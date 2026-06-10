@@ -1,0 +1,229 @@
+/**
+ * Tiny inline SVG icons used across the master workspace chrome. Kept
+ * inline (vs pulling a Lucide bundle) so the master window stays light
+ * and renders without a network fetch on first paint.
+ */
+import React from 'react';
+
+interface Props {
+    size?: number;
+    className?: string;
+    style?: React.CSSProperties;
+}
+
+const wrap = (size: number, children: React.ReactNode, className?: string, style?: React.CSSProperties) => (
+    <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={className}
+        style={style}
+        aria-hidden="true"
+    >
+        {children}
+    </svg>
+);
+
+export const IconChevronDown = ({ size = 15, ...p }: Props) =>
+    wrap(size, <polyline points="6 9 12 15 18 9" />, p.className, p.style);
+export const IconPanelLeftOpen = ({ size = 18, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <path d="M9 3v18" />
+            <path d="M14 10l3 2-3 2" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconPin = ({ size = 15, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <line x1="12" y1="17" x2="12" y2="22" />
+            <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17z" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconSearch = ({ size = 14, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconBox = ({ size = 14, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <path d="M21 8a2 2 0 0 0-1.06-1.76L13 2.18a2 2 0 0 0-2 0L4.06 6.24A2 2 0 0 0 3 8v8a2 2 0 0 0 1.06 1.76L11 21.82a2 2 0 0 0 2 0l6.94-4.06A2 2 0 0 0 21 16z" />
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+            <line x1="12" y1="22.08" x2="12" y2="12" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconCpu = ({ size = 18, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <rect x="4" y="4" width="16" height="16" rx="2" />
+            <rect x="9" y="9" width="6" height="6" />
+            <line x1="9" y1="2" x2="9" y2="4" />
+            <line x1="15" y1="2" x2="15" y2="4" />
+            <line x1="9" y1="20" x2="9" y2="22" />
+            <line x1="15" y1="20" x2="15" y2="22" />
+            <line x1="20" y1="9" x2="22" y2="9" />
+            <line x1="20" y1="15" x2="22" y2="15" />
+            <line x1="2" y1="9" x2="4" y2="9" />
+            <line x1="2" y1="15" x2="4" y2="15" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconTerminal = ({ size = 18, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <polyline points="4 17 10 11 4 5" />
+            <line x1="12" y1="19" x2="20" y2="19" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconGlobe = ({ size = 18, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <circle cx="12" cy="12" r="10" />
+            <line x1="2" y1="12" x2="22" y2="12" />
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconPlus = ({ size = 14, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconCheck = ({ size = 11, ...p }: Props) =>
+    wrap(size, <polyline points="20 6 9 17 4 12" />, p.className, p.style);
+export const IconLayoutGrid = ({ size = 15, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <rect x="3" y="3" width="7" height="7" />
+            <rect x="14" y="3" width="7" height="7" />
+            <rect x="3" y="14" width="7" height="7" />
+            <rect x="14" y="14" width="7" height="7" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconPanelLeft = ({ size = 15, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <line x1="9" y1="3" x2="9" y2="21" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconColumns = ({ size = 15, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <line x1="9" y1="3" x2="9" y2="21" />
+            <line x1="15" y1="3" x2="15" y2="21" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconMaximize = ({ size = 16, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <polyline points="15 3 21 3 21 9" />
+            <polyline points="9 21 3 21 3 15" />
+            <line x1="21" y1="3" x2="14" y2="10" />
+            <line x1="3" y1="21" x2="10" y2="14" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconMinimize = ({ size = 14, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <polyline points="4 14 10 14 10 20" />
+            <polyline points="20 10 14 10 14 4" />
+            <line x1="14" y1="10" x2="21" y2="3" />
+            <line x1="3" y1="21" x2="10" y2="14" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconX = ({ size = 14, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconSettings = ({ size = 16, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconTrash = ({ size = 13, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+            <path d="M10 11v6" />
+            <path d="M14 11v6" />
+            <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconListTree = ({ size = 14, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <path d="M21 12h-8" />
+            <path d="M21 6h-8" />
+            <path d="M21 18h-8" />
+            <path d="M3 6v4c0 1.1.9 2 2 2h3" />
+            <path d="M3 10v6c0 1.1.9 2 2 2h3" />
+        </>,
+        p.className,
+        p.style,
+    );

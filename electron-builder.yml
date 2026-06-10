@@ -1,0 +1,61 @@
+appId: ai.tynn.genie
+productName: Genie
+copyright: Copyright © 2026 Wishborn / Tynn
+
+directories:
+  buildResources: resources
+  output: dist
+
+files:
+  - from: .
+    filter:
+      - app/**/*
+      - package.json
+
+asar: true
+
+# Custom protocol — genie:// — registered at install time. Story #150 uses
+# this for the OAuth callback handoff from tynn.ai/login.
+protocols:
+  - name: Genie OAuth
+    schemes:
+      - genie
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - dmg
+    - zip
+  icon: resources/icon.icns
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  # Notarisation envs are picked up from CI at release time.
+  # APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: resources/icon.ico
+  # Code signing happens via env vars in CI:
+  # CSC_LINK, CSC_KEY_PASSWORD
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Genie
+
+linux:
+  target:
+    - AppImage
+  icon: resources/icon.png
+  category: Development
+
+publish:
+  provider: github
+  owner: Renaissance-Analytics
+  repo: tynn.ai

@@ -1,0 +1,381 @@
+import { app, BrowserWindow, ipcMain, nativeImage, session } from 'electron';
+import path from 'path';
+import { createTray } from './tray';
+import { registerShortcuts, unregisterShortcuts } from './shortcuts';
+import { registerIpcHandlers } from './ipc';
+import { initDatabase } from './db';
+import { registerProtocolHandler, handleGenieUrl } from './auth';
+import { registerTerminalIpc, stopAllTerminals } from './terminal/ipc';
+import { registerGithubIpc } from './github/ipc';
+import { registerUpdaterIpc } from './updater/ipc';
+
+/**
+ * Genie — Tynn desktop companion.
+ *
+ * Architecture:
+ *   - Main process owns everything sensitive (db, filesystem, git ops,
+ *     sub-process spawning, session cookies).
+ *   - Renderer (Next.js) is read-only across IPC; talks via typed channels.
+ *   - Tray icon is the durable surface; windows are spawned lazily.
+ *
+ * Story #149 — scaffold + tray. Subsequent stories layer on top.
+ */
+
+const isProd = process.env.NODE_ENV === 'production';
+const isDev = !isProd;
+
+// Single-instance lock. If a second copy of Genie is launched (e.g. clicking
+// a genie:// URL), the existing process gets the activation event and the
+// second one exits. This is also how the Windows protocol handoff works.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+    app.quit();
+}
+
+let mainWindow: BrowserWindow | null = null;
+let captureWindow: BrowserWindow | null = null;
+let settingsWindow: BrowserWindow | null = null;
+let masterWindow: BrowserWindow | null = null;
+const terminalWindows = new Set<BrowserWindow>();
+
+export function getMainWindow(): BrowserWindow | null {
+    return mainWindow;
+}
+
+/**
+ * Open TheFloor — the unified workspace + terminal management window.
+ * Hosts the cross-project terminal tree, the workspace CRUD sidebar,
+ * the layout grid, and the project context menu. Single instance —
+ * clicking the tray entry while already open just focuses it.
+ */
+export function showMasterWindow(): void {
+    if (masterWindow && !masterWindow.isDestroyed()) {
+        masterWindow.show();
+        masterWindow.focus();
+        return;
+    }
+    const win = new BrowserWindow({
+        width: 1280,
+        height: 820,
+        minWidth: 980,
+        minHeight: 620,
+        show: false,
+        frame: true,
+        title: 'Genie · TheFloor',
+        backgroundColor: '#0a0a0c',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false,
+        },
+    });
+
+    if (isDev) {
+        win.loadURL('http://localhost:8888/master');
+    } else {
+        win.loadFile(path.join(__dirname, 'master.html'));
+    }
+
+    win.once('ready-to-show', () => win.show());
+    win.on('closed', () => {
+        if (masterWindow === win) masterWindow = null;
+    });
+    masterWindow = win;
+}
+
+/**
+ * Open a Stage — a satellite TheFloor window pinned to a single project
+ * by default. Multiple stages can be open at once; each one has its own
+ * selection + layout state. Stages share the underlying ptys with
+ * TheFloor (via the multi-attach manager), so a terminal running in
+ * TheFloor will mirror its live output into the Stage when added.
+ */
+const stageWindows = new Set<BrowserWindow>();
+export function showStageWindow(workspaceId?: string): void {
+    const win = new BrowserWindow({
+        width: 1100,
+        height: 720,
+        minWidth: 900,
+        minHeight: 560,
+        show: false,
+        frame: true,
+        title: 'Genie · Stage',
+        backgroundColor: '#0a0a0c',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false,
+        },
+    });
+    const query = workspaceId
+        ? `?stage=${encodeURIComponent(workspaceId)}`
+        : '?stage=1';
+    if (isDev) {
+        win.loadURL(`http://localhost:8888/master${query}`);
+    } else {
+        win.loadFile(path.join(__dirname, 'master.html'), {
+            search: query.slice(1),
+        });
+    }
+    win.once('ready-to-show', () => win.show());
+    stageWindows.add(win);
+    win.on('closed', () => stageWindows.delete(win));
+}
+
+/**
+ * Open a standalone terminal window — used by the tray menu's "New
+ * terminal" entry and (later) by the workspace UI. The window loads the
+ * `/terminal` route, which mounts an XTerm bound to a fresh pty.
+ */
+export function showTerminalWindow(): void {
+    const win = new BrowserWindow({
+        width: 880,
+        height: 560,
+        show: false,
+        frame: true,
+        title: 'Genie · Terminal',
+        backgroundColor: '#09090b',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false,
+        },
+    });
+
+    if (isDev) {
+        win.loadURL('http://localhost:8888/terminal');
+    } else {
+        win.loadFile(path.join(__dirname, 'terminal.html'));
+    }
+
+    win.once('ready-to-show', () => win.show());
+    terminalWindows.add(win);
+    win.on('closed', () => terminalWindows.delete(win));
+}
+
+export function getCaptureWindow(): BrowserWindow | null {
+    return captureWindow;
+}
+
+export function getSettingsWindow(): BrowserWindow | null {
+    return settingsWindow;
+}
+
+/**
+ * The legacy `/tray` BrowserWindow was retired in favour of TheFloor as the
+ * single unified surface. Every old call site (auth callback, second-
+ * instance handler, macOS dock click, IPC) now lands in TheFloor instead.
+ * Kept exported only so existing imports compile; the underlying
+ * `createMainWindow` is no longer reachable.
+ */
+export function showMainWindow(): void {
+    showMasterWindow();
+}
+
+export function showSettingsWindow(): void {
+    if (!settingsWindow || settingsWindow.isDestroyed()) {
+        settingsWindow = createSettingsWindow();
+        // createSettingsWindow defers .show() to 'ready-to-show'; just
+        // wait for it. focus() also no-ops until the window is visible.
+        settingsWindow.once('ready-to-show', () => settingsWindow?.focus());
+        return;
+    }
+    settingsWindow.show();
+    settingsWindow.focus();
+}
+
+export function showCaptureWindow(): void {
+    if (!captureWindow || captureWindow.isDestroyed()) {
+        captureWindow = createCaptureWindow();
+    }
+    captureWindow.show();
+    captureWindow.focus();
+}
+
+export function hideCaptureWindow(): void {
+    if (captureWindow && !captureWindow.isDestroyed()) {
+        captureWindow.hide();
+    }
+}
+
+function createMainWindow(): BrowserWindow {
+    const win = new BrowserWindow({
+        width: 480,
+        height: 640,
+        show: false,
+        frame: true,
+        title: 'Genie',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false,
+        },
+    });
+
+    if (isDev) {
+        win.loadURL('http://localhost:8888/tray');
+    } else {
+        win.loadFile(path.join(__dirname, 'tray.html'));
+    }
+
+    win.on('close', (e) => {
+        // Closing the window hides it instead of quitting — Genie is
+        // tray-resident.
+        if (!(app as any).isQuiting) {
+            e.preventDefault();
+            win.hide();
+        }
+    });
+
+    return win;
+}
+
+function createSettingsWindow(): BrowserWindow {
+    const win = new BrowserWindow({
+        width: 720,
+        height: 640,
+        show: false,
+        frame: true,
+        title: 'Genie Settings',
+        backgroundColor: '#0a0a0c',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false,
+        },
+    });
+
+    if (isDev) {
+        win.loadURL('http://localhost:8888/settings');
+    } else {
+        win.loadFile(path.join(__dirname, 'settings.html'));
+    }
+
+    // Defer showing until the page has actually painted. Without this, the
+    // window pops up as a white/blank rectangle for several frames while
+    // the renderer boots, which reads as "broken" rather than "loading".
+    win.once('ready-to-show', () => win.show());
+    return win;
+}
+
+function createCaptureWindow(): BrowserWindow {
+    const win = new BrowserWindow({
+        width: 480,
+        height: 200,
+        show: false,
+        frame: false,
+        alwaysOnTop: true,
+        resizable: false,
+        skipTaskbar: true,
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false,
+        },
+    });
+
+    if (isDev) {
+        win.loadURL('http://localhost:8888/capture');
+    } else {
+        win.loadFile(path.join(__dirname, 'capture.html'));
+    }
+
+    // Hide on blur — capture is a transient flow.
+    win.on('blur', () => {
+        if (!win.webContents.isDevToolsOpened()) {
+            win.hide();
+        }
+    });
+
+    return win;
+}
+
+app.on('second-instance', (_event, argv) => {
+    // Windows: protocol URLs come in via argv. Find the genie:// URL.
+    const url = argv.find((a) => a.startsWith('genie://'));
+    if (url) {
+        handleGenieUrl(url);
+    } else {
+        showMainWindow();
+    }
+});
+
+// macOS: protocol URLs come in via 'open-url'.
+app.on('open-url', (event, url) => {
+    event.preventDefault();
+    handleGenieUrl(url);
+});
+
+app.whenReady().then(async () => {
+    // Persistent session under "persist:tynn" so cookies survive restarts.
+    // tynn-api.ts uses this session for all outbound calls.
+    session.fromPartition('persist:tynn');
+
+    // Surface preload-script errors loudly. Without this, a bug in
+    // preload.ts fails silently — window.genie never attaches and the
+    // renderer just sits on "Waiting for preload…" with no clue why.
+    // The terminal running `npm run dev` now gets the error + stack.
+    app.on('web-contents-created', (_e, contents) => {
+        contents.on('preload-error', (_event, preloadPath, error) => {
+            // eslint-disable-next-line no-console
+            console.error(
+                `[preload-error] ${preloadPath}\n${error?.stack ?? error?.message ?? String(error)}`,
+            );
+        });
+    });
+
+    initDatabase();
+    registerIpcHandlers();
+    // Static imports above — earlier dynamic imports could fail silently
+    // on some bundlers, leaving the IPC channels unregistered and
+    // surfacing as "No handler registered for 'terminal:resize'" in the
+    // renderer once a window mounts.
+    registerTerminalIpc();
+    registerGithubIpc();
+    registerUpdaterIpc();
+    app.on('before-quit', () => stopAllTerminals());
+    registerProtocolHandler();
+
+    // Tray icon lives at app/tray-icon.png in production (electron-builder
+    // copies resources/ → app/ at pack time) and at resources/tray-icon.png
+    // in dev. Try both.
+    const trayCandidate = isDev
+        ? path.join(process.cwd(), 'resources', 'tray-icon.png')
+        : path.join(__dirname, '..', 'resources', 'tray-icon.png');
+    const trayIconPath = trayCandidate;
+    const trayImg = nativeImage.createFromPath(trayIconPath);
+    if (process.platform === 'darwin' && !trayImg.isEmpty()) {
+        trayImg.setTemplateImage(true);
+    }
+    createTray(trayImg);
+
+    registerShortcuts();
+
+    // On macOS, hitting the dock icon should show the main window.
+    app.on('activate', () => {
+        showMainWindow();
+    });
+});
+
+app.on('window-all-closed', () => {
+    // Genie stays alive in the tray. Do nothing.
+});
+
+app.on('before-quit', () => {
+    (app as any).isQuiting = true;
+    unregisterShortcuts();
+});
+
+// Bridge for getting the active project context (used by capture window).
+ipcMain.handle('app:get-current-project', async () => {
+    // Capture window uses this to pre-select the project. Defaults to the
+    // last-opened workspace, then to primary's project, then null.
+    const { getLastOpenedProject } = require('./workspace/last-opened');
+    return getLastOpenedProject();
+});

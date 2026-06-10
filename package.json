@@ -1,0 +1,49 @@
+{
+  "name": "genie",
+  "version": "0.7.0-alpha.1",
+  "description": "Tynn desktop companion — tray-resident workspace manager",
+  "private": true,
+  "main": "app/background.js",
+  "scripts": {
+    "dev": "nextron",
+    "build": "nextron build",
+    "build:win": "nextron build --win",
+    "build:mac": "nextron build --mac",
+    "postinstall": "electron-builder install-app-deps || echo \"native rebuild skipped — using bundled prebuilds (install VS Build Tools on Windows for ABI-clean release builds)\"",
+    "typecheck:main": "tsc --noEmit -p main/tsconfig.json",
+    "typecheck:renderer": "tsc --noEmit -p renderer/tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "better-sqlite3": "^11.7.0",
+    "electron-updater": "^6.3.9",
+    "node-pty": "^1.1.0",
+    "simple-git": "^3.27.0"
+  },
+  "devDependencies": {
+    "@particle-academy/react-fancy": "^4.3.0",
+    "@tailwindcss/postcss": "^4.0.0",
+    "@tailwindcss/typography": "^0.5.19",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.7",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitest/coverage-v8": "^2.1.9",
+    "autoprefixer": "^10.4.21",
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
+    "next": "^15.1.6",
+    "nextron": "^9.4.0",
+    "postcss": "^8.5.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9"
+  }
+}

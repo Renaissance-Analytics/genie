@@ -1,0 +1,718 @@
+import React, { useEffect, useState } from 'react';
+import {
+    Action,
+    Card,
+    Heading,
+    Icon,
+    Input,
+    Select,
+    Text,
+} from '@particle-academy/react-fancy';
+import {
+    api,
+    type EditorDetection,
+    type Settings,
+    type UpdaterConfig,
+    type UpdaterStatus,
+} from '../lib/genie';
+
+export default function SettingsPage() {
+    const [s, setS] = useState<Settings | null>(null);
+    const [editors, setEditors] = useState<EditorDetection[]>([]);
+    const [saving, setSaving] = useState(false);
+    const [savedAt, setSavedAt] = useState<number | null>(null);
+
+    useEffect(() => {
+        (async () => {
+            const cur = await api().settings.get();
+            setS(cur);
+            const eds = await api().settings.detectEditors();
+            setEditors(eds);
+            if (!cur.default_editor_cmd && eds[0]) {
+                setS({
+                    ...cur,
+                    default_editor: eds[0].id,
+                    default_editor_cmd: eds[0].path,
+                });
+            }
+        })();
+    }, []);
+
+    const patch = (p: Partial<Settings>) => setS((cur) => (cur ? { ...cur, ...p } : cur));
+
+    const save = async () => {
+        if (!s) return;
+        setSaving(true);
+        try {
+            await api().settings.set(s);
+            setSavedAt(Date.now());
+            setTimeout(() => setSavedAt(null), 1800);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const pickPrimary = async () => {
+        const p = await api().settings.chooseFolder('Choose primary workspace folder');
+        if (p) patch({ primary_workspace: p });
+    };
+    const pickEditor = async () => {
+        const p = await api().settings.chooseFile('Choose editor executable');
+        if (p) patch({ default_editor: 'custom', default_editor_cmd: p });
+    };
+
+    if (!s) return <div className="surface" style={{ padding: 24 }}>Loading…</div>;
+
+    return (
+        <div className="surface" style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <Heading as="h1" size="lg">
+                <Icon name="settings" size="md" className="text-zinc-500" /> Settings
+            </Heading>
+
+            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <Heading as="h2" size="sm">Primary workspace</Heading>
+                <Text size="xs" className="text-zinc-500">
+                    Default destination for NEW projects created from Genie. Existing
+                    projects can live anywhere — this is a default, not a constraint.
+                </Text>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                    <div style={{ flex: 1 }}>
+                        <Input
+                            readOnly
+                            value={s.primary_workspace ?? ''}
+                            placeholder="No primary workspace chosen"
+                        />
+                    </div>
+                    <Action variant="ghost" icon="folder" onClick={pickPrimary}>
+                        Browse
+                    </Action>
+                </div>
+            </Card>
+
+            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <Heading as="h2" size="sm">Default editor</Heading>
+                <Select
+                    value={s.default_editor ?? ''}
+                    onValueChange={(v) => {
+                        const ed = editors.find((e) => e.id === v);
+                        patch({ default_editor: v, default_editor_cmd: ed?.path ?? s.default_editor_cmd });
+                    }}
+                    list={[
+                        ...editors.map((e) => ({ value: e.id, label: e.label })),
+                        { value: 'custom', label: 'Custom executable' },
+                    ]}
+                />
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                    <div style={{ flex: 1 }}>
+                        <Input
+                            value={s.default_editor_cmd ?? ''}
+                            onValueChange={(v) => patch({ default_editor_cmd: v })}
+                            placeholder="cursor / code / path/to/binary"
+                        />
+                    </div>
+                    <Action variant="ghost" icon="folder" onClick={pickEditor}>
+                        Browse
+                    </Action>
+                </div>
+            </Card>
+
+            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <Heading as="h2" size="sm">Defaults for new workspaces</Heading>
+                <Input
+                    label="Start command"
+                    value={s.default_start_cmd ?? ''}
+                    onValueChange={(v) => patch({ default_start_cmd: v })}
+                />
+                <Input
+                    label="Env file name"
+                    value={s.default_env_file ?? ''}
+                    onValueChange={(v) => patch({ default_env_file: v })}
+                />
+            </Card>
+
+            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <Heading as="h2" size="sm">Quick capture hotkey</Heading>
+                <Input
+                    label="Accelerator"
+                    description="Electron accelerator string, e.g. CommandOrControl+Shift+W"
+                    value={s.global_hotkey ?? ''}
+                    onValueChange={(v) => patch({ global_hotkey: v })}
+                />
+            </Card>
+
+            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <Heading as="h2" size="sm">Tynn host</Heading>
+                <Input
+                    description="Override for self-hosted Tynn instances. Default: https://tynn.ai"
+                    value={s.tynn_host ?? ''}
+                    onValueChange={(v) => patch({ tynn_host: v })}
+                />
+            </Card>
+
+            <GitHubSection />
+
+            <UpdaterSection />
+
+            <AionimaSection />
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                {savedAt && (
+                    <Text size="xs" style={{ color: 'var(--emerald-500)' }}>
+                        <Icon name="check" size="xs" /> Saved
+                    </Text>
+                )}
+                <Action color="blue" icon="check" onClick={save} disabled={saving}>
+                    {saving ? 'Saving…' : 'Save'}
+                </Action>
+            </div>
+        </div>
+    );
+}
+
+/**
+ * Aionima connection — separate save flow because it probes the
+ * configured host immediately so the user gets a "Connected as X" or
+ * "Failed to reach" signal without leaving the page. Bearer-token paste
+ * is the placeholder UX; a proper pairing flow lands when
+ * https://github.com/Civicognita/agi/issues/178 Q5.2a is answered.
+ */
+function AionimaSection() {
+    const [host, setHost] = useState('');
+    const [token, setToken] = useState('');
+    const [user, setUser] = useState<{ name: string; email?: string } | null>(null);
+    const [busy, setBusy] = useState(false);
+    const [status, setStatus] = useState<string | null>(null);
+
+    useEffect(() => {
+        api()
+            .aionima.getConfig()
+            .then((c) => {
+                setHost(c.host ?? '');
+                setToken(c.token ?? '');
+            });
+        api()
+            .auth.whoami('aionima')
+            .then((u) => setUser((u as any) ?? null));
+    }, []);
+
+    const save = async () => {
+        setBusy(true);
+        setStatus(null);
+        try {
+            const res = await api().aionima.setConfig({
+                host: host.trim() || undefined,
+                token: token.trim() || null,
+            });
+            setUser(res.user as any);
+            setStatus(
+                res.user
+                    ? `Connected as ${res.user.name}`
+                    : 'Saved — could not reach Aionima with that host + token.',
+            );
+        } catch (e: unknown) {
+            setStatus(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const disconnect = async () => {
+        setBusy(true);
+        await api().aionima.setConfig({ token: null });
+        setToken('');
+        setUser(null);
+        setStatus('Disconnected.');
+        setBusy(false);
+    };
+
+    return (
+        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Heading as="h2" size="sm" style={{ margin: 0 }}>
+                    Aionima
+                </Heading>
+                <Text size="xs" className="text-zinc-500">
+                    Local LAN AGI gateway
+                </Text>
+                <span style={{ flex: 1 }} />
+                {user && (
+                    <Text size="xs" style={{ color: 'var(--emerald-600)' }}>
+                        <Icon name="check" size="xs" /> Connected as {user.name}
+                    </Text>
+                )}
+            </div>
+            <Input
+                label="Aionima host"
+                description="e.g. http://192.168.0.144:3100 (the machine running AGI)"
+                value={host}
+                onValueChange={setHost}
+                placeholder="http://192.168.0.144:3100"
+            />
+            <Input
+                label="Bearer token"
+                description="Mint a token in your Aionima dashboard and paste it here."
+                value={token}
+                onValueChange={setToken}
+                placeholder="(paste token)"
+            />
+            <div style={{ display: 'flex', gap: 8 }}>
+                <Action color="blue" icon="check" onClick={save} disabled={busy}>
+                    {busy ? 'Saving…' : 'Save + test'}
+                </Action>
+                {user && (
+                    <Action variant="ghost" onClick={disconnect} disabled={busy}>
+                        Disconnect
+                    </Action>
+                )}
+                {status && (
+                    <Text
+                        size="xs"
+                        style={{
+                            alignSelf: 'center',
+                            color: user ? 'var(--emerald-600)' : 'var(--fg-3)',
+                        }}
+                    >
+                        {status}
+                    </Text>
+                )}
+            </div>
+        </Card>
+    );
+}
+
+/**
+ * GitHub connection — Device Flow OAuth so we don't need to ship a
+ * client secret or run an embedded browser. The user registers an
+ * OAuth App at https://github.com/settings/applications/new with
+ * Device Flow enabled and pastes the client ID here.
+ *
+ * Connect: click Connect → modal shows the user_code + the URL to
+ * visit. While the modal is open, we poll the main-side status until
+ * GitHub returns a token (success) or the code expires.
+ */
+function GitHubSection() {
+    const [connected, setConnected] = useState(false);
+    const [username, setUsername] = useState<string | null>(null);
+    const [clientId, setClientId] = useState('');
+    const [clientIdSet, setClientIdSet] = useState(false);
+    const [storageOk, setStorageOk] = useState(true);
+    const [flow, setFlow] = useState<
+        | { kind: 'idle' }
+        | { kind: 'starting' }
+        | {
+              kind: 'pending';
+              userCode: string;
+              verificationUri: string;
+              expiresInSec: number;
+          }
+        | { kind: 'success'; user: { login: string; name: string | null } }
+        | { kind: 'error'; code: string; message: string }
+    >({ kind: 'idle' });
+
+    const refresh = async () => {
+        const st = await api().github.status();
+        setConnected(st.connected);
+        setUsername(st.username);
+        setClientIdSet(st.clientIdSet);
+        setStorageOk(st.storageOk);
+        if (st.flow.kind === 'pending') {
+            setFlow({
+                kind: 'pending',
+                userCode: st.flow.userCode,
+                verificationUri: st.flow.verificationUri,
+                expiresInSec: st.flow.expiresInSec,
+            });
+        } else if (st.flow.kind === 'success') {
+            setFlow({ kind: 'success', user: st.flow.user });
+            // Auto-close the success state after a brief moment.
+            setTimeout(() => setFlow({ kind: 'idle' }), 1200);
+        } else if (st.flow.kind === 'error') {
+            setFlow({ kind: 'error', code: st.flow.code, message: st.flow.message });
+        }
+    };
+
+    useEffect(() => {
+        void refresh();
+        const ssn = api()
+            .settings.get()
+            .then((s) => setClientId((s as { github_client_id?: string }).github_client_id ?? ''));
+        void ssn;
+    }, []);
+
+    // Poll for flow progress while it's running.
+    useEffect(() => {
+        if (flow.kind !== 'pending' && flow.kind !== 'starting') return;
+        const t = setInterval(refresh, 1500);
+        return () => clearInterval(t);
+    }, [flow.kind]);
+
+    const start = async () => {
+        try {
+            setFlow({ kind: 'starting' });
+            const code = await api().github.startDevice();
+            setFlow({
+                kind: 'pending',
+                userCode: code.user_code,
+                verificationUri: code.verification_uri,
+                expiresInSec: code.expires_in,
+            });
+        } catch (e) {
+            setFlow({
+                kind: 'error',
+                code: 'start_failed',
+                message: e instanceof Error ? e.message : String(e),
+            });
+        }
+    };
+
+    const cancel = async () => {
+        await api().github.cancelDevice();
+        setFlow({ kind: 'idle' });
+    };
+
+    const disconnect = async () => {
+        await api().github.disconnect();
+        await refresh();
+    };
+
+    const saveClientId = async () => {
+        await api().settings.set({
+            // The settings table stores k/v; the type signature doesn't include
+            // github_client_id explicitly so we widen via Record.
+            github_client_id: clientId.trim(),
+        } as unknown as Record<string, string>);
+        await refresh();
+    };
+
+    return (
+        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Heading as="h2" size="sm" style={{ margin: 0 }}>
+                    GitHub
+                </Heading>
+                <Text size="xs" className="text-zinc-500">
+                    Device Flow auth · used to create .agi repos
+                </Text>
+                <span style={{ flex: 1 }} />
+                {connected && username && (
+                    <Text size="xs" style={{ color: 'var(--emerald-600)' }}>
+                        <Icon name="check" size="xs" /> Connected as {username}
+                    </Text>
+                )}
+            </div>
+
+            {!storageOk && (
+                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                    OS keychain unavailable. Genie won't store a GitHub token
+                    unencrypted. On Linux: install gnome-keyring / libsecret.
+                </Text>
+            )}
+
+            <Input
+                label="OAuth App client ID"
+                description={
+                    'Use a SEPARATE OAuth App from Tynn login. Register one at https://github.com/settings/applications/new (or under an org), tick Enable Device Flow, and paste its client ID here. The client ID is public, not a secret. Genie will request scopes: repo, workflow, read:org — enough to read/write/create repos and list your orgs. (Delete is deliberately not requested.)'
+                }
+                value={clientId}
+                onValueChange={setClientId}
+                placeholder="e.g. Iv1.a1b2c3d4e5f6g7h8"
+            />
+
+            <div style={{ display: 'flex', gap: 8 }}>
+                <Action color="blue" size="sm" onClick={saveClientId}>
+                    Save client ID
+                </Action>
+                {!connected && (
+                    <Action
+                        color="blue"
+                        size="sm"
+                        onClick={start}
+                        disabled={!clientIdSet || flow.kind === 'pending' || flow.kind === 'starting' || !storageOk}
+                    >
+                        Connect GitHub…
+                    </Action>
+                )}
+                {connected && (
+                    <Action variant="ghost" size="sm" onClick={disconnect}>
+                        Disconnect
+                    </Action>
+                )}
+            </div>
+
+            {(flow.kind === 'pending' || flow.kind === 'starting') && (
+                <DeviceFlowPanel
+                    flow={flow}
+                    onCancel={cancel}
+                />
+            )}
+
+            {flow.kind === 'error' && (
+                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                    {flow.message}
+                </Text>
+            )}
+        </Card>
+    );
+}
+
+function DeviceFlowPanel({
+    flow,
+    onCancel,
+}: {
+    flow:
+        | { kind: 'starting' }
+        | {
+              kind: 'pending';
+              userCode: string;
+              verificationUri: string;
+              expiresInSec: number;
+          };
+    onCancel: () => void;
+}) {
+    const open = () => {
+        if (flow.kind !== 'pending') return;
+        api().tynn.openInBrowser(flow.verificationUri);
+    };
+    return (
+        <div
+            style={{
+                padding: 12,
+                borderRadius: 8,
+                background: 'var(--bg-2)',
+                border: '1px solid var(--border-1)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+            }}
+        >
+            <Text size="xs" className="text-zinc-500">
+                {flow.kind === 'starting'
+                    ? 'Requesting a device code…'
+                    : '1. Open GitHub and paste the code below. 2. Wait — Genie will catch the token automatically.'}
+            </Text>
+            {flow.kind === 'pending' && (
+                <>
+                    <div
+                        style={{
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: 22,
+                            fontWeight: 600,
+                            letterSpacing: '0.1em',
+                            background: 'var(--card)',
+                            border: '1px solid var(--border-1)',
+                            borderRadius: 8,
+                            padding: '10px 14px',
+                            textAlign: 'center',
+                            userSelect: 'all',
+                        }}
+                    >
+                        {flow.userCode}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                        <Action color="blue" size="sm" onClick={open}>
+                            Open {flow.verificationUri}
+                        </Action>
+                        <Action variant="ghost" size="sm" onClick={onCancel}>
+                            Cancel
+                        </Action>
+                    </div>
+                </>
+            )}
+        </div>
+    );
+}
+
+/**
+ * Phase 1 git-pull updater UI. Shows current vs latest, an inline log
+ * during apply, and a non-blocking Restart-when-ready prompt when the
+ * rebuild finishes. Auto-poll cadence is user-configurable; 0 = manual.
+ */
+function UpdaterSection() {
+    const [config, setConfig] = useState<UpdaterConfig>({ repo: '', pollHours: 6 });
+    const [status, setStatus] = useState<UpdaterStatus | null>(null);
+    const [busy, setBusy] = useState(false);
+
+    useEffect(() => {
+        void (async () => {
+            const c = await api().updater.getConfig();
+            const s = await api().updater.status();
+            setConfig(c);
+            setStatus(s);
+        })();
+        const off = api().on.updaterStatus((s) => setStatus(s));
+        return () => off();
+    }, []);
+
+    const check = async () => {
+        setBusy(true);
+        try {
+            const next = await api().updater.check();
+            setStatus(next);
+        } finally {
+            setBusy(false);
+        }
+    };
+    const apply = async () => {
+        setBusy(true);
+        try {
+            await api().updater.apply();
+        } finally {
+            setBusy(false);
+        }
+    };
+    const saveConfig = async () => {
+        const next = await api().updater.setConfig(config);
+        setConfig(next);
+    };
+
+    const stateLabel: Record<string, string> = {
+        idle: 'Idle',
+        checking: 'Checking…',
+        available: `Update available`,
+        'up-to-date': 'Up to date',
+        applying: 'Applying update…',
+        'ready-to-restart': 'Ready — restart to load',
+        error: 'Error',
+        disabled: 'Disabled',
+    };
+
+    return (
+        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Heading as="h2" size="sm" style={{ margin: 0 }}>
+                    Updates
+                </Heading>
+                <Text size="xs" className="text-zinc-500">
+                    git-pull + rebuild (Phase 1)
+                </Text>
+                <span style={{ flex: 1 }} />
+                <Text size="xs" className="text-zinc-500">
+                    {status ? stateLabel[status.state] ?? status.state : '—'}
+                </Text>
+            </div>
+
+            <Input
+                label="Source repository"
+                description={'GitHub owner/repo. Default is renaissance-analytics/genie; change only if you’re tracking a fork. Empty disables the updater.'}
+                value={config.repo}
+                onValueChange={(v) => setConfig((c) => ({ ...c, repo: v }))}
+                placeholder="renaissance-analytics/genie"
+            />
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                <div style={{ flex: 1 }}>
+                    <Input
+                        label="Poll every (hours)"
+                        description="0 disables automatic polling."
+                        value={String(config.pollHours)}
+                        onValueChange={(v) =>
+                            setConfig((c) => ({
+                                ...c,
+                                pollHours: Number(v) || 0,
+                            }))
+                        }
+                        placeholder="6"
+                    />
+                </div>
+                <Action color="blue" size="sm" onClick={saveConfig}>
+                    Save
+                </Action>
+            </div>
+
+            <div
+                style={{
+                    padding: 12,
+                    borderRadius: 8,
+                    border: '1px solid var(--border-1)',
+                    background: 'var(--bg-2)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 6,
+                }}
+            >
+                <div style={{ display: 'flex', gap: 16, alignItems: 'baseline' }}>
+                    <Text size="xs" className="text-zinc-500">
+                        Current
+                    </Text>
+                    <Text size="sm" style={{ fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
+                        v{status?.currentVersion ?? '0.0.0'}
+                    </Text>
+                    <Text size="xs" className="text-zinc-500" style={{ marginLeft: 16 }}>
+                        Latest
+                    </Text>
+                    <Text size="sm" style={{ fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
+                        {status?.latestVersion ? `v${status.latestVersion}` : '—'}
+                    </Text>
+                </div>
+                {status?.publishedAt && (
+                    <Text size="xs" className="text-zinc-500">
+                        Published {new Date(status.publishedAt).toLocaleString()}
+                    </Text>
+                )}
+                <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                    <Action
+                        size="sm"
+                        variant="ghost"
+                        onClick={check}
+                        disabled={busy || !config.repo || status?.state === 'applying'}
+                    >
+                        Check for updates
+                    </Action>
+                    {status?.state === 'available' && (
+                        <Action color="blue" size="sm" onClick={apply} disabled={busy}>
+                            Update now (v{status.latestVersion})
+                        </Action>
+                    )}
+                    {status?.state === 'ready-to-restart' && (
+                        <Action
+                            color="blue"
+                            size="sm"
+                            onClick={() => api().app.quit()}
+                        >
+                            Restart Genie now
+                        </Action>
+                    )}
+                </div>
+                {status?.error && (
+                    <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                        {status.error}
+                    </Text>
+                )}
+            </div>
+
+            {status &&
+                (status.state === 'applying' ||
+                    status.state === 'ready-to-restart' ||
+                    status.state === 'error') &&
+                status.log.length > 0 && (
+                    <UpdaterLogPanel log={status.log} />
+                )}
+        </Card>
+    );
+}
+
+function UpdaterLogPanel({ log }: { log: string[] }) {
+    const ref = React.useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+    }, [log.length]);
+    return (
+        <div
+            ref={ref}
+            style={{
+                maxHeight: 240,
+                overflowY: 'auto',
+                padding: 10,
+                borderRadius: 8,
+                background: '#0b0b0f',
+                color: '#d4d4d8',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 11.5,
+                lineHeight: 1.5,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+            }}
+        >
+            {log.join('\n')}
+        </div>
+    );
+}
