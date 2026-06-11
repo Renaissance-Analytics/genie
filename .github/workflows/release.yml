@@ -31,6 +31,12 @@ on:
       - 'v*'
   workflow_dispatch: {}
 
+# The default GITHUB_TOKEN is read-only for `contents`. electron-builder
+# needs write to attach installers + latest.yml to the GitHub Release;
+# without this it gets a 403 on the upload step.
+permissions:
+  contents: write
+
 jobs:
   release:
     strategy:
