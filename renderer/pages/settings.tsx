@@ -297,6 +297,8 @@ function GitHubSection() {
     const [username, setUsername] = useState<string | null>(null);
     const [clientId, setClientId] = useState('');
     const [clientIdSet, setClientIdSet] = useState(false);
+    const [builtInClientId, setBuiltInClientId] = useState(false);
+    const [showAdvanced, setShowAdvanced] = useState(false);
     const [storageOk, setStorageOk] = useState(true);
     const [flow, setFlow] = useState<
         | { kind: 'idle' }
@@ -316,6 +318,7 @@ function GitHubSection() {
         setConnected(st.connected);
         setUsername(st.username);
         setClientIdSet(st.clientIdSet);
+        setBuiltInClientId(st.builtInClientId);
         setStorageOk(st.storageOk);
         if (st.flow.kind === 'pending') {
             setFlow({
@@ -410,20 +413,16 @@ function GitHubSection() {
                 </Text>
             )}
 
-            <Input
-                label="OAuth App client ID"
-                description={
-                    'Use a SEPARATE OAuth App from Tynn login. Register one at https://github.com/settings/applications/new (or under an org), tick Enable Device Flow, and paste its client ID here. The client ID is public, not a secret. Genie will request scopes: repo, workflow, read:org — enough to read/write/create repos and list your orgs. (Delete is deliberately not requested.)'
-                }
-                value={clientId}
-                onValueChange={setClientId}
-                placeholder="e.g. Iv1.a1b2c3d4e5f6g7h8"
-            />
+            {!builtInClientId && !showAdvanced && (
+                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                    This Genie build doesn't ship a baked-in OAuth Client ID.
+                    Open Advanced to paste one (you'll need to register your own
+                    OAuth App at github.com/settings/applications/new with
+                    Enable Device Flow ticked).
+                </Text>
+            )}
 
-            <div style={{ display: 'flex', gap: 8 }}>
-                <Action color="blue" size="sm" onClick={saveClientId}>
-                    Save client ID
-                </Action>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 {!connected && (
                     <Action
                         color="blue"
@@ -439,7 +438,36 @@ function GitHubSection() {
                         Disconnect
                     </Action>
                 )}
+                <span style={{ flex: 1 }} />
+                <Action
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowAdvanced((s) => !s)}
+                >
+                    {showAdvanced ? 'Hide Advanced' : 'Advanced'}
+                </Action>
             </div>
+
+            {showAdvanced && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 8, borderTop: '1px solid var(--border-1)' }}>
+                    <Input
+                        label="OAuth App client ID override"
+                        description={
+                            builtInClientId
+                                ? 'This Genie build ships with a baked-in OAuth Client ID. Use this field only if you want to point Genie at a different OAuth App (self-hosters, devs testing forks). Leave blank to use the bundle default. The Client ID is public, not a secret. Required scopes: repo, workflow, read:org.'
+                                : 'Register an OAuth App at github.com/settings/applications/new with Enable Device Flow ticked, then paste its Client ID here. The Client ID is public, not a secret. Required scopes: repo, workflow, read:org.'
+                        }
+                        value={clientId}
+                        onValueChange={setClientId}
+                        placeholder="e.g. Iv1.a1b2c3d4e5f6g7h8"
+                    />
+                    <div>
+                        <Action color="blue" size="sm" onClick={saveClientId}>
+                            Save client ID
+                        </Action>
+                    </div>
+                </div>
+            )}
 
             {(flow.kind === 'pending' || flow.kind === 'starting') && (
                 <DeviceFlowPanel

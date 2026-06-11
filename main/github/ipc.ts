@@ -7,6 +7,7 @@ import {
 } from './device-flow';
 import {
     clearToken,
+    getBuiltInClientId,
     getClientId,
     getToken,
     getUsername,
@@ -52,6 +53,7 @@ export function registerGithubIpc(): void {
         connected: boolean;
         username: string | null;
         clientIdSet: boolean;
+        builtInClientId: boolean;
         storageOk: boolean;
         flow: FlowStatus;
     }> => {
@@ -59,6 +61,10 @@ export function registerGithubIpc(): void {
             connected: !!getToken(),
             username: getUsername(),
             clientIdSet: !!getClientId(),
+            // True when the binary ships with a baked-in client ID
+            // (config.GENIE_GITHUB_CLIENT_ID). Settings UI uses this
+            // to hide the override field on normal installs.
+            builtInClientId: !!getBuiltInClientId(),
             storageOk: isStorageAvailable(),
             flow: status,
         };

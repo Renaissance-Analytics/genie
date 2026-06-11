@@ -1,5 +1,6 @@
 import { safeStorage } from 'electron';
 import { getAllSettings, setSettings } from '../db';
+import { GENIE_GITHUB_CLIENT_ID } from '../config';
 
 /**
  * GitHub access token storage. The raw token never lands in plain text
@@ -60,6 +61,14 @@ export function clearToken(): void {
 }
 
 export function getClientId(): string {
+    // Settings override wins so devs can point Genie at their own OAuth
+    // App without rebuilding. Falls back to the build-time constant
+    // (set in main/config.ts) for normal packaged installs.
     const settings = getAllSettings() as unknown as Record<string, string>;
-    return settings.github_client_id ?? '';
+    const override = settings.github_client_id?.trim();
+    return override || GENIE_GITHUB_CLIENT_ID;
+}
+
+export function getBuiltInClientId(): string {
+    return GENIE_GITHUB_CLIENT_ID;
 }

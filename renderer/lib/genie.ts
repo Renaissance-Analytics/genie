@@ -331,6 +331,7 @@ interface GenieApi {
             connected: boolean;
             username: string | null;
             clientIdSet: boolean;
+            builtInClientId: boolean;
             storageOk: boolean;
             flow:
                 | { kind: 'idle' }
