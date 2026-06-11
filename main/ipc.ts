@@ -51,6 +51,11 @@ import {
     signedInBackends,
 } from './backend/registry';
 import type { BackendKind } from './backend/backend';
+import {
+    getAutostart,
+    isAutostartSupported,
+    setAutostart,
+} from './autostart';
 
 /**
  * Wire every typed channel exposed by preload.ts to its main-side handler.
@@ -275,6 +280,17 @@ export function registerIpcHandlers(): void {
             user: x.user,
             host: x.backend.host(),
         }));
+    });
+
+    // --- Autostart ("Launch Genie at sign-in") ---------------------------
+    ipcMain.handle('app:autostart:get', () => ({
+        enabled: getAutostart(),
+        supported: isAutostartSupported(),
+        platform: process.platform,
+    }));
+    ipcMain.handle('app:autostart:set', (_e, enabled: boolean) => {
+        setAutostart(Boolean(enabled));
+        return { enabled: getAutostart() };
     });
 }
 

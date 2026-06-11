@@ -153,6 +153,8 @@ export default function SettingsPage() {
 
             <UpdaterSection />
 
+            <StartupSection />
+
             <AionimaSection />
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -733,6 +735,84 @@ function UpdaterSection() {
                 status.log.length > 0 && (
                     <UpdaterLogPanel log={status.log} />
                 )}
+        </Card>
+    );
+}
+
+/**
+ * Settings → Startup. Single toggle: "Launch Genie when I sign in."
+ *
+ *   - Reads + writes via the `app.autostart` IPC, which forwards to
+ *     Electron's `setLoginItemSettings` on macOS / Windows and a
+ *     `~/.config/autostart/genie.desktop` file on Linux.
+ *   - On dev (non-packaged) builds, the toggle is shown but disabled —
+ *     writing an autostart entry that points at a one-time dev path
+ *     would just rot once the dev session ends.
+ *   - Autostart launches Genie with `openAsHidden: true`, so Genie
+ *     boots into the tray quietly. The master window only appears
+ *     when the user clicks the tray icon — no surprise pop-ups on
+ *     every login.
+ */
+function StartupSection() {
+    const [enabled, setEnabled] = useState(false);
+    const [supported, setSupported] = useState(true);
+    const [platform, setPlatform] = useState<string>('');
+    const [busy, setBusy] = useState(false);
+
+    useEffect(() => {
+        api()
+            .app.autostart.get()
+            .then((s) => {
+                setEnabled(s.enabled);
+                setSupported(s.supported);
+                setPlatform(s.platform);
+            })
+            .catch(() => { /* tolerant of older preload shapes */ });
+    }, []);
+
+    async function toggle(next: boolean) {
+        setBusy(true);
+        try {
+            const r = await api().app.autostart.set(next);
+            setEnabled(r.enabled);
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    const platformLabel =
+        platform === 'darwin'
+            ? 'macOS login items'
+            : platform === 'win32'
+                ? 'Windows Run-at-startup registry entry'
+                : platform === 'linux'
+                    ? '~/.config/autostart/genie.desktop'
+                    : 'OS login items';
+
+    return (
+        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Heading as="h2" size="sm">Startup</Heading>
+            <Text size="sm" style={{ color: 'var(--fg-2)' }}>
+                When enabled, Genie starts hidden in the tray every time you
+                sign in. Click the tray icon to open the workspace window.
+                Backed by {platformLabel}.
+            </Text>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <Action
+                    color={enabled ? 'blue' : undefined}
+                    icon={enabled ? 'check' : 'circle'}
+                    onClick={() => toggle(!enabled)}
+                    disabled={busy || !supported}
+                >
+                    {enabled ? 'Launch at sign-in: on' : 'Launch at sign-in: off'}
+                </Action>
+                {!supported && (
+                    <Text size="xs" style={{ color: 'var(--fg-3)' }}>
+                        Dev builds can't register a stable autostart path.
+                        Install the packaged release to use this.
+                    </Text>
+                )}
+            </div>
         </Card>
     );
 }

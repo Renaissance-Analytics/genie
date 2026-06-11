@@ -45,12 +45,25 @@ win:
   # CSC_LINK, CSC_KEY_PASSWORD
 
 nsis:
+  # `oneClick: false` gives the full assisted-installer wizard with
+  # location chooser + shortcut options instead of a silent install.
   oneClick: false
+  # `perMachine: false` keeps the install per-user (no UAC prompt),
+  # which also means it survives signing being absent — UAC + unsigned
+  # binary is a classic silent-fail combination on Windows 11.
   perMachine: false
   allowToChangeInstallationDirectory: true
+  # Allow the user to elevate later if they actually want a machine-
+  # wide install. Without this, the wizard pre-decides for them.
+  allowElevation: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Genie
+  # Use the universal Unicode installer header so non-ASCII paths in
+  # the user profile (e.g. accented characters) don't break extraction.
+  unicode: true
+  # Surface uninstaller in Add/Remove Programs cleanly.
+  deleteAppDataOnUninstall: false
 
 linux:
   target:

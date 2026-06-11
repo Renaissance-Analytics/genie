@@ -66,6 +66,18 @@ You only see these prompts on the **first install**. Auto-updates
 after that run through `electron-updater`'s SHA-512-verified flow
 without re-prompting.
 
+#### If the Windows installer flashes and disappears
+
+If you click **Run anyway** through SmartScreen and the installer
+window closes without installing anything, **Windows Defender
+quarantined the unsigned `.exe` after SmartScreen approved it** —
+they're separate defense systems. Open **Windows Security → Virus
+& threat protection → Protection history**, find the entry for
+`Genie-Setup-<version>.exe`, click **Actions → Restore**, then
+re-run the installer. Signed installers don't hit this. Full
+diagnostic walkthrough in
+[docs/release-pipeline.md](docs/release-pipeline.md).
+
 > Installers are produced by
 > [release CI](.github/workflows/release.yml) on every `v*` tag.
 > Signed installers ship automatically once the code-signing secrets

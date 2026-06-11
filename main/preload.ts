@@ -130,6 +130,18 @@ const api = {
         openStage: (workspaceId?: string) =>
             ipcRenderer.invoke('app:open-stage', workspaceId),
         quit: () => ipcRenderer.invoke('app:quit'),
+        autostart: {
+            get: () =>
+                ipcRenderer.invoke('app:autostart:get') as Promise<{
+                    enabled: boolean;
+                    supported: boolean;
+                    platform: NodeJS.Platform;
+                }>,
+            set: (enabled: boolean) =>
+                ipcRenderer.invoke('app:autostart:set', enabled) as Promise<{
+                    enabled: boolean;
+                }>,
+        },
     },
 
     terminalSpec: {

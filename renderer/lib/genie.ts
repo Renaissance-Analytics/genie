@@ -290,6 +290,14 @@ interface GenieApi {
         showMain: () => Promise<{ ok: boolean }>;
         openStage: (workspaceId?: string) => Promise<{ ok: boolean }>;
         quit: () => Promise<{ ok: boolean }>;
+        autostart: {
+            get: () => Promise<{
+                enabled: boolean;
+                supported: boolean;
+                platform: string;
+            }>;
+            set: (enabled: boolean) => Promise<{ enabled: boolean }>;
+        };
     };
     updater: {
         mode: () => Promise<'phase1' | 'phase2'>;
