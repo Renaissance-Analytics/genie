@@ -10,6 +10,12 @@ files:
   - from: .
     filter:
       - app/**/*
+      # The tray icon + app icon live in resources/ and are read at
+      # runtime by main/background.ts (which expects them at
+      # <asar>/resources/*.png). Without this rule they're not in the
+      # asar bundle and the tray surfaces with a blank icon.
+      - resources/tray-icon.png
+      - resources/icon.png
       - package.json
 
 asar: true

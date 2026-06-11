@@ -8,6 +8,7 @@ import { registerProtocolHandler, handleGenieUrl } from './auth';
 import { registerTerminalIpc, stopAllTerminals } from './terminal/ipc';
 import { registerGithubIpc } from './github/ipc';
 import { registerUpdaterIpc } from './updater/ipc';
+import { installAppMenu } from './app-menu';
 
 /**
  * Genie — Tynn desktop companion.
@@ -354,6 +355,8 @@ app.whenReady().then(async () => {
         trayImg.setTemplateImage(true);
     }
     createTray(trayImg);
+
+    installAppMenu();
 
     registerShortcuts();
 

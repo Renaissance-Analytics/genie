@@ -5,6 +5,15 @@
  */
 module.exports = {
     output: 'export',
+    // assetPrefix './' makes Next.js emit relative asset URLs
+    // (./_next/static/...) instead of absolute (/_next/static/...).
+    // Under file:// — which packaged Electron uses for the renderer —
+    // absolute paths resolve to the filesystem root and every JS/CSS
+    // chunk 404s. Symptom: "Waiting for preload bridge…" forever
+    // because the renderer's React bundle never runs and window.genie
+    // never lands. Only applied for production builds; dev still
+    // serves over http://localhost:8888 where absolute paths are fine.
+    assetPrefix: process.env.NODE_ENV === 'production' ? './' : undefined,
     images: { unoptimized: true },
     distDir: process.env.NODE_ENV === 'production' ? '../app' : '.next',
     trailingSlash: false,
