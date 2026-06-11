@@ -56,6 +56,15 @@ jobs:
           node-version: '20'
           cache: npm
 
+      - name: Set up Python (node-gyp needs distutils)
+        # node-pty / better-sqlite3 native rebuild goes through node-gyp,
+        # which still imports distutils. Python 3.12 dropped it from
+        # stdlib; pin to 3.11 across all runners so the rebuild succeeds
+        # without manual setuptools installs.
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Install dependencies
         # CI=true makes electron-builder install-app-deps fail loudly
         # rather than fall back to prebuilt-only via our postinstall
