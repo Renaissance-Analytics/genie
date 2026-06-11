@@ -43,7 +43,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          # Pinned to windows-2022 (not windows-latest). When Microsoft
+          # rolled `windows-latest` from 2022 → 2025 in mid-2026, the new
+          # image's Visual Studio install layout broke node-gyp's
+          # auto-discovery and node-pty failed to rebuild
+          # ("Could not find any Visual Studio installation to use").
+          # Pin so we control the image rollover ourselves.
+          - os: windows-2022
             artifact: 'Genie-Setup-*.exe'
           - os: macos-latest
             artifact: 'Genie-*.dmg'
