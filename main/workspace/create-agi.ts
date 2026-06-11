@@ -103,9 +103,15 @@ export async function createAgiEnvelope(
         'utf8',
     );
 
-    // git init + initial commit
+    // git init + initial commit. Set a local user.email / user.name so
+    // the commit succeeds even when the host has no global git identity
+    // (CI runners, fresh installs, sandboxed environments). The user can
+    // still override these via `git config` after the fact; this is just
+    // a sane default so we're not blocked on env-level configuration.
     const git = simpleGit(envelopePath);
     await git.init(['--initial-branch=main']);
+    await git.addConfig('user.email', 'genie@localhost');
+    await git.addConfig('user.name', 'Genie');
     await git.add('.');
     await git.commit('Initial commit — {slug}.agi envelope scaffolded by Genie');
 
