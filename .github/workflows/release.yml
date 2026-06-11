@@ -38,7 +38,33 @@ permissions:
   contents: write
 
 jobs:
+  # All three platform jobs run in parallel and each one wants to
+  # publish to the same GitHub Release. electron-builder's publish
+  # step creates the Release if it doesn't exist — but with three
+  # parallel POSTs, two of them lose the race and 422 with
+  # "tag_name already_exists" before they get a chance to attach
+  # assets. Create the Release shell up front so everyone can attach
+  # cleanly.
+  prepare-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure GitHub Release exists for tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --prerelease \
+              --title "$TAG" \
+              --notes "Automated build for $TAG"
+          else
+            echo "Release $TAG already exists; reusing"
+          fi
+
   release:
+    needs: prepare-release
     strategy:
       fail-fast: false
       matrix:
