@@ -65,3 +65,7 @@ publish:
   # `latest.yml` (Win + Linux) and `latest-mac.yml` are written next to
   # the installers when electron-builder ships a release. electron-updater
   # reads them from this provider via GitHub Releases.
+  # `prerelease` so CI uploads attach to existing pre-release tags created
+  # by `gh release create --prerelease`; switch to `release` for stable
+  # cuts so they're tagged Latest in the GitHub UI.
+  releaseType: prerelease
