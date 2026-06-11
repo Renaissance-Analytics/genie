@@ -26,7 +26,9 @@ mac:
   target:
     - dmg
     - zip
-  icon: resources/icon.icns
+  # No explicit .icns — electron-builder derives one from resources/icon.png
+  # at build time. Drop in a real icon.icns later for tighter control.
+  icon: resources/icon.png
   hardenedRuntime: true
   gatekeeperAssess: false
   # Notarisation envs are picked up from CI at release time.
@@ -37,7 +39,8 @@ win:
     - target: nsis
       arch:
         - x64
-  icon: resources/icon.ico
+  # No explicit .ico — electron-builder derives one from resources/icon.png.
+  icon: resources/icon.png
   # Code signing happens via env vars in CI:
   # CSC_LINK, CSC_KEY_PASSWORD
 

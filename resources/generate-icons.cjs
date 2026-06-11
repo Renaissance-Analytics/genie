@@ -43,5 +43,8 @@ function png(width, height, rgba) {
 }
 
 writeFileSync(join(__dirname, 'tray-icon.png'), png(32, 32, [139, 92, 246, 255]));
-writeFileSync(join(__dirname, 'icon.png'), png(256, 256, [139, 92, 246, 255]));
-console.log('Wrote placeholder tray-icon.png + icon.png');
+// 1024×1024 is the standard for retina/HiDPI app icons and is large
+// enough for electron-builder to derive icns + ico variants from. macOS
+// rejects icons smaller than 512×512.
+writeFileSync(join(__dirname, 'icon.png'), png(1024, 1024, [139, 92, 246, 255]));
+console.log('Wrote placeholder tray-icon.png + icon.png (1024×1024)');
