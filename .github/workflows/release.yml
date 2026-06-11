@@ -93,7 +93,7 @@ jobs:
       # CSC_IDENTITY_AUTO_DISCOVERY=false instead.
 
       - name: Build (Windows)
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
@@ -109,7 +109,7 @@ jobs:
           npx nextron build --win
 
       - name: Build (macOS)
-        if: matrix.os == 'macos-latest'
+        if: runner.os == 'macOS'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
@@ -129,7 +129,7 @@ jobs:
           npx nextron build --mac
 
       - name: Build (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
         run: npx nextron build --linux
