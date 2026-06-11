@@ -53,7 +53,16 @@ export function registerProtocolHandler(): void {
 export async function startSignIn(): Promise<void> {
     const host = tynnHost();
     const ret = encodeURIComponent('genie://oauth/callback');
-    const url = `${host}/login?return=${ret}`;
+    // Send the user straight to /genie/callback, not /login. The
+    // callback endpoint handles BOTH cases:
+    //   - already signed in → renders the handoff page that fires
+    //     genie://oauth/callback?token=... immediately.
+    //   - signed out → bounces them through /login?return=... and
+    //     comes back here automatically after auth.
+    // Hitting /login first short-circuits when the user has an active
+    // Tynn session — Fortify sees them as already-authenticated and
+    // redirects to /dashboard, dropping the return URL on the floor.
+    const url = `${host}/genie/callback?return=${ret}`;
     await shell.openExternal(url);
 }
 
