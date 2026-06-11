@@ -1,0 +1,101 @@
+name: Release
+
+# Builds signed installers for Windows, macOS, and Linux on tag push.
+# Each platform runs on its native runner so node-pty + better-sqlite3
+# native modules link against the right ABI.
+#
+# Required secrets (configure under repo Settings → Secrets and variables
+# → Actions). Without them the build still runs but produces unsigned
+# installers — fine for testing the pipeline, not for distribution:
+#
+#   GH_TOKEN                — A token with repo:write permission so
+#                             electron-builder can attach release
+#                             artifacts to a GitHub Release. The default
+#                             secrets.GITHUB_TOKEN works for the same-
+#                             repo case.
+#
+#   Windows (NSIS):
+#     WINDOWS_CSC_LINK            — base64-encoded .pfx OR https URL
+#     WINDOWS_CSC_KEY_PASSWORD    — password for the .pfx
+#
+#   macOS (Developer ID + notarisation):
+#     MAC_CSC_LINK                — base64-encoded .p12
+#     MAC_CSC_KEY_PASSWORD        — password for the .p12
+#     APPLE_ID                    — Apple ID for notarisation
+#     APPLE_APP_SPECIFIC_PASSWORD — app-specific password
+#     APPLE_TEAM_ID               — your Developer Team ID
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: 'Genie-Setup-*.exe'
+          - os: macos-latest
+            artifact: 'Genie-*.dmg'
+          - os: ubuntu-latest
+            artifact: 'Genie-*.AppImage'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        # CI=true makes electron-builder install-app-deps fail loudly
+        # rather than fall back to prebuilt-only via our postinstall
+        # `|| echo` guard. We want a clean ABI match on release builds.
+        env:
+          CI: true
+        run: npm ci
+
+      - name: Build (Windows)
+        if: matrix.os == 'windows-latest'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+        run: npx nextron build --win
+
+      - name: Build (macOS)
+        if: matrix.os == 'macos-latest'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx nextron build --mac
+
+      - name: Build (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+        run: npx nextron build --linux
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}-installer
+          path: |
+            dist/${{ matrix.artifact }}
+            dist/*.yml
+            dist/*.blockmap
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,209 @@
+import { app } from 'electron';
+import { autoUpdater, type UpdateInfo } from 'electron-updater';
+import { EventEmitter } from 'node:events';
+
+/**
+ * Phase 2 packaged-app updater. Wraps `electron-updater` so the
+ * renderer surface is identical to the Phase 1 git updater: same
+ * state machine, same log stream, same UI. The two updaters never
+ * run at the same time — `mode()` below picks one based on whether
+ * we're a packaged build or a git checkout.
+ *
+ * `electron-updater` pulls release artifacts from the publish provider
+ * configured in `electron-builder.yml` (GitHub Releases for us). It
+ * verifies a SHA-512 checksum from `latest.yml` against the downloaded
+ * installer before applying — that, plus the signed installer's own
+ * authenticode/notarisation chain, is what makes the auto-update path
+ * production-trustworthy.
+ *
+ * Differences vs Phase 1:
+ *   - No `npm install`/`npm run build` step. The new version IS the
+ *     installer.
+ *   - "Apply" downloads the installer to a staging dir; "Restart"
+ *     hands control to it. The current binary is replaced atomically
+ *     by the installer's own swap logic on next launch.
+ *   - No rollback on failure — electron-updater leaves the previous
+ *     install intact and the user can simply not restart.
+ */
+
+export type AutoUpdaterState =
+    | 'idle'
+    | 'checking'
+    | 'available'
+    | 'up-to-date'
+    | 'downloading'
+    | 'ready-to-restart'
+    | 'error'
+    | 'disabled';
+
+export interface AutoUpdaterStatus {
+    state: AutoUpdaterState;
+    currentVersion: string;
+    latestVersion: string | null;
+    publishedAt: string | null;
+    releaseUrl: string | null;
+    log: string[];
+    error: string | null;
+    /** 0..1 during 'downloading'. */
+    progress: number | null;
+}
+
+const LOG_MAX = 2000;
+
+class AutoUpdater extends EventEmitter {
+    private status: AutoUpdaterStatus;
+
+    constructor() {
+        super();
+        this.status = {
+            state: 'idle',
+            currentVersion: app.getVersion(),
+            latestVersion: null,
+            publishedAt: null,
+            releaseUrl: null,
+            log: [],
+            error: null,
+            progress: null,
+        };
+        this.bind();
+    }
+
+    getStatus(): AutoUpdaterStatus {
+        return { ...this.status, log: [...this.status.log] };
+    }
+
+    async checkForUpdate(): Promise<void> {
+        if (this.status.state === 'downloading') return;
+        this.setStatus({ state: 'checking', error: null });
+        try {
+            const res = await autoUpdater.checkForUpdates();
+            if (!res || !res.updateInfo) {
+                this.setStatus({ state: 'up-to-date' });
+                return;
+            }
+            const latest = res.updateInfo.version;
+            if (latest === app.getVersion()) {
+                this.setStatus({
+                    state: 'up-to-date',
+                    latestVersion: latest,
+                });
+            } else {
+                this.setStatus({
+                    state: 'available',
+                    latestVersion: latest,
+                    publishedAt: res.updateInfo.releaseDate ?? null,
+                    releaseUrl: pickReleaseUrl(res.updateInfo),
+                });
+            }
+        } catch (e) {
+            this.setStatus({
+                state: 'error',
+                error: e instanceof Error ? e.message : String(e),
+            });
+        }
+    }
+
+    async downloadAndStage(): Promise<void> {
+        if (this.status.state !== 'available') {
+            throw new Error('No update available to download.');
+        }
+        this.setStatus({ state: 'downloading', progress: 0, error: null });
+        try {
+            await autoUpdater.downloadUpdate();
+            // Success transitions to 'ready-to-restart' via the
+            // `update-downloaded` event handler in bind().
+        } catch (e) {
+            this.setStatus({
+                state: 'error',
+                error: e instanceof Error ? e.message : String(e),
+            });
+        }
+    }
+
+    restartAndApply(): void {
+        if (this.status.state !== 'ready-to-restart') {
+            throw new Error('No update has been downloaded yet.');
+        }
+        // `quitAndInstall(isSilent, isForceRunAfter)`:
+        //   isSilent=false  — show the installer UI (Windows NSIS)
+        //   isForceRunAfter=true — relaunch Genie after install
+        autoUpdater.quitAndInstall(false, true);
+    }
+
+    private bind(): void {
+        // We do everything explicitly — no auto-download, no auto-install.
+        autoUpdater.autoDownload = false;
+        autoUpdater.autoInstallOnAppQuit = false;
+
+        autoUpdater.logger = {
+            info: (...args: unknown[]) => this.appendLog('info: ' + args.join(' ')),
+            warn: (...args: unknown[]) => this.appendLog('warn: ' + args.join(' ')),
+            error: (...args: unknown[]) => this.appendLog('error: ' + args.join(' ')),
+            debug: (..._args: unknown[]) => { /* noisy; drop */ },
+        };
+
+        autoUpdater.on('update-available', (info) => {
+            this.appendLog(`update-available ${info.version}`);
+        });
+        autoUpdater.on('update-not-available', (info) => {
+            this.appendLog(`update-not-available ${info.version}`);
+        });
+        autoUpdater.on('download-progress', (p) => {
+            this.setStatus({
+                state: 'downloading',
+                progress: Math.max(0, Math.min(1, p.percent / 100)),
+            });
+        });
+        autoUpdater.on('update-downloaded', (info) => {
+            this.appendLog(`update-downloaded ${info.version}`);
+            this.setStatus({
+                state: 'ready-to-restart',
+                latestVersion: info.version,
+                progress: 1,
+            });
+        });
+        autoUpdater.on('error', (err) => {
+            this.setStatus({
+                state: 'error',
+                error: err?.message ?? String(err),
+            });
+        });
+    }
+
+    private appendLog(line: string): void {
+        const trimmed = String(line).trim();
+        if (!trimmed) return;
+        this.status.log.push(trimmed);
+        if (this.status.log.length > LOG_MAX) {
+            this.status.log = this.status.log.slice(-LOG_MAX);
+        }
+        this.emit('log', trimmed);
+        this.emit('status', this.status);
+    }
+
+    private setStatus(patch: Partial<AutoUpdaterStatus>): void {
+        this.status = { ...this.status, ...patch };
+        this.emit('status', this.status);
+    }
+}
+
+let instance: AutoUpdater | null = null;
+export function autoUpdaterInstance(): AutoUpdater {
+    if (!instance) instance = new AutoUpdater();
+    return instance;
+}
+
+function pickReleaseUrl(info: UpdateInfo): string | null {
+    const tag = info.version ? `v${info.version}` : null;
+    if (!tag) return null;
+    return `https://github.com/Renaissance-Analytics/genie/releases/tag/${tag}`;
+}
+
+/**
+ * Decide which updater path to expose to the renderer.
+ *   - Packaged production builds: Phase 2 (electron-updater).
+ *   - Dev / git-clone installs: Phase 1 (git-pull-and-rebuild).
+ */
+export function updaterMode(): 'phase2' | 'phase1' {
+    return app.isPackaged ? 'phase2' : 'phase1';
+}

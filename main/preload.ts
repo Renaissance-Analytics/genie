@@ -46,9 +46,16 @@ const api = {
     },
 
     updater: {
+        mode: () =>
+            ipcRenderer.invoke('updater:mode') as Promise<'phase1' | 'phase2'>,
         status: () => ipcRenderer.invoke('updater:status'),
         check: () => ipcRenderer.invoke('updater:check'),
         apply: () => ipcRenderer.invoke('updater:apply'),
+        restart: () =>
+            ipcRenderer.invoke('updater:restart') as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
         getConfig: () => ipcRenderer.invoke('updater:config:get'),
         setConfig: (patch: { repo?: string; pollHours?: number }) =>
             ipcRenderer.invoke('updater:config:set', patch),

@@ -98,7 +98,8 @@ export type UpdaterState =
     | 'checking'
     | 'available'
     | 'up-to-date'
-    | 'applying'
+    | 'applying'      // phase 1
+    | 'downloading'   // phase 2
     | 'ready-to-restart'
     | 'error'
     | 'disabled';
@@ -111,7 +112,10 @@ export interface UpdaterStatus {
     releaseUrl: string | null;
     log: string[];
     error: string | null;
-    repo: string | null;
+    /** Only meaningful for the phase-1 backend. */
+    repo?: string | null;
+    /** Only meaningful during phase-2 download: 0..1. */
+    progress?: number | null;
 }
 
 export interface UpdaterConfig {
@@ -288,9 +292,11 @@ interface GenieApi {
         quit: () => Promise<{ ok: boolean }>;
     };
     updater: {
+        mode: () => Promise<'phase1' | 'phase2'>;
         status: () => Promise<UpdaterStatus>;
         check: () => Promise<UpdaterStatus>;
         apply: () => Promise<{ ok: boolean; error?: string }>;
+        restart: () => Promise<{ ok: boolean; error?: string }>;
         getConfig: () => Promise<UpdaterConfig>;
         setConfig: (
             patch: Partial<UpdaterConfig>,

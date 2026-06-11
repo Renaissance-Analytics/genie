@@ -58,4 +58,7 @@ linux:
 publish:
   provider: github
   owner: Renaissance-Analytics
-  repo: tynn.ai
+  repo: genie
+  # `latest.yml` (Win + Linux) and `latest-mac.yml` are written next to
+  # the installers when electron-builder ships a release. electron-updater
+  # reads them from this provider via GitHub Releases.

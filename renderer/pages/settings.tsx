@@ -530,12 +530,17 @@ function DeviceFlowPanel({
 function UpdaterSection() {
     const [config, setConfig] = useState<UpdaterConfig>({ repo: '', pollHours: 6 });
     const [status, setStatus] = useState<UpdaterStatus | null>(null);
+    const [mode, setMode] = useState<'phase1' | 'phase2' | null>(null);
     const [busy, setBusy] = useState(false);
 
     useEffect(() => {
         void (async () => {
-            const c = await api().updater.getConfig();
-            const s = await api().updater.status();
+            const [m, c, s] = await Promise.all([
+                api().updater.mode(),
+                api().updater.getConfig(),
+                api().updater.status(),
+            ]);
+            setMode(m);
             setConfig(c);
             setStatus(s);
         })();
@@ -571,9 +576,17 @@ function UpdaterSection() {
         available: `Update available`,
         'up-to-date': 'Up to date',
         applying: 'Applying update…',
+        downloading: 'Downloading installer…',
         'ready-to-restart': 'Ready — restart to load',
         error: 'Error',
         disabled: 'Disabled',
+    };
+    const restart = async () => {
+        if (mode === 'phase2') {
+            await api().updater.restart();
+        } else {
+            await api().app.quit();
+        }
     };
 
     return (
@@ -583,7 +596,9 @@ function UpdaterSection() {
                     Updates
                 </Heading>
                 <Text size="xs" className="text-zinc-500">
-                    git-pull + rebuild (Phase 1)
+                    {mode === 'phase2'
+                        ? 'Signed installer (auto-update)'
+                        : 'git-pull + rebuild (dev)'}
                 </Text>
                 <span style={{ flex: 1 }} />
                 <Text size="xs" className="text-zinc-500">
@@ -591,32 +606,55 @@ function UpdaterSection() {
                 </Text>
             </div>
 
-            <Input
-                label="Source repository"
-                description={'GitHub owner/repo. Default is renaissance-analytics/genie; change only if you’re tracking a fork. Empty disables the updater.'}
-                value={config.repo}
-                onValueChange={(v) => setConfig((c) => ({ ...c, repo: v }))}
-                placeholder="renaissance-analytics/genie"
-            />
-            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                <div style={{ flex: 1 }}>
+            {mode === 'phase1' && (
+                <>
                     <Input
-                        label="Poll every (hours)"
-                        description="0 disables automatic polling."
-                        value={String(config.pollHours)}
-                        onValueChange={(v) =>
-                            setConfig((c) => ({
-                                ...c,
-                                pollHours: Number(v) || 0,
-                            }))
-                        }
-                        placeholder="6"
+                        label="Source repository"
+                        description={'GitHub owner/repo. Default is renaissance-analytics/genie; change only if you’re tracking a fork. Empty disables the updater.'}
+                        value={config.repo}
+                        onValueChange={(v) => setConfig((c) => ({ ...c, repo: v }))}
+                        placeholder="renaissance-analytics/genie"
                     />
-                </div>
-                <Action color="blue" size="sm" onClick={saveConfig}>
-                    Save
-                </Action>
-            </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                        <div style={{ flex: 1 }}>
+                            <Input
+                                label="Poll every (hours)"
+                                description="0 disables automatic polling."
+                                value={String(config.pollHours)}
+                                onValueChange={(v) =>
+                                    setConfig((c) => ({
+                                        ...c,
+                                        pollHours: Number(v) || 0,
+                                    }))
+                                }
+                                placeholder="6"
+                            />
+                        </div>
+                        <Action color="blue" size="sm" onClick={saveConfig}>
+                            Save
+                        </Action>
+                    </div>
+                </>
+            )}
+
+            {mode === 'phase2' && (
+                <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                    Updates are downloaded from{' '}
+                    <a
+                        href="#"
+                        onClick={(e) => {
+                            e.preventDefault();
+                            void api().tynn.openInBrowser(
+                                'https://github.com/Renaissance-Analytics/genie/releases',
+                            );
+                        }}
+                        style={{ color: 'var(--blue-400)' }}
+                    >
+                        the canonical Genie releases page
+                    </a>
+                    . Installer is checksum-verified before applying.
+                </Text>
+            )}
 
             <div
                 style={{
@@ -648,28 +686,36 @@ function UpdaterSection() {
                         Published {new Date(status.publishedAt).toLocaleString()}
                     </Text>
                 )}
-                <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                <div style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}>
                     <Action
                         size="sm"
                         variant="ghost"
                         onClick={check}
-                        disabled={busy || !config.repo || status?.state === 'applying'}
+                        disabled={
+                            busy ||
+                            (mode === 'phase1' && !config.repo) ||
+                            status?.state === 'applying' ||
+                            status?.state === 'downloading'
+                        }
                     >
                         Check for updates
                     </Action>
                     {status?.state === 'available' && (
                         <Action color="blue" size="sm" onClick={apply} disabled={busy}>
-                            Update now (v{status.latestVersion})
+                            {mode === 'phase2'
+                                ? `Download v${status.latestVersion}`
+                                : `Update now (v${status.latestVersion})`}
                         </Action>
                     )}
                     {status?.state === 'ready-to-restart' && (
-                        <Action
-                            color="blue"
-                            size="sm"
-                            onClick={() => api().app.quit()}
-                        >
+                        <Action color="blue" size="sm" onClick={restart}>
                             Restart Genie now
                         </Action>
+                    )}
+                    {status?.state === 'downloading' && status.progress != null && (
+                        <Text size="xs" className="text-zinc-500">
+                            {Math.round(status.progress * 100)}%
+                        </Text>
                     )}
                 </div>
                 {status?.error && (
@@ -681,6 +727,7 @@ function UpdaterSection() {
 
             {status &&
                 (status.state === 'applying' ||
+                    status.state === 'downloading' ||
                     status.state === 'ready-to-restart' ||
                     status.state === 'error') &&
                 status.log.length > 0 && (

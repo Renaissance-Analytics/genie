@@ -29,7 +29,27 @@ local AGI gateway.
 
 ## Install
 
-You need: **Node.js ≥ 20**, **npm**, **git**.
+### End-user install (signed installers)
+
+Download the installer for your platform from
+[Releases](https://github.com/Renaissance-Analytics/genie/releases):
+
+- **Windows:** `Genie-Setup-<version>.exe`
+- **macOS:** `Genie-<version>.dmg` (signed + notarised)
+- **Linux:** `Genie-<version>.AppImage`
+
+Auto-update is handled by `electron-updater` — once installed, Genie
+polls Releases on launch and prompts you when a newer build is
+available.
+
+> Installers are produced by [CI](.github/workflows/release.yml) on
+> every `v*` tag. If a release doesn't have signed installers yet,
+> you can either wait for the next signed cut or fall back to the
+> developer install below.
+
+### Developer install
+
+You need **Node.js ≥ 20**, **npm**, and **git**.
 
 ```bash
 git clone https://github.com/renaissance-analytics/genie.git
@@ -42,7 +62,11 @@ On Windows, native modules (`node-pty`, `better-sqlite3`) ship with
 prebuilt binaries for common Electron ABIs. If `npm install` complains
 about Visual Studio Build Tools, the prebuilds are usually still
 enough for development — install Build Tools only if you need to
-package a release.
+package a release locally.
+
+In dev mode the updater path is the **Phase 1 git-pull-and-rebuild**
+flow (Settings → Updates), which runs `git fetch && git checkout
+<tag> && npm install && npm run build` in-place.
 
 ## Project layout
 
@@ -63,11 +87,23 @@ genie/
 └── test/                  ← Vitest unit tests
 ```
 
-## How updates work (Phase 1)
+## How updates work
 
-Genie polls the GitHub Releases / Tags API on the configured repo. When
-a newer tag is available, you see a small indicator in TheFloor's title
-bar. Click **Update now** in Settings → Updates and Genie runs:
+Genie picks the right updater path automatically:
+
+### Packaged installs → `electron-updater` (Phase 2)
+
+When you run a signed installer from Releases, the running Genie polls
+its publish provider (GitHub Releases) for newer versions, downloads
+the new installer in the background, verifies the SHA-512 checksum
+recorded in `latest.yml`, and prompts you to restart. The restart
+swaps the binary atomically via the installer's own mechanism.
+
+### Developer installs → git-pull + rebuild (Phase 1)
+
+When you ran `git clone && npm install && npm run dev`, the updater
+detects you're not a packaged build and switches to the Phase 1 flow.
+Settings → Updates shows the same UI but executes:
 
 ```
 git fetch origin --tags
@@ -76,13 +112,11 @@ npm install
 npm run build
 ```
 
-Output streams into the Updates panel so you can watch it. On success
-you're prompted to restart Genie. On failure the old version stays
-intact and the error is shown.
+Output streams into the Updates panel; on success you're prompted to
+restart. On failure the previous `HEAD` is restored.
 
-Phase 2 (planned): swap to `electron-updater` with signed installers
-distributed via GitHub Releases. The Phase 1 git-rebuild updater
-remains useful for tracking trunk if you want to live on tip.
+The same Settings panel UI handles both — the backend is selected by
+`app.isPackaged`.
 
 ## Architecture notes
 
