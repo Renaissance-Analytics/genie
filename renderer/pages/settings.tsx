@@ -140,14 +140,10 @@ export default function SettingsPage() {
                 />
             </Card>
 
-            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Heading as="h2" size="sm">Tynn host</Heading>
-                <Input
-                    description="Override for self-hosted Tynn instances. Default: https://tynn.ai"
-                    value={s.tynn_host ?? ''}
-                    onValueChange={(v) => patch({ tynn_host: v })}
-                />
-            </Card>
+            <TynnSection
+                hostOverride={s.tynn_host ?? ''}
+                onHostOverrideChange={(v) => patch({ tynn_host: v })}
+            />
 
             <GitHubSection />
 
@@ -168,6 +164,136 @@ export default function SettingsPage() {
                 </Action>
             </div>
         </div>
+    );
+}
+
+/**
+ * Tynn connection — surfaces login state ("Connected as X") and
+ * routes sign-in / sign-out through the standard browser handoff.
+ * The host is auto-selected per environment (tynn.test in dev,
+ * tynn.ai in production) and can be overridden via Advanced for
+ * self-hosters / staging. Replaces the bare "Tynn host" Input that
+ * used to live in the main settings list.
+ */
+function TynnSection({
+    hostOverride,
+    onHostOverrideChange,
+}: {
+    hostOverride: string;
+    onHostOverrideChange: (v: string) => void;
+}) {
+    const [user, setUser] = useState<{ name: string; email?: string } | null>(null);
+    const [host, setHost] = useState<string>('');
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [showAdvanced, setShowAdvanced] = useState(false);
+
+    const refresh = async () => {
+        try {
+            const u = await api().auth.whoami('tynn');
+            const single = (u && 'name' in (u as object))
+                ? (u as { name: string; email?: string })
+                : null;
+            setUser(single);
+            setHost(await api().tynnHost.get());
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        }
+    };
+
+    useEffect(() => {
+        void refresh();
+        // Listen for the auth:changed event the main process broadcasts
+        // after the genie:// callback drops a session cookie.
+        const off = api().on.authChanged?.(() => {
+            void refresh();
+        });
+        return () => off?.();
+    }, []);
+
+    const signIn = async () => {
+        setBusy(true);
+        setError(null);
+        try {
+            const r = await api().auth.startSignIn('tynn');
+            if (!r.ok) setError(r.message ?? 'Sign-in could not be started.');
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const signOut = async () => {
+        setBusy(true);
+        try {
+            await api().auth.signOut('tynn');
+            await refresh();
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    // Pretty-print the host: chop the protocol so the chip reads
+    // "tynn.ai" instead of "https://tynn.ai".
+    const hostLabel = host.replace(/^https?:\/\//, '');
+
+    return (
+        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Heading as="h2" size="sm" style={{ margin: 0 }}>
+                    Tynn
+                </Heading>
+                <Text size="xs" className="text-zinc-500">
+                    Project management · browser sign-in via {hostLabel || 'tynn.ai'}
+                </Text>
+                <span style={{ flex: 1 }} />
+                {user && (
+                    <Text size="xs" style={{ color: 'var(--emerald-600)' }}>
+                        <Icon name="check" size="xs" /> Connected as {user.name}
+                    </Text>
+                )}
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {!user && (
+                    <Action color="blue" size="sm" onClick={signIn} disabled={busy}>
+                        {busy ? 'Opening…' : `Sign in at ${hostLabel || 'tynn.ai'}…`}
+                    </Action>
+                )}
+                {user && (
+                    <Action variant="ghost" size="sm" onClick={signOut} disabled={busy}>
+                        Sign out
+                    </Action>
+                )}
+                <span style={{ flex: 1 }} />
+                <Action
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowAdvanced((s) => !s)}
+                >
+                    {showAdvanced ? 'Hide Advanced' : 'Advanced'}
+                </Action>
+            </div>
+
+            {error && (
+                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                    {error}
+                </Text>
+            )}
+
+            {showAdvanced && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 8, borderTop: '1px solid var(--border-1)' }}>
+                    <Input
+                        label="Tynn host override"
+                        description="Leave blank to use the environment default (tynn.test in dev, tynn.ai when installed). Set this only for self-hosted Tynn or a staging instance — e.g. https://tynn-staging.example.com."
+                        value={hostOverride}
+                        onValueChange={onHostOverrideChange}
+                        placeholder={host || 'https://tynn.ai'}
+                    />
+                </div>
+            )}
+        </Card>
     );
 }
 

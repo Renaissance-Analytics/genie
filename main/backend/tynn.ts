@@ -1,4 +1,4 @@
-import { session, shell } from 'electron';
+import { app, session, shell } from 'electron';
 import { getAllSettings } from '../db';
 import type {
     Backend,
@@ -27,11 +27,23 @@ interface TynnFetchOptions {
     headers?: Record<string, string>;
 }
 
+/**
+ * Default Tynn host depends on whether Genie is running packaged
+ * (production install) or from `npm run dev`. Packaged installs talk
+ * to the public Tynn at tynn.ai; dev sessions talk to the local Herd
+ * site at tynn.test that's serving the _app/ source. A user setting
+ * overrides both for self-hosted / staging cases.
+ */
+function defaultTynnHost(): string {
+    return app.isPackaged ? 'https://tynn.ai' : 'https://tynn.test';
+}
+
 export class TynnBackend implements Backend {
     readonly kind = 'tynn' as const;
 
     host(): string {
-        return getAllSettings().tynn_host ?? 'https://tynn.ai';
+        const override = getAllSettings().tynn_host?.trim();
+        return override || defaultTynnHost();
     }
 
     async whoami(): Promise<BackendUser | null> {
