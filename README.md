@@ -29,23 +29,47 @@ local AGI gateway.
 
 ## Install
 
-### End-user install (signed installers)
+### End-user install
 
 Download the installer for your platform from
 [Releases](https://github.com/Renaissance-Analytics/genie/releases):
 
 - **Windows:** `Genie-Setup-<version>.exe`
-- **macOS:** `Genie-<version>.dmg` (signed + notarised)
+- **macOS:** `Genie-<version>-arm64.dmg`
 - **Linux:** `Genie-<version>.AppImage`
 
 Auto-update is handled by `electron-updater` — once installed, Genie
 polls Releases on launch and prompts you when a newer build is
-available.
+available. Update payloads are checksum-verified (SHA-512 in
+`latest.yml`) before being applied.
 
-> Installers are produced by [CI](.github/workflows/release.yml) on
-> every `v*` tag. If a release doesn't have signed installers yet,
-> you can either wait for the next signed cut or fall back to the
-> developer install below.
+### First-launch prompts (alpha — installers are unsigned)
+
+Alpha builds are not yet code-signed, so your OS will prompt the first
+time you install. This is expected; the warning goes away once we
+have signing certificates configured. Follow the steps for your
+platform:
+
+- **Windows:** SmartScreen blocks the installer with *"Windows
+  protected your PC"*. Click **More info** → **Run anyway**, then
+  step through the NSIS installer normally.
+- **macOS:** Gatekeeper blocks the `.dmg` with *"can't be opened
+  because Apple cannot check it for malicious software"*. Open
+  **System Settings → Privacy & Security**, scroll to the bottom,
+  click **Open Anyway** on the blocked entry, then re-open the DMG.
+  (On older macOS: right-click the DMG → **Open** → **Open** at the
+  confirmation prompt.)
+- **Linux:** `chmod +x Genie-<version>.AppImage && ./Genie-<version>.AppImage`.
+  No prompt.
+
+You only see these prompts on the **first install**. Auto-updates
+after that run through `electron-updater`'s SHA-512-verified flow
+without re-prompting.
+
+> Installers are produced by
+> [release CI](.github/workflows/release.yml) on every `v*` tag.
+> Signed installers ship automatically once the code-signing secrets
+> are configured — see [docs/release-pipeline.md](docs/release-pipeline.md).
 
 ### Developer install
 
