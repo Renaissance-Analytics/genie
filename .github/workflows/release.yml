@@ -50,7 +50,10 @@ jobs:
           # ("Could not find any Visual Studio installation to use").
           # Pin so we control the image rollover ourselves.
           - os: windows-2022
-            artifact: 'Genie-Setup-*.exe'
+            # Glob matches both the NSIS installer (Genie-Setup-*.exe)
+            # and the portable build (Genie-*.exe without the Setup-
+            # prefix) so both get attached to the release.
+            artifact: 'Genie*.exe'
           - os: macos-latest
             artifact: 'Genie-*.dmg'
           - os: ubuntu-latest

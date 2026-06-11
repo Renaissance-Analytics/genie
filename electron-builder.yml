@@ -39,6 +39,14 @@ win:
     - target: nsis
       arch:
         - x64
+    # Portable is a self-extracting EXE that doesn't actually install —
+    # it runs Genie directly from a temp dir. We ship it alongside the
+    # NSIS installer so users can isolate "installer broken" vs "app
+    # broken" when the installer silently fails (Defender quarantine,
+    # corporate AV, NSIS extraction failure on the target machine).
+    - target: portable
+      arch:
+        - x64
   # No explicit .ico — electron-builder derives one from resources/icon.png.
   icon: resources/icon.png
   # Code signing happens via env vars in CI:
