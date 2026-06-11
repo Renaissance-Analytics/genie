@@ -1,6 +1,6 @@
 {
   "name": "genie",
-  "version": "0.7.0-alpha.8",
+  "version": "0.7.0-alpha.9",
   "description": "Tynn desktop companion — tray-resident workspace manager",
   "private": true,
   "main": "app/background.js",
@@ -14,7 +14,8 @@
     "typecheck:renderer": "tsc --noEmit -p renderer/tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "build:icons": "node resources/build-icons.cjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

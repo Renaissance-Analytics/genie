@@ -590,27 +590,10 @@ function TitleBar({
                 </span>
             )}
             <span className="glogo">
-                <svg
-                    className="lamp"
-                    viewBox="0 0 32 32"
-                    xmlns="http://www.w3.org/2000/svg"
-                >
-                    <defs>
-                        <linearGradient id="gl2" x1="3" y1="6" x2="29" y2="26" gradientUnits="userSpaceOnUse">
-                            <stop stopColor="#7dd3fc" />
-                            <stop offset=".5" stopColor="#818cf8" />
-                            <stop offset="1" stopColor="#c4b5fd" />
-                        </linearGradient>
-                    </defs>
-                    <ellipse cx="15" cy="25.5" rx="9" ry="1.5" fill="url(#gl2)" opacity=".3" />
-                    <path
-                        d="M6 20c0-3.2 4-5 9-5s9 1.8 9 5c0 1.6-1.3 2.6-3.1 3.2-1.8.6-3.7.8-5.9.8s-4.1-.2-5.9-.8C7.3 22.6 6 21.6 6 20Z"
-                        fill="url(#gl2)"
-                    />
-                    <path d="M23.5 18.6 29 16.8l-5.5-1.5Z" fill="url(#gl2)" />
-                    <circle cx="15" cy="12.6" r="1.7" fill="url(#gl2)" />
-                    <path d="M12.4 14.8c.6-1.1 1.5-1.8 2.6-1.8s2 .7 2.6 1.8Z" fill="url(#gl2)" />
-                </svg>
+                {/* The PNG ships in resources/logo.png; Next copies it into
+                    renderer/public at build time. Use the relative path so it
+                    works under file:// (packaged) and http://localhost (dev). */}
+                <img className="lamp" src="./logo.png" alt="" width={22} height={22} />
                 Genie
             </span>
             <span className="ttl">
