@@ -1,5 +1,6 @@
 import { BrowserWindow, ipcMain, WebContents } from 'electron';
 import { terminalManager, CreateTerminalOpts, TerminalInfo } from './manager';
+import { detectShells, defaultShellId, resolveDefaultShell } from './shells';
 
 /**
  * IPC layer for the terminal subsystem. The manager owns ptys + emits
@@ -75,11 +76,24 @@ export function registerTerminalIpc(): void {
             event,
             opts: CreateTerminalOpts,
         ): TerminalInfo & { existing: boolean; scrollback: string } => {
+            // No explicit shell on the spec → the user's configured default
+            // (Settings → Terminal), which itself falls back to detection
+            // (Git Bash first on Windows). Resolution lives in shells.ts so
+            // the manager stays a pure pty pool.
+            if (!opts.shell) {
+                const resolved = resolveDefaultShell();
+                opts = { ...opts, shell: resolved.command, args: opts.args ?? resolved.args };
+            }
             const result = mgr.create(opts);
             trackOwner(opts.id, event.sender);
             return result;
         },
     );
+
+    ipcMain.handle('terminal:shells', () => {
+        const shells = detectShells();
+        return { shells, defaultId: defaultShellId(shells) };
+    });
 
     ipcMain.handle('terminal:write', (_event, id: string, data: string): boolean => {
         return mgr.write(id, data);

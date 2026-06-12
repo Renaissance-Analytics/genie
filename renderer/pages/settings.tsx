@@ -12,6 +12,7 @@ import {
     api,
     type EditorDetection,
     type Settings,
+    type ShellDetection,
     type UpdaterConfig,
     type UpdaterStatus,
 } from '../lib/genie';
@@ -19,6 +20,8 @@ import {
 export default function SettingsPage() {
     const [s, setS] = useState<Settings | null>(null);
     const [editors, setEditors] = useState<EditorDetection[]>([]);
+    const [shells, setShells] = useState<ShellDetection[]>([]);
+    const [shellDefault, setShellDefault] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
     const [savedAt, setSavedAt] = useState<number | null>(null);
 
@@ -35,6 +38,12 @@ export default function SettingsPage() {
                     default_editor_cmd: eds[0].path,
                 });
             }
+            const det = await api().settings.detectShells().catch(() => ({
+                shells: [] as ShellDetection[],
+                defaultId: null,
+            }));
+            setShells(det.shells);
+            setShellDefault(det.defaultId);
         })();
     }, []);
 
@@ -114,6 +123,60 @@ export default function SettingsPage() {
                         Browse
                     </Action>
                 </div>
+            </Card>
+
+            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <Heading as="h2" size="sm">Default terminal</Heading>
+                <Text size="xs" className="text-zinc-500">
+                    Shell used when a terminal panel doesn't specify one. Detected
+                    on this machine{shellDefault
+                        ? ` — ${shells.find((d) => d.id === shellDefault)?.label ?? shellDefault} is the recommended default`
+                        : ''}. Each panel can still switch shells from its toolbar.
+                </Text>
+                <Select
+                    value={s.terminal_shell || shellDefault || ''}
+                    onValueChange={(v) => patch({ terminal_shell: v })}
+                    list={[
+                        ...shells.map((d) => ({
+                            value: d.id,
+                            label:
+                                d.id === shellDefault
+                                    ? `${d.label} (recommended)`
+                                    : d.label,
+                        })),
+                        { value: 'custom', label: 'Custom executable' },
+                    ]}
+                />
+                {(s.terminal_shell === 'custom' || shells.length === 0) && (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                        <div style={{ flex: 1 }}>
+                            <Input
+                                label="Executable line"
+                                description='Full command line; quote paths with spaces, e.g. "C:\Program Files\Git\bin\bash.exe" --login -i'
+                                value={s.terminal_custom_cmd ?? ''}
+                                onValueChange={(v) => patch({ terminal_custom_cmd: v })}
+                                placeholder="pwsh -NoLogo"
+                            />
+                        </div>
+                        <Action
+                            variant="ghost"
+                            icon="folder"
+                            onClick={async () => {
+                                const p = await api().settings.chooseFile(
+                                    'Choose shell executable',
+                                );
+                                if (p) {
+                                    patch({
+                                        terminal_shell: 'custom',
+                                        terminal_custom_cmd: p.includes(' ') ? `"${p}"` : p,
+                                    });
+                                }
+                            }}
+                        >
+                            Browse
+                        </Action>
+                    </div>
+                )}
             </Card>
 
             <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>

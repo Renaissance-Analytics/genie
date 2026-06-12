@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from 'electron';
+import { BrowserWindow, ipcMain, Notification } from 'electron';
 import { updater, type UpdaterConfig, type UpdaterStatus } from './git-updater';
 import {
     autoUpdaterInstance,
@@ -6,6 +6,8 @@ import {
     type AutoUpdaterStatus,
 } from './auto-updater';
 import { getAllSettings, setSettings } from '../db';
+import { setUpdateAvailable } from '../tray';
+import { showSettingsWindow } from '../background';
 
 /**
  * Unified IPC for the updater. The renderer doesn't know whether it's
@@ -106,10 +108,50 @@ export function registerUpdaterIpc(): void {
     );
 
     // Status + log fanout. Both backends emit the same events.
-    u.on('status', (status) => broadcastStatus(status));
+    u.on('status', (status) => {
+        broadcastStatus(status);
+        reflectUpdateState(status as UpdaterStatus);
+    });
     u.on('log', (line: string) => broadcastLog(line));
-    a.on('status', (status) => broadcastStatus(status));
+    a.on('status', (status) => {
+        broadcastStatus(status);
+        reflectUpdateState(status as AutoUpdaterStatus);
+    });
     a.on('log', (line: string) => broadcastLog(line));
+}
+
+/**
+ * Update-available UX, driven off the same status stream the renderer
+ * gets: swap the tray icon to the badged variant, and fire ONE native
+ * notification per discovered version (re-checks every pollHours would
+ * otherwise re-toast the same release all day). Cleared whenever the
+ * backend reports anything that isn't available/staging/ready.
+ */
+let notifiedVersion: string | null = null;
+function reflectUpdateState(status: UpdaterStatus | AutoUpdaterStatus): void {
+    const pending =
+        status.state === 'available' ||
+        status.state === 'downloading' ||
+        status.state === 'applying' ||
+        status.state === 'ready-to-restart';
+
+    setUpdateAvailable(pending ? status.latestVersion : null);
+
+    if (
+        status.state === 'available' &&
+        status.latestVersion &&
+        status.latestVersion !== notifiedVersion &&
+        Notification.isSupported()
+    ) {
+        notifiedVersion = status.latestVersion;
+        const n = new Notification({
+            title: `Genie v${status.latestVersion} is available`,
+            body: 'Click to open Settings and install the update.',
+            silent: true,
+        });
+        n.on('click', () => showSettingsWindow());
+        n.show();
+    }
 }
 
 function broadcastStatus(status: unknown): void {

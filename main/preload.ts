@@ -70,6 +70,16 @@ const api = {
         chooseFile: (label?: string) =>
             ipcRenderer.invoke('settings:choose-file', label),
         detectEditors: () => ipcRenderer.invoke('settings:detect-editors'),
+        detectShells: () =>
+            ipcRenderer.invoke('terminal:shells') as Promise<{
+                shells: Array<{
+                    id: string;
+                    label: string;
+                    command: string;
+                    args: string[];
+                }>;
+                defaultId: string | null;
+            }>,
     },
 
     workspaces: {

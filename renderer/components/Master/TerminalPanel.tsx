@@ -1,7 +1,14 @@
-import { useEffect, useRef, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import type { ShellProfile } from '@particle-academy/fancy-term';
 import XTerm from '../Terminal/XTerm';
 import { IconMaximize, IconMinimize, IconX } from './icons';
-import type { TerminalSpec, WorkspaceRow } from '../../lib/genie';
+import {
+    api,
+    detectedShells,
+    type ShellDetection,
+    type TerminalSpec,
+    type WorkspaceRow,
+} from '../../lib/genie';
 
 interface Props {
     spec: TerminalSpec;
@@ -16,6 +23,10 @@ interface Props {
     onMarkInactive: () => void;
 }
 
+function toProfile(s: ShellDetection): ShellProfile {
+    return { id: s.id, label: s.label, command: s.command, args: s.args };
+}
+
 /**
  * One terminal tile in the workspace grid.
  *
@@ -26,6 +37,10 @@ interface Props {
  *   - The maximize button toggles a `maximizedId` upstream; when
  *     `maximized` is true, the icon switches to "minimize" so the user
  *     can restore the tiled view.
+ *   - Shell switching: fancy-term's switcher fires onShellChange; we
+ *     persist the choice on the spec, then remount the XTerm (key
+ *     change). Unmount detaches the old pty (last detach kills it) and
+ *     the remount spawns a fresh one with the chosen shell.
  */
 export default function TerminalPanel({
     spec,
@@ -48,6 +63,51 @@ export default function TerminalPanel({
         onMarkActive();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    const [shellOptions, setShellOptions] = useState<ShellProfile[]>([]);
+    // The live shell override (command + args). Starts from the spec;
+    // switching updates it locally + persists to the spec row.
+    const [shell, setShell] = useState<{
+        command: string | null;
+        args: string[] | undefined;
+        id: string | null;
+    }>({ command: spec.shell ?? null, args: spec.args, id: null });
+
+    useEffect(() => {
+        let alive = true;
+        void detectedShells().then(({ shells, defaultId }) => {
+            if (!alive) return;
+            setShellOptions(shells.map(toProfile));
+            // Resolve the active switcher id: explicit spec shell → match by
+            // command; otherwise the detection default.
+            const match = spec.shell
+                ? shells.find((s) => s.command === spec.shell)
+                : shells.find((s) => s.id === defaultId);
+            if (match) setShell((cur) => ({ ...cur, id: match.id }));
+        });
+        return () => {
+            alive = false;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const onShellChange = async (id: string, profile: ShellProfile): Promise<void> => {
+        // Kill the pty BEFORE remounting. The remount reuses spec.id (the
+        // multi-attach key Stage windows join on); without the explicit
+        // kill, the new mount's create() would attach to the still-running
+        // old-shell pty and the old mount's detach would then kill it.
+        await api().terminal.kill(spec.id).catch(() => {});
+        setShell({ command: profile.command ?? null, args: profile.args, id });
+        // Persist on the spec so the choice survives restarts. Fire and
+        // forget — a failed write only loses the persistence, not the
+        // live switch.
+        void api()
+            .terminalSpec.update(spec.id, {
+                shell: profile.command ?? null,
+                args: profile.args ?? [],
+            })
+            .catch(() => {});
+    };
 
     return (
         <section
@@ -98,12 +158,16 @@ export default function TerminalPanel({
             </div>
             <div className="term-host">
                 <XTerm
+                    key={`${spec.id}:${shell.command ?? 'default'}`}
                     id={spec.id}
                     cwd={spec.cwd}
-                    shell={spec.shell ?? undefined}
-                    args={spec.args}
+                    shell={shell.command ?? undefined}
+                    args={shell.args}
                     env={spec.env}
                     onExit={onMarkInactive}
+                    shells={shellOptions}
+                    activeShell={shell.id ?? undefined}
+                    onShellChange={onShellChange}
                 />
             </div>
         </section>

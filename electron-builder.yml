@@ -15,6 +15,7 @@ files:
       # <asar>/resources/*.png). Without this rule they're not in the
       # asar bundle and the tray surfaces with a blank icon.
       - resources/tray-icon.png
+      - resources/tray-icon-update.png
       - resources/icon.png
       - package.json
 
@@ -53,8 +54,10 @@ win:
     - target: portable
       arch:
         - x64
-  # No explicit .ico — electron-builder derives one from resources/icon.png.
-  icon: resources/icon.png
+  # Hand-built multi-size .ico (build-icons.cjs) — each layer resampled
+  # individually so the 16/24/32px taskbar + alt-tab renderings stay
+  # legible instead of being Windows-shrunk from the 256px layer.
+  icon: resources/icon.ico
   # Code signing happens via env vars in CI:
   # CSC_LINK, CSC_KEY_PASSWORD
 

@@ -61,8 +61,23 @@ export function showMasterWindow(): void {
         minWidth: 980,
         minHeight: 620,
         show: false,
-        frame: true,
-        title: 'Genie · TheFloor',
+        // Hidden native title bar — the in-app .titlebar row is the drag
+        // region, so the window presents one "Genie" chrome instead of a
+        // native label + menu bar duplicating it. The overlay keeps the
+        // native min/max/close cluster (and its snap layouts flyout) on
+        // Windows; macOS keeps inset traffic lights.
+        title: 'Genie',
+        titleBarStyle: 'hidden',
+        ...(process.platform !== 'darwin'
+            ? {
+                  titleBarOverlay: {
+                      color: '#0a0a0c',
+                      symbolColor: '#a1a1aa',
+                      height: 46,
+                  },
+              }
+            : {}),
+        autoHideMenuBar: true,
         backgroundColor: '#0a0a0c',
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
@@ -100,8 +115,19 @@ export function showStageWindow(workspaceId?: string): void {
         minWidth: 900,
         minHeight: 560,
         show: false,
-        frame: true,
-        title: 'Genie · Stage',
+        // Same hidden-titlebar treatment as the master window — one chrome.
+        title: 'Genie',
+        titleBarStyle: 'hidden',
+        ...(process.platform !== 'darwin'
+            ? {
+                  titleBarOverlay: {
+                      color: '#0a0a0c',
+                      symbolColor: '#a1a1aa',
+                      height: 46,
+                  },
+              }
+            : {}),
+        autoHideMenuBar: true,
         backgroundColor: '#0a0a0c',
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
@@ -343,18 +369,23 @@ app.whenReady().then(async () => {
     app.on('before-quit', () => stopAllTerminals());
     registerProtocolHandler();
 
-    // Tray icon lives at app/tray-icon.png in production (electron-builder
-    // copies resources/ → app/ at pack time) and at resources/tray-icon.png
-    // in dev. Try both.
-    const trayCandidate = isDev
-        ? path.join(process.cwd(), 'resources', 'tray-icon.png')
-        : path.join(__dirname, '..', 'resources', 'tray-icon.png');
-    const trayIconPath = trayCandidate;
-    const trayImg = nativeImage.createFromPath(trayIconPath);
+    // Tray icons live at <asar>/resources/*.png in production (the
+    // electron-builder files filter ships them) and at resources/*.png
+    // in dev. The -update variant carries the amber badge dot shown
+    // while an update is pending.
+    const resourcesDir = isDev
+        ? path.join(process.cwd(), 'resources')
+        : path.join(__dirname, '..', 'resources');
+    const trayImg = nativeImage.createFromPath(
+        path.join(resourcesDir, 'tray-icon.png'),
+    );
+    const trayUpdateImg = nativeImage.createFromPath(
+        path.join(resourcesDir, 'tray-icon-update.png'),
+    );
     if (process.platform === 'darwin' && !trayImg.isEmpty()) {
         trayImg.setTemplateImage(true);
     }
-    createTray(trayImg);
+    createTray(trayImg, trayUpdateImg.isEmpty() ? undefined : trayUpdateImg);
 
     installAppMenu();
 

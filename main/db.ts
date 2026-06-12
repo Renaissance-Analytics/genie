@@ -168,6 +168,10 @@ export interface Settings {
     tynn_host?: string;
     notifications_muted?: string; // JSON-encoded array of category keys
     auto_update?: 'on' | 'off';
+    /** Default shell id ('git-bash' | 'pwsh' | … | 'custom'). Empty = auto-detect. */
+    terminal_shell?: string;
+    /** Manual executable line, used when terminal_shell === 'custom'. */
+    terminal_custom_cmd?: string;
 }
 
 export function getAllSettings(): Settings {
@@ -194,6 +198,8 @@ export function getAllSettings(): Settings {
         tynn_host: out['tynn_host'] ?? 'https://tynn.ai',
         notifications_muted: out['notifications_muted'] ?? '[]',
         auto_update: (out['auto_update'] as 'on' | 'off') ?? 'on',
+        terminal_shell: out['terminal_shell'] ?? '',
+        terminal_custom_cmd: out['terminal_custom_cmd'] ?? '',
     };
 }
 

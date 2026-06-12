@@ -19,6 +19,13 @@ module.exports = {
     trailingSlash: false,
     eslint: { ignoreDuringBuilds: true },
     typescript: { ignoreBuildErrors: true },
+    // fancy-term ships pure ESM with `import { Terminal } from
+    // '@xterm/xterm'` (a CJS package). During build-time page-data
+    // collection Next loads externals with Node's real ESM loader, whose
+    // cjs-module-lexer can't see xterm's UMD exports — named-import
+    // SyntaxError. Transpiling the package routes it through webpack,
+    // which handles the CJS interop fine.
+    transpilePackages: ['@particle-academy/fancy-term'],
     // The renderer reaches the main process via window.genie only — no
     // network calls from inside Next directly.
     reactStrictMode: false,

@@ -67,27 +67,89 @@
 }
 
 /* ===== Title bar ======================================================== */
+/* The native title bar is hidden (titleBarStyle: 'hidden' + overlay), so
+   this row is the real window chrome: it drags the window and pads right
+   for the native min/max/close overlay on Windows. The titlebar-area env
+   vars resolve to the drag-safe region; the 100vw fallback collapses the
+   inset to 0 where no overlay exists (macOS, plain Linux). */
 .titlebar {
     display: flex;
     align-items: center;
     gap: 14px;
     height: 46px;
     padding: 0 14px;
+    padding-right: calc(100vw - env(titlebar-area-width, 100vw) + 14px);
     flex: 0 0 auto;
     background: var(--shell);
     border-bottom: 1px solid var(--border-1);
     user-select: none;
+    -webkit-app-region: drag;
 }
-.lights {
+.titlebar button,
+.titlebar a,
+.titlebar select,
+.titlebar input {
+    -webkit-app-region: no-drag;
+}
+/* macOS: the REAL traffic lights overlay the top-left corner. */
+.traffic-pad {
+    width: 58px;
+    flex: 0 0 auto;
+}
+
+/* ===== Update banner ==================================================== */
+.update-banner {
     display: flex;
-    gap: 8px;
-    padding-right: 4px;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 14px;
+    flex: 0 0 auto;
+    background: color-mix(in srgb, #f59e0b 12%, var(--shell));
+    border-bottom: 1px solid color-mix(in srgb, #f59e0b 35%, var(--border-1));
+    font-size: 12.5px;
+    color: var(--fg-1);
 }
-.lights i {
-    width: 12px;
-    height: 12px;
+.update-banner .ub-dot {
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
-    display: block;
+    background: #f59e0b;
+    flex: 0 0 auto;
+}
+.update-banner .ub-spacer {
+    flex: 1;
+}
+.update-banner .ub-btn {
+    padding: 4px 12px;
+    border-radius: var(--radius-lg);
+    border: 1px solid #f59e0b;
+    background: #f59e0b;
+    color: #09090b;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.update-banner .ub-btn:hover {
+    filter: brightness(1.1);
+}
+.update-banner .ub-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+.update-banner .ub-close {
+    width: 22px;
+    height: 22px;
+    border: none;
+    background: transparent;
+    color: var(--fg-3);
+    font-size: 15px;
+    cursor: pointer;
+    border-radius: var(--radius-md);
+}
+.update-banner .ub-close:hover {
+    color: var(--fg-1);
+    background: var(--bg-2);
 }
 .glogo {
     display: flex;

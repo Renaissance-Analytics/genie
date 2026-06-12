@@ -25,6 +25,7 @@ import {
     hasGenieBridge,
     ulid,
     type TerminalSpec,
+    type UpdaterStatus,
     type WorkspaceRow,
 } from '../lib/genie';
 
@@ -446,6 +447,7 @@ function MasterInner() {
                             : undefined
                     }
                 />
+                <UpdateBanner />
                 <Toolbar
                     workspaces={workspaces}
                     specs={specs}
@@ -566,6 +568,92 @@ function MasterInner() {
     );
 }
 
+/**
+ * Slim update strip under the title bar. Renders only while an update is
+ * pending (available → downloading/applying → ready-to-restart) and the
+ * user hasn't dismissed THAT version — a new release re-surfaces it. The
+ * action button walks the updater's own state machine: download/apply
+ * first, restart once staged.
+ */
+function UpdateBanner() {
+    const [status, setStatus] = useState<UpdaterStatus | null>(null);
+    const [dismissed, setDismissed] = useState<string | null>(null);
+    const [busy, setBusy] = useState(false);
+
+    useEffect(() => {
+        let alive = true;
+        void api()
+            .updater.status()
+            .then((s) => alive && setStatus(s))
+            .catch(() => {});
+        const off = api().on.updaterStatus((s) => setStatus(s));
+        return () => {
+            alive = false;
+            off();
+        };
+    }, []);
+
+    const pending =
+        status &&
+        ['available', 'downloading', 'applying', 'ready-to-restart'].includes(
+            status.state,
+        );
+    if (!status || !pending) return null;
+    if (dismissed && dismissed === status.latestVersion) return null;
+
+    const version = status.latestVersion ?? 'new version';
+    const working = status.state === 'downloading' || status.state === 'applying';
+    const pct =
+        status.state === 'downloading' && typeof status.progress === 'number'
+            ? ` ${Math.round(status.progress * 100)}%`
+            : '';
+
+    const act = async () => {
+        setBusy(true);
+        try {
+            if (status.state === 'available') {
+                await api().updater.apply();
+            } else if (status.state === 'ready-to-restart') {
+                const r = await api().updater.restart();
+                // Phase-1 (git checkout) builds restart manually — quitting
+                // is the honest fallback so relaunch picks up the new code.
+                if (!r.ok) await api().app.quit();
+            }
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <div className="update-banner">
+            <span className="ub-dot" />
+            <span className="ub-text">
+                {status.state === 'ready-to-restart'
+                    ? `Genie v${version} is ready — restart to finish installing.`
+                    : working
+                        ? `Downloading Genie v${version}…${pct}`
+                        : `Genie v${version} is available.`}
+            </span>
+            <span className="ub-spacer" />
+            {!working && (
+                <button type="button" className="ub-btn" onClick={act} disabled={busy}>
+                    {status.state === 'ready-to-restart'
+                        ? 'Restart now'
+                        : 'Download update'}
+                </button>
+            )}
+            <button
+                type="button"
+                className="ub-close"
+                title="Dismiss for this version"
+                onClick={() => setDismissed(status.latestVersion ?? 'unknown')}
+            >
+                ×
+            </button>
+        </div>
+    );
+}
+
 function TitleBar({
     isStage,
     stageWorkspaceName,
@@ -578,17 +666,11 @@ function TitleBar({
         /Mac/i.test(navigator.platform ?? navigator.userAgent ?? '');
     return (
         <div className="titlebar">
-            {/* macOS-style "traffic lights" — purely decorative; only show on
-                macOS where they match the real window controls. On Windows /
-                Linux the OS already paints minimize/maximize/close, so a
-                second set of fake circles is just noise. */}
-            {isMac && (
-                <span className="lights">
-                    <i style={{ background: '#ff5f57' }} />
-                    <i style={{ background: '#febc2e' }} />
-                    <i style={{ background: '#28c840' }} />
-                </span>
-            )}
+            {/* The native title bar is hidden (titleBarStyle: 'hidden') — this
+                row IS the window chrome. On macOS the REAL traffic lights
+                overlay the top-left corner, so pad past them rather than
+                painting fakes. */}
+            {isMac && <span className="traffic-pad" />}
             <span className="glogo">
                 {/* The PNG ships in resources/logo.png; Next copies it into
                     renderer/public at build time. Use the relative path so it
@@ -596,11 +678,11 @@ function TitleBar({
                 <img className="lamp" src="./logo.png" alt="" width={22} height={22} />
                 Genie
             </span>
-            <span className="ttl">
-                {isStage
-                    ? `Stage${stageWorkspaceName ? ` · ${stageWorkspaceName}` : ''}`
-                    : 'TheFloor'}
-            </span>
+            {/* No internal view codenames in the UI — a Stage window shows its
+                pinned workspace name, the master window shows nothing extra. */}
+            {isStage && stageWorkspaceName && (
+                <span className="ttl">{stageWorkspaceName}</span>
+            )}
             <span className="spacer" />
             <button
                 type="button"

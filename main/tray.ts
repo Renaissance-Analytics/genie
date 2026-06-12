@@ -16,20 +16,52 @@ import { listWorkspaces } from './db';
 import { openWorkspace } from './workspace/open';
 
 let tray: Tray | null = null;
+let normalImg: NativeImage | null = null;
+let updateImg: NativeImage | null = null;
+/** Version string when an update is available; null = no update pending. */
+let updateVersion: string | null = null;
 
-export function createTray(image: NativeImage): Tray {
-    const img = image.isEmpty()
+function sized(image: NativeImage): NativeImage {
+    return image.isEmpty()
         ? nativeImage.createEmpty()
         : image.resize({ width: 18, height: 18 });
-    tray = new Tray(img);
-    tray.setToolTip('Genie — Tynn workspace manager');
+}
+
+export function createTray(image: NativeImage, updateImage?: NativeImage): Tray {
+    normalImg = sized(image);
+    updateImg = updateImage ? sized(updateImage) : null;
+    tray = new Tray(updateVersion && updateImg ? updateImg : normalImg);
+    applyTooltip();
     rebuildMenu();
     tray.on('click', () => {
-        // Single entry point. TheFloor is the unified workspace + terminal
-        // surface; the legacy /tray BrowserWindow is no longer surfaced.
+        // Single entry point: the master workspace + terminal surface.
+        // The legacy /tray BrowserWindow is no longer surfaced.
         if (process.platform !== 'darwin') showMasterWindow();
     });
     return tray;
+}
+
+/**
+ * Flip the tray into (or out of) update-available mode: badge icon,
+ * tooltip, and a highlighted install entry at the top of the menu.
+ * Safe to call before createTray — state is re-applied on creation.
+ */
+export function setUpdateAvailable(version: string | null): void {
+    if (updateVersion === version) return;
+    updateVersion = version;
+    if (!tray) return;
+    if (version && updateImg) tray.setImage(updateImg);
+    else if (normalImg) tray.setImage(normalImg);
+    applyTooltip();
+    rebuildMenu();
+}
+
+function applyTooltip(): void {
+    tray?.setToolTip(
+        updateVersion
+            ? `Genie — update v${updateVersion} available`
+            : 'Genie — Tynn workspace manager',
+    );
 }
 
 export function getTray(): Tray | null {
@@ -50,6 +82,14 @@ export function rebuildMenu(): void {
 
     const workspaces = listWorkspaces();
     const items: Array<MenuItem | Electron.MenuItemConstructorOptions> = [];
+
+    if (updateVersion) {
+        items.push({
+            label: `⬆ Update to v${updateVersion}…`,
+            click: () => showSettingsWindow(),
+        });
+        items.push({ type: 'separator' });
+    }
 
     if (workspaces.length === 0) {
         items.push({ label: 'No workspaces yet', enabled: false });
@@ -86,7 +126,8 @@ export function rebuildMenu(): void {
         click: () => showCaptureWindow(),
     });
     items.push({
-        label: 'Open TheFloor',
+        // "TheFloor" is an internal codename — never user-facing.
+        label: 'Open Genie',
         click: () => showMasterWindow(),
     });
     items.push({

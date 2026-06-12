@@ -61,6 +61,17 @@ export interface Settings {
     tynn_host?: string;
     notifications_muted?: string;
     auto_update?: 'on' | 'off';
+    /** Default shell id ('git-bash' | 'pwsh' | … | 'custom'). Empty = auto-detect. */
+    terminal_shell?: string;
+    /** Manual executable line, used when terminal_shell === 'custom'. */
+    terminal_custom_cmd?: string;
+}
+
+export interface ShellDetection {
+    id: string;
+    label: string;
+    command: string;
+    args: string[];
 }
 
 export interface AionimaConfig {
@@ -246,6 +257,10 @@ interface GenieApi {
         chooseFolder: (label?: string) => Promise<string | null>;
         chooseFile: (label?: string) => Promise<string | null>;
         detectEditors: () => Promise<EditorDetection[]>;
+        detectShells: () => Promise<{
+            shells: ShellDetection[];
+            defaultId: string | null;
+        }>;
     };
     workspaces: {
         list: () => Promise<WorkspaceRow[]>;
@@ -442,4 +457,26 @@ export function ulid(): string {
     const t = Date.now().toString(36);
     const r = Math.random().toString(36).slice(2, 10);
     return (t + r).padEnd(20, '0').slice(0, 20).toUpperCase();
+}
+
+/**
+ * Detected shells, cached for the window's lifetime. Detection walks the
+ * filesystem in main, so every TerminalPanel sharing one promise beats N
+ * panels firing N IPC round-trips on a grid render. Installing a new
+ * shell mid-session just needs a window reload to show up.
+ */
+let shellsPromise: Promise<{
+    shells: ShellDetection[];
+    defaultId: string | null;
+}> | null = null;
+export function detectedShells(): Promise<{
+    shells: ShellDetection[];
+    defaultId: string | null;
+}> {
+    if (!shellsPromise) {
+        shellsPromise = api()
+            .settings.detectShells()
+            .catch(() => ({ shells: [], defaultId: null }));
+    }
+    return shellsPromise;
 }

@@ -1,6 +1,9 @@
 import { useEffect, useRef } from 'react';
-import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
+import {
+    Terminal as FancyTerminal,
+    type TerminalHandle,
+    type ShellProfile,
+} from '@particle-academy/fancy-term';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { api, ulid } from '../../lib/genie';
 import '@xterm/xterm/css/xterm.css';
@@ -10,7 +13,7 @@ interface XTermProps {
     id?: string;
     /** Working directory for the spawned shell. */
     cwd: string;
-    /** Optional shell override. Falls through to the OS default in main. */
+    /** Optional shell override. Falls through to the configured default in main. */
     shell?: string;
     /** Optional args appended to the shell. */
     args?: string[];
@@ -20,21 +23,30 @@ interface XTermProps {
     onExit?: (info: { exitCode: number; signal?: number }) => void;
     /** Optional className applied to the host element (height/width should be set here). */
     className?: string;
+    /** Shell profiles offered by the host (renders fancy-term's ShellSwitcher when set). */
+    shells?: ShellProfile[];
+    /** Controlled active-shell id for the switcher. */
+    activeShell?: string;
+    /** The user picked a different shell — host respawns the pty. */
+    onShellChange?: (id: string, profile: ShellProfile) => void;
 }
 
 /**
- * Single embedded terminal. Owns the xterm.js instance + the fit addon
- * and wires user input → main (write) and main pty data → xterm. Resize
- * is observed via ResizeObserver: any change to the host element re-fits
- * the terminal and tells the main-side pty to match. Lifecycle:
+ * Single embedded terminal on fancy-term's <Terminal>. The wrapper owns
+ * xterm.js + fit; this component owns the pty lifecycle and the IPC
+ * wiring (user input → main write, main pty data → ref.write). The
+ * controlled `output` prop is deliberately NOT used — pty streams write
+ * through the TerminalHandle so high-volume output never round-trips
+ * React state. Lifecycle:
  *
  *   mount   → ulid + api.terminal.create({id, cwd, cols, rows})
- *   resize  → fit + api.terminal.resize(id, cols, rows)
+ *   resize  → onResize → api.terminal.resize(id, cols, rows)
  *   exit    → onExit({exitCode}) + clean up listeners
- *   unmount → api.terminal.kill(id) (main also kills on webContents destroy)
+ *   unmount → api.terminal.detach(id) (last detach kills the pty in main)
  *
- * The component is intentionally dumb: tabs, splits, and "open a TUI
- * here" UX all live one layer up. This piece just renders one pty.
+ * Shell switching is host-driven per fancy-term's contract: the switcher
+ * UI fires onShellChange and the parent respawns this component (key
+ * change) with the new shell — the wrapper never spawns anything.
  */
 export default function XTerm({
     id: providedId,
@@ -44,105 +56,104 @@ export default function XTerm({
     env,
     onExit,
     className,
+    shells,
+    activeShell,
+    onShellChange,
 }: XTermProps) {
-    const hostRef = useRef<HTMLDivElement>(null);
+    const handleRef = useRef<TerminalHandle>(null);
     const ptyIdRef = useRef<string | null>(null);
+    const createFailedRef = useRef(false);
 
     useEffect(() => {
-        const host = hostRef.current;
-        if (!host) return;
+        const handle = handleRef.current;
+        const xterm = handle?.xterm;
+        if (!handle || !xterm) return;
 
-        const term = new Terminal({
-            convertEol: true,
-            cursorBlink: true,
-            fontFamily:
-                'ui-monospace, SFMono-Regular, Menlo, "Cascadia Code", Consolas, monospace',
-            fontSize: 13,
-            theme: { background: '#09090b', foreground: '#fafafa' },
-            allowProposedApi: true,
-        });
-        const fit = new FitAddon();
-        term.loadAddon(fit);
-        term.loadAddon(new WebLinksAddon());
-        term.open(host);
-        fit.fit();
+        // Escape hatches fancy-term doesn't surface as props: pty data on
+        // Windows ConPTY arrives \n-only from some tools, and links in dev
+        // output should be clickable.
+        xterm.options.convertEol = true;
+        xterm.loadAddon(new WebLinksAddon());
+        handle.fit();
 
         const id = providedId ?? ulid();
         ptyIdRef.current = id;
-        const { cols, rows } = term;
         let alive = true;
 
         const offData = api().on.terminalData(({ id: hitId, data }) => {
             if (hitId !== id || !alive) return;
-            term.write(data);
+            handle.write(data);
         });
         const offExit = api().on.terminalExit((payload) => {
             if (payload.id !== id || !alive) return;
-            term.writeln(
+            handle.writeln(
                 `\r\n\x1b[2m[process exited with code ${payload.exitCode}]\x1b[0m`,
             );
             onExit?.({ exitCode: payload.exitCode, signal: payload.signal });
         });
 
-        const inputDisposable = term.onData((data) => {
-            // Swallow IPC errors here — if the main-side handler is briefly
-            // unavailable (during bootstrap, after a hot-reload) the input
-            // is just lost for that key. A thrown promise rejection bubbles
-            // up as a Next.js runtime error and blanks the page; better to
-            // drop a keystroke than crash the panel.
-            void api().terminal.write(id, data).catch(() => {});
-        });
-
-        let createFailed = false;
         void api()
-            .terminal.create({ id, cwd, shell, args, env, cols, rows })
+            .terminal.create({
+                id,
+                cwd,
+                shell,
+                args,
+                env,
+                cols: xterm.cols,
+                rows: xterm.rows,
+            })
             .then((res) => {
-                // If we're attaching to an already-running pty (because
-                // another window had it open), replay the scrollback so this
-                // window doesn't start staring at a blank screen.
-                if (res.scrollback) term.write(res.scrollback);
+                // Attaching to an already-running pty (another window has it
+                // open) — replay the scrollback so this window catches up.
+                if (res.scrollback) handle.write(res.scrollback);
             })
             .catch((err: unknown) => {
-                createFailed = true;
+                createFailedRef.current = true;
                 const msg = err instanceof Error ? err.message : String(err);
-                term.writeln(`\r\n\x1b[31mFailed to start terminal: ${msg}\x1b[0m`);
+                handle.writeln(
+                    `\r\n\x1b[31mFailed to start terminal: ${msg}\x1b[0m`,
+                );
             });
-
-        const resize = (): void => {
-            try {
-                fit.fit();
-            } catch {
-                /* host detached */
-                return;
-            }
-            if (createFailed) return;
-            void api().terminal.resize(id, term.cols, term.rows).catch(() => {});
-        };
-
-        const observer = new ResizeObserver(resize);
-        observer.observe(host);
 
         return () => {
             alive = false;
-            observer.disconnect();
             offData();
             offExit();
-            inputDisposable.dispose();
             // Detach (soft release) — the pty keeps running while any other
             // window is still attached. Last detach kills the pty in main.
-            if (!createFailed && ptyIdRef.current) {
+            if (!createFailedRef.current && ptyIdRef.current) {
                 void api().terminal.detach(ptyIdRef.current);
             }
-            term.dispose();
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     return (
-        <div
-            ref={hostRef}
+        <FancyTerminal
+            ref={handleRef}
             className={className ?? 'h-full w-full'}
             style={{ background: '#09090b' }}
+            theme={{ background: '#09090b', foreground: '#fafafa' }}
+            fontFamily='ui-monospace, SFMono-Regular, Menlo, "Cascadia Code", Consolas, monospace'
+            fontSize={13}
+            cursorBlink
+            shells={shells}
+            activeShell={activeShell}
+            onShellChange={onShellChange}
+            showShellBar={Boolean(shells && shells.length > 1)}
+            onData={(data) => {
+                // Swallow IPC errors — if the main-side handler is briefly
+                // unavailable (bootstrap, hot-reload) the keystroke is lost;
+                // better than a thrown rejection blanking the page.
+                const id = ptyIdRef.current;
+                if (!id) return;
+                void api().terminal.write(id, data).catch(() => {});
+            }}
+            onResize={({ cols, rows }) => {
+                const id = ptyIdRef.current;
+                if (!id || createFailedRef.current) return;
+                void api().terminal.resize(id, cols, rows).catch(() => {});
+            }}
         />
     );
 }
