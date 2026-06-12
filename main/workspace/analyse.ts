@@ -47,8 +47,21 @@ export interface AnalyseOtherEntry {
     kind: 'file' | 'directory';
 }
 
+/**
+ * What the source folder fundamentally IS — drives the wizard's framing:
+ *
+ *   - 'single-repo'     — the folder itself is one git repo (monorepos
+ *                          included: one .git = one repo = one submodule).
+ *   - 'repo-collection' — no root .git, but one or more subfolders are
+ *                          git repos; each becomes its own submodule.
+ *   - 'plain-folder'    — no git anywhere at the top level. Knowledge
+ *                          can still move into the envelope.
+ */
+export type SourceKind = 'single-repo' | 'repo-collection' | 'plain-folder';
+
 export interface AnalyseResult {
     root: string;
+    source_kind: SourceKind;
     repos: AnalyseRepoCandidate[];
     knowledge: AnalyseKnowledgeCandidate[];
     other: AnalyseOtherEntry[];
@@ -105,15 +118,38 @@ export async function analyseFolder(root: string): Promise<AnalyseResult> {
     const knowledge: AnalyseKnowledgeCandidate[] = [];
     const other: AnalyseOtherEntry[] = [];
 
+    // The single most common source is the folder ITSELF being one git
+    // repo (plain repo or monorepo — one .git either way). It becomes one
+    // submodule named after the folder. Nested .git dirs inside it are
+    // that repo's own submodules/worktrees — they travel with the parent,
+    // so we don't offer them separately.
+    const rootIsRepo = fs.existsSync(path.join(root, '.git'));
+    if (rootIsRepo) {
+        const { origin, head } = await readGitInfo(root);
+        const leaf = path.basename(root.replace(/[\\/]+$/, ''));
+        repos.push({
+            rel_path: '.',
+            abs_path: root,
+            default_name: sanitiseRepoName(leaf),
+            origin_url: origin,
+            head_ref: head,
+        });
+    }
+
     for (const entry of entries) {
         if (SKIP_NAMES.has(entry.name)) continue;
         const abs = path.join(root, entry.name);
 
         if (entry.isDirectory()) {
             // Probe for a git repo. Both `.git` dirs and `.git` files
-            // (worktrees / submodules) count.
+            // (worktrees / submodules) count. Skipped when the root is
+            // itself a repo — see above.
             const dotGit = path.join(abs, '.git');
             if (fs.existsSync(dotGit)) {
+                if (rootIsRepo) {
+                    other.push({ rel_path: entry.name, kind: 'directory' });
+                    continue;
+                }
                 const { origin, head } = await readGitInfo(abs);
                 repos.push({
                     rel_path: entry.name,
@@ -159,12 +195,19 @@ export async function analyseFolder(root: string): Promise<AnalyseResult> {
         }
     }
 
-    // Sort each list alphabetically so the UI is stable.
+    // Sort each list alphabetically so the UI is stable. The root-repo
+    // row ('.') sorts first naturally.
     repos.sort((a, b) => a.rel_path.localeCompare(b.rel_path));
     knowledge.sort((a, b) => a.rel_path.localeCompare(b.rel_path));
     other.sort((a, b) => a.rel_path.localeCompare(b.rel_path));
 
-    return { root, repos, knowledge, other };
+    const source_kind: SourceKind = rootIsRepo
+        ? 'single-repo'
+        : repos.length > 0
+            ? 'repo-collection'
+            : 'plain-folder';
+
+    return { root, source_kind, repos, knowledge, other };
 }
 
 /**

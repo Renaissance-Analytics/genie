@@ -4,7 +4,6 @@ import {
     type TerminalHandle,
     type ShellProfile,
 } from '@particle-academy/fancy-term';
-import { WebLinksAddon } from '@xterm/addon-web-links';
 import { api, ulid } from '../../lib/genie';
 import '@xterm/xterm/css/xterm.css';
 
@@ -34,11 +33,21 @@ interface XTermProps {
 /**
  * Single embedded terminal on fancy-term's <Terminal>. The wrapper owns
  * xterm.js + fit; this component owns the pty lifecycle and the IPC
- * wiring (user input → main write, main pty data → ref.write). The
+ * wiring (user input → main write, main pty data → handle.write). The
  * controlled `output` prop is deliberately NOT used — pty streams write
  * through the TerminalHandle so high-volume output never round-trips
- * React state. Lifecycle:
+ * React state.
  *
+ * IMPORTANT (fancy-term 0.2.2): do NOT touch `handle.xterm` from this
+ * component. The forwarded ref is built with `{...handle}` inside
+ * useImperativeHandle, which snapshots the `xterm` GETTER during the
+ * layout phase — before the instance exists — so the ref's `.xterm` is
+ * null forever. The method closures (write/writeln/fit/...) read the
+ * live internal ref and always work. Sizes come from onResize instead
+ * of reading xterm.cols/rows. Fix upstream, then the escape hatch
+ * (WebLinksAddon etc.) can come back.
+ *
+ * Lifecycle:
  *   mount   → ulid + api.terminal.create({id, cwd, cols, rows})
  *   resize  → onResize → api.terminal.resize(id, cols, rows)
  *   exit    → onExit({exitCode}) + clean up listeners
@@ -63,18 +72,16 @@ export default function XTerm({
     const handleRef = useRef<TerminalHandle>(null);
     const ptyIdRef = useRef<string | null>(null);
     const createFailedRef = useRef(false);
+    // Latest fitted grid from onResize. fancy-term fits on mount, which
+    // fires onResize before our create effect runs in the same commit?
+    // No — effects run after; the initial fit's resize may land before
+    // OR after create. Track it either way: create uses the latest
+    // known size, and any later resize is forwarded to the pty.
+    const sizeRef = useRef<{ cols: number; rows: number }>({ cols: 80, rows: 24 });
 
     useEffect(() => {
         const handle = handleRef.current;
-        const xterm = handle?.xterm;
-        if (!handle || !xterm) return;
-
-        // Escape hatches fancy-term doesn't surface as props: pty data on
-        // Windows ConPTY arrives \n-only from some tools, and links in dev
-        // output should be clickable.
-        xterm.options.convertEol = true;
-        xterm.loadAddon(new WebLinksAddon());
-        handle.fit();
+        if (!handle) return;
 
         const id = providedId ?? ulid();
         ptyIdRef.current = id;
@@ -92,6 +99,7 @@ export default function XTerm({
             onExit?.({ exitCode: payload.exitCode, signal: payload.signal });
         });
 
+        handle.fit();
         void api()
             .terminal.create({
                 id,
@@ -99,13 +107,18 @@ export default function XTerm({
                 shell,
                 args,
                 env,
-                cols: xterm.cols,
-                rows: xterm.rows,
+                cols: sizeRef.current.cols,
+                rows: sizeRef.current.rows,
             })
             .then((res) => {
                 // Attaching to an already-running pty (another window has it
                 // open) — replay the scrollback so this window catches up.
                 if (res.scrollback) handle.write(res.scrollback);
+                // The fit may have landed between create and now — sync the
+                // pty to whatever the grid actually is.
+                void api()
+                    .terminal.resize(id, sizeRef.current.cols, sizeRef.current.rows)
+                    .catch(() => {});
             })
             .catch((err: unknown) => {
                 createFailedRef.current = true;
@@ -150,6 +163,7 @@ export default function XTerm({
                 void api().terminal.write(id, data).catch(() => {});
             }}
             onResize={({ cols, rows }) => {
+                sizeRef.current = { cols, rows };
                 const id = ptyIdRef.current;
                 if (!id || createFailedRef.current) return;
                 void api().terminal.resize(id, cols, rows).catch(() => {});

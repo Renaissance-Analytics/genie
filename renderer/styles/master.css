@@ -1153,6 +1153,12 @@
     align-items: center;
     justify-content: center;
     gap: 12px;
+    /* Fill the grid area — without this the button shrinks to its text
+       and the helper line presses against the dashed border. */
+    width: 100%;
+    height: 100%;
+    padding: 36px 28px;
+    text-align: center;
     border: 1.5px dashed var(--border-2);
     border-radius: var(--radius-xl);
     background: var(--bg-0);
@@ -1185,6 +1191,8 @@
 .addtile .as {
     font-size: 11.5px;
     color: var(--fg-4);
+    max-width: 300px;
+    line-height: 1.55;
 }
 
 /* ===== Status bar ====================================================== */

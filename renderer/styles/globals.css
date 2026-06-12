@@ -190,3 +190,51 @@ textarea.input {
     border-color: var(--blue-500);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue-500) 22%, transparent);
 }
+
+/* Upgrade wizard (carousel steps) */
+.upgrade-steps {
+    padding: 4px 0 12px;
+    border-bottom: 1px solid var(--border-1);
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+/* Cap the step panel and scroll INSIDE it — the modal itself stays
+   within the window, so no step can push the footer out of view. */
+.upgrade-panels {
+    max-height: min(52vh, 460px);
+    overflow-y: auto;
+    padding-right: 4px;
+}
+.upgrade-kind {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    padding: 12px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-lg);
+    background: var(--card);
+}
+.upgrade-kind .uk-icon {
+    flex: 0 0 auto;
+    width: 36px;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-1);
+    background: var(--bg-2);
+    color: var(--blue-500);
+}
+.upgrade-other summary {
+    cursor: pointer;
+    font-size: 11.5px;
+    color: var(--fg-3);
+}
+.upgrade-other ul {
+    margin: 6px 0 0;
+    padding: 0 0 0 18px;
+    font-size: 11.5px;
+    color: var(--fg-3);
+    font-family: var(--font-mono);
+}

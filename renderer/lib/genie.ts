@@ -203,7 +203,10 @@ export interface AnalyseOtherEntry {
     kind: 'file' | 'directory';
 }
 
+export type SourceKind = 'single-repo' | 'repo-collection' | 'plain-folder';
+
 export interface AnalyseResult {
+    source_kind: SourceKind;
     root: string;
     repos: AnalyseRepoCandidate[];
     knowledge: AnalyseKnowledgeCandidate[];

@@ -42,7 +42,9 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
     }, []);
 
     return (
-        <Modal open onClose={onClose} size="lg">
+        // The interactive upgrade wizard carries step tables — give it the
+        // widest modal so nothing clips; the simpler flows stay at lg.
+        <Modal open onClose={onClose} size={stage === 'agi-interactive' ? 'xl' : 'lg'}>
             <Modal.Header>
                 <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <Icon name="folder-plus" size="sm" /> Add workspace

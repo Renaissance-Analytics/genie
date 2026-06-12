@@ -64,7 +64,12 @@ export default function TerminalPanel({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const [shellOptions, setShellOptions] = useState<ShellProfile[]>([]);
+    // null until detection resolves. The XTerm render WAITS for this:
+    // fancy-term reshapes its DOM tree when showShellBar flips, which
+    // would detach the xterm.js-mounted canvas mid-session. Resolving
+    // shells first (cached, one IPC) keeps the tree stable for the
+    // terminal's whole life.
+    const [shellOptions, setShellOptions] = useState<ShellProfile[] | null>(null);
     // The live shell override (command + args). Starts from the spec;
     // switching updates it locally + persists to the spec row.
     const [shell, setShell] = useState<{
@@ -157,18 +162,20 @@ export default function TerminalPanel({
                 </span>
             </div>
             <div className="term-host">
-                <XTerm
-                    key={`${spec.id}:${shell.command ?? 'default'}`}
-                    id={spec.id}
-                    cwd={spec.cwd}
-                    shell={shell.command ?? undefined}
-                    args={shell.args}
-                    env={spec.env}
-                    onExit={onMarkInactive}
-                    shells={shellOptions}
-                    activeShell={shell.id ?? undefined}
-                    onShellChange={onShellChange}
-                />
+                {shellOptions !== null && (
+                    <XTerm
+                        key={`${spec.id}:${shell.command ?? 'default'}`}
+                        id={spec.id}
+                        cwd={spec.cwd}
+                        shell={shell.command ?? undefined}
+                        args={shell.args}
+                        env={spec.env}
+                        onExit={onMarkInactive}
+                        shells={shellOptions}
+                        activeShell={shell.id ?? undefined}
+                        onShellChange={onShellChange}
+                    />
+                )}
             </div>
         </section>
     );

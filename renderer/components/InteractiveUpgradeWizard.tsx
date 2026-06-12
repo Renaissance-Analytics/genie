@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
     Action,
-    Card,
+    Carousel,
     Heading,
     Icon,
     Input,
     Select,
     Text,
+    useCarousel,
 } from '@particle-academy/react-fancy';
 import {
     api,
@@ -14,6 +15,7 @@ import {
     type AnalyseRepoCandidate,
     type AnalyseResult,
     type ConvertPlanOpts,
+    type SourceKind,
     type TynnProject,
     type WorkspaceRow,
 } from '../lib/genie';
@@ -52,6 +54,34 @@ const KNOWLEDGE_TARGETS: Array<{ value: string; label: string }> = [
     { value: '', label: '.ai/ (root)' },
 ];
 
+const KIND_COPY: Record<
+    SourceKind,
+    { title: string; body: string; icon: string }
+> = {
+    'single-repo': {
+        title: 'Single repository',
+        body: 'This folder is one git repo (monorepos count — one .git is one repo). It becomes ONE submodule inside the envelope, and any docs/plans folders can copy into .ai/.',
+        icon: 'git-branch',
+    },
+    'repo-collection': {
+        title: 'Collection of repositories',
+        body: 'This folder is not a repo itself, but it contains git repos. Each one becomes its own submodule under repos/ — pick which to include on the next step.',
+        icon: 'folder-git-2',
+    },
+    'plain-folder': {
+        title: 'Plain folder',
+        body: 'No git repos found at the top level. You can still build an envelope and move knowledge into .ai/ — repos can be added later.',
+        icon: 'folder',
+    },
+};
+
+/**
+ * Upgrade-to-.agi wizard, structured as a four-step Carousel (wizard
+ * variant): Source → Repos → Knowledge → Envelope. The Source step
+ * classifies the folder (single repo / repo collection / plain folder)
+ * and the later steps adapt to that shape. The source folder is never
+ * modified — submodules clone FROM it, knowledge copies out of it.
+ */
 export default function InteractiveUpgradeWizard({
     initialFolder,
     projects,
@@ -59,9 +89,9 @@ export default function InteractiveUpgradeWizard({
     onCancel,
     onCreated,
 }: Props) {
-    const [stage, setStage] = useState<'pick' | 'plan' | 'configure' | 'busy'>(
-        initialFolder ? 'plan' : 'pick',
-    );
+    const [step, setStep] = useState(0);
+    const [busy, setBusy] = useState(false);
+    const [busyStep, setBusyStep] = useState<string | null>(null);
     const [sourceFolder, setSourceFolder] = useState<string>(initialFolder ?? '');
     const [scan, setScan] = useState<AnalyseResult | null>(null);
     const [scanning, setScanning] = useState(false);
@@ -138,7 +168,6 @@ export default function InteractiveUpgradeWizard({
                     orgs: orgs.map((o) => ({ login: o.login })),
                     error: null,
                 });
-                // Default owner = personal user account.
                 if (!ghOwner && st.username) setGhOwner('');
             } catch (e) {
                 if (cancelled) return;
@@ -181,10 +210,10 @@ export default function InteractiveUpgradeWizard({
                 .replace(/[\\/]+$/, '')
                 .split(/[\\/]/)
                 .pop();
-            if (leaf && !slug) setSlug(leaf);
-            setStage('plan');
+            if (leaf && !slug) setSlug(leaf.replace(/\.agi$/i, ''));
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
+            setScan(null);
         } finally {
             setScanning(false);
         }
@@ -213,25 +242,46 @@ export default function InteractiveUpgradeWizard({
         [knowledgeRows],
     );
 
+    const repoNamesValid = useMemo(() => {
+        const names = repoRows
+            .filter((r) => r.included)
+            .map((r) => r.submodule_name.trim());
+        if (names.some((n) => !n)) return false;
+        return new Set(names).size === names.length;
+    }, [repoRows]);
+
     const planValid =
         slug.trim().length > 0 &&
         parentFolder.trim().length > 0 &&
         projectId.length > 0 &&
-        // Submodule names unique + non-empty
-        (() => {
-            const names = repoRows.filter((r) => r.included).map((r) => r.submodule_name.trim());
-            if (names.some((n) => !n)) return false;
-            return new Set(names).size === names.length;
-        })() &&
-        // For GitHub auto, we need a connected account; the owner is
-        // optional (empty string = personal account).
+        repoNamesValid &&
         (remoteMode !== 'github' || gh.connected);
 
-    const [busyStep, setBusyStep] = useState<string | null>(null);
+    /** Per-step forward gating. Back is always allowed. */
+    const canLeave = (s: number): boolean => {
+        if (busy) return false;
+        if (s === 0) return !!scan;
+        if (s === 1) return repoNamesValid;
+        return true;
+    };
+
+    const onIndexChange = (next: number) => {
+        if (next === step) return;
+        if (next < step) {
+            setStep(next);
+            return;
+        }
+        // Forward jumps (Next button or clicking a later step dot) must
+        // pass every gate between here and there.
+        for (let s = step; s < next; s++) {
+            if (!canLeave(s)) return;
+        }
+        setStep(next);
+    };
 
     const execute = async () => {
-        if (!planValid) return;
-        setStage('busy');
+        if (!planValid || busy) return;
+        setBusy(true);
         setError(null);
         setBusyStep(null);
         try {
@@ -325,429 +375,201 @@ export default function InteractiveUpgradeWizard({
             onCreated(saved);
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
-            setStage('configure');
             setBusyStep(null);
+        } finally {
+            setBusy(false);
         }
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <Heading as="h2" size="sm">
-                <Icon name="layers" size="sm" /> Interactive upgrade to .agi
+                <Icon name="layers" size="sm" /> Upgrade to .agi envelope
             </Heading>
-            <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
-                Genie scans the source folder, then lets you choose which
-                sub-repos become <code>repos/</code> submodules and which
-                knowledge folders / files land in <code>.ai/</code>. The
-                original folder is never modified.
-            </Text>
 
-            <SourceFolderRow
-                folder={sourceFolder}
-                onPick={pickSourceFolder}
-                scanning={scanning}
-                onRescan={() => sourceFolder && runScan(sourceFolder)}
-            />
-
-            {error && (
-                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
-                    {error}
-                </Text>
-            )}
-
-            {scan && (
-                <>
-                    <ScanSection
-                        title={`Detected repos · ${repoRows.length}`}
-                        description={
-                            repoRows.length === 0
-                                ? 'No nested git repos found at the top level. The source folder itself can still be added as a single submodule via the simple checkbox flow.'
-                                : 'Each detected repo becomes a git submodule under repos/. Uncheck the ones you don’t want; rename if the directory name is unfortunate.'
-                        }
-                    >
-                        {repoRows.length === 0 ? null : (
-                            <table className="upgrade-tbl">
-                                <thead>
-                                    <tr>
-                                        <th />
-                                        <th>Source</th>
-                                        <th>repos/&lt;name&gt;</th>
-                                        <th>Origin / fallback</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {repoRows.map((r, i) => (
-                                        <tr key={r.abs_path}>
-                                            <td>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={r.included}
-                                                    onChange={(e) =>
-                                                        setRepoRows((rs) =>
-                                                            rs.map((row, idx) =>
-                                                                idx === i
-                                                                    ? {
-                                                                            ...row,
-                                                                            included:
-                                                                                e.target
-                                                                                    .checked,
-                                                                        }
-                                                                    : row,
-                                                            ),
-                                                        )
-                                                    }
-                                                />
-                                            </td>
-                                            <td>
-                                                <code>{r.rel_path}/</code>
-                                                {r.head_ref && (
-                                                    <Text
-                                                        size="xs"
-                                                        className="text-zinc-500"
-                                                        style={{ display: 'block' }}
-                                                    >
-                                                        @{r.head_ref}
-                                                    </Text>
-                                                )}
-                                            </td>
-                                            <td>
-                                                <input
-                                                    type="text"
-                                                    className="upgrade-inp"
-                                                    value={r.submodule_name}
-                                                    onChange={(e) =>
-                                                        setRepoRows((rs) =>
-                                                            rs.map((row, idx) =>
-                                                                idx === i
-                                                                    ? {
-                                                                            ...row,
-                                                                            submodule_name:
-                                                                                e.target.value,
-                                                                        }
-                                                                    : row,
-                                                            ),
-                                                        )
-                                                    }
-                                                />
-                                            </td>
-                                            <td>
-                                                {r.origin_url ? (
-                                                    <label
-                                                        style={{
-                                                            display: 'inline-flex',
-                                                            alignItems: 'center',
-                                                            gap: 6,
-                                                            fontSize: 11,
-                                                        }}
-                                                    >
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={r.use_remote}
-                                                            onChange={(e) =>
-                                                                setRepoRows((rs) =>
-                                                                    rs.map((row, idx) =>
-                                                                        idx === i
-                                                                            ? {
-                                                                                    ...row,
-                                                                                    use_remote:
-                                                                                        e.target
-                                                                                            .checked,
-                                                                                }
-                                                                            : row,
-                                                                    ),
-                                                                )
-                                                            }
-                                                        />
-                                                        <span
-                                                            style={{
-                                                                color: 'var(--fg-3)',
-                                                                fontFamily: 'var(--font-mono)',
-                                                                fontSize: 10.5,
-                                                            }}
-                                                        >
-                                                            {r.origin_url}
-                                                        </span>
-                                                    </label>
-                                                ) : (
-                                                    <Text
-                                                        size="xs"
-                                                        className="text-zinc-500"
-                                                        style={{
-                                                            fontFamily: 'var(--font-mono)',
-                                                            fontSize: 10.5,
-                                                        }}
-                                                    >
-                                                        no origin · use local path
-                                                    </Text>
-                                                )}
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        )}
-                    </ScanSection>
-
-                    <ScanSection
-                        title={`Knowledge candidates · ${knowledgeRows.length}`}
-                        description="Top-level folders matching plans/, docs/, notes/, k/, .ai/ etc., plus loose markdown files. Each one copies into .ai/ at the target you pick. The source is untouched."
-                    >
-                        {knowledgeRows.length === 0 ? null : (
-                            <table className="upgrade-tbl">
-                                <thead>
-                                    <tr>
-                                        <th />
-                                        <th>Source</th>
-                                        <th>Target inside .ai/</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {knowledgeRows.map((r, i) => (
-                                        <tr key={r.abs_path}>
-                                            <td>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={r.included}
-                                                    onChange={(e) =>
-                                                        setKnowledgeRows((rs) =>
-                                                            rs.map((row, idx) =>
-                                                                idx === i
-                                                                    ? {
-                                                                            ...row,
-                                                                            included:
-                                                                                e.target
-                                                                                    .checked,
-                                                                        }
-                                                                    : row,
-                                                            ),
-                                                        )
-                                                    }
-                                                />
-                                            </td>
-                                            <td>
-                                                <code>
-                                                    {r.rel_path}
-                                                    {r.kind === 'directory' ? '/' : ''}
-                                                </code>
-                                                {r.kind === 'file' && r.size != null && (
-                                                    <Text
-                                                        size="xs"
-                                                        className="text-zinc-500"
-                                                        style={{ display: 'block' }}
-                                                    >
-                                                        {formatBytes(r.size)}
-                                                    </Text>
-                                                )}
-                                            </td>
-                                            <td>
-                                                <Select
-                                                    value={r.target_subdir}
-                                                    onValueChange={(v) =>
-                                                        setKnowledgeRows((rs) =>
-                                                            rs.map((row, idx) =>
-                                                                idx === i
-                                                                    ? {
-                                                                            ...row,
-                                                                            target_subdir: v,
-                                                                        }
-                                                                    : row,
-                                                            ),
-                                                        )
-                                                    }
-                                                    list={KNOWLEDGE_TARGETS.map((t) => ({
-                                                        value: t.value,
-                                                        label: t.label,
-                                                    }))}
-                                                />
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        )}
-                    </ScanSection>
-
-                    {scan.other.length > 0 && (
-                        <ScanSection
-                            title={`Other items · ${scan.other.length}`}
-                            description="Stuff Genie didn’t classify. None of it will be moved or added — it stays in the source folder."
-                        >
-                            <ul
-                                style={{
-                                    margin: 0,
-                                    padding: '6px 0 0 18px',
-                                    fontSize: 11.5,
-                                    color: 'var(--fg-3)',
-                                    fontFamily: 'var(--font-mono)',
-                                }}
-                            >
-                                {scan.other.slice(0, 30).map((o) => (
-                                    <li key={o.rel_path}>
-                                        {o.rel_path}
-                                        {o.kind === 'directory' ? '/' : ''}
-                                    </li>
-                                ))}
-                                {scan.other.length > 30 && (
-                                    <li>… and {scan.other.length - 30} more</li>
-                                )}
-                            </ul>
-                        </ScanSection>
-                    )}
-
-                    <Card
-                        style={{
-                            padding: 14,
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: 10,
-                        }}
-                    >
-                        <Heading as="h3" size="sm" style={{ margin: 0 }}>
-                            Envelope settings
-                        </Heading>
-                        <ProjectPickerInline
-                            projects={projects}
-                            loading={loadingProjects}
-                            value={projectId}
-                            onChange={setProjectId}
-                        />
-                        <Input
-                            label="Envelope slug"
-                            description={`Becomes the folder name: ${slug || '{slug}'}.agi`}
-                            value={slug}
-                            onValueChange={setSlug}
-                            placeholder="brain-v2"
-                        />
-                        <ParentFolderRow
-                            folder={parentFolder}
-                            onChoose={pickParentFolder}
-                            description={
-                                primaryWorkspace
-                                    ? `Default: ${primaryWorkspace}. Result: <parent>/${slug || '{slug}'}.agi/`
-                                    : `Pick where the new envelope folder will be created. Result: <parent>/${slug || '{slug}'}.agi/`
-                            }
-                        />
-
-                        <div>
-                            <Text
-                                size="xs"
-                                style={{
-                                    display: 'block',
-                                    marginBottom: 6,
-                                    fontWeight: 600,
-                                }}
-                            >
-                                Envelope remote (optional)
-                            </Text>
-                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                                {(['none', 'github', 'paste'] as const).map((m) => (
-                                    <Action
-                                        key={m}
-                                        size="sm"
-                                        variant={remoteMode === m ? 'default' : 'ghost'}
-                                        color={remoteMode === m ? 'blue' : undefined}
-                                        onClick={() => setRemoteMode(m)}
-                                    >
-                                        {m === 'none'
-                                            ? 'No remote'
-                                            : m === 'github'
-                                              ? 'GitHub (auto-create)'
-                                              : 'Paste URL'}
-                                    </Action>
-                                ))}
-                            </div>
-                            {remoteMode === 'paste' && (
-                                <Input
-                                    label="Remote URL"
-                                    value={remoteUrl}
-                                    onValueChange={setRemoteUrl}
-                                    placeholder="git@github.com:owner/{slug}.agi.git"
-                                    style={{ marginTop: 8 }}
-                                />
-                            )}
-                            {remoteMode === 'github' && (
-                                <GitHubAutoPanel
-                                    gh={gh}
-                                    slug={slug}
-                                    owner={ghOwner}
-                                    onOwnerChange={setGhOwner}
-                                    isPrivate={ghPrivate}
-                                    onPrivateChange={setGhPrivate}
-                                    onOpenSettings={() =>
-                                        api().app.showSettings().catch(() => {})
-                                    }
-                                />
-                            )}
-                        </div>
-
-                        <Text
-                            size="xs"
-                            className="text-zinc-500"
-                            style={{ display: 'block' }}
-                        >
-                            Will create <strong>{selectedRepoCount}</strong> submodule
-                            {selectedRepoCount === 1 ? '' : 's'} and copy{' '}
-                            <strong>{selectedKnowledgeCount}</strong> knowledge item
-                            {selectedKnowledgeCount === 1 ? '' : 's'} into{' '}
-                            <code>.ai/</code>.
-                        </Text>
-                    </Card>
-                </>
-            )}
-
-            <div
-                style={{
-                    display: 'flex',
-                    justifyContent: 'flex-end',
-                    gap: 8,
-                    marginTop: 4,
-                }}
+            <Carousel
+                variant="wizard"
+                activeIndex={step}
+                onIndexChange={onIndexChange}
+                onFinish={() => void execute()}
             >
-                <Action variant="ghost" onClick={onCancel} disabled={stage === 'busy'}>
-                    Cancel
-                </Action>
-                <Action
-                    color="blue"
-                    onClick={execute}
-                    disabled={!scan || !planValid || stage === 'busy'}
+                <Carousel.Steps className="upgrade-steps" />
+
+                <Carousel.Panels
+                    transition="fade"
+                    className="upgrade-panels"
                 >
-                    {stage === 'busy'
-                        ? busyStep ?? 'Building envelope…'
-                        : remoteMode === 'github'
-                          ? 'Create on GitHub + build envelope'
-                          : 'Build envelope'}
-                </Action>
-            </div>
+                    <Carousel.Slide name="Source">
+                        <SourceStep
+                            folder={sourceFolder}
+                            scan={scan}
+                            scanning={scanning}
+                            onPick={pickSourceFolder}
+                            onRescan={() => sourceFolder && void runScan(sourceFolder)}
+                        />
+                    </Carousel.Slide>
+
+                    <Carousel.Slide name="Repos">
+                        <ReposStep
+                            kind={scan?.source_kind ?? 'plain-folder'}
+                            rows={repoRows}
+                            setRows={setRepoRows}
+                            namesValid={repoNamesValid}
+                        />
+                    </Carousel.Slide>
+
+                    <Carousel.Slide name="Knowledge">
+                        <KnowledgeStep
+                            rows={knowledgeRows}
+                            setRows={setKnowledgeRows}
+                            other={scan?.other ?? []}
+                        />
+                    </Carousel.Slide>
+
+                    <Carousel.Slide name="Envelope">
+                        <EnvelopeStep
+                            projects={projects}
+                            loadingProjects={loadingProjects}
+                            projectId={projectId}
+                            setProjectId={setProjectId}
+                            slug={slug}
+                            setSlug={setSlug}
+                            parentFolder={parentFolder}
+                            onPickParent={pickParentFolder}
+                            primaryWorkspace={primaryWorkspace}
+                            remoteMode={remoteMode}
+                            setRemoteMode={setRemoteMode}
+                            remoteUrl={remoteUrl}
+                            setRemoteUrl={setRemoteUrl}
+                            gh={gh}
+                            ghOwner={ghOwner}
+                            setGhOwner={setGhOwner}
+                            ghPrivate={ghPrivate}
+                            setGhPrivate={setGhPrivate}
+                            selectedRepoCount={selectedRepoCount}
+                            selectedKnowledgeCount={selectedKnowledgeCount}
+                            busyStep={busyStep}
+                        />
+                    </Carousel.Slide>
+                </Carousel.Panels>
+
+                {error && (
+                    <Text
+                        size="xs"
+                        style={{ color: 'var(--rose-500)', display: 'block', marginTop: 8 }}
+                    >
+                        {error}
+                    </Text>
+                )}
+
+                <WizardFooter
+                    onCancel={onCancel}
+                    busy={busy}
+                    busyStep={busyStep}
+                    canNext={canLeave(step)}
+                    finishLabel={
+                        remoteMode === 'github'
+                            ? 'Create on GitHub + build envelope'
+                            : 'Build envelope'
+                    }
+                    finishEnabled={planValid && !busy}
+                    onFinish={() => void execute()}
+                />
+            </Carousel>
         </div>
     );
 }
 
-function SourceFolderRow({
+/**
+ * Custom controls row — fancy-ui's built-in <Carousel.Controls> has no
+ * per-step gating, and the finish action needs validity + busy state.
+ * Lives inside the Carousel so useCarousel() reaches the context.
+ */
+function WizardFooter({
+    onCancel,
+    busy,
+    busyStep,
+    canNext,
+    finishLabel,
+    finishEnabled,
+    onFinish,
+}: {
+    onCancel: () => void;
+    busy: boolean;
+    busyStep: string | null;
+    canNext: boolean;
+    finishLabel: string;
+    finishEnabled: boolean;
+    onFinish: () => void;
+}) {
+    const { activeIndex, totalSlides, next, prev } = useCarousel();
+    const isFirst = activeIndex === 0;
+    const isLast = activeIndex === totalSlides - 1;
+
+    return (
+        <div
+            style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                alignItems: 'center',
+                gap: 8,
+                marginTop: 12,
+            }}
+        >
+            <Action variant="ghost" onClick={onCancel} disabled={busy}>
+                Cancel
+            </Action>
+            <span style={{ flex: 1 }} />
+            {!isFirst && (
+                <Action variant="ghost" icon="arrow-left" onClick={prev} disabled={busy}>
+                    Back
+                </Action>
+            )}
+            {isLast ? (
+                <Action color="blue" icon="check" onClick={onFinish} disabled={!finishEnabled}>
+                    {busy ? busyStep ?? 'Building envelope…' : finishLabel}
+                </Action>
+            ) : (
+                <Action
+                    color="blue"
+                    iconTrailing="arrow-right"
+                    onClick={next}
+                    disabled={!canNext}
+                >
+                    Next
+                </Action>
+            )}
+        </div>
+    );
+}
+
+/* ===== Step 1 — Source =================================================== */
+
+function SourceStep({
     folder,
-    onPick,
+    scan,
     scanning,
+    onPick,
     onRescan,
 }: {
     folder: string;
-    onPick: () => void;
+    scan: AnalyseResult | null;
     scanning: boolean;
+    onPick: () => void;
     onRescan: () => void;
 }) {
     return (
-        <div>
-            <Text size="xs" style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
-                Source folder
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                Pick the folder to upgrade. Genie reads its layout (never
+                modifies it) and figures out whether it's a single repo, a
+                collection of repos, or a plain folder.
             </Text>
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
                 <div style={{ flex: 1 }}>
-                    <Input
-                        value={folder}
-                        onValueChange={() => {}}
-                        readOnly
-                        placeholder="No folder chosen"
-                    />
+                    <Input value={folder} readOnly placeholder="No folder chosen" />
                 </div>
-                <Action variant="ghost" onClick={onPick} icon="folder">
+                <Action variant="ghost" onClick={onPick} icon="folder" disabled={scanning}>
                     Browse
                 </Action>
                 {folder && (
@@ -761,92 +583,394 @@ function SourceFolderRow({
                     </Action>
                 )}
             </div>
+
+            {scan && (
+                <div className="upgrade-kind">
+                    <span className="uk-icon">
+                        <Icon name={KIND_COPY[scan.source_kind].icon} size="md" />
+                    </span>
+                    <div>
+                        <Text size="sm" style={{ fontWeight: 600, display: 'block' }}>
+                            {KIND_COPY[scan.source_kind].title}
+                        </Text>
+                        <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                            {KIND_COPY[scan.source_kind].body}
+                        </Text>
+                        <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
+                            Found: {scan.repos.length} repo
+                            {scan.repos.length === 1 ? '' : 's'} ·{' '}
+                            {scan.knowledge.length} knowledge candidate
+                            {scan.knowledge.length === 1 ? '' : 's'} ·{' '}
+                            {scan.other.length} other item
+                            {scan.other.length === 1 ? '' : 's'}
+                        </Text>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
 
-function ScanSection({
-    title,
-    description,
-    children,
-}: {
-    title: string;
-    description: string;
-    children: React.ReactNode;
-}) {
-    return (
-        <Card style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <Heading as="h3" size="sm" style={{ margin: 0 }}>
-                {title}
-            </Heading>
-            <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
-                {description}
-            </Text>
-            {children}
-        </Card>
-    );
-}
+/* ===== Step 2 — Repos ==================================================== */
 
-function ProjectPickerInline({
-    projects,
-    loading,
-    value,
-    onChange,
+function ReposStep({
+    kind,
+    rows,
+    setRows,
+    namesValid,
 }: {
-    projects: TynnProject[];
-    loading: boolean;
-    value: string;
-    onChange: (id: string) => void;
+    kind: SourceKind;
+    rows: RepoRow[];
+    setRows: React.Dispatch<React.SetStateAction<RepoRow[]>>;
+    namesValid: boolean;
 }) {
-    if (loading)
+    const patchRow = (i: number, patch: Partial<RepoRow>) =>
+        setRows((rs) => rs.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
+
+    if (rows.length === 0) {
         return (
-            <Text size="xs" className="text-zinc-500">
-                Loading projects…
+            <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                No git repos detected — the envelope starts without submodules.
+                You can add repos later with <code>git submodule add</code> or
+                from the workspace context menu.
             </Text>
         );
+    }
+
     return (
-        <div>
-            <Text size="xs" style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
-                Tynn project
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                {kind === 'single-repo'
+                    ? 'The source repo becomes one submodule under repos/. Rename it if the folder name is unfortunate.'
+                    : 'Each detected repo becomes a git submodule under repos/. Uncheck the ones you don’t want; rename where needed.'}
+                {' '}When a repo has an origin remote you can clone from it instead
+                of the local path — better for envelopes you'll push and re-clone
+                elsewhere.
             </Text>
-            <Select
-                value={value}
-                onValueChange={onChange}
-                list={projects.map((p) => ({ value: p.id, label: p.name }))}
-            />
+            <table className="upgrade-tbl">
+                <thead>
+                    <tr>
+                        <th />
+                        <th>Source</th>
+                        <th>repos/&lt;name&gt;</th>
+                        <th>Clone from</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows.map((r, i) => (
+                        <tr key={r.abs_path}>
+                            <td>
+                                <input
+                                    type="checkbox"
+                                    checked={r.included}
+                                    onChange={(e) => patchRow(i, { included: e.target.checked })}
+                                />
+                            </td>
+                            <td>
+                                <code>{r.rel_path === '.' ? '(this folder)' : `${r.rel_path}/`}</code>
+                                {r.head_ref && (
+                                    <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                                        @{r.head_ref}
+                                    </Text>
+                                )}
+                            </td>
+                            <td>
+                                <input
+                                    type="text"
+                                    className="upgrade-inp"
+                                    value={r.submodule_name}
+                                    onChange={(e) => patchRow(i, { submodule_name: e.target.value })}
+                                />
+                            </td>
+                            <td>
+                                {r.origin_url ? (
+                                    <label
+                                        style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: 6,
+                                            fontSize: 11,
+                                        }}
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={r.use_remote}
+                                            onChange={(e) => patchRow(i, { use_remote: e.target.checked })}
+                                        />
+                                        <span
+                                            style={{
+                                                color: 'var(--fg-3)',
+                                                fontFamily: 'var(--font-mono)',
+                                                fontSize: 10.5,
+                                            }}
+                                        >
+                                            {r.use_remote ? r.origin_url : 'local path'}
+                                        </span>
+                                    </label>
+                                ) : (
+                                    <Text
+                                        size="xs"
+                                        className="text-zinc-500"
+                                        style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5 }}
+                                    >
+                                        no origin · local path
+                                    </Text>
+                                )}
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+            {!namesValid && (
+                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                    Submodule names must be non-empty and unique.
+                </Text>
+            )}
         </div>
     );
 }
 
-function ParentFolderRow({
-    folder,
-    onChoose,
-    description,
+/* ===== Step 3 — Knowledge =============================================== */
+
+function KnowledgeStep({
+    rows,
+    setRows,
+    other,
 }: {
-    folder: string;
-    onChoose: () => void;
-    description: string;
+    rows: KnowledgeRow[];
+    setRows: React.Dispatch<React.SetStateAction<KnowledgeRow[]>>;
+    other: AnalyseResult['other'];
+}) {
+    const patchRow = (i: number, patch: Partial<KnowledgeRow>) =>
+        setRows((rs) => rs.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
+
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                Folders matching plans/, docs/, notes/, k/, .ai/ etc., plus
+                loose markdown files. Each copies into <code>.ai/</code> at the
+                target you pick — the source stays untouched.
+            </Text>
+            {rows.length === 0 ? (
+                <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                    No knowledge candidates detected. Nothing to configure here —
+                    hit Next.
+                </Text>
+            ) : (
+                <table className="upgrade-tbl">
+                    <thead>
+                        <tr>
+                            <th />
+                            <th>Source</th>
+                            <th>Target inside .ai/</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows.map((r, i) => (
+                            <tr key={r.abs_path}>
+                                <td>
+                                    <input
+                                        type="checkbox"
+                                        checked={r.included}
+                                        onChange={(e) => patchRow(i, { included: e.target.checked })}
+                                    />
+                                </td>
+                                <td>
+                                    <code>
+                                        {r.rel_path}
+                                        {r.kind === 'directory' ? '/' : ''}
+                                    </code>
+                                    {r.kind === 'file' && r.size != null && (
+                                        <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                                            {formatBytes(r.size)}
+                                        </Text>
+                                    )}
+                                </td>
+                                <td>
+                                    <Select
+                                        value={r.target_subdir}
+                                        onValueChange={(v) => patchRow(i, { target_subdir: v })}
+                                        list={KNOWLEDGE_TARGETS.map((t) => ({
+                                            value: t.value,
+                                            label: t.label,
+                                        }))}
+                                    />
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            )}
+            {other.length > 0 && (
+                <details className="upgrade-other">
+                    <summary>
+                        {other.length} other item{other.length === 1 ? '' : 's'} —
+                        stay in the source folder, untouched
+                    </summary>
+                    <ul>
+                        {other.slice(0, 30).map((o) => (
+                            <li key={o.rel_path}>
+                                {o.rel_path}
+                                {o.kind === 'directory' ? '/' : ''}
+                            </li>
+                        ))}
+                        {other.length > 30 && <li>… and {other.length - 30} more</li>}
+                    </ul>
+                </details>
+            )}
+        </div>
+    );
+}
+
+/* ===== Step 4 — Envelope ================================================ */
+
+function EnvelopeStep({
+    projects,
+    loadingProjects,
+    projectId,
+    setProjectId,
+    slug,
+    setSlug,
+    parentFolder,
+    onPickParent,
+    primaryWorkspace,
+    remoteMode,
+    setRemoteMode,
+    remoteUrl,
+    setRemoteUrl,
+    gh,
+    ghOwner,
+    setGhOwner,
+    ghPrivate,
+    setGhPrivate,
+    selectedRepoCount,
+    selectedKnowledgeCount,
+    busyStep,
+}: {
+    projects: TynnProject[];
+    loadingProjects: boolean;
+    projectId: string;
+    setProjectId: (v: string) => void;
+    slug: string;
+    setSlug: (v: string) => void;
+    parentFolder: string;
+    onPickParent: () => void;
+    primaryWorkspace?: string;
+    remoteMode: 'none' | 'paste' | 'github';
+    setRemoteMode: (v: 'none' | 'paste' | 'github') => void;
+    remoteUrl: string;
+    setRemoteUrl: (v: string) => void;
+    gh: {
+        loaded: boolean;
+        connected: boolean;
+        username: string | null;
+        orgs: Array<{ login: string }>;
+        error: string | null;
+    };
+    ghOwner: string;
+    setGhOwner: (v: string) => void;
+    ghPrivate: boolean;
+    setGhPrivate: (v: boolean) => void;
+    selectedRepoCount: number;
+    selectedKnowledgeCount: number;
+    busyStep: string | null;
 }) {
     return (
-        <div>
-            <Text size="xs" style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
-                Destination parent
-            </Text>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                <div style={{ flex: 1 }}>
-                    <Input value={folder} readOnly placeholder="No folder chosen" />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {loadingProjects ? (
+                <Text size="xs" className="text-zinc-500">
+                    Loading projects…
+                </Text>
+            ) : (
+                <div>
+                    <Text size="xs" style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+                        Tynn project
+                    </Text>
+                    <Select
+                        value={projectId}
+                        onValueChange={setProjectId}
+                        list={projects.map((p) => ({ value: p.id, label: p.name }))}
+                    />
                 </div>
-                <Action variant="ghost" onClick={onChoose} icon="folder">
-                    Browse
-                </Action>
+            )}
+            <Input
+                label="Envelope slug"
+                description={`Becomes the folder name: ${slug || '{slug}'}.agi`}
+                value={slug}
+                onValueChange={setSlug}
+                placeholder="brain-v2"
+            />
+            <div>
+                <Text size="xs" style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+                    Destination parent
+                </Text>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                    <div style={{ flex: 1 }}>
+                        <Input value={parentFolder} readOnly placeholder="No folder chosen" />
+                    </div>
+                    <Action variant="ghost" onClick={onPickParent} icon="folder">
+                        Browse
+                    </Action>
+                </div>
+                <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
+                    {primaryWorkspace
+                        ? `Default: ${primaryWorkspace}. Result: <parent>/${slug || '{slug}'}.agi/`
+                        : `Result: <parent>/${slug || '{slug}'}.agi/`}
+                </Text>
             </div>
-            {description && (
-                <Text
-                    size="xs"
-                    className="text-zinc-500"
-                    style={{ display: 'block', marginTop: 4 }}
-                >
-                    {description}
+
+            <div>
+                <Text size="xs" style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+                    Envelope remote (optional)
+                </Text>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {(['none', 'github', 'paste'] as const).map((m) => (
+                        <Action
+                            key={m}
+                            size="sm"
+                            variant={remoteMode === m ? 'default' : 'ghost'}
+                            color={remoteMode === m ? 'blue' : undefined}
+                            onClick={() => setRemoteMode(m)}
+                        >
+                            {m === 'none'
+                                ? 'No remote'
+                                : m === 'github'
+                                  ? 'GitHub (auto-create)'
+                                  : 'Paste URL'}
+                        </Action>
+                    ))}
+                </div>
+                {remoteMode === 'paste' && (
+                    <Input
+                        label="Remote URL"
+                        value={remoteUrl}
+                        onValueChange={setRemoteUrl}
+                        placeholder="git@github.com:owner/{slug}.agi.git"
+                        style={{ marginTop: 8 }}
+                    />
+                )}
+                {remoteMode === 'github' && (
+                    <GitHubAutoPanel
+                        gh={gh}
+                        slug={slug}
+                        owner={ghOwner}
+                        onOwnerChange={setGhOwner}
+                        isPrivate={ghPrivate}
+                        onPrivateChange={setGhPrivate}
+                        onOpenSettings={() => api().app.showSettings().catch(() => {})}
+                    />
+                )}
+            </div>
+
+            <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                Will create <strong>{selectedRepoCount}</strong> submodule
+                {selectedRepoCount === 1 ? '' : 's'} and copy{' '}
+                <strong>{selectedKnowledgeCount}</strong> knowledge item
+                {selectedKnowledgeCount === 1 ? '' : 's'} into <code>.ai/</code>.
+            </Text>
+            {busyStep && (
+                <Text size="xs" style={{ display: 'block', color: 'var(--blue-500)' }}>
+                    {busyStep}
                 </Text>
             )}
         </div>
@@ -966,11 +1090,7 @@ function GitHubAutoPanel({
                 />
                 <Text size="xs">Private repository</Text>
             </label>
-            <Text
-                size="xs"
-                className="text-zinc-500"
-                style={{ display: 'block' }}
-            >
+            <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
                 Will create <code>{targetUrl}</code>, set it as <code>origin</code>{' '}
                 on the new envelope, and push the initial commit.
             </Text>

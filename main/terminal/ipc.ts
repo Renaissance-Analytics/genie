@@ -79,10 +79,17 @@ export function registerTerminalIpc(): void {
             // No explicit shell on the spec → the user's configured default
             // (Settings → Terminal), which itself falls back to detection
             // (Git Bash first on Windows). Resolution lives in shells.ts so
-            // the manager stays a pure pty pool.
+            // the manager stays a pure pty pool. An EMPTY args array counts
+            // as "no explicit args" — terminal_specs rows default to '[]',
+            // and that must not strip the shell's own defaults (git-bash
+            // needs --login -i for a profile-loaded interactive session).
             if (!opts.shell) {
                 const resolved = resolveDefaultShell();
-                opts = { ...opts, shell: resolved.command, args: opts.args ?? resolved.args };
+                opts = {
+                    ...opts,
+                    shell: resolved.command,
+                    args: opts.args?.length ? opts.args : resolved.args,
+                };
             }
             const result = mgr.create(opts);
             trackOwner(opts.id, event.sender);
