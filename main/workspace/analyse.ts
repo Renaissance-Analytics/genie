@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -59,12 +59,33 @@ export interface AnalyseOtherEntry {
  */
 export type SourceKind = 'single-repo' | 'repo-collection' | 'plain-folder';
 
+/**
+ * Per-entry classification for SINGLE-REPO sources. Everything at the
+ * top level defaults to "part of the codebase" — the repo's own git
+ * store then refines that: tracked entries genuinely travel with the
+ * submodule clone, while ignored/untracked entries (a gitignored .ai/,
+ * loose WIP notes) would be LEFT BEHIND unless the envelope captures
+ * them as knowledge or root items.
+ */
+export interface RootEntry {
+    rel_path: string;
+    abs_path: string;
+    kind: 'file' | 'directory';
+    git_state: 'tracked' | 'untracked' | 'ignored';
+    /** Default disposition the wizard pre-selects. */
+    suggested: 'codebase' | 'knowledge' | 'root';
+    /** `.ai/` subdir when suggested === 'knowledge'. */
+    suggested_target: string;
+}
+
 export interface AnalyseResult {
     root: string;
     source_kind: SourceKind;
     repos: AnalyseRepoCandidate[];
     knowledge: AnalyseKnowledgeCandidate[];
     other: AnalyseOtherEntry[];
+    /** Only present for 'single-repo' sources. */
+    root_entries?: RootEntry[];
 }
 
 /**
@@ -102,6 +123,28 @@ const SKIP_NAMES = new Set([
     'node_modules',
     '.idea',
     '.vscode',
+]);
+
+/**
+ * Regenerable build/dependency output. When these show up ignored in a
+ * single-repo source we still default them to "codebase" (= do nothing,
+ * the toolchain recreates them) rather than suggesting a copy.
+ */
+const REGENERABLE_NAMES = new Set([
+    'node_modules',
+    'vendor',
+    'dist',
+    'build',
+    'out',
+    'target',
+    '.next',
+    '.nuxt',
+    '.turbo',
+    '.cache',
+    '__pycache__',
+    '.venv',
+    'venv',
+    'coverage',
 ]);
 
 export async function analyseFolder(root: string): Promise<AnalyseResult> {
@@ -207,7 +250,107 @@ export async function analyseFolder(root: string): Promise<AnalyseResult> {
             ? 'repo-collection'
             : 'plain-folder';
 
-    return { root, source_kind, repos, knowledge, other };
+    const root_entries = rootIsRepo
+        ? await classifyRootEntries(root, entries)
+        : undefined;
+
+    return { root, source_kind, repos, knowledge, other, root_entries };
+}
+
+/**
+ * Single-repo classification: consult the repo's own git store. One
+ * `git ls-files` gives the tracked top-level set; the rest are sorted
+ * into ignored vs untracked via one batched `git check-ignore --stdin`.
+ *
+ * Suggested dispositions:
+ *   - tracked                                  → codebase (travels with the clone)
+ *   - knowledge-convention name (any state)    → knowledge (.ai/<mapped>)
+ *   - regenerable ignored output (dist/, etc.) → codebase (toolchain recreates it)
+ *   - everything else untracked/ignored        → codebase too — but flagged by
+ *     git_state so the UI can warn "won't travel" and let the user flip it.
+ *     Defaulting dotfiles/.env to a COPY would risk committing secrets into
+ *     the (git-tracked, possibly pushed) envelope.
+ */
+async function classifyRootEntries(
+    root: string,
+    entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>,
+): Promise<RootEntry[]> {
+    const names = entries
+        .filter((e) => e.name !== '.git' && (e.isDirectory() || e.isFile()))
+        .map((e) => ({ name: e.name, dir: e.isDirectory() }));
+
+    // Tracked top-level prefixes from one ls-files pass.
+    const tracked = new Set<string>();
+    try {
+        // Plain ls-files lists tracked paths — there is no --name-only
+        // here (that's a diff option); names are already the output.
+        const out = await execFileAsync('git', ['ls-files'], {
+            cwd: root,
+            maxBuffer: 32 * 1024 * 1024,
+        });
+        for (const line of out.stdout.split('\n')) {
+            if (!line) continue;
+            const top = line.split('/')[0];
+            if (top) tracked.add(top);
+        }
+    } catch {
+        /* not actually a repo / git missing — everything reads untracked */
+    }
+
+    // Batched ignore check for the non-tracked remainder. check-ignore
+    // exits 1 when NOTHING matched and 0 when something did — stdout is
+    // authoritative either way, so collect it regardless of exit code.
+    const ignored = new Set<string>();
+    const untrackedNames = names.filter((n) => !tracked.has(n.name));
+    if (untrackedNames.length > 0) {
+        try {
+            const out = await runGitWithStdin(
+                root,
+                ['check-ignore', '--stdin'],
+                untrackedNames.map((n) => n.name).join('\n'),
+            );
+            for (const line of out.split('\n')) {
+                if (line) ignored.add(line.trim());
+            }
+        } catch {
+            /* git missing — treat all as untracked */
+        }
+    }
+
+    return names.map(({ name, dir }) => {
+        const git_state: RootEntry['git_state'] = tracked.has(name)
+            ? 'tracked'
+            : ignored.has(name)
+                ? 'ignored'
+                : 'untracked';
+
+        const knowledgeTarget = dir
+            ? KNOWLEDGE_DIR_MAP[name.toLowerCase()]
+            : KNOWLEDGE_FILE_EXTS.has(path.extname(name).toLowerCase())
+                ? 'knowledge'
+                : undefined;
+
+        let suggested: RootEntry['suggested'] = 'codebase';
+        let suggested_target = '';
+        if (knowledgeTarget !== undefined && git_state !== 'tracked') {
+            // Knowledge-shaped AND not in git — would be lost on clone.
+            // Tracked knowledge dirs stay codebase by default (they
+            // already travel); the user can still flip them to copy.
+            if (!REGENERABLE_NAMES.has(name.toLowerCase())) {
+                suggested = 'knowledge';
+                suggested_target = knowledgeTarget;
+            }
+        }
+
+        return {
+            rel_path: name,
+            abs_path: path.join(root, name),
+            kind: dir ? ('directory' as const) : ('file' as const),
+            git_state,
+            suggested,
+            suggested_target,
+        };
+    });
 }
 
 /**
@@ -217,6 +360,32 @@ export async function analyseFolder(root: string): Promise<AnalyseResult> {
  */
 function sanitiseRepoName(name: string): string {
     return name.replace(/^_+/, '').replace(/[^A-Za-z0-9._-]/g, '-') || name;
+}
+
+/**
+ * Run git with data piped to stdin and resolve with stdout. Async
+ * execFile has no `input` option (that's execFileSync) — without
+ * explicitly writing + closing stdin, `git check-ignore --stdin`
+ * blocks forever. Non-zero exits still resolve: check-ignore uses
+ * exit 1 for "no matches", which isn't an error for us.
+ */
+function runGitWithStdin(
+    cwd: string,
+    args: string[],
+    input: string,
+): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const child = spawn('git', args, { cwd, stdio: ['pipe', 'pipe', 'ignore'] });
+        let stdout = '';
+        child.stdout.setEncoding('utf8');
+        child.stdout.on('data', (d: string) => {
+            stdout += d;
+        });
+        child.on('error', reject);
+        child.on('close', () => resolve(stdout));
+        child.stdin.write(input);
+        child.stdin.end();
+    });
 }
 
 interface GitInfo {

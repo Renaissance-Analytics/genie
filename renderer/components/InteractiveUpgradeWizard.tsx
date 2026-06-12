@@ -15,6 +15,7 @@ import {
     type AnalyseRepoCandidate,
     type AnalyseResult,
     type ConvertPlanOpts,
+    type RootEntry,
     type SourceKind,
     type TynnProject,
     type WorkspaceRow,
@@ -41,6 +42,18 @@ interface RepoRow extends AnalyseRepoCandidate {
 interface KnowledgeRow extends AnalyseKnowledgeCandidate {
     included: boolean;
     /** Selected target subdir inside `.ai/`. Empty string = `.ai/` root (spread for dirs). */
+    target_subdir: string;
+}
+
+/**
+ * Single-repo sources get a per-entry disposition instead of the
+ * knowledge-candidates table: every top-level item is either
+ * Codebase (stays in the repo, travels with the submodule clone),
+ * Knowledge (copies into .ai/<target>), or Root (copies beside
+ * project.json).
+ */
+interface DispositionRow extends RootEntry {
+    disposition: 'codebase' | 'knowledge' | 'root';
     target_subdir: string;
 }
 
@@ -100,6 +113,8 @@ export default function InteractiveUpgradeWizard({
     // Plan state
     const [repoRows, setRepoRows] = useState<RepoRow[]>([]);
     const [knowledgeRows, setKnowledgeRows] = useState<KnowledgeRow[]>([]);
+    // Single-repo only: per-entry disposition rows replace knowledgeRows.
+    const [dispositionRows, setDispositionRows] = useState<DispositionRow[]>([]);
 
     // Configure state
     const [projectId, setProjectId] = useState('');
@@ -205,6 +220,13 @@ export default function InteractiveUpgradeWizard({
                     target_subdir: c.suggested_target,
                 })),
             );
+            setDispositionRows(
+                (r.root_entries ?? []).map((e) => ({
+                    ...e,
+                    disposition: e.suggested,
+                    target_subdir: e.suggested_target,
+                })),
+            );
             // Suggest a slug from the source folder's basename.
             const leaf = folder
                 .replace(/[\\/]+$/, '')
@@ -237,9 +259,13 @@ export default function InteractiveUpgradeWizard({
         () => repoRows.filter((r) => r.included).length,
         [repoRows],
     );
+    const isSingleRepo = scan?.source_kind === 'single-repo';
     const selectedKnowledgeCount = useMemo(
-        () => knowledgeRows.filter((r) => r.included).length,
-        [knowledgeRows],
+        () =>
+            isSingleRepo
+                ? dispositionRows.filter((r) => r.disposition !== 'codebase').length
+                : knowledgeRows.filter((r) => r.included).length,
+        [isSingleRepo, dispositionRows, knowledgeRows],
     );
 
     const repoNamesValid = useMemo(() => {
@@ -325,13 +351,23 @@ export default function InteractiveUpgradeWizard({
                         is_local: !(r.use_remote && r.origin_url),
                         submodule_name: r.submodule_name.trim(),
                     })),
-                knowledge: knowledgeRows
-                    .filter((r) => r.included)
-                    .map((r) => ({
-                        source_abs_path: r.abs_path,
-                        kind: r.kind,
-                        target_subdir: r.target_subdir,
-                    })),
+                knowledge: isSingleRepo
+                    ? dispositionRows
+                          .filter((r) => r.disposition !== 'codebase')
+                          .map((r) => ({
+                              source_abs_path: r.abs_path,
+                              kind: r.kind,
+                              target_subdir:
+                                  r.disposition === 'knowledge' ? r.target_subdir : '',
+                              to_envelope_root: r.disposition === 'root',
+                          }))
+                    : knowledgeRows
+                          .filter((r) => r.included)
+                          .map((r) => ({
+                              source_abs_path: r.abs_path,
+                              kind: r.kind,
+                              target_subdir: r.target_subdir,
+                          })),
                 remote,
             };
             setBusyStep('Building envelope + adding submodules…');
@@ -419,11 +455,18 @@ export default function InteractiveUpgradeWizard({
                     </Carousel.Slide>
 
                     <Carousel.Slide name="Knowledge">
-                        <KnowledgeStep
-                            rows={knowledgeRows}
-                            setRows={setKnowledgeRows}
-                            other={scan?.other ?? []}
-                        />
+                        {isSingleRepo ? (
+                            <DispositionStep
+                                rows={dispositionRows}
+                                setRows={setDispositionRows}
+                            />
+                        ) : (
+                            <KnowledgeStep
+                                rows={knowledgeRows}
+                                setRows={setKnowledgeRows}
+                                other={scan?.other ?? []}
+                            />
+                        )}
                     </Carousel.Slide>
 
                     <Carousel.Slide name="Envelope">
@@ -726,6 +769,119 @@ function ReposStep({
                     Submodule names must be non-empty and unique.
                 </Text>
             )}
+        </div>
+    );
+}
+
+/* ===== Step 3a — Disposition (single-repo sources) ====================== */
+
+const GIT_STATE_HINT: Record<RootEntry['git_state'], string> = {
+    tracked: 'in git — travels with the repo',
+    untracked: 'NOT in git — stays behind unless copied',
+    ignored: 'gitignored — stays behind unless copied',
+};
+
+function DispositionStep({
+    rows,
+    setRows,
+}: {
+    rows: DispositionRow[];
+    setRows: React.Dispatch<React.SetStateAction<DispositionRow[]>>;
+}) {
+    const patchRow = (i: number, patch: Partial<DispositionRow>) =>
+        setRows((rs) => rs.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
+
+    const setAll = (d: DispositionRow['disposition']) =>
+        setRows((rs) => rs.map((row) => ({ ...row, disposition: d })));
+
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                Everything tracked by git already travels with the repo —
+                that's <strong>Codebase</strong> (nothing copies). Items NOT in
+                git (a gitignored <code>.ai/</code>, loose notes) would be left
+                behind on a fresh clone: send those to{' '}
+                <strong>Knowledge</strong> (<code>.ai/…</code>) or{' '}
+                <strong>Root</strong> (beside <code>project.json</code>).
+            </Text>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <Text size="xs" className="text-zinc-500">
+                    Set all:
+                </Text>
+                {(['codebase', 'knowledge', 'root'] as const).map((d) => (
+                    <Action key={d} size="sm" variant="ghost" onClick={() => setAll(d)}>
+                        {d === 'codebase' ? 'Codebase' : d === 'knowledge' ? 'Knowledge' : 'Root'}
+                    </Action>
+                ))}
+            </div>
+            <table className="upgrade-tbl">
+                <thead>
+                    <tr>
+                        <th>Entry</th>
+                        <th>Git</th>
+                        <th>Disposition</th>
+                        <th>Target</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows.map((r, i) => (
+                        <tr key={r.abs_path}>
+                            <td>
+                                <code>
+                                    {r.rel_path}
+                                    {r.kind === 'directory' ? '/' : ''}
+                                </code>
+                            </td>
+                            <td>
+                                <span
+                                    className={`git-pill git-${r.git_state}`}
+                                    title={GIT_STATE_HINT[r.git_state]}
+                                >
+                                    {r.git_state}
+                                </span>
+                            </td>
+                            <td>
+                                <Select
+                                    value={r.disposition}
+                                    onValueChange={(v) =>
+                                        patchRow(i, {
+                                            disposition: v as DispositionRow['disposition'],
+                                            // First flip into knowledge gets a sane target.
+                                            target_subdir:
+                                                v === 'knowledge' && !r.target_subdir
+                                                    ? 'knowledge'
+                                                    : r.target_subdir,
+                                        })
+                                    }
+                                    list={[
+                                        { value: 'codebase', label: 'Codebase (stays in repo)' },
+                                        { value: 'knowledge', label: 'Knowledge / WIP → .ai/' },
+                                        { value: 'root', label: 'Envelope root' },
+                                    ]}
+                                />
+                            </td>
+                            <td>
+                                {r.disposition === 'knowledge' ? (
+                                    <Select
+                                        value={r.target_subdir}
+                                        onValueChange={(v) => patchRow(i, { target_subdir: v })}
+                                        list={KNOWLEDGE_TARGETS.map((t) => ({
+                                            value: t.value,
+                                            label: t.label,
+                                        }))}
+                                    />
+                                ) : (
+                                    <Text size="xs" className="text-zinc-500">
+                                        {r.disposition === 'root'
+                                            ? `/${r.rel_path}${r.kind === 'directory' ? '/' : ''}`
+                                            : '—'}
+                                    </Text>
+                                )}
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
         </div>
     );
 }

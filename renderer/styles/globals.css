@@ -193,17 +193,44 @@ textarea.input {
 
 /* Upgrade wizard (carousel steps) */
 .upgrade-steps {
-    padding: 4px 0 12px;
+    padding: 6px 2px 14px;
     border-bottom: 1px solid var(--border-1);
-    margin-bottom: 12px;
+    margin-bottom: 14px;
     flex-wrap: wrap;
+    row-gap: 8px;
 }
 /* Cap the step panel and scroll INSIDE it — the modal itself stays
-   within the window, so no step can push the footer out of view. */
+   within the window, so no step can push the footer out of view.
+   Generous inner padding: overflow-y:auto forces overflow-x to clip
+   too, and without breathing room it shears off button focus rings
+   and input shadows at the panel edges. */
 .upgrade-panels {
     max-height: min(52vh, 460px);
     overflow-y: auto;
-    padding-right: 4px;
+    padding: 4px 10px 10px 4px;
+    scrollbar-gutter: stable;
+}
+.git-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    cursor: default;
+}
+.git-pill.git-tracked {
+    color: var(--emerald-500, #10b981);
+    background: color-mix(in srgb, #10b981 12%, transparent);
+}
+.git-pill.git-untracked {
+    color: #f59e0b;
+    background: color-mix(in srgb, #f59e0b 12%, transparent);
+}
+.git-pill.git-ignored {
+    color: var(--fg-3);
+    background: color-mix(in srgb, currentColor 10%, transparent);
 }
 .upgrade-kind {
     display: flex;

@@ -192,6 +192,14 @@ export interface AgiPlanKnowledge {
      * "plans" or "knowledge".
      */
     target_subdir: string;
+    /**
+     * Copy to the ENVELOPE ROOT instead of `.ai/` — for items that
+     * belong beside project.json (a top-level README, an existing
+     * scripts/ dir). Files land at the root; directories keep their
+     * basename (never spread — spreading at root could collide with
+     * the skeleton). When true, `target_subdir` is ignored.
+     */
+    to_envelope_root?: boolean;
 }
 
 export interface ConvertPlanOpts {
@@ -249,14 +257,15 @@ export async function convertToAgiPlan(opts: ConvertPlanOpts): Promise<CreateAgi
     }
 
     for (const k of opts.knowledge) {
-        const targetDir = path.join(base.path, '.ai', k.target_subdir);
+        const basename = path.basename(k.source_abs_path);
+        const targetDir = k.to_envelope_root
+            ? k.kind === 'directory'
+                ? path.join(base.path, basename)
+                : base.path
+            : path.join(base.path, '.ai', k.target_subdir);
         fs.mkdirSync(targetDir, { recursive: true });
         if (k.kind === 'file') {
-            const dest = path.join(
-                targetDir,
-                path.basename(k.source_abs_path),
-            );
-            fs.copyFileSync(k.source_abs_path, dest);
+            fs.copyFileSync(k.source_abs_path, path.join(targetDir, basename));
         } else {
             copyDirRecursive(k.source_abs_path, targetDir);
         }

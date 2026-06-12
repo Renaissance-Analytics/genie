@@ -205,12 +205,23 @@ export interface AnalyseOtherEntry {
 
 export type SourceKind = 'single-repo' | 'repo-collection' | 'plain-folder';
 
+export interface RootEntry {
+    rel_path: string;
+    abs_path: string;
+    kind: 'file' | 'directory';
+    git_state: 'tracked' | 'untracked' | 'ignored';
+    suggested: 'codebase' | 'knowledge' | 'root';
+    suggested_target: string;
+}
+
 export interface AnalyseResult {
     source_kind: SourceKind;
     root: string;
     repos: AnalyseRepoCandidate[];
     knowledge: AnalyseKnowledgeCandidate[];
     other: AnalyseOtherEntry[];
+    /** Only present for 'single-repo' sources. */
+    root_entries?: RootEntry[];
 }
 
 export interface AgiPlanRepo {
@@ -222,6 +233,8 @@ export interface AgiPlanKnowledge {
     source_abs_path: string;
     kind: 'file' | 'directory';
     target_subdir: string;
+    /** Copy beside project.json instead of into .ai/. */
+    to_envelope_root?: boolean;
 }
 export interface ConvertPlanOpts {
     slug: string;
