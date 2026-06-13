@@ -24,6 +24,7 @@ import {
     api,
     hasGenieBridge,
     ulid,
+    type Changelog,
     type TerminalSpec,
     type UpdaterStatus,
     type WorkspaceRow,
@@ -447,7 +448,6 @@ function MasterInner() {
                             : undefined
                     }
                 />
-                <UpdateBanner />
                 <Toolbar
                     workspaces={workspaces}
                     specs={specs}
@@ -569,16 +569,18 @@ function MasterInner() {
 }
 
 /**
- * Slim update strip under the title bar. Renders only while an update is
- * pending (available → downloading/applying → ready-to-restart) and the
- * user hasn't dismissed THAT version — a new release re-surfaces it. The
- * action button walks the updater's own state machine: download/apply
- * first, restart once staged.
+ * Header update pill. Lives in the title bar and only renders while an
+ * update is pending (available → downloading → ready-to-restart). One
+ * click walks the updater's state machine: Install (download) → Restart.
+ * Hovering reveals a popover of the incoming changes — commit subjects
+ * between the installed and latest version, grouped per version so a
+ * user several releases behind sees them stacked newest-first.
  */
-function UpdateBanner() {
+function UpdatePill() {
     const [status, setStatus] = useState<UpdaterStatus | null>(null);
-    const [dismissed, setDismissed] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
+    const [changelog, setChangelog] = useState<Changelog | null>(null);
+    const [hover, setHover] = useState(false);
 
     useEffect(() => {
         let alive = true;
@@ -598,25 +600,47 @@ function UpdateBanner() {
         ['available', 'downloading', 'applying', 'ready-to-restart'].includes(
             status.state,
         );
-    if (!status || !pending) return null;
-    if (dismissed && dismissed === status.latestVersion) return null;
 
-    const version = status.latestVersion ?? 'new version';
+    // Fetch the changelog once we know a version is on offer. Cached in
+    // main, so re-fetches across status ticks are cheap.
+    useEffect(() => {
+        if (!pending || !status?.latestVersion) return;
+        let alive = true;
+        void api()
+            .updater.changelog(status.latestVersion)
+            .then((c) => alive && setChangelog(c))
+            .catch(() => {});
+        return () => {
+            alive = false;
+        };
+    }, [pending, status?.latestVersion]);
+
+    if (!status || !pending) return null;
+
+    const version = status.latestVersion ?? '';
     const working = status.state === 'downloading' || status.state === 'applying';
+    const ready = status.state === 'ready-to-restart';
     const pct =
         status.state === 'downloading' && typeof status.progress === 'number'
-            ? ` ${Math.round(status.progress * 100)}%`
-            : '';
+            ? Math.round(status.progress * 100)
+            : null;
+
+    const label = ready
+        ? 'Restart to update'
+        : working
+            ? `Installing…${pct !== null ? ` ${pct}%` : ''}`
+            : 'Install update';
 
     const act = async () => {
+        if (working) return;
         setBusy(true);
         try {
             if (status.state === 'available') {
                 await api().updater.apply();
-            } else if (status.state === 'ready-to-restart') {
+            } else if (ready) {
                 const r = await api().updater.restart();
-                // Phase-1 (git checkout) builds restart manually — quitting
-                // is the honest fallback so relaunch picks up the new code.
+                // Phase-1 (git checkout) restarts manually — quitting is the
+                // honest fallback so relaunch picks up the new code.
                 if (!r.ok) await api().app.quit();
             }
         } finally {
@@ -625,31 +649,64 @@ function UpdateBanner() {
     };
 
     return (
-        <div className="update-banner">
-            <span className="ub-dot" />
-            <span className="ub-text">
-                {status.state === 'ready-to-restart'
-                    ? `Genie v${version} is ready — restart to finish installing.`
-                    : working
-                        ? `Downloading Genie v${version}…${pct}`
-                        : `Genie v${version} is available.`}
-            </span>
-            <span className="ub-spacer" />
-            {!working && (
-                <button type="button" className="ub-btn" onClick={act} disabled={busy}>
-                    {status.state === 'ready-to-restart'
-                        ? 'Restart now'
-                        : 'Download update'}
-                </button>
-            )}
+        <div
+            className="update-pill-wrap"
+            onMouseEnter={() => setHover(true)}
+            onMouseLeave={() => setHover(false)}
+        >
             <button
                 type="button"
-                className="ub-close"
-                title="Dismiss for this version"
-                onClick={() => setDismissed(status.latestVersion ?? 'unknown')}
+                className={`update-pill${ready ? ' ready' : ''}`}
+                onClick={act}
+                disabled={busy || working}
             >
-                ×
+                <span className="up-dot" />
+                {label}
             </button>
+            {hover && (
+                <UpdatePopover version={version} changelog={changelog} ready={ready} />
+            )}
+        </div>
+    );
+}
+
+function UpdatePopover({
+    version,
+    changelog,
+    ready,
+}: {
+    version: string;
+    changelog: Changelog | null;
+    ready: boolean;
+}) {
+    return (
+        <div className="update-popover" role="tooltip">
+            <div className="up-head">
+                <strong>Genie v{version}</strong>
+                <span>{ready ? 'downloaded — restart to install' : 'available'}</span>
+            </div>
+            {!changelog ? (
+                <div className="up-muted">Loading changes…</div>
+            ) : changelog.groups.length === 0 ? (
+                <div className="up-muted">
+                    {changelog.partial
+                        ? "Couldn't load release notes (offline?). The update is still safe to install."
+                        : 'No notable changes listed.'}
+                </div>
+            ) : (
+                <div className="up-groups">
+                    {changelog.groups.map((g) => (
+                        <div key={g.version} className="up-group">
+                            <div className="up-ver">v{g.version}</div>
+                            <ul>
+                                {g.changes.map((c, i) => (
+                                    <li key={i}>{c}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }
@@ -684,6 +741,7 @@ function TitleBar({
                 <span className="ttl">{stageWorkspaceName}</span>
             )}
             <span className="spacer" />
+            <UpdatePill />
             <button
                 type="button"
                 className="gicon"

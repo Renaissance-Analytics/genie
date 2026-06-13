@@ -8,6 +8,7 @@ import {
 import { getAllSettings, setSettings } from '../db';
 import { setUpdateAvailable } from '../tray';
 import { showSettingsWindow } from '../background';
+import { getChangelog, type Changelog } from './changelog';
 
 /**
  * Unified IPC for the updater. The renderer doesn't know whether it's
@@ -102,6 +103,11 @@ export function registerUpdaterIpc(): void {
             return { ok: false, error: e instanceof Error ? e.message : String(e) };
         }
     });
+
+    ipcMain.handle(
+        'updater:changelog',
+        async (_e, latest: string): Promise<Changelog> => getChangelog(latest),
+    );
 
     ipcMain.handle('updater:config:get', (): UpdaterConfig => u.getConfig());
     ipcMain.handle(

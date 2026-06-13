@@ -68,6 +68,8 @@ const api = {
         getConfig: () => ipcRenderer.invoke('updater:config:get'),
         setConfig: (patch: { repo?: string; pollHours?: number }) =>
             ipcRenderer.invoke('updater:config:set', patch),
+        changelog: (latest: string) =>
+            ipcRenderer.invoke('updater:changelog', latest),
     },
 
     settings: {

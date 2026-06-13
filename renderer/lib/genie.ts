@@ -134,6 +134,17 @@ export interface UpdaterConfig {
     pollHours: number;
 }
 
+export interface ChangelogGroup {
+    version: string;
+    changes: string[];
+}
+export interface Changelog {
+    current: string;
+    latest: string;
+    groups: ChangelogGroup[];
+    partial: boolean;
+}
+
 export interface TerminalSpec {
     id: string;
     workspace_id: string | null;
@@ -340,6 +351,7 @@ interface GenieApi {
         setConfig: (
             patch: Partial<UpdaterConfig>,
         ) => Promise<UpdaterConfig>;
+        changelog: (latest: string) => Promise<Changelog>;
     };
     terminalSpec: {
         list: () => Promise<TerminalSpec[]>;
