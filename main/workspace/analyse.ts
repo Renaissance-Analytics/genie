@@ -50,14 +50,32 @@ export interface AnalyseOtherEntry {
 /**
  * What the source folder fundamentally IS — drives the wizard's framing:
  *
- *   - 'single-repo'     — the folder itself is one git repo (monorepos
- *                          included: one .git = one repo = one submodule).
+ *   - 'single-repo'     — the folder itself is one git repo with NO
+ *                          submodules. It becomes ONE submodule.
+ *   - 'monorepo'        — the folder is a git repo that DECLARES git
+ *                          submodules (a `.gitmodules` listing ≥1). The
+ *                          wizard can either wrap it whole (one submodule)
+ *                          or explode it into its member submodules.
  *   - 'repo-collection' — no root .git, but one or more subfolders are
  *                          git repos; each becomes its own submodule.
  *   - 'plain-folder'    — no git anywhere at the top level. Knowledge
  *                          can still move into the envelope.
  */
-export type SourceKind = 'single-repo' | 'repo-collection' | 'plain-folder';
+export type SourceKind = 'single-repo' | 'monorepo' | 'repo-collection' | 'plain-folder';
+
+/**
+ * One entry parsed from the root repo's `.gitmodules`. Present only for
+ * 'monorepo' sources. `url` is whatever `.gitmodules` declares (usually a
+ * remote URL; may be relative — left verbatim so the wizard can decide).
+ */
+export interface SubmoduleEntry {
+    /** The `[submodule "<name>"]` section name. */
+    name: string;
+    /** The submodule's checkout path relative to the repo root. */
+    path: string;
+    /** The submodule's declared remote URL. */
+    url: string;
+}
 
 /**
  * Per-entry classification for SINGLE-REPO sources. Everything at the
@@ -84,8 +102,13 @@ export interface AnalyseResult {
     repos: AnalyseRepoCandidate[];
     knowledge: AnalyseKnowledgeCandidate[];
     other: AnalyseOtherEntry[];
-    /** Only present for 'single-repo' sources. */
+    /** Present for 'single-repo' AND 'monorepo' sources (root is a repo). */
     root_entries?: RootEntry[];
+    /**
+     * The root repo's declared submodules, parsed from `.gitmodules`.
+     * Non-empty exactly when `source_kind === 'monorepo'`.
+     */
+    submodules: SubmoduleEntry[];
 }
 
 /**
@@ -162,11 +185,13 @@ export async function analyseFolder(root: string): Promise<AnalyseResult> {
     const other: AnalyseOtherEntry[] = [];
 
     // The single most common source is the folder ITSELF being one git
-    // repo (plain repo or monorepo — one .git either way). It becomes one
-    // submodule named after the folder. Nested .git dirs inside it are
-    // that repo's own submodules/worktrees — they travel with the parent,
-    // so we don't offer them separately.
+    // repo. It becomes one submodule named after the folder. Nested .git
+    // dirs inside it are that repo's own submodules/worktrees — they
+    // travel with the parent, so we don't offer them separately. If the
+    // root repo DECLARES submodules (`.gitmodules`), that promotes the
+    // source to a 'monorepo' so the wizard can explode it into members.
     const rootIsRepo = fs.existsSync(path.join(root, '.git'));
+    const submodules = rootIsRepo ? await parseGitModules(root) : [];
     if (rootIsRepo) {
         const { origin, head } = await readGitInfo(root);
         const leaf = path.basename(root.replace(/[\\/]+$/, ''));
@@ -245,7 +270,9 @@ export async function analyseFolder(root: string): Promise<AnalyseResult> {
     other.sort((a, b) => a.rel_path.localeCompare(b.rel_path));
 
     const source_kind: SourceKind = rootIsRepo
-        ? 'single-repo'
+        ? submodules.length > 0
+            ? 'monorepo'
+            : 'single-repo'
         : repos.length > 0
             ? 'repo-collection'
             : 'plain-folder';
@@ -254,7 +281,109 @@ export async function analyseFolder(root: string): Promise<AnalyseResult> {
         ? await classifyRootEntries(root, entries)
         : undefined;
 
-    return { root, source_kind, repos, knowledge, other, root_entries };
+    return { root, source_kind, repos, knowledge, other, root_entries, submodules };
+}
+
+/**
+ * Parse the root repo's `.gitmodules` into structured submodule entries.
+ * The file is INI-ish:
+ *
+ *   [submodule "fancy-ui"]
+ *       path = repos/fancy-ui
+ *       url = git@github.com:org/fancy-ui.git
+ *
+ * We prefer `git config -f .gitmodules --list` (handles quoting, comments,
+ * and continuation the same way git does) and fall back to a tolerant
+ * hand parser when git is unavailable. Only entries that have BOTH a path
+ * and a url are returned; section name comes from the `[submodule "…"]`
+ * header. Returns [] when there is no `.gitmodules`.
+ */
+export async function parseGitModules(root: string): Promise<SubmoduleEntry[]> {
+    const modulesPath = path.join(root, '.gitmodules');
+    if (!fs.existsSync(modulesPath)) return [];
+
+    // Preferred path: let git itself flatten the file. Output lines look
+    // like `submodule.fancy-ui.path repos/fancy-ui`. The middle key (the
+    // section name) can itself contain dots, so we split on the FIRST and
+    // LAST dot only: submodule.<name>.<field>.
+    try {
+        const out = await execFileAsync(
+            'git',
+            ['config', '-f', '.gitmodules', '--list'],
+            { cwd: root, maxBuffer: 8 * 1024 * 1024 },
+        );
+        const byName = new Map<string, { path?: string; url?: string }>();
+        for (const line of out.stdout.split('\n')) {
+            if (!line) continue;
+            const eq = line.indexOf('=');
+            if (eq === -1) continue;
+            const fullKey = line.slice(0, eq);
+            const value = line.slice(eq + 1);
+            if (!fullKey.startsWith('submodule.')) continue;
+            const rest = fullKey.slice('submodule.'.length);
+            const lastDot = rest.lastIndexOf('.');
+            if (lastDot === -1) continue;
+            const name = rest.slice(0, lastDot);
+            const field = rest.slice(lastDot + 1);
+            const cur = byName.get(name) ?? {};
+            if (field === 'path') cur.path = value.trim();
+            else if (field === 'url') cur.url = value.trim();
+            byName.set(name, cur);
+        }
+        const entries: SubmoduleEntry[] = [];
+        for (const [name, v] of byName) {
+            if (v.path && v.url) {
+                entries.push({ name, path: v.path, url: v.url });
+            }
+        }
+        if (entries.length > 0) {
+            entries.sort((a, b) => a.path.localeCompare(b.path));
+            return entries;
+        }
+        // git produced nothing usable — fall through to the hand parser
+        // (e.g. a malformed file git skipped but we can still salvage).
+    } catch {
+        /* git missing or refused the file — hand-parse below */
+    }
+
+    return parseGitModulesText(fs.readFileSync(modulesPath, 'utf8'));
+}
+
+/**
+ * Tolerant fallback parser for `.gitmodules` content. Reads
+ * `[submodule "name"]` sections and their `path =` / `url =` keys. Lines
+ * starting with `#` or `;` are comments. Only fully-specified entries
+ * (both path and url) are emitted.
+ */
+export function parseGitModulesText(text: string): SubmoduleEntry[] {
+    const out: SubmoduleEntry[] = [];
+    let current: { name: string; path?: string; url?: string } | null = null;
+    const flush = () => {
+        if (current && current.path && current.url) {
+            out.push({ name: current.name, path: current.path, url: current.url });
+        }
+    };
+    for (const raw of text.split('\n')) {
+        const line = raw.trim();
+        if (!line || line.startsWith('#') || line.startsWith(';')) continue;
+        const header = line.match(/^\[submodule\s+"([^"]*)"\]$/i)
+            ?? line.match(/^\[submodule\s+"?([^"\]]+)"?\]$/i);
+        if (header) {
+            flush();
+            current = { name: header[1].trim() };
+            continue;
+        }
+        if (!current) continue;
+        const eq = line.indexOf('=');
+        if (eq === -1) continue;
+        const key = line.slice(0, eq).trim().toLowerCase();
+        const value = line.slice(eq + 1).trim();
+        if (key === 'path') current.path = value;
+        else if (key === 'url') current.url = value;
+    }
+    flush();
+    out.sort((a, b) => a.path.localeCompare(b.path));
+    return out;
 }
 
 /**

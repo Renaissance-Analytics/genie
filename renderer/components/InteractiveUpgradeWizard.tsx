@@ -17,6 +17,7 @@ import {
     type ConvertPlanOpts,
     type RootEntry,
     type SourceKind,
+    type SubmoduleEntry,
     type TynnProject,
     type WorkspaceRow,
 } from '../lib/genie';
@@ -92,8 +93,13 @@ const KIND_COPY: Record<
 > = {
     'single-repo': {
         title: 'Single repository',
-        body: 'This folder is one git repo (monorepos count — one .git is one repo). It becomes ONE submodule inside the envelope, and any docs/plans folders can copy into .ai/.',
+        body: 'This folder is one git repo with no submodules. It becomes ONE submodule inside the envelope, and any docs/plans folders can copy into .ai/.',
         icon: 'git-branch',
+    },
+    'monorepo': {
+        title: 'Monorepo (git submodules)',
+        body: 'This folder is one git repo that itself bundles git submodules. You can EXPLODE it — add each submodule to the new envelope as its own submodule — or WRAP it whole as a single submodule. Choose on the next step.',
+        icon: 'boxes',
     },
     'repo-collection': {
         title: 'Collection of repositories',
@@ -132,8 +138,11 @@ export default function InteractiveUpgradeWizard({
     // Plan state
     const [repoRows, setRepoRows] = useState<RepoRow[]>([]);
     const [knowledgeRows, setKnowledgeRows] = useState<KnowledgeRow[]>([]);
-    // Single-repo only: per-entry disposition rows replace knowledgeRows.
+    // Single-repo / monorepo only: per-entry disposition rows replace knowledgeRows.
     const [dispositionRows, setDispositionRows] = useState<DispositionRow[]>([]);
+    // Monorepo only: 'explode' = one row per declared submodule; 'wrap' = the
+    // monorepo becomes ONE submodule (the legacy single-repo behaviour).
+    const [monorepoMode, setMonorepoMode] = useState<'explode' | 'wrap'>('explode');
 
     // Configure state
     const [projectId, setProjectId] = useState('');
@@ -168,30 +177,76 @@ export default function InteractiveUpgradeWizard({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [initialFolder]);
 
+    /**
+     * Build the "wrap" repoRows from analysed repo candidates — one row
+     * per detected repo (for monorepo-wrap that's just the root repo; for
+     * single-repo / repo-collection it's the usual set). Each origin URL is
+     * parsed so the Repos step knows which rows are forkable.
+     */
+    const buildWrapRows = async (
+        candidates: AnalyseRepoCandidate[],
+    ): Promise<RepoRow[]> => {
+        const refs = await Promise.all(
+            candidates.map((c) =>
+                c.origin_url
+                    ? api().github.parseRemote(c.origin_url).catch(() => null)
+                    : Promise.resolve(null),
+            ),
+        );
+        return candidates.map((c, i) => ({
+            ...c,
+            included: true,
+            submodule_name: c.default_name,
+            source_mode: c.origin_url ? 'origin' : 'local',
+            gh_ref: refs[i],
+        }));
+    };
+
+    /**
+     * Build the "explode" repoRows from a monorepo's declared submodules —
+     * one row per `.gitmodules` entry, sourced from its declared URL. The
+     * submodule_name is the sanitized basename of its path; gh_ref is parsed
+     * so per-row fork is available. Submodules whose declared URL is not a
+     * GitHub remote stay on origin/local (no fork option).
+     */
+    const buildExplodeRows = async (
+        subs: SubmoduleEntry[],
+    ): Promise<RepoRow[]> => {
+        const refs = await Promise.all(
+            subs.map((s) =>
+                api().github.parseRemote(s.url).catch(() => null),
+            ),
+        );
+        return subs.map((s, i) => {
+            const leaf = s.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? s.name;
+            return {
+                rel_path: s.path,
+                abs_path: s.url, // identity key; explode rows source from the URL
+                default_name: sanitiseSubmoduleName(leaf),
+                origin_url: s.url,
+                head_ref: null,
+                included: true,
+                submodule_name: sanitiseSubmoduleName(leaf),
+                source_mode: 'origin' as RepoSourceMode,
+                gh_ref: refs[i],
+            };
+        });
+    };
+
     const runScan = async (folder: string) => {
         setScanning(true);
         setError(null);
         try {
             const r = await api().agi.analyse(folder);
             setScan(r);
-            // Parse each origin URL so the Repos step knows which repos are
-            // GitHub remotes (and therefore forkable).
-            const refs = await Promise.all(
-                r.repos.map((c) =>
-                    c.origin_url
-                        ? api().github.parseRemote(c.origin_url).catch(() => null)
-                        : Promise.resolve(null),
-                ),
-            );
-            setRepoRows(
-                r.repos.map((c, i) => ({
-                    ...c,
-                    included: true,
-                    submodule_name: c.default_name,
-                    source_mode: c.origin_url ? 'origin' : 'local',
-                    gh_ref: refs[i],
-                })),
-            );
+            // Monorepo defaults to EXPLODE: surface its member submodules as
+            // rows. Everything else uses the detected repo candidates.
+            if (r.source_kind === 'monorepo' && r.submodules.length > 0) {
+                setMonorepoMode('explode');
+                setRepoRows(await buildExplodeRows(r.submodules));
+            } else {
+                setRepoRows(await buildWrapRows(r.repos));
+            }
             setKnowledgeRows(
                 r.knowledge.map((c) => ({
                     ...c,
@@ -220,6 +275,21 @@ export default function InteractiveUpgradeWizard({
         }
     };
 
+    /**
+     * Switch a monorepo between explode (member submodules) and wrap (the
+     * monorepo as one submodule), repopulating repoRows from the scan.
+     * No-op when there's no scan or the mode is unchanged.
+     */
+    const setMonorepoModeAndRebuild = async (mode: 'explode' | 'wrap') => {
+        if (!scan || mode === monorepoMode) return;
+        setMonorepoMode(mode);
+        if (mode === 'explode') {
+            setRepoRows(await buildExplodeRows(scan.submodules));
+        } else {
+            setRepoRows(await buildWrapRows(scan.repos));
+        }
+    };
+
     const pickSourceFolder = async () => {
         const p = await api().settings.chooseFolder('Choose source folder to analyse');
         if (p) {
@@ -238,13 +308,17 @@ export default function InteractiveUpgradeWizard({
         () => repoRows.filter((r) => r.included).length,
         [repoRows],
     );
-    const isSingleRepo = scan?.source_kind === 'single-repo';
+    // Both single-repo and monorepo sources have a root git store, so the
+    // Knowledge step uses the per-entry disposition table (root_entries),
+    // not the knowledge-candidates table.
+    const usesDisposition =
+        scan?.source_kind === 'single-repo' || scan?.source_kind === 'monorepo';
     const selectedKnowledgeCount = useMemo(
         () =>
-            isSingleRepo
+            usesDisposition
                 ? dispositionRows.filter((r) => r.disposition !== 'codebase').length
                 : knowledgeRows.filter((r) => r.included).length,
-        [isSingleRepo, dispositionRows, knowledgeRows],
+        [usesDisposition, dispositionRows, knowledgeRows],
     );
 
     const repoNamesValid = useMemo(() => {
@@ -365,7 +439,7 @@ export default function InteractiveUpgradeWizard({
                             submodule_name: r.submodule_name.trim(),
                         };
                     }),
-                knowledge: isSingleRepo
+                knowledge: usesDisposition
                     ? dispositionRows
                           .filter((r) => r.disposition !== 'codebase')
                           .map((r) => ({
@@ -466,11 +540,16 @@ export default function InteractiveUpgradeWizard({
                             setRows={setRepoRows}
                             namesValid={repoNamesValid}
                             account={account}
+                            monorepoMode={monorepoMode}
+                            onMonorepoModeChange={(m) =>
+                                void setMonorepoModeAndRebuild(m)
+                            }
+                            submoduleCount={scan?.submodules.length ?? 0}
                         />
                     </Carousel.Slide>
 
                     <Carousel.Slide name="Knowledge">
-                        {isSingleRepo ? (
+                        {usesDisposition ? (
                             <DispositionStep
                                 rows={dispositionRows}
                                 setRows={setDispositionRows}
@@ -678,23 +757,67 @@ function ReposStep({
     setRows,
     namesValid,
     account,
+    monorepoMode,
+    onMonorepoModeChange,
+    submoduleCount,
 }: {
     kind: SourceKind;
     rows: RepoRow[];
     setRows: React.Dispatch<React.SetStateAction<RepoRow[]>>;
     namesValid: boolean;
     account: GitHubAccount;
+    monorepoMode: 'explode' | 'wrap';
+    onMonorepoModeChange: (m: 'explode' | 'wrap') => void;
+    submoduleCount: number;
 }) {
     const patchRow = (i: number, patch: Partial<RepoRow>) =>
         setRows((rs) => rs.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
 
+    const isMonorepo = kind === 'monorepo';
+
+    // Monorepo toggle — rendered even when (in some transient state) rows are
+    // empty, so the user can always switch handling mode.
+    const monorepoToggle = isMonorepo ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                This monorepo declares <strong>{submoduleCount}</strong> submodule
+                {submoduleCount === 1 ? '' : 's'}. Choose how to bring it into the
+                envelope:
+            </Text>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {([
+                    { value: 'explode', label: `Explode into ${submoduleCount} submodule${submoduleCount === 1 ? '' : 's'}` },
+                    { value: 'wrap', label: 'Wrap whole (one submodule)' },
+                ] as const).map((opt) => (
+                    <Action
+                        key={opt.value}
+                        size="sm"
+                        variant={monorepoMode === opt.value ? 'default' : 'ghost'}
+                        color={monorepoMode === opt.value ? 'blue' : undefined}
+                        onClick={() => onMonorepoModeChange(opt.value)}
+                    >
+                        {opt.label}
+                    </Action>
+                ))}
+            </div>
+            <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                {monorepoMode === 'explode'
+                    ? 'Each member submodule is added to the new envelope as its own submodule — a flat multi-repo envelope of the monorepo’s members.'
+                    : 'The whole monorepo becomes ONE submodule under repos/, with its own submodules nested inside it as-is.'}
+            </Text>
+        </div>
+    ) : null;
+
     if (rows.length === 0) {
         return (
-            <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
-                No git repos detected — the envelope starts without submodules.
-                You can add repos later with <code>git submodule add</code> or
-                from the workspace context menu.
-            </Text>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {monorepoToggle}
+                <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                    No git repos detected — the envelope starts without submodules.
+                    You can add repos later with <code>git submodule add</code> or
+                    from the workspace context menu.
+                </Text>
+            </div>
         );
     }
 
@@ -703,10 +826,15 @@ function ReposStep({
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {monorepoToggle}
             <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
                 {kind === 'single-repo'
                     ? 'The source repo becomes one submodule under repos/. Rename it if the folder name is unfortunate.'
-                    : 'Each detected repo becomes a git submodule under repos/. Uncheck the ones you don’t want; rename where needed.'}{' '}
+                    : isMonorepo && monorepoMode === 'explode'
+                        ? 'Each member submodule becomes a git submodule under repos/. Uncheck the ones you don’t want; rename where needed.'
+                        : isMonorepo
+                            ? 'The monorepo becomes one submodule under repos/. Rename it if the folder name is unfortunate.'
+                            : 'Each detected repo becomes a git submodule under repos/. Uncheck the ones you don’t want; rename where needed.'}{' '}
                 <strong>Origin</strong> clones from the existing remote;{' '}
                 <strong>Fork</strong> forks it into your account/org first (the
                 Teams/Agents path — work on your fork, PR back);{' '}
@@ -1202,6 +1330,16 @@ function EnvelopeStep({
             )}
         </div>
     );
+}
+
+/**
+ * Mirror of analyse.ts's sanitiseRepoName for explode-row submodule names:
+ * drop a leading underscore and replace characters git refuses in a
+ * submodule path. Keeps renderer-side defaults consistent with the backend
+ * validation in convertToAgiPlan (which enforces [A-Za-z0-9._-]).
+ */
+function sanitiseSubmoduleName(name: string): string {
+    return name.replace(/^_+/, '').replace(/[^A-Za-z0-9._-]/g, '-') || name;
 }
 
 function formatBytes(n: number): string {

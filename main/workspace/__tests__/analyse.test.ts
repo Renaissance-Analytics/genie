@@ -1,8 +1,12 @@
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { afterAll, describe, expect, it } from 'vitest';
-import { analyseFolder } from '../analyse';
+import { analyseFolder, parseGitModulesText } from '../analyse';
 import { cleanupTmpRoot, makeTmpDir, seedGitRepo } from '../../../test/helpers';
+
+const execFileAsync = promisify(execFile);
 
 afterAll(() => cleanupTmpRoot());
 
@@ -53,6 +57,71 @@ describe('analyseFolder source classification', () => {
         expect(r.source_kind).toBe('single-repo');
         expect(r.repos).toHaveLength(1);
         expect(r.repos[0].rel_path).toBe('.');
+    });
+
+    it('single-repo has empty submodules array', async () => {
+        const dir = makeTmpDir('an-single-subs');
+        await seedGitRepo(dir);
+        const r = await analyseFolder(dir);
+        expect(r.source_kind).toBe('single-repo');
+        expect(r.submodules).toEqual([]);
+    });
+
+    it('classifies a root repo WITH git submodules as monorepo', async () => {
+        // Root repo plus two local repos added as real submodules.
+        const dir = makeTmpDir('an-mono');
+        await seedGitRepo(dir);
+        const subA = makeTmpDir('an-mono-subA');
+        const subB = makeTmpDir('an-mono-subB');
+        await seedGitRepo(subA);
+        await seedGitRepo(subB);
+
+        // Local-path submodule adds need protocol.file.allow=always (CVE-2022-39253).
+        const addSub = (url: string, p: string) =>
+            execFileAsync(
+                'git',
+                ['-c', 'protocol.file.allow=always', 'submodule', 'add', url, p],
+                { cwd: dir, maxBuffer: 32 * 1024 * 1024 },
+            );
+        await addSub(subA, 'repos/alpha');
+        await addSub(subB, 'repos/beta');
+
+        const r = await analyseFolder(dir);
+        expect(r.source_kind).toBe('monorepo');
+        expect(r.submodules).toHaveLength(2);
+
+        const byPath = new Map(r.submodules.map((s) => [s.path, s]));
+        const alpha = byPath.get('repos/alpha')!;
+        expect(alpha).toBeDefined();
+        expect(alpha.name).toBe('repos/alpha');
+        expect(alpha.url).toBe(subA);
+        const beta = byPath.get('repos/beta')!;
+        expect(beta).toBeDefined();
+        expect(beta.url).toBe(subB);
+
+        // root_entries still populated (root is a repo).
+        expect(r.root_entries).toBeDefined();
+    });
+
+    it('parseGitModulesText handles the standard INI-ish format', () => {
+        const text = [
+            '# a comment',
+            '[submodule "fancy-ui"]',
+            '\tpath = repos/fancy-ui',
+            '\turl = git@github.com:org/fancy-ui.git',
+            '[submodule "brain"]',
+            '    path = repos/brain',
+            '    url = https://github.com/org/brain.git',
+            // Incomplete entry (no url) is dropped.
+            '[submodule "dangling"]',
+            '    path = repos/dangling',
+        ].join('\n');
+        const subs = parseGitModulesText(text);
+        expect(subs).toHaveLength(2);
+        expect(subs.map((s) => s.name).sort()).toEqual(['brain', 'fancy-ui']);
+        const fancy = subs.find((s) => s.name === 'fancy-ui')!;
+        expect(fancy.path).toBe('repos/fancy-ui');
+        expect(fancy.url).toBe('git@github.com:org/fancy-ui.git');
     });
 });
 

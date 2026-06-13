@@ -243,7 +243,13 @@ export interface ConsolidateMcpResult {
     gitignored?: boolean;
 }
 
-export type SourceKind = 'single-repo' | 'repo-collection' | 'plain-folder';
+export type SourceKind = 'single-repo' | 'monorepo' | 'repo-collection' | 'plain-folder';
+
+export interface SubmoduleEntry {
+    name: string;
+    path: string;
+    url: string;
+}
 
 export interface RootEntry {
     rel_path: string;
@@ -260,8 +266,10 @@ export interface AnalyseResult {
     repos: AnalyseRepoCandidate[];
     knowledge: AnalyseKnowledgeCandidate[];
     other: AnalyseOtherEntry[];
-    /** Only present for 'single-repo' sources. */
+    /** Present for 'single-repo' AND 'monorepo' sources (root is a repo). */
     root_entries?: RootEntry[];
+    /** Root repo's declared submodules; non-empty when source_kind === 'monorepo'. */
+    submodules: SubmoduleEntry[];
 }
 
 export interface AgiPlanRepo {
