@@ -4,6 +4,7 @@ import path from 'path';
 import { promisify } from 'util';
 import { simpleGit } from 'simple-git';
 import { blankProjectJson, writeProjectJson } from './project-json';
+import { consolidateMcp } from './mcp';
 
 const execFileAsync = promisify(execFile);
 
@@ -427,7 +428,11 @@ export async function convertToAgiPlan(opts: ConvertPlanOpts): Promise<CreateAgi
         }
     }
 
-    if (opts.repos.length > 0 || opts.knowledge.length > 0) {
+    // Surface any MCP config the submodules carry at the envelope root so
+    // a Claude/Cursor session opened on the monorepo sees their servers.
+    const mcp = consolidateMcp(base.path);
+
+    if (opts.repos.length > 0 || opts.knowledge.length > 0 || mcp.files.length > 0) {
         const git = simpleGit({ baseDir: base.path });
         await git.add('.');
         const parts: string[] = [];
@@ -439,6 +444,11 @@ export async function convertToAgiPlan(opts: ConvertPlanOpts): Promise<CreateAgi
         if (opts.knowledge.length > 0) {
             parts.push(
                 `${opts.knowledge.length} knowledge item${opts.knowledge.length === 1 ? '' : 's'}`,
+            );
+        }
+        if (mcp.servers.length > 0) {
+            parts.push(
+                `${mcp.servers.length} MCP server${mcp.servers.length === 1 ? '' : 's'}`,
             );
         }
         await git.commit(`Convert: migrate ${parts.join(' + ')}`);
@@ -525,6 +535,8 @@ export async function convertToAgi(opts: ConvertToAgiOpts): Promise<ConvertToAgi
     // to plain `git` via execFile. Everything else still goes through
     // simple-git.
     await runGitSubmoduleAdd(base.path, submoduleUrl, submodulePath);
+    // Surface the submodule's MCP config (if any) at the envelope root.
+    consolidateMcp(base.path);
     const git = simpleGit({ baseDir: base.path });
     await git.add('.');
     await git.commit(`Convert: add ${subName} as submodule under repos/`);
@@ -747,4 +759,61 @@ export async function addStructureDocs(
     }
 
     return { added, committed: true, pushed, pushError };
+}
+
+export interface ConsolidateMcpCommitResult {
+    servers: string[];
+    files: string[];
+    committed: boolean;
+    pushed: boolean;
+    pushError?: string;
+}
+
+/**
+ * Consolidate repo MCP configs to the envelope root (both .mcp.json and
+ * .cursor/mcp.json), then commit + best-effort push. On-demand sibling of
+ * addStructureDocs for the health UI. No-op when nothing changed.
+ */
+export async function consolidateMcpAndCommit(
+    envelopePath: string,
+): Promise<ConsolidateMcpCommitResult> {
+    const res = consolidateMcp(envelopePath);
+    if (res.files.length === 0) {
+        return { servers: [], files: [], committed: false, pushed: false };
+    }
+
+    const git = simpleGit({ baseDir: envelopePath });
+    try {
+        const cfg = await git.listConfig();
+        const all = cfg.all as Record<string, string | string[]>;
+        if (!all['user.email']) await git.addConfig('user.email', 'genie@localhost');
+        if (!all['user.name']) await git.addConfig('user.name', 'Genie');
+    } catch {
+        /* best effort */
+    }
+
+    await git.add(['.mcp.json', '.cursor/mcp.json']);
+    // Nothing staged → the files already matched; treat as no-op.
+    const staged = (await git.diff(['--cached', '--name-only'])).trim();
+    if (!staged) {
+        return { servers: res.servers, files: res.files, committed: false, pushed: false };
+    }
+    await git.commit(
+        `Consolidate MCP config to envelope root (${res.servers.length} server${res.servers.length === 1 ? '' : 's'})`,
+    );
+
+    let pushed = false;
+    let pushError: string | undefined;
+    try {
+        const remotes = await git.getRemotes();
+        if (remotes.some((r) => r.name === 'origin')) {
+            const branch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
+            await git.push(['-u', 'origin', branch || 'main']);
+            pushed = true;
+        }
+    } catch (e) {
+        pushError = e instanceof Error ? e.message : String(e);
+    }
+
+    return { servers: res.servers, files: res.files, committed: true, pushed, pushError };
 }

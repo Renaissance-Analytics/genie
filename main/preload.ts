@@ -121,6 +121,10 @@ const api = {
             ipcRenderer.invoke('agi:doc-status', envelopePath),
         addDocs: (envelopePath: string, name: string, slug: string) =>
             ipcRenderer.invoke('agi:add-docs', envelopePath, name, slug),
+        mcpStatus: (envelopePath: string) =>
+            ipcRenderer.invoke('agi:mcp-status', envelopePath),
+        consolidateMcp: (envelopePath: string) =>
+            ipcRenderer.invoke('agi:consolidate-mcp', envelopePath),
     },
 
     tynn: {

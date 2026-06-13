@@ -228,6 +228,19 @@ export interface AddStructureDocsResult {
     pushed: boolean;
     pushError?: string;
 }
+export interface McpStatus {
+    repoServers: string[];
+    rootServers: string[];
+    missingAtRoot: string[];
+    needsConsolidation: boolean;
+}
+export interface ConsolidateMcpResult {
+    servers: string[];
+    files: string[];
+    committed: boolean;
+    pushed: boolean;
+    pushError?: string;
+}
 
 export type SourceKind = 'single-repo' | 'repo-collection' | 'plain-folder';
 
@@ -329,6 +342,8 @@ interface GenieApi {
             name: string,
             slug: string,
         ) => Promise<AddStructureDocsResult>;
+        mcpStatus: (envelopePath: string) => Promise<McpStatus>;
+        consolidateMcp: (envelopePath: string) => Promise<ConsolidateMcpResult>;
     };
     tynn: {
         projects: () => Promise<TynnProject[]>;

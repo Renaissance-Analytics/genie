@@ -15,7 +15,13 @@ import {
     IconTrash,
 } from './icons';
 import { showPrompt } from './Prompt';
-import { api, type StructureDocStatus, type TerminalSpec, type WorkspaceRow } from '../../lib/genie';
+import {
+    api,
+    type McpStatus,
+    type StructureDocStatus,
+    type TerminalSpec,
+    type WorkspaceRow,
+} from '../../lib/genie';
 
 interface Props {
     workspaces: WorkspaceRow[];
@@ -292,9 +298,11 @@ function envelopeSlug(ws: WorkspaceRow): string {
  */
 function AgiHealth({ ws }: { ws: WorkspaceRow }) {
     const [status, setStatus] = useState<StructureDocStatus | null>(null);
+    const [mcp, setMcp] = useState<McpStatus | null>(null);
     const [open, setOpen] = useState(false);
     const [busy, setBusy] = useState(false);
     const [done, setDone] = useState<string | null>(null);
+    const [mcpDone, setMcpDone] = useState<string | null>(null);
     const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
     const anchorRef = useRef<HTMLSpanElement>(null);
     const popRef = useRef<HTMLDivElement>(null);
@@ -304,6 +312,10 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
             .agi.docStatus(ws.path)
             .then(setStatus)
             .catch(() => setStatus(null));
+        void api()
+            .agi.mcpStatus(ws.path)
+            .then(setMcp)
+            .catch(() => setMcp(null));
     };
     useEffect(refresh, [ws.path]);
 
@@ -342,7 +354,10 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open]);
 
-    if (!status || !status.isEnvelope || !status.missing) return null;
+    const docsMissing = !!status && status.isEnvelope && status.missing;
+    const mcpPending = !!mcp && mcp.needsConsolidation;
+    // Show the alert only for a real envelope with at least one issue.
+    if (!status || !status.isEnvelope || (!docsMissing && !mcpPending)) return null;
 
     const missingList = [
         !status.hasReadme && 'README.md',
@@ -366,6 +381,27 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
             refresh();
         } catch (err) {
             setDone(err instanceof Error ? err.message : String(err));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const doConsolidateMcp = async (e: React.MouseEvent) => {
+        e.stopPropagation();
+        setBusy(true);
+        setMcpDone(null);
+        try {
+            const r = await api().agi.consolidateMcp(ws.path);
+            setMcpDone(
+                !r.committed
+                    ? 'MCP config already up to date.'
+                    : r.pushed
+                        ? `Consolidated ${r.servers.length} server${r.servers.length === 1 ? '' : 's'} + pushed.`
+                        : `Consolidated ${r.servers.length} server${r.servers.length === 1 ? '' : 's'}. Push skipped${r.pushError ? `: ${r.pushError}` : ' (no remote).'}`,
+            );
+            refresh();
+        } catch (err) {
+            setMcpDone(err instanceof Error ? err.message : String(err));
         } finally {
             setBusy(false);
         }
@@ -395,34 +431,80 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
                         style={{ top: coords.top, left: coords.left }}
                         onClick={(e) => e.stopPropagation()}
                     >
-                        <div className="ahp-title">Missing structure docs</div>
-                        <div className="ahp-body">
-                            This <code>.agi</code> envelope is missing{' '}
-                            {missingList.map((m, i) => (
-                                <span key={m}>
-                                    {i > 0 ? ', ' : ''}
-                                    <code>{m}</code>
-                                </span>
-                            ))}
-                            . These explain the monorepo to humans (README) and
-                            agents (AGENTS/CLAUDE). Existing files are left
-                            untouched — only what's missing gets added.
-                        </div>
-                        {done ? (
-                            <div className="ahp-done">{done}</div>
-                        ) : (
-                            <button
-                                type="button"
-                                className="ahp-btn"
-                                onClick={add}
-                                disabled={busy}
-                            >
-                                {busy
-                                    ? 'Working…'
-                                    : status.hasRemote
-                                        ? 'Add, commit & push'
-                                        : 'Add & commit'}
-                            </button>
+                        <div className="ahp-title">Envelope needs attention</div>
+
+                        {docsMissing && (
+                            <div className="ahp-section">
+                                <div className="ahp-body">
+                                    Missing structure docs:{' '}
+                                    {missingList.map((m, i) => (
+                                        <span key={m}>
+                                            {i > 0 ? ', ' : ''}
+                                            <code>{m}</code>
+                                        </span>
+                                    ))}
+                                    . They explain the monorepo to humans (README)
+                                    and agents (AGENTS/CLAUDE). Existing files are
+                                    left untouched.
+                                </div>
+                                {done ? (
+                                    <div className="ahp-done">{done}</div>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        className="ahp-btn"
+                                        onClick={add}
+                                        disabled={busy}
+                                    >
+                                        {busy
+                                            ? 'Working…'
+                                            : status.hasRemote
+                                                ? 'Add docs, commit & push'
+                                                : 'Add docs & commit'}
+                                    </button>
+                                )}
+                            </div>
+                        )}
+
+                        {mcpPending && (
+                            <div className="ahp-section">
+                                <div className="ahp-body">
+                                    {mcp!.missingAtRoot.length > 0 ? (
+                                        <>
+                                            MCP server
+                                            {mcp!.missingAtRoot.length === 1 ? '' : 's'}{' '}
+                                            {mcp!.missingAtRoot.map((s, i) => (
+                                                <span key={s}>
+                                                    {i > 0 ? ', ' : ''}
+                                                    <code>{s}</code>
+                                                </span>
+                                            ))}{' '}
+                                            defined in repos aren't surfaced at the
+                                            envelope root.
+                                        </>
+                                    ) : (
+                                        <>
+                                            The envelope's <code>.mcp.json</code> and{' '}
+                                            <code>.cursor/mcp.json</code> are out of
+                                            sync.
+                                        </>
+                                    )}{' '}
+                                    Consolidate so sessions opened on the monorepo
+                                    pick them up.
+                                </div>
+                                {mcpDone ? (
+                                    <div className="ahp-done">{mcpDone}</div>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        className="ahp-btn"
+                                        onClick={doConsolidateMcp}
+                                        disabled={busy}
+                                    >
+                                        {busy ? 'Working…' : 'Consolidate MCP config'}
+                                    </button>
+                                )}
+                            </div>
                         )}
                     </div>,
                     document.body,

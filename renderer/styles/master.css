@@ -945,7 +945,12 @@
     font-size: 12px;
     font-weight: 700;
     color: var(--fg-1);
-    margin-bottom: 5px;
+    margin-bottom: 8px;
+}
+.agi-health-pop .ahp-section + .ahp-section {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-1);
 }
 .agi-health-pop .ahp-body {
     font-size: 11.5px;

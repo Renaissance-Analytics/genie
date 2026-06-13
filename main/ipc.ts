@@ -205,6 +205,14 @@ export function registerIpcHandlers(): void {
             return addStructureDocs(envelopePath, name, slug);
         },
     );
+    ipcMain.handle('agi:mcp-status', async (_e, envelopePath: string) => {
+        const { mcpStatus } = await import('./workspace/mcp');
+        return mcpStatus(envelopePath);
+    });
+    ipcMain.handle('agi:consolidate-mcp', async (_e, envelopePath: string) => {
+        const { consolidateMcpAndCommit } = await import('./workspace/create-agi');
+        return consolidateMcpAndCommit(envelopePath);
+    });
 
     // --- Terminal specs (persistent definitions, NOT live ptys) ---------
     ipcMain.handle('terminal-spec:list', (): TerminalSpecRow[] => listTerminalSpecs());
