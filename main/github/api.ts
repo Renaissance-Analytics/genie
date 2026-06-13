@@ -50,13 +50,34 @@ async function gh<T = unknown>(
         // GitHub sometimes returns HTML on 5xx; fall through with raw text.
     }
     if (!res.ok) {
-        const msg =
+        // GitHub's top-level `message` is often generic ("Repository
+        // creation failed.", "Validation Failed") — the actionable detail
+        // is in `errors[]`. Fold those in so the UI shows the real cause
+        // (e.g. "name already exists on this account").
+        let msg =
             (json && typeof json === 'object' && 'message' in json
                 ? String((json as { message: unknown }).message)
                 : null) ?? text ?? res.statusText;
+        const errs =
+            json && typeof json === 'object' && Array.isArray((json as { errors?: unknown }).errors)
+                ? ((json as { errors: Array<Record<string, unknown>> }).errors)
+                : [];
+        const details = errs
+            .map((e) => (typeof e.message === 'string' ? e.message : `${e.field ?? ''} ${e.code ?? ''}`.trim()))
+            .filter(Boolean);
+        if (details.length) msg += ` — ${details.join('; ')}`;
         throw new GitHubApiError(res.status, msg);
     }
     return json as T;
+}
+
+/** True when a 422 from repo creation means "this name already exists". */
+function isNameExists(e: unknown): boolean {
+    return (
+        e instanceof GitHubApiError &&
+        e.status === 422 &&
+        /already exists/i.test(e.message)
+    );
 }
 
 export interface GitHubUser {
@@ -108,10 +129,23 @@ export async function createRepo(opts: CreateRepoOpts): Promise<CreatedRepo> {
         private: opts.private ?? true,
         auto_init: false,
     };
-    if (opts.owner) {
-        return gh<CreatedRepo>('POST', `/orgs/${opts.owner}/repos`, body);
+    try {
+        if (opts.owner) {
+            return await gh<CreatedRepo>('POST', `/orgs/${opts.owner}/repos`, body);
+        }
+        return await gh<CreatedRepo>('POST', '/user/repos', body);
+    } catch (e) {
+        // A previous run that failed AFTER repo creation (e.g. the local
+        // build collided) leaves the repo behind. Reuse it instead of
+        // dead-ending the retry — fetch the existing repo and return it.
+        // The envelope flow only ever PUSHES an initial commit, and the
+        // repo it made earlier is empty, so this is safe.
+        if (isNameExists(e)) {
+            const owner = opts.owner || (await getViewer()).login;
+            return gh<CreatedRepo>('GET', `/repos/${owner}/${opts.name}`);
+        }
+        throw e;
     }
-    return gh<CreatedRepo>('POST', '/user/repos', body);
 }
 
 export interface ParsedRepoRef {
