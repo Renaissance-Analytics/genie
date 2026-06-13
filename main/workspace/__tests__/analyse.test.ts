@@ -46,7 +46,10 @@ describe('analyseFolder source classification', () => {
         expect(r.repos).toHaveLength(0);
     });
 
-    it('single-repo: nested repos are NOT separate candidates', async () => {
+    it('monorepo: a nested repo is a member, not a `repos`/`other` entry', async () => {
+        // A root repo with a nested independent git repo is a monorepo:
+        // the nested repo becomes a submodule MEMBER, the root stays the
+        // single WRAP candidate, and the nested dir is NOT duped into `other`.
         const dir = makeTmpDir('an-nested');
         await seedGitRepo(dir);
         const nested = path.join(dir, 'third-party');
@@ -54,9 +57,11 @@ describe('analyseFolder source classification', () => {
         await seedGitRepo(nested);
 
         const r = await analyseFolder(dir);
-        expect(r.source_kind).toBe('single-repo');
+        expect(r.source_kind).toBe('monorepo');
         expect(r.repos).toHaveLength(1);
         expect(r.repos[0].rel_path).toBe('.');
+        expect(r.submodules.map((s) => s.path)).toEqual(['third-party']);
+        expect(r.other.map((o) => o.rel_path)).not.toContain('third-party');
     });
 
     it('single-repo has empty submodules array', async () => {
@@ -101,6 +106,94 @@ describe('analyseFolder source classification', () => {
 
         // root_entries still populated (root is a repo).
         expect(r.root_entries).toBeDefined();
+    });
+
+    it('classifies a root repo whose subdirs are independent repos as monorepo', async () => {
+        // The fancy-ui workspaces case: root has .git but NO .gitmodules;
+        // its top-level subdirs are each their OWN git repo (independent
+        // clones held together by package.json `workspaces`, not by git).
+        const dir = makeTmpDir('an-ws-mono');
+        await seedGitRepo(dir);
+
+        // Two members WITH a GitHub-style origin, one WITHOUT (local fallback).
+        const withOrigin = async (name: string, originUrl: string) => {
+            const sub = path.join(dir, name);
+            fs.mkdirSync(sub);
+            await seedGitRepo(sub);
+            await execFileAsync('git', ['remote', 'add', 'origin', originUrl], {
+                cwd: sub,
+            });
+        };
+        await withOrigin('fancy-3d', 'git@github.com:Particle-Academy/fancy-3d.git');
+        await withOrigin('fancy-term', 'git@github.com:Particle-Academy/fancy-term.git');
+
+        const noOrigin = path.join(dir, 'dark-slide');
+        fs.mkdirSync(noOrigin);
+        await seedGitRepo(noOrigin); // no origin remote set
+
+        // Knowledge + non-repo noise that must NOT become members.
+        fs.mkdirSync(path.join(dir, 'docs'));
+        fs.writeFileSync(path.join(dir, 'docs', 'readme.md'), '# docs\n');
+        fs.writeFileSync(path.join(dir, 'package.json'), '{"workspaces":["*"]}\n');
+
+        const r = await analyseFolder(dir);
+        expect(r.source_kind).toBe('monorepo');
+
+        const byPath = new Map(r.submodules.map((s) => [s.path, s]));
+        expect(byPath.size).toBe(3);
+        expect(byPath.get('fancy-3d')!.url).toBe(
+            'git@github.com:Particle-Academy/fancy-3d.git',
+        );
+        expect(byPath.get('fancy-3d')!.name).toBe('fancy-3d');
+        expect(byPath.get('fancy-term')!.url).toBe(
+            'git@github.com:Particle-Academy/fancy-term.git',
+        );
+        // No-origin member falls back to its absolute local path so the
+        // explode row can source it as a local submodule.
+        expect(byPath.get('dark-slide')!.url).toBe(noOrigin);
+
+        // The root repo is still the single WRAP candidate; nested repos
+        // must NOT appear in `repos` or `other`.
+        expect(r.repos.map((x) => x.rel_path)).toEqual(['.']);
+        const otherNames = r.other.map((o) => o.rel_path);
+        expect(otherNames).not.toContain('fancy-3d');
+        expect(otherNames).not.toContain('fancy-term');
+        expect(otherNames).not.toContain('dark-slide');
+
+        // Knowledge detection still works (docs/ surfaced as knowledge).
+        expect(r.knowledge.some((k) => k.rel_path === 'docs')).toBe(true);
+    });
+
+    it('unions nested repos with declared .gitmodules submodules (dedupe by path)', async () => {
+        // A root repo that BOTH declares a submodule AND has an extra nested
+        // independent repo. The declared one is deduped (declared URL wins),
+        // the nested-only one is added.
+        const dir = makeTmpDir('an-union');
+        await seedGitRepo(dir);
+        const declared = makeTmpDir('an-union-declared');
+        await seedGitRepo(declared);
+        await execFileAsync(
+            'git',
+            ['-c', 'protocol.file.allow=always', 'submodule', 'add', declared, 'gamma'],
+            { cwd: dir, maxBuffer: 32 * 1024 * 1024 },
+        );
+
+        // Independent nested repo NOT registered as a submodule.
+        const extra = path.join(dir, 'delta');
+        fs.mkdirSync(extra);
+        await seedGitRepo(extra);
+        await execFileAsync('git', ['remote', 'add', 'origin', 'git@github.com:org/delta.git'], {
+            cwd: extra,
+        });
+
+        const r = await analyseFolder(dir);
+        expect(r.source_kind).toBe('monorepo');
+
+        const byPath = new Map(r.submodules.map((s) => [s.path, s]));
+        // gamma appears exactly once (declared wins) and delta is added.
+        expect(byPath.size).toBe(2);
+        expect(byPath.get('gamma')!.url).toBe(declared);
+        expect(byPath.get('delta')!.url).toBe('git@github.com:org/delta.git');
     });
 
     it('parseGitModulesText handles the standard INI-ish format', () => {

@@ -185,13 +185,17 @@ export async function analyseFolder(root: string): Promise<AnalyseResult> {
     const other: AnalyseOtherEntry[] = [];
 
     // The single most common source is the folder ITSELF being one git
-    // repo. It becomes one submodule named after the folder. Nested .git
-    // dirs inside it are that repo's own submodules/worktrees — they
-    // travel with the parent, so we don't offer them separately. If the
-    // root repo DECLARES submodules (`.gitmodules`), that promotes the
-    // source to a 'monorepo' so the wizard can explode it into members.
+    // repo. It becomes one submodule named after the folder. A root repo
+    // is promoted to a 'monorepo' when it either DECLARES git submodules
+    // (`.gitmodules`) OR holds independent git repos in its top-level
+    // subdirs (the npm-workspaces pattern — 37 sibling clones held
+    // together by package.json `workspaces`, not by git). Either way the
+    // wizard can explode it into its members.
     const rootIsRepo = fs.existsSync(path.join(root, '.git'));
-    const submodules = rootIsRepo ? await parseGitModules(root) : [];
+    const declaredSubmodules = rootIsRepo ? await parseGitModules(root) : [];
+    // Collected while walking entries below; nested git repos under a root
+    // repo become monorepo members (NOT `other`).
+    const nestedRepoMembers: SubmoduleEntry[] = [];
     if (rootIsRepo) {
         const { origin, head } = await readGitInfo(root);
         const leaf = path.basename(root.replace(/[\\/]+$/, ''));
@@ -210,12 +214,22 @@ export async function analyseFolder(root: string): Promise<AnalyseResult> {
 
         if (entry.isDirectory()) {
             // Probe for a git repo. Both `.git` dirs and `.git` files
-            // (worktrees / submodules) count. Skipped when the root is
-            // itself a repo — see above.
+            // (worktrees / submodules) count.
             const dotGit = path.join(abs, '.git');
             if (fs.existsSync(dotGit)) {
                 if (rootIsRepo) {
-                    other.push({ rel_path: entry.name, kind: 'directory' });
+                    // Nested repo under a root repo: this is a monorepo
+                    // member (independent clone in a workspaces monorepo,
+                    // or a checked-out submodule). Capture its origin/head
+                    // so the explode flow can source from it. Falls back to
+                    // the absolute local path when there's no origin, so the
+                    // explode row can still add it as a local submodule.
+                    const { origin } = await readGitInfo(abs);
+                    nestedRepoMembers.push({
+                        name: entry.name,
+                        path: entry.name,
+                        url: origin ?? abs,
+                    });
                     continue;
                 }
                 const { origin, head } = await readGitInfo(abs);
@@ -269,6 +283,12 @@ export async function analyseFolder(root: string): Promise<AnalyseResult> {
     knowledge.sort((a, b) => a.rel_path.localeCompare(b.rel_path));
     other.sort((a, b) => a.rel_path.localeCompare(b.rel_path));
 
+    // Monorepo members = UNION of declared `.gitmodules` submodules AND
+    // detected nested git repos, deduped by checkout path. A nested repo
+    // that's also a declared submodule appears once; the declared entry
+    // wins (its URL is the canonical configured remote).
+    const submodules = unionSubmodules(declaredSubmodules, nestedRepoMembers);
+
     const source_kind: SourceKind = rootIsRepo
         ? submodules.length > 0
             ? 'monorepo'
@@ -282,6 +302,25 @@ export async function analyseFolder(root: string): Promise<AnalyseResult> {
         : undefined;
 
     return { root, source_kind, repos, knowledge, other, root_entries, submodules };
+}
+
+/**
+ * Merge declared `.gitmodules` entries with detected nested-repo members,
+ * deduped by checkout path (normalised to forward slashes). Declared
+ * submodules take precedence — their `.gitmodules` URL is the configured
+ * remote, which may differ from a checked-out clone's `origin`. Result is
+ * sorted by path for a stable UI.
+ */
+function unionSubmodules(
+    declared: SubmoduleEntry[],
+    nested: SubmoduleEntry[],
+): SubmoduleEntry[] {
+    const norm = (p: string) => p.replace(/[\\/]+$/, '').replace(/\\/g, '/');
+    const byPath = new Map<string, SubmoduleEntry>();
+    // Nested first, then declared overwrites on path collision.
+    for (const s of nested) byPath.set(norm(s.path), s);
+    for (const s of declared) byPath.set(norm(s.path), s);
+    return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
 
 /**

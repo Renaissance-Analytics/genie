@@ -203,31 +203,37 @@ export default function InteractiveUpgradeWizard({
     };
 
     /**
-     * Build the "explode" repoRows from a monorepo's declared submodules —
-     * one row per `.gitmodules` entry, sourced from its declared URL. The
+     * Build the "explode" repoRows from a monorepo's member submodules —
+     * one row per member (parsed `.gitmodules` entry OR detected nested
+     * git repo). Members are sourced from their declared/origin URL. The
      * submodule_name is the sanitized basename of its path; gh_ref is parsed
-     * so per-row fork is available. Submodules whose declared URL is not a
-     * GitHub remote stay on origin/local (no fork option).
+     * so per-row fork is available. Members whose URL is a local filesystem
+     * path (a nested repo with no origin remote) get source_mode 'local'
+     * with origin_url null — so the executed plan submodules them straight
+     * from disk (is_local) rather than treating the path as a clonable URL.
      */
     const buildExplodeRows = async (
         subs: SubmoduleEntry[],
     ): Promise<RepoRow[]> => {
         const refs = await Promise.all(
             subs.map((s) =>
-                api().github.parseRemote(s.url).catch(() => null),
+                isLocalPathLike(s.url)
+                    ? Promise.resolve(null)
+                    : api().github.parseRemote(s.url).catch(() => null),
             ),
         );
         return subs.map((s, i) => {
             const leaf = s.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? s.name;
+            const local = isLocalPathLike(s.url);
             return {
                 rel_path: s.path,
                 abs_path: s.url, // identity key; explode rows source from the URL
                 default_name: sanitiseSubmoduleName(leaf),
-                origin_url: s.url,
+                origin_url: local ? null : s.url,
                 head_ref: null,
                 included: true,
                 submodule_name: sanitiseSubmoduleName(leaf),
-                source_mode: 'origin' as RepoSourceMode,
+                source_mode: (local ? 'local' : 'origin') as RepoSourceMode,
                 gh_ref: refs[i],
             };
         });
@@ -1340,6 +1346,20 @@ function EnvelopeStep({
  */
 function sanitiseSubmoduleName(name: string): string {
     return name.replace(/^_+/, '').replace(/[^A-Za-z0-9._-]/g, '-') || name;
+}
+
+/**
+ * True for absolute local paths (POSIX or Windows) and `file://` URLs —
+ * mirrors main's isLocalPathLikeUrl. A monorepo member with no origin
+ * remote falls back to its absolute local path as the submodule source;
+ * this lets the explode row treat it as a local (is_local) submodule
+ * instead of a clonable remote URL.
+ */
+function isLocalPathLike(value: string): boolean {
+    if (value.startsWith('file://')) return true;
+    if (value.startsWith('/')) return true;
+    if (/^[A-Za-z]:[\\/]/.test(value)) return true;
+    return false;
 }
 
 function formatBytes(n: number): string {
