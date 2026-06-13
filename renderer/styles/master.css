@@ -878,6 +878,22 @@
     padding: 1px 7px;
 }
 
+/* ===== fancy-term shell switcher fixes ================================= */
+/* The component's listbox is inline-styled minWidth:100% (= the narrow
+   trigger button width), so items like "Windows PowerShell" wrap onto
+   three cramped lines. Widen the menu and stop labels from wrapping.
+   Inline styles don't set white-space, so those rules need no override;
+   minWidth is inline, so that one does. */
+[data-fancy-shell-switcher] [role='listbox'] {
+    min-width: 200px !important;
+}
+[data-fancy-shell-switcher] [role='option'] {
+    white-space: nowrap;
+}
+[data-fancy-shell-switcher] [role='option'] > span {
+    white-space: nowrap;
+}
+
 /* ===== .agi envelope treatment ========================================= */
 /* Distinct badge so envelopes read differently from plain folders. */
 .tproj-head .pico {
