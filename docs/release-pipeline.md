@@ -215,6 +215,68 @@ service, waits for the result, and staples the ticket so the
 installer works offline. First-time notarisation can take 5–15
 minutes; subsequent runs are usually under 2.
 
+## Managed / cross-platform signing services
+
+A recurring question: *is there one service that handles signing for
+Windows, macOS, and Linux?* The honest answer is shaped by one hard
+constraint and one non-requirement:
+
+- **macOS can't be fully outsourced.** Apple is the *sole issuer* of
+  Developer ID certificates, and only to an enrolled Apple Developer
+  account ($99/yr). No third party can sell you macOS signing. A
+  service can *hold your Apple cert and run sign+notarise for you*, but
+  you still own the Apple account. This is non-negotiable.
+- **Linux needs no mandatory signing.** AppImage runs unsigned; you can
+  GPG-sign it with your own free key if you want integrity checks.
+  Snap/Flatpak are signed by their stores. There's nothing to buy.
+- **Only Windows is freely "buy from anyone"** — the cert can come from
+  any CA, and a cloud service can hold the key in an HSM and sign on
+  demand (see Paths A–C above).
+
+So there's no single vendor that *issues* certs for all three. Two
+categories of service get close:
+
+### Option A — signing-orchestration services (use *your* certs)
+
+Store your keys in their cloud HSM and sign Windows + macOS in CI:
+
+- **SignPath.io** — Windows Authenticode + Apple notarisation,
+  CI-integrated, **free tier for open-source**. Closest to "one place"
+  for the signing step. You still bring the Apple account; they manage
+  the Windows cert + signing mechanics.
+- **DigiCert Software Trust Manager** / **Garasign (Garantir)** —
+  enterprise, all platforms incl. GPG for Linux. Powerful, pricey,
+  overkill at Genie's scale.
+
+These sit *alongside* electron-builder — builder calls them as the sign
+step. Lowest disruption to this pipeline.
+
+### Option B — turnkey Electron build/sign/distribute SaaS
+
+- **ToDesktop** — build + sign + notarise + distribute + auto-update,
+  Electron-specific. They provide the Windows cert and run macOS
+  notarisation (you connect your Apple account). The genuine
+  "one service does everything." **Caveat: it replaces
+  `electron-builder` + `electron-updater` entirely** — so it would
+  subsume this pipeline *and* the in-app update pill / `latest.yml`
+  flow. Paid monthly SaaS.
+
+### Recommendation for Genie
+
+Stay on `electron-builder` and feed each platform its own signer — at
+this scale the builder pipeline already *is* the "one place,"
+orchestrating all three platforms in a single CI run:
+
+| Platform | Provider | Cost | Where |
+| -------- | -------- | ---- | ----- |
+| Windows  | Azure Trusted Signing (or SSL.com eSigner) | ~$10/mo or ~$130/yr | `electron-builder.yml` sign config (Path A/B) |
+| macOS    | Apple Developer + builder notarise | $99/yr | `APPLE_*` env vars (already plumbed) |
+| Linux    | self-GPG-sign AppImage (optional) | free | trivial post-build step |
+
+Only reconsider a turnkey SaaS (ToDesktop) if the goal is to never
+touch signing/release infra again and you're willing to replace the
+build + update stack.
+
 ## Verifying a signed build
 
 After CI succeeds, download an installer and verify:

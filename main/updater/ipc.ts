@@ -170,6 +170,24 @@ function reflectUpdateState(status: UpdaterStatus | AutoUpdaterStatus): void {
     }
 }
 
+/**
+ * Run a check on the ACTIVE backend, throttled so opening/focusing the
+ * window repeatedly doesn't hammer GitHub. Called when the master window
+ * is shown — Genie is tray-resident, so the startup poll often fires
+ * while no window is open (and the native toast can be swallowed by
+ * Windows Focus Assist). Checking on window-show guarantees the header
+ * pill is current the moment the user actually looks at Genie.
+ */
+let lastCheckAt = 0;
+export function checkForUpdatesNow(force = false): void {
+    const now = Date.now();
+    if (!force && now - lastCheckAt < 2 * 60 * 1000) return;
+    lastCheckAt = now;
+    const mode = updaterMode();
+    if (mode === 'phase1') void updater().checkForUpdate().catch(() => {});
+    else void autoUpdaterInstance().checkForUpdate().catch(() => {});
+}
+
 function broadcastStatus(status: unknown): void {
     for (const w of BrowserWindow.getAllWindows()) {
         if (!w.isDestroyed()) w.webContents.send('updater:status', status);

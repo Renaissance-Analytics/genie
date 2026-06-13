@@ -7,7 +7,7 @@ import { initDatabase } from './db';
 import { registerProtocolHandler, handleGenieUrl } from './auth';
 import { registerTerminalIpc, stopAllTerminals } from './terminal/ipc';
 import { registerGithubIpc } from './github/ipc';
-import { registerUpdaterIpc } from './updater/ipc';
+import { registerUpdaterIpc, checkForUpdatesNow } from './updater/ipc';
 import { installAppMenu } from './app-menu';
 
 /**
@@ -50,6 +50,11 @@ export function getMainWindow(): BrowserWindow | null {
  * clicking the tray entry while already open just focuses it.
  */
 export function showMasterWindow(): void {
+    // Whenever the window comes to the front, refresh the update check so
+    // the header pill reflects reality (throttled in the updater). Genie
+    // lives in the tray, so this is the moment the user can actually see
+    // the result.
+    checkForUpdatesNow();
     if (masterWindow && !masterWindow.isDestroyed()) {
         masterWindow.show();
         masterWindow.focus();
@@ -94,6 +99,9 @@ export function showMasterWindow(): void {
     }
 
     win.once('ready-to-show', () => win.show());
+    // Re-check on focus too — catches the case where Genie was left open
+    // for hours and a release shipped in the meantime (throttled).
+    win.on('focus', () => checkForUpdatesNow());
     win.on('closed', () => {
         if (masterWindow === win) masterWindow = null;
     });
