@@ -24,7 +24,9 @@ export interface ProjectJson {
         mode?: 'development' | 'staging' | 'production';
     };
     repos?: ProjectJsonRepo[];
-    tynnToken?: string | null;
+    // NB: project.json ships inside the monorepo and must NEVER carry a
+    // token/secret. Tokens come from the user copying an MCP config — never
+    // from here. Don't reintroduce a tynnToken (or any secret) field.
     // Anything else (AGI gateway fields, future Genie fields) is preserved.
     [k: string]: unknown;
 }
@@ -68,6 +70,5 @@ export function blankProjectJson(name: string, slug: string): ProjectJson {
             mode: 'development',
         },
         repos: [],
-        tynnToken: null,
     };
 }

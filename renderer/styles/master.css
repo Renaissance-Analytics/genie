@@ -1132,19 +1132,24 @@
 }
 
 /* ===== Panel grid ===================================================== */
+/* Tiles mash together: no padding, no per-tile margin, no radius. The
+   single 1px seam between adjacent panels comes from a 1px grid/flex gap
+   over a seam-coloured container background — never from panel borders
+   (those would double up where two panels meet). The seam container is
+   whatever directly lays the tiles out: .grid-wrap behind .pgrid, and the
+   nested .pstack behind its own stacked tiles in focus-stack mode. */
 .grid-wrap {
     flex: 1;
     min-width: 0;
     min-height: 0;
-    padding: 2px;
-    background: var(--bg-2);
+    background: var(--border-1);
     overflow: hidden;
 }
 .pgrid {
     width: 100%;
     height: 100%;
     display: grid;
-    gap: 2px;
+    gap: 1px;
 }
 .pgrid.g1 {
     grid-template-columns: 1fr;
@@ -1166,7 +1171,7 @@
 /* focus + stack: one large panel beside a vertical stack */
 .pgrid.focus-stack {
     display: flex;
-    gap: 2px;
+    gap: 1px;
 }
 .pmain {
     flex: 1.62;
@@ -1182,7 +1187,10 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
+    /* Seam behind the stacked tiles: the 1px column gap shows this
+       through as the single seam between stacked panels. */
+    background: var(--border-1);
 }
 .pstack .tpanel {
     flex: 1;
@@ -1218,15 +1226,15 @@
     flex-direction: column;
     min-width: 0;
     min-height: 0;
-    border: 1px solid var(--border-1);
-    border-radius: var(--radius-xl);
+    /* No border/radius: tiles butt flush, the 1px gap-over-seam supplies
+       the only line between them. */
     overflow: hidden;
     background: var(--term-bg);
-    box-shadow: var(--shadow-sm);
 }
 .tpanel.focus {
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 1px #3b82f6, var(--shadow-sm);
+    /* Inset ring so the focus highlight doesn't grow the tile or stack a
+       second line on top of the seam. */
+    box-shadow: inset 0 0 0 1px #3b82f6;
 }
 .tpanel .pa {
     opacity: 0;

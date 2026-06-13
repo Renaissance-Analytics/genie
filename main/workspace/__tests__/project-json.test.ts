@@ -27,6 +27,10 @@ describe('project-json', () => {
         expect(read?.hosting?.enabled).toBe(false);
         expect(read?.type).toBeNull();
         expect(typeof read?.createdAt).toBe('string');
+        // project.json ships in the monorepo — it must never carry a
+        // token/secret. Guard against a tynnToken field creeping back.
+        expect(read).not.toHaveProperty('tynnToken');
+        expect(blankProjectJson('Foo', 'foo')).not.toHaveProperty('tynnToken');
     });
 
     it('preserves unknown top-level fields across patches', () => {

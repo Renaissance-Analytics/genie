@@ -151,28 +151,28 @@ function templateFor(mode: ResolvedMode, count: number): CSSProperties {
                 display: 'grid',
                 gridTemplateColumns: '1fr',
                 gridTemplateRows: '1fr',
-                gap: '2px',
+                gap: '1px',
             };
         case 'g2x1':
             return {
                 display: 'grid',
                 gridTemplateColumns: '1fr 1fr',
                 gridTemplateRows: '1fr',
-                gap: '2px',
+                gap: '1px',
             };
         case '2x2':
             return {
                 display: 'grid',
                 gridTemplateColumns: '1fr 1fr',
                 gridTemplateRows: '1fr 1fr',
-                gap: '2px',
+                gap: '1px',
             };
         case 'columns':
             return {
                 display: 'grid',
                 gridTemplateColumns: 'repeat(3, 1fr)',
                 gridTemplateRows: '1fr',
-                gap: '2px',
+                gap: '1px',
             };
         case 'focus-stack': {
             const stackRows = Math.max(1, count - 1);
@@ -180,7 +180,7 @@ function templateFor(mode: ResolvedMode, count: number): CSSProperties {
                 display: 'grid',
                 gridTemplateColumns: '1.62fr 1fr',
                 gridTemplateRows: `repeat(${stackRows}, 1fr)`,
-                gap: '2px',
+                gap: '1px',
             };
         }
     }
