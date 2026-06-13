@@ -81,6 +81,131 @@ export function envelopeFolderName(slug: string): string {
     return /\.agi$/i.test(slug) ? slug : `${slug}.agi`;
 }
 
+/** Human-facing structure guide written to the envelope root. */
+function readmeTemplate(name: string, slug: string): string {
+    const folder = envelopeFolderName(slug);
+    return `# ${name}
+
+This is a **\`.agi\` envelope** — an Aionima project monorepo that bundles
+one or more code repositories together with shared knowledge, planning,
+and scratch space. Created with Genie.
+
+## Layout
+
+\`\`\`
+${folder}/
+├── project.json     Envelope manifest — repo registry + metadata
+├── .gitmodules      Submodule registry (the repos below)
+├── repos/           Code repositories, each a git submodule
+├── .ai/             Shared knowledge (humans + agents)
+│   ├── knowledge/   Notes, docs, references
+│   ├── plans/       Plans and design docs
+│   ├── pm/          Project management
+│   ├── chat/        Saved conversations
+│   ├── memory/      Long-lived agent memory
+│   └── issues/      Issue notes
+├── sandbox/         Scratch space (gitignored)
+└── .trash/          Soft-delete buffer (gitignored)
+\`\`\`
+
+## Working with it
+
+Clone with submodules:
+
+\`\`\`
+git clone --recurse-submodules <url>
+# or, after a plain clone:
+git submodule update --init --recursive
+\`\`\`
+
+Each folder under \`repos/\` is an independent repository pinned to a
+specific commit. The envelope tracks \`project.json\`, \`.ai/\`, and the
+submodule pointers — never the code inside the submodules (that lives in
+each repo). Advance a pin with \`git submodule update --remote repos/<name>\`.
+
+For the agent-oriented version of this guide, see \`AGENTS.md\`
+(\`CLAUDE.md\` is a symlink to it).
+`;
+}
+
+/** Agent-facing structure guide. CLAUDE.md symlinks to this. */
+function agentsTemplate(name: string): string {
+    return `# AGENTS.md — ${name} (.agi envelope)
+
+You are working inside a **\`.agi\` envelope**: an Aionima project monorepo.
+\`CLAUDE.md\` is a symlink to this file.
+
+## Structure
+
+- \`repos/<name>/\` — code repositories, each a git **submodule** pinned to
+  a commit. Do code work INSIDE these: commit/push in the repo, then the
+  envelope's submodule pointer is advanced separately.
+- \`.ai/\` — shared knowledge, writable by humans and agents:
+  - \`.ai/knowledge/\` — notes, docs, references
+  - \`.ai/plans/\` — plans and design docs
+  - \`.ai/pm/\` — project management
+  - \`.ai/chat/\` — saved conversations
+  - \`.ai/memory/\` — long-lived memory
+  - \`.ai/issues/\` — issue notes
+- \`sandbox/\` — scratch space, gitignored. Use freely; never relied upon.
+- \`.trash/\` — soft-delete buffer, gitignored.
+- \`project.json\` — the envelope manifest (repo registry + metadata).
+
+## Rules
+
+- The envelope never commits code that belongs to a submodule. Code lives
+  in \`repos/<name>\`; the envelope only tracks the submodule pointer.
+- \`.ai/\`, \`sandbox/\`, \`.trash/\` are envelope-owned — never submoduled.
+- After cloning: \`git submodule update --init --recursive\`.
+- Submodule pins advance deliberately
+  (\`git submodule update --remote repos/<name>\`), not automatically.
+`;
+}
+
+/**
+ * Turn the staged CLAUDE.md into a real git symlink → AGENTS.md, then
+ * sync the working tree to match. Done at the git layer (mode 120000 +
+ * checkout-index) rather than fs.symlinkSync so it's a true committed
+ * symlink on every platform — Windows working trees can't create file
+ * symlinks without elevation, but git stores/restores them fine.
+ */
+async function makeClaudeSymlink(
+    git: ReturnType<typeof simpleGit>,
+    envelopePath: string,
+): Promise<void> {
+    const claude = path.join(envelopePath, 'CLAUDE.md');
+    try {
+        // CLAUDE.md currently holds exactly "AGENTS.md" (the link target),
+        // already staged by `git add .` as a normal blob — so its hash IS
+        // the symlink blob we want. Flip the index entry's mode to 120000.
+        const sha = (await git.raw(['hash-object', claude])).trim();
+        await git.raw([
+            'update-index',
+            '--add',
+            '--cacheinfo',
+            `120000,${sha},CLAUDE.md`,
+        ]);
+        // Materialise the working tree from the index so it matches the
+        // 120000 entry — a real symlink where the OS allows (macOS/Linux),
+        // a plain "AGENTS.md" file where it doesn't (Windows). Either way
+        // the tree is clean against the index.
+        await git.raw(['checkout-index', '-f', '--', 'CLAUDE.md']);
+    } catch {
+        // Worst case the index flip failed — CLAUDE.md stays a plain file
+        // containing the AGENTS.md content path. Rewrite it as a readable
+        // pointer so it's not a confusing one-liner.
+        try {
+            fs.writeFileSync(
+                claude,
+                '# CLAUDE.md\n\nSee [AGENTS.md](./AGENTS.md) — the envelope structure guide.\n',
+            );
+            await git.add('CLAUDE.md');
+        } catch {
+            /* best effort */
+        }
+    }
+}
+
 export async function createAgiEnvelope(
     opts: CreateAgiOpts,
 ): Promise<CreateAgiResult> {
@@ -118,6 +243,26 @@ export async function createAgiEnvelope(
         'utf8',
     );
 
+    // Structure docs. README.md for humans, AGENTS.md for agents, and
+    // CLAUDE.md as a symlink to AGENTS.md (Claude Code reads CLAUDE.md;
+    // AGENTS.md is the cross-tool standard). The symlink is materialised
+    // at the git layer below so it's a real symlink in the committed repo
+    // even on Windows where the working-tree FS can't make one.
+    fs.writeFileSync(
+        path.join(envelopePath, 'README.md'),
+        readmeTemplate(opts.name, opts.slug),
+        'utf8',
+    );
+    fs.writeFileSync(
+        path.join(envelopePath, 'AGENTS.md'),
+        agentsTemplate(opts.name),
+        'utf8',
+    );
+    // CLAUDE.md starts as a plain file holding the symlink TARGET text
+    // ("AGENTS.md"). update-index below rewrites its mode to 120000
+    // (symlink); the blob content is exactly that target string.
+    fs.writeFileSync(path.join(envelopePath, 'CLAUDE.md'), 'AGENTS.md');
+
     // git init + initial commit. Set a local user.email / user.name so
     // the commit succeeds even when the host has no global git identity
     // (CI runners, fresh installs, sandboxed environments). The user can
@@ -128,6 +273,7 @@ export async function createAgiEnvelope(
     await git.addConfig('user.email', 'genie@localhost');
     await git.addConfig('user.name', 'Genie');
     await git.add('.');
+    await makeClaudeSymlink(git, envelopePath);
     await git.commit('Initial commit — {slug}.agi envelope scaffolded by Genie');
 
     let remote: string | undefined;

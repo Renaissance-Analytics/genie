@@ -81,6 +81,25 @@ describe('createAgiEnvelope', () => {
         const gi = fs.readFileSync(path.join(res.path, '.gitignore'), 'utf8');
         expect(gi).toMatch(/sandbox/);
         expect(gi).toMatch(/\.trash/);
+
+        // Structure docs for humans + agents.
+        const readme = fs.readFileSync(path.join(res.path, 'README.md'), 'utf8');
+        expect(readme).toMatch(/# Test/);
+        expect(readme).toMatch(/test-env\.agi/);
+        expect(readme).toMatch(/repos\//);
+        const agents = fs.readFileSync(path.join(res.path, 'AGENTS.md'), 'utf8');
+        expect(agents).toMatch(/AGENTS\.md/);
+        expect(agents).toMatch(/submodule/i);
+
+        // CLAUDE.md is committed as a real git symlink (mode 120000)
+        // pointing at AGENTS.md — verified via the index, since the
+        // working-tree representation is platform-dependent.
+        const git = simpleGit(res.path);
+        const lsFiles = await git.raw(['ls-files', '-s', 'CLAUDE.md']);
+        expect(lsFiles).toMatch(/^120000 /);
+        const sha = lsFiles.trim().split(/\s+/)[1];
+        const blob = await git.raw(['cat-file', '-p', sha]);
+        expect(blob).toBe('AGENTS.md');
     });
 
     it('refuses to scaffold into a non-empty folder', async () => {
