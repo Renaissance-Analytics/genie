@@ -487,6 +487,8 @@ function GitHubSection() {
     const [clientId, setClientId] = useState('');
     const [clientIdSet, setClientIdSet] = useState(false);
     const [builtInClientId, setBuiltInClientId] = useState(false);
+    const [usingOverride, setUsingOverride] = useState(false);
+    const [activeClientId, setActiveClientId] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [storageOk, setStorageOk] = useState(true);
     const [flow, setFlow] = useState<
@@ -508,6 +510,8 @@ function GitHubSection() {
         setUsername(st.username);
         setClientIdSet(st.clientIdSet);
         setBuiltInClientId(st.builtInClientId);
+        setUsingOverride(st.usingOverride);
+        setActiveClientId(st.activeClientId);
         setStorageOk(st.storageOk);
         if (st.flow.kind === 'pending') {
             setFlow({
@@ -578,6 +582,12 @@ function GitHubSection() {
         await refresh();
     };
 
+    const resetClientId = async () => {
+        await api().github.resetClientId();
+        setClientId('');
+        await refresh();
+    };
+
     return (
         <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -609,6 +619,33 @@ function GitHubSection() {
                     OAuth App at github.com/settings/applications/new with
                     Enable Device Flow ticked).
                 </Text>
+            )}
+
+            {/* Stale-override guard. A custom client ID shadowing the bundled
+                one is the most common reason Device Flow fails on a build
+                that ships a working baked-in ID (early alphas prompted users
+                to paste their own). Surface it with a one-click reset. */}
+            {usingOverride && builtInClientId && !connected && (
+                <div
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '8px 10px',
+                        borderRadius: 8,
+                        background: 'color-mix(in srgb, #f59e0b 12%, transparent)',
+                        border: '1px solid color-mix(in srgb, #f59e0b 35%, var(--border-1))',
+                    }}
+                >
+                    <Text size="xs" style={{ flex: 1 }}>
+                        Using a custom OAuth Client ID (<code>{activeClientId}</code>)
+                        instead of the one bundled with Genie. If sign-in fails,
+                        this is the likely cause.
+                    </Text>
+                    <Action size="sm" variant="ghost" onClick={resetClientId}>
+                        Use bundled default
+                    </Action>
+                </div>
             )}
 
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

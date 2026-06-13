@@ -1,0 +1,258 @@
+import { useEffect, useRef, useState } from 'react';
+import { Action, Select, Text } from '@particle-academy/react-fancy';
+import { api } from '../lib/genie';
+
+/**
+ * Shared GitHub account surface for every .agi creation flow. Two pieces:
+ *
+ *   useGitHubAccount() — connection state + inline Device Flow driver
+ *                        (no bounce to Settings; the wizard connects in
+ *                        place and polls github:status to completion).
+ *   <GitHubConnect>    — the inline connect panel (button → code → done).
+ *   <OwnerSelect>      — owner dropdown (personal + every org), so the
+ *                        user always chooses WHICH account a repo or
+ *                        fork lands under.
+ *
+ * Empty owner string === the authenticated user's personal account; any
+ * other value is an org login. That's the same convention createRepo /
+ * forkRepo use on the main side.
+ */
+
+export interface GitHubOrgLite {
+    login: string;
+}
+
+type Flow =
+    | { kind: 'idle' }
+    | { kind: 'starting' }
+    | { kind: 'pending'; userCode: string; verificationUri: string }
+    | { kind: 'error'; message: string };
+
+export interface GitHubAccount {
+    loaded: boolean;
+    connected: boolean;
+    username: string | null;
+    orgs: GitHubOrgLite[];
+    storageOk: boolean;
+    clientIdSet: boolean;
+    flow: Flow;
+    connect: () => Promise<void>;
+    cancel: () => Promise<void>;
+    refresh: () => Promise<unknown>;
+}
+
+export function useGitHubAccount(): GitHubAccount {
+    const [loaded, setLoaded] = useState(false);
+    const [connected, setConnected] = useState(false);
+    const [username, setUsername] = useState<string | null>(null);
+    const [orgs, setOrgs] = useState<GitHubOrgLite[]>([]);
+    const [storageOk, setStorageOk] = useState(true);
+    const [clientIdSet, setClientIdSet] = useState(false);
+    const [flow, setFlow] = useState<Flow>({ kind: 'idle' });
+    const polling = useRef(false);
+
+    const refresh = async () => {
+        const st = await api().github.status();
+        setConnected(st.connected);
+        setUsername(st.username);
+        setStorageOk(st.storageOk);
+        setClientIdSet(st.clientIdSet);
+        setLoaded(true);
+        if (st.connected) {
+            try {
+                const list = await api().github.orgs();
+                setOrgs(list.map((o) => ({ login: o.login })));
+            } catch {
+                setOrgs([]);
+            }
+        }
+        // Reflect the main-side flow outcome into local state.
+        if (st.flow.kind === 'success') {
+            setFlow({ kind: 'idle' });
+        } else if (st.flow.kind === 'error') {
+            setFlow({ kind: 'error', message: st.flow.message });
+        }
+        return st;
+    };
+
+    useEffect(() => {
+        void refresh();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // While a device flow is pending, poll status until it connects (or
+    // errors). One poller at a time — guarded by the ref.
+    useEffect(() => {
+        if (flow.kind !== 'pending' || polling.current) return;
+        polling.current = true;
+        const t = setInterval(async () => {
+            const st = await refresh();
+            if (st.connected || st.flow.kind === 'error') {
+                clearInterval(t);
+                polling.current = false;
+                if (st.connected) setFlow({ kind: 'idle' });
+            }
+        }, 1500);
+        return () => {
+            clearInterval(t);
+            polling.current = false;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [flow.kind]);
+
+    const connect = async () => {
+        try {
+            setFlow({ kind: 'starting' });
+            const code = await api().github.startDevice();
+            setFlow({
+                kind: 'pending',
+                userCode: code.user_code,
+                verificationUri: code.verification_uri,
+            });
+            // Open the verification page immediately so the user only has
+            // to paste the (pre-shown) code.
+            api().tynn.openInBrowser(code.verification_uri);
+        } catch (e) {
+            setFlow({
+                kind: 'error',
+                message: e instanceof Error ? e.message : String(e),
+            });
+        }
+    };
+
+    const cancel = async () => {
+        await api().github.cancelDevice().catch(() => {});
+        setFlow({ kind: 'idle' });
+    };
+
+    return {
+        loaded,
+        connected,
+        username,
+        orgs,
+        storageOk,
+        clientIdSet,
+        flow,
+        connect,
+        cancel,
+        refresh,
+    };
+}
+
+export function GitHubConnect({ account }: { account: GitHubAccount }) {
+    const { loaded, connected, username, storageOk, clientIdSet, flow } = account;
+
+    if (!loaded) {
+        return (
+            <Text size="xs" className="text-zinc-500">
+                Checking GitHub connection…
+            </Text>
+        );
+    }
+
+    if (connected) {
+        return (
+            <Text size="xs" style={{ color: 'var(--emerald-600)', display: 'block' }}>
+                ✓ Connected as <strong>{username}</strong>
+            </Text>
+        );
+    }
+
+    return (
+        <div className="gh-connect">
+            {!storageOk && (
+                <Text size="xs" style={{ color: 'var(--rose-500)', display: 'block' }}>
+                    OS keychain unavailable — Genie won't store a token
+                    unencrypted. On Linux: install gnome-keyring / libsecret.
+                </Text>
+            )}
+            {!clientIdSet && (
+                <Text size="xs" style={{ color: 'var(--rose-500)', display: 'block' }}>
+                    No GitHub OAuth Client ID configured. Set one in
+                    Settings → GitHub → Advanced.
+                </Text>
+            )}
+
+            {(flow.kind === 'idle' || flow.kind === 'error') && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Action
+                        color="blue"
+                        size="sm"
+                        icon="github"
+                        onClick={() => void account.connect()}
+                        disabled={!storageOk || !clientIdSet}
+                    >
+                        Connect GitHub…
+                    </Action>
+                    <Text size="xs" className="text-zinc-500">
+                        Needed to create or fork repositories.
+                    </Text>
+                </div>
+            )}
+
+            {flow.kind === 'starting' && (
+                <Text size="xs" className="text-zinc-500">
+                    Requesting a device code…
+                </Text>
+            )}
+
+            {flow.kind === 'pending' && (
+                <div className="gh-device">
+                    <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                        A browser opened at <code>{flow.verificationUri}</code>.
+                        Enter the code below and approve — Genie catches the
+                        token automatically.
+                    </Text>
+                    <div className="gh-code">{flow.userCode}</div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                        <Action
+                            size="sm"
+                            variant="ghost"
+                            icon="external-link"
+                            onClick={() =>
+                                api().tynn.openInBrowser(flow.verificationUri)
+                            }
+                        >
+                            Reopen GitHub
+                        </Action>
+                        <Action size="sm" variant="ghost" onClick={() => void account.cancel()}>
+                            Cancel
+                        </Action>
+                    </div>
+                </div>
+            )}
+
+            {flow.kind === 'error' && (
+                <Text size="xs" style={{ color: 'var(--rose-500)', display: 'block' }}>
+                    {flow.message}
+                </Text>
+            )}
+        </div>
+    );
+}
+
+export function OwnerSelect({
+    account,
+    value,
+    onChange,
+    label = 'Owner',
+}: {
+    account: GitHubAccount;
+    value: string;
+    onChange: (login: string) => void;
+    label?: string;
+}) {
+    if (!account.connected) return null;
+    const options = [
+        { value: '', label: `${account.username ?? '(you)'} · personal` },
+        ...account.orgs.map((o) => ({ value: o.login, label: `${o.login} · org` })),
+    ];
+    return (
+        <div>
+            <Text size="xs" style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+                {label}
+            </Text>
+            <Select value={value} onValueChange={onChange} list={options} />
+        </div>
+    );
+}

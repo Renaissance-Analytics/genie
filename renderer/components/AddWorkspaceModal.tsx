@@ -13,6 +13,7 @@ import {
 import { api, ulid } from '../lib/genie';
 import type { DetectResult, TynnProject, WorkspaceRow } from '../lib/genie';
 import InteractiveUpgradeWizard from './InteractiveUpgradeWizard';
+import { useGitHubAccount, GitHubConnect, OwnerSelect } from './GitHubConnect';
 
 type Stage =
     | 'shape'
@@ -771,6 +772,7 @@ function AgiCreateWizard({
     const [remoteUrl, setRemoteUrl] = useState('');
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const account = useGitHubAccount();
 
     useEffect(() => {
         api()
@@ -802,12 +804,31 @@ function AgiCreateWizard({
             if (!slug) throw new Error('Slug is required.');
             if (!parentFolder) throw new Error('Pick the parent folder.');
 
-            const remote =
-                remoteMode === 'none'
-                    ? { kind: 'none' as const }
-                    : remoteMode === 'paste'
-                        ? { kind: 'paste' as const, url: remoteUrl }
-                        : { kind: 'auto' as const, owner: remoteOwner };
+            // 'auto' actually mints the repo on GitHub under the chosen
+            // owner BEFORE building the envelope, then pushes — same flow
+            // as the interactive wizard. (createAgiEnvelope's own 'auto'
+            // only records a local remote URL without creating/pushing, so
+            // we drive create+push here and hand it a concrete paste URL.)
+            let remote:
+                | { kind: 'none' }
+                | { kind: 'paste'; url: string }
+                | { kind: 'auto'; owner: string } = { kind: 'none' };
+            let pushAfter = false;
+            if (remoteMode === 'paste') {
+                remote = { kind: 'paste', url: remoteUrl };
+            } else if (remoteMode === 'auto') {
+                if (!account.connected) {
+                    throw new Error('Connect GitHub to auto-create the repo.');
+                }
+                const created = await api().github.createRepo({
+                    name: `${slug}.agi`,
+                    owner: remoteOwner || null,
+                    description: `Aionima envelope for ${project.name}`,
+                    private: true,
+                });
+                remote = { kind: 'paste', url: created.clone_url };
+                pushAfter = true;
+            }
 
             const res = await api().agi.create({
                 slug,
@@ -815,6 +836,16 @@ function AgiCreateWizard({
                 parent_path: parentFolder,
                 remote,
             });
+
+            if (pushAfter) {
+                try {
+                    await api().agi.push(res.path, 'main');
+                } catch (pushErr) {
+                    setError(
+                        pushErr instanceof Error ? pushErr.message : String(pushErr),
+                    );
+                }
+            }
 
             const settings = await api().settings.get();
             const row: WorkspaceRow = {
@@ -889,13 +920,17 @@ function AgiCreateWizard({
                     ))}
                 </div>
                 {remoteMode === 'auto' && (
-                    <Input
-                        label="GitHub owner / org"
-                        value={remoteOwner}
-                        onValueChange={setRemoteOwner}
-                        placeholder="e.g. Renaissance-Analytics"
-                        style={{ marginTop: 8 }}
-                    />
+                    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <GitHubConnect account={account} />
+                        {account.connected && (
+                            <OwnerSelect
+                                account={account}
+                                value={remoteOwner}
+                                onChange={setRemoteOwner}
+                                label="Create under"
+                            />
+                        )}
+                    </div>
                 )}
                 {remoteMode === 'paste' && (
                     <Input

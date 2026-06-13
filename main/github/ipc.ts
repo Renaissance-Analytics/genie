@@ -6,9 +6,11 @@ import {
     requestDeviceCode,
 } from './device-flow';
 import {
+    clearClientIdOverride,
     clearToken,
     getBuiltInClientId,
     getClientId,
+    getClientIdOverride,
     getToken,
     getUsername,
     isStorageAvailable,
@@ -16,12 +18,16 @@ import {
 } from './storage';
 import {
     createRepo,
+    forkRepo,
     getViewer,
     listOrgs,
+    parseGitHubRemote,
     type CreateRepoOpts,
     type CreatedRepo,
+    type ForkRepoOpts,
     type GitHubOrg,
     type GitHubUser,
+    type ParsedRepoRef,
 } from './api';
 
 /**
@@ -54,20 +60,36 @@ export function registerGithubIpc(): void {
         username: string | null;
         clientIdSet: boolean;
         builtInClientId: boolean;
+        usingOverride: boolean;
+        activeClientId: string;
         storageOk: boolean;
         flow: FlowStatus;
     }> => {
+        const override = getClientIdOverride();
+        const active = getClientId();
         return {
             connected: !!getToken(),
             username: getUsername(),
-            clientIdSet: !!getClientId(),
+            clientIdSet: !!active,
             // True when the binary ships with a baked-in client ID
             // (config.GENIE_GITHUB_CLIENT_ID). Settings UI uses this
             // to hide the override field on normal installs.
             builtInClientId: !!getBuiltInClientId(),
+            // True when a settings override is shadowing the bundled ID —
+            // the prime suspect when Device Flow fails on a build that
+            // ships a working baked-in client ID.
+            usingOverride: !!override,
+            // Masked for display so the user can sanity-check which ID is
+            // actually in play without leaking it to logs/screenshots.
+            activeClientId: maskClientId(active),
             storageOk: isStorageAvailable(),
             flow: status,
         };
+    });
+
+    ipcMain.handle('github:reset-client-id', async () => {
+        clearClientIdOverride();
+        return { ok: true };
     });
 
     ipcMain.handle('github:device:start', async (): Promise<DeviceCodeResponse> => {
@@ -138,6 +160,25 @@ export function registerGithubIpc(): void {
         'github:create-repo',
         async (_e, opts: CreateRepoOpts): Promise<CreatedRepo> => createRepo(opts),
     );
+    ipcMain.handle(
+        'github:fork-repo',
+        async (_e, opts: ForkRepoOpts): Promise<CreatedRepo> => forkRepo(opts),
+    );
+    // Pure helper — lets the renderer decide whether to OFFER a fork for a
+    // given submodule source URL without duplicating the parser.
+    ipcMain.handle(
+        'github:parse-remote',
+        async (_e, url: string): Promise<ParsedRepoRef | null> =>
+            parseGitHubRemote(url),
+    );
+}
+
+/** Show the first 7 + last 3 chars so the user can recognise their ID
+ *  without exposing the whole value. Short IDs are shown whole. */
+function maskClientId(id: string): string {
+    if (!id) return '';
+    if (id.length <= 12) return id;
+    return `${id.slice(0, 7)}…${id.slice(-3)}`;
 }
 
 /**

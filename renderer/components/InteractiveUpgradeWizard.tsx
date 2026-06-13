@@ -20,6 +20,12 @@ import {
     type TynnProject,
     type WorkspaceRow,
 } from '../lib/genie';
+import {
+    useGitHubAccount,
+    GitHubConnect,
+    OwnerSelect,
+    type GitHubAccount,
+} from './GitHubConnect';
 
 interface Props {
     /** Optional source folder pre-filled by the caller. */
@@ -31,12 +37,25 @@ interface Props {
     onCreated: (row: WorkspaceRow) => void;
 }
 
+/**
+ * How a detected repo becomes a submodule:
+ *   - 'origin' — clone from its existing origin remote (no copy of history
+ *     into a new place; the envelope references the canonical repo).
+ *   - 'fork'   — fork the origin on GitHub into the chosen owner, then
+ *     submodule the FORK. This is the Teams/Agents path: each actor works
+ *     on their own fork and PRs back.
+ *   - 'local'  — submodule straight from the local path (file:// source);
+ *     the only option when the repo has no GitHub origin.
+ */
+type RepoSourceMode = 'origin' | 'fork' | 'local';
+
 /** UI plan rows; row.included controls whether they enter the executed plan. */
 interface RepoRow extends AnalyseRepoCandidate {
     included: boolean;
     submodule_name: string;
-    /** Use the remote origin URL if available; otherwise the local path. */
-    use_remote: boolean;
+    source_mode: RepoSourceMode;
+    /** Parsed owner/repo when origin_url is a GitHub remote — gates 'fork'. */
+    gh_ref: { owner: string; repo: string } | null;
 }
 
 interface KnowledgeRow extends AnalyseKnowledgeCandidate {
@@ -124,14 +143,9 @@ export default function InteractiveUpgradeWizard({
     const [remoteMode, setRemoteMode] = useState<'none' | 'paste' | 'github'>('none');
     const [remoteUrl, setRemoteUrl] = useState('');
 
-    // GitHub state — only fetched once the user picks the github remote mode.
-    const [gh, setGh] = useState<{
-        loaded: boolean;
-        connected: boolean;
-        username: string | null;
-        orgs: Array<{ login: string }>;
-        error: string | null;
-    }>({ loaded: false, connected: false, username: null, orgs: [], error: null });
+    // Shared GitHub account — drives inline connect + owner selection for
+    // BOTH the envelope remote and any repo forks. One account choice.
+    const account = useGitHubAccount();
     const [ghOwner, setGhOwner] = useState<string>(''); // empty = personal user account
     const [ghPrivate, setGhPrivate] = useState(true);
 
@@ -154,63 +168,28 @@ export default function InteractiveUpgradeWizard({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [initialFolder]);
 
-    // Fetch GitHub state lazily — first time the user opens the github
-    // remote picker. Refresh on every reopen so a freshly-connected
-    // account in Settings becomes visible without restarting the modal.
-    useEffect(() => {
-        if (remoteMode !== 'github') return;
-        let cancelled = false;
-        (async () => {
-            try {
-                const st = await api().github.status();
-                if (cancelled) return;
-                if (!st.connected) {
-                    setGh({
-                        loaded: true,
-                        connected: false,
-                        username: st.username,
-                        orgs: [],
-                        error: null,
-                    });
-                    return;
-                }
-                const orgs = await api().github.orgs();
-                if (cancelled) return;
-                setGh({
-                    loaded: true,
-                    connected: true,
-                    username: st.username,
-                    orgs: orgs.map((o) => ({ login: o.login })),
-                    error: null,
-                });
-                if (!ghOwner && st.username) setGhOwner('');
-            } catch (e) {
-                if (cancelled) return;
-                setGh((prev) => ({
-                    ...prev,
-                    loaded: true,
-                    error: e instanceof Error ? e.message : String(e),
-                }));
-            }
-        })();
-        return () => {
-            cancelled = true;
-        };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [remoteMode]);
-
     const runScan = async (folder: string) => {
         setScanning(true);
         setError(null);
         try {
             const r = await api().agi.analyse(folder);
             setScan(r);
+            // Parse each origin URL so the Repos step knows which repos are
+            // GitHub remotes (and therefore forkable).
+            const refs = await Promise.all(
+                r.repos.map((c) =>
+                    c.origin_url
+                        ? api().github.parseRemote(c.origin_url).catch(() => null)
+                        : Promise.resolve(null),
+                ),
+            );
             setRepoRows(
-                r.repos.map((c) => ({
+                r.repos.map((c, i) => ({
                     ...c,
                     included: true,
                     submodule_name: c.default_name,
-                    use_remote: !!c.origin_url,
+                    source_mode: c.origin_url ? 'origin' : 'local',
+                    gh_ref: refs[i],
                 })),
             );
             setKnowledgeRows(
@@ -281,7 +260,10 @@ export default function InteractiveUpgradeWizard({
         parentFolder.trim().length > 0 &&
         projectId.length > 0 &&
         repoNamesValid &&
-        (remoteMode !== 'github' || gh.connected);
+        // GitHub is needed when the envelope is auto-created on GitHub OR
+        // any repo is set to fork (forking hits the GitHub API).
+        ((remoteMode !== 'github' && !repoRows.some((r) => r.included && r.source_mode === 'fork')) ||
+            account.connected);
 
     /** Per-step forward gating. Back is always allowed. */
     const canLeave = (s: number): boolean => {
@@ -314,6 +296,27 @@ export default function InteractiveUpgradeWizard({
             const project = projects.find((p) => p.id === projectId);
             if (!project) throw new Error('Pick a Tynn project.');
 
+            // Fork any repos set to 'fork' FIRST — the fork's clone URL
+            // becomes the submodule source. Forks land under the chosen
+            // owner (ghOwner; empty = personal), so Teams/Agents each get
+            // their own fork to work on and PR back from.
+            const forkUrlByPath = new Map<string, string>();
+            const forkRows = repoRows.filter(
+                (r) => r.included && r.source_mode === 'fork' && r.gh_ref,
+            );
+            for (const r of forkRows) {
+                if (!account.connected) {
+                    throw new Error('Connect GitHub to fork repositories.');
+                }
+                setBusyStep(`Forking ${r.gh_ref!.owner}/${r.gh_ref!.repo}…`);
+                const fork = await api().github.forkRepo({
+                    owner: r.gh_ref!.owner,
+                    repo: r.gh_ref!.repo,
+                    intoOrg: ghOwner || null,
+                });
+                forkUrlByPath.set(r.abs_path, fork.clone_url);
+            }
+
             // If GitHub Auto is selected, mint the empty repo BEFORE we
             // build the envelope so the URL is ready to register as origin.
             let remote: ConvertPlanOpts['remote'] = { kind: 'none' };
@@ -321,10 +324,8 @@ export default function InteractiveUpgradeWizard({
             if (remoteMode === 'paste' && remoteUrl.trim()) {
                 remote = { kind: 'paste', url: remoteUrl.trim() };
             } else if (remoteMode === 'github') {
-                if (!gh.connected) {
-                    throw new Error(
-                        'GitHub is not connected. Open Settings → GitHub and finish the Device Flow.',
-                    );
+                if (!account.connected) {
+                    throw new Error('Connect GitHub to auto-create the envelope repo.');
                 }
                 setBusyStep('Creating GitHub repo…');
                 const created = await api().github.createRepo({
@@ -343,14 +344,27 @@ export default function InteractiveUpgradeWizard({
                 parent_path: parentFolder.trim(),
                 repos: repoRows
                     .filter((r) => r.included)
-                    .map((r) => ({
-                        source:
-                            r.use_remote && r.origin_url
-                                ? r.origin_url
-                                : r.abs_path,
-                        is_local: !(r.use_remote && r.origin_url),
-                        submodule_name: r.submodule_name.trim(),
-                    })),
+                    .map((r) => {
+                        if (r.source_mode === 'fork' && forkUrlByPath.has(r.abs_path)) {
+                            return {
+                                source: forkUrlByPath.get(r.abs_path)!,
+                                is_local: false,
+                                submodule_name: r.submodule_name.trim(),
+                            };
+                        }
+                        if (r.source_mode === 'origin' && r.origin_url) {
+                            return {
+                                source: r.origin_url,
+                                is_local: false,
+                                submodule_name: r.submodule_name.trim(),
+                            };
+                        }
+                        return {
+                            source: r.abs_path,
+                            is_local: true,
+                            submodule_name: r.submodule_name.trim(),
+                        };
+                    }),
                 knowledge: isSingleRepo
                     ? dispositionRows
                           .filter((r) => r.disposition !== 'codebase')
@@ -451,6 +465,7 @@ export default function InteractiveUpgradeWizard({
                             rows={repoRows}
                             setRows={setRepoRows}
                             namesValid={repoNamesValid}
+                            account={account}
                         />
                     </Carousel.Slide>
 
@@ -484,11 +499,12 @@ export default function InteractiveUpgradeWizard({
                             setRemoteMode={setRemoteMode}
                             remoteUrl={remoteUrl}
                             setRemoteUrl={setRemoteUrl}
-                            gh={gh}
+                            account={account}
                             ghOwner={ghOwner}
                             setGhOwner={setGhOwner}
                             ghPrivate={ghPrivate}
                             setGhPrivate={setGhPrivate}
+                            forkCount={repoRows.filter((r) => r.included && r.source_mode === 'fork').length}
                             selectedRepoCount={selectedRepoCount}
                             selectedKnowledgeCount={selectedKnowledgeCount}
                             busyStep={busyStep}
@@ -661,11 +677,13 @@ function ReposStep({
     rows,
     setRows,
     namesValid,
+    account,
 }: {
     kind: SourceKind;
     rows: RepoRow[];
     setRows: React.Dispatch<React.SetStateAction<RepoRow[]>>;
     namesValid: boolean;
+    account: GitHubAccount;
 }) {
     const patchRow = (i: number, patch: Partial<RepoRow>) =>
         setRows((rs) => rs.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
@@ -680,90 +698,108 @@ function ReposStep({
         );
     }
 
+    const anyForkable = rows.some((r) => r.gh_ref);
+    const wantsFork = rows.some((r) => r.included && r.source_mode === 'fork');
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
                 {kind === 'single-repo'
                     ? 'The source repo becomes one submodule under repos/. Rename it if the folder name is unfortunate.'
-                    : 'Each detected repo becomes a git submodule under repos/. Uncheck the ones you don’t want; rename where needed.'}
-                {' '}When a repo has an origin remote you can clone from it instead
-                of the local path — better for envelopes you'll push and re-clone
-                elsewhere.
+                    : 'Each detected repo becomes a git submodule under repos/. Uncheck the ones you don’t want; rename where needed.'}{' '}
+                <strong>Origin</strong> clones from the existing remote;{' '}
+                <strong>Fork</strong> forks it into your account/org first (the
+                Teams/Agents path — work on your fork, PR back);{' '}
+                <strong>Local</strong> submodules straight from the folder on disk.
             </Text>
+
+            {anyForkable && (
+                <div className="gh-inline">
+                    <GitHubConnect account={account} />
+                </div>
+            )}
+
             <table className="upgrade-tbl">
                 <thead>
                     <tr>
                         <th />
                         <th>Source</th>
                         <th>repos/&lt;name&gt;</th>
-                        <th>Clone from</th>
+                        <th>From</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {rows.map((r, i) => (
-                        <tr key={r.abs_path}>
-                            <td>
-                                <input
-                                    type="checkbox"
-                                    checked={r.included}
-                                    onChange={(e) => patchRow(i, { included: e.target.checked })}
-                                />
-                            </td>
-                            <td>
-                                <code>{r.rel_path === '.' ? '(this folder)' : `${r.rel_path}/`}</code>
-                                {r.head_ref && (
-                                    <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
-                                        @{r.head_ref}
-                                    </Text>
-                                )}
-                            </td>
-                            <td>
-                                <input
-                                    type="text"
-                                    className="upgrade-inp"
-                                    value={r.submodule_name}
-                                    onChange={(e) => patchRow(i, { submodule_name: e.target.value })}
-                                />
-                            </td>
-                            <td>
-                                {r.origin_url ? (
-                                    <label
-                                        style={{
-                                            display: 'inline-flex',
-                                            alignItems: 'center',
-                                            gap: 6,
-                                            fontSize: 11,
-                                        }}
-                                    >
-                                        <input
-                                            type="checkbox"
-                                            checked={r.use_remote}
-                                            onChange={(e) => patchRow(i, { use_remote: e.target.checked })}
-                                        />
-                                        <span
+                    {rows.map((r, i) => {
+                        const sourceOptions = [
+                            ...(r.origin_url
+                                ? [{ value: 'origin', label: 'Origin (clone)' }]
+                                : []),
+                            ...(r.gh_ref
+                                ? [{ value: 'fork', label: 'Fork into…' }]
+                                : []),
+                            { value: 'local', label: 'Local path' },
+                        ];
+                        return (
+                            <tr key={r.abs_path}>
+                                <td>
+                                    <input
+                                        type="checkbox"
+                                        checked={r.included}
+                                        onChange={(e) => patchRow(i, { included: e.target.checked })}
+                                    />
+                                </td>
+                                <td>
+                                    <code>
+                                        {r.rel_path === '.' ? '(this folder)' : `${r.rel_path}/`}
+                                    </code>
+                                    {r.head_ref && (
+                                        <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                                            @{r.head_ref}
+                                        </Text>
+                                    )}
+                                </td>
+                                <td>
+                                    <input
+                                        type="text"
+                                        className="upgrade-inp"
+                                        value={r.submodule_name}
+                                        onChange={(e) => patchRow(i, { submodule_name: e.target.value })}
+                                    />
+                                </td>
+                                <td style={{ minWidth: 130 }}>
+                                    <Select
+                                        value={r.source_mode}
+                                        onValueChange={(v) =>
+                                            patchRow(i, { source_mode: v as RepoSourceMode })
+                                        }
+                                        list={sourceOptions}
+                                    />
+                                    {r.source_mode !== 'local' && r.origin_url && (
+                                        <Text
+                                            size="xs"
+                                            className="text-zinc-500"
                                             style={{
-                                                color: 'var(--fg-3)',
+                                                display: 'block',
+                                                marginTop: 4,
                                                 fontFamily: 'var(--font-mono)',
-                                                fontSize: 10.5,
+                                                fontSize: 10,
+                                                wordBreak: 'break-all',
                                             }}
                                         >
-                                            {r.use_remote ? r.origin_url : 'local path'}
-                                        </span>
-                                    </label>
-                                ) : (
-                                    <Text
-                                        size="xs"
-                                        className="text-zinc-500"
-                                        style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5 }}
-                                    >
-                                        no origin · local path
-                                    </Text>
-                                )}
-                            </td>
-                        </tr>
-                    ))}
+                                            {r.origin_url}
+                                        </Text>
+                                    )}
+                                </td>
+                            </tr>
+                        );
+                    })}
                 </tbody>
             </table>
+            {wantsFork && !account.connected && (
+                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                    Connect GitHub above to fork the selected repos.
+                </Text>
+            )}
             {!namesValid && (
                 <Text size="xs" style={{ color: 'var(--rose-500)' }}>
                     Submodule names must be non-empty and unique.
@@ -994,11 +1030,12 @@ function EnvelopeStep({
     setRemoteMode,
     remoteUrl,
     setRemoteUrl,
-    gh,
+    account,
     ghOwner,
     setGhOwner,
     ghPrivate,
     setGhPrivate,
+    forkCount,
     selectedRepoCount,
     selectedKnowledgeCount,
     busyStep,
@@ -1016,17 +1053,12 @@ function EnvelopeStep({
     setRemoteMode: (v: 'none' | 'paste' | 'github') => void;
     remoteUrl: string;
     setRemoteUrl: (v: string) => void;
-    gh: {
-        loaded: boolean;
-        connected: boolean;
-        username: string | null;
-        orgs: Array<{ login: string }>;
-        error: string | null;
-    };
+    account: GitHubAccount;
     ghOwner: string;
     setGhOwner: (v: string) => void;
     ghPrivate: boolean;
     setGhPrivate: (v: boolean) => void;
+    forkCount: number;
     selectedRepoCount: number;
     selectedKnowledgeCount: number;
     busyStep: string | null;
@@ -1106,21 +1138,60 @@ function EnvelopeStep({
                     />
                 )}
                 {remoteMode === 'github' && (
-                    <GitHubAutoPanel
-                        gh={gh}
-                        slug={slug}
-                        owner={ghOwner}
-                        onOwnerChange={setGhOwner}
-                        isPrivate={ghPrivate}
-                        onPrivateChange={setGhPrivate}
-                        onOpenSettings={() => api().app.showSettings().catch(() => {})}
-                    />
+                    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <GitHubConnect account={account} />
+                        {account.connected && (
+                            <>
+                                <OwnerSelect
+                                    account={account}
+                                    value={ghOwner}
+                                    onChange={setGhOwner}
+                                />
+                                <label
+                                    style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: 8,
+                                        cursor: 'pointer',
+                                    }}
+                                >
+                                    <input
+                                        type="checkbox"
+                                        checked={ghPrivate}
+                                        onChange={(e) => setGhPrivate(e.target.checked)}
+                                    />
+                                    <Text size="xs">Private repository</Text>
+                                </label>
+                                <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                                    Will create{' '}
+                                    <code>
+                                        github.com/{ghOwner || account.username || 'you'}/
+                                        {slug || '{slug}'}.agi
+                                    </code>
+                                    , set it as <code>origin</code>, and push the
+                                    initial commit.
+                                </Text>
+                            </>
+                        )}
+                    </div>
                 )}
             </div>
 
+            {/* When forks are queued, the same owner choice targets them —
+                surface it here so the user sees one account decision. */}
+            {forkCount > 0 && account.connected && (
+                <OwnerSelect
+                    account={account}
+                    value={ghOwner}
+                    onChange={setGhOwner}
+                    label={`Fork ${forkCount} repo${forkCount === 1 ? '' : 's'} into`}
+                />
+            )}
+
             <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
                 Will create <strong>{selectedRepoCount}</strong> submodule
-                {selectedRepoCount === 1 ? '' : 's'} and copy{' '}
+                {selectedRepoCount === 1 ? '' : 's'}
+                {forkCount > 0 ? ` (${forkCount} via fork)` : ''} and copy{' '}
                 <strong>{selectedKnowledgeCount}</strong> knowledge item
                 {selectedKnowledgeCount === 1 ? '' : 's'} into <code>.ai/</code>.
             </Text>
@@ -1139,117 +1210,3 @@ function formatBytes(n: number): string {
     return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/**
- * GitHub Auto remote picker. Three states:
- *
- *  - GitHub not connected → "Connect first" prompt + Settings shortcut.
- *  - Connected, loading orgs → spinner row.
- *  - Connected + ready → owner dropdown (personal first, then each org)
- *    + visibility toggle + the URL we'll mint.
- */
-function GitHubAutoPanel({
-    gh,
-    slug,
-    owner,
-    onOwnerChange,
-    isPrivate,
-    onPrivateChange,
-    onOpenSettings,
-}: {
-    gh: {
-        loaded: boolean;
-        connected: boolean;
-        username: string | null;
-        orgs: Array<{ login: string }>;
-        error: string | null;
-    };
-    slug: string;
-    owner: string;
-    onOwnerChange: (login: string) => void;
-    isPrivate: boolean;
-    onPrivateChange: (priv: boolean) => void;
-    onOpenSettings: () => void;
-}) {
-    if (!gh.loaded) {
-        return (
-            <div style={{ marginTop: 8 }}>
-                <Text size="xs" className="text-zinc-500">
-                    Checking GitHub connection…
-                </Text>
-            </div>
-        );
-    }
-    if (gh.error) {
-        return (
-            <div style={{ marginTop: 8 }}>
-                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
-                    GitHub: {gh.error}
-                </Text>
-            </div>
-        );
-    }
-    if (!gh.connected) {
-        return (
-            <div
-                style={{
-                    marginTop: 8,
-                    padding: 10,
-                    border: '1px dashed var(--border-2)',
-                    borderRadius: 8,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 8,
-                }}
-            >
-                <Text size="xs" style={{ display: 'block' }}>
-                    GitHub isn't connected yet. Open <strong>Settings → GitHub</strong> and
-                    finish the Device Flow, then come back here.
-                </Text>
-                <div>
-                    <Action variant="ghost" size="sm" onClick={onOpenSettings}>
-                        Open Settings…
-                    </Action>
-                </div>
-            </div>
-        );
-    }
-
-    const ownerLabel = owner || gh.username || 'me';
-    const repoName = `${slug || '{slug}'}.agi`;
-    const targetUrl = `https://github.com/${ownerLabel}/${repoName}`;
-
-    const ownerOptions = [
-        { value: '', label: `${gh.username ?? '(you)'} · personal` },
-        ...gh.orgs.map((o) => ({ value: o.login, label: `${o.login} · org` })),
-    ];
-
-    return (
-        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div>
-                <Text size="xs" style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
-                    Owner
-                </Text>
-                <Select value={owner} onValueChange={onOwnerChange} list={ownerOptions} />
-            </div>
-            <label
-                style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    cursor: 'pointer',
-                }}
-            >
-                <input
-                    type="checkbox"
-                    checked={isPrivate}
-                    onChange={(e) => onPrivateChange(e.target.checked)}
-                />
-                <Text size="xs">Private repository</Text>
-            </label>
-            <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
-                Will create <code>{targetUrl}</code>, set it as <code>origin</code>{' '}
-                on the new envelope, and push the initial commit.
-            </Text>
-        </div>
-    );
-}

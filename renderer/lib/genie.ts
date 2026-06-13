@@ -363,6 +363,8 @@ interface GenieApi {
             username: string | null;
             clientIdSet: boolean;
             builtInClientId: boolean;
+            usingOverride: boolean;
+            activeClientId: string;
             storageOk: boolean;
             flow:
                 | { kind: 'idle' }
@@ -385,6 +387,7 @@ interface GenieApi {
             interval: number;
         }>;
         cancelDevice: () => Promise<{ ok: boolean }>;
+        resetClientId: () => Promise<{ ok: boolean }>;
         disconnect: () => Promise<{ ok: boolean }>;
         user: () => Promise<{ login: string; name: string | null; avatar_url: string }>;
         orgs: () => Promise<
@@ -406,6 +409,21 @@ interface GenieApi {
             html_url: string;
             default_branch: string;
         }>;
+        forkRepo: (opts: {
+            owner: string;
+            repo: string;
+            intoOrg?: string | null;
+            name?: string;
+        }) => Promise<{
+            full_name: string;
+            clone_url: string;
+            ssh_url: string;
+            html_url: string;
+            default_branch: string;
+        }>;
+        parseRemote: (
+            url: string,
+        ) => Promise<{ owner: string; repo: string } | null>;
     };
 
     terminal: {

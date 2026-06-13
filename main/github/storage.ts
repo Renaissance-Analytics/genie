@@ -64,9 +64,20 @@ export function getClientId(): string {
     // Settings override wins so devs can point Genie at their own OAuth
     // App without rebuilding. Falls back to the build-time constant
     // (set in main/config.ts) for normal packaged installs.
+    return getClientIdOverride() || GENIE_GITHUB_CLIENT_ID;
+}
+
+/** The raw override (empty when none). Exposed so the UI can surface a
+ *  stale override — a common Device Flow failure: early alphas (before
+ *  the ID was baked in) prompted users to paste their own client ID, and
+ *  a wrong/stale value here silently wins over the bundled one. */
+export function getClientIdOverride(): string {
     const settings = getAllSettings() as unknown as Record<string, string>;
-    const override = settings.github_client_id?.trim();
-    return override || GENIE_GITHUB_CLIENT_ID;
+    return settings.github_client_id?.trim() ?? '';
+}
+
+export function clearClientIdOverride(): void {
+    setSettings({ github_client_id: '' } as unknown as Record<string, string>);
 }
 
 export function getBuiltInClientId(): string {

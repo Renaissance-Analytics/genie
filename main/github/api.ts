@@ -113,3 +113,56 @@ export async function createRepo(opts: CreateRepoOpts): Promise<CreatedRepo> {
     }
     return gh<CreatedRepo>('POST', '/user/repos', body);
 }
+
+export interface ParsedRepoRef {
+    owner: string;
+    repo: string;
+}
+
+/**
+ * Pull owner + repo out of a GitHub remote URL (https or ssh). Returns
+ * null for non-GitHub or unparseable URLs so callers can fall back to
+ * clone/local without offering a fork.
+ */
+export function parseGitHubRemote(url: string): ParsedRepoRef | null {
+    const trimmed = url.trim().replace(/\.git$/i, '').replace(/\/$/, '');
+    // git@github.com:owner/repo  |  ssh://git@github.com/owner/repo
+    const ssh = /^(?:ssh:\/\/)?git@github\.com[:/]([^/]+)\/(.+)$/i.exec(trimmed);
+    if (ssh) return { owner: ssh[1], repo: ssh[2].split('/').pop()! };
+    // https://github.com/owner/repo
+    const https = /^https?:\/\/github\.com\/([^/]+)\/(.+)$/i.exec(trimmed);
+    if (https) return { owner: https[1], repo: https[2].split('/').pop()! };
+    return null;
+}
+
+export interface ForkRepoOpts {
+    /** Source repo to fork. */
+    owner: string;
+    repo: string;
+    /** Org to fork INTO. Undefined/null = fork into the authenticated user. */
+    intoOrg?: string | null;
+    /** Optional rename of the fork (GitHub keeps the source name by default). */
+    name?: string;
+}
+
+/**
+ * Fork an existing GitHub repo (POST /repos/{owner}/{repo}/forks). The
+ * fork is created asynchronously on GitHub's side, but the API returns
+ * the fork object immediately with its clone URLs — usable as a submodule
+ * source right away (git clone retries while GitHub finishes copying).
+ *
+ * Forks back Teams/Agents workflows: each actor forks the canonical repo
+ * (or the whole {slug}.agi envelope) into their own account/org, works
+ * there, and PRs back. The `intoOrg` + rename knobs make a fork land
+ * exactly where the caller's owner picker chose.
+ */
+export async function forkRepo(opts: ForkRepoOpts): Promise<CreatedRepo> {
+    const body: Record<string, unknown> = { default_branch_only: false };
+    if (opts.intoOrg) body.organization = opts.intoOrg;
+    if (opts.name) body.name = opts.name;
+    return gh<CreatedRepo>(
+        'POST',
+        `/repos/${opts.owner}/${opts.repo}/forks`,
+        body,
+    );
+}

@@ -34,6 +34,7 @@ const api = {
         status: () => ipcRenderer.invoke('github:status'),
         startDevice: () => ipcRenderer.invoke('github:device:start'),
         cancelDevice: () => ipcRenderer.invoke('github:device:cancel'),
+        resetClientId: () => ipcRenderer.invoke('github:reset-client-id'),
         disconnect: () => ipcRenderer.invoke('github:disconnect'),
         user: () => ipcRenderer.invoke('github:user'),
         orgs: () => ipcRenderer.invoke('github:orgs'),
@@ -43,6 +44,14 @@ const api = {
             description?: string;
             private?: boolean;
         }) => ipcRenderer.invoke('github:create-repo', opts),
+        forkRepo: (opts: {
+            owner: string;
+            repo: string;
+            intoOrg?: string | null;
+            name?: string;
+        }) => ipcRenderer.invoke('github:fork-repo', opts),
+        parseRemote: (url: string) =>
+            ipcRenderer.invoke('github:parse-remote', url),
     },
 
     updater: {
