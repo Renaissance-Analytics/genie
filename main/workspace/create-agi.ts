@@ -763,16 +763,29 @@ export async function addStructureDocs(
 
 export interface ConsolidateMcpCommitResult {
     servers: string[];
+    /** Files written to disk at the envelope root. */
     files: string[];
     committed: boolean;
     pushed: boolean;
     pushError?: string;
+    /**
+     * True when the written files are gitignored, so Genie wrote them
+     * locally (sessions opened on the monorepo use them) but did NOT
+     * commit — committing could leak MCP tokens the config may hold.
+     */
+    gitignored?: boolean;
 }
 
 /**
  * Consolidate repo MCP configs to the envelope root (both .mcp.json and
- * .cursor/mcp.json), then commit + best-effort push. On-demand sibling of
- * addStructureDocs for the health UI. No-op when nothing changed.
+ * .cursor/mcp.json) for local sessions, then commit + best-effort push
+ * the files that are tracked. On-demand sibling of addStructureDocs.
+ *
+ * SAFETY: MCP configs can hold bearer tokens, which is exactly why an
+ * envelope may gitignore `.mcp.json`. We never force-add an ignored
+ * file — that would leak secrets into the repo. Ignored files are still
+ * written to disk (the actual requirement: sessions starting on the
+ * monorepo pick them up) but left uncommitted, and we say so.
  */
 export async function consolidateMcpAndCommit(
     envelopePath: string,
@@ -792,10 +805,35 @@ export async function consolidateMcpAndCommit(
         /* best effort */
     }
 
-    await git.add(['.mcp.json', '.cursor/mcp.json']);
-    // Nothing staged → the files already matched; treat as no-op.
+    // Only stage files that aren't gitignored. check-ignore exits 1 (and
+    // simple-git throws) when a path is NOT ignored — so a throw means
+    // "addable", a non-empty stdout means "ignored, skip".
+    const candidates = ['.mcp.json', '.cursor/mcp.json'];
+    const addable: string[] = [];
+    for (const f of candidates) {
+        if (!fs.existsSync(path.join(envelopePath, f))) continue;
+        try {
+            const out = await git.raw(['check-ignore', f]);
+            if (!out.trim()) addable.push(f); // empty stdout, exit 0: not ignored
+        } catch {
+            addable.push(f); // exit 1: not ignored
+        }
+    }
+
+    if (addable.length === 0) {
+        return {
+            servers: res.servers,
+            files: res.files,
+            committed: false,
+            pushed: false,
+            gitignored: true,
+        };
+    }
+
+    await git.add(addable);
     const staged = (await git.diff(['--cached', '--name-only'])).trim();
     if (!staged) {
+        // Files already matched what's committed — nothing to do.
         return { servers: res.servers, files: res.files, committed: false, pushed: false };
     }
     await git.commit(

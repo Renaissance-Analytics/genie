@@ -300,7 +300,8 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
     const [status, setStatus] = useState<StructureDocStatus | null>(null);
     const [mcp, setMcp] = useState<McpStatus | null>(null);
     const [open, setOpen] = useState(false);
-    const [busy, setBusy] = useState(false);
+    const [docsBusy, setDocsBusy] = useState(false);
+    const [mcpBusy, setMcpBusy] = useState(false);
     const [done, setDone] = useState<string | null>(null);
     const [mcpDone, setMcpDone] = useState<string | null>(null);
     const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
@@ -367,7 +368,7 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
 
     const add = async (e: React.MouseEvent) => {
         e.stopPropagation();
-        setBusy(true);
+        setDocsBusy(true);
         setDone(null);
         try {
             const r = await api().agi.addDocs(ws.path, ws.project_name, envelopeSlug(ws));
@@ -382,28 +383,31 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
         } catch (err) {
             setDone(err instanceof Error ? err.message : String(err));
         } finally {
-            setBusy(false);
+            setDocsBusy(false);
         }
     };
 
     const doConsolidateMcp = async (e: React.MouseEvent) => {
         e.stopPropagation();
-        setBusy(true);
+        setMcpBusy(true);
         setMcpDone(null);
         try {
             const r = await api().agi.consolidateMcp(ws.path);
+            const n = r.servers.length;
             setMcpDone(
-                !r.committed
-                    ? 'MCP config already up to date.'
-                    : r.pushed
-                        ? `Consolidated ${r.servers.length} server${r.servers.length === 1 ? '' : 's'} + pushed.`
-                        : `Consolidated ${r.servers.length} server${r.servers.length === 1 ? '' : 's'}. Push skipped${r.pushError ? `: ${r.pushError}` : ' (no remote).'}`,
+                r.gitignored
+                    ? `Wrote config for ${n} server${n === 1 ? '' : 's'} to the envelope root. Local sessions use it now; not committed — these files are gitignored (they can hold MCP tokens).`
+                    : !r.committed
+                        ? 'MCP config already up to date.'
+                        : r.pushed
+                            ? `Consolidated ${n} server${n === 1 ? '' : 's'} + pushed.`
+                            : `Consolidated ${n} server${n === 1 ? '' : 's'}. Push skipped${r.pushError ? `: ${r.pushError}` : ' (no remote).'}`,
             );
             refresh();
         } catch (err) {
             setMcpDone(err instanceof Error ? err.message : String(err));
         } finally {
-            setBusy(false);
+            setMcpBusy(false);
         }
     };
 
@@ -454,9 +458,9 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
                                         type="button"
                                         className="ahp-btn"
                                         onClick={add}
-                                        disabled={busy}
+                                        disabled={docsBusy}
                                     >
-                                        {busy
+                                        {docsBusy
                                             ? 'Working…'
                                             : status.hasRemote
                                                 ? 'Add docs, commit & push'
@@ -499,9 +503,9 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
                                         type="button"
                                         className="ahp-btn"
                                         onClick={doConsolidateMcp}
-                                        disabled={busy}
+                                        disabled={mcpBusy}
                                     >
-                                        {busy ? 'Working…' : 'Consolidate MCP config'}
+                                        {mcpBusy ? 'Working…' : 'Consolidate MCP config'}
                                     </button>
                                 )}
                             </div>

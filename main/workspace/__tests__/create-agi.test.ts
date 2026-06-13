@@ -4,6 +4,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { simpleGit } from 'simple-git';
 import {
     addStructureDocs,
+    consolidateMcpAndCommit,
     convertToAgi,
     createAgiEnvelope,
     deriveRepoName,
@@ -198,6 +199,54 @@ describe('structure docs health + backfill', () => {
         expect(fs.readFileSync(path.join(res.path, 'CLAUDE.md'), 'utf8')).toBe(customClaude);
         const ls = await git.raw(['ls-files', '-s', 'CLAUDE.md']);
         expect(ls).toMatch(/^100644 /); // still a regular file, not a symlink
+    });
+});
+
+describe('MCP consolidate-and-commit (gitignore-aware)', () => {
+    it('writes locally but does NOT commit when the configs are gitignored', async () => {
+        const parent = makeTmpDir('mcp-ignored');
+        const res = await createAgiEnvelope({ slug: 'sec', name: 'Sec', parent_path: parent });
+        // A repo carrying an MCP server.
+        const repo = path.join(res.path, 'repos', 'app');
+        fs.mkdirSync(repo, { recursive: true });
+        fs.writeFileSync(
+            path.join(repo, '.mcp.json'),
+            JSON.stringify({ mcpServers: { tynn: { command: 'x', env: { TOKEN: 'secret' } } } }),
+        );
+        // Envelope gitignores the MCP files (the tynn.agi case).
+        fs.appendFileSync(path.join(res.path, '.gitignore'), '\n.mcp.json\n.cursor/\n');
+        const git = simpleGit(res.path);
+        await git.add('.gitignore');
+        await git.commit('ignore mcp');
+
+        const r = await consolidateMcpAndCommit(res.path);
+        expect(r.gitignored).toBe(true);
+        expect(r.committed).toBe(false);
+        // Files are still written to disk for local sessions.
+        expect(fs.existsSync(path.join(res.path, '.mcp.json'))).toBe(true);
+        expect(fs.existsSync(path.join(res.path, '.cursor', 'mcp.json'))).toBe(true);
+        // And the secret-bearing config was NOT committed.
+        const tracked = await git.raw(['ls-files', '.mcp.json', '.cursor/mcp.json']);
+        expect(tracked.trim()).toBe('');
+    });
+
+    it('commits + reports when the configs are NOT gitignored', async () => {
+        const parent = makeTmpDir('mcp-tracked');
+        const res = await createAgiEnvelope({ slug: 'open', name: 'Open', parent_path: parent });
+        const repo = path.join(res.path, 'repos', 'app');
+        fs.mkdirSync(repo, { recursive: true });
+        fs.writeFileSync(
+            path.join(repo, '.mcp.json'),
+            JSON.stringify({ mcpServers: { docs: { url: 'https://x/mcp' } } }),
+        );
+        const r = await consolidateMcpAndCommit(res.path);
+        expect(r.gitignored).toBeFalsy();
+        expect(r.committed).toBe(true);
+        expect(r.servers).toContain('docs');
+        const git = simpleGit(res.path);
+        const tracked = await git.raw(['ls-files', '.mcp.json', '.cursor/mcp.json']);
+        expect(tracked).toMatch(/\.mcp\.json/);
+        expect(tracked).toMatch(/\.cursor\/mcp\.json/);
     });
 });
 

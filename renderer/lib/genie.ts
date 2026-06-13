@@ -240,6 +240,7 @@ export interface ConsolidateMcpResult {
     committed: boolean;
     pushed: boolean;
     pushError?: string;
+    gitignored?: boolean;
 }
 
 export type SourceKind = 'single-repo' | 'repo-collection' | 'plain-folder';
