@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
     IconAlert,
     IconBox,
@@ -294,6 +295,9 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
     const [open, setOpen] = useState(false);
     const [busy, setBusy] = useState(false);
     const [done, setDone] = useState<string | null>(null);
+    const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+    const anchorRef = useRef<HTMLSpanElement>(null);
+    const popRef = useRef<HTMLDivElement>(null);
 
     const refresh = () => {
         void api()
@@ -302,6 +306,41 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
             .catch(() => setStatus(null));
     };
     useEffect(refresh, [ws.path]);
+
+    // Position the portaled popover under the alert dot, clamped to the
+    // viewport. Recomputed on open; closed on scroll/resize so it never
+    // drifts away from its anchor.
+    const place = () => {
+        const r = anchorRef.current?.getBoundingClientRect();
+        if (!r) return;
+        const width = 268;
+        const left = Math.min(
+            Math.max(8, r.right - width),
+            window.innerWidth - width - 8,
+        );
+        setCoords({ top: r.bottom + 6, left });
+    };
+
+    useEffect(() => {
+        if (!open) return;
+        place();
+        const onAway = (e: MouseEvent) => {
+            const t = e.target as Node;
+            if (popRef.current?.contains(t) || anchorRef.current?.contains(t)) return;
+            setOpen(false);
+        };
+        const onScrollResize = () => setOpen(false);
+        document.addEventListener('mousedown', onAway);
+        window.addEventListener('resize', onScrollResize);
+        // Capture scroll on any ancestor (the sidebar list scrolls).
+        window.addEventListener('scroll', onScrollResize, true);
+        return () => {
+            document.removeEventListener('mousedown', onAway);
+            window.removeEventListener('resize', onScrollResize);
+            window.removeEventListener('scroll', onScrollResize, true);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open]);
 
     if (!status || !status.isEnvelope || !status.missing) return null;
 
@@ -333,11 +372,7 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
     };
 
     return (
-        <span
-            className="agi-health"
-            onMouseEnter={() => setOpen(true)}
-            onMouseLeave={() => setOpen(false)}
-        >
+        <span className="agi-health" ref={anchorRef}>
             <span
                 className="agi-health-dot"
                 role="button"
@@ -350,42 +385,48 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
             >
                 <IconAlert size={13} />
             </span>
-            {open && (
-                <div
-                    className="agi-health-pop"
-                    role="tooltip"
-                    onClick={(e) => e.stopPropagation()}
-                >
-                    <div className="ahp-title">Missing structure docs</div>
-                    <div className="ahp-body">
-                        This <code>.agi</code> envelope is missing{' '}
-                        {missingList.map((m, i) => (
-                            <span key={m}>
-                                {i > 0 ? ', ' : ''}
-                                <code>{m}</code>
-                            </span>
-                        ))}
-                        . These explain the monorepo to humans (README) and
-                        agents (AGENTS/CLAUDE).
-                    </div>
-                    {done ? (
-                        <div className="ahp-done">{done}</div>
-                    ) : (
-                        <button
-                            type="button"
-                            className="ahp-btn"
-                            onClick={add}
-                            disabled={busy}
-                        >
-                            {busy
-                                ? 'Working…'
-                                : status.hasRemote
-                                    ? 'Add, commit & push'
-                                    : 'Add & commit'}
-                        </button>
-                    )}
-                </div>
-            )}
+            {open &&
+                coords &&
+                createPortal(
+                    <div
+                        ref={popRef}
+                        className="agi-health-pop"
+                        role="tooltip"
+                        style={{ top: coords.top, left: coords.left }}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="ahp-title">Missing structure docs</div>
+                        <div className="ahp-body">
+                            This <code>.agi</code> envelope is missing{' '}
+                            {missingList.map((m, i) => (
+                                <span key={m}>
+                                    {i > 0 ? ', ' : ''}
+                                    <code>{m}</code>
+                                </span>
+                            ))}
+                            . These explain the monorepo to humans (README) and
+                            agents (AGENTS/CLAUDE). Existing files are left
+                            untouched — only what's missing gets added.
+                        </div>
+                        {done ? (
+                            <div className="ahp-done">{done}</div>
+                        ) : (
+                            <button
+                                type="button"
+                                className="ahp-btn"
+                                onClick={add}
+                                disabled={busy}
+                            >
+                                {busy
+                                    ? 'Working…'
+                                    : status.hasRemote
+                                        ? 'Add, commit & push'
+                                        : 'Add & commit'}
+                            </button>
+                        )}
+                    </div>,
+                    document.body,
+                )}
         </span>
     );
 }

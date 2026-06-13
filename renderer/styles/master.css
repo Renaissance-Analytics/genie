@@ -928,11 +928,11 @@
     color: #fbbf24;
 }
 .agi-health-pop {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    z-index: 60;
-    width: 260px;
+    /* Portaled to <body> + fixed so the narrow scrollable sidebar can't
+       clip it (top/left set inline from the anchor's rect). */
+    position: fixed;
+    z-index: 1000;
+    width: 268px;
     padding: 10px 12px;
     border-radius: var(--radius-lg);
     border: 1px solid var(--border-1);

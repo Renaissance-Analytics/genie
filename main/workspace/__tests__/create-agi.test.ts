@@ -174,6 +174,31 @@ describe('structure docs health + backfill', () => {
         const ls = await git.raw(['ls-files', '-s', 'CLAUDE.md']);
         expect(ls).toMatch(/^120000 /);
     });
+
+    it('preserves an existing CLAUDE.md and only adds the missing docs', async () => {
+        const parent = makeTmpDir('sd-partial');
+        const res = await createAgiEnvelope({ slug: 'partial', name: 'Partial', parent_path: parent });
+        const git = simpleGit(res.path);
+        // Simulate the tynn case: a real CLAUDE.md with bespoke content,
+        // no README/AGENTS.
+        for (const f of ['README.md', 'AGENTS.md', 'CLAUDE.md']) {
+            await git.rm([f]);
+            const p = path.join(res.path, f);
+            if (fs.existsSync(p)) fs.rmSync(p);
+        }
+        const customClaude = '# Project CLAUDE\n\nHand-written, do not touch.\n';
+        fs.writeFileSync(path.join(res.path, 'CLAUDE.md'), customClaude);
+        await git.add(['CLAUDE.md']);
+        await git.commit('custom claude only');
+
+        const r = await addStructureDocs(res.path, 'Partial', 'partial');
+        // Only the two genuinely-missing docs were written.
+        expect(r.added.sort()).toEqual(['AGENTS.md', 'README.md']);
+        // The bespoke CLAUDE.md is byte-for-byte untouched (not symlinked).
+        expect(fs.readFileSync(path.join(res.path, 'CLAUDE.md'), 'utf8')).toBe(customClaude);
+        const ls = await git.raw(['ls-files', '-s', 'CLAUDE.md']);
+        expect(ls).toMatch(/^100644 /); // still a regular file, not a symlink
+    });
 });
 
 describe('convertToAgi (local source)', () => {
