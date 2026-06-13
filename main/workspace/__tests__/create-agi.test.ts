@@ -6,6 +6,7 @@ import {
     convertToAgi,
     createAgiEnvelope,
     deriveRepoName,
+    envelopeFolderName,
 } from '../create-agi';
 import { cleanupTmpRoot, makeTmpDir, seedGitRepo } from '../../../test/helpers';
 
@@ -32,6 +33,16 @@ describe('deriveRepoName', () => {
     });
 });
 
+describe('envelopeFolderName', () => {
+    it('appends .agi to a bare slug', () => {
+        expect(envelopeFolderName('brain-v2')).toBe('brain-v2.agi');
+    });
+    it('does not double the suffix', () => {
+        expect(envelopeFolderName('brain-v2.agi')).toBe('brain-v2.agi');
+        expect(envelopeFolderName('brain-v2.AGI')).toBe('brain-v2.AGI');
+    });
+});
+
 describe('createAgiEnvelope', () => {
     it('scaffolds the skeleton + initial commit', async () => {
         const parent = makeTmpDir('cae-scaffold');
@@ -41,7 +52,8 @@ describe('createAgiEnvelope', () => {
             parent_path: parent,
         });
 
-        expect(res.path).toBe(path.join(parent, 'test-env'));
+        // Folder carries the .agi suffix (the envelope convention).
+        expect(res.path).toBe(path.join(parent, 'test-env.agi'));
         expect(res.git_log_count).toBe(1);
 
         // Required skeleton dirs exist.
@@ -73,7 +85,8 @@ describe('createAgiEnvelope', () => {
 
     it('refuses to scaffold into a non-empty folder', async () => {
         const parent = makeTmpDir('cae-occupied');
-        const target = path.join(parent, 'occupied');
+        // The envelope lands at <parent>/occupied.agi — occupy THAT.
+        const target = path.join(parent, 'occupied.agi');
         fs.mkdirSync(target);
         fs.writeFileSync(path.join(target, 'noise'), 'x');
 
@@ -117,7 +130,7 @@ describe('convertToAgi (local source)', () => {
             sub_name: 'core',
         });
 
-        expect(res.path).toBe(path.join(parent, 'wrapper'));
+        expect(res.path).toBe(path.join(parent, 'wrapper.agi'));
         expect(res.submodule_path).toBe('repos/core');
         expect(res.submodule_url).toBe(source);
         expect(res.git_log_count).toBeGreaterThanOrEqual(2);

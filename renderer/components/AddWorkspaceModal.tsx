@@ -883,7 +883,7 @@ function AgiCreateWizard({
             />
             <Input
                 label="Slug"
-                description="Becomes the folder name and the {slug}.agi GitHub remote."
+                description="Becomes the {slug}.agi folder name and GitHub remote."
                 value={slug}
                 onValueChange={setSlug}
                 placeholder="brain-v2"

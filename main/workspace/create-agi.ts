@@ -69,10 +69,25 @@ Thumbs.db
 *.log
 `;
 
+/**
+ * The on-disk envelope folder name. The `.agi` suffix is the envelope
+ * convention (it's what the GitHub remote uses too) and keeps the
+ * envelope distinct from the SOURCE repo when both live under the same
+ * parent — e.g. upgrading `…/civicognita-web` writes the envelope to
+ * `…/civicognita-web.agi` instead of colliding with the source. Idempotent
+ * if the slug already carries the suffix.
+ */
+export function envelopeFolderName(slug: string): string {
+    return /\.agi$/i.test(slug) ? slug : `${slug}.agi`;
+}
+
 export async function createAgiEnvelope(
     opts: CreateAgiOpts,
 ): Promise<CreateAgiResult> {
-    const envelopePath = path.join(opts.parent_path, opts.slug);
+    const envelopePath = path.join(
+        opts.parent_path,
+        envelopeFolderName(opts.slug),
+    );
     if (fs.existsSync(envelopePath)) {
         const entries = fs.readdirSync(envelopePath);
         if (entries.length > 0) {
