@@ -878,6 +878,92 @@
     padding: 1px 7px;
 }
 
+/* ===== .agi envelope treatment ========================================= */
+/* Distinct badge so envelopes read differently from plain folders. */
+.tproj-head .pico {
+    color: var(--fg-2);
+}
+.agi-badge {
+    flex: 0 0 auto;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: lowercase;
+    color: var(--agent);
+    background: color-mix(in srgb, var(--agent) 16%, transparent);
+    border: 1px solid color-mix(in srgb, var(--agent) 35%, transparent);
+    border-radius: var(--radius-full);
+    padding: 1px 6px;
+}
+.agi-health {
+    position: relative;
+    display: inline-flex;
+    flex: 0 0 auto;
+}
+.agi-health-dot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #f59e0b;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+}
+.agi-health-dot:hover {
+    color: #fbbf24;
+}
+.agi-health-pop {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 60;
+    width: 260px;
+    padding: 10px 12px;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-1);
+    background: var(--card);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+    cursor: default;
+    white-space: normal;
+}
+.agi-health-pop .ahp-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--fg-1);
+    margin-bottom: 5px;
+}
+.agi-health-pop .ahp-body {
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--fg-3);
+    margin-bottom: 10px;
+}
+.agi-health-pop code {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-2);
+}
+.agi-health-pop .ahp-btn {
+    width: 100%;
+    padding: 6px 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid #f59e0b;
+    background: #f59e0b;
+    color: #09090b;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.agi-health-pop .ahp-btn:disabled {
+    opacity: 0.7;
+    cursor: default;
+}
+.agi-health-pop .ahp-done {
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--emerald-500, #10b981);
+}
+
 .tproj-body {
     padding: 2px 0 6px 14px;
     display: flex;

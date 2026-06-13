@@ -194,6 +194,17 @@ export function registerIpcHandlers(): void {
             return { ok: true };
         },
     );
+    ipcMain.handle('agi:doc-status', async (_e, envelopePath: string) => {
+        const { structureDocStatus } = await import('./workspace/create-agi');
+        return structureDocStatus(envelopePath);
+    });
+    ipcMain.handle(
+        'agi:add-docs',
+        async (_e, envelopePath: string, name: string, slug: string) => {
+            const { addStructureDocs } = await import('./workspace/create-agi');
+            return addStructureDocs(envelopePath, name, slug);
+        },
+    );
 
     // --- Terminal specs (persistent definitions, NOT live ptys) ---------
     ipcMain.handle('terminal-spec:list', (): TerminalSpecRow[] => listTerminalSpecs());

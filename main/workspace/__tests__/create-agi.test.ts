@@ -3,10 +3,12 @@ import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { simpleGit } from 'simple-git';
 import {
+    addStructureDocs,
     convertToAgi,
     createAgiEnvelope,
     deriveRepoName,
     envelopeFolderName,
+    structureDocStatus,
 } from '../create-agi';
 import { cleanupTmpRoot, makeTmpDir, seedGitRepo } from '../../../test/helpers';
 
@@ -132,6 +134,45 @@ describe('createAgiEnvelope', () => {
         const remotes = await git.getRemotes(true);
         const origin = remotes.find((r) => r.name === 'origin');
         expect(origin?.refs.push).toBe('git@github.com:owner/with-remote.agi.git');
+    });
+});
+
+describe('structure docs health + backfill', () => {
+    it('reports a freshly-created envelope as complete', async () => {
+        const parent = makeTmpDir('sd-fresh');
+        const res = await createAgiEnvelope({ slug: 'fresh', name: 'Fresh', parent_path: parent });
+        const st = await structureDocStatus(res.path);
+        expect(st.isEnvelope).toBe(true);
+        expect(st.missing).toBe(false);
+        expect(st.hasReadme && st.hasAgents && st.hasClaude).toBe(true);
+    });
+
+    it('detects + backfills missing docs and commits them', async () => {
+        const parent = makeTmpDir('sd-missing');
+        const res = await createAgiEnvelope({ slug: 'gap', name: 'Gap', parent_path: parent });
+        // Simulate an older envelope: remove the docs + drop them from git.
+        const git = simpleGit(res.path);
+        for (const f of ['README.md', 'AGENTS.md', 'CLAUDE.md']) {
+            await git.rm([f]);
+            const p = path.join(res.path, f);
+            if (fs.existsSync(p)) fs.rmSync(p);
+        }
+        await git.commit('strip docs');
+
+        const before = await structureDocStatus(res.path);
+        expect(before.missing).toBe(true);
+        expect(before.hasReadme).toBe(false);
+
+        const r = await addStructureDocs(res.path, 'Gap', 'gap');
+        expect(r.added.sort()).toEqual(['AGENTS.md', 'CLAUDE.md', 'README.md']);
+        expect(r.committed).toBe(true);
+        expect(r.pushed).toBe(false); // no remote
+
+        const after = await structureDocStatus(res.path);
+        expect(after.missing).toBe(false);
+        // CLAUDE.md restored as a real git symlink.
+        const ls = await git.raw(['ls-files', '-s', 'CLAUDE.md']);
+        expect(ls).toMatch(/^120000 /);
     });
 });
 

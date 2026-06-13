@@ -214,6 +214,21 @@ export interface AnalyseOtherEntry {
     kind: 'file' | 'directory';
 }
 
+export interface StructureDocStatus {
+    isEnvelope: boolean;
+    hasReadme: boolean;
+    hasAgents: boolean;
+    hasClaude: boolean;
+    missing: boolean;
+    hasRemote: boolean;
+}
+export interface AddStructureDocsResult {
+    added: string[];
+    committed: boolean;
+    pushed: boolean;
+    pushError?: string;
+}
+
 export type SourceKind = 'single-repo' | 'repo-collection' | 'plain-folder';
 
 export interface RootEntry {
@@ -308,6 +323,12 @@ interface GenieApi {
         analyse: (folder: string) => Promise<AnalyseResult>;
         convertPlan: (opts: ConvertPlanOpts) => Promise<CreateAgiResult>;
         push: (envelopePath: string, branch?: string) => Promise<{ ok: boolean }>;
+        docStatus: (envelopePath: string) => Promise<StructureDocStatus>;
+        addDocs: (
+            envelopePath: string,
+            name: string,
+            slug: string,
+        ) => Promise<AddStructureDocsResult>;
     };
     tynn: {
         projects: () => Promise<TynnProject[]>;

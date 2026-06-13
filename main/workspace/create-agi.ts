@@ -244,10 +244,8 @@ export async function createAgiEnvelope(
     );
 
     // Structure docs. README.md for humans, AGENTS.md for agents, and
-    // CLAUDE.md as a symlink to AGENTS.md (Claude Code reads CLAUDE.md;
-    // AGENTS.md is the cross-tool standard). The symlink is materialised
-    // at the git layer below so it's a real symlink in the committed repo
-    // even on Windows where the working-tree FS can't make one.
+    // CLAUDE.md as a symlink to AGENTS.md. (Written to disk here; the
+    // CLAUDE.md symlink is materialised at the git layer after `git add`.)
     fs.writeFileSync(
         path.join(envelopePath, 'README.md'),
         readmeTemplate(opts.name, opts.slug),
@@ -258,9 +256,6 @@ export async function createAgiEnvelope(
         agentsTemplate(opts.name),
         'utf8',
     );
-    // CLAUDE.md starts as a plain file holding the symlink TARGET text
-    // ("AGENTS.md"). update-index below rewrites its mode to 120000
-    // (symlink); the blob content is exactly that target string.
     fs.writeFileSync(path.join(envelopePath, 'CLAUDE.md'), 'AGENTS.md');
 
     // git init + initial commit. Set a local user.email / user.name so
@@ -626,4 +621,130 @@ export function deriveRepoName(urlOrPath: string): string {
     const parts = trimmed.split(/[/\\:]/);
     const last = parts[parts.length - 1] ?? 'repo';
     return last.replace(/\.git$/i, '') || 'repo';
+}
+
+/**
+ * Envelope structure-doc health. Older envelopes (created before Genie
+ * scaffolded these, or imported from elsewhere) may be missing the
+ * human/agent guides. The UI uses this to show a backfill prompt.
+ */
+export interface StructureDocStatus {
+    /** Path exists and looks like an envelope (has project.json or .git). */
+    isEnvelope: boolean;
+    hasReadme: boolean;
+    hasAgents: boolean;
+    hasClaude: boolean;
+    /** True when at least one of the three docs is missing. */
+    missing: boolean;
+    /** Whether the envelope has an `origin` remote (drives push offer). */
+    hasRemote: boolean;
+}
+
+export async function structureDocStatus(
+    envelopePath: string,
+): Promise<StructureDocStatus> {
+    const exists = (f: string) => fs.existsSync(path.join(envelopePath, f));
+    const isEnvelope =
+        fs.existsSync(envelopePath) &&
+        (exists('project.json') || exists('.git'));
+    const hasReadme = exists('README.md');
+    const hasAgents = exists('AGENTS.md');
+    const hasClaude = exists('CLAUDE.md');
+
+    let hasRemote = false;
+    if (isEnvelope && exists('.git')) {
+        try {
+            const remotes = await simpleGit({ baseDir: envelopePath }).getRemotes();
+            hasRemote = remotes.some((r) => r.name === 'origin');
+        } catch {
+            hasRemote = false;
+        }
+    }
+
+    return {
+        isEnvelope,
+        hasReadme,
+        hasAgents,
+        hasClaude,
+        missing: isEnvelope && !(hasReadme && hasAgents && hasClaude),
+        hasRemote,
+    };
+}
+
+export interface AddStructureDocsResult {
+    added: string[];
+    committed: boolean;
+    pushed: boolean;
+    pushError?: string;
+}
+
+/**
+ * Backfill the structure docs into an existing envelope: write any of
+ * README.md / AGENTS.md / CLAUDE.md that are missing, commit them, and
+ * (best-effort) push to origin. Idempotent — only writes what's absent,
+ * and re-establishes the CLAUDE.md symlink at the git layer.
+ */
+export async function addStructureDocs(
+    envelopePath: string,
+    name: string,
+    slug: string,
+): Promise<AddStructureDocsResult> {
+    const exists = (f: string) => fs.existsSync(path.join(envelopePath, f));
+    const added: string[] = [];
+
+    if (!exists('README.md')) {
+        fs.writeFileSync(
+            path.join(envelopePath, 'README.md'),
+            readmeTemplate(name, slug),
+            'utf8',
+        );
+        added.push('README.md');
+    }
+    if (!exists('AGENTS.md')) {
+        fs.writeFileSync(
+            path.join(envelopePath, 'AGENTS.md'),
+            agentsTemplate(name),
+            'utf8',
+        );
+        added.push('AGENTS.md');
+    }
+    const needClaude = !exists('CLAUDE.md');
+    if (needClaude) {
+        fs.writeFileSync(path.join(envelopePath, 'CLAUDE.md'), 'AGENTS.md');
+        added.push('CLAUDE.md');
+    }
+
+    if (added.length === 0) {
+        return { added, committed: false, pushed: false };
+    }
+
+    const git = simpleGit({ baseDir: envelopePath });
+    // Make sure a commit identity exists (envelope may predate Genie's).
+    try {
+        const cfg = await git.listConfig();
+        const all = cfg.all as Record<string, string | string[]>;
+        if (!all['user.email']) await git.addConfig('user.email', 'genie@localhost');
+        if (!all['user.name']) await git.addConfig('user.name', 'Genie');
+    } catch {
+        /* best effort */
+    }
+
+    await git.add(added);
+    if (needClaude) await makeClaudeSymlink(git, envelopePath);
+    await git.commit('Add envelope structure docs (README + AGENTS + CLAUDE)');
+
+    let pushed = false;
+    let pushError: string | undefined;
+    try {
+        const remotes = await git.getRemotes();
+        if (remotes.some((r) => r.name === 'origin')) {
+            const branch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
+            await git.push(['-u', 'origin', branch || 'main']);
+            pushed = true;
+        }
+    } catch (e) {
+        pushError = e instanceof Error ? e.message : String(e);
+    }
+
+    return { added, committed: true, pushed, pushError };
 }

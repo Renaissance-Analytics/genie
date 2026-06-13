@@ -117,6 +117,10 @@ const api = {
             ipcRenderer.invoke('agi:convert-plan', opts),
         push: (envelopePath: string, branch?: string) =>
             ipcRenderer.invoke('agi:push', envelopePath, branch),
+        docStatus: (envelopePath: string) =>
+            ipcRenderer.invoke('agi:doc-status', envelopePath),
+        addDocs: (envelopePath: string, name: string, slug: string) =>
+            ipcRenderer.invoke('agi:add-docs', envelopePath, name, slug),
     },
 
     tynn: {

@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
+    IconAlert,
     IconBox,
     IconCheck,
     IconChevronDown,
@@ -13,7 +14,7 @@ import {
     IconTrash,
 } from './icons';
 import { showPrompt } from './Prompt';
-import type { TerminalSpec, WorkspaceRow } from '../../lib/genie';
+import { api, type StructureDocStatus, type TerminalSpec, type WorkspaceRow } from '../../lib/genie';
 
 interface Props {
     workspaces: WorkspaceRow[];
@@ -193,6 +194,12 @@ export default function Chooser({
                                     </span>
                                     <span className="pico">{workspaceIcon(ws, 14)}</span>
                                     <span className="pname">{ws.project_name}</span>
+                                    {ws.shape === 'agi' && (
+                                        <span className="agi-badge" title="Aionima .agi envelope">
+                                            .agi
+                                        </span>
+                                    )}
+                                    {ws.shape === 'agi' && <AgiHealth ws={ws} />}
                                     <span className="pcount">{wsSpecs.length}</span>
                                 </button>
                                 <div className="tproj-body">
@@ -267,6 +274,120 @@ function workspaceIcon(ws: WorkspaceRow, size = 18) {
     if (ws.backend === 'aionima') return <IconCpu size={size} />;
     if (ws.shape === 'agi') return <IconBox size={size} />;
     return <IconGlobe size={size} />;
+}
+
+/** Slug an envelope folder back to its base name (drops the .agi suffix). */
+function envelopeSlug(ws: WorkspaceRow): string {
+    const leaf = (ws.path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '';
+    return leaf.replace(/\.agi$/i, '') || ws.project_name;
+}
+
+/**
+ * Health dot for an .agi envelope: checks whether the structure docs
+ * (README/AGENTS/CLAUDE) are present. When any are missing it shows an
+ * amber alert that opens a popover explaining + a one-click "Add &
+ * push" that backfills, commits, and pushes them. Stops the propagation
+ * to the collapse toggle since it lives inside the header button.
+ */
+function AgiHealth({ ws }: { ws: WorkspaceRow }) {
+    const [status, setStatus] = useState<StructureDocStatus | null>(null);
+    const [open, setOpen] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const [done, setDone] = useState<string | null>(null);
+
+    const refresh = () => {
+        void api()
+            .agi.docStatus(ws.path)
+            .then(setStatus)
+            .catch(() => setStatus(null));
+    };
+    useEffect(refresh, [ws.path]);
+
+    if (!status || !status.isEnvelope || !status.missing) return null;
+
+    const missingList = [
+        !status.hasReadme && 'README.md',
+        !status.hasAgents && 'AGENTS.md',
+        !status.hasClaude && 'CLAUDE.md',
+    ].filter(Boolean) as string[];
+
+    const add = async (e: React.MouseEvent) => {
+        e.stopPropagation();
+        setBusy(true);
+        setDone(null);
+        try {
+            const r = await api().agi.addDocs(ws.path, ws.project_name, envelopeSlug(ws));
+            setDone(
+                r.pushed
+                    ? `Added + pushed ${r.added.length} file${r.added.length === 1 ? '' : 's'}.`
+                    : r.committed
+                        ? `Added + committed. Push skipped${r.pushError ? `: ${r.pushError}` : ' (no remote).'}`
+                        : 'Nothing to add.',
+            );
+            refresh();
+        } catch (err) {
+            setDone(err instanceof Error ? err.message : String(err));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <span
+            className="agi-health"
+            onMouseEnter={() => setOpen(true)}
+            onMouseLeave={() => setOpen(false)}
+        >
+            <span
+                className="agi-health-dot"
+                role="button"
+                tabIndex={0}
+                title="Envelope is missing structure docs"
+                onClick={(e) => {
+                    e.stopPropagation();
+                    setOpen((o) => !o);
+                }}
+            >
+                <IconAlert size={13} />
+            </span>
+            {open && (
+                <div
+                    className="agi-health-pop"
+                    role="tooltip"
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <div className="ahp-title">Missing structure docs</div>
+                    <div className="ahp-body">
+                        This <code>.agi</code> envelope is missing{' '}
+                        {missingList.map((m, i) => (
+                            <span key={m}>
+                                {i > 0 ? ', ' : ''}
+                                <code>{m}</code>
+                            </span>
+                        ))}
+                        . These explain the monorepo to humans (README) and
+                        agents (AGENTS/CLAUDE).
+                    </div>
+                    {done ? (
+                        <div className="ahp-done">{done}</div>
+                    ) : (
+                        <button
+                            type="button"
+                            className="ahp-btn"
+                            onClick={add}
+                            disabled={busy}
+                        >
+                            {busy
+                                ? 'Working…'
+                                : status.hasRemote
+                                    ? 'Add, commit & push'
+                                    : 'Add & commit'}
+                        </button>
+                    )}
+                </div>
+            )}
+        </span>
+    );
 }
 
 function hostBadgeKind(backend: WorkspaceRow['backend']): string {
