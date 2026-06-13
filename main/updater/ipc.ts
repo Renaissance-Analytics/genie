@@ -43,9 +43,19 @@ export function registerUpdaterIpc(): void {
 
     const u = updater();
     u.setConfig({ repo, pollHours: Number.isFinite(pollHours) ? pollHours : 6 });
-    if (mode === 'phase1') u.startPolling();
 
     const a = autoUpdaterInstance();
+
+    // Kick off automatic checks for the ACTIVE backend. Packaged builds
+    // (phase2) previously never auto-polled — updates only showed after a
+    // manual "Check for updates" click. Now both backends check at
+    // startup + on an interval, and the status they emit drives the tray
+    // badge / notification / banner via reflectUpdateState below.
+    if (mode === 'phase1') {
+        u.startPolling();
+    } else {
+        a.startPolling(Number.isFinite(pollHours) ? pollHours : 6);
+    }
 
     ipcMain.handle('updater:mode', () => mode);
 

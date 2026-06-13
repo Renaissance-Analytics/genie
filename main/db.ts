@@ -185,6 +185,15 @@ export function getAllSettings(): Settings {
     for (const r of rows) out[r.key] = r.value;
 
     return {
+        // Pass ALL raw k/v through first. The github + updater modules
+        // store their own keys (github_token_enc, github_user,
+        // github_client_id, updater_repo, …) and read them back via
+        // `getAllSettings() as Record<string,string>` — without this
+        // spread those keys were silently dropped, so getToken() always
+        // returned null and GitHub could never report "connected" even
+        // after a successful Device Flow. The typed defaults below
+        // override the spread for the keys Settings cares about.
+        ...out,
         primary_workspace: out['primary_workspace'],
         default_editor: out['default_editor'] ?? 'cursor',
         default_editor_cmd: out['default_editor_cmd'],

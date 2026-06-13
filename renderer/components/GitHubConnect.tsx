@@ -200,10 +200,10 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
                 <div className="gh-device">
                     <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
                         A browser opened at <code>{flow.verificationUri}</code>.
-                        Enter the code below and approve — Genie catches the
-                        token automatically.
+                        Click the code to copy it, paste it on GitHub, and
+                        approve — Genie catches the token automatically.
                     </Text>
-                    <div className="gh-code">{flow.userCode}</div>
+                    <CodeChip code={flow.userCode} />
                     <div style={{ display: 'flex', gap: 8 }}>
                         <Action
                             size="sm"
@@ -228,6 +228,31 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
                 </Text>
             )}
         </div>
+    );
+}
+
+/** Click-to-copy device code. Shows a brief "Copied" flash on click. */
+function CodeChip({ code }: { code: string }) {
+    const [copied, setCopied] = useState(false);
+    const copy = () => {
+        navigator.clipboard.writeText(code).then(
+            () => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+            },
+            () => {},
+        );
+    };
+    return (
+        <button
+            type="button"
+            className="gh-code"
+            onClick={copy}
+            title="Click to copy"
+        >
+            {code}
+            <span className="gh-code-hint">{copied ? '✓ Copied' : 'Click to copy'}</span>
+        </button>
     );
 }
 

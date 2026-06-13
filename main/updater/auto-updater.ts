@@ -52,6 +52,7 @@ const LOG_MAX = 2000;
 
 class AutoUpdater extends EventEmitter {
     private status: AutoUpdaterStatus;
+    private timer: NodeJS.Timeout | null = null;
 
     constructor() {
         super();
@@ -70,6 +71,33 @@ class AutoUpdater extends EventEmitter {
 
     getStatus(): AutoUpdaterStatus {
         return { ...this.status, log: [...this.status.log] };
+    }
+
+    /**
+     * Automatic update checks: one shortly after launch (so a release cut
+     * while Genie was closed surfaces on next open) then every
+     * `intervalHours`. Without this, packaged builds only ever checked
+     * when the user hit "Check for updates" — so the tray badge /
+     * notification / banner never fired on their own. Each check emits
+     * status, which the IPC layer turns into the update-available UX.
+     */
+    startPolling(intervalHours: number): void {
+        this.stopPolling();
+        const hours = intervalHours > 0 ? intervalHours : 6;
+        // Defer the first check a few seconds so it doesn't compete with
+        // window creation / IPC registration on cold start.
+        setTimeout(() => void this.checkForUpdate().catch(() => {}), 8000);
+        this.timer = setInterval(
+            () => void this.checkForUpdate().catch(() => {}),
+            hours * 60 * 60 * 1000,
+        );
+        // Don't hold the event loop open just for the poll.
+        this.timer.unref?.();
+    }
+
+    stopPolling(): void {
+        if (this.timer) clearInterval(this.timer);
+        this.timer = null;
     }
 
     async checkForUpdate(): Promise<void> {

@@ -282,6 +282,11 @@ textarea.input {
     background: var(--bg-2);
 }
 .gh-code {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
     font-family: var(--font-mono);
     font-size: 20px;
     font-weight: 600;
@@ -291,5 +296,19 @@ textarea.input {
     border: 1px solid var(--border-1);
     border-radius: var(--radius-md);
     background: var(--card);
-    user-select: all;
+    color: var(--fg-1);
+    cursor: pointer;
+    transition: border-color var(--dur-fast) var(--ease-out),
+        background var(--dur-fast) var(--ease-out);
+}
+.gh-code:hover {
+    border-color: var(--blue-500);
+    background: var(--bg-2);
+}
+.gh-code-hint {
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: var(--fg-3);
 }

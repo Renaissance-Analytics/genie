@@ -748,7 +748,14 @@ function DeviceFlowPanel({
             </Text>
             {flow.kind === 'pending' && (
                 <>
-                    <div
+                    <button
+                        type="button"
+                        title="Click to copy"
+                        onClick={() => {
+                            navigator.clipboard
+                                .writeText(flow.userCode)
+                                .catch(() => {});
+                        }}
                         style={{
                             fontFamily: 'var(--font-mono)',
                             fontSize: 22,
@@ -759,11 +766,13 @@ function DeviceFlowPanel({
                             borderRadius: 8,
                             padding: '10px 14px',
                             textAlign: 'center',
-                            userSelect: 'all',
+                            cursor: 'pointer',
+                            color: 'var(--fg-1)',
+                            width: '100%',
                         }}
                     >
                         {flow.userCode}
-                    </div>
+                    </button>
                     <div style={{ display: 'flex', gap: 8 }}>
                         <Action color="blue" size="sm" onClick={open}>
                             Open {flow.verificationUri}
