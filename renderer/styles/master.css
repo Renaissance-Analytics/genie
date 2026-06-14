@@ -1416,6 +1416,29 @@ body.gutter-dragging .grid-gutter {
     min-width: 0;
     min-height: 0;
 }
+/* Make the fancy-code editor fill the panel and scroll internally.
+   fancy-code's CodeEditor root is a plain `overflow-hidden` block and its
+   Panel sizes to content between optional min/maxHeight props (which we don't
+   pass) — so short files render squished and big files overflow the panel
+   with no scrollbar. Force the root into a full-height flex column and let the
+   Panel flex:1; the Panel already carries `overflow-auto`, so once it has a
+   bounded height it scrolls. `max-height:none` defeats any content cap; the
+   StatusBar (the non-panel child) keeps its natural height. We also target the
+   data-attributes as a fallback in case the className props are ever dropped. */
+.code-host .code-editor-col .cv-editor,
+.code-host .code-editor-col > [data-fancy-code-editor] {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+}
+.code-host .code-editor-col .cv-panel,
+.code-host .code-editor-col [data-fancy-code-panel] {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none !important;
+}
 /* When the tree is hidden the editor takes the whole width — nothing extra
    needed since the tree node simply isn't rendered, but the modifier is here
    for any tree-hidden-only tweaks. */

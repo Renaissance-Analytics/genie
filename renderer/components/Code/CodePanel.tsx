@@ -360,6 +360,7 @@ export default function CodePanel({
                     {openFile ? (
                         <CodeEditor
                             key={openFile}
+                            className="cv-editor"
                             value={content}
                             language={language}
                             theme="dark"
@@ -368,7 +369,7 @@ export default function CodePanel({
                                 setDirty(true);
                             }}
                         >
-                            <CodeEditor.Panel />
+                            <CodeEditor.Panel className="cv-panel" />
                             <CodeEditor.StatusBar />
                         </CodeEditor>
                     ) : (
