@@ -2,9 +2,10 @@ import { spawn, IPty } from 'node-pty';
 import { EventEmitter } from 'node:events';
 import { scanOsc7Cwd } from './osc7';
 import { cwdHookEnv } from './shells';
-import { readSnapshot } from './sessions';
 import type { PtyBackend } from './backend';
 import type { CreateTerminalOpts, TerminalInfo, AttachResult } from './types';
+import type { SettingsProvider } from './ports';
+import type { SnapshotStore } from './sessions';
 
 export type { CreateTerminalOpts, TerminalInfo, AttachResult } from './types';
 
@@ -16,29 +17,41 @@ export type { CreateTerminalOpts, TerminalInfo, AttachResult } from './types';
  * BrowserWindow is hosting a terminal — that's the IPC layer's job. The
  * manager just emits `data:<id>` and `exit:<id>` and lets ipc.ts wire
  * them to the right webContents.
+ *
+ * RUNTIME-AGNOSTIC: this module imports neither `electron` nor `../db`. The
+ * settings (for the OSC-7 cwd hook) + snapshot store (for cold-spawn restore)
+ * are injected via BackendDeps, and the live cwd learned from OSC-7 is EMITTED
+ * as a `'cwd'` event rather than written to the DB directly. Genie's adapter
+ * subscribes to `'cwd'` → `updateTerminalSpec({ live_cwd })`.
  */
 
 /** ~1 MB per pty. Enough for an hour of typical dev output without runaway memory. */
 const SCROLLBACK_MAX = 1_000_000;
 
-/** Debounce window for persisting an OSC-7 cwd change to the spec row. */
+/** Debounce window for emitting an OSC-7 cwd change (the adapter persists it). */
 const CWD_PERSIST_DEBOUNCE_MS = 750;
 
 /**
- * Persist a live cwd to the spec row, debounced + best-effort. Imported lazily
- * so this module can be loaded in test contexts where the db isn't initialised
- * — a failed import or uninitialised db just no-ops the persistence.
+ * Dependencies the in-process backend needs that used to be direct `../db` /
+ * `electron` reaches: a SettingsProvider (cwd-hook gating) and a SnapshotStore
+ * (cold-spawn restore). Injected by the composition root via
+ * configureInProcessBackend; defaults are inert so a test/pre-config load is
+ * harmless (no settings → cwd hook degrades to {}, no-op snapshot store → no
+ * restore), preserving the historical "db not ready → best-effort" behaviour.
  */
-function persistLiveCwd(id: string, cwd: string): void {
-    try {
-        // require (not import) so the db module — which calls app.getPath at
-        // init — is only touched when we actually have a cwd to write.
-        const { updateTerminalSpec } = require('../db') as typeof import('../db');
-        updateTerminalSpec(id, { live_cwd: cwd });
-    } catch {
-        /* db not ready / spec gone — cwd accuracy is best-effort */
-    }
+export interface BackendDeps {
+    settings: SettingsProvider;
+    snapshots: SnapshotStore;
 }
+
+const inertDeps: BackendDeps = {
+    settings: { get: () => undefined },
+    snapshots: {
+        writeSnapshot: () => null,
+        readSnapshot: () => null,
+        deleteSnapshot: () => {},
+    },
+};
 
 /**
  * InProcessBackend — node-pty instances owned directly by the Electron main
@@ -49,6 +62,15 @@ function persistLiveCwd(id: string, cwd: string): void {
  * EventEmitter gives us the `on('data'|'exit', …)` half of PtyBackend for free.
  */
 class InProcessBackend extends EventEmitter implements PtyBackend {
+    constructor(private deps: BackendDeps = inertDeps) {
+        super();
+    }
+
+    /** Swap injected deps (only used if configure lands after lazy construction). */
+    setDeps(deps: BackendDeps): void {
+        this.deps = deps;
+    }
+
     private readonly ptys = new Map<string, IPty>();
     private readonly scrollback = new Map<string, string>();
     private readonly shells = new Map<string, string>();
@@ -90,7 +112,7 @@ class InProcessBackend extends EventEmitter implements PtyBackend {
         // tracking is off or the shell can't be hooked — degrade silently.
         const env = {
             ...process.env,
-            ...cwdHookEnv(shell),
+            ...cwdHookEnv(shell, this.deps.settings),
             ...(opts.env ?? {}),
         } as Record<string, string>;
         // Most TUI apps key off TERM to decide whether to emit ANSI / use the
@@ -139,7 +161,7 @@ class InProcessBackend extends EventEmitter implements PtyBackend {
 
         // Cold spawn: surface any previous-session snapshot so the renderer can
         // replay history + divider + reset before this fresh shell takes over.
-        const snap = readSnapshot(opts.id);
+        const snap = this.deps.snapshots.readSnapshot(opts.id);
 
         return {
             id: opts.id,
@@ -156,7 +178,7 @@ class InProcessBackend extends EventEmitter implements PtyBackend {
         if (existing) clearTimeout(existing);
         const t = setTimeout(() => {
             this.cwdTimers.delete(id);
-            persistLiveCwd(id, cwd);
+            this.emit('cwd', id, cwd);
         }, CWD_PERSIST_DEBOUNCE_MS);
         // Don't let a pending cwd-write hold the process open at quit.
         if (typeof t.unref === 'function') t.unref();
@@ -170,9 +192,9 @@ class InProcessBackend extends EventEmitter implements PtyBackend {
             this.cwdTimers.delete(id);
         }
         // Flush the last known cwd synchronously so a quit right after a `cd`
-        // doesn't lose it.
+        // doesn't lose it. The adapter persists on the `cwd` event.
         const cwd = this.liveCwd.get(id);
-        if (cwd) persistLiveCwd(id, cwd);
+        if (cwd) this.emit('cwd', id, cwd);
         this.liveCwd.delete(id);
     }
 
@@ -274,6 +296,25 @@ class InProcessBackend extends EventEmitter implements PtyBackend {
 export type TerminalManager = InProcessBackend;
 
 /**
+ * Injected dependencies for the in-process backend, set ONCE by the composition
+ * root (genie-adapter.ts) before the backend is first constructed. Defaults are
+ * inert so a test/pre-config load is harmless. Stored module-side rather than
+ * threaded through every call site because the backend is a lazy singleton.
+ */
+let configuredDeps: BackendDeps = inertDeps;
+
+/**
+ * Wire the in-process backend's settings + snapshot store. Must be called by the
+ * adapter at app-ready, before any terminal is created. Idempotent if the
+ * singleton hasn't been built yet; if it already exists this updates the deps it
+ * uses (the adapter calls this exactly once, before first use).
+ */
+export function configureInProcessBackend(deps: BackendDeps): void {
+    configuredDeps = deps;
+    if (inProcess) inProcess.setDeps(deps);
+}
+
+/**
  * In-process backend singleton. Created lazily so importing this module from a
  * test context doesn't attempt to load node-pty before vi.mock has had a chance
  * to substitute it. This is ALSO the Tier 1/Tier 2 fallback floor: the quit-time
@@ -281,7 +322,7 @@ export type TerminalManager = InProcessBackend;
  */
 let inProcess: InProcessBackend | null = null;
 export function inProcessBackend(): InProcessBackend {
-    if (!inProcess) inProcess = new InProcessBackend();
+    if (!inProcess) inProcess = new InProcessBackend(configuredDeps);
     return inProcess;
 }
 

@@ -6,8 +6,8 @@ import {
     TerminalInfo,
 } from './manager';
 import { detectShells, defaultShellId, resolveDefaultShell } from './shells';
-import { writeSnapshot, deleteSnapshot } from './sessions';
 import { updateTerminalSpec } from '../db';
+import { getSnapshotStore, dbSettingsProvider } from './genie-adapter';
 
 /**
  * Tier 2 resource cap. The number of terminals that may be RETAINED (kept
@@ -120,7 +120,7 @@ export function registerTerminalIpc(): void {
             // and that must not strip the shell's own defaults (git-bash
             // needs --login -i for a profile-loaded interactive session).
             if (!opts.shell) {
-                const resolved = resolveDefaultShell();
+                const resolved = resolveDefaultShell(dbSettingsProvider());
                 opts = {
                     ...opts,
                     shell: resolved.command,
@@ -160,7 +160,7 @@ export function registerTerminalIpc(): void {
         const killed = mgr().kill(id);
         // Delete (not just disable): drop the Tier 1 snapshot too so a deleted
         // terminal can never resurrect on the next launch. Best-effort.
-        deleteSnapshot(id);
+        getSnapshotStore().deleteSnapshot(id);
         broadcastTerminalCount();
         return killed;
     });
@@ -221,7 +221,7 @@ export function registerTerminalIpc(): void {
         'terminal:snapshot',
         (_event, id: string, serialized: string): boolean => {
             try {
-                const bytes = writeSnapshot(id, serialized);
+                const bytes = getSnapshotStore().writeSnapshot(id, serialized);
                 if (bytes == null) return false;
                 try {
                     updateTerminalSpec(id, {
@@ -319,7 +319,7 @@ export function snapshotRetainedWindowless(): void {
         const scrollback = mgr.getScrollback(id);
         if (!scrollback) continue;
         try {
-            const bytes = writeSnapshot(id, scrollback);
+            const bytes = getSnapshotStore().writeSnapshot(id, scrollback);
             if (bytes == null) continue;
             try {
                 updateTerminalSpec(id, {

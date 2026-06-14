@@ -16,6 +16,7 @@ import {
     isHostBacked,
     disconnectHostLeaveRunning,
 } from './terminal/host-lifecycle';
+import { wireTerminalAdapter } from './terminal/genie-adapter';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
 import { registerUpdaterIpc, checkForUpdatesNow } from './updater/ipc';
@@ -378,6 +379,13 @@ app.whenReady().then(async () => {
 
     initDatabase();
     registerIpcHandlers();
+    // Wire the terminal core to its Electron/SQLite adapters (snapshot store +
+    // settings provider + host spawner) and subscribe the cwd→db / host-status→
+    // broadcast bridges. MUST run before initTerminalBackend (which reads the
+    // host spawner + settings) and before registerTerminalIpc (which uses the
+    // shared snapshot store). __dirname is the compiled main bundle dir, where
+    // the detached pty-host script sits beside background.js.
+    wireTerminalAdapter(__dirname);
     // Tier 3: choose the terminal backend BEFORE registering the terminal IPC.
     // initTerminalBackend connects-or-spawns the detached pty-host when the
     // `detached_terminals` setting is ON (default OFF → in-process). It NEVER

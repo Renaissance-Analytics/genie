@@ -1,14 +1,13 @@
-import { app, BrowserWindow } from 'electron';
-import { spawn } from 'node:child_process';
 import {
     readPidfile,
     pidfileUsable,
     deletePidfile,
-    resolveHostScript,
 } from './host-locate';
 import { HostClient } from './host-client';
 import { setActiveBackend, inProcessBackend } from './manager';
-import { getAllSettings } from '../db';
+import type { SettingsProvider, HostSpawner } from './ports';
+import type { SnapshotStore } from './sessions';
+import type { HostStatus } from './backend';
 
 /**
  * Tier 3 lifecycle: decide the backend at app-ready, manage the detached
@@ -29,30 +28,50 @@ import { getAllSettings } from '../db';
  *   host-script path. Shipping it default-ON would put every user on an
  *   unproven detached process the first launch after upgrade. Default-OFF means
  *   the proven in-process T1/T2 path remains the out-of-box experience; users
- *   opt in via Settings → Terminal → "Keep terminals running after quit". The
- *   plan explicitly sanctions this ("Better to ship T3 behind a default-OFF
- *   setting than to ship a broken build").
+ *   opt in via Settings → Terminal → "Keep terminals running after quit".
+ *
+ * RUNTIME-AGNOSTIC: this module imports neither `electron` nor `../db`. The
+ * connect-or-spawn-or-fallback LOGIC is core; the Electron specifics are
+ * injected:
+ *   - HostSpawner       — resolveHostScript / spawnDetached / userDataDir
+ *                         (was app.getPath + child_process.spawn with execPath +
+ *                          ELECTRON_RUN_AS_NODE).
+ *   - SettingsProvider  — the `detached_terminals` read (was getAllSettings).
+ *   - SnapshotStore     — passed to HostClient for cold-create snapshot probe.
+ *   - onHostStatus      — the fallback toast sink, emits `host-status` instead of
+ *                         a direct BrowserWindow broadcast.
+ * Genie's adapter (genie-adapter.ts) supplies all four via configureHostLifecycle.
  */
+
+interface HostLifecycleDeps {
+    spawner: HostSpawner;
+    settings: SettingsProvider;
+    snapshots: SnapshotStore;
+    onHostStatus: (status: HostStatus) => void;
+}
+
+let deps: HostLifecycleDeps | null = null;
+
+/**
+ * Wire the host lifecycle's injected ports. Called once by the adapter at
+ * app-ready, before initTerminalBackend. NEVER configured = in-process only
+ * (detachedEnabled below returns false defensively).
+ */
+export function configureHostLifecycle(d: HostLifecycleDeps): void {
+    deps = d;
+}
 
 let client: HostClient | null = null;
 let usingHost = false;
 
-/** Pushed to every window so the renderer can toast the fallback. */
-function toast(message: string, level: 'info' | 'warn' = 'warn'): void {
-    for (const w of BrowserWindow.getAllWindows()) {
-        if (w.isDestroyed()) continue;
-        try {
-            w.webContents.send('terminal:host-status', { message, level });
-        } catch {
-            /* window tearing down */
-        }
-    }
+/** Emit the fallback host-status (was a direct BrowserWindow broadcast). */
+function status(message: string, level: 'info' | 'warn' = 'warn'): void {
+    deps?.onHostStatus({ message, level });
 }
 
 function detachedEnabled(): boolean {
     try {
-        const s = getAllSettings() as Record<string, string>;
-        return s.detached_terminals === 'on';
+        return deps?.settings.get('detached_terminals') === 'on';
     } catch {
         return false;
     }
@@ -65,25 +84,6 @@ export function isHostBacked(): boolean {
 
 export function getHostClient(): HostClient | null {
     return client;
-}
-
-/**
- * Spawn the detached pty-host. ELECTRON_RUN_AS_NODE makes the Electron binary
- * (process.execPath) run as plain Node so node-pty's native ABI matches what the
- * app was built against. Detached + unref + stdio:'ignore' fully severs it from
- * the app's process tree so it outlives the quit.
- */
-function spawnHost(hostScript: string): void {
-    const child = spawn(process.execPath, [hostScript], {
-        detached: true,
-        stdio: 'ignore',
-        env: {
-            ...process.env,
-            ELECTRON_RUN_AS_NODE: '1',
-            GENIE_USERDATA: app.getPath('userData'),
-        },
-    });
-    child.unref();
 }
 
 /** Poll for the pidfile to appear + become usable, up to `timeoutMs`. */
@@ -101,9 +101,6 @@ async function awaitUsableHost(userData: string, timeoutMs = 4000): Promise<bool
  * Initialise the terminal backend at app-ready. Returns the list of host pty ids
  * that should be reattached by the renderer (empty for the in-process path or a
  * cold host). NEVER throws — every failure degrades to in-process.
- *
- * `onReady` (optional) lets the caller drive the reattach once the backend +
- * window are up.
  */
 export async function initTerminalBackend(): Promise<{
     host: boolean;
@@ -112,13 +109,14 @@ export async function initTerminalBackend(): Promise<{
     // Ensure the in-process backend is the active default before anything.
     setActiveBackend(inProcessBackend());
 
-    if (!detachedEnabled()) {
+    if (!deps || !detachedEnabled()) {
         return { host: false, reattachIds: [] };
     }
+    const { spawner, snapshots } = deps;
 
-    const userData = app.getPath('userData');
+    const userData = spawner.userDataDir();
     try {
-        const hostScript = resolveHostScript(__dirname);
+        const hostScript = spawner.resolveHostScript();
 
         // 1) Try an existing host.
         let pf = readPidfile(userData);
@@ -128,15 +126,15 @@ export async function initTerminalBackend(): Promise<{
             if (!hostScript) {
                 // Can't find the compiled host script (packaging risk). Stay
                 // in-process with a clear toast.
-                toast(
+                status(
                     'Detached terminals unavailable (host not found) — using in-process. Sessions won\'t survive a full quit.',
                 );
                 return { host: false, reattachIds: [] };
             }
-            spawnHost(hostScript);
+            spawner.spawnDetached(hostScript, { GENIE_USERDATA: userData });
             const up = await awaitUsableHost(userData);
             if (!up) {
-                toast(
+                status(
                     'Detached terminals unavailable (host didn\'t start) — using in-process. Sessions won\'t survive a full quit.',
                 );
                 return { host: false, reattachIds: [] };
@@ -145,14 +143,14 @@ export async function initTerminalBackend(): Promise<{
         }
 
         if (!pf) {
-            toast(
+            status(
                 'Detached terminals unavailable — using in-process. Sessions won\'t survive a full quit.',
             );
             return { host: false, reattachIds: [] };
         }
 
         // 2) Connect.
-        client = await HostClient.connect(pf.socketPath);
+        client = await HostClient.connect(pf.socketPath, snapshots);
         client.on('error', onHostError);
         setActiveBackend(client);
         usingHost = true;
@@ -169,7 +167,7 @@ export async function initTerminalBackend(): Promise<{
         client = null;
         usingHost = false;
         setActiveBackend(inProcessBackend());
-        toast(
+        status(
             'Detached terminals unavailable — using in-process. Sessions won\'t survive a full quit.',
         );
         return { host: false, reattachIds: [] };
@@ -188,7 +186,7 @@ function onHostError(err: Error): void {
     usingHost = false;
     client = null;
     setActiveBackend(inProcessBackend());
-    toast(
+    status(
         'Detached terminal host stopped — switched to in-process. Open terminals may need reopening.',
     );
 }

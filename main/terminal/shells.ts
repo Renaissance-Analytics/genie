@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { getAllSettings } from '../db';
+import type { SettingsProvider } from './ports';
 
 /**
  * Shell detection + default-shell resolution for the terminal subsystem.
@@ -213,9 +213,11 @@ export function shellKind(command: string): ShellKind {
  * mode on POSIX), which is Genie's default Windows shell — so the common path
  * is covered.
  */
-export function cwdHookEnv(command: string): Record<string, string> {
-    const settings = getAllSettings();
-    if (settings.track_cwd === 'off') return {};
+export function cwdHookEnv(
+    command: string,
+    settings: SettingsProvider,
+): Record<string, string> {
+    if (settings.get('track_cwd') === 'off') return {};
 
     const kind = shellKind(command);
     const host = os.hostname();
@@ -244,17 +246,20 @@ export function cwdHookEnv(command: string): Record<string, string> {
  * with `terminal_custom_cmd`). Anything unresolvable falls back to the
  * detection-based default so the terminal always opens SOMETHING.
  */
-export function resolveDefaultShell(): { command: string; args: string[] } {
-    const settings = getAllSettings();
+export function resolveDefaultShell(settings: SettingsProvider): {
+    command: string;
+    args: string[];
+} {
     const detected = detectShells();
+    const terminalShell = settings.get('terminal_shell');
 
-    if (settings.terminal_shell === 'custom') {
-        const parsed = parseCommandLine(settings.terminal_custom_cmd ?? '');
+    if (terminalShell === 'custom') {
+        const parsed = parseCommandLine(settings.get('terminal_custom_cmd') ?? '');
         if (parsed.command) return parsed;
     }
 
     const pick =
-        detected.find((s) => s.id === settings.terminal_shell) ??
+        detected.find((s) => s.id === terminalShell) ??
         detected.find((s) => s.id === defaultShellId(detected));
     if (pick) return { command: pick.command, args: pick.args };
 

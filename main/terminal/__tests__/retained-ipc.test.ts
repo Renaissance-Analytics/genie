@@ -51,18 +51,37 @@ vi.mock('../../db', () => ({
     getAllSettings: () => ({ track_cwd: 'off' }),
 }));
 
-// Track deleteSnapshot calls so we can assert terminal:kill cleans up.
+// Track deleteSnapshot calls so we can assert terminal:kill cleans up. ipc.ts
+// now goes through the genie-adapter for its snapshot store + settings provider;
+// mock the adapter with TEST-DOUBLE PORTS (in-memory snapshot store + a
+// track_cwd-off settings provider) instead of mocking electron/sessions/db deep.
 const deleted: string[] = [];
-vi.mock('../sessions', () => ({
-    readSnapshot: () => null,
-    writeSnapshot: () => 1,
-    deleteSnapshot: (id: string) => {
-        deleted.push(id);
-    },
+vi.mock('../genie-adapter', () => ({
+    getSnapshotStore: () => ({
+        readSnapshot: () => null,
+        writeSnapshot: () => 1,
+        deleteSnapshot: (id: string) => {
+            deleted.push(id);
+        },
+    }),
+    dbSettingsProvider: () => ({
+        get: (k: string) => (k === 'track_cwd' ? 'off' : undefined),
+    }),
 }));
 
 import { registerTerminalIpc, MAX_RETAINED } from '../ipc';
-import { terminalManager } from '../manager';
+import { terminalManager, configureInProcessBackend } from '../manager';
+
+// Configure the in-process backend with the same test-double ports so create()
+// in these IPC tests doesn't touch disk/db either.
+configureInProcessBackend({
+    settings: { get: (k) => (k === 'track_cwd' ? 'off' : undefined) },
+    snapshots: {
+        readSnapshot: () => null,
+        writeSnapshot: () => 1,
+        deleteSnapshot: () => undefined,
+    },
+});
 
 const fakeEvent = { sender: { once: () => {}, off: () => {}, isDestroyed: () => false } };
 

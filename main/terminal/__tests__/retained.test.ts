@@ -71,24 +71,25 @@ vi.mock('node-pty', () => ({
     },
 }));
 
-// db is imported lazily inside the manager (require) for cwd persistence; the
-// electron stub's app.getPath returns /tmp, so a real db could init. Stub the
-// persistence path so tests never touch disk state.
-vi.mock('../../db', () => ({
-    updateTerminalSpec: () => null,
-    // shells.ts cwdHookEnv reads this during create(); track_cwd off → {} env.
-    getAllSettings: () => ({ track_cwd: 'off' }),
-}));
+import { terminalManager, configureInProcessBackend } from '../manager';
 
-// sessions.ts is imported by both manager (readSnapshot) and ipc
-// (writeSnapshot/deleteSnapshot). Stub so no snapshot files are touched.
-vi.mock('../sessions', () => ({
-    readSnapshot: () => null,
-    writeSnapshot: () => 1,
-    deleteSnapshot: () => undefined,
-}));
-
-import { terminalManager } from '../manager';
+/**
+ * Inversion: instead of mocking `../../db` + `../sessions`, we configure the
+ * in-process backend with TEST-DOUBLE PORTS:
+ *   - a SettingsProvider map (track_cwd off → cwdHookEnv returns {}),
+ *   - an in-memory no-op SnapshotStore (no snapshot files touched),
+ * and capture the backend's emitted `cwd` events to prove the inversion of the
+ * old direct updateTerminalSpec({ live_cwd }) write.
+ */
+const cwdEvents: Array<{ id: string; cwd: string }> = [];
+configureInProcessBackend({
+    settings: { get: (k) => (k === 'track_cwd' ? 'off' : undefined) },
+    snapshots: {
+        readSnapshot: () => null,
+        writeSnapshot: () => 1,
+        deleteSnapshot: () => undefined,
+    },
+});
 
 function mgr() {
     return terminalManager();
@@ -98,8 +99,13 @@ function freshCreate(id: string) {
     return mgr().create({ id, cwd: '/tmp', shell: '/bin/fake', args: [] });
 }
 
+// Subscribe ONCE to the backend's emitted cwd events (the adapter's job in
+// production). The singleton survives across tests, so subscribe at module load.
+mgr().on('cwd', (id, cwd) => cwdEvents.push({ id, cwd }));
+
 beforeEach(() => {
     spawned.length = 0;
+    cwdEvents.length = 0;
     // Clean any ptys left from a prior test (the manager is a singleton).
     mgr().killAll();
     for (const id of mgr().retainedIds()) mgr().setRetained(id, false);
@@ -139,6 +145,28 @@ describe('manager retained API', () => {
         spawned[0]._onExit?.({ exitCode: 0 });
         expect(m.isRetained('t-exit')).toBe(false);
         expect(m.isLive('t-exit')).toBe(false);
+    });
+});
+
+describe('cwd event (inverted live_cwd persistence)', () => {
+    it('emits a cwd event for an OSC-7 report (was a direct db write)', () => {
+        const m = mgr();
+        freshCreate('t-cwd');
+        // Feed an OSC-7 cwd report. The backend records it in-memory and, on
+        // teardown, flushes the latest cwd synchronously as a `cwd` event — the
+        // adapter persists it to live_cwd. (The debounced timer also emits, but
+        // the synchronous flush on kill is deterministic to assert.)
+        spawned[0].emit('\x1b]7;file:///home/user/proj\x07');
+        m.kill('t-cwd');
+        expect(cwdEvents).toContainEqual({ id: 't-cwd', cwd: '/home/user/proj' });
+    });
+
+    it('does not emit cwd when no OSC-7 was seen', () => {
+        const m = mgr();
+        freshCreate('t-nocwd');
+        spawned[0].emit('just some output, no osc7\r\n');
+        m.kill('t-nocwd');
+        expect(cwdEvents.some((e) => e.id === 't-nocwd')).toBe(false);
     });
 });
 

@@ -9,7 +9,7 @@ import {
     type ClientMessage,
     type HostMessage,
 } from './host-protocol';
-import { readSnapshot } from './sessions';
+import type { SnapshotStore } from './sessions';
 
 /**
  * HostClient — the Tier 3 PtyBackend that proxies every call to the DETACHED
@@ -59,7 +59,10 @@ export class HostClient extends EventEmitter implements PtyBackend {
     hostPid = 0;
     private connected = false;
 
-    private constructor(private readonly socketPath: string) {
+    private constructor(
+        private readonly socketPath: string,
+        private readonly snapshots: SnapshotStore,
+    ) {
         super();
     }
 
@@ -68,10 +71,17 @@ export class HostClient extends EventEmitter implements PtyBackend {
      * and seed the local mirror from the host's live ptys (list + per-pty
      * scrollback). Resolves to a ready client, or rejects on connect failure /
      * version mismatch / timeout — the caller then falls back to in-process.
+     *
+     * `snapshots` is the injected snapshot store used by cold-create to surface
+     * any on-disk previous-session snapshot (was a direct `./sessions` import).
      */
-    static connect(socketPath: string, timeoutMs = 3000): Promise<HostClient> {
+    static connect(
+        socketPath: string,
+        snapshots: SnapshotStore,
+        timeoutMs = 3000,
+    ): Promise<HostClient> {
         return new Promise<HostClient>((resolve, reject) => {
-            const client = new HostClient(socketPath);
+            const client = new HostClient(socketPath, snapshots);
             const sock = net.createConnection(socketPath);
             let settled = false;
             const timer = setTimeout(() => {
@@ -292,7 +302,7 @@ export class HostClient extends EventEmitter implements PtyBackend {
             .catch(() => {
                 /* connection error surfaces via the error event → fallback */
             });
-        const snap = readSnapshot(opts.id);
+        const snap = this.snapshots.readSnapshot(opts.id);
         return {
             id: opts.id,
             pid: 0,

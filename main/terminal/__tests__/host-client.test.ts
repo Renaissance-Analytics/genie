@@ -18,17 +18,21 @@ import {
  * Windows) and assert the client: handshakes, proxies create/write, surfaces
  * pushed data/exit, and seeds its mirror from a list+scrollback on connect.
  *
- * sessions.readSnapshot is stubbed so create()'s on-disk snapshot probe never
- * touches the filesystem.
+ * Inversion: the snapshot store is now an INJECTED PORT passed to
+ * HostClient.connect — a no-op in-memory test double — so create()'s on-disk
+ * snapshot probe never touches the filesystem and the client never imports
+ * `../sessions` directly.
  */
 
-vi.mock('../sessions', () => ({
+import { HostClient } from '../host-client';
+import type { SnapshotStore } from '../sessions';
+
+/** No-op snapshot store double — readSnapshot always returns null. */
+const noSnapshots: SnapshotStore = {
     readSnapshot: () => null,
     writeSnapshot: () => 1,
     deleteSnapshot: () => undefined,
-}));
-
-import { HostClient } from '../host-client';
+};
 
 function ephemeralPath(): string {
     const tag = crypto.randomBytes(6).toString('hex');
@@ -166,7 +170,7 @@ describe('HostClient.connect', () => {
     it('handshakes and reports connected', async () => {
         host = startMockHost(socketPath);
         await host.listen();
-        client = await HostClient.connect(socketPath, 2000);
+        client = await HostClient.connect(socketPath, noSnapshots, 2000);
         expect(client.isConnected()).toBe(true);
         expect(client.hostPid).toBe(9999);
     });
@@ -174,12 +178,12 @@ describe('HostClient.connect', () => {
     it('rejects on protocol-version mismatch', async () => {
         host = startMockHost(socketPath, { helloVersion: PROTOCOL_VERSION + 99 });
         await host.listen();
-        await expect(HostClient.connect(socketPath, 2000)).rejects.toThrow(/mismatch/);
+        await expect(HostClient.connect(socketPath, noSnapshots, 2000)).rejects.toThrow(/mismatch/);
     });
 
     it('rejects on connect timeout when nothing is listening', async () => {
         // No server started → connection fails fast (ENOENT/ECONNREFUSED) or times out.
-        await expect(HostClient.connect(socketPath, 800)).rejects.toBeTruthy();
+        await expect(HostClient.connect(socketPath, noSnapshots, 800)).rejects.toBeTruthy();
     });
 
     it('seeds its mirror from the host list + scrollback on connect', async () => {
@@ -189,7 +193,7 @@ describe('HostClient.connect', () => {
             ],
         });
         await host.listen();
-        client = await HostClient.connect(socketPath, 2000);
+        client = await HostClient.connect(socketPath, noSnapshots, 2000);
 
         expect(client.liveIds()).toContain('srv');
         expect(client.isLive('srv')).toBe(true);
@@ -207,7 +211,7 @@ describe('HostClient proxying', () => {
     it('proxies create + write to the host', async () => {
         host = startMockHost(socketPath);
         await host.listen();
-        client = await HostClient.connect(socketPath, 2000);
+        client = await HostClient.connect(socketPath, noSnapshots, 2000);
 
         const res = client.create({ id: 'a', cwd: '/tmp', shell: 'sh' });
         expect(res.existing).toBe(false);
@@ -225,7 +229,7 @@ describe('HostClient proxying', () => {
     it('surfaces pushed data + exit events to subscribers', async () => {
         host = startMockHost(socketPath);
         await host.listen();
-        client = await HostClient.connect(socketPath, 2000);
+        client = await HostClient.connect(socketPath, noSnapshots, 2000);
         client.create({ id: 'a', cwd: '/tmp' });
 
         const datas: Array<{ id: string; data: string }> = [];
@@ -246,7 +250,7 @@ describe('HostClient proxying', () => {
     it('killAll is a no-op (host ptys survive quit)', async () => {
         host = startMockHost(socketPath);
         await host.listen();
-        client = await HostClient.connect(socketPath, 2000);
+        client = await HostClient.connect(socketPath, noSnapshots, 2000);
         client.create({ id: 'a', cwd: '/tmp' });
         client.killAll();
         // Still live locally — killAll must NOT tear down host ptys.

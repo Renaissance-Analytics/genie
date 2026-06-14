@@ -1,56 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { HostStatus } from '../backend';
+import type { SnapshotStore } from '../sessions';
 
 /**
  * Tier 3 — backend selection + graceful fallback.
  *
  *   • Setting OFF (default)            → in-process backend, host:false.
  *   • Setting ON but host unavailable  → fall back to in-process, host:false,
- *                                        and a non-fatal toast is broadcast.
+ *                                        and a non-fatal host-status is emitted.
  *
- * We drive initTerminalBackend with a mocked settings source and a mocked
- * host-script resolver (returns null → "host not found" branch, which is the
- * cleanest unavailable case that doesn't spawn a real process). The electron
- * stub's BrowserWindow.getAllWindows() returns [] so the toast broadcast is a
- * harmless no-op we can still assert was attempted via the captured windows.
+ * Inversion: instead of mocking electron's app/BrowserWindow + ../../db, we drive
+ * initTerminalBackend through configureHostLifecycle with TEST-DOUBLE PORTS:
+ *   - a SettingsProvider map (detached_terminals on/off),
+ *   - a HostSpawner whose resolveHostScript returns null (the cleanest
+ *     "unavailable" case — it takes the spawn branch then hits the null-script
+ *     guard → fallback, with no real process spawned),
+ *   - a no-op SnapshotStore,
+ *   - an onHostStatus sink we capture to assert the fallback toast.
+ * No electron/db deep-mocking needed — host-lifecycle is now port-driven.
  */
-
-let settings: Record<string, string> = {};
-vi.mock('../../db', () => ({
-    getAllSettings: () => settings,
-    updateTerminalSpec: () => null,
-}));
-
-// Capture toast broadcasts by spying on a fake window's webContents.send.
-const sent: Array<{ channel: string; payload: unknown }> = [];
-vi.mock('electron', () => ({
-    app: {
-        getPath: () => '/tmp/genie-userdata',
-    },
-    BrowserWindow: {
-        getAllWindows: () => [
-            {
-                isDestroyed: () => false,
-                webContents: {
-                    send: (channel: string, payload: unknown) =>
-                        sent.push({ channel, payload }),
-                },
-            },
-        ],
-    },
-}));
-
-// Force the "host script not found" branch so no real process is spawned.
-vi.mock('../host-locate', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../host-locate')>();
-    return {
-        ...actual,
-        resolveHostScript: () => null,
-        // Pretend there's no existing host so we take the spawn branch (which
-        // then hits the null-script guard → fallback).
-        readPidfile: () => null,
-        pidfileUsable: () => false,
-    };
-});
 
 // node-pty fake so the in-process backend can be constructed if touched.
 vi.mock('node-pty', () => ({
@@ -65,18 +33,49 @@ vi.mock('node-pty', () => ({
     }),
 }));
 
-vi.mock('../sessions', () => ({
+import {
+    initTerminalBackend,
+    isHostBacked,
+    configureHostLifecycle,
+} from '../host-lifecycle';
+import {
+    terminalManager,
+    inProcessBackend,
+    configureInProcessBackend,
+} from '../manager';
+import type { HostSpawner, SettingsProvider } from '../ports';
+
+let settings: Record<string, string> = {};
+const statuses: HostStatus[] = [];
+
+const noSnapshots: SnapshotStore = {
     readSnapshot: () => null,
     writeSnapshot: () => 1,
     deleteSnapshot: () => undefined,
-}));
+};
 
-import { initTerminalBackend, isHostBacked } from '../host-lifecycle';
-import { terminalManager, inProcessBackend } from '../manager';
+const settingsProvider: SettingsProvider = { get: (k) => settings[k] };
+
+// HostSpawner whose script-resolve returns null → "host not found" branch.
+const nullSpawner: HostSpawner = {
+    resolveHostScript: () => null,
+    userDataDir: () => '/tmp/genie-userdata',
+    spawnDetached: () => {
+        throw new Error('spawnDetached should not be called when script is null');
+    },
+};
+
+configureInProcessBackend({ settings: settingsProvider, snapshots: noSnapshots });
+configureHostLifecycle({
+    spawner: nullSpawner,
+    settings: settingsProvider,
+    snapshots: noSnapshots,
+    onHostStatus: (s) => statuses.push(s),
+});
 
 beforeEach(() => {
     settings = {};
-    sent.length = 0;
+    statuses.length = 0;
 });
 
 afterEach(() => {
@@ -93,7 +92,7 @@ describe('backend selection', () => {
         // Active backend is the in-process singleton.
         expect(terminalManager()).toBe(inProcessBackend());
         // No fallback toast when the user never opted in.
-        expect(sent.some((s) => s.channel === 'terminal:host-status')).toBe(false);
+        expect(statuses.length).toBe(0);
     });
 
     it('setting ON but host unavailable → fallback to in-process + toast', async () => {
@@ -102,11 +101,9 @@ describe('backend selection', () => {
         expect(res.host).toBe(false);
         expect(isHostBacked()).toBe(false);
         expect(terminalManager()).toBe(inProcessBackend());
-        // A non-fatal fallback toast was broadcast.
-        const toast = sent.find((s) => s.channel === 'terminal:host-status');
+        // A non-fatal fallback host-status was emitted.
+        const toast = statuses[0];
         expect(toast).toBeTruthy();
-        expect((toast!.payload as { message: string }).message).toMatch(
-            /in-process/i,
-        );
+        expect(toast.message).toMatch(/in-process/i);
     });
 });
