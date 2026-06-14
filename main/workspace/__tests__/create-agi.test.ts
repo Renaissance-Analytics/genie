@@ -6,11 +6,13 @@ import {
     addStructureDocs,
     consolidateMcpAndCommit,
     convertToAgi,
+    convertToAgiPlan,
     createAgiEnvelope,
     deriveRepoName,
     envelopeFolderName,
     structureDocStatus,
 } from '../create-agi';
+import { readProjectJson } from '../project-json';
 import { cleanupTmpRoot, makeTmpDir, seedGitRepo } from '../../../test/helpers';
 
 afterAll(() => cleanupTmpRoot());
@@ -304,5 +306,77 @@ describe('convertToAgi (local source)', () => {
                 sub_name: '../escape',
             }),
         ).rejects.toThrow(/invalid submodule name/i);
+    });
+});
+
+describe('convertToAgiPlan (monorepo explode)', () => {
+    it('adds members as submodules with branches + host/package roles', async () => {
+        // Three independent member repos — the explode flow sources each by
+        // its local path. seedGitRepo leaves them on `main`.
+        const memA = makeTmpDir('plan-memA');
+        const memB = makeTmpDir('plan-memB');
+        const memC = makeTmpDir('plan-memC');
+        await seedGitRepo(memA);
+        await seedGitRepo(memB);
+        await seedGitRepo(memC);
+
+        const parent = makeTmpDir('plan-dest');
+        const res = await convertToAgiPlan({
+            slug: 'pa-ux-sandbox',
+            name: 'PA UX Sandbox',
+            parent_path: parent,
+            primary: 'host-app',
+            repos: [
+                { source: memA, is_local: true, submodule_name: 'host-app' },
+                { source: memB, is_local: true, submodule_name: 'pkg-one' },
+                { source: memC, is_local: true, submodule_name: 'pkg-two' },
+            ],
+            knowledge: [],
+        });
+
+        // All three members are submodules under repos/.
+        for (const name of ['host-app', 'pkg-one', 'pkg-two']) {
+            expect(fs.existsSync(path.join(res.path, 'repos', name))).toBe(true);
+        }
+
+        // .gitmodules records a branch per submodule (enables --remote).
+        const gm = fs.readFileSync(path.join(res.path, '.gitmodules'), 'utf8');
+        expect(gm).toMatch(/path = repos\/host-app/);
+        expect(gm).toMatch(/\[submodule "host-app"\][\s\S]*?branch = main/);
+        expect(gm).toMatch(/\[submodule "pkg-one"\][\s\S]*?branch = main/);
+        expect(gm).toMatch(/\[submodule "pkg-two"\][\s\S]*?branch = main/);
+
+        // project.json: host designation + roles + path/url/branch.
+        const pj = readProjectJson(res.path)!;
+        expect(pj.primaryRepo).toBe('host-app');
+        expect(pj.hosting?.enabled).toBe(true);
+
+        const byName = new Map((pj.repos ?? []).map((r) => [r.name, r]));
+        expect(byName.size).toBe(3);
+        expect(byName.get('host-app')!.role).toBe('host');
+        expect(byName.get('host-app')!.path).toBe('repos/host-app');
+        expect(byName.get('host-app')!.branch).toBe('main');
+        expect(byName.get('host-app')!.url).toBe(memA);
+        expect(byName.get('pkg-one')!.role).toBe('package');
+        expect(byName.get('pkg-two')!.role).toBe('package');
+    });
+
+    it('treats a lone repo as the host when no primary is given', async () => {
+        const mem = makeTmpDir('plan-lone-src');
+        await seedGitRepo(mem);
+        const parent = makeTmpDir('plan-lone-dest');
+
+        const res = await convertToAgiPlan({
+            slug: 'solo',
+            name: 'Solo',
+            parent_path: parent,
+            repos: [{ source: mem, is_local: true, submodule_name: 'app' }],
+            knowledge: [],
+        });
+
+        const pj = readProjectJson(res.path)!;
+        expect(pj.primaryRepo).toBe('app');
+        expect(pj.hosting?.enabled).toBe(true);
+        expect(pj.repos?.[0].role).toBe('host');
     });
 });

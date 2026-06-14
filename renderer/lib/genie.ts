@@ -272,6 +272,20 @@ export interface AnalyseResult {
     submodules: SubmoduleEntry[];
 }
 
+export type ProjectJsonRepoRole = 'host' | 'package';
+
+/** A member repo as recorded in the envelope's project.json. */
+export interface ProjectJsonRepo {
+    name: string;
+    url?: string;
+    /** Checkout path inside the envelope, always `repos/<name>`. */
+    path?: string;
+    /** 'host' = the primary build target; 'package' = a consumed dependency. */
+    role?: ProjectJsonRepoRole;
+    /** Tracked branch for `git submodule update --remote`. */
+    branch?: string;
+}
+
 export interface AgiPlanRepo {
     source: string;
     is_local: boolean;
@@ -290,6 +304,8 @@ export interface ConvertPlanOpts {
     parent_path: string;
     repos: AgiPlanRepo[];
     knowledge: AgiPlanKnowledge[];
+    /** `submodule_name` of the host (primary) member — the repo Aionima builds/hosts. */
+    primary?: string;
     remote?:
         | { kind: 'none' }
         | { kind: 'paste'; url: string }

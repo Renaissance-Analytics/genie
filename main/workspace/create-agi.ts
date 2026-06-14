@@ -3,7 +3,12 @@ import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 import { simpleGit } from 'simple-git';
-import { blankProjectJson, writeProjectJson } from './project-json';
+import {
+    blankProjectJson,
+    projectJsonFromRepos,
+    writeProjectJson,
+    type ProjectJsonRepoInput,
+} from './project-json';
 import { consolidateMcp } from './mcp';
 
 const execFileAsync = promisify(execFile);
@@ -365,6 +370,14 @@ export interface ConvertPlanOpts {
     parent_path: string;
     repos: AgiPlanRepo[];
     knowledge: AgiPlanKnowledge[];
+    /**
+     * `submodule_name` of the host (primary) member — the repo Aionima
+     * builds/hosts. The rest are packages it consumes from the registry.
+     * When omitted (or not matching any repo) and there's exactly one
+     * repo, that lone repo is treated as the host; with multiple repos and
+     * no match, no host is designated (hosting stays disabled).
+     */
+    primary?: string;
     remote?:
         | { kind: 'none' }
         | { kind: 'paste'; url: string }
@@ -402,6 +415,17 @@ export async function convertToAgiPlan(opts: ConvertPlanOpts): Promise<CreateAgi
         remote: opts.remote,
     });
 
+    // Designate the host. With an explicit primary, match it by name; with
+    // exactly one repo and no explicit primary, that lone repo is the host;
+    // otherwise no host (hosting stays disabled).
+    const hostName =
+        opts.primary && opts.repos.some((r) => r.submodule_name === opts.primary)
+            ? opts.primary
+            : opts.repos.length === 1
+                ? opts.repos[0].submodule_name
+                : undefined;
+
+    const members: ProjectJsonRepoInput[] = [];
     for (const r of opts.repos) {
         const submodulePath = `repos/${r.submodule_name}`;
         try {
@@ -411,6 +435,35 @@ export async function convertToAgiPlan(opts: ConvertPlanOpts): Promise<CreateAgi
                 `Failed to add submodule from ${r.source} → ${submodulePath}: ${(e as Error).message}`,
             );
         }
+        // Record the submodule's tracked branch so `git submodule update
+        // --remote` can advance the pin later. A freshly cloned submodule is
+        // normally on its default branch; a detached HEAD (clone pinned to a
+        // bare commit) has no symbolic ref, so we fall back to 'main'.
+        const branch = await readSubmoduleBranch(base.path, submodulePath);
+        try {
+            await execFileAsync(
+                'git',
+                ['config', '-f', '.gitmodules', `submodule.${r.submodule_name}.branch`, branch],
+                { cwd: base.path },
+            );
+        } catch {
+            /* best effort — the submodule still works without a tracked branch */
+        }
+        members.push({
+            name: r.submodule_name,
+            url: r.source,
+            branch,
+            isHost: r.submodule_name === hostName,
+        });
+    }
+
+    // Write the populated project.json (repos[] with role/branch/path + host
+    // designation), replacing the blank one createAgiEnvelope scaffolded.
+    if (members.length > 0) {
+        writeProjectJson(
+            base.path,
+            projectJsonFromRepos(opts.name, opts.slug, members),
+        );
     }
 
     for (const k of opts.knowledge) {
@@ -613,6 +666,32 @@ async function runGitSubmoduleAdd(
         const msg = (err.stderr ?? '').toString().trim() || err.message;
         throw new Error(msg);
     }
+}
+
+/**
+ * Resolve the tracked branch for a freshly-added submodule, used to set
+ * `submodule.<name>.branch` in `.gitmodules`. Reads the submodule's
+ * current branch via `symbolic-ref --short HEAD`. A submodule cloned at a
+ * pinned commit lands on a DETACHED HEAD (no symbolic ref) — there git
+ * exits non-zero, and we fall back to 'main' so `--remote` still has a
+ * branch to track.
+ */
+async function readSubmoduleBranch(
+    envelopePath: string,
+    submodulePath: string,
+): Promise<string> {
+    try {
+        const out = await execFileAsync(
+            'git',
+            ['-C', submodulePath, 'symbolic-ref', '--short', 'HEAD'],
+            { cwd: envelopePath },
+        );
+        const branch = out.stdout.trim();
+        if (branch) return branch;
+    } catch {
+        /* detached HEAD or git error — fall through to the default */
+    }
+    return 'main';
 }
 
 /**

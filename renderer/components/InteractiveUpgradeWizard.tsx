@@ -143,10 +143,17 @@ export default function InteractiveUpgradeWizard({
     // Monorepo only: 'explode' = one row per declared submodule; 'wrap' = the
     // monorepo becomes ONE submodule (the legacy single-repo behaviour).
     const [monorepoMode, setMonorepoMode] = useState<'explode' | 'wrap'>('explode');
+    // Monorepo explode only: submodule_name of the HOST (primary) member —
+    // the repo Aionima builds. The rest are packages it consumes from the
+    // registry. Defaults to the first included member.
+    const [primaryName, setPrimaryName] = useState<string>('');
 
     // Configure state
     const [projectId, setProjectId] = useState('');
     const [slug, setSlug] = useState('');
+    // True once the user has manually edited the slug — after that we stop
+    // auto-deriving it (from the source basename or the chosen primary).
+    const [slugTouched, setSlugTouched] = useState(false);
     const [parentFolder, setParentFolder] = useState('');
     const [primaryWorkspace, setPrimaryWorkspace] = useState<string | undefined>();
     const [remoteMode, setRemoteMode] = useState<'none' | 'paste' | 'github'>('none');
@@ -247,11 +254,17 @@ export default function InteractiveUpgradeWizard({
             setScan(r);
             // Monorepo defaults to EXPLODE: surface its member submodules as
             // rows. Everything else uses the detected repo candidates.
+            let explodeRows: RepoRow[] | null = null;
             if (r.source_kind === 'monorepo' && r.submodules.length > 0) {
                 setMonorepoMode('explode');
-                setRepoRows(await buildExplodeRows(r.submodules));
+                explodeRows = await buildExplodeRows(r.submodules);
+                setRepoRows(explodeRows);
+                // Default the host to the first included member.
+                const firstIncluded = explodeRows.find((row) => row.included);
+                setPrimaryName(firstIncluded?.submodule_name ?? '');
             } else {
                 setRepoRows(await buildWrapRows(r.repos));
+                setPrimaryName('');
             }
             setKnowledgeRows(
                 r.knowledge.map((c) => ({
@@ -267,12 +280,21 @@ export default function InteractiveUpgradeWizard({
                     target_subdir: e.suggested_target,
                 })),
             );
-            // Suggest a slug from the source folder's basename.
-            const leaf = folder
-                .replace(/[\\/]+$/, '')
-                .split(/[\\/]/)
-                .pop();
-            if (leaf && !slug) setSlug(leaf.replace(/\.agi$/i, ''));
+            // Suggest a slug. For a monorepo exploded into members, default
+            // it to the chosen primary's name; otherwise the source folder's
+            // basename. Only auto-set until the user edits the slug.
+            if (!slugTouched) {
+                const primaryRow = explodeRows?.find((row) => row.included);
+                if (primaryRow) {
+                    setSlug(primaryRow.submodule_name.replace(/\.agi$/i, ''));
+                } else {
+                    const leaf = folder
+                        .replace(/[\\/]+$/, '')
+                        .split(/[\\/]/)
+                        .pop();
+                    if (leaf) setSlug(leaf.replace(/\.agi$/i, ''));
+                }
+            }
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
             setScan(null);
@@ -290,10 +312,35 @@ export default function InteractiveUpgradeWizard({
         if (!scan || mode === monorepoMode) return;
         setMonorepoMode(mode);
         if (mode === 'explode') {
-            setRepoRows(await buildExplodeRows(scan.submodules));
+            const rows = await buildExplodeRows(scan.submodules);
+            setRepoRows(rows);
+            const firstIncluded = rows.find((row) => row.included);
+            setPrimaryName(firstIncluded?.submodule_name ?? '');
+            if (!slugTouched && firstIncluded) {
+                setSlug(firstIncluded.submodule_name.replace(/\.agi$/i, ''));
+            }
         } else {
             setRepoRows(await buildWrapRows(scan.repos));
+            setPrimaryName('');
         }
+    };
+
+    /**
+     * Choose the host (primary) member. When the slug is still
+     * auto-derived, re-derive it from the new primary's name so the
+     * envelope folder tracks the host repo.
+     */
+    const choosePrimary = (name: string) => {
+        setPrimaryName(name);
+        if (!slugTouched && name) {
+            setSlug(name.replace(/\.agi$/i, ''));
+        }
+    };
+
+    /** Slug edited by the user — stop auto-deriving from here on. */
+    const onSlugEdited = (v: string) => {
+        setSlugTouched(true);
+        setSlug(v);
     };
 
     const pickSourceFolder = async () => {
@@ -335,11 +382,40 @@ export default function InteractiveUpgradeWizard({
         return new Set(names).size === names.length;
     }, [repoRows]);
 
+    const isExplodeMono =
+        scan?.source_kind === 'monorepo' && monorepoMode === 'explode';
+
+    // Keep the host valid: if the chosen primary was unchecked or renamed
+    // away, repick the first included member so a host always exists while
+    // there are members. Uses submodule_name (the identity the plan uses).
+    useEffect(() => {
+        if (!isExplodeMono) return;
+        const included = repoRows.filter((r) => r.included);
+        if (included.length === 0) {
+            if (primaryName) setPrimaryName('');
+            return;
+        }
+        if (!included.some((r) => r.submodule_name.trim() === primaryName)) {
+            const next = included[0].submodule_name.trim();
+            setPrimaryName(next);
+            if (!slugTouched && next) setSlug(next.replace(/\.agi$/i, ''));
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isExplodeMono, repoRows, primaryName]);
+
+    // For an exploded monorepo, a host must be designated among the
+    // included members (the effect above guarantees one whenever members
+    // exist, so this just guards the empty-members edge).
+    const hostValid =
+        !isExplodeMono ||
+        repoRows.some((r) => r.included && r.submodule_name.trim() === primaryName);
+
     const planValid =
         slug.trim().length > 0 &&
         parentFolder.trim().length > 0 &&
         projectId.length > 0 &&
         repoNamesValid &&
+        hostValid &&
         // GitHub is needed when the envelope is auto-created on GitHub OR
         // any repo is set to fork (forking hits the GitHub API).
         ((remoteMode !== 'github' && !repoRows.some((r) => r.included && r.source_mode === 'fork')) ||
@@ -462,6 +538,10 @@ export default function InteractiveUpgradeWizard({
                               kind: r.kind,
                               target_subdir: r.target_subdir,
                           })),
+                // Host designation: only meaningful when exploding a
+                // monorepo into N members. Wrap/single-repo leave it unset
+                // (convert treats a lone repo as the host automatically).
+                primary: isExplodeMono ? primaryName : undefined,
                 remote,
             };
             setBusyStep('Building envelope + adding submodules…');
@@ -551,6 +631,9 @@ export default function InteractiveUpgradeWizard({
                                 void setMonorepoModeAndRebuild(m)
                             }
                             submoduleCount={scan?.submodules.length ?? 0}
+                            showPrimaryPicker={isExplodeMono}
+                            primaryName={primaryName}
+                            onChoosePrimary={choosePrimary}
                         />
                     </Carousel.Slide>
 
@@ -576,7 +659,7 @@ export default function InteractiveUpgradeWizard({
                             projectId={projectId}
                             setProjectId={setProjectId}
                             slug={slug}
-                            setSlug={setSlug}
+                            setSlug={onSlugEdited}
                             parentFolder={parentFolder}
                             onPickParent={pickParentFolder}
                             primaryWorkspace={primaryWorkspace}
@@ -766,6 +849,9 @@ function ReposStep({
     monorepoMode,
     onMonorepoModeChange,
     submoduleCount,
+    showPrimaryPicker,
+    primaryName,
+    onChoosePrimary,
 }: {
     kind: SourceKind;
     rows: RepoRow[];
@@ -775,6 +861,11 @@ function ReposStep({
     monorepoMode: 'explode' | 'wrap';
     onMonorepoModeChange: (m: 'explode' | 'wrap') => void;
     submoduleCount: number;
+    /** True when exploding a monorepo — show the host (primary) picker. */
+    showPrimaryPicker: boolean;
+    /** submodule_name of the currently-chosen host. */
+    primaryName: string;
+    onChoosePrimary: (name: string) => void;
 }) {
     const patchRow = (i: number, patch: Partial<RepoRow>) =>
         setRows((rs) => rs.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
@@ -847,6 +938,15 @@ function ReposStep({
                 <strong>Local</strong> submodules straight from the folder on disk.
             </Text>
 
+            {showPrimaryPicker && (
+                <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                    Pick the <strong>host</strong> — the one repo Aionima builds and
+                    hosts. The rest become <strong>packages</strong> the host consumes
+                    from the npm/composer registry (nothing in any build config is
+                    rewritten). The envelope slug defaults to the host’s name.
+                </Text>
+            )}
+
             {anyForkable && (
                 <div className="gh-inline">
                     <GitHubConnect account={account} />
@@ -857,6 +957,7 @@ function ReposStep({
                 <thead>
                     <tr>
                         <th />
+                        {showPrimaryPicker && <th>Host</th>}
                         <th>Source</th>
                         <th>repos/&lt;name&gt;</th>
                         <th>From</th>
@@ -882,6 +983,27 @@ function ReposStep({
                                         onChange={(e) => patchRow(i, { included: e.target.checked })}
                                     />
                                 </td>
+                                {showPrimaryPicker && (
+                                    <td style={{ textAlign: 'center' }}>
+                                        <input
+                                            type="radio"
+                                            name="agi-primary-host"
+                                            title={
+                                                r.included
+                                                    ? 'Make this the host (build target)'
+                                                    : 'Include the repo to make it the host'
+                                            }
+                                            checked={
+                                                r.included &&
+                                                r.submodule_name.trim() === primaryName
+                                            }
+                                            disabled={!r.included}
+                                            onChange={() =>
+                                                onChoosePrimary(r.submodule_name.trim())
+                                            }
+                                        />
+                                    </td>
+                                )}
                                 <td>
                                     <code>
                                         {r.rel_path === '.' ? '(this folder)' : `${r.rel_path}/`}
