@@ -907,7 +907,12 @@ function UpdatePill() {
                 {label}
             </button>
             {hover && (
-                <UpdatePopover version={version} changelog={changelog} ready={ready} />
+                <UpdatePopover
+                    version={version}
+                    changelog={changelog}
+                    ready={ready}
+                    willRestartPtyHost={!!status.willRestartPtyHost}
+                />
             )}
         </div>
     );
@@ -917,10 +922,12 @@ function UpdatePopover({
     version,
     changelog,
     ready,
+    willRestartPtyHost,
 }: {
     version: string;
     changelog: Changelog | null;
     ready: boolean;
+    willRestartPtyHost: boolean;
 }) {
     return (
         <div className="update-popover" role="tooltip">
@@ -928,6 +935,14 @@ function UpdatePopover({
                 <strong>Genie v{version}</strong>
                 <span>{ready ? 'downloaded — restart to install' : 'available'}</span>
             </div>
+            {willRestartPtyHost && (
+                <div className="up-warn" role="alert">
+                    Applying this update restarts your background terminals.
+                    Running sessions will be restored from a snapshot (command
+                    history is kept; live processes stop). Save or close anything
+                    important first.
+                </div>
+            )}
             {!changelog ? (
                 <div className="up-muted">Loading changes…</div>
             ) : changelog.groups.length === 0 ? (

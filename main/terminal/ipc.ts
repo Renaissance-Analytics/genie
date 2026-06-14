@@ -271,6 +271,18 @@ export function stopAllTerminals(): void {
 }
 
 /**
+ * True when terminal `id` currently has at least one attached window (its
+ * SerializeAddon can produce a snapshot via the before-quit broadcast).
+ * Exposed so the update-path host snapshot (genie-adapter
+ * snapshotHostTerminalsForUpdate) can skip windowed terminals without this
+ * module's owner registry leaking out.
+ */
+export function terminalHasWindow(id: string): boolean {
+    const entry = ownersByTerminal.get(id);
+    return !!entry && entry.owners.size > 0;
+}
+
+/**
  * Two-phase quit support (Tier 1). Broadcast a snapshot-request to every
  * window so each live terminal serializes its current buffer and sends a final
  * `terminal:snapshot` before its pty is killed. Returns immediately — the

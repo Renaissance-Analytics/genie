@@ -9,6 +9,10 @@ import {
     configureInProcessBackend,
     terminalManager,
     configureHostLifecycle,
+    getHostClient,
+    readPidfile,
+    isPidAlive,
+    deletePidfile,
     type SnapshotStore,
     type SettingsProvider,
     type Encryptor,
@@ -181,3 +185,120 @@ export function wireTerminalAdapter(dirname: string): void {
 /** Resolve the live active backend (in-process or host client). Re-exported so
  *  ipc.ts and quit helpers always hit the current backend after a T3 swap. */
 export { terminalManager };
+
+/**
+ * INTERIM STOPGAP for the auto-update path (Particle-Academy/fancy-term-host#2).
+ *
+ * The detached pty-host runs as Genie's `process.execPath` (+ ELECTRON_RUN_AS_NODE)
+ * so it PINS Genie's executable open. On a NORMAL quit that's the point — the host
+ * survives so terminals come back live (background.ts uses
+ * disconnectHostLeaveRunning). But on the AUTO-UPDATE path NSIS must OVERWRITE
+ * that binary, and a surviving host blocks it. The package has NO graceful
+ * `shutdownHost()` yet, so we terminate the host by its PIDFILE pid and wait
+ * (bounded) for it to actually die before the installer runs.
+ *
+ * Returns true if the host is confirmed dead (or was never running), false if it
+ * was still alive after the wait window. Best-effort + bounded so before-quit can
+ * never hang on it.
+ */
+export async function killHostForUpdate(
+    waitMs = 3000,
+): Promise<{ killed: boolean; alreadyDead: boolean }> {
+    const ud = app.getPath('userData');
+    let pf: ReturnType<typeof readPidfile> = null;
+    try {
+        pf = readPidfile(ud);
+    } catch {
+        pf = null;
+    }
+    // No pidfile or a dead pid → nothing to kill. Clean up a stale pidfile.
+    if (!pf || !isPidAlive(pf.pid)) {
+        try {
+            deletePidfile(ud);
+        } catch {
+            /* best-effort */
+        }
+        return { killed: false, alreadyDead: true };
+    }
+    try {
+        process.kill(pf.pid);
+    } catch {
+        // Already gone between the probe and the kill, or no permission.
+    }
+    // Poll until the host is dead or the bounded window elapses. SIGTERM
+    // (default) lets the host close its sockets; we don't escalate to SIGKILL
+    // here — the wait is short and the installer's own retry covers a laggard.
+    const deadline = Date.now() + Math.max(0, waitMs);
+    let alive = isPidAlive(pf.pid);
+    while (alive && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 50));
+        alive = isPidAlive(pf.pid);
+    }
+    try {
+        deletePidfile(ud);
+    } catch {
+        /* best-effort */
+    }
+    return { killed: !alive, alreadyDead: false };
+}
+
+/**
+ * Update-path snapshot for HOST-backed terminals (T1 floor before the host is
+ * killed). Mirrors snapshotRetainedWindowless, but for the DETACHED HOST: the
+ * host owns the ptys and their scrollback, so on the update path — where we are
+ * about to KILL the host — we must capture every host pty's history so the
+ * post-update COLD launch replays it (AttachResult.snapshot) instead of coming
+ * back fresh.
+ *
+ * Open windows already serialize via the before-quit terminal:snapshot-request →
+ * SerializeAddon → terminal:snapshot flow (a cleaner reconstruction), so those
+ * are skipped here to avoid clobbering them with raw bytes. Windowless host ptys
+ * (e.g. a detached dev server with no open window) have no renderer to serialize
+ * them — we pull the host's scrollback and write a raw-ANSI T1 snapshot; T1's
+ * restore resets the screen (\x1bc) before the fresh shell, so raw
+ * history-above-divider is the intended shape.
+ *
+ * `hasWindow(id)` lets ipc.ts inject its owner-registry knowledge without this
+ * module importing the registry. Best-effort + synchronous-ish; never throws.
+ */
+export function snapshotHostTerminalsForUpdate(
+    hasWindow: (id: string) => boolean,
+): number {
+    const client = getHostClient();
+    if (!client) return 0;
+    const store = getSnapshotStore();
+    let written = 0;
+    let ids: string[] = [];
+    try {
+        ids = client.list().map((t) => t.id);
+    } catch {
+        ids = [];
+    }
+    for (const id of ids) {
+        // Covered by the renderer snapshot broadcast → skip (cleaner output).
+        if (hasWindow(id)) continue;
+        let scrollback: string | undefined;
+        try {
+            scrollback = client.getScrollback(id);
+        } catch {
+            scrollback = undefined;
+        }
+        if (!scrollback) continue;
+        try {
+            const bytes = store.writeSnapshot(id, scrollback);
+            if (bytes == null) continue;
+            written++;
+            try {
+                updateTerminalSpec(id, {
+                    snapshot_at: Date.now(),
+                    snapshot_bytes: bytes,
+                });
+            } catch {
+                /* spec gone / db not ready — file is still written */
+            }
+        } catch {
+            /* best-effort */
+        }
+    }
+    return written;
+}

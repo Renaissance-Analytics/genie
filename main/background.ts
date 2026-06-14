@@ -10,13 +10,19 @@ import {
     stopAllTerminals,
     requestFinalSnapshots,
     snapshotRetainedWindowless,
+    terminalHasWindow,
 } from './terminal/ipc';
 import {
     initTerminalBackend,
     isHostBacked,
     disconnectHostLeaveRunning,
 } from '@particle-academy/fancy-term-host';
-import { wireTerminalAdapter } from './terminal/genie-adapter';
+import {
+    wireTerminalAdapter,
+    killHostForUpdate,
+    snapshotHostTerminalsForUpdate,
+} from './terminal/genie-adapter';
+import { isQuittingForUpdate } from './updater/quit-state';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
 import { registerUpdaterIpc, checkForUpdatesNow } from './updater/ipc';
@@ -428,13 +434,37 @@ app.whenReady().then(async () => {
     // hang on this. The wait is also unconditionally bounded by a timer, so a
     // wedged renderer can't block shutdown either.
     let snapshotFlushDone = false;
-    // Tier 3: when host-backed, the detached pty-host OWNS the ptys and must
-    // OUTLIVE the quit — we snapshot (T1 floor, in case the host later dies) and
-    // disconnect the client, but we DO NOT kill anything. teardownTerminals()
-    // picks the right behaviour for the active backend.
-    const teardownTerminals = () => {
+    // Teardown picks behaviour by (a) active backend and (b) WHY we're quitting:
+    //
+    //   • NORMAL quit, host-backed   → disconnectHostLeaveRunning(). The detached
+    //     pty-host OWNS the ptys and must OUTLIVE the quit so the next launch
+    //     reattaches live sessions. We snapshot first (T1 floor) but DO NOT kill.
+    //   • NORMAL quit, in-process    → stopAllTerminals() (kill the ptys we own).
+    //   • UPDATE quit, host-backed   → the host PINS Genie's binary (it runs as
+    //     execPath), so NSIS can't overwrite it. Snapshot every host terminal
+    //     (so restore replays history, not fresh) then KILL the host by its
+    //     pidfile pid and WAIT (bounded) for it to die before quitAndInstall's
+    //     installer runs. INTERIM STOPGAP — proper fix is the host-as-OS-service
+    //     (Particle-Academy/fancy-term-host#2).
+    //   • UPDATE quit, in-process    → stopAllTerminals() (no host to worry about).
+    //
+    // Returns a promise so the before-quit second phase can AWAIT the bounded
+    // host kill before letting the quit proceed.
+    const teardownTerminals = async (): Promise<void> => {
+        const forUpdate = isQuittingForUpdate();
         if (isHostBacked()) {
-            disconnectHostLeaveRunning();
+            if (forUpdate) {
+                // Snapshot windowless host ptys (windowed ones are covered by the
+                // renderer snapshot broadcast) BEFORE the host dies, so the cold
+                // post-update launch replays their history.
+                snapshotHostTerminalsForUpdate(terminalHasWindow);
+                // Disconnect the client first (no lingering socket), then kill the
+                // host so the installer can replace the pinned binary.
+                disconnectHostLeaveRunning();
+                await killHostForUpdate();
+            } else {
+                disconnectHostLeaveRunning();
+            }
         } else {
             stopAllTerminals();
         }
@@ -446,19 +476,27 @@ app.whenReady().then(async () => {
         // replays on the next launch. (Host-backed: this is the resilience floor
         // if the detached host is later killed externally.)
         snapshotRetainedWindowless();
-        // Nothing window-side to snapshot if no window is open — tear down
-        // immediately (the windowless retained snapshot above already ran).
-        if (BrowserWindow.getAllWindows().length === 0) {
+        // On the UPDATE path the host kill is async + bounded, so we must always
+        // take the preventDefault → await → re-quit two-phase even with no window
+        // open (otherwise the synchronous return would quit before the host dies).
+        const forUpdate = isQuittingForUpdate();
+        if (BrowserWindow.getAllWindows().length === 0 && !forUpdate) {
+            // Nothing window-side to snapshot and a normal quit — tear down
+            // immediately (the windowless retained snapshot above already ran).
             snapshotFlushDone = true;
-            teardownTerminals();
+            void teardownTerminals();
             return;
         }
         event.preventDefault();
-        requestFinalSnapshots();
+        if (BrowserWindow.getAllWindows().length > 0) requestFinalSnapshots();
+        // Give the renderer ~250ms to land its final snapshots, THEN run the
+        // teardown (which on the update path kills the host + waits up to ~3s),
+        // THEN re-trigger the quit. The whole chain is bounded so quit can't hang.
         setTimeout(() => {
-            snapshotFlushDone = true;
-            teardownTerminals();
-            app.quit(); // re-trigger; the guard above lets it through now
+            void teardownTerminals().finally(() => {
+                snapshotFlushDone = true;
+                app.quit(); // re-trigger; the guard above lets it through now
+            });
         }, 250);
     });
     registerProtocolHandler();

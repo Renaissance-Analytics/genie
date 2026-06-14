@@ -136,6 +136,14 @@ export interface UpdaterStatus {
     repo?: string | null;
     /** Only meaningful during phase-2 download: 0..1. */
     progress?: number | null;
+    /**
+     * True when APPLYING this update will restart the detached pty-host —
+     * i.e. a host-backed build with detached terminals running. On the update
+     * path the host pins Genie's binary so it must be killed for NSIS to
+     * replace it; live terminals come back from a snapshot (history kept,
+     * running processes stop). The update pill warns the user when this is set.
+     */
+    willRestartPtyHost?: boolean;
 }
 
 export interface UpdaterConfig {

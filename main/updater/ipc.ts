@@ -9,6 +9,7 @@ import { getAllSettings, setSettings } from '../db';
 import { setUpdateAvailable } from '../tray';
 import { showSettingsWindow } from '../background';
 import { getChangelog, type Changelog } from './changelog';
+import { isHostBacked } from '@particle-academy/fancy-term-host';
 
 /**
  * Unified IPC for the updater. The renderer doesn't know whether it's
@@ -60,17 +61,17 @@ export function registerUpdaterIpc(): void {
 
     ipcMain.handle('updater:mode', () => mode);
 
-    ipcMain.handle('updater:status', (): UpdaterStatus | AutoUpdaterStatus => {
-        return mode === 'phase1' ? u.getStatus() : a.getStatus();
+    ipcMain.handle('updater:status', () => {
+        return withHostFlag(mode === 'phase1' ? u.getStatus() : a.getStatus());
     });
 
     ipcMain.handle('updater:check', async (): Promise<unknown> => {
         if (mode === 'phase1') {
             await u.checkForUpdate();
-            return u.getStatus();
+            return withHostFlag(u.getStatus());
         }
         await a.checkForUpdate();
-        return a.getStatus();
+        return withHostFlag(a.getStatus());
     });
 
     ipcMain.handle(
@@ -125,15 +126,36 @@ export function registerUpdaterIpc(): void {
 
     // Status + log fanout. Both backends emit the same events.
     u.on('status', (status) => {
-        broadcastStatus(status);
+        broadcastStatus(withHostFlag(status));
         reflectUpdateState(status as UpdaterStatus);
     });
     u.on('log', (line: string) => broadcastLog(line));
     a.on('status', (status) => {
-        broadcastStatus(status);
+        broadcastStatus(withHostFlag(status));
         reflectUpdateState(status as AutoUpdaterStatus);
     });
     a.on('log', (line: string) => broadcastLog(line));
+}
+
+/**
+ * Decorate a status payload with whether APPLYING an update will restart the
+ * detached pty-host. On the update path a host-backed build must KILL the host
+ * (it pins Genie's binary so NSIS can replace it — see quit-state.ts), which
+ * means any running detached terminals restart from a snapshot. The update pill
+ * uses this to warn the user BEFORE they apply so they can save/close live
+ * sessions first. `willRestartPtyHost` === `isHostBacked()` (detached terminals
+ * active + host alive).
+ */
+export function withHostFlag(
+    status: UpdaterStatus | AutoUpdaterStatus,
+): (UpdaterStatus | AutoUpdaterStatus) & { willRestartPtyHost: boolean } {
+    let willRestartPtyHost = false;
+    try {
+        willRestartPtyHost = isHostBacked();
+    } catch {
+        /* defensive: never let the host probe break the status payload */
+    }
+    return { ...status, willRestartPtyHost };
 }
 
 /**

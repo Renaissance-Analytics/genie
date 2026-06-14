@@ -1,6 +1,7 @@
 import { app } from 'electron';
 import { autoUpdater, type UpdateInfo } from 'electron-updater';
 import { EventEmitter } from 'node:events';
+import { markQuittingForUpdate } from './quit-state';
 
 /**
  * Phase 2 packaged-app updater. Wraps `electron-updater` so the
@@ -152,6 +153,13 @@ class AutoUpdater extends EventEmitter {
         if (this.status.state !== 'ready-to-restart') {
             throw new Error('No update has been downloaded yet.');
         }
+        // Signal the before-quit teardown that this quit is an UPDATE apply,
+        // not a normal quit. With a detached pty-host alive, the host pins
+        // Genie's binary (it runs as `execPath` + ELECTRON_RUN_AS_NODE) and
+        // NSIS can't overwrite it; the teardown reads this flag to snapshot +
+        // KILL the host so the installer can replace the binary. MUST be set
+        // BEFORE quitAndInstall so before-quit sees it. (See quit-state.ts.)
+        markQuittingForUpdate();
         // `quitAndInstall(isSilent, isForceRunAfter)`:
         //   isSilent=false  — show the installer UI (Windows NSIS)
         //   isForceRunAfter=true — relaunch Genie after install
