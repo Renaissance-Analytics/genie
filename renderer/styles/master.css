@@ -572,6 +572,92 @@
     background: #e11d48;
 }
 
+/* Manual-quit terminal confirmation (T3) — wider than a plain prompt to fit the
+   per-terminal checklist. Reuses the prompt-scrim/card/btn chrome. */
+.quit-terms-card {
+    width: 460px;
+}
+.quit-terms-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.quit-terms-title svg {
+    color: #f59e0b;
+    flex: none;
+}
+.quit-terms-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 280px;
+    overflow-y: auto;
+    margin: 2px 0;
+    padding: 2px;
+}
+.quit-term-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md);
+    background: var(--card);
+    cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-out);
+}
+.quit-term-row:hover {
+    background: var(--bg-2);
+}
+.quit-term-row input {
+    accent-color: var(--agent);
+    width: 15px;
+    height: 15px;
+    flex: none;
+    cursor: pointer;
+}
+.quit-term-row.shutting {
+    opacity: 0.62;
+}
+.quit-term-main {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+    flex: 1;
+}
+.quit-term-label {
+    font-size: 12.5px;
+    color: var(--fg-1);
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.quit-term-meta {
+    font-size: 10.5px;
+    color: var(--fg-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.quit-term-state {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex: none;
+    color: var(--fg-3);
+}
+.quit-term-row:not(.shutting) .quit-term-state {
+    color: #10b981;
+}
+.quit-term-row.shutting .quit-term-state {
+    color: #f43f5e;
+}
+.quit-terms-actions {
+    flex-wrap: wrap;
+}
+
 .seg {
     display: inline-flex;
     padding: 3px;

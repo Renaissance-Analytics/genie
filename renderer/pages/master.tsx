@@ -3,6 +3,9 @@ import Chooser from '../components/Master/Chooser';
 import ProjectContextMenu from '../components/Master/ProjectContextMenu';
 import SpecContextMenu from '../components/Master/SpecContextMenu';
 import { PromptHost, showPrompt } from '../components/Master/Prompt';
+import QuitTerminalsModal, {
+    type QuitTerminal,
+} from '../components/Master/QuitTerminalsModal';
 import TerminalGrid, {
     type LayoutMode,
 } from '../components/Master/TerminalGrid';
@@ -129,6 +132,27 @@ function MasterInner() {
     useEffect(() => {
         return api().on.terminalHostStatus((p) => setToast(p.message));
     }, []);
+
+    // Manual-quit terminal confirmation (T3). Main broadcasts the live host
+    // terminals when the user quits with detached terminals running; we show a
+    // modal and reply with the keep/kill decision. Null = no dialog up. The
+    // master window is the only one that registers this (the dialog is shown in
+    // whichever window main picks; all windows subscribe so any can host it).
+    const [quitTerminals, setQuitTerminals] = useState<QuitTerminal[] | null>(
+        null,
+    );
+    useEffect(() => {
+        return api().on.confirmQuitTerminals((p) => {
+            setQuitTerminals(p.terminals ?? []);
+        });
+    }, []);
+    const decideQuit = useCallback(
+        (decision: { confirmed: boolean; keepIds: string[] }) => {
+            setQuitTerminals(null);
+            api().app.quitDecision(decision);
+        },
+        [],
+    );
 
     const workspacesById = useMemo(() => {
         const m = new Map<string, WorkspaceRow>();
@@ -808,6 +832,15 @@ function MasterInner() {
             </div>
 
             <PromptHost />
+
+            {quitTerminals && (
+                <QuitTerminalsModal
+                    terminals={quitTerminals}
+                    specs={specs}
+                    workspacesById={workspacesById}
+                    onDecision={decideQuit}
+                />
+            )}
 
             {toast && (
                 <div className="g-toast" role="status" onClick={() => setToast(null)}>

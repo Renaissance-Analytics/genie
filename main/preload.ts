@@ -159,6 +159,15 @@ const api = {
         openStage: (workspaceId?: string) =>
             ipcRenderer.invoke('app:open-stage', workspaceId),
         quit: () => ipcRenderer.invoke('app:quit'),
+        /**
+         * Reply to the manual-quit terminal confirmation (see
+         * on.confirmQuitTerminals). `confirmed:false` aborts the quit; otherwise
+         * `keepIds` are the host terminals to LEAVE RUNNING — every other live one
+         * is killed before quit. Fire-and-forget `send` (main is just listening),
+         * not invoke, since the main side completes the quit on its own.
+         */
+        quitDecision: (payload: { confirmed: boolean; keepIds: string[] }) =>
+            ipcRenderer.send('app:quit-decision', payload),
         autostart: {
             get: () =>
                 ipcRenderer.invoke('app:autostart:get') as Promise<{
@@ -341,6 +350,27 @@ const api = {
             ) => cb(payload);
             ipcRenderer.on('terminal:host-status', handler);
             return () => ipcRenderer.off('terminal:host-status', handler);
+        },
+        /**
+         * Manual-quit terminal confirmation (T3). Main asks the master window to
+         * confirm which detached terminals to keep running vs shut down before
+         * Genie quits. The renderer shows a modal and replies via
+         * app.quitDecision(). Payload carries the live host terminals (id + pid +
+         * shell); the renderer joins ids → spec label/workspace itself.
+         */
+        confirmQuitTerminals: (
+            cb: (payload: {
+                terminals: Array<{ id: string; pid: number; shell: string }>;
+            }) => void,
+        ) => {
+            const handler = (
+                _e: unknown,
+                payload: {
+                    terminals: Array<{ id: string; pid: number; shell: string }>;
+                },
+            ) => cb(payload);
+            ipcRenderer.on('app:confirm-quit-terminals', handler);
+            return () => ipcRenderer.off('app:confirm-quit-terminals', handler);
         },
         updaterStatus: (cb: (status: unknown) => void) => {
             const handler = (_e: unknown, payload: unknown) => cb(payload);

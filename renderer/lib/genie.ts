@@ -464,6 +464,12 @@ interface GenieApi {
         showMain: () => Promise<{ ok: boolean }>;
         openStage: (workspaceId?: string) => Promise<{ ok: boolean }>;
         quit: () => Promise<{ ok: boolean }>;
+        /**
+         * Reply to the manual-quit terminal confirmation (see
+         * on.confirmQuitTerminals). `confirmed:false` aborts the quit; otherwise
+         * `keepIds` are the host terminals to leave running. Fire-and-forget.
+         */
+        quitDecision: (payload: { confirmed: boolean; keepIds: string[] }) => void;
         autostart: {
             get: () => Promise<{
                 enabled: boolean;
@@ -667,6 +673,16 @@ interface GenieApi {
         /** Tier 3 detached-host status — fired on fallback to in-process. */
         terminalHostStatus: (
             cb: (payload: { message: string; level: 'info' | 'warn' }) => void,
+        ) => () => void;
+        /**
+         * Manual-quit terminal confirmation (T3). Main asks the master window to
+         * pick which detached terminals to keep running vs shut down before quit.
+         * Reply via app.quitDecision().
+         */
+        confirmQuitTerminals: (
+            cb: (payload: {
+                terminals: Array<{ id: string; pid: number; shell: string }>;
+            }) => void,
         ) => () => void;
         updaterStatus: (cb: (status: UpdaterStatus) => void) => () => void;
         updaterLog: (cb: (payload: { line: string }) => void) => () => void;

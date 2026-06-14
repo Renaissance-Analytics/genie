@@ -22,6 +22,12 @@ import {
     killHostForUpdate,
     snapshotHostTerminalsForUpdate,
 } from './terminal/genie-adapter';
+import {
+    liveHostTerminals,
+    shouldConfirmQuit,
+    confirmQuitTerminals,
+    pickDialogWindow,
+} from './terminal/quit-confirm';
 import { isQuittingForUpdate } from './updater/quit-state';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
@@ -434,6 +440,13 @@ app.whenReady().then(async () => {
     // hang on this. The wait is also unconditionally bounded by a timer, so a
     // wedged renderer can't block shutdown either.
     let snapshotFlushDone = false;
+    // Manual-quit terminal confirmation (T3). When host-backed, a normal quit
+    // leaves the ptys running in the detached host. Before doing that silently
+    // we ask the user which terminals to keep vs shut down. This guards the
+    // before-quit re-entry: while the dialog is up we've preventDefault'd and
+    // are awaiting the renderer's decision; a stray second quit must not stack
+    // another dialog.
+    let quitConfirmInFlight = false;
     // Teardown picks behaviour by (a) active backend and (b) WHY we're quitting:
     //
     //   • NORMAL quit, host-backed   → disconnectHostLeaveRunning(). The detached
@@ -470,12 +483,68 @@ app.whenReady().then(async () => {
             stopAllTerminals();
         }
     };
+    // The teardown+re-quit tail, shared by every path that proceeds to actually
+    // quit (normal, post-confirm, post-timeout, no-window). Runs the backend
+    // teardown (host-backed normal → disconnectHostLeaveRunning leaves the kept
+    // terminals running; update → kills the host) then re-triggers app.quit(),
+    // which the snapshotFlushDone guard now lets pass straight through.
+    const finishQuit = (): void => {
+        void teardownTerminals().finally(() => {
+            snapshotFlushDone = true;
+            quitConfirmInFlight = false;
+            app.quit();
+        });
+    };
+
+    // Drive the manual-quit confirmation: broadcast the live host terminals to
+    // the chosen window and await the renderer's decision (via the tested
+    // confirmQuitTerminals orchestrator — bounded timeout, one-shot listener).
+    //   - 'cancelled' → abort the quit; clear the in-flight flag so a later quit
+    //                   re-asks. Nothing torn down, Genie stays open.
+    //   - 'proceed'   → the deselected terminals were already killed; run the
+    //                   teardown tail (leaves the kept ones running) + quit.
+    const runQuitConfirmThenQuit = (
+        liveTerminals: ReturnType<typeof liveHostTerminals>,
+    ): void => {
+        const win = pickDialogWindow();
+        if (!win) {
+            // No-window fallback: nothing to host the dialog (e.g. tray quit with
+            // all windows closed). Don't block — fall back to today's behaviour
+            // (disconnectHostLeaveRunning leaves all running) and quit.
+            finishQuit();
+            return;
+        }
+        void confirmQuitTerminals({
+            liveTerminals,
+            send: (channel, payload) => win.webContents.send(channel, payload),
+            focusWindow: () => {
+                win.show();
+                win.focus();
+            },
+        }).then((outcome) => {
+            if (outcome === 'cancelled') {
+                quitConfirmInFlight = false;
+                return;
+            }
+            finishQuit();
+        });
+    };
+
     app.on('before-quit', (event) => {
         if (snapshotFlushDone) return; // re-entry: let the quit proceed
-        // Tier 2 → Tier 1 degrade: snapshot any RETAINED-but-windowless ptys
-        // from their scrollback before we tear down, so a suspended dev server
-        // replays on the next launch. (Host-backed: this is the resilience floor
-        // if the detached host is later killed externally.)
+        // While the confirm dialog is up we've already preventDefault'd and are
+        // awaiting the renderer; swallow any stray re-quit so we don't stack a
+        // second dialog or double-teardown.
+        if (quitConfirmInFlight) {
+            event.preventDefault();
+            return;
+        }
+        // PHASE 1 — SNAPSHOT. Tier 2 → Tier 1 degrade: snapshot any RETAINED-but-
+        // windowless ptys from their scrollback before we tear down, so a
+        // suspended dev server replays on the next launch. (Host-backed: this is
+        // the resilience floor if the detached host is later killed externally.)
+        // This ALWAYS runs first, so even a terminal the user later chooses to
+        // shut down still has a replayable snapshot next launch.
         snapshotRetainedWindowless();
         // On the UPDATE path the host kill is async + bounded, so we must always
         // take the preventDefault → await → re-quit two-phase even with no window
@@ -490,14 +559,30 @@ app.whenReady().then(async () => {
         }
         event.preventDefault();
         if (BrowserWindow.getAllWindows().length > 0) requestFinalSnapshots();
-        // Give the renderer ~250ms to land its final snapshots, THEN run the
-        // teardown (which on the update path kills the host + waits up to ~3s),
-        // THEN re-trigger the quit. The whole chain is bounded so quit can't hang.
+        // Give the renderer ~250ms to land its final snapshots, THEN advance the
+        // state machine. The whole chain is bounded so quit can't hang.
         setTimeout(() => {
-            void teardownTerminals().finally(() => {
-                snapshotFlushDone = true;
-                app.quit(); // re-trigger; the guard above lets it through now
-            });
+            // PHASE 2 — CONFIRM (manual quit only). After the snapshot flush, on a
+            // MANUAL quit that's host-backed with ≥1 live host terminal AND a
+            // window open, ask the user which terminals to keep vs shut down. The
+            // update path skips this entirely (forUpdate gate) — it snapshots +
+            // shuts the whole host down for the binary swap. In-process / no-
+            // terminals / no-window all fall through to the teardown tail.
+            const liveTerminals = forUpdate ? [] : liveHostTerminals();
+            const confirm =
+                !forUpdate &&
+                shouldConfirmQuit({
+                    hostBacked: isHostBacked(),
+                    liveTerminals,
+                    hasOpenWindow: BrowserWindow.getAllWindows().length > 0,
+                });
+            if (confirm) {
+                quitConfirmInFlight = true;
+                runQuitConfirmThenQuit(liveTerminals);
+                return;
+            }
+            // PHASE 3 — TEARDOWN + QUIT (no confirmation needed).
+            finishQuit();
         }, 250);
     });
     registerProtocolHandler();
