@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import {
     IconBox,
     IconCode,
+    IconCopy,
     IconListTree,
     IconPlus,
     IconTrash,
@@ -21,6 +22,7 @@ interface Props {
     onNewFile: () => void;
     onNewFolder: () => void;
     onRename: () => void;
+    onDuplicate: () => void;
     onDelete: () => void;
     onCopyPath: () => void;
 }
@@ -41,6 +43,7 @@ export default function FileTreeContextMenu({
     onNewFile,
     onNewFolder,
     onRename,
+    onDuplicate,
     onDelete,
     onCopyPath,
 }: Props) {
@@ -147,6 +150,16 @@ export default function FileTreeContextMenu({
                                 onClose();
                             }}
                         />
+                        {!isFolder && (
+                            <CtxItem
+                                icon={<IconCopy size={14} />}
+                                label="Duplicate"
+                                onClick={() => {
+                                    onDuplicate();
+                                    onClose();
+                                }}
+                            />
+                        )}
                         <CtxItem
                             icon={<IconTrash size={14} />}
                             label="Delete"

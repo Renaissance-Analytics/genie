@@ -219,6 +219,11 @@ const api = {
             ipcRenderer.invoke('files:rename', workspacePath, fromRel, toRel) as Promise<{
                 ok: boolean;
             }>,
+        duplicate: (workspacePath: string, relPath: string) =>
+            ipcRenderer.invoke('files:duplicate', workspacePath, relPath) as Promise<{
+                ok: boolean;
+                relPath: string;
+            }>,
         delete: (workspacePath: string, relPath: string) =>
             ipcRenderer.invoke('files:delete', workspacePath, relPath) as Promise<{
                 ok: boolean;

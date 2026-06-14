@@ -508,6 +508,10 @@ interface GenieApi {
             fromRel: string,
             toRel: string,
         ) => Promise<{ ok: boolean }>;
+        duplicate: (
+            workspacePath: string,
+            relPath: string,
+        ) => Promise<{ ok: boolean; relPath: string }>;
         delete: (
             workspacePath: string,
             relPath: string,

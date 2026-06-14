@@ -5,6 +5,7 @@ import {
     createFile,
     createFolder,
     deletePath,
+    duplicatePath,
     listTree,
     readFile,
     renamePath,
@@ -300,5 +301,63 @@ describe('files:delete path-guard', () => {
         const dir = makeTmpDir('dl-root');
         await expect(deletePath(dir, '.')).rejects.toThrow(/Invalid path/);
         expect(fs.existsSync(dir)).toBe(true);
+    });
+});
+
+describe('files:duplicate', () => {
+    it('copies a file to a -copy sibling and returns the new path', async () => {
+        const dir = makeTmpDir('dup-basic');
+        fs.writeFileSync(path.join(dir, 'notes.txt'), 'hello');
+        const r = await duplicatePath(dir, 'notes.txt');
+        expect(r.ok).toBe(true);
+        expect(r.relPath).toBe('notes-copy.txt');
+        expect(fs.readFileSync(path.join(dir, 'notes-copy.txt'), 'utf8')).toBe('hello');
+        // Original is untouched.
+        expect(fs.readFileSync(path.join(dir, 'notes.txt'), 'utf8')).toBe('hello');
+    });
+
+    it('inserts -copy before the extension and keeps the folder', async () => {
+        const dir = makeTmpDir('dup-sub');
+        fs.mkdirSync(path.join(dir, 'src'));
+        fs.writeFileSync(path.join(dir, 'src', 'index.ts'), 'x');
+        const r = await duplicatePath(dir, 'src/index.ts');
+        expect(r.relPath).toBe('src/index-copy.ts');
+        expect(fs.existsSync(path.join(dir, 'src', 'index-copy.ts'))).toBe(true);
+    });
+
+    it('disambiguates with -copy-N when a copy already exists', async () => {
+        const dir = makeTmpDir('dup-collide');
+        fs.writeFileSync(path.join(dir, 'a.txt'), '1');
+        fs.writeFileSync(path.join(dir, 'a-copy.txt'), 'existing');
+        const r = await duplicatePath(dir, 'a.txt');
+        expect(r.relPath).toBe('a-copy-2.txt');
+        // The pre-existing copy is never clobbered.
+        expect(fs.readFileSync(path.join(dir, 'a-copy.txt'), 'utf8')).toBe('existing');
+    });
+
+    it('appends -copy when the file has no extension', async () => {
+        const dir = makeTmpDir('dup-noext');
+        fs.writeFileSync(path.join(dir, 'Makefile'), 'all:');
+        const r = await duplicatePath(dir, 'Makefile');
+        expect(r.relPath).toBe('Makefile-copy');
+    });
+
+    it('refuses to duplicate a folder', async () => {
+        const dir = makeTmpDir('dup-folder');
+        fs.mkdirSync(path.join(dir, 'pkg'));
+        await expect(duplicatePath(dir, 'pkg')).rejects.toThrow(/Not a file/);
+    });
+
+    it('rejects a source that escapes the workspace', async () => {
+        const dir = makeTmpDir('dup-dotdot');
+        const sibling = makeTmpDir('dup-target');
+        fs.writeFileSync(path.join(sibling, 'secret.txt'), 's');
+        const rel = path.relative(dir, path.join(sibling, 'secret.txt'));
+        await expect(duplicatePath(dir, rel)).rejects.toThrow(/escapes workspace/);
+    });
+
+    it('refuses to duplicate the workspace root', async () => {
+        const dir = makeTmpDir('dup-root');
+        await expect(duplicatePath(dir, '.')).rejects.toThrow(/Invalid path/);
     });
 });

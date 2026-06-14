@@ -182,6 +182,21 @@ export default function FileTree({
         }
     };
 
+    const handleDuplicate = async (node: TreeNodeData) => {
+        if (node.type === 'folder') return; // file-only op
+        try {
+            const { relPath } = await api().files.duplicate(workspacePath, node.id);
+            await onTreeChanged();
+            onOpenCreatedFile(relPath); // select + open the new copy
+        } catch (e) {
+            await showPrompt({
+                title: 'Could not duplicate',
+                body: e instanceof Error ? e.message : String(e),
+                confirmLabel: 'OK',
+            });
+        }
+    };
+
     const handleCopyPath = async (node: TreeNodeData) => {
         try {
             await navigator.clipboard.writeText(node.id);
@@ -222,6 +237,7 @@ export default function FileTree({
                     onNewFile={() => void handleNewFile(menu.node)}
                     onNewFolder={() => void handleNewFolder(menu.node)}
                     onRename={() => menu.node && void handleRename(menu.node)}
+                    onDuplicate={() => menu.node && void handleDuplicate(menu.node)}
                     onDelete={() => menu.node && void handleDelete(menu.node)}
                     onCopyPath={() => menu.node && void handleCopyPath(menu.node)}
                 />

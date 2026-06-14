@@ -258,6 +258,60 @@ export async function renamePath(
 }
 
 /**
+ * Build a `-copy` sibling name for `name`, inserting the suffix BEFORE the
+ * extension: `foo.txt` → `foo-copy.txt`, `Makefile` → `Makefile-copy`,
+ * `.gitignore` → `.gitignore-copy`. `n` (2, 3, …) disambiguates collisions:
+ * `foo-copy-2.txt`.
+ */
+function copyName(name: string, n: number): string {
+    const ext = path.extname(name);
+    const base = ext ? name.slice(0, -ext.length) : name;
+    const suffix = n > 1 ? `-copy-${n}` : '-copy';
+    return `${base}${suffix}${ext}`;
+}
+
+/**
+ * Duplicate the file at `relPath` as a `-copy` sibling, returning the new
+ * workspace-relative path. Picks the first free `-copy` / `-copy-N` name so an
+ * existing copy is never clobbered. Path-guarded on both ends; the workspace
+ * root and folders are rejected (duplicate is a file-only op).
+ */
+export async function duplicatePath(
+    workspacePath: string,
+    relPath: string,
+): Promise<{ ok: boolean; relPath: string }> {
+    const from = guardedResolve(workspacePath, relPath);
+    if (!from) throw new Error('Path escapes workspace');
+    if (from === path.resolve(workspacePath)) throw new Error('Invalid path');
+    const stat = await fsp.stat(from);
+    if (!stat.isFile()) throw new Error('Not a file');
+
+    const dir = path.dirname(from);
+    const name = path.basename(from);
+    const norm = relPath.replace(/\\/g, '/');
+    const slash = norm.lastIndexOf('/');
+    const relDir = slash === -1 ? '' : norm.slice(0, slash);
+
+    // Find the first free -copy name in the source folder.
+    for (let n = 1; n <= 1000; n++) {
+        const candidate = copyName(name, n);
+        const toAbs = path.join(dir, candidate);
+        // Keep the destination inside the workspace (defensive — the source
+        // already is, so a sibling is too, but guard anyway).
+        const toRel = relDir ? `${relDir}/${candidate}` : candidate;
+        if (!guardedResolve(workspacePath, toRel)) continue;
+        const taken = await fsp
+            .access(toAbs)
+            .then(() => true)
+            .catch(() => false);
+        if (taken) continue;
+        await fsp.copyFile(from, toAbs);
+        return { ok: true, relPath: toRel };
+    }
+    throw new Error('Too many copies');
+}
+
+/**
  * Delete the node at `relPath`. Recursive for folders. Path-guarded; the
  * workspace root itself can never be deleted.
  */
@@ -300,6 +354,11 @@ export function registerFilesIpc(): void {
         'files:rename',
         (_e, workspacePath: string, fromRel: string, toRel: string) =>
             renamePath(workspacePath, fromRel, toRel),
+    );
+    ipcMain.handle(
+        'files:duplicate',
+        (_e, workspacePath: string, relPath: string) =>
+            duplicatePath(workspacePath, relPath),
     );
     ipcMain.handle(
         'files:delete',
