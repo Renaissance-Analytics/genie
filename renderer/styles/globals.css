@@ -87,6 +87,35 @@ body {
     box-sizing: border-box;
 }
 
+/* ===== Thin scrollbars (global) =======================================
+   Electron renders the chunky default Chromium bars in every scroll
+   container (Chooser flyout, Code-tree, editor gutter, modals, settings,
+   terminal panels). Slim them everywhere with a theme-tokened thumb.
+   Firefox/standard property + WebKit pseudo-elements cover both engines.
+   The thumb uses --border-2 (subtle), stronger on hover; the track is
+   transparent so it reads as an overlay rather than a gutter. */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-2) transparent;
+}
+*::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+*::-webkit-scrollbar-track {
+    background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+    background: var(--border-2);
+    border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+    background: var(--fg-4);
+}
+*::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
 .input {
     width: 100%;
     height: 36px;

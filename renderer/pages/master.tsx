@@ -113,6 +113,8 @@ function MasterInner() {
         y: number;
     } | null>(null);
     const [addingWorkspace, setAddingWorkspace] = useState(false);
+    // Max panels visible per workspace (Settings → max_views, default 4).
+    const [maxViews, setMaxViews] = useState(4);
 
     const workspacesById = useMemo(() => {
         const m = new Map<string, WorkspaceRow>();
@@ -174,6 +176,23 @@ function MasterInner() {
             off();
         };
     }, [refresh, refreshAuth]);
+
+    // Load the max_views setting and keep it fresh — the Settings screen is
+    // a separate window, so re-read whenever this window regains focus.
+    useEffect(() => {
+        const load = () => {
+            void api()
+                .settings.get()
+                .then((s) => {
+                    const n = parseInt(String(s.max_views ?? '4'), 10);
+                    if (Number.isFinite(n) && n > 0) setMaxViews(n);
+                })
+                .catch(() => {});
+        };
+        load();
+        window.addEventListener('focus', load);
+        return () => window.removeEventListener('focus', load);
+    }, []);
 
     useEffect(() => {
         if (!stageSeedWorkspace || specs.length === 0 || selected.size > 0) return;
@@ -466,6 +485,11 @@ function MasterInner() {
         return ids;
     }, [selectedSpecs]);
 
+    // Enforce max_views: count only the ACTIVE workspace's visible views.
+    // When at the cap, the Add affordances disable with a hint to raise it.
+    const atMaxViews = selectedSpecs.length >= maxViews;
+    const maxViewsReason = `Max views reached (${maxViews}) — raise it in Settings`;
+
     if (authChecked && !signedIn) {
         return (
             <div className="gwrap" id="app">
@@ -536,6 +560,8 @@ function MasterInner() {
                     onAddView={(type) =>
                         activeWorkspaceId && void addSpec(activeWorkspaceId, type)
                     }
+                    addDisabled={atMaxViews}
+                    addDisabledReason={maxViewsReason}
                 />
                 <div className="gbody">
                     <Chooser
@@ -562,6 +588,9 @@ function MasterInner() {
                         specs={selectedSpecs}
                         backgroundSpecs={backgroundSpecs}
                         workspacesById={workspacesById}
+                        activeWorkspaceId={activeWorkspaceId}
+                        addDisabled={atMaxViews}
+                        addDisabledReason={maxViewsReason}
                         focusId={focusId}
                         maximizedId={maximizedId}
                         onClose={closeSelected}
@@ -842,6 +871,8 @@ interface ToolbarProps {
     layoutMode: LayoutMode;
     onLayoutMode: (m: LayoutMode) => void;
     onAddView: (type: ViewType) => void;
+    addDisabled?: boolean;
+    addDisabledReason?: string;
 }
 
 function Toolbar({
@@ -849,6 +880,8 @@ function Toolbar({
     layoutMode,
     onLayoutMode,
     onAddView,
+    addDisabled,
+    addDisabledReason,
 }: ToolbarProps) {
     return (
         <div className="gtoolbar">
@@ -903,7 +936,8 @@ function Toolbar({
                 <IconMaximize />
             </button>
             <AddViewButton
-                disabled={!activeWorkspace}
+                disabled={!activeWorkspace || !!addDisabled}
+                disabledReason={!activeWorkspace ? undefined : addDisabledReason}
                 onAddTerminal={() => onAddView('terminal')}
                 onAddCode={() => onAddView('code')}
             />
@@ -918,10 +952,12 @@ function Toolbar({
  */
 function AddViewButton({
     disabled,
+    disabledReason,
     onAddTerminal,
     onAddCode,
 }: {
     disabled: boolean;
+    disabledReason?: string;
     onAddTerminal: () => void;
     onAddCode: () => void;
 }) {
@@ -942,12 +978,13 @@ function AddViewButton({
     }, [open]);
 
     return (
-        <div className="addview-split" ref={ref}>
+        <div className="addview-split" ref={ref} title={disabled ? disabledReason : undefined}>
             <button
                 type="button"
                 className="gbtn accent addview-main"
                 onClick={onAddTerminal}
                 disabled={disabled}
+                title={disabled ? disabledReason : undefined}
             >
                 <IconPlus /> Add terminal
             </button>

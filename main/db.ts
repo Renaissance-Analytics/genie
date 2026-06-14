@@ -209,6 +209,10 @@ export interface Settings {
     terminal_shell?: string;
     /** Manual executable line, used when terminal_shell === 'custom'. */
     terminal_custom_cmd?: string;
+    /** Max panels visible at once per workspace. String-encoded (settings are k/v text). Default '4'. */
+    max_views?: string;
+    /** Per-workspace draggable-grid track sizes, JSON-encoded. Keyed by `${workspaceId}:${signature}`. */
+    layout_json?: string;
 }
 
 export function getAllSettings(): Settings {
@@ -247,6 +251,8 @@ export function getAllSettings(): Settings {
         auto_update: (out['auto_update'] as 'on' | 'off') ?? 'on',
         terminal_shell: out['terminal_shell'] ?? '',
         terminal_custom_cmd: out['terminal_custom_cmd'] ?? '',
+        max_views: out['max_views'] ?? '4',
+        layout_json: out['layout_json'] ?? '{}',
     };
 }
 
@@ -413,6 +419,10 @@ export type TerminalSpecType = 'terminal' | 'code';
 /** Per-type metadata. Code views persist the open file's workspace-relative path. */
 export interface TerminalSpecMeta {
     file_path?: string;
+    /** When true, a code view is pinned to `root` and reopens `file_path`. */
+    locked?: boolean;
+    /** Workspace-relative folder the tree is rooted at when locked. */
+    root?: string;
     [key: string]: unknown;
 }
 

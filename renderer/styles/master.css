@@ -1151,6 +1151,71 @@
     display: grid;
     gap: 1px;
 }
+/* Resizable grid: gutters lay over the seams. Position is relative so the
+   gutter children's grid placement is the only layout role they play. */
+.pgrid.resizable {
+    position: relative;
+}
+
+/* ===== Draggable grid gutters ========================================= */
+/* Each gutter spans a track seam. The element itself is the ~12px hit
+   area (transparent); its ::before paints a ~6px visible bar that lights
+   up on hover/active. They sit ON the 1px gap, centred over the seam via
+   a translate, so the hit zone straddles both neighbouring panels. */
+.grid-gutter {
+    position: relative;
+    z-index: 5;
+    align-self: stretch;
+    justify-self: stretch;
+}
+.grid-gutter.gutter-col {
+    /* Self-justified to the column track's end edge; the 12px hit box is
+       pulled half-over the 1px seam so it straddles both panels. */
+    width: 12px;
+    cursor: col-resize;
+    transform: translateX(6px);
+}
+.grid-gutter.gutter-row {
+    height: 12px;
+    cursor: row-resize;
+    transform: translateY(6px);
+}
+.grid-gutter::before {
+    content: '';
+    position: absolute;
+    background: transparent;
+    border-radius: 3px;
+    transition: background var(--dur-fast) var(--ease-out);
+}
+.grid-gutter.gutter-col::before {
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 6px;
+    transform: translateX(-50%);
+}
+.grid-gutter.gutter-row::before {
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 6px;
+    transform: translateY(-50%);
+}
+.grid-gutter:hover::before {
+    background: color-mix(in srgb, var(--agent) 55%, transparent);
+}
+/* While dragging any gutter, suppress text selection + iframe pointer
+   capture so the drag stays smooth across panel boundaries. */
+body.gutter-dragging {
+    cursor: col-resize;
+    user-select: none;
+}
+body.gutter-dragging * {
+    pointer-events: none;
+}
+body.gutter-dragging .grid-gutter {
+    pointer-events: auto;
+}
 .pgrid.g1 {
     grid-template-columns: 1fr;
     grid-template-rows: 1fr;
@@ -1374,6 +1439,31 @@
 .tpanel-head .pctl.is-on {
     background: color-mix(in srgb, var(--violet-500) 22%, transparent);
     color: #c4b5fd;
+}
+/* Left-cluster controls (the tree-toggle): always visible — it's the
+   primary re-open affordance, and the tree opens on the left edge so the
+   re-open icon lives here. Unlike the right .pa cluster it does NOT fade
+   with hover. */
+.tpanel-head .pa.pa-left {
+    opacity: 1;
+    margin-right: 2px;
+}
+.tpanel:hover .pa.pa-left {
+    opacity: 1;
+}
+/* Locked-view badge beside a code view's label. */
+.tpanel-head .lock-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--term-warn);
+    flex: 0 0 auto;
+}
+
+/* Code-tree wrapper — fills the tree column so its empty space still
+   receives the create-at-root context menu. */
+.filetree-root {
+    min-height: 100%;
 }
 /* Unsaved-changes dot beside a code view's label. */
 .tpanel-head .dirty-dot {

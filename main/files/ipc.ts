@@ -40,6 +40,13 @@ const NUL = String.fromCharCode(0);
 interface ListTreeOpts {
     maxDepth?: number;
     maxEntries?: number;
+    /**
+     * Workspace-relative subfolder to root the walk at (locked code views).
+     * Guard-resolved under `workspacePath` — a `..`/absolute escape throws.
+     * Node ids stay relative to `workspacePath` so reads still path-guard
+     * against the workspace root, never the locked subroot.
+     */
+    root?: string;
 }
 
 /**
@@ -133,10 +140,22 @@ export async function listTree(
     workspacePath: string,
     opts: ListTreeOpts = {},
 ): Promise<TreeNodeData[]> {
-    const root = path.resolve(workspacePath);
     const maxDepth = opts.maxDepth ?? DEFAULT_MAX_DEPTH;
     const maxEntries = opts.maxEntries ?? DEFAULT_MAX_ENTRIES;
     const budget = { remaining: maxEntries };
+
+    // A locked code view roots the walk at a workspace-relative subfolder.
+    // Guard-resolve it against the workspace so it can't escape; the id
+    // prefix keeps node ids relative to the WORKSPACE root, so file
+    // reads/writes still path-guard against the workspace, not the subroot.
+    const sub = (opts.root ?? '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    if (sub) {
+        const start = guardedResolve(workspacePath, sub);
+        if (!start) throw new Error('Path escapes workspace');
+        return walk(start, sub, 0, maxDepth, budget);
+    }
+
+    const root = path.resolve(workspacePath);
     return walk(root, '', 0, maxDepth, budget);
 }
 
@@ -173,6 +192,86 @@ export async function writeFile(
     return { ok: true };
 }
 
+/**
+ * Create an empty file at `relPath` under the workspace root. Fails if the
+ * target already exists (so a "New file" never silently overwrites). The
+ * parent directory is created as needed. Path-guarded like read/write.
+ */
+export async function createFile(
+    workspacePath: string,
+    relPath: string,
+): Promise<{ ok: boolean }> {
+    const abs = guardedResolve(workspacePath, relPath);
+    if (!abs) throw new Error('Path escapes workspace');
+    // The root itself is never a valid create target.
+    if (abs === path.resolve(workspacePath)) throw new Error('Invalid path');
+    await fsp.mkdir(path.dirname(abs), { recursive: true });
+    // wx = create + fail if it exists. Reliable across platforms.
+    const fh = await fsp.open(abs, 'wx').catch((e: NodeJS.ErrnoException) => {
+        if (e.code === 'EEXIST') throw new Error('File already exists');
+        throw e;
+    });
+    await fh.close();
+    return { ok: true };
+}
+
+/**
+ * Create a folder at `relPath` under the workspace root. Recursive
+ * (intermediate dirs are made); a pre-existing folder is a no-op success
+ * (mkdir recursive doesn't throw on EEXIST for a dir). Path-guarded.
+ */
+export async function createFolder(
+    workspacePath: string,
+    relPath: string,
+): Promise<{ ok: boolean }> {
+    const abs = guardedResolve(workspacePath, relPath);
+    if (!abs) throw new Error('Path escapes workspace');
+    if (abs === path.resolve(workspacePath)) throw new Error('Invalid path');
+    await fsp.mkdir(abs, { recursive: true });
+    return { ok: true };
+}
+
+/**
+ * Rename / move a node from `fromRel` to `toRel`. BOTH paths are
+ * guard-resolved against the workspace root, so neither side can escape.
+ * Fails if the destination already exists (no clobber).
+ */
+export async function renamePath(
+    workspacePath: string,
+    fromRel: string,
+    toRel: string,
+): Promise<{ ok: boolean }> {
+    const from = guardedResolve(workspacePath, fromRel);
+    const to = guardedResolve(workspacePath, toRel);
+    if (!from || !to) throw new Error('Path escapes workspace');
+    const root = path.resolve(workspacePath);
+    if (from === root || to === root) throw new Error('Invalid path');
+    // No-clobber: refuse if the destination already exists.
+    const exists = await fsp
+        .access(to)
+        .then(() => true)
+        .catch(() => false);
+    if (exists) throw new Error('Destination already exists');
+    await fsp.mkdir(path.dirname(to), { recursive: true });
+    await fsp.rename(from, to);
+    return { ok: true };
+}
+
+/**
+ * Delete the node at `relPath`. Recursive for folders. Path-guarded; the
+ * workspace root itself can never be deleted.
+ */
+export async function deletePath(
+    workspacePath: string,
+    relPath: string,
+): Promise<{ ok: boolean }> {
+    const abs = guardedResolve(workspacePath, relPath);
+    if (!abs) throw new Error('Path escapes workspace');
+    if (abs === path.resolve(workspacePath)) throw new Error('Invalid path');
+    await fsp.rm(abs, { recursive: true, force: true });
+    return { ok: true };
+}
+
 export function registerFilesIpc(): void {
     ipcMain.handle(
         'files:list-tree',
@@ -186,5 +285,25 @@ export function registerFilesIpc(): void {
         'files:write',
         (_e, workspacePath: string, relPath: string, content: string) =>
             writeFile(workspacePath, relPath, content),
+    );
+    ipcMain.handle(
+        'files:create-file',
+        (_e, workspacePath: string, relPath: string) =>
+            createFile(workspacePath, relPath),
+    );
+    ipcMain.handle(
+        'files:create-folder',
+        (_e, workspacePath: string, relPath: string) =>
+            createFolder(workspacePath, relPath),
+    );
+    ipcMain.handle(
+        'files:rename',
+        (_e, workspacePath: string, fromRel: string, toRel: string) =>
+            renamePath(workspacePath, fromRel, toRel),
+    );
+    ipcMain.handle(
+        'files:delete',
+        (_e, workspacePath: string, relPath: string) =>
+            deletePath(workspacePath, relPath),
     );
 }

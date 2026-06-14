@@ -180,6 +180,27 @@ export default function SettingsPage() {
             </Card>
 
             <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <Heading as="h2" size="sm">Workspace layout</Heading>
+                <Input
+                    label="Max views"
+                    type="number"
+                    min={1}
+                    max={9}
+                    description="Maximum panels visible at once per workspace. Reaching the limit disables the Add terminal / Add code view buttons until you raise it or close a view."
+                    value={String(s.max_views ?? '4')}
+                    onValueChange={(v) => {
+                        // Clamp to 1–9; ignore empty/garbage so the field stays usable.
+                        const n = parseInt(v, 10);
+                        if (Number.isFinite(n)) {
+                            patch({ max_views: String(Math.min(9, Math.max(1, n))) });
+                        } else if (v === '') {
+                            patch({ max_views: '' });
+                        }
+                    }}
+                />
+            </Card>
+
+            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Heading as="h2" size="sm">Defaults for new workspaces</Heading>
                 <Input
                     label="Start command"

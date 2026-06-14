@@ -67,6 +67,10 @@ export interface Settings {
     terminal_shell?: string;
     /** Manual executable line, used when terminal_shell === 'custom'. */
     terminal_custom_cmd?: string;
+    /** Max panels visible at once per workspace. String-encoded; default '4'. */
+    max_views?: string;
+    /** Per-workspace draggable-grid track sizes, JSON-encoded. */
+    layout_json?: string;
 }
 
 export interface ShellDetection {
@@ -153,6 +157,10 @@ export type ViewType = 'terminal' | 'code';
 /** Per-type spec metadata. Code views persist the open file's relative path. */
 export interface ViewMeta {
     file_path?: string;
+    /** When true, this code view is pinned to `root` + reopens `file_path`. */
+    locked?: boolean;
+    /** Workspace-relative folder the tree is rooted at when locked. '' = workspace root. */
+    root?: string;
     [key: string]: unknown;
 }
 
@@ -461,7 +469,7 @@ interface GenieApi {
     files: {
         listTree: (
             workspacePath: string,
-            opts?: { maxDepth?: number; maxEntries?: number },
+            opts?: { maxDepth?: number; maxEntries?: number; root?: string },
         ) => Promise<TreeNodeData[]>;
         read: (
             workspacePath: string,
@@ -471,6 +479,23 @@ interface GenieApi {
             workspacePath: string,
             relPath: string,
             content: string,
+        ) => Promise<{ ok: boolean }>;
+        createFile: (
+            workspacePath: string,
+            relPath: string,
+        ) => Promise<{ ok: boolean }>;
+        createFolder: (
+            workspacePath: string,
+            relPath: string,
+        ) => Promise<{ ok: boolean }>;
+        rename: (
+            workspacePath: string,
+            fromRel: string,
+            toRel: string,
+        ) => Promise<{ ok: boolean }>;
+        delete: (
+            workspacePath: string,
+            relPath: string,
         ) => Promise<{ ok: boolean }>;
     };
     github: {

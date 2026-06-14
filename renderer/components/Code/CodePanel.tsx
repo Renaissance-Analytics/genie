@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { CodeEditor } from '@particle-academy/fancy-code';
 import FileTree from './FileTree';
-import { IconCode, IconMaximize, IconMinimize, IconX } from '../Master/icons';
+import {
+    IconCode,
+    IconLock,
+    IconMaximize,
+    IconMinimize,
+    IconUnlock,
+    IconX,
+} from '../Master/icons';
 import { showPrompt } from '../Master/Prompt';
 import {
     api,
     type TerminalSpec,
     type TreeNodeData,
+    type ViewMeta,
     type WorkspaceRow,
 } from '../../lib/genie';
 
@@ -24,8 +32,7 @@ interface Props {
 /**
  * Map a file extension to a fancy-code language name. fancy-code ships
  * tokenizers for JS/TS/HTML/PHP/Python/Go; everything else falls back to
- * 'plaintext' (no highlighting, still fully editable). Driving the
- * `language` prop is purely cosmetic — the editor never refuses a file.
+ * 'plaintext' (no highlighting, still fully editable).
  */
 function languageFor(relPath: string): string {
     const ext = relPath.split('.').pop()?.toLowerCase() ?? '';
@@ -52,21 +59,29 @@ function languageFor(relPath: string): string {
     }
 }
 
+/** Normalise a user-typed root: forward-slashed, no leading/trailing slash, no `..`. */
+function normaliseRoot(input: string): string {
+    return input
+        .replace(/\\/g, '/')
+        .replace(/^\/+|\/+$/g, '')
+        .split('/')
+        .filter((seg) => seg && seg !== '.' && seg !== '..')
+        .join('/');
+}
+
 /**
- * A Code view tile. Mirrors TerminalPanel's chrome (`.tpanel` head with
- * label/loc/controls) but its body is `.code-host`: a collapsible file
- * tree column beside a fancy-code editor.
+ * A Code view tile. Mirrors TerminalPanel's chrome but its body is a
+ * collapsible file tree beside a fancy-code editor.
  *
- * Tree visibility rules (locked by the plan):
- *   - starts visible,
- *   - auto-hides the moment a file is selected,
- *   - re-opens ONLY via the head tree-toggle icon — there are deliberately
- *     NO hover handlers, so the tree never flickers in/out as the pointer
- *     crosses the panel.
+ * Tree-toggle lives at the LEFT of the head (the tree opens on the left
+ * edge, so the re-open icon sits where the tree appears). Maximize/Close
+ * stay on the right.
  *
- * Editing: the editor is controlled (`value`/`onChange`). Edits set the
- * dirty flag; Ctrl/Cmd+S writes via `files:write` and clears it. Switching
- * files or closing with unsaved changes prompts first.
+ * Lock (Item 5): a locked view pins the tree to a workspace-relative
+ * `root` folder and reopens the same `file_path` on relaunch. Persisted in
+ * the spec's `meta_json` ({ locked, root, file_path }). Reads/writes still
+ * path-guard against the WORKSPACE root in main — the locked root is only
+ * the tree's starting folder, never a security boundary.
  */
 export default function CodePanel({
     spec,
@@ -90,6 +105,11 @@ export default function CodePanel({
     const [dirty, setDirty] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
 
+    // Lock state seeded from persisted meta; pins the tree root + reopens
+    // the same file on relaunch / workspace switch.
+    const [locked, setLocked] = useState<boolean>(!!spec.meta?.locked);
+    const [lockedRoot, setLockedRoot] = useState<string>(spec.meta?.root ?? '');
+
     // Latest dirty/content for the keydown handler without re-binding it.
     const dirtyRef = useRef(dirty);
     dirtyRef.current = dirty;
@@ -98,17 +118,38 @@ export default function CodePanel({
     const openFileRef = useRef(openFile);
     openFileRef.current = openFile;
 
-    // Load the tree on mount (and if the workspace path changes).
+    /** Persist a patch into the spec's meta (merging over current meta). */
+    const persistMeta = useCallback(
+        (patch: Partial<ViewMeta>) => {
+            const nextMeta: ViewMeta = { ...spec.meta, ...patch };
+            void api()
+                .terminalSpec.update(spec.id, { meta: nextMeta })
+                .catch(() => {});
+        },
+        [spec.id, spec.meta],
+    );
+
+    /** (Re)load the tree, rooting at the locked subfolder when locked. */
+    const reloadTree = useCallback(() => {
+        const opts = locked && lockedRoot ? { root: lockedRoot } : undefined;
+        return api()
+            .files.listTree(workspacePath, opts)
+            .then((t) => setNodes(t))
+            .catch(() => setNodes([]));
+    }, [workspacePath, locked, lockedRoot]);
+
+    // Load the tree on mount and whenever the root (workspace or lock) shifts.
     useEffect(() => {
         let alive = true;
+        const opts = locked && lockedRoot ? { root: lockedRoot } : undefined;
         void api()
-            .files.listTree(workspacePath)
+            .files.listTree(workspacePath, opts)
             .then((t) => alive && setNodes(t))
             .catch(() => alive && setNodes([]));
         return () => {
             alive = false;
         };
-    }, [workspacePath]);
+    }, [workspacePath, locked, lockedRoot]);
 
     const loadFile = useCallback(
         async (relPath: string) => {
@@ -123,16 +164,12 @@ export default function CodePanel({
                 setLanguage(languageFor(relPath));
                 setDirty(false);
                 setTreeVisible(false); // auto-hide tree on open
-                void api()
-                    .terminalSpec.update(spec.id, {
-                        meta: { ...spec.meta, file_path: relPath },
-                    })
-                    .catch(() => {});
+                persistMeta({ file_path: relPath });
             } catch (e) {
                 setLoadError(e instanceof Error ? e.message : String(e));
             }
         },
-        [workspacePath, spec.id, spec.meta],
+        [workspacePath, persistMeta],
     );
 
     // Seed the editor from a persisted open file once the panel mounts.
@@ -193,13 +230,67 @@ export default function CodePanel({
         onClose();
     }, [guardUnsaved, onClose]);
 
+    /**
+     * Toggle the lock. Locking prompts for a workspace-relative root folder
+     * (prefilled with the current locked root; blank = whole workspace),
+     * then persists meta.locked + meta.root and re-roots the tree. Unlocking
+     * clears both and restores the workspace root.
+     */
+    const toggleLock = useCallback(async () => {
+        if (locked) {
+            setLocked(false);
+            setLockedRoot('');
+            persistMeta({ locked: false, root: '' });
+            return;
+        }
+        const picked = await showPrompt({
+            title: 'Lock this code view',
+            label: 'Root folder (workspace-relative)',
+            body: 'The view will reopen pinned to this folder and the current file. Leave blank to lock to the whole workspace. e.g. repos/genie',
+            initial: lockedRoot,
+            placeholder: 'repos/genie',
+            confirmLabel: 'Lock',
+        });
+        // showPrompt returns null on cancel; a submitted blank is impossible
+        // (input mode rejects empty), so an empty root is opted into by
+        // confirming with the seed cleared — treat null as cancel only.
+        if (picked === null) return;
+        const root = normaliseRoot(picked);
+        setLocked(true);
+        setLockedRoot(root);
+        persistMeta({ locked: true, root, file_path: openFileRef.current ?? undefined });
+    }, [locked, lockedRoot, persistMeta]);
+
     return (
         <section className={`tpanel${focused ? ' focus' : ''}`} style={style}>
             <div className="tpanel-head">
+                {/* LEFT cluster: tree-toggle sits where the tree opens. */}
+                <span className="pa pa-left">
+                    <button
+                        type="button"
+                        className={`pctl${treeVisible ? ' is-on' : ''}`}
+                        onClick={() => setTreeVisible((v) => !v)}
+                        title={treeVisible ? 'Hide file tree' : 'Show file tree'}
+                    >
+                        <IconCode size={14} />
+                    </button>
+                </span>
                 <span className="pdot" style={{ background: '#8b5cf6' }} />
                 <span className="pn">
                     <span className="nm">{spec.label}</span>
                     {dirty && <span className="dirty-dot" title="Unsaved changes" />}
+                    {locked && (
+                        <span
+                            className="lock-badge"
+                            title={
+                                lockedRoot
+                                    ? `Locked to ${lockedRoot}`
+                                    : 'Locked to workspace root'
+                            }
+                        >
+                            <IconLock size={11} />
+                        </span>
+                    )}
                 </span>
                 {openFile ? (
                     <span className="ploc">{openFile}</span>
@@ -212,11 +303,15 @@ export default function CodePanel({
                 <span className="pa">
                     <button
                         type="button"
-                        className={`pctl${treeVisible ? ' is-on' : ''}`}
-                        onClick={() => setTreeVisible((v) => !v)}
-                        title={treeVisible ? 'Hide file tree' : 'Show file tree'}
+                        className={`pctl${locked ? ' is-on' : ''}`}
+                        onClick={() => void toggleLock()}
+                        title={
+                            locked
+                                ? 'Unlock — restore workspace root'
+                                : 'Lock to a repo folder + current file'
+                        }
                     >
-                        <IconCode size={14} />
+                        {locked ? <IconLock size={13} /> : <IconUnlock size={13} />}
                     </button>
                     {onMinimize && !maximized && (
                         <button
@@ -254,7 +349,10 @@ export default function CodePanel({
                         <FileTree
                             nodes={nodes}
                             selectedId={openFile ?? undefined}
+                            workspacePath={workspacePath}
                             onSelectFile={(rel) => void selectFile(rel)}
+                            onTreeChanged={reloadTree}
+                            onOpenCreatedFile={(rel) => void selectFile(rel)}
                         />
                     </div>
                 )}

@@ -1,7 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { listTree, readFile, writeFile, type TreeNodeData } from '../ipc';
+import {
+    createFile,
+    createFolder,
+    deletePath,
+    listTree,
+    readFile,
+    renamePath,
+    writeFile,
+    type TreeNodeData,
+} from '../ipc';
 import { cleanupTmpRoot, makeTmpDir } from '../../../test/helpers';
 
 afterAll(() => cleanupTmpRoot());
@@ -134,5 +143,162 @@ describe('files:write path-guard', () => {
         await expect(
             writeFile(dir, 'b.txt', `ok${NUL}bad`),
         ).rejects.toThrow(/binary/i);
+    });
+});
+
+describe('files:list-tree locked root', () => {
+    it('roots the walk at a workspace-relative subfolder, keeping ids workspace-relative', async () => {
+        const dir = makeTmpDir('lt-root');
+        fs.mkdirSync(path.join(dir, 'repos', 'genie', 'src'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'repos', 'genie', 'src', 'a.ts'), 'export {}');
+        fs.writeFileSync(path.join(dir, 'top.txt'), 'top');
+
+        const tree = await listTree(dir, { root: 'repos/genie' });
+        const all = ids(tree);
+        // Ids stay relative to the WORKSPACE root, not the subroot.
+        expect(all).toContain('repos/genie/src');
+        expect(all).toContain('repos/genie/src/a.ts');
+        // Anything outside the locked root is not walked.
+        expect(all).not.toContain('top.txt');
+    });
+
+    it('rejects a locked root that escapes the workspace', async () => {
+        const dir = makeTmpDir('lt-escape');
+        await expect(listTree(dir, { root: '../..' })).rejects.toThrow(
+            /escapes workspace/,
+        );
+    });
+});
+
+describe('files:create-file path-guard', () => {
+    it('creates an empty file inside the workspace', async () => {
+        const dir = makeTmpDir('cf-ok');
+        const r = await createFile(dir, 'src/new.ts');
+        expect(r.ok).toBe(true);
+        expect(fs.existsSync(path.join(dir, 'src', 'new.ts'))).toBe(true);
+        expect(fs.readFileSync(path.join(dir, 'src', 'new.ts'), 'utf8')).toBe('');
+    });
+
+    it('fails if the file already exists', async () => {
+        const dir = makeTmpDir('cf-exists');
+        fs.writeFileSync(path.join(dir, 'there.txt'), 'x');
+        await expect(createFile(dir, 'there.txt')).rejects.toThrow(/already exists/i);
+    });
+
+    it('rejects a `..` traversal out of the workspace', async () => {
+        const dir = makeTmpDir('cf-dotdot');
+        const sibling = makeTmpDir('cf-target');
+        const rel = path.relative(dir, path.join(sibling, 'pwned.txt'));
+        await expect(createFile(dir, rel)).rejects.toThrow(/escapes workspace/);
+        expect(fs.existsSync(path.join(sibling, 'pwned.txt'))).toBe(false);
+    });
+
+    it('rejects an absolute create target', async () => {
+        const dir = makeTmpDir('cf-abs');
+        const other = makeTmpDir('cf-abs-target');
+        const abs = path.join(other, 'evil.txt');
+        await expect(createFile(dir, abs)).rejects.toThrow(/escapes workspace/);
+        expect(fs.existsSync(abs)).toBe(false);
+    });
+
+    it('refuses to create the workspace root itself', async () => {
+        const dir = makeTmpDir('cf-root');
+        await expect(createFile(dir, '.')).rejects.toThrow(/Invalid path/);
+    });
+});
+
+describe('files:create-folder path-guard', () => {
+    it('creates a folder (recursively) inside the workspace', async () => {
+        const dir = makeTmpDir('cd-ok');
+        const r = await createFolder(dir, 'a/b/c');
+        expect(r.ok).toBe(true);
+        expect(fs.statSync(path.join(dir, 'a', 'b', 'c')).isDirectory()).toBe(true);
+    });
+
+    it('rejects a `..` traversal out of the workspace', async () => {
+        const dir = makeTmpDir('cd-dotdot');
+        const sibling = makeTmpDir('cd-target');
+        const rel = path.relative(dir, path.join(sibling, 'pwned'));
+        await expect(createFolder(dir, rel)).rejects.toThrow(/escapes workspace/);
+        expect(fs.existsSync(path.join(sibling, 'pwned'))).toBe(false);
+    });
+});
+
+describe('files:rename path-guard', () => {
+    it('renames a file inside the workspace', async () => {
+        const dir = makeTmpDir('rn-ok');
+        fs.writeFileSync(path.join(dir, 'old.txt'), 'data');
+        const r = await renamePath(dir, 'old.txt', 'sub/new.txt');
+        expect(r.ok).toBe(true);
+        expect(fs.existsSync(path.join(dir, 'old.txt'))).toBe(false);
+        expect(fs.readFileSync(path.join(dir, 'sub', 'new.txt'), 'utf8')).toBe('data');
+    });
+
+    it('refuses to clobber an existing destination', async () => {
+        const dir = makeTmpDir('rn-clobber');
+        fs.writeFileSync(path.join(dir, 'a.txt'), 'a');
+        fs.writeFileSync(path.join(dir, 'b.txt'), 'b');
+        await expect(renamePath(dir, 'a.txt', 'b.txt')).rejects.toThrow(
+            /already exists/i,
+        );
+        // Both untouched.
+        expect(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8')).toBe('a');
+        expect(fs.readFileSync(path.join(dir, 'b.txt'), 'utf8')).toBe('b');
+    });
+
+    it('rejects a destination that escapes the workspace', async () => {
+        const dir = makeTmpDir('rn-escape');
+        const sibling = makeTmpDir('rn-target');
+        fs.writeFileSync(path.join(dir, 'src.txt'), 'x');
+        const rel = path.relative(dir, path.join(sibling, 'out.txt'));
+        await expect(renamePath(dir, 'src.txt', rel)).rejects.toThrow(
+            /escapes workspace/,
+        );
+        expect(fs.existsSync(path.join(sibling, 'out.txt'))).toBe(false);
+    });
+
+    it('rejects a source that escapes the workspace', async () => {
+        const dir = makeTmpDir('rn-escape-src');
+        const sibling = makeTmpDir('rn-src-target');
+        fs.writeFileSync(path.join(sibling, 'secret.txt'), 'no');
+        const rel = path.relative(dir, path.join(sibling, 'secret.txt'));
+        await expect(renamePath(dir, rel, 'here.txt')).rejects.toThrow(
+            /escapes workspace/,
+        );
+    });
+});
+
+describe('files:delete path-guard', () => {
+    it('deletes a file inside the workspace', async () => {
+        const dir = makeTmpDir('dl-file');
+        fs.writeFileSync(path.join(dir, 'gone.txt'), 'x');
+        const r = await deletePath(dir, 'gone.txt');
+        expect(r.ok).toBe(true);
+        expect(fs.existsSync(path.join(dir, 'gone.txt'))).toBe(false);
+    });
+
+    it('deletes a folder recursively', async () => {
+        const dir = makeTmpDir('dl-folder');
+        fs.mkdirSync(path.join(dir, 'pkg', 'nested'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'pkg', 'a.txt'), 'a');
+        fs.writeFileSync(path.join(dir, 'pkg', 'nested', 'b.txt'), 'b');
+        const r = await deletePath(dir, 'pkg');
+        expect(r.ok).toBe(true);
+        expect(fs.existsSync(path.join(dir, 'pkg'))).toBe(false);
+    });
+
+    it('rejects a `..` traversal out of the workspace', async () => {
+        const dir = makeTmpDir('dl-dotdot');
+        const sibling = makeTmpDir('dl-target');
+        fs.writeFileSync(path.join(sibling, 'keep.txt'), 'keep');
+        const rel = path.relative(dir, path.join(sibling, 'keep.txt'));
+        await expect(deletePath(dir, rel)).rejects.toThrow(/escapes workspace/);
+        expect(fs.existsSync(path.join(sibling, 'keep.txt'))).toBe(true);
+    });
+
+    it('refuses to delete the workspace root itself', async () => {
+        const dir = makeTmpDir('dl-root');
+        await expect(deletePath(dir, '.')).rejects.toThrow(/Invalid path/);
+        expect(fs.existsSync(dir)).toBe(true);
     });
 });

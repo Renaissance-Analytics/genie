@@ -196,7 +196,7 @@ const api = {
     files: {
         listTree: (
             workspacePath: string,
-            opts?: { maxDepth?: number; maxEntries?: number },
+            opts?: { maxDepth?: number; maxEntries?: number; root?: string },
         ) => ipcRenderer.invoke('files:list-tree', workspacePath, opts),
         read: (workspacePath: string, relPath: string) =>
             ipcRenderer.invoke('files:read', workspacePath, relPath) as Promise<{
@@ -205,6 +205,22 @@ const api = {
             }>,
         write: (workspacePath: string, relPath: string, content: string) =>
             ipcRenderer.invoke('files:write', workspacePath, relPath, content) as Promise<{
+                ok: boolean;
+            }>,
+        createFile: (workspacePath: string, relPath: string) =>
+            ipcRenderer.invoke('files:create-file', workspacePath, relPath) as Promise<{
+                ok: boolean;
+            }>,
+        createFolder: (workspacePath: string, relPath: string) =>
+            ipcRenderer.invoke('files:create-folder', workspacePath, relPath) as Promise<{
+                ok: boolean;
+            }>,
+        rename: (workspacePath: string, fromRel: string, toRel: string) =>
+            ipcRenderer.invoke('files:rename', workspacePath, fromRel, toRel) as Promise<{
+                ok: boolean;
+            }>,
+        delete: (workspacePath: string, relPath: string) =>
+            ipcRenderer.invoke('files:delete', workspacePath, relPath) as Promise<{
                 ok: boolean;
             }>,
     },
