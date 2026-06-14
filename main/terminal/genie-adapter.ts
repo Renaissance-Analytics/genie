@@ -13,6 +13,7 @@ import {
     readPidfile,
     isPidAlive,
     deletePidfile,
+    shutdownHost,
     type SnapshotStore,
     type SettingsProvider,
     type Encryptor,
@@ -187,19 +188,26 @@ export function wireTerminalAdapter(dirname: string): void {
 export { terminalManager };
 
 /**
- * INTERIM STOPGAP for the auto-update path (Particle-Academy/fancy-term-host#2).
+ * Tear down the detached pty-host on the AUTO-UPDATE path so the NSIS installer
+ * can overwrite Genie's binary.
  *
  * The detached pty-host runs as Genie's `process.execPath` (+ ELECTRON_RUN_AS_NODE)
  * so it PINS Genie's executable open. On a NORMAL quit that's the point — the host
  * survives so terminals come back live (background.ts uses
  * disconnectHostLeaveRunning). But on the AUTO-UPDATE path NSIS must OVERWRITE
- * that binary, and a surviving host blocks it. The package has NO graceful
- * `shutdownHost()` yet, so we terminate the host by its PIDFILE pid and wait
- * (bounded) for it to actually die before the installer runs.
+ * that binary, and a surviving host blocks it.
+ *
+ * fancy-term-host@^0.1.2 exposes a GRACEFUL `shutdownHost()`: it sends a
+ * `shutdown` wire message, the host runs its OWN cleanup (kills its ptys, removes
+ * pidfile + socket, exits 0), and the package reverts to the in-process backend.
+ * That replaces the alpha.44 interim SIGKILL-by-pidfile. We still keep that kill
+ * as a DEFENSIVE fallback: if `shutdownHost()` rejects, or the host is somehow
+ * still alive after it resolves, we fall back to terminating the host by its
+ * pidfile pid + bounded poll — so a wedged host can never block the installer.
  *
  * Returns true if the host is confirmed dead (or was never running), false if it
- * was still alive after the wait window. Best-effort + bounded so before-quit can
- * never hang on it.
+ * was still alive after the bounded fallback. Best-effort + bounded so before-quit
+ * can never hang on it.
  */
 export async function killHostForUpdate(
     waitMs = 3000,
@@ -220,14 +228,36 @@ export async function killHostForUpdate(
         }
         return { killed: false, alreadyDead: true };
     }
+
+    // PRIMARY: ask the host to shut itself down gracefully (its own cleanup +
+    // pidfile/socket removal + revert to in-process). Bounded by waitMs.
+    // shutdownHost is documented never to throw, but we still guard it so a
+    // rejection can't escape before the fallback runs.
+    try {
+        await shutdownHost(waitMs);
+    } catch {
+        /* fall through to the defensive pidfile kill below */
+    }
+
+    // If the graceful path got the host gone, we're done.
+    if (!isPidAlive(pf.pid)) {
+        try {
+            deletePidfile(ud);
+        } catch {
+            /* best-effort — the host's own cleanup likely already removed it */
+        }
+        return { killed: true, alreadyDead: false };
+    }
+
+    // DEFENSIVE FALLBACK: graceful shutdown didn't take (rejected, timed out, or
+    // host still alive). Terminate by pidfile pid and poll (bounded) for death.
+    // SIGTERM (default) lets the host close its sockets; we don't escalate to
+    // SIGKILL — the wait is short and the installer's own retry covers a laggard.
     try {
         process.kill(pf.pid);
     } catch {
         // Already gone between the probe and the kill, or no permission.
     }
-    // Poll until the host is dead or the bounded window elapses. SIGTERM
-    // (default) lets the host close its sockets; we don't escalate to SIGKILL
-    // here — the wait is short and the installer's own retry covers a laggard.
     const deadline = Date.now() + Math.max(0, waitMs);
     let alive = isPidAlive(pf.pid);
     while (alive && Date.now() < deadline) {

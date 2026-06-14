@@ -17,7 +17,13 @@ import path from 'node:path';
 export default defineConfig({
     test: {
         environment: 'node',
-        include: ['main/**/__tests__/**/*.test.ts'],
+        // Main-process tests, plus PURE renderer-side logic (no DOM): the
+        // renderer has no jsdom harness, so only framework-free helpers (e.g.
+        // the keyboard-shortcut intent resolver) are testable here.
+        include: [
+            'main/**/__tests__/**/*.test.ts',
+            'renderer/**/__tests__/**/*.test.ts',
+        ],
         // Run main-process tests serially. The git + filesystem fixtures
         // mutate cwd-adjacent state and the suite is small — parallelism
         // buys little and risks flakes from racing temp directories.

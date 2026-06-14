@@ -9,6 +9,7 @@ import TerminalGrid, {
 import AddWorkspaceModal from '../components/AddWorkspaceModal';
 import SignInPrompt from '../components/SignInPrompt';
 import type { BackendUser, ViewType } from '../lib/genie';
+import { resolveShortcut } from '../lib/master-shortcuts';
 import {
     IconBox,
     IconChevronDown,
@@ -611,6 +612,73 @@ function MasterInner() {
     // When at the cap, the Add affordances disable with a hint to raise it.
     const atMaxViews = selectedSpecs.length >= maxViews;
     const maxViewsReason = `Max views reached (${maxViews}) — raise it in Settings`;
+
+    // Global keyboard shortcuts (advertised in the footer hint):
+    //   ⌘/Ctrl + 1–9  → focus the Nth visible panel of the active workspace.
+    //   ⌘/Ctrl + \\   → toggle the pinned tree/chooser.
+    //   ⌘/Ctrl + W    → close the currently focused panel (same as its X).
+    //
+    // Guard against stealing keystrokes while the user is typing in a real text
+    // input — the in-app prompt modal, the editor's fields, any <input>/<textarea>/
+    // contenteditable. The xterm surface uses a hidden `.xterm-helper-textarea`;
+    // that one is fine to act over (the shortcuts aren't terminal keystrokes), so
+    // it's explicitly exempt from the guard.
+    useEffect(() => {
+        const isTextEntry = (el: Element | null): boolean => {
+            if (!el || !(el instanceof HTMLElement)) return false;
+            // xterm's hidden input is a textarea but is NOT a real text field for
+            // our purposes — shortcuts should still work while a terminal is focused.
+            if (
+                el.classList.contains('xterm-helper-textarea') ||
+                el.closest('.xterm')
+            ) {
+                return false;
+            }
+            const tag = el.tagName;
+            return (
+                tag === 'INPUT' ||
+                tag === 'TEXTAREA' ||
+                el.isContentEditable
+            );
+        };
+
+        const onKeyDown = (e: KeyboardEvent) => {
+            // Never steal keystrokes from a real text field (the in-app prompt,
+            // the editor, any input). The xterm helper textarea is exempt.
+            if (isTextEntry(document.activeElement)) return;
+
+            const intent = resolveShortcut(e);
+            if (!intent) return;
+
+            if (intent.kind === 'close') {
+                // Close the focused panel (NOT the window). No-op + DON'T
+                // preventDefault when nothing is focused, so ⌘W stays inert
+                // rather than swallowed.
+                if (focusId) {
+                    e.preventDefault();
+                    closeSelected(focusId);
+                }
+                return;
+            }
+
+            if (intent.kind === 'pin') {
+                e.preventDefault();
+                setChooserPinned((p) => !p);
+                return;
+            }
+
+            // focus: index into the visible grid order (selectedSpecs).
+            // Out-of-range → no-op (and don't preventDefault).
+            const target = selectedSpecs[intent.index];
+            if (target) {
+                e.preventDefault();
+                setFocusId(target.id);
+            }
+        };
+
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [selectedSpecs, focusId, closeSelected]);
 
     if (authChecked && !signedIn) {
         return (

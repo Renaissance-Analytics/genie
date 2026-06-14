@@ -1,4 +1,4 @@
-import { app, Menu, shell } from 'electron';
+import { app, BrowserWindow, Menu, shell } from 'electron';
 
 /**
  * Build + install Genie's application menu (top-of-window menu bar
@@ -61,7 +61,21 @@ export function installAppMenu(): void {
             label: 'Window',
             submenu: [
                 { role: 'minimize' },
-                { role: 'close' },
+                // The default `{ role: 'close' }` registers CmdOrCtrl+W as a
+                // native accelerator, which would close the BrowserWindow before
+                // the renderer's ⌘/Ctrl+W handler (close the FOCUSED PANEL) could
+                // run. We hand W to the renderer by giving this item NO accelerator
+                // (plain click handler), so the menu still offers "Close Window"
+                // without advertising a shortcut it doesn't truly own.
+                {
+                    label: 'Close Window',
+                    click: () => {
+                        const w =
+                            BrowserWindow.getFocusedWindow() ??
+                            BrowserWindow.getAllWindows()[0];
+                        w?.close();
+                    },
+                },
             ],
         },
         {

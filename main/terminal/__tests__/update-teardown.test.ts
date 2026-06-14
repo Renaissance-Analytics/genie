@@ -25,12 +25,30 @@ const hostState: {
         list: () => Array<{ id: string; pid: number; shell: string }>;
         getScrollback: (id: string) => string | undefined;
     } | null;
+    // What the mocked graceful shutdownHost() does when called. By default it
+    // simulates a clean graceful stop: the host dies and removes its pidfile.
+    // Tests override this to simulate a rejection or a no-op (host lingers) so
+    // the defensive pidfile-kill fallback can be exercised.
+    shutdownHostImpl: (timeoutMs?: number) => Promise<void>;
 } = {
     pidfile: null,
     alivePids: new Set<number>(),
     deletedPidfile: false,
     client: null,
+    shutdownHostImpl: async () => {
+        // Default: graceful stop succeeds — host kills its ptys, cleans up its
+        // pidfile/socket and exits. Mirror that by clearing every alive pid and
+        // removing the pidfile, just like the real host's own cleanup.
+        hostState.alivePids.clear();
+        hostState.pidfile = null;
+        hostState.deletedPidfile = true;
+    },
 };
+
+// Spy so tests can assert shutdownHost() was awaited (and with what timeout).
+const shutdownHostMock = vi.fn((timeoutMs?: number) =>
+    hostState.shutdownHostImpl(timeoutMs),
+);
 
 vi.mock('@particle-academy/fancy-term-host', () => ({
     // adapter wiring touched at import time — inert stubs
@@ -52,6 +70,8 @@ vi.mock('@particle-academy/fancy-term-host', () => ({
         hostState.deletedPidfile = true;
         hostState.pidfile = null;
     },
+    // 0.1.2 graceful shutdown — primary path under test.
+    shutdownHost: (timeoutMs?: number) => shutdownHostMock(timeoutMs),
 }));
 
 vi.mock('../../db', () => ({
@@ -77,6 +97,13 @@ beforeEach(() => {
     hostState.alivePids = new Set<number>();
     hostState.deletedPidfile = false;
     hostState.client = null;
+    // Reset the graceful-shutdown mock to the default "clean stop" behaviour.
+    hostState.shutdownHostImpl = async () => {
+        hostState.alivePids.clear();
+        hostState.pidfile = null;
+        hostState.deletedPidfile = true;
+    };
+    shutdownHostMock.mockClear();
     writeSpy.mockClear();
 });
 
@@ -88,7 +115,7 @@ afterEach(() => {
 });
 
 describe('killHostForUpdate', () => {
-    it('kills the host by its pidfile pid and waits until it is dead', async () => {
+    it('awaits the graceful shutdownHost() and skips the pidfile kill when it works', async () => {
         hostState.pidfile = {
             pid: 4321,
             socketPath: 'pipe',
@@ -96,25 +123,49 @@ describe('killHostForUpdate', () => {
             startedAt: 0,
         };
         hostState.alivePids.add(4321);
+        // Default shutdownHostImpl performs a clean graceful stop (host dies).
+        killSpy = vi.spyOn(process, 'kill');
 
+        const res = await killHostForUpdate(3000);
+
+        // Graceful path is the PRIMARY: it was awaited with our timeout, and the
+        // defensive pidfile process.kill never had to fire.
+        expect(shutdownHostMock).toHaveBeenCalledWith(3000);
+        expect(killSpy).not.toHaveBeenCalled();
+        expect(res.killed).toBe(true);
+        expect(res.alreadyDead).toBe(false);
+        expect(hostState.alivePids.has(4321)).toBe(false);
+    });
+
+    it('falls back to the pidfile kill when shutdownHost() rejects', async () => {
+        hostState.pidfile = {
+            pid: 555,
+            socketPath: 'pipe',
+            protocolVersion: 1,
+            startedAt: 0,
+        };
+        hostState.alivePids.add(555);
+        // Graceful shutdown rejects (and leaves the host alive).
+        hostState.shutdownHostImpl = async () => {
+            throw new Error('shutdown wire send failed');
+        };
         killSpy = vi
             .spyOn(process, 'kill')
             .mockImplementation((pid: number) => {
-                // Simulate the host exiting in response to the signal.
-                hostState.alivePids.delete(pid);
+                hostState.alivePids.delete(pid); // fallback SIGTERM lands
                 return true;
             });
 
         const res = await killHostForUpdate(3000);
 
-        expect(killSpy).toHaveBeenCalledWith(4321);
+        expect(shutdownHostMock).toHaveBeenCalledWith(3000);
+        // Defensive fallback fired: terminate by pidfile pid.
+        expect(killSpy).toHaveBeenCalledWith(555);
         expect(res.killed).toBe(true);
-        expect(res.alreadyDead).toBe(false);
         expect(hostState.deletedPidfile).toBe(true);
-        expect(hostState.alivePids.has(4321)).toBe(false);
     });
 
-    it('polls and waits when the host lingers, then succeeds once it dies', async () => {
+    it('falls back to the pidfile kill when the host lingers after shutdownHost() resolves', async () => {
         hostState.pidfile = {
             pid: 99,
             socketPath: 'pipe',
@@ -122,21 +173,32 @@ describe('killHostForUpdate', () => {
             startedAt: 0,
         };
         hostState.alivePids.add(99);
-        killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true); // signal sent, host lingers
-
-        // Host dies ~120ms later (after a couple of poll iterations).
-        setTimeout(() => hostState.alivePids.delete(99), 120);
+        // Graceful shutdown resolves but does NOT actually stop the host.
+        hostState.shutdownHostImpl = async () => {
+            /* no-op: host stays alive */
+        };
+        killSpy = vi
+            .spyOn(process, 'kill')
+            .mockImplementation((pid: number) => {
+                hostState.alivePids.delete(pid);
+                return true;
+            });
 
         const res = await killHostForUpdate(3000);
+
+        expect(shutdownHostMock).toHaveBeenCalled();
+        expect(killSpy).toHaveBeenCalledWith(99);
         expect(res.killed).toBe(true);
     });
 
-    it('reports alreadyDead and skips process.kill when no live host', async () => {
+    it('reports alreadyDead and never calls shutdownHost/process.kill when no live host', async () => {
         hostState.pidfile = null; // nothing running
         killSpy = vi.spyOn(process, 'kill');
 
         const res = await killHostForUpdate(3000);
 
+        // No host at all → bail before either teardown mechanism.
+        expect(shutdownHostMock).not.toHaveBeenCalled();
         expect(killSpy).not.toHaveBeenCalled();
         expect(res.alreadyDead).toBe(true);
         expect(res.killed).toBe(false);
@@ -144,7 +206,7 @@ describe('killHostForUpdate', () => {
         expect(hostState.deletedPidfile).toBe(true);
     });
 
-    it('returns killed=false if the host is still alive after the bounded wait', async () => {
+    it('returns killed=false if the host survives both graceful shutdown and the bounded fallback', async () => {
         hostState.pidfile = {
             pid: 7,
             socketPath: 'pipe',
@@ -152,9 +214,15 @@ describe('killHostForUpdate', () => {
             startedAt: 0,
         };
         hostState.alivePids.add(7);
+        // Neither graceful shutdown nor the fallback SIGTERM ever kills it.
+        hostState.shutdownHostImpl = async () => {
+            /* no-op: host stays alive */
+        };
         killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true); // never dies
 
         const res = await killHostForUpdate(120); // short bound so the test is fast
+        expect(shutdownHostMock).toHaveBeenCalled();
+        expect(killSpy).toHaveBeenCalledWith(7);
         expect(res.killed).toBe(false);
     });
 });

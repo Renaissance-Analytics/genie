@@ -442,10 +442,11 @@ app.whenReady().then(async () => {
     //   • NORMAL quit, in-process    → stopAllTerminals() (kill the ptys we own).
     //   • UPDATE quit, host-backed   → the host PINS Genie's binary (it runs as
     //     execPath), so NSIS can't overwrite it. Snapshot every host terminal
-    //     (so restore replays history, not fresh) then KILL the host by its
-    //     pidfile pid and WAIT (bounded) for it to die before quitAndInstall's
-    //     installer runs. INTERIM STOPGAP — proper fix is the host-as-OS-service
-    //     (Particle-Academy/fancy-term-host#2).
+    //     (so restore replays history, not fresh) then GRACEFULLY shut the host
+    //     down (killHostForUpdate → shutdownHost(): the host kills its own ptys,
+    //     cleans up pidfile/socket, exits) and WAIT (bounded) before
+    //     quitAndInstall's installer runs, with a defensive pidfile-kill fallback
+    //     if the graceful path doesn't take.
     //   • UPDATE quit, in-process    → stopAllTerminals() (no host to worry about).
     //
     // Returns a promise so the before-quit second phase can AWAIT the bounded
@@ -458,8 +459,8 @@ app.whenReady().then(async () => {
                 // renderer snapshot broadcast) BEFORE the host dies, so the cold
                 // post-update launch replays their history.
                 snapshotHostTerminalsForUpdate(terminalHasWindow);
-                // Disconnect the client first (no lingering socket), then kill the
-                // host so the installer can replace the pinned binary.
+                // Disconnect the client first (no lingering socket), then shut the
+                // host down so the installer can replace the pinned binary.
                 disconnectHostLeaveRunning();
                 await killHostForUpdate();
             } else {
