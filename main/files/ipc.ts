@@ -1,7 +1,11 @@
 import { ipcMain } from 'electron';
+import { execFile } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { REGENERABLE_NAMES, SKIP_NAMES } from '../workspace/ignore';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Filesystem IPC for the Code View. Three channels, all scoped to a
@@ -326,6 +330,119 @@ export async function deletePath(
     return { ok: true };
 }
 
+/**
+ * A workspace-relative path → single status token. Tokens are normalised
+ * (not raw 2-char XY codes) so the renderer can colour without re-parsing:
+ *   'untracked' | 'modified' | 'added' | 'deleted' | 'renamed' | 'ignored'
+ */
+export type GitFileStatus =
+    | 'untracked'
+    | 'modified'
+    | 'added'
+    | 'deleted'
+    | 'renamed'
+    | 'ignored';
+
+export type GitStatusMap = Record<string, GitFileStatus>;
+
+/**
+ * Collapse a porcelain v1 two-char XY status into one normalised token.
+ * X = staged (index) state, Y = worktree state. Precedence is chosen for
+ * a file-tree colouring use-case (what does the user most want to see):
+ *   '??' untracked, '!!' ignored, any 'D' deleted, any 'R' renamed,
+ *   index 'A' added/staged, otherwise modified.
+ */
+function classifyXY(xy: string): GitFileStatus {
+    if (xy === '??') return 'untracked';
+    if (xy === '!!') return 'ignored';
+    const x = xy[0];
+    const y = xy[1];
+    if (x === 'R' || y === 'R') return 'renamed';
+    if (x === 'D' || y === 'D') return 'deleted';
+    if (x === 'A') return 'added';
+    return 'modified';
+}
+
+/**
+ * Forward-slash a git porcelain path and strip the surrounding quotes git
+ * adds when a path has "unusual" chars. Quoted paths can carry C-style
+ * escapes (\t, \", \\, octal) — git only quotes when `core.quotepath` is on
+ * (the default), but porcelain v1 with `-z` would avoid them. We don't pass
+ * `-z` (so rename `->` parsing stays simple), so handle the common quote
+ * unwrapping for paths with spaces / specials.
+ */
+function unquotePath(p: string): string {
+    let s = p;
+    if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+        s = s.slice(1, -1).replace(/\\(["\\])/g, '$1');
+    }
+    return s.replace(/\\/g, '/');
+}
+
+/**
+ * Parse `git status --porcelain=v1` output into a workspace-relative path →
+ * status map. Each line is `XY <path>` (or `XY <old> -> <new>` for renames).
+ * For a rename we record the NEW path (the one that exists in the tree) as
+ * 'renamed'. Exported for unit testing the parser in isolation.
+ */
+export function parseGitPorcelain(stdout: string): GitStatusMap {
+    const map: GitStatusMap = {};
+    for (const rawLine of stdout.split('\n')) {
+        if (!rawLine) continue;
+        // Strip a trailing CR (porcelain lines are \n-separated, but be safe).
+        const line = rawLine.replace(/\r$/, '');
+        if (line.length < 3) continue;
+        const xy = line.slice(0, 2);
+        const rest = line.slice(3); // skip the single space after XY
+        const status = classifyXY(xy);
+
+        // Rename/copy lines carry "old -> new"; the new path is what's on disk.
+        // The ` -> ` separator sits between two (possibly quoted) paths.
+        const arrow = rest.indexOf(' -> ');
+        if (arrow !== -1 && (xy[0] === 'R' || xy[0] === 'C')) {
+            const newPath = unquotePath(rest.slice(arrow + 4));
+            map[newPath] = status;
+            continue;
+        }
+        map[unquotePath(rest)] = status;
+    }
+    return map;
+}
+
+/**
+ * Run `git status` in `workspacePath` and return a normalised path→status
+ * map. Never throws: a non-git dir, missing git, or any git error yields an
+ * empty map (the tree simply isn't coloured). Args are passed as an array
+ * (no shell) so paths with spaces / specials can't be interpolated.
+ *
+ * `-uall` lists every untracked file individually (not just the containing
+ * dir). `--ignored` is opt-in via `opts.ignored` — off by default since the
+ * walk already hides most ignored noise and listing it all is wasteful.
+ */
+export async function gitStatus(
+    workspacePath: string,
+    opts: { ignored?: boolean } = {},
+): Promise<GitStatusMap> {
+    const root = path.resolve(workspacePath);
+    // Cheap pre-check: a workspace with no .git (and not inside one) won't be
+    // a repo. We still let git decide (submodules, .git files), but bail fast
+    // when the dir itself is unreadable.
+    try {
+        const args = ['status', '--porcelain=v1', '-uall'];
+        if (opts.ignored) args.push('--ignored');
+        const { stdout } = await execFileAsync('git', args, {
+            cwd: root,
+            windowsHide: true,
+            maxBuffer: 8 * 1024 * 1024,
+            timeout: 10_000,
+        });
+        return parseGitPorcelain(stdout);
+    } catch {
+        // Not a repo, git missing, timeout, etc. → no colouring.
+        return {};
+    }
+}
+
 export function registerFilesIpc(): void {
     ipcMain.handle(
         'files:list-tree',
@@ -364,5 +481,10 @@ export function registerFilesIpc(): void {
         'files:delete',
         (_e, workspacePath: string, relPath: string) =>
             deletePath(workspacePath, relPath),
+    );
+    ipcMain.handle(
+        'files:git-status',
+        (_e, workspacePath: string, opts?: { ignored?: boolean }) =>
+            gitStatus(workspacePath, opts ?? {}),
     );
 }

@@ -4,8 +4,10 @@ import {
     IconCode,
     IconCopy,
     IconListTree,
+    IconLock,
     IconPlus,
     IconTrash,
+    IconUnlock,
 } from '../Master/icons';
 import type { TreeNodeData } from '../../lib/genie';
 
@@ -25,6 +27,13 @@ interface Props {
     onDuplicate: () => void;
     onDelete: () => void;
     onCopyPath: () => void;
+    /** Pin the Editor's tree root to a folder node (folder-only). */
+    onLockToFolder: (node: TreeNodeData) => void;
+    /** Clear the current Editor lock. */
+    onUnlock: () => void;
+    /** Whether the Editor is currently locked, and to which folder ('' = workspace root). */
+    locked: boolean;
+    lockedRoot: string;
 }
 
 /**
@@ -46,6 +55,10 @@ export default function FileTreeContextMenu({
     onDuplicate,
     onDelete,
     onCopyPath,
+    onLockToFolder,
+    onUnlock,
+    locked,
+    lockedRoot,
 }: Props) {
     const menuRef = useRef<HTMLDivElement>(null);
 
@@ -129,6 +142,46 @@ export default function FileTreeContextMenu({
                     }}
                 />
             </div>
+
+            {(isFolder || locked) && (
+                <>
+                    <div className="proj-popover-divider" />
+                    <div className="proj-popover-section">
+                        {locked && (
+                            <div className="ctx-note" role="presentation">
+                                Locked to{' '}
+                                <span className="ctx-note-em">
+                                    {lockedRoot || 'workspace root'}
+                                </span>
+                            </div>
+                        )}
+                        {isFolder && (
+                            <CtxItem
+                                icon={<IconLock size={14} />}
+                                label={
+                                    locked && lockedRoot === node?.id
+                                        ? 'Editor locked here'
+                                        : 'Lock Editor to this folder'
+                                }
+                                onClick={() => {
+                                    if (node) onLockToFolder(node);
+                                    onClose();
+                                }}
+                            />
+                        )}
+                        {locked && (
+                            <CtxItem
+                                icon={<IconUnlock size={14} />}
+                                label="Unlock Editor"
+                                onClick={() => {
+                                    onUnlock();
+                                    onClose();
+                                }}
+                            />
+                        )}
+                    </div>
+                </>
+            )}
 
             {node && (
                 <>

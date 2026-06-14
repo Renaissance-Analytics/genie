@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { CodeEditor } from '@particle-academy/fancy-code';
 import FileTree from './FileTree';
 import {
+    IconCheck,
     IconCode,
     IconLock,
     IconMaximize,
@@ -110,6 +111,10 @@ export default function CodePanel({
     const [locked, setLocked] = useState<boolean>(!!spec.meta?.locked);
     const [lockedRoot, setLockedRoot] = useState<string>(spec.meta?.root ?? '');
 
+    // Bumped after a save so the FileTree refetches git status (the file just
+    // changed on disk, so its colour should update).
+    const [gitRefreshKey, setGitRefreshKey] = useState(0);
+
     // Latest dirty/content for the keydown handler without re-binding it.
     const dirtyRef = useRef(dirty);
     dirtyRef.current = dirty;
@@ -184,6 +189,8 @@ export default function CodePanel({
         try {
             await api().files.write(workspacePath, file, contentRef.current);
             setDirty(false);
+            // The file changed on disk — refresh git colours in the tree.
+            setGitRefreshKey((k) => k + 1);
         } catch (e) {
             setLoadError(e instanceof Error ? e.message : String(e));
         }
@@ -231,35 +238,51 @@ export default function CodePanel({
     }, [guardUnsaved, onClose]);
 
     /**
-     * Toggle the lock. Locking prompts for a workspace-relative root folder
-     * (prefilled with the current locked root; blank = whole workspace),
-     * then persists meta.locked + meta.root and re-roots the tree. Unlocking
-     * clears both and restores the workspace root.
+     * Lock the Editor to a folder node (the PRIMARY affordance — invoked from
+     * the file-tree right-click menu). Pins the tree root to the folder's
+     * workspace-relative path, persists meta ({locked, root, file_path}) so the
+     * Editor reopens rooted there across restarts, and re-roots the tree now.
      */
-    const toggleLock = useCallback(async () => {
+    const lockToFolder = useCallback(
+        (node: TreeNodeData) => {
+            const root = normaliseRoot(node.id);
+            setLocked(true);
+            setLockedRoot(root);
+            persistMeta({
+                locked: true,
+                root,
+                file_path: openFileRef.current ?? undefined,
+            });
+        },
+        [persistMeta],
+    );
+
+    /** Clear the lock and restore the whole-workspace tree root. */
+    const unlock = useCallback(() => {
+        setLocked(false);
+        setLockedRoot('');
+        persistMeta({ locked: false, root: '' });
+    }, [persistMeta]);
+
+    /**
+     * Head lock button: a quick toggle. Unlock when locked; when unlocked,
+     * lock to the CURRENT tree root (the workspace root here — right-click a
+     * folder for a sub-root). The right-click "Lock Editor to this folder"
+     * menu item is the primary way to choose the folder.
+     */
+    const toggleLock = useCallback(() => {
         if (locked) {
-            setLocked(false);
-            setLockedRoot('');
-            persistMeta({ locked: false, root: '' });
+            unlock();
             return;
         }
-        const picked = await showPrompt({
-            title: 'Lock this editor',
-            label: 'Root folder (workspace-relative)',
-            body: 'The view will reopen pinned to this folder and the current file. Leave blank to lock to the whole workspace. e.g. repos/genie',
-            initial: lockedRoot,
-            placeholder: 'repos/genie',
-            confirmLabel: 'Lock',
-        });
-        // showPrompt returns null on cancel; a submitted blank is impossible
-        // (input mode rejects empty), so an empty root is opted into by
-        // confirming with the seed cleared — treat null as cancel only.
-        if (picked === null) return;
-        const root = normaliseRoot(picked);
         setLocked(true);
-        setLockedRoot(root);
-        persistMeta({ locked: true, root, file_path: openFileRef.current ?? undefined });
-    }, [locked, lockedRoot, persistMeta]);
+        setLockedRoot('');
+        persistMeta({
+            locked: true,
+            root: '',
+            file_path: openFileRef.current ?? undefined,
+        });
+    }, [locked, unlock, persistMeta]);
 
     return (
         <section className={`tpanel${focused ? ' focus' : ''}`} style={style}>
@@ -301,6 +324,19 @@ export default function CodePanel({
                 ) : null}
                 <span className="grow" />
                 <span className="pa">
+                    <button
+                        type="button"
+                        className="pctl save-btn"
+                        onClick={() => void save()}
+                        disabled={!dirty || !openFile}
+                        title={
+                            dirty
+                                ? 'Save (Ctrl/Cmd+S)'
+                                : 'Saved'
+                        }
+                    >
+                        <IconCheck size={13} />
+                    </button>
                     <button
                         type="button"
                         className={`pctl${locked ? ' is-on' : ''}`}
@@ -353,6 +389,12 @@ export default function CodePanel({
                             onSelectFile={(rel) => void selectFile(rel)}
                             onTreeChanged={reloadTree}
                             onOpenCreatedFile={(rel) => void selectFile(rel)}
+                            onLockToFolder={lockToFolder}
+                            onUnlock={unlock}
+                            locked={locked}
+                            lockedRoot={lockedRoot}
+                            dirtyPath={dirty ? openFile : null}
+                            gitRefreshKey={gitRefreshKey}
                         />
                     </div>
                 )}

@@ -207,6 +207,20 @@ export interface TreeNodeData {
     children?: TreeNodeData[];
 }
 
+/**
+ * Normalised git status token for one file, produced by `files:git-status`.
+ * Maps a workspace-relative path → one of these. Used to colour the tree.
+ */
+export type GitFileStatus =
+    | 'untracked'
+    | 'modified'
+    | 'added'
+    | 'deleted'
+    | 'renamed'
+    | 'ignored';
+
+export type GitStatusMap = Record<string, GitFileStatus>;
+
 interface CreateAgiOpts {
     slug: string;
     name: string;
@@ -516,6 +530,10 @@ interface GenieApi {
             workspacePath: string,
             relPath: string,
         ) => Promise<{ ok: boolean }>;
+        gitStatus: (
+            workspacePath: string,
+            opts?: { ignored?: boolean },
+        ) => Promise<GitStatusMap>;
     };
     github: {
         status: () => Promise<{

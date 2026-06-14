@@ -1577,6 +1577,34 @@ body.gutter-dragging .grid-gutter {
     background: var(--term-warn);
     flex: 0 0 auto;
 }
+/* Save button — lit (warn) while there are unsaved edits, dim+disabled when
+   the file is clean. Reuses .pctl chrome. */
+.tpanel-head .pctl.save-btn:not(:disabled) {
+    color: var(--term-warn);
+}
+.tpanel-head .pctl.save-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+.tpanel-head .pctl.save-btn:disabled:hover {
+    background: transparent;
+    color: #71717a;
+}
+/* Unsaved `*` marker on the open file's tree node. */
+.code-tree .tree-dirty-mark {
+    color: var(--term-warn);
+    font-weight: 700;
+}
+/* Context-menu "Locked to …" note line. */
+.ctx-menu .ctx-note {
+    padding: 4px 10px 2px;
+    font-size: 10.5px;
+    color: #71717a;
+}
+.ctx-menu .ctx-note .ctx-note-em {
+    color: #c4b5fd;
+    font-family: ui-monospace, 'Geist Mono', monospace;
+}
 
 /* ===== Empty-grid add tiles (terminal + code) ========================= */
 .addtile-group {

@@ -228,6 +228,10 @@ const api = {
             ipcRenderer.invoke('files:delete', workspacePath, relPath) as Promise<{
                 ok: boolean;
             }>,
+        gitStatus: (workspacePath: string, opts?: { ignored?: boolean }) =>
+            ipcRenderer.invoke('files:git-status', workspacePath, opts) as Promise<
+                Record<string, string>
+            >,
     },
 
     terminal: {
