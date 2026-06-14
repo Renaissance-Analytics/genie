@@ -86,3 +86,79 @@ describe('db migration v4 (typed view specs)', () => {
         expect(JSON.parse(row!.meta_json)).toEqual({ file_path: 'src/index.ts' });
     });
 });
+
+describe('db migration v5 (session-persistence pointers)', () => {
+    it('adds snapshot_at + snapshot_bytes + live_cwd columns', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const c = cols(db, 'terminal_specs');
+        expect(c.has('snapshot_at')).toBe(true);
+        expect(c.has('snapshot_bytes')).toBe(true);
+        expect(c.has('live_cwd')).toBe(true);
+    });
+
+    it('a pre-existing spec row reads back NULL for all three pointer columns', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+
+        // Insert with only the pre-v5 columns — the v5 columns must be NULL,
+        // exactly as a row migrated up from v3/v4 would be.
+        db.prepare(
+            `INSERT INTO terminal_specs
+               (id, workspace_id, label, cwd, shell, args_json, env_json, type, meta_json, sort_order, created_at)
+             VALUES (@id, NULL, @label, @cwd, NULL, '[]', '{}', 'terminal', '{}', 0, @now)`,
+        ).run({ id: 'spec-pre-v5', label: 'pre', cwd: '/tmp', now: new Date().toISOString() });
+
+        const row = db
+            .prepare<
+                [string],
+                {
+                    snapshot_at: number | null;
+                    snapshot_bytes: number | null;
+                    live_cwd: string | null;
+                }
+            >(
+                'SELECT snapshot_at, snapshot_bytes, live_cwd FROM terminal_specs WHERE id = ?',
+            )
+            .get('spec-pre-v5');
+
+        expect(row?.snapshot_at).toBeNull();
+        expect(row?.snapshot_bytes).toBeNull();
+        expect(row?.live_cwd).toBeNull();
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        const c = cols(db, 'terminal_specs');
+        expect(c.has('snapshot_at')).toBe(true);
+        expect(c.has('live_cwd')).toBe(true);
+    });
+
+    it('persists snapshot/cwd pointers on a spec row', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO terminal_specs
+               (id, workspace_id, label, cwd, shell, args_json, env_json, type, meta_json, sort_order, created_at)
+             VALUES ('s1', NULL, 'l', '/tmp', NULL, '[]', '{}', 'terminal', '{}', 0, @now)`,
+        ).run({ now: new Date().toISOString() });
+
+        db.prepare(
+            `UPDATE terminal_specs SET snapshot_at = ?, snapshot_bytes = ?, live_cwd = ? WHERE id = 's1'`,
+        ).run(1234567890, 4096, 'C:\\work\\proj');
+
+        const row = db
+            .prepare<
+                [],
+                { snapshot_at: number; snapshot_bytes: number; live_cwd: string }
+            >(
+                'SELECT snapshot_at, snapshot_bytes, live_cwd FROM terminal_specs WHERE id = \'s1\'',
+            )
+            .get();
+        expect(row?.snapshot_at).toBe(1234567890);
+        expect(row?.snapshot_bytes).toBe(4096);
+        expect(row?.live_cwd).toBe('C:\\work\\proj');
+    });
+});

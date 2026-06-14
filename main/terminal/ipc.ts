@@ -1,6 +1,8 @@
 import { BrowserWindow, ipcMain, WebContents } from 'electron';
 import { terminalManager, CreateTerminalOpts, TerminalInfo } from './manager';
 import { detectShells, defaultShellId, resolveDefaultShell } from './shells';
+import { writeSnapshot } from './sessions';
+import { updateTerminalSpec } from '../db';
 
 /**
  * IPC layer for the terminal subsystem. The manager owns ptys + emits
@@ -75,7 +77,11 @@ export function registerTerminalIpc(): void {
         (
             event,
             opts: CreateTerminalOpts,
-        ): TerminalInfo & { existing: boolean; scrollback: string } => {
+        ): TerminalInfo & {
+            existing: boolean;
+            scrollback: string;
+            snapshot?: { serialized: string; savedAt: number };
+        } => {
             // No explicit shell on the spec → the user's configured default
             // (Settings → Terminal), which itself falls back to detection
             // (Git Bash first on Windows). Resolution lives in shells.ts so
@@ -127,6 +133,31 @@ export function registerTerminalIpc(): void {
         return mgr.list();
     });
 
+    // Tier 1 capture: the renderer sends a SerializeAddon reconstruction of a
+    // terminal's buffer. Persist it (encrypted gz on disk) and record the
+    // pointer metadata on the spec row so the next launch knows a snapshot
+    // exists. Best-effort — a failed write must not reject the renderer.
+    ipcMain.handle(
+        'terminal:snapshot',
+        (_event, id: string, serialized: string): boolean => {
+            try {
+                const bytes = writeSnapshot(id, serialized);
+                if (bytes == null) return false;
+                try {
+                    updateTerminalSpec(id, {
+                        snapshot_at: Date.now(),
+                        snapshot_bytes: bytes,
+                    });
+                } catch {
+                    /* spec may be unsaved/scratch — the file is still written */
+                }
+                return true;
+            } catch {
+                return false;
+            }
+        },
+    );
+
     mgr.on('data', (id: string, data: string) => {
         const entry = ownersByTerminal.get(id);
         if (!entry) return;
@@ -153,6 +184,24 @@ export function registerTerminalIpc(): void {
 /** Tear down every pty on app quit so dangling shell processes don't survive. */
 export function stopAllTerminals(): void {
     terminalManager().killAll();
+}
+
+/**
+ * Two-phase quit support (Tier 1). Broadcast a snapshot-request to every
+ * window so each live terminal serializes its current buffer and sends a final
+ * `terminal:snapshot` before its pty is killed. Returns immediately — the
+ * caller waits a bounded window (so quit can never hang) and THEN calls
+ * stopAllTerminals(). If no windows are open, there's nothing to snapshot.
+ */
+export function requestFinalSnapshots(): void {
+    for (const w of BrowserWindow.getAllWindows()) {
+        if (w.isDestroyed()) continue;
+        try {
+            w.webContents.send('terminal:snapshot-request');
+        } catch {
+            /* window tearing down — skip */
+        }
+    }
 }
 
 /** Forward the broadcast helper for callers that want it. */

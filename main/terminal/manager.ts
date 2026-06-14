@@ -1,6 +1,9 @@
 import { spawn, IPty } from 'node-pty';
 import os from 'node:os';
 import { EventEmitter } from 'node:events';
+import { scanOsc7Cwd } from './osc7';
+import { cwdHookEnv } from './shells';
+import { readSnapshot } from './sessions';
 
 /**
  * Centralised PTY manager. Owns every spawned pty, routes I/O to/from
@@ -39,15 +42,45 @@ interface AttachResult extends TerminalInfo {
     existing: boolean;
     /** Bounded scrollback so a late-joining window can replay history. */
     scrollback: string;
+    /**
+     * A previous-session snapshot to replay, present ONLY on a COLD spawn that
+     * found a snapshot on disk. On a warm reattach this is omitted — the live
+     * scrollback already covers the history. The renderer frames it as
+     * "— previous session —" then resets before the fresh shell.
+     */
+    snapshot?: { serialized: string; savedAt: number };
 }
 
 /** ~1 MB per pty. Enough for an hour of typical dev output without runaway memory. */
 const SCROLLBACK_MAX = 1_000_000;
 
+/** Debounce window for persisting an OSC-7 cwd change to the spec row. */
+const CWD_PERSIST_DEBOUNCE_MS = 750;
+
+/**
+ * Persist a live cwd to the spec row, debounced + best-effort. Imported lazily
+ * so this module can be loaded in test contexts where the db isn't initialised
+ * — a failed import or uninitialised db just no-ops the persistence.
+ */
+function persistLiveCwd(id: string, cwd: string): void {
+    try {
+        // require (not import) so the db module — which calls app.getPath at
+        // init — is only touched when we actually have a cwd to write.
+        const { updateTerminalSpec } = require('../db') as typeof import('../db');
+        updateTerminalSpec(id, { live_cwd: cwd });
+    } catch {
+        /* db not ready / spec gone — cwd accuracy is best-effort */
+    }
+}
+
 class TerminalManager extends EventEmitter {
     private readonly ptys = new Map<string, IPty>();
     private readonly scrollback = new Map<string, string>();
     private readonly shells = new Map<string, string>();
+    /** Last cwd reported by each pty via OSC-7 (in-memory, authoritative). */
+    private readonly liveCwd = new Map<string, string>();
+    /** Pending debounced cwd-persist timers, keyed by terminal id. */
+    private readonly cwdTimers = new Map<string, NodeJS.Timeout>();
 
     /**
      * Spawn a new pty for the given id, OR return the existing one if a
@@ -68,7 +101,14 @@ class TerminalManager extends EventEmitter {
         }
         const shell = opts.shell ?? defaultShell();
         const args = opts.args ?? defaultShellArgs(shell);
-        const env = { ...process.env, ...(opts.env ?? {}) } as Record<string, string>;
+        // Inject the OSC-7 prompt hook (gated by the track_cwd setting) so the
+        // shell reports its cwd on every prompt. cwdHookEnv returns {} when
+        // tracking is off or the shell can't be hooked — degrade silently.
+        const env = {
+            ...process.env,
+            ...cwdHookEnv(shell),
+            ...(opts.env ?? {}),
+        } as Record<string, string>;
         // Most TUI apps key off TERM to decide whether to emit ANSI / use the
         // alt screen. xterm.js handles xterm-256color cleanly; without this,
         // some apps degrade to dumb mode.
@@ -93,14 +133,27 @@ class TerminalManager extends EventEmitter {
                 opts.id,
                 next.length > SCROLLBACK_MAX ? next.slice(-SCROLLBACK_MAX) : next,
             );
+            // Tier 1.5: watch for OSC-7 cwd reports and persist the latest,
+            // debounced. The in-memory map is authoritative; the spec row is a
+            // durable mirror for the next launch.
+            const cwd = scanOsc7Cwd(data);
+            if (cwd && cwd !== this.liveCwd.get(opts.id)) {
+                this.liveCwd.set(opts.id, cwd);
+                this.scheduleCwdPersist(opts.id, cwd);
+            }
             this.emit('data', opts.id, data);
         });
         pty.onExit(({ exitCode, signal }) => {
+            this.cleanupCwd(opts.id);
             this.ptys.delete(opts.id);
             this.scrollback.delete(opts.id);
             this.shells.delete(opts.id);
             this.emit('exit', opts.id, { exitCode, signal });
         });
+
+        // Cold spawn: surface any previous-session snapshot so the renderer can
+        // replay history + divider + reset before this fresh shell takes over.
+        const snap = readSnapshot(opts.id);
 
         return {
             id: opts.id,
@@ -108,7 +161,38 @@ class TerminalManager extends EventEmitter {
             shell,
             existing: false,
             scrollback: '',
+            snapshot: snap ?? undefined,
         };
+    }
+
+    private scheduleCwdPersist(id: string, cwd: string): void {
+        const existing = this.cwdTimers.get(id);
+        if (existing) clearTimeout(existing);
+        const t = setTimeout(() => {
+            this.cwdTimers.delete(id);
+            persistLiveCwd(id, cwd);
+        }, CWD_PERSIST_DEBOUNCE_MS);
+        // Don't let a pending cwd-write hold the process open at quit.
+        if (typeof t.unref === 'function') t.unref();
+        this.cwdTimers.set(id, t);
+    }
+
+    private cleanupCwd(id: string): void {
+        const t = this.cwdTimers.get(id);
+        if (t) {
+            clearTimeout(t);
+            this.cwdTimers.delete(id);
+        }
+        // Flush the last known cwd synchronously so a quit right after a `cd`
+        // doesn't lose it.
+        const cwd = this.liveCwd.get(id);
+        if (cwd) persistLiveCwd(id, cwd);
+        this.liveCwd.delete(id);
+    }
+
+    /** Last cwd reported by this pty via OSC-7, or undefined when unknown. */
+    getLiveCwd(id: string): string | undefined {
+        return this.liveCwd.get(id);
     }
 
     write(id: string, data: string): boolean {
@@ -135,6 +219,7 @@ class TerminalManager extends EventEmitter {
         } catch {
             /* already exited */
         }
+        this.cleanupCwd(id);
         this.ptys.delete(id);
         this.scrollback.delete(id);
         this.shells.delete(id);

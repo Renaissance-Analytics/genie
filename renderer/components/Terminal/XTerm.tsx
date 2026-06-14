@@ -4,6 +4,8 @@ import {
     type TerminalHandle,
     type ShellProfile,
 } from '@particle-academy/fancy-term';
+import { Terminal as XtermTerminal } from '@xterm/xterm';
+import { SerializeAddon } from '@xterm/addon-serialize';
 import { api, ulid } from '../../lib/genie';
 import '@xterm/xterm/css/xterm.css';
 
@@ -31,6 +33,56 @@ interface XTermProps {
 }
 
 /**
+ * Reaching the LIVE xterm instance (Tier 1 snapshots).
+ *
+ * fancy-term 0.2.2's forwarded ref is built with `{...handle}` inside
+ * useImperativeHandle, which snapshots the `xterm` GETTER at layout time
+ * (before the instance exists) into a static null — so `handle.xterm` is null
+ * forever and there's no `loadAddon` on the handle. To load a SerializeAddon
+ * we need the real Terminal object.
+ *
+ * fancy-term imports the SAME hoisted `@xterm/xterm` singleton we do (no nested
+ * copy), so patching `Terminal.prototype.open` here once reaches fancy-term's
+ * instances too. We stamp each opened instance onto its container element; our
+ * effect then recovers it by querying the `[data-fancy-terminal]` node fancy-
+ * term renders. This is the documented public `open(parent)` API, not an
+ * internals hack, and degrades gracefully — if the stamp is ever missing we
+ * simply skip snapshots for that terminal.
+ */
+const STAMP = '__genieXterm' as const;
+type StampedElement = HTMLElement & { [STAMP]?: XtermTerminal };
+
+let openPatched = false;
+function patchXtermOpen(): void {
+    if (openPatched) return;
+    openPatched = true;
+    const proto = XtermTerminal.prototype as unknown as {
+        open: (parent: HTMLElement) => void;
+    };
+    const orig = proto.open;
+    proto.open = function patchedOpen(this: XtermTerminal, parent: HTMLElement) {
+        try {
+            (parent as StampedElement)[STAMP] = this;
+        } catch {
+            /* exotic element — snapshots will just be skipped */
+        }
+        return orig.call(this, parent);
+    };
+}
+
+function findLiveXterm(host: HTMLElement | null): XtermTerminal | null {
+    if (!host) return null;
+    const node =
+        (host.matches?.('[data-fancy-terminal]') ? host : null) ??
+        host.querySelector<HTMLElement>('[data-fancy-terminal]');
+    const stamped = node as StampedElement | null;
+    return stamped?.[STAMP] ?? null;
+}
+
+/** How often a live terminal proactively snapshots itself (reliability floor). */
+const SNAPSHOT_INTERVAL_MS = 30_000;
+
+/**
  * Single embedded terminal on fancy-term's <Terminal>. The wrapper owns
  * xterm.js + fit; this component owns the pty lifecycle and the IPC
  * wiring (user input → main write, main pty data → handle.write). The
@@ -38,24 +90,18 @@ interface XTermProps {
  * through the TerminalHandle so high-volume output never round-trips
  * React state.
  *
- * IMPORTANT (fancy-term 0.2.2): do NOT touch `handle.xterm` from this
- * component. The forwarded ref is built with `{...handle}` inside
- * useImperativeHandle, which snapshots the `xterm` GETTER during the
- * layout phase — before the instance exists — so the ref's `.xterm` is
- * null forever. The method closures (write/writeln/fit/...) read the
- * live internal ref and always work. Sizes come from onResize instead
- * of reading xterm.cols/rows. Fix upstream, then the escape hatch
- * (WebLinksAddon etc.) can come back.
- *
  * Lifecycle:
  *   mount   → ulid + api.terminal.create({id, cwd, cols, rows})
  *   resize  → onResize → api.terminal.resize(id, cols, rows)
  *   exit    → onExit({exitCode}) + clean up listeners
- *   unmount → api.terminal.detach(id) (last detach kills the pty in main)
+ *   unmount → final snapshot, then api.terminal.detach(id)
  *
- * Shell switching is host-driven per fancy-term's contract: the switcher
- * UI fires onShellChange and the parent respawns this component (key
- * change) with the new shell — the wrapper never spawns anything.
+ * Tier 1 persistence:
+ *   - After fit, a SerializeAddon is loaded onto the live xterm via a ref.
+ *   - A 30s interval + a quit-time `terminal:snapshot-request` + clean unmount
+ *     all serialize the buffer and send `terminal:snapshot`.
+ *   - On a COLD spawn that returns a `snapshot`, we replay it, draw a dim
+ *     "— previous session —" divider, full-reset, THEN wire the live shell.
  */
 export default function XTerm({
     id: providedId,
@@ -70,14 +116,20 @@ export default function XTerm({
     onShellChange,
 }: XTermProps) {
     const handleRef = useRef<TerminalHandle>(null);
+    const hostRef = useRef<HTMLDivElement>(null);
     const ptyIdRef = useRef<string | null>(null);
     const createFailedRef = useRef(false);
+    const serializeRef = useRef<SerializeAddon | null>(null);
     // Latest fitted grid from onResize. fancy-term fits on mount, which
     // fires onResize before our create effect runs in the same commit?
     // No — effects run after; the initial fit's resize may land before
     // OR after create. Track it either way: create uses the latest
     // known size, and any later resize is forwarded to the pty.
     const sizeRef = useRef<{ cols: number; rows: number }>({ cols: 80, rows: 24 });
+
+    // Patch xterm's open() at module init (idempotent) so the live instance is
+    // recoverable from the DOM the moment fancy-term mounts it.
+    patchXtermOpen();
 
     useEffect(() => {
         const handle = handleRef.current;
@@ -100,6 +152,36 @@ export default function XTerm({
         });
 
         handle.fit();
+
+        // Load the SerializeAddon onto the live xterm instance (recovered via
+        // the patched open()). Best-effort — a missing instance just disables
+        // snapshots for this terminal, it never breaks the session.
+        const live = findLiveXterm(hostRef.current);
+        if (live) {
+            try {
+                const addon = new SerializeAddon();
+                live.loadAddon(addon);
+                serializeRef.current = addon;
+            } catch {
+                serializeRef.current = null;
+            }
+        }
+
+        const serializeNow = (): string | null => {
+            const addon = serializeRef.current;
+            if (!addon) return null;
+            try {
+                return addon.serialize();
+            } catch {
+                return null;
+            }
+        };
+        const sendSnapshot = (): void => {
+            const data = serializeNow();
+            if (!data) return;
+            void api().terminal.snapshot(id, data).catch(() => {});
+        };
+
         void api()
             .terminal.create({
                 id,
@@ -111,9 +193,23 @@ export default function XTerm({
                 rows: sizeRef.current.rows,
             })
             .then((res) => {
-                // Attaching to an already-running pty (another window has it
-                // open) — replay the scrollback so this window catches up.
-                if (res.scrollback) handle.write(res.scrollback);
+                if (res.existing) {
+                    // Warm reattach: another window already has this pty live.
+                    // Replay the scrollback so this window catches up. Do NOT
+                    // replay the on-disk snapshot — the live buffer supersedes
+                    // it and double-drawing would duplicate history.
+                    if (res.scrollback) handle.write(res.scrollback);
+                } else if (res.snapshot?.serialized) {
+                    // Cold spawn with a previous-session snapshot. Frame it:
+                    // restored history → dim divider → full reset (\x1bc) so
+                    // the fresh shell starts on a clean screen below the
+                    // history. The reset clears any alt-screen/TUI state the
+                    // snapshot captured (e.g. quitting inside vim), which is
+                    // why we serialize rather than raw-replay.
+                    handle.write(res.snapshot.serialized);
+                    handle.write('\r\n\x1b[2m— previous session —\x1b[0m\r\n');
+                    handle.write('\x1bc');
+                }
                 // The fit may have landed between create and now — sync the
                 // pty to whatever the grid actually is.
                 void api()
@@ -128,10 +224,27 @@ export default function XTerm({
                 );
             });
 
+        // Reliability floor: snapshot every 30s while the terminal is live, so
+        // a crash (not a clean quit) still leaves recent history on disk.
+        const interval = setInterval(sendSnapshot, SNAPSHOT_INTERVAL_MS);
+
+        // Quit handshake: main broadcasts snapshot-request on before-quit; send
+        // our final buffer immediately so it lands inside the bounded wait.
+        const offSnapReq = api().on.terminalSnapshotRequest(() => {
+            if (!alive || createFailedRef.current) return;
+            sendSnapshot();
+        });
+
         return () => {
             alive = false;
+            clearInterval(interval);
+            offSnapReq();
             offData();
             offExit();
+            // Snapshot on clean unmount/detach so reopening picks up the very
+            // latest buffer even without a quit.
+            if (!createFailedRef.current) sendSnapshot();
+            serializeRef.current = null;
             // Detach (soft release) — the pty keeps running while any other
             // window is still attached. Last detach kills the pty in main.
             if (!createFailedRef.current && ptyIdRef.current) {
@@ -142,32 +255,34 @@ export default function XTerm({
     }, []);
 
     return (
-        <FancyTerminal
-            ref={handleRef}
-            className={className ?? 'h-full w-full'}
-            style={{ background: '#09090b' }}
-            theme={{ background: '#09090b', foreground: '#fafafa' }}
-            fontFamily='ui-monospace, SFMono-Regular, Menlo, "Cascadia Code", Consolas, monospace'
-            fontSize={13}
-            cursorBlink
-            shells={shells}
-            activeShell={activeShell}
-            onShellChange={onShellChange}
-            showShellBar={Boolean(shells && shells.length > 1)}
-            onData={(data) => {
-                // Swallow IPC errors — if the main-side handler is briefly
-                // unavailable (bootstrap, hot-reload) the keystroke is lost;
-                // better than a thrown rejection blanking the page.
-                const id = ptyIdRef.current;
-                if (!id) return;
-                void api().terminal.write(id, data).catch(() => {});
-            }}
-            onResize={({ cols, rows }) => {
-                sizeRef.current = { cols, rows };
-                const id = ptyIdRef.current;
-                if (!id || createFailedRef.current) return;
-                void api().terminal.resize(id, cols, rows).catch(() => {});
-            }}
-        />
+        <div ref={hostRef} className={className ?? 'h-full w-full'}>
+            <FancyTerminal
+                ref={handleRef}
+                className="h-full w-full"
+                style={{ background: '#09090b' }}
+                theme={{ background: '#09090b', foreground: '#fafafa' }}
+                fontFamily='ui-monospace, SFMono-Regular, Menlo, "Cascadia Code", Consolas, monospace'
+                fontSize={13}
+                cursorBlink
+                shells={shells}
+                activeShell={activeShell}
+                onShellChange={onShellChange}
+                showShellBar={Boolean(shells && shells.length > 1)}
+                onData={(data) => {
+                    // Swallow IPC errors — if the main-side handler is briefly
+                    // unavailable (bootstrap, hot-reload) the keystroke is lost;
+                    // better than a thrown rejection blanking the page.
+                    const id = ptyIdRef.current;
+                    if (!id) return;
+                    void api().terminal.write(id, data).catch(() => {});
+                }}
+                onResize={({ cols, rows }) => {
+                    sizeRef.current = { cols, rows };
+                    const id = ptyIdRef.current;
+                    if (!id || createFailedRef.current) return;
+                    void api().terminal.resize(id, cols, rows).catch(() => {});
+                }}
+            />
+        </div>
     );
 }

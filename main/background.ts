@@ -5,7 +5,7 @@ import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { registerIpcHandlers } from './ipc';
 import { initDatabase } from './db';
 import { registerProtocolHandler, handleGenieUrl } from './auth';
-import { registerTerminalIpc, stopAllTerminals } from './terminal/ipc';
+import { registerTerminalIpc, stopAllTerminals, requestFinalSnapshots } from './terminal/ipc';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
 import { registerUpdaterIpc, checkForUpdatesNow } from './updater/ipc';
@@ -376,7 +376,30 @@ app.whenReady().then(async () => {
     registerFilesIpc();
     registerGithubIpc();
     registerUpdaterIpc();
-    app.on('before-quit', () => stopAllTerminals());
+    // Two-phase quit (Tier 1 terminal persistence). On the FIRST before-quit we
+    // hold the quit, ask every window to serialize its terminals one last time,
+    // wait a bounded window for those final `terminal:snapshot` messages to
+    // land, then kill the ptys and let the quit proceed. A re-entry guard means
+    // the second (post-flush) quit passes straight through, so quit can never
+    // hang on this. The wait is also unconditionally bounded by a timer, so a
+    // wedged renderer can't block shutdown either.
+    let snapshotFlushDone = false;
+    app.on('before-quit', (event) => {
+        if (snapshotFlushDone) return; // re-entry: let the quit proceed
+        // Nothing to snapshot if no window is open — tear down immediately.
+        if (BrowserWindow.getAllWindows().length === 0) {
+            snapshotFlushDone = true;
+            stopAllTerminals();
+            return;
+        }
+        event.preventDefault();
+        requestFinalSnapshots();
+        setTimeout(() => {
+            snapshotFlushDone = true;
+            stopAllTerminals();
+            app.quit(); // re-trigger; the guard above lets it through now
+        }, 250);
+    });
     registerProtocolHandler();
 
     // Tray icons live at <asar>/resources/*.png in production (the

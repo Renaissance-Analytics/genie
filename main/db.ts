@@ -161,6 +161,39 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v5 — terminal session-persistence pointers (Tier 1). The actual
+            // snapshot bytes live encrypted on disk under
+            // userData/sessions/<id>.snap; these columns are just metadata
+            // pointers so the renderer can know a snapshot exists and where
+            // the shell was last running:
+            //   snapshot_at    — epoch ms of the last written snapshot (NULL = none)
+            //   snapshot_bytes — on-disk encrypted size, for surfacing/limits
+            //   live_cwd       — last cwd reported by the shell via OSC-7 (NULL = unknown)
+            // Idempotent ADD COLUMN like v2/v4 — re-running on a partially
+            // applied DB no-ops via the column-exists check. Pre-existing rows
+            // read back NULL for all three, which the app treats as "no
+            // snapshot / cwd unknown" and degrades to the static cwd.
+            version: 5,
+            runner: (db) => {
+                const cols = terminalSpecColumns(db);
+                if (!cols.has('snapshot_at')) {
+                    db.exec(
+                        `ALTER TABLE terminal_specs ADD COLUMN snapshot_at INTEGER`,
+                    );
+                }
+                if (!cols.has('snapshot_bytes')) {
+                    db.exec(
+                        `ALTER TABLE terminal_specs ADD COLUMN snapshot_bytes INTEGER`,
+                    );
+                }
+                if (!cols.has('live_cwd')) {
+                    db.exec(
+                        `ALTER TABLE terminal_specs ADD COLUMN live_cwd TEXT`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -213,6 +246,9 @@ export interface Settings {
     max_views?: string;
     /** Per-workspace draggable-grid track sizes, JSON-encoded. Keyed by `${workspaceId}:${signature}`. */
     layout_json?: string;
+    /** Inject a per-shell OSC-7 prompt hook so resumed terminals start in the
+     *  right cwd. 'off' disables it; anything else (incl. unset) is ON. */
+    track_cwd?: 'on' | 'off';
 }
 
 export function getAllSettings(): Settings {
@@ -253,6 +289,7 @@ export function getAllSettings(): Settings {
         terminal_custom_cmd: out['terminal_custom_cmd'] ?? '',
         max_views: out['max_views'] ?? '4',
         layout_json: out['layout_json'] ?? '{}',
+        track_cwd: (out['track_cwd'] as 'on' | 'off') ?? 'on',
     };
 }
 
@@ -439,6 +476,12 @@ export interface TerminalSpecRow {
     sort_order: number;
     created_at: string;
     last_opened_at: string | null;
+    /** Epoch ms of the last written session snapshot, or null when none. */
+    snapshot_at: number | null;
+    /** On-disk encrypted snapshot size in bytes, or null when none. */
+    snapshot_bytes: number | null;
+    /** Last cwd the shell reported via OSC-7, or null when unknown. */
+    live_cwd: string | null;
 }
 
 interface TerminalSpecRecord {
@@ -457,6 +500,11 @@ interface TerminalSpecRecord {
     sort_order: number;
     created_at: string;
     last_opened_at: string | null;
+    /** Pre-v5 rows lack these columns; a SELECT * over an older DB types them
+     *  as possibly absent. Null = no snapshot / cwd unknown. */
+    snapshot_at: number | null;
+    snapshot_bytes: number | null;
+    live_cwd: string | null;
 }
 
 function rowFromRecord(r: TerminalSpecRecord): TerminalSpecRow {
@@ -480,6 +528,9 @@ function rowFromRecord(r: TerminalSpecRecord): TerminalSpecRow {
         sort_order: r.sort_order,
         created_at: r.created_at,
         last_opened_at: r.last_opened_at,
+        snapshot_at: r.snapshot_at ?? null,
+        snapshot_bytes: r.snapshot_bytes ?? null,
+        live_cwd: r.live_cwd ?? null,
     };
 }
 
@@ -552,6 +603,9 @@ export function updateTerminalSpec(
         meta: TerminalSpecMeta;
         workspace_id: string | null;
         sort_order: number;
+        snapshot_at: number | null;
+        snapshot_bytes: number | null;
+        live_cwd: string | null;
     }>,
 ): TerminalSpecRow | null {
     const cur = getTerminalSpec(id);
@@ -567,6 +621,13 @@ export function updateTerminalSpec(
         workspace_id:
             patch.workspace_id !== undefined ? patch.workspace_id : cur.workspace_id,
         sort_order: patch.sort_order ?? cur.sort_order,
+        snapshot_at:
+            patch.snapshot_at !== undefined ? patch.snapshot_at : cur.snapshot_at,
+        snapshot_bytes:
+            patch.snapshot_bytes !== undefined
+                ? patch.snapshot_bytes
+                : cur.snapshot_bytes,
+        live_cwd: patch.live_cwd !== undefined ? patch.live_cwd : cur.live_cwd,
     };
     getDb()
         .prepare(
@@ -579,7 +640,10 @@ export function updateTerminalSpec(
                type      = @type,
                meta_json = @meta_json,
                workspace_id = @workspace_id,
-               sort_order   = @sort_order
+               sort_order   = @sort_order,
+               snapshot_at    = @snapshot_at,
+               snapshot_bytes = @snapshot_bytes,
+               live_cwd       = @live_cwd
              WHERE id = @id`,
         )
         .run({ id, ...next });

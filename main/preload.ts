@@ -241,11 +241,15 @@ const api = {
                 shell: string;
                 existing: boolean;
                 scrollback: string;
+                snapshot?: { serialized: string; savedAt: number };
             }>,
         write: (id: string, data: string) =>
             ipcRenderer.invoke('terminal:write', id, data) as Promise<boolean>,
         resize: (id: string, cols: number, rows: number) =>
             ipcRenderer.invoke('terminal:resize', id, cols, rows) as Promise<boolean>,
+        /** Persist a SerializeAddon snapshot of this terminal's buffer (Tier 1). */
+        snapshot: (id: string, serialized: string) =>
+            ipcRenderer.invoke('terminal:snapshot', id, serialized) as Promise<boolean>,
         /** Release this window's view of the pty without killing it. */
         detach: (id: string) =>
             ipcRenderer.invoke('terminal:detach', id) as Promise<boolean>,
@@ -292,6 +296,12 @@ const api = {
             ) => cb(payload);
             ipcRenderer.on('terminal:exit', handler);
             return () => ipcRenderer.off('terminal:exit', handler);
+        },
+        /** Main asks every window to serialize its terminals before quit (Tier 1). */
+        terminalSnapshotRequest: (cb: () => void) => {
+            const handler = () => cb();
+            ipcRenderer.on('terminal:snapshot-request', handler);
+            return () => ipcRenderer.off('terminal:snapshot-request', handler);
         },
         updaterStatus: (cb: (status: unknown) => void) => {
             const handler = (_e: unknown, payload: unknown) => cb(payload);

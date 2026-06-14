@@ -166,7 +166,11 @@ export default function TerminalPanel({
                     <XTerm
                         key={`${spec.id}:${shell.command ?? 'default'}`}
                         id={spec.id}
-                        cwd={spec.cwd}
+                        // Tier 1: a fresh shell starts where the old one was —
+                        // the OSC-7-tracked live_cwd wins over the static spec
+                        // cwd when present, falling back when cwd tracking is
+                        // off / unavailable.
+                        cwd={spec.live_cwd ?? spec.cwd}
                         shell={shell.command ?? undefined}
                         args={shell.args}
                         env={spec.env}

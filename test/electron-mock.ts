@@ -121,3 +121,16 @@ export const globalShortcut = {
     unregisterAll: noop,
     isRegistered: (): boolean => false,
 };
+
+/**
+ * safeStorage stub. Defaults to "encryption unavailable" so any module that
+ * imports it at load time (e.g. main/terminal/sessions.ts) resolves cleanly.
+ * Tests that exercise the encrypted path override `isEncryptionAvailable` and
+ * provide a reversible fake cipher (identity round-trip) — see
+ * main/terminal/__tests__/sessions.test.ts.
+ */
+export const safeStorage = {
+    isEncryptionAvailable: (): boolean => false,
+    encryptString: (s: string): Buffer => Buffer.from(s, 'utf8'),
+    decryptString: (b: Buffer): string => b.toString('utf8'),
+};

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { getAllSettings } from '../db';
 
 /**
@@ -170,6 +171,71 @@ export function parseCommandLine(line: string): { command: string; args: string[
     let m: RegExpExecArray | null;
     while ((m = re.exec(trimmed))) tokens.push(m[1] ?? m[2]);
     return { command: tokens[0] ?? '', args: tokens.slice(1) };
+}
+
+/** Coarse shell family, derived from the executable name, used to decide which
+ *  OSC-7 prompt hook (if any) we can inject. */
+export type ShellKind = 'powershell' | 'bash' | 'zsh' | 'fish' | 'cmd' | 'other';
+
+export function shellKind(command: string): ShellKind {
+    const base = path.basename(command).toLowerCase();
+    if (base.includes('pwsh') || base.includes('powershell')) return 'powershell';
+    if (base.startsWith('zsh')) return 'zsh';
+    if (base.startsWith('bash')) return 'bash';
+    if (base.startsWith('fish')) return 'fish';
+    if (base.startsWith('cmd')) return 'cmd';
+    return 'other';
+}
+
+/**
+ * Build the env additions that make a shell emit OSC-7 cwd reports on every
+ * prompt, so resumed terminals know where they were (Tier 1.5). Gated by the
+ * `track_cwd` setting (default ON). Returns {} when tracking is off or the
+ * shell can't be hooked via env — the manager then degrades to the static cwd.
+ *
+ * Design notes:
+ *   - We APPEND to existing prompt machinery, never replace it, so a user's
+ *     own prompt survives.
+ *   - bash:  PROMPT_COMMAND runs before each prompt — prepend our printf.
+ *   - zsh:   ZDOTDIR can't carry a precmd via env cleanly, but bash-style
+ *     PROMPT_COMMAND isn't honored; instead we rely on the widely-supported
+ *     `chpwd`-via-precmd being unavailable from env, so for zsh we set a
+ *     PROMPT_COMMAND-like hook through the `precmd_functions` route which zsh
+ *     does NOT read from env. So zsh degrades unless the user's rc emits OSC-7.
+ *     (Kept minimal — see Learnings.) We still try bash-style for zsh-in-bash-
+ *     compat shells.
+ *   - PowerShell: there's no env-var prompt hook; PowerShell reads $PROFILE.
+ *     We inject GENIE_OSC7=1 and rely on a one-line shim only when a profile
+ *     opts in. Practically, PowerShell here degrades to static cwd unless the
+ *     user adds the documented `prompt` shim. (See Learnings.)
+ *
+ * The portable, reliable case is bash (Git Bash on Windows, bash/zsh-in-bash
+ * mode on POSIX), which is Genie's default Windows shell — so the common path
+ * is covered.
+ */
+export function cwdHookEnv(command: string): Record<string, string> {
+    const settings = getAllSettings();
+    if (settings.track_cwd === 'off') return {};
+
+    const kind = shellKind(command);
+    const host = os.hostname();
+
+    if (kind === 'bash') {
+        // Emit OSC-7 from PROMPT_COMMAND. \033]7;file://HOST$PWD\007 — $PWD is
+        // already absolute. PROMPT_COMMAND is read from the environment by
+        // interactive bash, and we PREPEND so any existing value still runs.
+        // Single-quoted so $PWD expands at prompt time, not now.
+        const emit = `printf '\\033]7;file://${host}%s\\033\\\\' "$PWD"`;
+        // Existing PROMPT_COMMAND (if the user has one in their rc) is chained
+        // after ours via the trailing separator. bash treats PROMPT_COMMAND as
+        // a command string; "; " keeps both.
+        return { PROMPT_COMMAND: `${emit}${process.env.PROMPT_COMMAND ? '; ' + process.env.PROMPT_COMMAND : ''}` };
+    }
+
+    // zsh / fish / powershell / cmd: no clean env-only, non-clobbering hook.
+    // Degrade silently to the static cwd (the spec's `cwd`). A future tier can
+    // ship a real rc/profile shim.
+    return {};
 }
 
 /**

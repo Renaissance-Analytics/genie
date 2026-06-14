@@ -177,6 +177,12 @@ export interface TerminalSpec {
     sort_order: number;
     created_at: string;
     last_opened_at: string | null;
+    /** Epoch ms of the last persisted session snapshot, or null when none (Tier 1). */
+    snapshot_at: number | null;
+    /** On-disk encrypted snapshot size in bytes, or null when none (Tier 1). */
+    snapshot_bytes: number | null;
+    /** Last cwd the shell reported via OSC-7, or null when unknown (Tier 1.5). */
+    live_cwd: string | null;
 }
 
 /**
@@ -582,9 +588,12 @@ interface GenieApi {
             shell: string;
             existing: boolean;
             scrollback: string;
+            snapshot?: { serialized: string; savedAt: number };
         }>;
         write: (id: string, data: string) => Promise<boolean>;
         resize: (id: string, cols: number, rows: number) => Promise<boolean>;
+        /** Persist a SerializeAddon snapshot of this terminal's buffer (Tier 1). */
+        snapshot: (id: string, serialized: string) => Promise<boolean>;
         detach: (id: string) => Promise<boolean>;
         kill: (id: string) => Promise<boolean>;
         list: () => Promise<Array<{ id: string; pid: number; shell: string }>>;
@@ -603,6 +612,8 @@ interface GenieApi {
         terminalExit: (
             cb: (payload: { id: string; exitCode: number; signal?: number }) => void,
         ) => () => void;
+        /** Main asks every window to serialize its terminals before quit (Tier 1). */
+        terminalSnapshotRequest: (cb: () => void) => () => void;
         updaterStatus: (cb: (status: UpdaterStatus) => void) => () => void;
         updaterLog: (cb: (payload: { line: string }) => void) => () => void;
     };
