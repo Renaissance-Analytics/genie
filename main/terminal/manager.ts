@@ -1,6 +1,7 @@
 import { spawn, IPty } from 'node-pty';
 import { EventEmitter } from 'node:events';
 import { scanOsc7Cwd } from './osc7';
+import { resolveSpawnCwd, toNativeCwd } from './cwd';
 import { cwdHookEnv } from './shells';
 import type { PtyBackend } from './backend';
 import type { CreateTerminalOpts, TerminalInfo, AttachResult } from './types';
@@ -122,7 +123,10 @@ class InProcessBackend extends EventEmitter implements PtyBackend {
 
         const pty = spawn(shell, args, {
             name: 'xterm-color',
-            cwd: opts.cwd,
+            // Validate + native-convert the cwd: a stale or MSYS-form path
+            // (e.g. Git Bash's /c/Users/me) otherwise crashes node-pty with
+            // Windows error 267 (ERROR_DIRECTORY). Falls back to home.
+            cwd: resolveSpawnCwd(opts.cwd),
             cols: opts.cols ?? 80,
             rows: opts.rows ?? 24,
             env,
@@ -142,7 +146,11 @@ class InProcessBackend extends EventEmitter implements PtyBackend {
             // Tier 1.5: watch for OSC-7 cwd reports and persist the latest,
             // debounced. The in-memory map is authoritative; the spec row is a
             // durable mirror for the next launch.
-            const cwd = scanOsc7Cwd(data);
+            const raw = scanOsc7Cwd(data);
+            // Normalise to the host's native form (e.g. Git Bash's /c/Users/me
+            // → C:\Users\me) so the persisted live_cwd is a valid spawn cwd next
+            // launch — not just inside the shell that reported it.
+            const cwd = raw ? toNativeCwd(raw) : null;
             if (cwd && cwd !== this.liveCwd.get(opts.id)) {
                 this.liveCwd.set(opts.id, cwd);
                 this.scheduleCwdPersist(opts.id, cwd);

@@ -34,6 +34,7 @@ import {
     type HostMessage,
 } from './host-protocol';
 import { socketPathFor, pidfilePath } from './host-locate';
+import { resolveSpawnCwd } from './cwd';
 
 const SCROLLBACK_MAX = 1_000_000;
 /** Self-exit after this long with no ptys AND no connected client. */
@@ -91,7 +92,9 @@ function createPty(opts: {
 
     const pty = spawn(shell, opts.args ?? [], {
         name: 'xterm-color',
-        cwd: opts.cwd,
+        // Validate + native-convert: a stale or MSYS-form cwd otherwise crashes
+        // node-pty with Windows error 267 (ERROR_DIRECTORY). Falls back to home.
+        cwd: resolveSpawnCwd(opts.cwd),
         cols: opts.cols ?? 80,
         rows: opts.rows ?? 24,
         env,
