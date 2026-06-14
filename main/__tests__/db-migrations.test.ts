@@ -214,3 +214,53 @@ describe('db migration v6 (Tier 2 enabled column)', () => {
         expect(cols(db, 'terminal_specs').has('enabled')).toBe(true);
     });
 });
+
+describe('db migration v7 (Tier 3 host_session_id)', () => {
+    it('adds the host_session_id column to terminal_specs', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(cols(db, 'terminal_specs').has('host_session_id')).toBe(true);
+    });
+
+    it('a pre-existing (pre-v7) spec row reads back NULL for host_session_id', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+
+        db.prepare(
+            `INSERT INTO terminal_specs
+               (id, workspace_id, label, cwd, shell, args_json, env_json, type, meta_json, sort_order, created_at)
+             VALUES (@id, NULL, @label, @cwd, NULL, '[]', '{}', 'terminal', '{}', 0, @now)`,
+        ).run({ id: 'spec-pre-v7', label: 'pre', cwd: '/tmp', now: new Date().toISOString() });
+
+        const row = db
+            .prepare<[string], { host_session_id: string | null }>(
+                'SELECT host_session_id FROM terminal_specs WHERE id = ?',
+            )
+            .get('spec-pre-v7');
+        expect(row?.host_session_id).toBeNull();
+    });
+
+    it('round-trips a host_session_id on a spec row', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO terminal_specs
+               (id, workspace_id, label, cwd, shell, args_json, env_json, type, meta_json, sort_order, created_at, host_session_id)
+             VALUES ('s-host', NULL, 'l', '/tmp', NULL, '[]', '{}', 'terminal', '{}', 0, @now, 'host-pty-7')`,
+        ).run({ now: new Date().toISOString() });
+
+        const row = db
+            .prepare<[], { host_session_id: string }>(
+                "SELECT host_session_id FROM terminal_specs WHERE id = 's-host'",
+            )
+            .get();
+        expect(row?.host_session_id).toBe('host-pty-7');
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'terminal_specs').has('host_session_id')).toBe(true);
+    });
+});

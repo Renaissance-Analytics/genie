@@ -1,9 +1,12 @@
 import { spawn, IPty } from 'node-pty';
-import os from 'node:os';
 import { EventEmitter } from 'node:events';
 import { scanOsc7Cwd } from './osc7';
 import { cwdHookEnv } from './shells';
 import { readSnapshot } from './sessions';
+import type { PtyBackend } from './backend';
+import type { CreateTerminalOpts, TerminalInfo, AttachResult } from './types';
+
+export type { CreateTerminalOpts, TerminalInfo, AttachResult } from './types';
 
 /**
  * Centralised PTY manager. Owns every spawned pty, routes I/O to/from
@@ -14,42 +17,6 @@ import { readSnapshot } from './sessions';
  * manager just emits `data:<id>` and `exit:<id>` and lets ipc.ts wire
  * them to the right webContents.
  */
-
-export interface CreateTerminalOpts {
-    /** Stable id chosen by the renderer (ulid). The manager uses it as the key. */
-    id: string;
-    /** Working directory for the spawned shell. */
-    cwd: string;
-    /** Shell executable. Defaults to the user's preferred login shell per platform. */
-    shell?: string;
-    /** Extra args for the shell. */
-    args?: string[];
-    /** Initial cols × rows. Renderer should send a `resize` immediately after mount. */
-    cols?: number;
-    rows?: number;
-    /** Extra env overrides. Merged on top of process.env. */
-    env?: Record<string, string>;
-}
-
-export interface TerminalInfo {
-    id: string;
-    pid: number;
-    shell: string;
-}
-
-interface AttachResult extends TerminalInfo {
-    /** True when an existing pty was returned (caller is "joining"). */
-    existing: boolean;
-    /** Bounded scrollback so a late-joining window can replay history. */
-    scrollback: string;
-    /**
-     * A previous-session snapshot to replay, present ONLY on a COLD spawn that
-     * found a snapshot on disk. On a warm reattach this is omitted — the live
-     * scrollback already covers the history. The renderer frames it as
-     * "— previous session —" then resets before the fresh shell.
-     */
-    snapshot?: { serialized: string; savedAt: number };
-}
 
 /** ~1 MB per pty. Enough for an hour of typical dev output without runaway memory. */
 const SCROLLBACK_MAX = 1_000_000;
@@ -73,7 +40,15 @@ function persistLiveCwd(id: string, cwd: string): void {
     }
 }
 
-class TerminalManager extends EventEmitter {
+/**
+ * InProcessBackend — node-pty instances owned directly by the Electron main
+ * process. This is the historical TerminalManager body verbatim; it now also
+ * formally implements the PtyBackend interface so the IPC layer can hold it
+ * behind that abstraction interchangeably with the Tier 3 HostClient.
+ *
+ * EventEmitter gives us the `on('data'|'exit', …)` half of PtyBackend for free.
+ */
+class InProcessBackend extends EventEmitter implements PtyBackend {
     private readonly ptys = new Map<string, IPty>();
     private readonly scrollback = new Map<string, string>();
     private readonly shells = new Map<string, string>();
@@ -294,15 +269,77 @@ class TerminalManager extends EventEmitter {
     }
 }
 
+/** Back-compat alias. The class was renamed InProcessBackend in Tier 3; existing
+ *  imports of `TerminalManager` as a TYPE keep working. */
+export type TerminalManager = InProcessBackend;
+
 /**
- * Singleton instance. Created lazily so importing this module from a test
- * context doesn't attempt to load node-pty before vi.mock has had a chance
- * to substitute it.
+ * In-process backend singleton. Created lazily so importing this module from a
+ * test context doesn't attempt to load node-pty before vi.mock has had a chance
+ * to substitute it. This is ALSO the Tier 1/Tier 2 fallback floor: the quit-time
+ * snapshot helpers reach for the in-process scrollback through it.
  */
-let instance: TerminalManager | null = null;
-export function terminalManager(): TerminalManager {
-    if (!instance) instance = new TerminalManager();
-    return instance;
+let inProcess: InProcessBackend | null = null;
+export function inProcessBackend(): InProcessBackend {
+    if (!inProcess) inProcess = new InProcessBackend();
+    return inProcess;
+}
+
+/**
+ * The ACTIVE backend the IPC layer talks to. Defaults to the in-process backend;
+ * Tier 3 swaps in a HostClient at startup via setActiveBackend() when the
+ * detached pty-host is available. Everything in ipc.ts / T1 / T2 goes through
+ * here, oblivious to which concrete backend is mounted.
+ */
+let active: PtyBackend | null = null;
+export function terminalManager(): PtyBackend {
+    if (!active) active = inProcessBackend();
+    return active;
+}
+
+/**
+ * Subscribers that want to follow whichever backend is active (the IPC layer's
+ * data/exit fan-out). Re-bound on every backend swap so events always come from
+ * the LIVE backend, not a stale one left behind after a fallback.
+ */
+interface BackendEventHandlers {
+    onData: (id: string, data: string) => void;
+    onExit: (id: string, payload: { exitCode: number; signal?: number }) => void;
+}
+let eventHandlers: BackendEventHandlers | null = null;
+/** Backends already wired to the fan-out, so a fallback back to a previously
+ *  active backend doesn't double-subscribe (which would duplicate every byte). */
+const boundBackends = new WeakSet<PtyBackend>();
+
+function bindEvents(backend: PtyBackend): void {
+    if (!eventHandlers) return;
+    if (boundBackends.has(backend)) return;
+    boundBackends.add(backend);
+    backend.on('data', eventHandlers.onData);
+    backend.on('exit', eventHandlers.onExit);
+}
+
+/**
+ * Register the data/exit fan-out once. Binds to the current active backend and
+ * is automatically re-bound to any backend swapped in via setActiveBackend, so
+ * the IPC layer never has to know the backend changed underneath it.
+ */
+export function subscribeBackendEvents(handlers: BackendEventHandlers): void {
+    eventHandlers = handlers;
+    bindEvents(terminalManager());
+}
+
+/**
+ * Swap the active backend (Tier 3 connect/spawn success → HostClient). Idempotent
+ * and safe to call before any pty exists. Passing null reverts to the in-process
+ * backend — used by the graceful-fallback path when the host dies mid-session.
+ * Re-binds the IPC event fan-out to the new backend.
+ */
+export function setActiveBackend(backend: PtyBackend | null): void {
+    const next = backend ?? inProcessBackend();
+    if (next === active) return;
+    active = next;
+    bindEvents(active);
 }
 
 export function defaultShell(): string {

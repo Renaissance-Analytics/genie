@@ -22,12 +22,27 @@
  *   megabytes), but that's the right trade-off for an electron-main
  *   target — it loads from disk once at boot and never streams.
  */
+const path = require('path');
+
 module.exports = {
     webpack: (config /* , env */) => {
         config.optimization = {
             ...(config.optimization ?? {}),
             splitChunks: false,
             runtimeChunk: false,
+        };
+
+        // Tier 3: emit the detached pty-host as its OWN bundle (app/pty-host.js)
+        // alongside background.js/preload.js. It's a SEPARATE entrypoint — never
+        // imported by main code; it's spawned via process.execPath at runtime —
+        // so webpack won't pick it up unless we add it explicitly. node-pty stays
+        // external (nextron externalizes all `dependencies`), so the emitted host
+        // does `require('node-pty')` at runtime and must run UNPACKED from the
+        // asar (see electron-builder.yml asarUnpack).
+        const existing = config.entry ?? {};
+        config.entry = {
+            ...existing,
+            'pty-host': path.join(process.cwd(), 'main', 'terminal', 'pty-host.ts'),
         };
         return config;
     },

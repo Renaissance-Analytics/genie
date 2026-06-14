@@ -21,6 +21,19 @@ files:
 
 asar: true
 
+# Tier 3 — detached pty-host packaging.
+#
+# The host (app/pty-host.js) is spawned via `process.execPath` with
+# ELECTRON_RUN_AS_NODE=1, i.e. it runs as PLAIN NODE whose require() is NOT
+# asar-aware — so the host script itself can't be loaded from inside app.asar.
+# And node-pty is a NATIVE module: its prebuilt .node can't be loaded from
+# inside an asar at all. Both must be UNPACKED to app.asar.unpacked so they
+# exist as real files on disk. resolveHostScript() (main/terminal/host-locate.ts)
+# resolves the host to the unpacked path first, then falls back defensively.
+asarUnpack:
+  - app/pty-host.js
+  - node_modules/node-pty/**/*
+
 # Custom protocol — genie:// — registered at install time. Story #150 uses
 # this for the OAuth callback handoff from tynn.ai/login.
 protocols:

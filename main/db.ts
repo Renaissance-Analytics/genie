@@ -212,6 +212,24 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v7 — Tier 3 detached pty-host mapping. `host_session_id` records
+            // the host-side pty key for this spec so a spec can be re-associated
+            // with its still-running shell in the detached host across an app
+            // restart. NULL = no host session (in-process backend, or never
+            // started under the host). Idempotent ADD COLUMN like v2/v4/v5/v6 —
+            // re-running no-ops via the column-exists check. Pre-v7 rows read
+            // back NULL, which the app treats as "no host session".
+            version: 7,
+            runner: (db) => {
+                const cols = terminalSpecColumns(db);
+                if (!cols.has('host_session_id')) {
+                    db.exec(
+                        `ALTER TABLE terminal_specs ADD COLUMN host_session_id TEXT`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -267,6 +285,9 @@ export interface Settings {
     /** Inject a per-shell OSC-7 prompt hook so resumed terminals start in the
      *  right cwd. 'off' disables it; anything else (incl. unset) is ON. */
     track_cwd?: 'on' | 'off';
+    /** Tier 3: keep terminals running in a detached pty-host so they survive a
+     *  full quit of the app. Defaults OFF (in-process T1/T2). 'on' opts in. */
+    detached_terminals?: 'on' | 'off';
 }
 
 export function getAllSettings(): Settings {
@@ -308,6 +329,7 @@ export function getAllSettings(): Settings {
         max_views: out['max_views'] ?? '4',
         layout_json: out['layout_json'] ?? '{}',
         track_cwd: (out['track_cwd'] as 'on' | 'off') ?? 'on',
+        detached_terminals: (out['detached_terminals'] as 'on' | 'off') ?? 'off',
     };
 }
 
@@ -506,6 +528,12 @@ export interface TerminalSpecRow {
      * while the app is open, its running pty. Pre-v6 rows read back as true.
      */
     enabled: boolean;
+    /**
+     * Tier 3: the detached pty-host's session key for this spec, so a spec can
+     * be re-associated with a still-running shell across an app restart. NULL
+     * when there's no host session (in-process backend or never host-started).
+     */
+    host_session_id: string | null;
 }
 
 interface TerminalSpecRecord {
@@ -532,6 +560,8 @@ interface TerminalSpecRecord {
     /** Pre-v6 rows lack this column; a SELECT * over an older DB types it as
      *  possibly absent. NULL/absent → enabled (1). Stored as 0/1. */
     enabled: number | null;
+    /** Pre-v7 rows lack this column; NULL = no host session. */
+    host_session_id: string | null;
 }
 
 function rowFromRecord(r: TerminalSpecRecord): TerminalSpecRow {
@@ -560,6 +590,7 @@ function rowFromRecord(r: TerminalSpecRecord): TerminalSpecRow {
         live_cwd: r.live_cwd ?? null,
         // NULL (pre-v6) or 1 → enabled; only an explicit 0 disables.
         enabled: r.enabled == null ? true : r.enabled !== 0,
+        host_session_id: r.host_session_id ?? null,
     };
 }
 
@@ -636,6 +667,7 @@ export function updateTerminalSpec(
         snapshot_bytes: number | null;
         live_cwd: string | null;
         enabled: boolean;
+        host_session_id: string | null;
     }>,
 ): TerminalSpecRow | null {
     const cur = getTerminalSpec(id);
@@ -660,6 +692,10 @@ export function updateTerminalSpec(
         live_cwd: patch.live_cwd !== undefined ? patch.live_cwd : cur.live_cwd,
         enabled:
             patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : cur.enabled ? 1 : 0,
+        host_session_id:
+            patch.host_session_id !== undefined
+                ? patch.host_session_id
+                : cur.host_session_id,
     };
     getDb()
         .prepare(
@@ -676,7 +712,8 @@ export function updateTerminalSpec(
                snapshot_at    = @snapshot_at,
                snapshot_bytes = @snapshot_bytes,
                live_cwd       = @live_cwd,
-               enabled        = @enabled
+               enabled        = @enabled,
+               host_session_id = @host_session_id
              WHERE id = @id`,
         )
         .run({ id, ...next });

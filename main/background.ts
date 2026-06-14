@@ -11,6 +11,11 @@ import {
     requestFinalSnapshots,
     snapshotRetainedWindowless,
 } from './terminal/ipc';
+import {
+    initTerminalBackend,
+    isHostBacked,
+    disconnectHostLeaveRunning,
+} from './terminal/host-lifecycle';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
 import { registerUpdaterIpc, checkForUpdatesNow } from './updater/ipc';
@@ -373,11 +378,37 @@ app.whenReady().then(async () => {
 
     initDatabase();
     registerIpcHandlers();
+    // Tier 3: choose the terminal backend BEFORE registering the terminal IPC.
+    // initTerminalBackend connects-or-spawns the detached pty-host when the
+    // `detached_terminals` setting is ON (default OFF → in-process). It NEVER
+    // throws — any failure degrades to the in-process backend with a non-fatal
+    // toast. Doing this first means registerTerminalIpc binds its data/exit
+    // fan-out to whichever backend won (subscribeBackendEvents also re-binds on
+    // any later swap, so a mid-session fallback still routes correctly).
+    let backendInit: { host: boolean; reattachIds: string[] } = {
+        host: false,
+        reattachIds: [],
+    };
+    try {
+        backendInit = await initTerminalBackend();
+    } catch {
+        /* initTerminalBackend is already try/caught internally; belt-and-braces */
+    }
     // Static imports above — earlier dynamic imports could fail silently
     // on some bundlers, leaving the IPC channels unregistered and
     // surfacing as "No handler registered for 'terminal:resize'" in the
     // renderer once a window mounts.
     registerTerminalIpc();
+    if (backendInit.host && backendInit.reattachIds.length > 0) {
+        // The renderer remounts retained specs on launch via the create() rejoin
+        // path; the host client's mirror already holds their scrollback, so the
+        // normal master-view restore replays them. Nothing extra to push here —
+        // the ids are surfaced for diagnostics/logging only.
+        // eslint-disable-next-line no-console
+        console.log(
+            `[terminal] reattached to detached host: ${backendInit.reattachIds.length} session(s)`,
+        );
+    }
     registerFilesIpc();
     registerGithubIpc();
     registerUpdaterIpc();
@@ -389,24 +420,36 @@ app.whenReady().then(async () => {
     // hang on this. The wait is also unconditionally bounded by a timer, so a
     // wedged renderer can't block shutdown either.
     let snapshotFlushDone = false;
+    // Tier 3: when host-backed, the detached pty-host OWNS the ptys and must
+    // OUTLIVE the quit — we snapshot (T1 floor, in case the host later dies) and
+    // disconnect the client, but we DO NOT kill anything. teardownTerminals()
+    // picks the right behaviour for the active backend.
+    const teardownTerminals = () => {
+        if (isHostBacked()) {
+            disconnectHostLeaveRunning();
+        } else {
+            stopAllTerminals();
+        }
+    };
     app.on('before-quit', (event) => {
         if (snapshotFlushDone) return; // re-entry: let the quit proceed
         // Tier 2 → Tier 1 degrade: snapshot any RETAINED-but-windowless ptys
-        // from their scrollback before we kill anything, so a suspended dev
-        // server replays on the next launch even though its pty dies on quit.
+        // from their scrollback before we tear down, so a suspended dev server
+        // replays on the next launch. (Host-backed: this is the resilience floor
+        // if the detached host is later killed externally.)
         snapshotRetainedWindowless();
         // Nothing window-side to snapshot if no window is open — tear down
         // immediately (the windowless retained snapshot above already ran).
         if (BrowserWindow.getAllWindows().length === 0) {
             snapshotFlushDone = true;
-            stopAllTerminals();
+            teardownTerminals();
             return;
         }
         event.preventDefault();
         requestFinalSnapshots();
         setTimeout(() => {
             snapshotFlushDone = true;
-            stopAllTerminals();
+            teardownTerminals();
             app.quit(); // re-trigger; the guard above lets it through now
         }, 250);
     });

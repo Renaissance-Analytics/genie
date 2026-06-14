@@ -321,6 +321,18 @@ const api = {
             ipcRenderer.on('terminal:count', handler);
             return () => ipcRenderer.off('terminal:count', handler);
         },
+        /** Tier 3 detached-host status — fired when the host is unavailable and
+         *  Genie falls back to in-process. The renderer surfaces a non-fatal toast. */
+        terminalHostStatus: (
+            cb: (payload: { message: string; level: 'info' | 'warn' }) => void,
+        ) => {
+            const handler = (
+                _e: unknown,
+                payload: { message: string; level: 'info' | 'warn' },
+            ) => cb(payload);
+            ipcRenderer.on('terminal:host-status', handler);
+            return () => ipcRenderer.off('terminal:host-status', handler);
+        },
         updaterStatus: (cb: (status: unknown) => void) => {
             const handler = (_e: unknown, payload: unknown) => cb(payload);
             ipcRenderer.on('updater:status', handler);

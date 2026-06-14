@@ -71,6 +71,9 @@ export interface Settings {
     max_views?: string;
     /** Per-workspace draggable-grid track sizes, JSON-encoded. */
     layout_json?: string;
+    /** Tier 3: keep terminals running in a detached host so they survive a full
+     *  quit. Defaults 'off' (in-process). 'on' opts in. */
+    detached_terminals?: 'on' | 'off';
 }
 
 export interface ShellDetection {
@@ -631,6 +634,10 @@ interface GenieApi {
         terminalSnapshotRequest: (cb: () => void) => () => void;
         /** Live pty count broadcast (Tier 2 resource awareness). */
         terminalCount: (cb: (payload: { count: number }) => void) => () => void;
+        /** Tier 3 detached-host status — fired on fallback to in-process. */
+        terminalHostStatus: (
+            cb: (payload: { message: string; level: 'info' | 'warn' }) => void,
+        ) => () => void;
         updaterStatus: (cb: (status: UpdaterStatus) => void) => () => void;
         updaterLog: (cb: (payload: { line: string }) => void) => () => void;
     };

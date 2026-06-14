@@ -123,6 +123,12 @@ function MasterInner() {
         return () => clearTimeout(t);
     }, [toast]);
 
+    // Tier 3: surface a non-fatal toast when the detached pty-host is
+    // unavailable and Genie falls back to in-process terminals.
+    useEffect(() => {
+        return api().on.terminalHostStatus((p) => setToast(p.message));
+    }, []);
+
     const workspacesById = useMemo(() => {
         const m = new Map<string, WorkspaceRow>();
         for (const w of workspaces) m.set(w.id, w);

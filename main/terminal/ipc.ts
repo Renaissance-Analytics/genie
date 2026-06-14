@@ -1,5 +1,10 @@
 import { BrowserWindow, ipcMain, WebContents } from 'electron';
-import { terminalManager, CreateTerminalOpts, TerminalInfo } from './manager';
+import {
+    terminalManager,
+    subscribeBackendEvents,
+    CreateTerminalOpts,
+    TerminalInfo,
+} from './manager';
 import { detectShells, defaultShellId, resolveDefaultShell } from './shells';
 import { writeSnapshot, deleteSnapshot } from './sessions';
 import { updateTerminalSpec } from '../db';
@@ -53,7 +58,10 @@ interface OwnerEntry {
 const ownersByTerminal = new Map<string, OwnerEntry>();
 
 export function registerTerminalIpc(): void {
-    const mgr = terminalManager();
+    // Always resolve the LIVE active backend per-call. Tier 3 can swap the
+    // backend (in-process ↔ host client) under us; capturing it once would
+    // leave handlers pointed at a stale backend after a fallback.
+    const mgr = () => terminalManager();
 
     const trackOwner = (id: string, sender: WebContents) => {
         let entry = ownersByTerminal.get(id);
@@ -88,8 +96,8 @@ export function registerTerminalIpc(): void {
             // scrollback, so re-enabling reattaches via the create() rejoin path
             // and replays history — the LIVE session, not a snapshot replay.
             // A non-retained terminal is killed as before.
-            if (!mgr.isRetained(id)) {
-                mgr.kill(id);
+            if (!mgr().isRetained(id)) {
+                mgr().kill(id);
             }
         }
     };
@@ -119,7 +127,7 @@ export function registerTerminalIpc(): void {
                     args: opts.args?.length ? opts.args : resolved.args,
                 };
             }
-            const result = mgr.create(opts);
+            const result = mgr().create(opts);
             trackOwner(opts.id, event.sender);
             return result;
         },
@@ -131,11 +139,11 @@ export function registerTerminalIpc(): void {
     });
 
     ipcMain.handle('terminal:write', (_event, id: string, data: string): boolean => {
-        return mgr.write(id, data);
+        return mgr().write(id, data);
     });
 
     ipcMain.handle('terminal:resize', (_event, id: string, cols: number, rows: number): boolean => {
-        return mgr.resize(id, cols, rows);
+        return mgr().resize(id, cols, rows);
     });
 
     ipcMain.handle('terminal:detach', (event, id: string): boolean => {
@@ -149,7 +157,7 @@ export function registerTerminalIpc(): void {
     ipcMain.handle('terminal:kill', (_event, id: string): boolean => {
         ownersByTerminal.delete(id);
         // kill() also clears the retained flag in the manager.
-        const killed = mgr.kill(id);
+        const killed = mgr().kill(id);
         // Delete (not just disable): drop the Tier 1 snapshot too so a deleted
         // terminal can never resurrect on the next launch. Best-effort.
         deleteSnapshot(id);
@@ -180,29 +188,29 @@ export function registerTerminalIpc(): void {
         ): { ok: boolean; retainedCount: number; max: number; reason?: string } => {
             if (retained) {
                 // Already retained → idempotent success.
-                if (!mgr.isRetained(id) && mgr.retainedCount() >= MAX_RETAINED) {
+                if (!mgr().isRetained(id) && mgr().retainedCount() >= MAX_RETAINED) {
                     return {
                         ok: false,
-                        retainedCount: mgr.retainedCount(),
+                        retainedCount: mgr().retainedCount(),
                         max: MAX_RETAINED,
                         reason: `Retained-terminal limit reached (${MAX_RETAINED}). Re-enable or delete a suspended terminal first.`,
                     };
                 }
-                mgr.setRetained(id, true);
+                mgr().setRetained(id, true);
             } else {
-                mgr.setRetained(id, false);
+                mgr().setRetained(id, false);
             }
             broadcastTerminalCount();
             return {
                 ok: true,
-                retainedCount: mgr.retainedCount(),
+                retainedCount: mgr().retainedCount(),
                 max: MAX_RETAINED,
             };
         },
     );
 
     ipcMain.handle('terminal:list', (): TerminalInfo[] => {
-        return mgr.list();
+        return mgr().list();
     });
 
     // Tier 1 capture: the renderer sends a SerializeAddon reconstruction of a
@@ -230,18 +238,20 @@ export function registerTerminalIpc(): void {
         },
     );
 
-    mgr.on('data', (id: string, data: string) => {
-        const entry = ownersByTerminal.get(id);
-        if (!entry) return;
-        for (const target of entry.owners) {
-            if (target.isDestroyed()) continue;
-            target.send('terminal:data', { id, data });
-        }
-    });
-
-    mgr.on(
-        'exit',
-        (id: string, payload: { exitCode: number; signal?: number }) => {
+    // Fan-out pty output/exit to the owning windows. Routed through
+    // subscribeBackendEvents so the binding FOLLOWS the active backend across a
+    // Tier 3 swap (in-process ↔ host client) — a captured `mgr.on` would keep
+    // firing from a stale backend after a fallback.
+    subscribeBackendEvents({
+        onData: (id: string, data: string) => {
+            const entry = ownersByTerminal.get(id);
+            if (!entry) return;
+            for (const target of entry.owners) {
+                if (target.isDestroyed()) continue;
+                target.send('terminal:data', { id, data });
+            }
+        },
+        onExit: (id: string, payload: { exitCode: number; signal?: number }) => {
             const entry = ownersByTerminal.get(id);
             ownersByTerminal.delete(id);
             if (!entry) return;
@@ -250,7 +260,7 @@ export function registerTerminalIpc(): void {
                 target.send('terminal:exit', { id, ...payload });
             }
         },
-    );
+    });
 }
 
 /** Tear down every pty on app quit so dangling shell processes don't survive. */
