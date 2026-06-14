@@ -5,6 +5,7 @@ import {
     IconBox,
     IconCheck,
     IconChevronDown,
+    IconCode,
     IconCpu,
     IconGlobe,
     IconPanelLeftOpen,
@@ -20,6 +21,7 @@ import {
     type McpStatus,
     type StructureDocStatus,
     type TerminalSpec,
+    type ViewType,
     type WorkspaceRow,
 } from '../../lib/genie';
 
@@ -28,10 +30,12 @@ interface Props {
     specs: TerminalSpec[];
     selected: Set<string>;
     activeIds: Set<string>;
+    activeWorkspaceId: string | null;
     pinned: boolean;
     onTogglePin: () => void;
+    onActivateWorkspace: (workspaceId: string) => void;
     onToggleSpec: (id: string) => void;
-    onAddSpec: (workspaceId: string) => void;
+    onAddSpec: (workspaceId: string, type: ViewType) => void;
     onDestroySpec: (id: string) => void;
     onOpenContextMenu: (specId: string, position: { x: number; y: number }) => void;
     onOpenProjectMenu: (workspaceId: string, position: { x: number; y: number }) => void;
@@ -49,8 +53,10 @@ export default function Chooser({
     specs,
     selected,
     activeIds,
+    activeWorkspaceId,
     pinned,
     onTogglePin,
+    onActivateWorkspace,
     onToggleSpec,
     onAddSpec,
     onDestroySpec,
@@ -95,11 +101,15 @@ export default function Chooser({
                 {workspaces.map((ws) => {
                     const wsSpecs = byWorkspace.get(ws.id) ?? [];
                     const live = wsSpecs.filter((s) => activeIds.has(s.id)).length;
+                    const isActive = ws.id === activeWorkspaceId;
                     return (
                         <button
                             key={ws.id}
                             type="button"
-                            className={`crail-btn${live > 0 ? ' active' : ''}`}
+                            className={`crail-btn${live > 0 ? ' active' : ''}${
+                                isActive ? ' is-active' : ''
+                            }`}
+                            onClick={() => onActivateWorkspace(ws.id)}
                             title={`${ws.project_name}${live > 0 ? ` · ${live} live` : ''}`}
                         >
                             {workspaceIcon(ws)}
@@ -172,22 +182,25 @@ export default function Chooser({
                     {workspaces.map((ws) => {
                         const wsSpecs = (byWorkspace.get(ws.id) ?? []).filter(matches);
                         const collapsed = collapsedWorkspaces.has(ws.id);
+                        const isActive = ws.id === activeWorkspaceId;
+                        const toggleCollapse = () =>
+                            setCollapsedWorkspaces((prev) => {
+                                const next = new Set(prev);
+                                if (collapsed) next.delete(ws.id);
+                                else next.add(ws.id);
+                                return next;
+                            });
                         return (
                             <div
                                 key={ws.id}
-                                className={`tproj${collapsed ? ' collapsed' : ''}`}
+                                className={`tproj${collapsed ? ' collapsed' : ''}${
+                                    isActive ? ' is-active' : ''
+                                }`}
                             >
                                 <button
                                     type="button"
                                     className="tproj-head"
-                                    onClick={() => {
-                                        setCollapsedWorkspaces((prev) => {
-                                            const next = new Set(prev);
-                                            if (collapsed) next.delete(ws.id);
-                                            else next.add(ws.id);
-                                            return next;
-                                        });
-                                    }}
+                                    onClick={() => onActivateWorkspace(ws.id)}
                                     onContextMenu={(e) => {
                                         e.preventDefault();
                                         onOpenProjectMenu(ws.id, {
@@ -196,7 +209,18 @@ export default function Chooser({
                                         });
                                     }}
                                 >
-                                    <span className="chev">
+                                    <span
+                                        className="chev"
+                                        role="button"
+                                        tabIndex={-1}
+                                        title={collapsed ? 'Expand' : 'Collapse'}
+                                        onClick={(e) => {
+                                            // Chevron toggles collapse WITHOUT
+                                            // activating the workspace.
+                                            e.stopPropagation();
+                                            toggleCollapse();
+                                        }}
+                                    >
                                         <IconChevronDown />
                                     </span>
                                     <span className="pico">{workspaceIcon(ws, 14)}</span>
@@ -225,16 +249,26 @@ export default function Chooser({
                                             }
                                         />
                                     ))}
-                                    <button
-                                        type="button"
-                                        className="tterm"
-                                        onClick={() => onAddSpec(ws.id)}
-                                        style={{ color: 'var(--fg-4)' }}
-                                    >
-                                        <span className="pick" />
-                                        <IconPlus size={12} />
-                                        <span className="tname">Add terminal…</span>
-                                    </button>
+                                    <div className="tproj-adds">
+                                        <button
+                                            type="button"
+                                            className="tterm tterm-add"
+                                            onClick={() => onAddSpec(ws.id, 'terminal')}
+                                        >
+                                            <span className="pick" />
+                                            <IconPlus size={12} />
+                                            <span className="tname">Add terminal…</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="tterm tterm-add"
+                                            onClick={() => onAddSpec(ws.id, 'code')}
+                                        >
+                                            <span className="pick" />
+                                            <IconCode size={12} />
+                                            <span className="tname">Add code view…</span>
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         );
@@ -580,7 +614,13 @@ function SpecRow({
             style={{ cursor: 'pointer' }}
         >
             <span className="pick">{checked && <IconCheck size={11} />}</span>
-            <span className={`sdot ${live ? 'run' : 'idle'}`} />
+            {spec.type === 'code' ? (
+                <span className="srow-ico code" title="Code view">
+                    <IconCode size={12} />
+                </span>
+            ) : (
+                <span className={`sdot ${live ? 'run' : 'idle'}`} />
+            )}
             <span className="tname">{spec.label}</span>
             <span className={`host ${hostKind}`}>{hostLabel}</span>
             <button

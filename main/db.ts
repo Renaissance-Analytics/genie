@@ -34,7 +34,12 @@ export function getDb(): Database.Database {
     return db;
 }
 
-function runMigrations(d: Database.Database): void {
+/**
+ * Run all pending append-only migrations against `d`. Exported so the
+ * migration suite can exercise the runner against a fresh `:memory:`
+ * database without the Electron `app.getPath` singleton path.
+ */
+export function runMigrations(d: Database.Database): void {
     d.exec(`CREATE TABLE IF NOT EXISTS schema_version (
         version INTEGER PRIMARY KEY
     )`);
@@ -133,6 +138,29 @@ function runMigrations(d: Database.Database): void {
                 `);
             },
         },
+        {
+            // v4 — view-typed specs. A spec is no longer always a terminal:
+            // `type` distinguishes 'terminal' from 'code' (a fancy-code
+            // editor view), and `meta_json` carries per-type state (code
+            // views store {"file_path":"…"}). Idempotent ADD COLUMN like
+            // v2's `backend` — re-running on a partially-applied DB no-ops
+            // via the column-exists check. No CHECK on ALTER (SQLite < 3.25
+            // rejects it); the 'terminal'|'code' set is enforced app-layer.
+            version: 4,
+            runner: (db) => {
+                const cols = terminalSpecColumns(db);
+                if (!cols.has('type')) {
+                    db.exec(
+                        `ALTER TABLE terminal_specs ADD COLUMN type TEXT NOT NULL DEFAULT 'terminal'`,
+                    );
+                }
+                if (!cols.has('meta_json')) {
+                    db.exec(
+                        `ALTER TABLE terminal_specs ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -156,10 +184,19 @@ function workspaceColumns(d: Database.Database): Set<string> {
     return new Set(rows.map((r) => r.name));
 }
 
+function terminalSpecColumns(d: Database.Database): Set<string> {
+    const rows = d
+        .prepare<[], { name: string }>(`PRAGMA table_info(terminal_specs)`)
+        .all();
+    return new Set(rows.map((r) => r.name));
+}
+
 // Settings helpers ------------------------------------------------------
 
 export interface Settings {
     primary_workspace?: string;
+    /** Last-activated workspace id in the master view; seeds the active workspace on launch. */
+    active_workspace?: string;
     default_editor?: string;
     default_editor_cmd?: string;
     default_start_cmd?: string;
@@ -195,6 +232,7 @@ export function getAllSettings(): Settings {
         // override the spread for the keys Settings cares about.
         ...out,
         primary_workspace: out['primary_workspace'],
+        active_workspace: out['active_workspace'],
         default_editor: out['default_editor'] ?? 'cursor',
         default_editor_cmd: out['default_editor_cmd'],
         default_start_cmd: out['default_start_cmd'] ?? 'npm run dev',
@@ -369,6 +407,15 @@ export function setAionimaConfig(patch: BackendConfig): BackendConfig {
 
 // Terminal spec helpers -------------------------------------------------
 
+/** A view spec is either a live terminal or a fancy-code editor view. */
+export type TerminalSpecType = 'terminal' | 'code';
+
+/** Per-type metadata. Code views persist the open file's workspace-relative path. */
+export interface TerminalSpecMeta {
+    file_path?: string;
+    [key: string]: unknown;
+}
+
 export interface TerminalSpecRow {
     id: string;
     workspace_id: string | null;
@@ -377,6 +424,8 @@ export interface TerminalSpecRow {
     shell: string | null;
     args: string[];
     env: Record<string, string>;
+    type: TerminalSpecType;
+    meta: TerminalSpecMeta;
     sort_order: number;
     created_at: string;
     last_opened_at: string | null;
@@ -390,6 +439,11 @@ interface TerminalSpecRecord {
     shell: string | null;
     args_json: string;
     env_json: string;
+    /** Nullable in the read because pre-v4 rows existed before the column;
+     *  the column default ('terminal') fills new rows, but a SELECT * over a
+     *  brand-new DB still types it as possibly absent. */
+    type: string | null;
+    meta_json: string | null;
     sort_order: number;
     created_at: string;
     last_opened_at: string | null;
@@ -398,8 +452,11 @@ interface TerminalSpecRecord {
 function rowFromRecord(r: TerminalSpecRecord): TerminalSpecRow {
     let args: string[] = [];
     let env: Record<string, string> = {};
+    let meta: TerminalSpecMeta = {};
     try { args = JSON.parse(r.args_json); } catch { args = []; }
     try { env = JSON.parse(r.env_json); } catch { env = {}; }
+    try { meta = r.meta_json ? JSON.parse(r.meta_json) : {}; } catch { meta = {}; }
+    const type: TerminalSpecType = r.type === 'code' ? 'code' : 'terminal';
     return {
         id: r.id,
         workspace_id: r.workspace_id,
@@ -408,6 +465,8 @@ function rowFromRecord(r: TerminalSpecRecord): TerminalSpecRow {
         shell: r.shell,
         args,
         env,
+        type,
+        meta,
         sort_order: r.sort_order,
         created_at: r.created_at,
         last_opened_at: r.last_opened_at,
@@ -438,6 +497,8 @@ export function createTerminalSpec(input: {
     shell?: string | null;
     args?: string[];
     env?: Record<string, string>;
+    type?: TerminalSpecType;
+    meta?: TerminalSpecMeta;
 }): TerminalSpecRow {
     const now = new Date().toISOString();
     const nextOrder = (getDb()
@@ -449,8 +510,8 @@ export function createTerminalSpec(input: {
     getDb()
         .prepare(
             `INSERT INTO terminal_specs
-             (id, workspace_id, label, cwd, shell, args_json, env_json, sort_order, created_at)
-             VALUES (@id, @workspace_id, @label, @cwd, @shell, @args_json, @env_json, @sort_order, @created_at)`,
+             (id, workspace_id, label, cwd, shell, args_json, env_json, type, meta_json, sort_order, created_at)
+             VALUES (@id, @workspace_id, @label, @cwd, @shell, @args_json, @env_json, @type, @meta_json, @sort_order, @created_at)`,
         )
         .run({
             id: input.id,
@@ -460,6 +521,8 @@ export function createTerminalSpec(input: {
             shell: input.shell ?? null,
             args_json: JSON.stringify(input.args ?? []),
             env_json: JSON.stringify(input.env ?? {}),
+            type: input.type === 'code' ? 'code' : 'terminal',
+            meta_json: JSON.stringify(input.meta ?? {}),
             sort_order: nextOrder,
             created_at: now,
         });
@@ -475,6 +538,8 @@ export function updateTerminalSpec(
         shell: string | null;
         args: string[];
         env: Record<string, string>;
+        type: TerminalSpecType;
+        meta: TerminalSpecMeta;
         workspace_id: string | null;
         sort_order: number;
     }>,
@@ -487,6 +552,8 @@ export function updateTerminalSpec(
         shell: patch.shell !== undefined ? patch.shell : cur.shell,
         args_json: JSON.stringify(patch.args ?? cur.args),
         env_json: JSON.stringify(patch.env ?? cur.env),
+        type: patch.type !== undefined ? patch.type : cur.type,
+        meta_json: JSON.stringify(patch.meta !== undefined ? patch.meta : cur.meta),
         workspace_id:
             patch.workspace_id !== undefined ? patch.workspace_id : cur.workspace_id,
         sort_order: patch.sort_order ?? cur.sort_order,
@@ -499,6 +566,8 @@ export function updateTerminalSpec(
                shell = @shell,
                args_json = @args_json,
                env_json  = @env_json,
+               type      = @type,
+               meta_json = @meta_json,
                workspace_id = @workspace_id,
                sort_order   = @sort_order
              WHERE id = @id`,

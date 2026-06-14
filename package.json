@@ -1,6 +1,6 @@
 {
   "name": "genie",
-  "version": "0.7.0-alpha.30",
+  "version": "0.7.0-alpha.31",
   "description": "Tynn desktop companion — tray-resident workspace manager",
   "private": true,
   "main": "app/background.js",
@@ -12,12 +12,14 @@
     "postinstall": "electron-builder install-app-deps || echo \"native rebuild skipped — using bundled prebuilds (install VS Build Tools on Windows for ABI-clean release builds)\"",
     "typecheck:main": "tsc --noEmit -p main/tsconfig.json",
     "typecheck:renderer": "tsc --noEmit -p renderer/tsconfig.json",
+    "pretest": "npm rebuild better-sqlite3 || echo \"better-sqlite3 rebuild skipped — db tests may fail if the native ABI doesn't match the test runtime\"",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "build:icons": "node resources/build-icons.cjs"
   },
   "dependencies": {
+    "@particle-academy/fancy-code": "^0.5.0",
     "@particle-academy/fancy-term": "^0.2.2",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",

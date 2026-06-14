@@ -8,6 +8,10 @@
    etc.) survive the build. Without this, Action/Card/Badge/Input render
    with the class names but no rules behind them. Mirrors _app/. */
 @source '../../node_modules/@particle-academy/react-fancy/dist/**/*.js';
+/* fancy-code's CodeEditor renders Tailwind utility classes inline too —
+   scan its bundle so the editor chrome (toolbar/panel/status-bar) keeps its
+   rules through the build, same as react-fancy above. */
+@source '../../node_modules/@particle-academy/fancy-code/dist/**/*.js';
 
 @custom-variant dark (&:where(.dark, .dark *));
 

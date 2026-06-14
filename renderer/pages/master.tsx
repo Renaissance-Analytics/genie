@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Chooser from '../components/Master/Chooser';
 import ProjectContextMenu from '../components/Master/ProjectContextMenu';
-import ProjectSelector from '../components/Master/ProjectSelector';
 import SpecContextMenu from '../components/Master/SpecContextMenu';
 import { PromptHost, showPrompt } from '../components/Master/Prompt';
 import TerminalGrid, {
@@ -9,12 +8,13 @@ import TerminalGrid, {
 } from '../components/Master/TerminalGrid';
 import AddWorkspaceModal from '../components/AddWorkspaceModal';
 import SignInPrompt from '../components/SignInPrompt';
-import type { BackendUser } from '../lib/genie';
+import type { BackendUser, ViewType } from '../lib/genie';
 import {
     IconBox,
+    IconChevronDown,
+    IconCode,
     IconColumns,
     IconLayoutGrid,
-    IconListTree,
     IconMaximize,
     IconPanelLeft,
     IconPlus,
@@ -90,6 +90,13 @@ function MasterInner() {
     const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
     const [specs, setSpecs] = useState<TerminalSpec[]>([]);
     const [selected, setSelected] = useState<Set<string>>(() => new Set());
+    // The workspace whose views fill the grid. Persisted as the
+    // `active_workspace` setting; seeded on launch from that setting (or the
+    // most-recent workspace). Stage windows seed from `?stage=`.
+    const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+    // Guards the one-time seed so a later refresh() doesn't reset the user's
+    // active workspace back to most-recent.
+    const seededActiveRef = useRef(false);
     const [activeIds, setActiveIds] = useState<Set<string>>(() => new Set());
     const [focusId, setFocusId] = useState<string | null>(null);
     const [maximizedId, setMaximizedId] = useState<string | null>(null);
@@ -177,9 +184,59 @@ function MasterInner() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [specs.length, stageSeedWorkspace]);
 
+    // Seed the active workspace ONCE, after workspaces load. Stage windows
+    // pin to their `?stage=` workspace; otherwise read the persisted
+    // `active_workspace` setting, falling back to the most-recent workspace
+    // (workspaces already sort last_opened_at DESC). Selecting a workspace
+    // selects its views so the grid shows something immediately.
+    useEffect(() => {
+        if (seededActiveRef.current || workspaces.length === 0) return;
+        seededActiveRef.current = true;
+        (async () => {
+            let target: string | null = null;
+            if (stageSeedWorkspace && workspaces.some((w) => w.id === stageSeedWorkspace)) {
+                target = stageSeedWorkspace;
+            } else {
+                try {
+                    const s = await api().settings.get();
+                    const saved = s.active_workspace;
+                    if (saved && workspaces.some((w) => w.id === saved)) target = saved;
+                } catch {
+                    /* settings unavailable — fall through to most-recent */
+                }
+                if (!target) target = workspaces[0]?.id ?? null;
+            }
+            if (!target) return;
+            setActiveWorkspaceId(target);
+            // Seed selection with this workspace's views unless a stage seed
+            // already populated it.
+            setSelected((prev) => {
+                if (prev.size > 0) return prev;
+                return new Set(
+                    specs.filter((s) => s.workspace_id === target).map((s) => s.id),
+                );
+            });
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [workspaces.length]);
+
+    // Active-workspace views drive the grid layout + counts.
     const selectedSpecs = useMemo(
-        () => specs.filter((s) => selected.has(s.id)),
-        [specs, selected],
+        () =>
+            specs.filter(
+                (s) => s.workspace_id === activeWorkspaceId && selected.has(s.id),
+            ),
+        [specs, selected, activeWorkspaceId],
+    );
+
+    // Selected views in OTHER workspaces — rendered mounted-hidden so their
+    // PTYs survive a workspace switch (Decision 1: keep-alive).
+    const backgroundSpecs = useMemo(
+        () =>
+            specs.filter(
+                (s) => s.workspace_id !== activeWorkspaceId && selected.has(s.id),
+            ),
+        [specs, selected, activeWorkspaceId],
     );
 
     const toggleSpec = useCallback((id: string) => {
@@ -192,17 +249,22 @@ function MasterInner() {
     }, []);
 
     const addSpec = useCallback(
-        async (workspaceId: string) => {
+        async (workspaceId: string, type: ViewType = 'terminal') => {
             const ws = workspacesById.get(workspaceId);
             if (!ws) return;
             const existing = specs.filter((s) => s.workspace_id === workspaceId);
             const baseLabel = ws.project_name.toLowerCase().replace(/\s+/g, '-');
-            const label = existing.length === 0 ? baseLabel : `${baseLabel}-${existing.length + 1}`;
+            // Code views get a `-code` label so they read distinctly in the
+            // tree alongside terminals.
+            const root = type === 'code' ? `${baseLabel}-code` : baseLabel;
+            const sameType = existing.filter((s) => s.type === type);
+            const label = sameType.length === 0 ? root : `${root}-${sameType.length + 1}`;
             const created = await api().terminalSpec.create({
                 id: ulid(),
                 workspace_id: workspaceId,
                 label,
                 cwd: ws.path,
+                type,
             });
             // Append the new spec in place rather than re-fetching the full
             // list — refresh() would replace the array reference, which makes
@@ -261,29 +323,44 @@ function MasterInner() {
         setMaximizedId((cur) => (cur === id ? null : id));
     }, []);
 
-    const switchToProject = useCallback(
+    /**
+     * Activate a workspace: it becomes the grid's focus. Its views are
+     * selected (so they fill the grid) WITHOUT clearing selections in other
+     * workspaces — those stay mounted-hidden so their PTYs keep running
+     * (Decision 1: keep-alive). The choice is persisted so the next launch
+     * reopens here.
+     */
+    const activateWorkspace = useCallback(
         (workspaceId: string) => {
-            const ids = specs
-                .filter((s) => s.workspace_id === workspaceId)
-                .map((s) => s.id);
-            setSelected(new Set(ids));
+            setActiveWorkspaceId(workspaceId);
+            setSelected((prev) => {
+                const next = new Set(prev);
+                for (const s of specs) {
+                    if (s.workspace_id === workspaceId) next.add(s.id);
+                }
+                return next;
+            });
             setFocusId(null);
             setMaximizedId(null);
+            void api()
+                .settings.set({ active_workspace: workspaceId })
+                .catch(() => {});
         },
         [specs],
     );
 
-    const showAllTerminals = useCallback(() => {
-        setSelected(new Set(specs.map((s) => s.id)));
-        setFocusId(null);
-        setMaximizedId(null);
-    }, [specs]);
-
+    /** Close every view in the ACTIVE workspace (deselect; PTYs detach on unmount). */
     const clearSelection = useCallback(() => {
-        setSelected(new Set());
+        setSelected((prev) => {
+            const next = new Set(prev);
+            for (const s of specs) {
+                if (s.workspace_id === activeWorkspaceId) next.delete(s.id);
+            }
+            return next;
+        });
         setFocusId(null);
         setMaximizedId(null);
-    }, []);
+    }, [specs, activeWorkspaceId]);
 
     const renameSpec = useCallback(async (id: string, currentLabel: string) => {
         const next = await showPrompt({
@@ -449,16 +526,16 @@ function MasterInner() {
                     }
                 />
                 <Toolbar
-                    workspaces={workspaces}
-                    specs={specs}
-                    selected={selected}
-                    workspacesById={workspacesById}
+                    activeWorkspace={
+                        activeWorkspaceId
+                            ? workspacesById.get(activeWorkspaceId)
+                            : undefined
+                    }
                     layoutMode={layoutMode}
                     onLayoutMode={setLayoutMode}
-                    onAddTerminal={() => workspaces[0] && void addSpec(workspaces[0].id)}
-                    onSwitchToProject={switchToProject}
-                    onShowAll={showAllTerminals}
-                    onClear={clearSelection}
+                    onAddView={(type) =>
+                        activeWorkspaceId && void addSpec(activeWorkspaceId, type)
+                    }
                 />
                 <div className="gbody">
                     <Chooser
@@ -466,10 +543,12 @@ function MasterInner() {
                         specs={specs}
                         selected={selected}
                         activeIds={activeIds}
+                        activeWorkspaceId={activeWorkspaceId}
                         pinned={chooserPinned}
                         onTogglePin={() => setChooserPinned((p) => !p)}
+                        onActivateWorkspace={activateWorkspace}
                         onToggleSpec={toggleSpec}
-                        onAddSpec={(wsId) => void addSpec(wsId)}
+                        onAddSpec={(wsId, type) => void addSpec(wsId, type)}
                         onDestroySpec={(id) => void destroySpec(id)}
                         onOpenContextMenu={(specId, p) =>
                             setContextMenu({ specId, x: p.x, y: p.y })
@@ -481,6 +560,7 @@ function MasterInner() {
                     />
                     <TerminalGrid
                         specs={selectedSpecs}
+                        backgroundSpecs={backgroundSpecs}
                         workspacesById={workspacesById}
                         focusId={focusId}
                         maximizedId={maximizedId}
@@ -488,7 +568,10 @@ function MasterInner() {
                         onFocus={(id) => setFocusId((cur) => (cur === id ? null : id))}
                         onToggleMaximize={toggleMaximize}
                         onAddTerminal={() =>
-                            workspaces[0] && void addSpec(workspaces[0].id)
+                            activeWorkspaceId && void addSpec(activeWorkspaceId, 'terminal')
+                        }
+                        onAddCode={() =>
+                            activeWorkspaceId && void addSpec(activeWorkspaceId, 'code')
                         }
                         onMarkActive={markActive}
                         onMarkInactive={markInactive}
@@ -755,41 +838,32 @@ function TitleBar({
 }
 
 interface ToolbarProps {
-    workspaces: WorkspaceRow[];
-    specs: TerminalSpec[];
-    selected: Set<string>;
-    workspacesById: Map<string, WorkspaceRow>;
+    activeWorkspace?: WorkspaceRow;
     layoutMode: LayoutMode;
     onLayoutMode: (m: LayoutMode) => void;
-    onAddTerminal: () => void;
-    onSwitchToProject: (workspaceId: string) => void;
-    onShowAll: () => void;
-    onClear: () => void;
+    onAddView: (type: ViewType) => void;
 }
 
 function Toolbar({
-    workspaces,
-    specs,
-    selected,
-    workspacesById,
+    activeWorkspace,
     layoutMode,
     onLayoutMode,
-    onAddTerminal,
-    onSwitchToProject,
-    onShowAll,
-    onClear,
+    onAddView,
 }: ToolbarProps) {
     return (
         <div className="gtoolbar">
-            <ProjectSelector
-                workspaces={workspaces}
-                specs={specs}
-                selected={selected}
-                workspacesById={workspacesById}
-                onSwitchToProject={onSwitchToProject}
-                onShowAll={onShowAll}
-                onClear={onClear}
-            />
+            <span className="active-ws">
+                {activeWorkspace ? (
+                    <>
+                        <span className="active-ws-dot" />
+                        <span className="active-ws-name">
+                            {activeWorkspace.project_name}
+                        </span>
+                    </>
+                ) : (
+                    <span className="active-ws-name muted">No active workspace</span>
+                )}
+            </span>
             <span className="spacer" />
             <div className="seg">
                 <button
@@ -828,9 +902,89 @@ function Toolbar({
             <button type="button" className="gicon" title="Maximize window">
                 <IconMaximize />
             </button>
-            <button type="button" className="gbtn accent" onClick={onAddTerminal}>
+            <AddViewButton
+                disabled={!activeWorkspace}
+                onAddTerminal={() => onAddView('terminal')}
+                onAddCode={() => onAddView('code')}
+            />
+        </div>
+    );
+}
+
+/**
+ * Split button: primary [Add terminal] + a chevron that opens a tiny menu
+ * with [Add code view]. Both target the active workspace; disabled when no
+ * workspace is active. Closes on outside-click / Escape.
+ */
+function AddViewButton({
+    disabled,
+    onAddTerminal,
+    onAddCode,
+}: {
+    disabled: boolean;
+    onAddTerminal: () => void;
+    onAddCode: () => void;
+}) {
+    const [open, setOpen] = useState(false);
+    const ref = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (!open) return;
+        const onAway = (e: MouseEvent) => {
+            if (!ref.current?.contains(e.target as Node)) setOpen(false);
+        };
+        const onEsc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+        document.addEventListener('mousedown', onAway);
+        document.addEventListener('keydown', onEsc);
+        return () => {
+            document.removeEventListener('mousedown', onAway);
+            document.removeEventListener('keydown', onEsc);
+        };
+    }, [open]);
+
+    return (
+        <div className="addview-split" ref={ref}>
+            <button
+                type="button"
+                className="gbtn accent addview-main"
+                onClick={onAddTerminal}
+                disabled={disabled}
+            >
                 <IconPlus /> Add terminal
             </button>
+            <button
+                type="button"
+                className="gbtn accent addview-caret"
+                onClick={() => setOpen((o) => !o)}
+                disabled={disabled}
+                title="Add another view type"
+                aria-label="Add another view type"
+            >
+                <IconChevronDown size={13} />
+            </button>
+            {open && (
+                <div className="addview-menu" role="menu">
+                    <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                            setOpen(false);
+                            onAddTerminal();
+                        }}
+                    >
+                        <IconPlus size={13} /> Add terminal
+                    </button>
+                    <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                            setOpen(false);
+                            onAddCode();
+                        }}
+                    >
+                        <IconCode size={13} /> Add code view
+                    </button>
+                </div>
+            )}
         </div>
     );
 }

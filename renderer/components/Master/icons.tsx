@@ -225,6 +225,16 @@ export const IconTrash = ({ size = 13, ...p }: Props) =>
         p.className,
         p.style,
     );
+export const IconCode = ({ size = 14, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <polyline points="16 18 22 12 16 6" />
+            <polyline points="8 6 2 12 8 18" />
+        </>,
+        p.className,
+        p.style,
+    );
 export const IconListTree = ({ size = 14, ...p }: Props) =>
     wrap(
         size,

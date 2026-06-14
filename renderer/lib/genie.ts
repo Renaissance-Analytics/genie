@@ -53,6 +53,8 @@ export interface DetectResult {
 
 export interface Settings {
     primary_workspace?: string;
+    /** Last-activated workspace id in the master view. */
+    active_workspace?: string;
     default_editor?: string;
     default_editor_cmd?: string;
     default_start_cmd?: string;
@@ -145,6 +147,15 @@ export interface Changelog {
     partial: boolean;
 }
 
+/** A view spec is either a live terminal or a fancy-code editor view. */
+export type ViewType = 'terminal' | 'code';
+
+/** Per-type spec metadata. Code views persist the open file's relative path. */
+export interface ViewMeta {
+    file_path?: string;
+    [key: string]: unknown;
+}
+
 export interface TerminalSpec {
     id: string;
     workspace_id: string | null;
@@ -153,9 +164,24 @@ export interface TerminalSpec {
     shell: string | null;
     args: string[];
     env: Record<string, string>;
+    type: ViewType;
+    meta: ViewMeta;
     sort_order: number;
     created_at: string;
     last_opened_at: string | null;
+}
+
+/**
+ * One node in the Code View file tree. Shape-compatible with react-fancy's
+ * `TreeNodeData` so it can be fed straight into `<TreeNav>`. Produced by
+ * the main-side `files:list-tree` walk.
+ */
+export interface TreeNodeData {
+    id: string;
+    label: string;
+    type?: 'file' | 'folder';
+    ext?: string;
+    children?: TreeNodeData[];
 }
 
 interface CreateAgiOpts {
@@ -424,11 +450,28 @@ interface GenieApi {
             shell?: string | null;
             args?: string[];
             env?: Record<string, string>;
+            type?: ViewType;
+            meta?: ViewMeta;
         }) => Promise<TerminalSpec>;
         update: (id: string, patch: Partial<TerminalSpec>) => Promise<TerminalSpec | null>;
         remove: (id: string) => Promise<boolean>;
         get: (id: string) => Promise<TerminalSpec | null>;
         touch: (id: string) => Promise<{ ok: boolean }>;
+    };
+    files: {
+        listTree: (
+            workspacePath: string,
+            opts?: { maxDepth?: number; maxEntries?: number },
+        ) => Promise<TreeNodeData[]>;
+        read: (
+            workspacePath: string,
+            relPath: string,
+        ) => Promise<{ content: string; truncated: boolean }>;
+        write: (
+            workspacePath: string,
+            relPath: string,
+            content: string,
+        ) => Promise<{ ok: boolean }>;
     };
     github: {
         status: () => Promise<{

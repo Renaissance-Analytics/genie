@@ -218,18 +218,8 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('terminal-spec:list', (): TerminalSpecRow[] => listTerminalSpecs());
     ipcMain.handle(
         'terminal-spec:create',
-        (
-            _e,
-            input: {
-                id: string;
-                workspace_id: string | null;
-                label: string;
-                cwd: string;
-                shell?: string | null;
-                args?: string[];
-                env?: Record<string, string>;
-            },
-        ) => createTerminalSpec(input),
+        (_e, input: Parameters<typeof createTerminalSpec>[0]) =>
+            createTerminalSpec(input),
     );
     ipcMain.handle(
         'terminal-spec:update',

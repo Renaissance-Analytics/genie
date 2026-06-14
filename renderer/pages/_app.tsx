@@ -1,6 +1,7 @@
 import type { AppProps } from 'next/app';
 import { useEffect } from 'react';
 import '@particle-academy/react-fancy/styles.css';
+import '@particle-academy/fancy-code/styles.css';
 import '../styles/globals.css';
 import '../styles/master.css';
 import ErrorBoundary from '../components/ErrorBoundary';

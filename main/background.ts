@@ -6,6 +6,7 @@ import { registerIpcHandlers } from './ipc';
 import { initDatabase } from './db';
 import { registerProtocolHandler, handleGenieUrl } from './auth';
 import { registerTerminalIpc, stopAllTerminals } from './terminal/ipc';
+import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
 import { registerUpdaterIpc, checkForUpdatesNow } from './updater/ipc';
 import { installAppMenu } from './app-menu';
@@ -372,6 +373,7 @@ app.whenReady().then(async () => {
     // surfacing as "No handler registered for 'terminal:resize'" in the
     // renderer once a window mounts.
     registerTerminalIpc();
+    registerFilesIpc();
     registerGithubIpc();
     registerUpdaterIpc();
     app.on('before-quit', () => stopAllTerminals());

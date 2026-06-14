@@ -1,12 +1,19 @@
 import type { CSSProperties } from 'react';
 import TerminalPanel from './TerminalPanel';
-import { IconPlus } from './icons';
+import CodePanel from '../Code/CodePanel';
+import { IconCode, IconPlus } from './icons';
 import type { TerminalSpec, WorkspaceRow } from '../../lib/genie';
 
 export type LayoutMode = 'auto' | 'focus-stack' | '2x2' | 'columns';
 
 interface Props {
+    /** Active-workspace specs only — these lay out the visible grid. */
     specs: TerminalSpec[];
+    /**
+     * Off-workspace selected specs. Rendered mounted-hidden (display:none)
+     * so their PTYs survive a workspace switch (Decision 1: keep-alive).
+     */
+    backgroundSpecs?: TerminalSpec[];
     workspacesById: Map<string, WorkspaceRow>;
     focusId: string | null;
     maximizedId: string | null;
@@ -14,6 +21,7 @@ interface Props {
     onFocus: (id: string) => void;
     onToggleMaximize: (id: string) => void;
     onAddTerminal: () => void;
+    onAddCode?: () => void;
     onMarkActive: (id: string) => void;
     onMarkInactive: (id: string) => void;
     layoutMode: LayoutMode;
@@ -37,6 +45,7 @@ type ResolvedMode = 'g1' | 'g2x1' | 'focus-stack' | '2x2' | 'columns';
  */
 export default function TerminalGrid({
     specs,
+    backgroundSpecs = [],
     workspacesById,
     focusId,
     maximizedId,
@@ -44,22 +53,55 @@ export default function TerminalGrid({
     onFocus,
     onToggleMaximize,
     onAddTerminal,
+    onAddCode,
     onMarkActive,
     onMarkInactive,
     layoutMode,
 }: Props) {
+    // Off-workspace selected panels: mounted but hidden so their PTYs keep
+    // running across a workspace switch. Code views have no live process,
+    // but keeping them mounted preserves unsaved edits + tree state too.
+    const background = backgroundSpecs.map((spec) => (
+        <PanelFor
+            key={spec.id}
+            spec={spec}
+            workspacesById={workspacesById}
+            focused={false}
+            maximized={false}
+            style={{ display: 'none' }}
+            onClose={() => onClose(spec.id)}
+            onMaximize={() => onToggleMaximize(spec.id)}
+            onMarkActive={() => onMarkActive(spec.id)}
+            onMarkInactive={() => onMarkInactive(spec.id)}
+        />
+    ));
+
     if (specs.length === 0) {
         return (
             <div className="grid-wrap">
-                <button type="button" className="addtile" onClick={onAddTerminal}>
-                    <span className="ai">
-                        <IconPlus size={18} />
-                    </span>
-                    <span className="at">Add a terminal</span>
-                    <span className="as">
-                        from any project — pick from the tree on the left
-                    </span>
-                </button>
+                <div className="addtile-group">
+                    <button type="button" className="addtile" onClick={onAddTerminal}>
+                        <span className="ai">
+                            <IconPlus size={18} />
+                        </span>
+                        <span className="at">Add a terminal</span>
+                        <span className="as">
+                            a live shell in this workspace
+                        </span>
+                    </button>
+                    {onAddCode && (
+                        <button type="button" className="addtile" onClick={onAddCode}>
+                            <span className="ai">
+                                <IconCode size={18} />
+                            </span>
+                            <span className="at">Add a code view</span>
+                            <span className="as">
+                                browse + edit files in this workspace
+                            </span>
+                        </button>
+                    )}
+                </div>
+                <div style={{ display: 'none' }}>{background}</div>
             </div>
         );
     }
@@ -91,14 +133,10 @@ export default function TerminalGrid({
                           : cellArea(mode, i, ordered.length);
                     const isMainInStack = mode === 'focus-stack' && i === 0;
                     return (
-                        <TerminalPanel
+                        <PanelFor
                             key={spec.id}
                             spec={spec}
-                            workspace={
-                                spec.workspace_id
-                                    ? workspacesById.get(spec.workspace_id)
-                                    : undefined
-                            }
+                            workspacesById={workspacesById}
                             focused={focusId === spec.id}
                             maximized={isMax}
                             style={style}
@@ -112,6 +150,7 @@ export default function TerminalGrid({
                         />
                     );
                 })}
+                {background}
                 {showAddTile && !maximizedId && (
                     <button
                         type="button"
@@ -130,6 +169,72 @@ export default function TerminalGrid({
                 )}
             </div>
         </div>
+    );
+}
+
+interface PanelForProps {
+    spec: TerminalSpec;
+    workspacesById: Map<string, WorkspaceRow>;
+    focused: boolean;
+    maximized: boolean;
+    style: CSSProperties;
+    onClose: () => void;
+    onMaximize: () => void;
+    onMinimize?: () => void;
+    onMarkActive: () => void;
+    onMarkInactive: () => void;
+}
+
+/**
+ * Dispatch a spec to the right panel component by `spec.type`. A 'code'
+ * spec renders the fancy-code editor view; everything else is a terminal.
+ * Code views carry no live pty, so they don't participate in the "live"
+ * activity count — TerminalGrid simply doesn't call onMarkActive for them.
+ */
+function PanelFor({
+    spec,
+    workspacesById,
+    focused,
+    maximized,
+    style,
+    onClose,
+    onMaximize,
+    onMinimize,
+    onMarkActive,
+    onMarkInactive,
+}: PanelForProps) {
+    const workspace = spec.workspace_id
+        ? workspacesById.get(spec.workspace_id)
+        : undefined;
+
+    if (spec.type === 'code') {
+        return (
+            <CodePanel
+                spec={spec}
+                workspace={workspace}
+                focused={focused}
+                maximized={maximized}
+                style={style}
+                onClose={onClose}
+                onMaximize={onMaximize}
+                onMinimize={onMinimize}
+            />
+        );
+    }
+
+    return (
+        <TerminalPanel
+            spec={spec}
+            workspace={workspace}
+            focused={focused}
+            maximized={maximized}
+            style={style}
+            onClose={onClose}
+            onMaximize={onMaximize}
+            onMinimize={onMinimize}
+            onMarkActive={onMarkActive}
+            onMarkInactive={onMarkInactive}
+        />
     );
 }
 

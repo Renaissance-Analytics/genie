@@ -183,12 +183,30 @@ const api = {
             shell?: string | null;
             args?: string[];
             env?: Record<string, string>;
+            type?: 'terminal' | 'code';
+            meta?: Record<string, unknown>;
         }) => ipcRenderer.invoke('terminal-spec:create', input),
         update: (id: string, patch: Record<string, unknown>) =>
             ipcRenderer.invoke('terminal-spec:update', id, patch),
         remove: (id: string) => ipcRenderer.invoke('terminal-spec:delete', id),
         get: (id: string) => ipcRenderer.invoke('terminal-spec:get', id),
         touch: (id: string) => ipcRenderer.invoke('terminal-spec:touch', id),
+    },
+
+    files: {
+        listTree: (
+            workspacePath: string,
+            opts?: { maxDepth?: number; maxEntries?: number },
+        ) => ipcRenderer.invoke('files:list-tree', workspacePath, opts),
+        read: (workspacePath: string, relPath: string) =>
+            ipcRenderer.invoke('files:read', workspacePath, relPath) as Promise<{
+                content: string;
+                truncated: boolean;
+            }>,
+        write: (workspacePath: string, relPath: string, content: string) =>
+            ipcRenderer.invoke('files:write', workspacePath, relPath, content) as Promise<{
+                ok: boolean;
+            }>,
     },
 
     terminal: {

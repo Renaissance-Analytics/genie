@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { REGENERABLE_NAMES, SKIP_NAMES } from './ignore';
 
 const execFileAsync = promisify(execFile);
 
@@ -139,36 +140,8 @@ const KNOWLEDGE_DIR_MAP: Record<string, string> = {
 
 const KNOWLEDGE_FILE_EXTS = new Set(['.md', '.txt', '.rst', '.adoc']);
 
-const SKIP_NAMES = new Set([
-    '.git',
-    '.DS_Store',
-    'Thumbs.db',
-    'node_modules',
-    '.idea',
-    '.vscode',
-]);
-
-/**
- * Regenerable build/dependency output. When these show up ignored in a
- * single-repo source we still default them to "codebase" (= do nothing,
- * the toolchain recreates them) rather than suggesting a copy.
- */
-const REGENERABLE_NAMES = new Set([
-    'node_modules',
-    'vendor',
-    'dist',
-    'build',
-    'out',
-    'target',
-    '.next',
-    '.nuxt',
-    '.turbo',
-    '.cache',
-    '__pycache__',
-    '.venv',
-    'venv',
-    'coverage',
-]);
+// SKIP_NAMES / REGENERABLE_NAMES now live in ./ignore so the Code View
+// file tree (main/files/ipc.ts) shares the exact same skip lists.
 
 export async function analyseFolder(root: string): Promise<AnalyseResult> {
     if (!fs.existsSync(root)) {
