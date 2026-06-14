@@ -1,6 +1,6 @@
 {
   "name": "genie",
-  "version": "0.7.0-alpha.40",
+  "version": "0.7.0-alpha.41",
   "description": "Tynn desktop companion — tray-resident workspace manager",
   "private": true,
   "main": "app/background.js",
@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@particle-academy/fancy-code": "^0.5.0",
-    "@particle-academy/fancy-term": "^0.2.2",
+    "@particle-academy/fancy-term": "^0.3.0",
     "@particle-academy/fancy-term-host": "^0.1.1",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-serialize": "^0.14.0",
@@ -32,7 +32,7 @@
     "simple-git": "^3.27.0"
   },
   "devDependencies": {
-    "@particle-academy/react-fancy": "^4.3.0",
+    "@particle-academy/react-fancy": "^4.4.3",
     "@tailwindcss/postcss": "^4.0.0",
     "@tailwindcss/typography": "^0.5.19",
     "@types/better-sqlite3": "^7.6.12",

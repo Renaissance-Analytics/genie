@@ -4,7 +4,6 @@ import {
     type TerminalHandle,
     type ShellProfile,
 } from '@particle-academy/fancy-term';
-import { Terminal as XtermTerminal } from '@xterm/xterm';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import { api, ulid } from '../../lib/genie';
 import '@xterm/xterm/css/xterm.css';
@@ -30,53 +29,6 @@ interface XTermProps {
     activeShell?: string;
     /** The user picked a different shell — host respawns the pty. */
     onShellChange?: (id: string, profile: ShellProfile) => void;
-}
-
-/**
- * Reaching the LIVE xterm instance (Tier 1 snapshots).
- *
- * fancy-term 0.2.2's forwarded ref is built with `{...handle}` inside
- * useImperativeHandle, which snapshots the `xterm` GETTER at layout time
- * (before the instance exists) into a static null — so `handle.xterm` is null
- * forever and there's no `loadAddon` on the handle. To load a SerializeAddon
- * we need the real Terminal object.
- *
- * fancy-term imports the SAME hoisted `@xterm/xterm` singleton we do (no nested
- * copy), so patching `Terminal.prototype.open` here once reaches fancy-term's
- * instances too. We stamp each opened instance onto its container element; our
- * effect then recovers it by querying the `[data-fancy-terminal]` node fancy-
- * term renders. This is the documented public `open(parent)` API, not an
- * internals hack, and degrades gracefully — if the stamp is ever missing we
- * simply skip snapshots for that terminal.
- */
-const STAMP = '__genieXterm' as const;
-type StampedElement = HTMLElement & { [STAMP]?: XtermTerminal };
-
-let openPatched = false;
-function patchXtermOpen(): void {
-    if (openPatched) return;
-    openPatched = true;
-    const proto = XtermTerminal.prototype as unknown as {
-        open: (parent: HTMLElement) => void;
-    };
-    const orig = proto.open;
-    proto.open = function patchedOpen(this: XtermTerminal, parent: HTMLElement) {
-        try {
-            (parent as StampedElement)[STAMP] = this;
-        } catch {
-            /* exotic element — snapshots will just be skipped */
-        }
-        return orig.call(this, parent);
-    };
-}
-
-function findLiveXterm(host: HTMLElement | null): XtermTerminal | null {
-    if (!host) return null;
-    const node =
-        (host.matches?.('[data-fancy-terminal]') ? host : null) ??
-        host.querySelector<HTMLElement>('[data-fancy-terminal]');
-    const stamped = node as StampedElement | null;
-    return stamped?.[STAMP] ?? null;
 }
 
 /** How often a live terminal proactively snapshots itself (reliability floor). */
@@ -116,7 +68,6 @@ export default function XTerm({
     onShellChange,
 }: XTermProps) {
     const handleRef = useRef<TerminalHandle>(null);
-    const hostRef = useRef<HTMLDivElement>(null);
     const ptyIdRef = useRef<string | null>(null);
     const createFailedRef = useRef(false);
     const serializeRef = useRef<SerializeAddon | null>(null);
@@ -126,10 +77,6 @@ export default function XTerm({
     // OR after create. Track it either way: create uses the latest
     // known size, and any later resize is forwarded to the pty.
     const sizeRef = useRef<{ cols: number; rows: number }>({ cols: 80, rows: 24 });
-
-    // Patch xterm's open() at module init (idempotent) so the live instance is
-    // recoverable from the DOM the moment fancy-term mounts it.
-    patchXtermOpen();
 
     useEffect(() => {
         const handle = handleRef.current;
@@ -153,10 +100,11 @@ export default function XTerm({
 
         handle.fit();
 
-        // Load the SerializeAddon onto the live xterm instance (recovered via
-        // the patched open()). Best-effort — a missing instance just disables
+        // Load the SerializeAddon onto the live xterm instance, exposed by
+        // fancy-term 0.3.0's `handle.xterm` escape hatch (non-null after the
+        // fit above mounts it). Best-effort — a missing instance just disables
         // snapshots for this terminal, it never breaks the session.
-        const live = findLiveXterm(hostRef.current);
+        const live = handle.xterm;
         if (live) {
             try {
                 const addon = new SerializeAddon();
@@ -255,7 +203,7 @@ export default function XTerm({
     }, []);
 
     return (
-        <div ref={hostRef} className={className ?? 'h-full w-full'}>
+        <div className={className ?? 'h-full w-full'}>
             <FancyTerminal
                 ref={handleRef}
                 className="h-full w-full"
