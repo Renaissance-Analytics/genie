@@ -22,6 +22,7 @@ import {
     IconMaximize,
     IconPanelLeft,
     IconPlus,
+    IconHelp,
     IconSettings,
 } from '../components/Master/icons';
 import {
@@ -1101,6 +1102,14 @@ function TitleBar({
             )}
             <span className="spacer" />
             <UpdatePill />
+            <button
+                type="button"
+                className="gicon"
+                title="Documentation"
+                onClick={() => api().app.showDocs().catch(() => {})}
+            >
+                <IconHelp />
+            </button>
             <button
                 type="button"
                 className="gicon"

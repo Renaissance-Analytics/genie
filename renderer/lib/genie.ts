@@ -76,6 +76,11 @@ export interface Settings {
     detached_terminals?: 'on' | 'off';
 }
 
+export interface DocEntry {
+    slug: string;
+    title: string;
+}
+
 export interface ShellDetection {
     id: string;
     label: string;
@@ -461,6 +466,7 @@ interface GenieApi {
         hideCapture: () => Promise<{ ok: boolean }>;
         getCurrentProject: () => Promise<{ id: string; name: string } | null>;
         showSettings: () => Promise<{ ok: boolean }>;
+        showDocs: () => Promise<{ ok: boolean }>;
         showMain: () => Promise<{ ok: boolean }>;
         openStage: (workspaceId?: string) => Promise<{ ok: boolean }>;
         quit: () => Promise<{ ok: boolean }>;
@@ -478,6 +484,10 @@ interface GenieApi {
             }>;
             set: (enabled: boolean) => Promise<{ enabled: boolean }>;
         };
+    };
+    docs: {
+        list: () => Promise<DocEntry[]>;
+        read: (slug: string) => Promise<string | null>;
     };
     updater: {
         mode: () => Promise<'phase1' | 'phase2'>;

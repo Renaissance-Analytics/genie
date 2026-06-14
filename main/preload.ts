@@ -155,6 +155,7 @@ const api = {
         hideCapture: () => ipcRenderer.invoke('app:hide-capture'),
         getCurrentProject: () => ipcRenderer.invoke('app:get-current-project'),
         showSettings: () => ipcRenderer.invoke('app:show-settings'),
+        showDocs: () => ipcRenderer.invoke('app:show-docs'),
         showMain: () => ipcRenderer.invoke('app:show-main'),
         openStage: (workspaceId?: string) =>
             ipcRenderer.invoke('app:open-stage', workspaceId),
@@ -180,6 +181,15 @@ const api = {
                     enabled: boolean;
                 }>,
         },
+    },
+
+    docs: {
+        list: () =>
+            ipcRenderer.invoke('docs:list') as Promise<
+                Array<{ slug: string; title: string }>
+            >,
+        read: (slug: string) =>
+            ipcRenderer.invoke('docs:read', slug) as Promise<string | null>,
     },
 
     terminalSpec: {

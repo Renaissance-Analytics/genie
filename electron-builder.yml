@@ -17,6 +17,10 @@ files:
       - resources/tray-icon.png
       - resources/tray-icon-update.png
       - resources/icon.png
+      # The in-app Docs viewer reads the user-guide markdown at runtime from
+      # <asar>/docs (main/docs/docs.ts resolveDocsDir). Ship the docs/ folder
+      # so docs:list / docs:read have something to serve in the packaged app.
+      - docs/**/*
       - package.json
 
 asar: true

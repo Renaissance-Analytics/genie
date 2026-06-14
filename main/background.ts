@@ -32,6 +32,7 @@ import { isQuittingForUpdate } from './updater/quit-state';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
 import { registerUpdaterIpc, checkForUpdatesNow } from './updater/ipc';
+import { registerDocsIpc } from './docs/ipc';
 import { installAppMenu } from './app-menu';
 
 /**
@@ -60,6 +61,7 @@ if (!gotLock) {
 let mainWindow: BrowserWindow | null = null;
 let captureWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
+let docsWindow: BrowserWindow | null = null;
 let masterWindow: BrowserWindow | null = null;
 const terminalWindows = new Set<BrowserWindow>();
 
@@ -246,6 +248,25 @@ export function showSettingsWindow(): void {
     settingsWindow.focus();
 }
 
+export function getDocsWindow(): BrowserWindow | null {
+    return docsWindow;
+}
+
+/**
+ * Open (or focus) the Docs viewer window. Mirrors showSettingsWindow — a
+ * separate BrowserWindow loading the `/docs` renderer page, reused on repeat
+ * opens so we never stack duplicate doc windows.
+ */
+export function showDocsWindow(): void {
+    if (!docsWindow || docsWindow.isDestroyed()) {
+        docsWindow = createDocsWindow();
+        docsWindow.once('ready-to-show', () => docsWindow?.focus());
+        return;
+    }
+    docsWindow.show();
+    docsWindow.focus();
+}
+
 export function showCaptureWindow(): void {
     if (!captureWindow || captureWindow.isDestroyed()) {
         captureWindow = createCaptureWindow();
@@ -318,6 +339,32 @@ function createSettingsWindow(): BrowserWindow {
     // Defer showing until the page has actually painted. Without this, the
     // window pops up as a white/blank rectangle for several frames while
     // the renderer boots, which reads as "broken" rather than "loading".
+    win.once('ready-to-show', () => win.show());
+    return win;
+}
+
+function createDocsWindow(): BrowserWindow {
+    const win = new BrowserWindow({
+        width: 960,
+        height: 720,
+        show: false,
+        frame: true,
+        title: 'Genie Documentation',
+        backgroundColor: '#0a0a0c',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false,
+        },
+    });
+
+    if (isDev) {
+        win.loadURL('http://localhost:8888/docs');
+    } else {
+        win.loadFile(path.join(__dirname, 'docs.html'));
+    }
+
     win.once('ready-to-show', () => win.show());
     return win;
 }
@@ -432,6 +479,10 @@ app.whenReady().then(async () => {
     registerFilesIpc();
     registerGithubIpc();
     registerUpdaterIpc();
+    // Docs viewer IPC (docs:list / docs:read). __dirname is the compiled main
+    // bundle dir; resolveDocsDir uses it to find the bundled docs/ in both dev
+    // and the packaged asar.
+    registerDocsIpc(__dirname);
     // Two-phase quit (Tier 1 terminal persistence). On the FIRST before-quit we
     // hold the quit, ask every window to serialize its terminals one last time,
     // wait a bounded window for those final `terminal:snapshot` messages to

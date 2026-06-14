@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Menu, shell } from 'electron';
+import { showDocsWindow } from './background';
 
 /**
  * Build + install Genie's application menu (top-of-window menu bar
@@ -86,6 +87,12 @@ export function installAppMenu(): void {
                     enabled: false,
                 },
                 { type: 'separator' },
+                {
+                    label: 'Documentation',
+                    click: () => {
+                        showDocsWindow();
+                    },
+                },
                 {
                     label: 'Genie on GitHub',
                     click: () => {

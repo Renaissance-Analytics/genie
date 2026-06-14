@@ -37,6 +37,7 @@ import { startSignIn, redeemCode } from './auth';
 import {
     hideCaptureWindow,
     showSettingsWindow,
+    showDocsWindow,
     showMainWindow,
     showStageWindow,
 } from './background';
@@ -267,6 +268,10 @@ export function registerIpcHandlers(): void {
     });
     ipcMain.handle('app:show-settings', () => {
         showSettingsWindow();
+        return { ok: true };
+    });
+    ipcMain.handle('app:show-docs', () => {
+        showDocsWindow();
         return { ok: true };
     });
     ipcMain.handle('app:show-main', () => {
