@@ -213,7 +213,7 @@ export default function SettingsPage() {
                     type="number"
                     min={1}
                     max={9}
-                    description="Maximum panels visible at once per workspace. Reaching the limit disables the Add terminal / Add code view buttons until you raise it or close a view."
+                    description="Maximum panels visible at once per workspace. Reaching the limit disables the Add Terminal / Add Editor buttons until you raise it or close a view."
                     value={String(s.max_views ?? '4')}
                     onValueChange={(v) => {
                         // Clamp to 1–9; ignore empty/garbage so the field stays usable.

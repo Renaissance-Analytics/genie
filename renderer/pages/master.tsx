@@ -288,9 +288,9 @@ function MasterInner() {
             if (!ws) return;
             const existing = specs.filter((s) => s.workspace_id === workspaceId);
             const baseLabel = ws.project_name.toLowerCase().replace(/\s+/g, '-');
-            // Code views get a `-code` label so they read distinctly in the
-            // tree alongside terminals.
-            const root = type === 'code' ? `${baseLabel}-code` : baseLabel;
+            // Editor views get an `-editor` label so they read distinctly in
+            // the tree alongside terminals.
+            const root = type === 'code' ? `${baseLabel}-editor` : baseLabel;
             const sameType = existing.filter((s) => s.type === type);
             const label = sameType.length === 0 ? root : `${root}-${sameType.length + 1}`;
             const created = await api().terminalSpec.create({
@@ -1077,8 +1077,8 @@ function Toolbar({
 }
 
 /**
- * Split button: primary [Add terminal] + a chevron that opens a tiny menu
- * with [Add code view]. Both target the active workspace; disabled when no
+ * Split button: primary [Add Terminal] + a chevron that opens a tiny menu
+ * with [Add Editor]. Both target the active workspace; disabled when no
  * workspace is active. Closes on outside-click / Escape.
  */
 function AddViewButton({
@@ -1117,7 +1117,7 @@ function AddViewButton({
                 disabled={disabled}
                 title={disabled ? disabledReason : undefined}
             >
-                <IconPlus /> Add terminal
+                <IconPlus /> Add Terminal
             </button>
             <button
                 type="button"
@@ -1139,7 +1139,7 @@ function AddViewButton({
                             onAddTerminal();
                         }}
                     >
-                        <IconPlus size={13} /> Add terminal
+                        <IconPlus size={13} /> Add Terminal
                     </button>
                     <button
                         type="button"
@@ -1149,7 +1149,7 @@ function AddViewButton({
                             onAddCode();
                         }}
                     >
-                        <IconCode size={13} /> Add code view
+                        <IconCode size={13} /> Add Editor
                     </button>
                 </div>
             )}

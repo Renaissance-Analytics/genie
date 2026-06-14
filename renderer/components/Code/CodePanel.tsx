@@ -244,7 +244,7 @@ export default function CodePanel({
             return;
         }
         const picked = await showPrompt({
-            title: 'Lock this code view',
+            title: 'Lock this editor',
             label: 'Root folder (workspace-relative)',
             body: 'The view will reopen pinned to this folder and the current file. Leave blank to lock to the whole workspace. e.g. repos/genie',
             initial: lockedRoot,

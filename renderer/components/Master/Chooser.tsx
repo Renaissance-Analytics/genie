@@ -268,7 +268,7 @@ export default function Chooser({
                                         >
                                             <span className="pick" />
                                             <IconPlus size={12} />
-                                            <span className="tname">Add terminal…</span>
+                                            <span className="tname">Add Terminal…</span>
                                         </button>
                                         <button
                                             type="button"
@@ -277,7 +277,7 @@ export default function Chooser({
                                         >
                                             <span className="pick" />
                                             <IconCode size={12} />
-                                            <span className="tname">Add code view…</span>
+                                            <span className="tname">Add Editor…</span>
                                         </button>
                                     </div>
                                 </div>
@@ -644,7 +644,7 @@ function SpecRow({
         >
             <span className="pick">{checked && !suspended && <IconCheck size={11} />}</span>
             {spec.type === 'code' ? (
-                <span className="srow-ico code" title="Code view">
+                <span className="srow-ico code" title="Editor">
                     <IconCode size={12} />
                 </span>
             ) : (

@@ -120,7 +120,7 @@ export default function TerminalGrid({
                         <span className="ai">
                             <IconPlus size={18} />
                         </span>
-                        <span className="at">Add a terminal</span>
+                        <span className="at">Add Terminal</span>
                         <span className="as">a live shell in this workspace</span>
                     </button>
                     {onAddCode && (
@@ -134,7 +134,7 @@ export default function TerminalGrid({
                             <span className="ai">
                                 <IconCode size={18} />
                             </span>
-                            <span className="at">Add a code view</span>
+                            <span className="at">Add Editor</span>
                             <span className="as">
                                 browse + edit files in this workspace
                             </span>
@@ -456,7 +456,7 @@ const ResizableGrid = ({
                         <span className="ai">
                             <IconPlus size={18} />
                         </span>
-                        <span className="at">Add a terminal</span>
+                        <span className="at">Add Terminal</span>
                         <span className="as">from any project — pick on the left</span>
                     </button>
                 )}

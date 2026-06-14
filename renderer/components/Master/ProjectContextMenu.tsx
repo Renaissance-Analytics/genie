@@ -103,7 +103,7 @@ export default function ProjectContextMenu({
                 />
                 <CtxItem
                     icon={<IconPlus size={14} />}
-                    label="Add terminal"
+                    label="Add Terminal"
                     onClick={() => {
                         onAddTerminal();
                         onClose();
