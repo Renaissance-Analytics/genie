@@ -183,6 +183,12 @@ export interface TerminalSpec {
     snapshot_bytes: number | null;
     /** Last cwd the shell reported via OSC-7, or null when unknown (Tier 1.5). */
     live_cwd: string | null;
+    /**
+     * Tier 2: true when live/visible, false when DISABLED (suspended-but-
+     * retained — spec kept, pty kept alive while the app is open). Pre-v6 rows
+     * read back as true.
+     */
+    enabled: boolean;
 }
 
 /**
@@ -595,6 +601,15 @@ interface GenieApi {
         /** Persist a SerializeAddon snapshot of this terminal's buffer (Tier 1). */
         snapshot: (id: string, serialized: string) => Promise<boolean>;
         detach: (id: string) => Promise<boolean>;
+        /**
+         * Tier 2: keep a pty alive on zero owners (retained=true, for disable)
+         * or release it (retained=false). Set true BEFORE the last detach.
+         * Refused (ok=false) when retaining would exceed the cap.
+         */
+        setRetained: (
+            id: string,
+            retained: boolean,
+        ) => Promise<{ ok: boolean; retainedCount: number; max: number; reason?: string }>;
         kill: (id: string) => Promise<boolean>;
         list: () => Promise<Array<{ id: string; pid: number; shell: string }>>;
     };
@@ -614,6 +629,8 @@ interface GenieApi {
         ) => () => void;
         /** Main asks every window to serialize its terminals before quit (Tier 1). */
         terminalSnapshotRequest: (cb: () => void) => () => void;
+        /** Live pty count broadcast (Tier 2 resource awareness). */
+        terminalCount: (cb: (payload: { count: number }) => void) => () => void;
         updaterStatus: (cb: (status: UpdaterStatus) => void) => () => void;
         updaterLog: (cb: (payload: { line: string }) => void) => () => void;
     };

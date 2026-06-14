@@ -81,6 +81,15 @@ class TerminalManager extends EventEmitter {
     private readonly liveCwd = new Map<string, string>();
     /** Pending debounced cwd-persist timers, keyed by terminal id. */
     private readonly cwdTimers = new Map<string, NodeJS.Timeout>();
+    /**
+     * Tier 2: ids that must keep their pty alive even with zero attached
+     * windows (a disabled-but-retained terminal — e.g. a dev server the user
+     * suspended). The IPC layer consults this in detachOwner: a retained id is
+     * left running on the last detach instead of killed, so re-enable reattaches
+     * to the LIVE session (scrollback replays) rather than spawning fresh.
+     * Insertion order is preserved so the cap can evict the oldest if needed.
+     */
+    private readonly retained = new Set<string>();
 
     /**
      * Spawn a new pty for the given id, OR return the existing one if a
@@ -148,6 +157,8 @@ class TerminalManager extends EventEmitter {
             this.ptys.delete(opts.id);
             this.scrollback.delete(opts.id);
             this.shells.delete(opts.id);
+            // A dead pty can't be retained — drop the flag so the cap frees up.
+            this.retained.delete(opts.id);
             this.emit('exit', opts.id, { exitCode, signal });
         });
 
@@ -223,6 +234,8 @@ class TerminalManager extends EventEmitter {
         this.ptys.delete(id);
         this.scrollback.delete(id);
         this.shells.delete(id);
+        // An explicit kill (delete) also clears any retained flag.
+        this.retained.delete(id);
         return true;
     }
 
@@ -242,6 +255,42 @@ class TerminalManager extends EventEmitter {
 
     isLive(id: string): boolean {
         return this.ptys.has(id);
+    }
+
+    // --- Tier 2: retained-PTY (disabled-not-deleted) -----------------------
+
+    /**
+     * Mark/unmark a terminal as retained. A retained terminal's pty is kept
+     * alive by the IPC layer even when its last window detaches. Returns the
+     * resulting retained-id set size. Retaining a terminal that isn't live is
+     * harmless (the flag simply has no pty to protect yet).
+     */
+    setRetained(id: string, retained: boolean): void {
+        if (retained) this.retained.add(id);
+        else this.retained.delete(id);
+    }
+
+    isRetained(id: string): boolean {
+        return this.retained.has(id);
+    }
+
+    /** Number of currently-retained terminals (for the resource cap). */
+    retainedCount(): number {
+        return this.retained.size;
+    }
+
+    /** Snapshot of retained ids in insertion order (oldest first). */
+    retainedIds(): string[] {
+        return Array.from(this.retained);
+    }
+
+    /**
+     * Buffered scrollback for a live pty (raw ANSI text), or undefined when the
+     * id has no pty. Tier 2 uses this to serialize a windowless retained pty at
+     * quit so its post-disable output still lands in a snapshot (T2→T1 degrade).
+     */
+    getScrollback(id: string): string | undefined {
+        return this.scrollback.get(id);
     }
 }
 

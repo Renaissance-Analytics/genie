@@ -9,7 +9,9 @@ import {
     IconCpu,
     IconGlobe,
     IconPanelLeftOpen,
+    IconPause,
     IconPin,
+    IconPlay,
     IconPlus,
     IconSearch,
     IconTerminal,
@@ -37,6 +39,10 @@ interface Props {
     onToggleSpec: (id: string) => void;
     onAddSpec: (workspaceId: string, type: ViewType) => void;
     onDestroySpec: (id: string) => void;
+    /** Tier 2: suspend a terminal (keep pty, hide panel). */
+    onDisableSpec: (id: string) => void;
+    /** Tier 2: resume a suspended terminal (reattach to the live session). */
+    onEnableSpec: (id: string) => void;
     onOpenContextMenu: (specId: string, position: { x: number; y: number }) => void;
     onOpenProjectMenu: (workspaceId: string, position: { x: number; y: number }) => void;
     onAddWorkspace: () => void;
@@ -60,6 +66,8 @@ export default function Chooser({
     onToggleSpec,
     onAddSpec,
     onDestroySpec,
+    onDisableSpec,
+    onEnableSpec,
     onOpenContextMenu,
     onOpenProjectMenu,
     onAddWorkspace,
@@ -240,10 +248,13 @@ export default function Chooser({
                                             spec={s}
                                             checked={selected.has(s.id)}
                                             live={activeIds.has(s.id)}
+                                            suspended={s.enabled === false}
                                             hostKind={hostBadgeKind(ws.backend)}
                                             hostLabel={ws.backend}
                                             onToggle={() => onToggleSpec(s.id)}
                                             onDestroy={() => onDestroySpec(s.id)}
+                                            onDisable={() => onDisableSpec(s.id)}
+                                            onEnable={() => onEnableSpec(s.id)}
                                             onContextMenu={(p) =>
                                                 onOpenContextMenu(s.id, p)
                                             }
@@ -293,10 +304,13 @@ export default function Chooser({
                                         spec={s}
                                         checked={selected.has(s.id)}
                                         live={activeIds.has(s.id)}
+                                        suspended={s.enabled === false}
                                         hostKind="desktop"
                                         hostLabel="local"
                                         onToggle={() => onToggleSpec(s.id)}
                                         onDestroy={() => onDestroySpec(s.id)}
+                                        onDisable={() => onDisableSpec(s.id)}
+                                        onEnable={() => onEnableSpec(s.id)}
                                         onContextMenu={(p) =>
                                             onOpenContextMenu(s.id, p)
                                         }
@@ -561,10 +575,14 @@ interface SpecRowProps {
     spec: TerminalSpec;
     checked: boolean;
     live: boolean;
+    /** Tier 2: this spec is disabled-but-retained (suspended). */
+    suspended: boolean;
     hostKind: string;
     hostLabel: string;
     onToggle: () => void;
     onDestroy: () => void;
+    onDisable: () => void;
+    onEnable: () => void;
     onContextMenu: (position: { x: number; y: number }) => void;
 }
 
@@ -574,15 +592,23 @@ interface SpecRowProps {
  * propagation so clicking it destroys the spec without also toggling
  * selection. A confirm guard fires for the destroy path because it
  * removes the spec from the DB and can't be undone.
+ *
+ * Tier 2: a SUSPENDED row (disabled-but-retained) reads greyed with a
+ * "Suspended" badge; clicking it (or its Resume button) re-enables and
+ * reattaches to the live pty. An ENABLED terminal row offers a Suspend
+ * button next to Delete so disabling is reachable from the tree too.
  */
 function SpecRow({
     spec,
     checked,
     live,
+    suspended,
     hostKind,
     hostLabel,
     onToggle,
     onDestroy,
+    onDisable,
+    onEnable,
     onContextMenu,
 }: SpecRowProps) {
     const handleDestroy = async (e: React.MouseEvent) => {
@@ -595,16 +621,19 @@ function SpecRow({
         });
         if (ok !== null) onDestroy();
     };
+    const isTerminal = spec.type !== 'code';
+    // Suspended rows resume on click; live rows toggle grid selection.
+    const onRowClick = suspended ? onEnable : onToggle;
     return (
         <div
-            className={`tterm${checked ? ' on sel' : ''}`}
+            className={`tterm${checked ? ' on sel' : ''}${suspended ? ' suspended' : ''}`}
             role="button"
             tabIndex={0}
-            onClick={onToggle}
+            onClick={onRowClick}
             onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    onToggle();
+                    onRowClick();
                 }
             }}
             onContextMenu={(e) => {
@@ -613,16 +642,51 @@ function SpecRow({
             }}
             style={{ cursor: 'pointer' }}
         >
-            <span className="pick">{checked && <IconCheck size={11} />}</span>
+            <span className="pick">{checked && !suspended && <IconCheck size={11} />}</span>
             {spec.type === 'code' ? (
                 <span className="srow-ico code" title="Code view">
                     <IconCode size={12} />
                 </span>
             ) : (
-                <span className={`sdot ${live ? 'run' : 'idle'}`} />
+                <span className={`sdot ${suspended ? 'idle' : live ? 'run' : 'idle'}`} />
             )}
             <span className="tname">{spec.label}</span>
-            <span className={`host ${hostKind}`}>{hostLabel}</span>
+            {suspended ? (
+                <span className="susp-badge" title="Suspended — pty still running">
+                    Suspended
+                </span>
+            ) : (
+                <span className={`host ${hostKind}`}>{hostLabel}</span>
+            )}
+            {suspended ? (
+                <button
+                    type="button"
+                    className="tterm-act"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onEnable();
+                    }}
+                    title="Resume — reattach to the live session"
+                    aria-label={`Resume ${spec.label}`}
+                >
+                    <IconPlay size={12} />
+                </button>
+            ) : (
+                isTerminal && (
+                    <button
+                        type="button"
+                        className="tterm-act"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onDisable();
+                        }}
+                        title="Suspend — keep running, hide panel"
+                        aria-label={`Suspend ${spec.label}`}
+                    >
+                        <IconPause size={12} />
+                    </button>
+                )
+            )}
             <button
                 type="button"
                 className="tterm-trash"

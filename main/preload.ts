@@ -253,6 +253,18 @@ const api = {
         /** Release this window's view of the pty without killing it. */
         detach: (id: string) =>
             ipcRenderer.invoke('terminal:detach', id) as Promise<boolean>,
+        /**
+         * Tier 2: keep a pty alive on zero owners (disable) or release it
+         * (enable/delete). MUST be called with true BEFORE the last detach.
+         * Refused when retaining would exceed the cap.
+         */
+        setRetained: (id: string, retained: boolean) =>
+            ipcRenderer.invoke('terminal:set-retained', id, retained) as Promise<{
+                ok: boolean;
+                retainedCount: number;
+                max: number;
+                reason?: string;
+            }>,
         kill: (id: string) =>
             ipcRenderer.invoke('terminal:kill', id) as Promise<boolean>,
         list: () =>
@@ -302,6 +314,12 @@ const api = {
             const handler = () => cb();
             ipcRenderer.on('terminal:snapshot-request', handler);
             return () => ipcRenderer.off('terminal:snapshot-request', handler);
+        },
+        /** Live pty count broadcast (Tier 2 resource awareness). */
+        terminalCount: (cb: (payload: { count: number }) => void) => {
+            const handler = (_e: unknown, payload: { count: number }) => cb(payload);
+            ipcRenderer.on('terminal:count', handler);
+            return () => ipcRenderer.off('terminal:count', handler);
         },
         updaterStatus: (cb: (status: unknown) => void) => {
             const handler = (_e: unknown, payload: unknown) => cb(payload);

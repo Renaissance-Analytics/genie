@@ -162,3 +162,55 @@ describe('db migration v5 (session-persistence pointers)', () => {
         expect(row?.live_cwd).toBe('C:\\work\\proj');
     });
 });
+
+describe('db migration v6 (Tier 2 enabled column)', () => {
+    it('adds the enabled column to terminal_specs', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(cols(db, 'terminal_specs').has('enabled')).toBe(true);
+    });
+
+    it('a pre-existing (pre-v6) spec row defaults to enabled=1', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+
+        // Insert with only the pre-v6 columns — `enabled` must fall back to its
+        // declared DEFAULT 1, exactly as a row migrated up from an older DB.
+        db.prepare(
+            `INSERT INTO terminal_specs
+               (id, workspace_id, label, cwd, shell, args_json, env_json, type, meta_json, sort_order, created_at)
+             VALUES (@id, NULL, @label, @cwd, NULL, '[]', '{}', 'terminal', '{}', 0, @now)`,
+        ).run({ id: 'spec-pre-v6', label: 'pre', cwd: '/tmp', now: new Date().toISOString() });
+
+        const row = db
+            .prepare<[string], { enabled: number }>(
+                'SELECT enabled FROM terminal_specs WHERE id = ?',
+            )
+            .get('spec-pre-v6');
+        expect(row?.enabled).toBe(1);
+    });
+
+    it('round-trips a disabled (enabled=0) spec row', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO terminal_specs
+               (id, workspace_id, label, cwd, shell, args_json, env_json, type, meta_json, sort_order, created_at, enabled)
+             VALUES ('s-dis', NULL, 'l', '/tmp', NULL, '[]', '{}', 'terminal', '{}', 0, @now, 0)`,
+        ).run({ now: new Date().toISOString() });
+
+        const row = db
+            .prepare<[], { enabled: number }>(
+                "SELECT enabled FROM terminal_specs WHERE id = 's-dis'",
+            )
+            .get();
+        expect(row?.enabled).toBe(0);
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'terminal_specs').has('enabled')).toBe(true);
+    });
+});

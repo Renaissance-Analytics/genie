@@ -115,6 +115,13 @@ function MasterInner() {
     const [addingWorkspace, setAddingWorkspace] = useState(false);
     // Max panels visible per workspace (Settings → max_views, default 4).
     const [maxViews, setMaxViews] = useState(4);
+    // Transient notice (Tier 2 cap warnings, max-views blocks). Auto-clears.
+    const [toast, setToast] = useState<string | null>(null);
+    useEffect(() => {
+        if (!toast) return;
+        const t = setTimeout(() => setToast(null), 4000);
+        return () => clearTimeout(t);
+    }, [toast]);
 
     const workspacesById = useMemo(() => {
         const m = new Map<string, WorkspaceRow>();
@@ -197,7 +204,7 @@ function MasterInner() {
     useEffect(() => {
         if (!stageSeedWorkspace || specs.length === 0 || selected.size > 0) return;
         const ids = specs
-            .filter((s) => s.workspace_id === stageSeedWorkspace)
+            .filter((s) => s.workspace_id === stageSeedWorkspace && s.enabled !== false)
             .map((s) => s.id);
         if (ids.length > 0) setSelected(new Set(ids));
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -232,7 +239,9 @@ function MasterInner() {
             setSelected((prev) => {
                 if (prev.size > 0) return prev;
                 return new Set(
-                    specs.filter((s) => s.workspace_id === target).map((s) => s.id),
+                    specs
+                        .filter((s) => s.workspace_id === target && s.enabled !== false)
+                        .map((s) => s.id),
                 );
             });
         })();
@@ -312,10 +321,9 @@ function MasterInner() {
     }, []);
 
     const destroySpec = useCallback(async (id: string) => {
-        // Optimistic: drop from local state first so the panel unmounts
-        // (which kills the pty via XTerm's cleanup), then DB-delete. If
-        // the DB call fails, refresh() on next mount brings it back —
-        // worst case the user sees a deleted spec reappear.
+        // Optimistic: drop from local state first so the panel unmounts, then
+        // DB-delete. If the DB call fails, refresh() on next mount brings it
+        // back — worst case the user sees a deleted spec reappear.
         setSelected((prev) => {
             if (!prev.has(id)) return prev;
             const next = new Set(prev);
@@ -331,12 +339,115 @@ function MasterInner() {
         setFocusId((cur) => (cur === id ? null : cur));
         setMaximizedId((cur) => (cur === id ? null : cur));
         setSpecs((prev) => prev.filter((s) => s.id !== id));
+        // Tier 2: kill explicitly. This clears any retained flag, kills the pty
+        // (even a windowless suspended one with no panel to unmount), AND drops
+        // the Tier 1 snapshot so a deleted terminal can't resurrect. For an
+        // enabled terminal the panel unmount would also detach+kill, but calling
+        // kill here makes the delete authoritative for both states.
         try {
+            await api().terminal.kill(id).catch(() => {});
             await api().terminalSpec.remove(id);
         } catch (e) {
             console.error('Failed to delete terminal spec', e);
         }
     }, []);
+
+    /**
+     * Tier 2 DISABLE: suspend a terminal without deleting it. Keeps the spec
+     * (enabled=false) and the running pty (retained), removing only the visible
+     * panel. Re-enabling reattaches to the LIVE session.
+     *
+     * CRITICAL ordering: setRetained(true) MUST land BEFORE the panel unmounts,
+     * else XTerm's unmount-detach would be the last detach and kill the pty
+     * first. We await setRetained, THEN deselect (which triggers the unmount).
+     * XTerm's unmount also fires a final Tier 1 snapshot, so a later full quit
+     * has fresh state even before the windowless-serialize fallback runs.
+     *
+     * Refused when the retained cap is hit — the panel stays visible and we
+     * surface the reason. Code views have no pty, so they're never retained;
+     * disabling one just hides it (enabled=false).
+     */
+    const disableSpec = useCallback(
+        async (id: string) => {
+            const spec = specs.find((s) => s.id === id);
+            if (!spec) return;
+            if (spec.type !== 'code') {
+                const res = await api()
+                    .terminal.setRetained(id, true)
+                    .catch(() => ({ ok: false, reason: 'Could not suspend terminal.' }) as {
+                        ok: boolean;
+                        reason?: string;
+                    });
+                if (!res.ok) {
+                    setToast(res.reason ?? 'Could not suspend terminal.');
+                    return;
+                }
+            }
+            // Persist enabled=false; reflect locally so the Chooser shows it
+            // suspended immediately.
+            void api().terminalSpec.update(id, { enabled: false }).catch(() => {});
+            setSpecs((prev) =>
+                prev.map((s) => (s.id === id ? { ...s, enabled: false } : s)),
+            );
+            // Deselect → panel unmounts (detach leaves the retained pty alive).
+            setSelected((prev) => {
+                if (!prev.has(id)) return prev;
+                const next = new Set(prev);
+                next.delete(id);
+                return next;
+            });
+            setActiveIds((prev) => {
+                if (!prev.has(id)) return prev;
+                const next = new Set(prev);
+                next.delete(id);
+                return next;
+            });
+            setFocusId((cur) => (cur === id ? null : cur));
+            setMaximizedId((cur) => (cur === id ? null : cur));
+        },
+        [specs],
+    );
+
+    /**
+     * Tier 2 ENABLE: resume a suspended terminal. Re-selects it into the active
+     * workspace grid; the remount's terminal:create rejoins the live pty and
+     * replays scrollback (no restart). Clears retention so a later plain close
+     * kills it as usual. Blocked when re-enabling would exceed Max Views, with
+     * the same hint as the Add affordances.
+     */
+    const enableSpec = useCallback(
+        async (id: string) => {
+            const spec = specs.find((s) => s.id === id);
+            if (!spec) return;
+            // Activate the spec's workspace if it isn't already active, so the
+            // re-enabled panel lands in the visible grid.
+            const wsId = spec.workspace_id;
+            const targetActive = wsId ?? activeWorkspaceId;
+            // Count what's already visible in the workspace we're enabling into.
+            const visibleInWs = specs.filter(
+                (s) => s.workspace_id === targetActive && selected.has(s.id),
+            ).length;
+            if (visibleInWs >= maxViews) {
+                setToast(maxViewsReason);
+                return;
+            }
+            if (spec.type !== 'code') {
+                await api().terminal.setRetained(id, false).catch(() => {});
+            }
+            void api().terminalSpec.update(id, { enabled: true }).catch(() => {});
+            setSpecs((prev) =>
+                prev.map((s) => (s.id === id ? { ...s, enabled: true } : s)),
+            );
+            if (wsId && wsId !== activeWorkspaceId) {
+                setActiveWorkspaceId(wsId);
+                void api().settings.set({ active_workspace: wsId }).catch(() => {});
+            }
+            setSelected((prev) => new Set(prev).add(id));
+        },
+        // maxViewsReason is derived below; safe to omit (string constant per render).
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [specs, selected, activeWorkspaceId, maxViews],
+    );
 
     const toggleMaximize = useCallback((id: string) => {
         setMaximizedId((cur) => (cur === id ? null : id));
@@ -355,7 +466,12 @@ function MasterInner() {
             setSelected((prev) => {
                 const next = new Set(prev);
                 for (const s of specs) {
-                    if (s.workspace_id === workspaceId) next.add(s.id);
+                    // Disabled (suspended) terminals stay out of the grid until
+                    // explicitly re-enabled — activating a workspace doesn't
+                    // resurrect them.
+                    if (s.workspace_id === workspaceId && s.enabled !== false) {
+                        next.add(s.id);
+                    }
                 }
                 return next;
             });
@@ -576,6 +692,8 @@ function MasterInner() {
                         onToggleSpec={toggleSpec}
                         onAddSpec={(wsId, type) => void addSpec(wsId, type)}
                         onDestroySpec={(id) => void destroySpec(id)}
+                        onDisableSpec={(id) => void disableSpec(id)}
+                        onEnableSpec={(id) => void enableSpec(id)}
                         onOpenContextMenu={(specId, p) =>
                             setContextMenu({ specId, x: p.x, y: p.y })
                         }
@@ -596,6 +714,7 @@ function MasterInner() {
                         onClose={closeSelected}
                         onFocus={(id) => setFocusId((cur) => (cur === id ? null : id))}
                         onToggleMaximize={toggleMaximize}
+                        onDisable={(id) => void disableSpec(id)}
                         onAddTerminal={() =>
                             activeWorkspaceId && void addSpec(activeWorkspaceId, 'terminal')
                         }
@@ -615,6 +734,12 @@ function MasterInner() {
             </div>
 
             <PromptHost />
+
+            {toast && (
+                <div className="g-toast" role="status" onClick={() => setToast(null)}>
+                    {toast}
+                </div>
+            )}
 
             {addingWorkspace && (
                 <AddWorkspaceModal

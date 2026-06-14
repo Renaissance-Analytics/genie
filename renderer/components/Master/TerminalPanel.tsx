@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { ShellProfile } from '@particle-academy/fancy-term';
 import XTerm from '../Terminal/XTerm';
-import { IconMaximize, IconMinimize, IconX } from './icons';
+import { IconMaximize, IconMinimize, IconPause, IconX } from './icons';
 import {
     api,
     detectedShells,
@@ -16,6 +16,12 @@ interface Props {
     onClose: () => void;
     onMaximize?: () => void;
     onMinimize?: () => void;
+    /**
+     * Tier 2: suspend this terminal — hide the panel but keep the pty running
+     * so re-enabling resumes the live session. Distinct from onClose (which
+     * detaches) and Delete (which kills + removes the spec).
+     */
+    onDisable?: () => void;
     focused?: boolean;
     maximized?: boolean;
     style?: CSSProperties;
@@ -48,6 +54,7 @@ export default function TerminalPanel({
     onClose,
     onMaximize,
     onMinimize,
+    onDisable,
     focused,
     maximized,
     style,
@@ -149,6 +156,16 @@ export default function TerminalPanel({
                             title={maximized ? 'Restore tiled view' : 'Maximize panel'}
                         >
                             {maximized ? <IconMinimize /> : <IconMaximize size={13} />}
+                        </button>
+                    )}
+                    {onDisable && (
+                        <button
+                            type="button"
+                            className="pctl"
+                            onClick={onDisable}
+                            title="Suspend — keep running, hide panel"
+                        >
+                            <IconPause />
                         </button>
                     )}
                     <button

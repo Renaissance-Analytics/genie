@@ -1091,6 +1091,87 @@
     color: #f43f5e;
 }
 
+/* Tier 2 — suspend/resume row action (mirrors .tterm-trash chrome). */
+.tterm-act {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--radius-md);
+    border: none;
+    background: transparent;
+    color: var(--fg-4);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease-out),
+        background var(--dur-fast) var(--ease-out),
+        color var(--dur-fast) var(--ease-out);
+}
+.tterm:hover .tterm-act,
+.tterm:focus-within .tterm-act {
+    opacity: 1;
+}
+.tterm-act:hover {
+    background: var(--agent-soft);
+    color: var(--agent);
+}
+
+/* Tier 2 — suspended (disabled-but-retained) row: greyed, Resume always shown. */
+.tterm.suspended {
+    opacity: 0.62;
+}
+.tterm.suspended .tname {
+    font-style: italic;
+}
+.tterm.suspended .tterm-act {
+    opacity: 1;
+    color: var(--agent);
+}
+.susp-badge {
+    flex: 0 0 auto;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 999px;
+    color: #fbbf24;
+    background: color-mix(in srgb, #fbbf24 16%, transparent);
+    white-space: nowrap;
+}
+
+/* Tier 2 — transient notice (cap warnings, max-views blocks). */
+.g-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 54px;
+    transform: translateX(-50%);
+    z-index: 1000;
+    max-width: 460px;
+    padding: 10px 16px;
+    border-radius: var(--radius-md);
+    background: var(--bg-1, #18181b);
+    border: 1px solid var(--border-2, #3f3f46);
+    color: var(--fg-1, #fafafa);
+    font-size: 12.5px;
+    line-height: 1.45;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+    cursor: pointer;
+    animation: g-toast-in 160ms var(--ease-out, ease-out);
+}
+@keyframes g-toast-in {
+    from {
+        opacity: 0;
+        transform: translate(-50%, 8px);
+    }
+    to {
+        opacity: 1;
+        transform: translate(-50%, 0);
+    }
+}
+
 /* status dots */
 .sdot.run {
     background: #10b981;

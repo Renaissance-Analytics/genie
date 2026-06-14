@@ -5,7 +5,12 @@ import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { registerIpcHandlers } from './ipc';
 import { initDatabase } from './db';
 import { registerProtocolHandler, handleGenieUrl } from './auth';
-import { registerTerminalIpc, stopAllTerminals, requestFinalSnapshots } from './terminal/ipc';
+import {
+    registerTerminalIpc,
+    stopAllTerminals,
+    requestFinalSnapshots,
+    snapshotRetainedWindowless,
+} from './terminal/ipc';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
 import { registerUpdaterIpc, checkForUpdatesNow } from './updater/ipc';
@@ -386,7 +391,12 @@ app.whenReady().then(async () => {
     let snapshotFlushDone = false;
     app.on('before-quit', (event) => {
         if (snapshotFlushDone) return; // re-entry: let the quit proceed
-        // Nothing to snapshot if no window is open — tear down immediately.
+        // Tier 2 → Tier 1 degrade: snapshot any RETAINED-but-windowless ptys
+        // from their scrollback before we kill anything, so a suspended dev
+        // server replays on the next launch even though its pty dies on quit.
+        snapshotRetainedWindowless();
+        // Nothing window-side to snapshot if no window is open — tear down
+        // immediately (the windowless retained snapshot above already ran).
         if (BrowserWindow.getAllWindows().length === 0) {
             snapshotFlushDone = true;
             stopAllTerminals();

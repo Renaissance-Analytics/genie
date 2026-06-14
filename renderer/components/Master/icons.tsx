@@ -268,3 +268,17 @@ export const IconListTree = ({ size = 14, ...p }: Props) =>
         p.className,
         p.style,
     );
+/** Suspend / disable (keep running, hide panel) — Tier 2. */
+export const IconPause = ({ size = 13, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <rect x="6" y="4" width="4" height="16" rx="1" />
+            <rect x="14" y="4" width="4" height="16" rx="1" />
+        </>,
+        p.className,
+        p.style,
+    );
+/** Resume / enable a suspended view — Tier 2. */
+export const IconPlay = ({ size = 13, ...p }: Props) =>
+    wrap(size, <polygon points="6 4 20 12 6 20 6 4" />, p.className, p.style);

@@ -194,6 +194,24 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v6 — Tier 2 retained-terminal state. `enabled` distinguishes a
+            // live/visible terminal (1) from a disabled-but-retained one (0):
+            // disabling keeps the spec AND (while the app is open) its running
+            // pty, so re-enabling resumes the live session. Pre-existing rows
+            // default to 1 (enabled) so nothing disappears on upgrade.
+            // Idempotent ADD COLUMN like v2/v4/v5 — re-running no-ops via the
+            // column-exists check.
+            version: 6,
+            runner: (db) => {
+                const cols = terminalSpecColumns(db);
+                if (!cols.has('enabled')) {
+                    db.exec(
+                        `ALTER TABLE terminal_specs ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -482,6 +500,12 @@ export interface TerminalSpecRow {
     snapshot_bytes: number | null;
     /** Last cwd the shell reported via OSC-7, or null when unknown. */
     live_cwd: string | null;
+    /**
+     * Tier 2: true when the terminal is live/visible, false when it has been
+     * DISABLED (suspended-but-retained). A disabled terminal keeps its spec and,
+     * while the app is open, its running pty. Pre-v6 rows read back as true.
+     */
+    enabled: boolean;
 }
 
 interface TerminalSpecRecord {
@@ -505,6 +529,9 @@ interface TerminalSpecRecord {
     snapshot_at: number | null;
     snapshot_bytes: number | null;
     live_cwd: string | null;
+    /** Pre-v6 rows lack this column; a SELECT * over an older DB types it as
+     *  possibly absent. NULL/absent → enabled (1). Stored as 0/1. */
+    enabled: number | null;
 }
 
 function rowFromRecord(r: TerminalSpecRecord): TerminalSpecRow {
@@ -531,6 +558,8 @@ function rowFromRecord(r: TerminalSpecRecord): TerminalSpecRow {
         snapshot_at: r.snapshot_at ?? null,
         snapshot_bytes: r.snapshot_bytes ?? null,
         live_cwd: r.live_cwd ?? null,
+        // NULL (pre-v6) or 1 → enabled; only an explicit 0 disables.
+        enabled: r.enabled == null ? true : r.enabled !== 0,
     };
 }
 
@@ -606,6 +635,7 @@ export function updateTerminalSpec(
         snapshot_at: number | null;
         snapshot_bytes: number | null;
         live_cwd: string | null;
+        enabled: boolean;
     }>,
 ): TerminalSpecRow | null {
     const cur = getTerminalSpec(id);
@@ -628,6 +658,8 @@ export function updateTerminalSpec(
                 ? patch.snapshot_bytes
                 : cur.snapshot_bytes,
         live_cwd: patch.live_cwd !== undefined ? patch.live_cwd : cur.live_cwd,
+        enabled:
+            patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : cur.enabled ? 1 : 0,
     };
     getDb()
         .prepare(
@@ -643,7 +675,8 @@ export function updateTerminalSpec(
                sort_order   = @sort_order,
                snapshot_at    = @snapshot_at,
                snapshot_bytes = @snapshot_bytes,
-               live_cwd       = @live_cwd
+               live_cwd       = @live_cwd,
+               enabled        = @enabled
              WHERE id = @id`,
         )
         .run({ id, ...next });

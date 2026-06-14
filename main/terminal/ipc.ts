@@ -1,8 +1,17 @@
 import { BrowserWindow, ipcMain, WebContents } from 'electron';
 import { terminalManager, CreateTerminalOpts, TerminalInfo } from './manager';
 import { detectShells, defaultShellId, resolveDefaultShell } from './shells';
-import { writeSnapshot } from './sessions';
+import { writeSnapshot, deleteSnapshot } from './sessions';
 import { updateTerminalSpec } from '../db';
+
+/**
+ * Tier 2 resource cap. The number of terminals that may be RETAINED (kept
+ * running with zero attached windows) at once. Disabling a terminal past this
+ * cap is blocked with a clear message rather than silently evicting a live
+ * session — losing a dev server you forgot about is worse than a "cap reached"
+ * toast. Tune here; the renderer surfaces the limit in its hint.
+ */
+export const MAX_RETAINED = 8;
 
 /**
  * IPC layer for the terminal subsystem. The manager owns ptys + emits
@@ -36,9 +45,15 @@ interface OwnerEntry {
     cleanup: WeakMap<WebContents, () => void>;
 }
 
+/**
+ * Owner registry, module-scoped so the quit-time helper
+ * (snapshotRetainedWindowless) can tell which retained ptys currently have no
+ * attached window. registerTerminalIpc is called exactly once at app-ready.
+ */
+const ownersByTerminal = new Map<string, OwnerEntry>();
+
 export function registerTerminalIpc(): void {
     const mgr = terminalManager();
-    const ownersByTerminal = new Map<string, OwnerEntry>();
 
     const trackOwner = (id: string, sender: WebContents) => {
         let entry = ownersByTerminal.get(id);
@@ -68,7 +83,14 @@ export function registerTerminalIpc(): void {
         }
         if (entry.owners.size === 0) {
             ownersByTerminal.delete(id);
-            mgr.kill(id);
+            // Tier 2: a RETAINED terminal (disabled-not-deleted) keeps its pty
+            // alive with zero owners. The manager still lists it and holds its
+            // scrollback, so re-enabling reattaches via the create() rejoin path
+            // and replays history — the LIVE session, not a snapshot replay.
+            // A non-retained terminal is killed as before.
+            if (!mgr.isRetained(id)) {
+                mgr.kill(id);
+            }
         }
     };
 
@@ -126,8 +148,58 @@ export function registerTerminalIpc(): void {
 
     ipcMain.handle('terminal:kill', (_event, id: string): boolean => {
         ownersByTerminal.delete(id);
-        return mgr.kill(id);
+        // kill() also clears the retained flag in the manager.
+        const killed = mgr.kill(id);
+        // Delete (not just disable): drop the Tier 1 snapshot too so a deleted
+        // terminal can never resurrect on the next launch. Best-effort.
+        deleteSnapshot(id);
+        broadcastTerminalCount();
+        return killed;
     });
+
+    /**
+     * Tier 2: mark a terminal as retained (kept alive on zero owners) or not.
+     * CRITICAL ordering: the renderer MUST set retained=true BEFORE the last
+     * window detaches (before unmounting the XTerm), otherwise the detach kills
+     * the pty first. The disable flow awaits this call, then unmounts.
+     *
+     * Enforces the MAX_RETAINED cap on the way IN (retained=true): if retaining
+     * this id would exceed the cap it is REFUSED — the disable is blocked and
+     * the renderer keeps the panel visible with a "cap reached" toast. Clearing
+     * retention (retained=false) is always allowed.
+     *
+     * Returns { ok, retainedCount, max, reason? } so the renderer can both gate
+     * and surface the count.
+     */
+    ipcMain.handle(
+        'terminal:set-retained',
+        (
+            _event,
+            id: string,
+            retained: boolean,
+        ): { ok: boolean; retainedCount: number; max: number; reason?: string } => {
+            if (retained) {
+                // Already retained → idempotent success.
+                if (!mgr.isRetained(id) && mgr.retainedCount() >= MAX_RETAINED) {
+                    return {
+                        ok: false,
+                        retainedCount: mgr.retainedCount(),
+                        max: MAX_RETAINED,
+                        reason: `Retained-terminal limit reached (${MAX_RETAINED}). Re-enable or delete a suspended terminal first.`,
+                    };
+                }
+                mgr.setRetained(id, true);
+            } else {
+                mgr.setRetained(id, false);
+            }
+            broadcastTerminalCount();
+            return {
+                ok: true,
+                retainedCount: mgr.retainedCount(),
+                max: MAX_RETAINED,
+            };
+        },
+    );
 
     ipcMain.handle('terminal:list', (): TerminalInfo[] => {
         return mgr.list();
@@ -209,5 +281,46 @@ export function broadcastTerminalCount(): void {
     const count = terminalManager().list().length;
     for (const w of BrowserWindow.getAllWindows()) {
         w.webContents.send('terminal:count', { count });
+    }
+}
+
+/**
+ * Tier 2 → Tier 1 degrade. On a real app quit, retained ptys still die via
+ * stopAllTerminals (the detached pty-host is a later tier, T3). To make
+ * reopening replay correctly we capture a Tier 1 snapshot for every retained
+ * pty that has NO attached window — those windows are gone, so the renderer's
+ * SerializeAddon can't snapshot them. We serialize the manager's raw scrollback
+ * buffer instead; T1's restore path resets the screen (\x1bc) before the fresh
+ * shell, so raw history-above-divider is exactly the intended shape.
+ *
+ * Retained terminals that DO still have a window are covered by the normal
+ * requestFinalSnapshots broadcast (their SerializeAddon produces a cleaner
+ * reconstruction), so we skip those here to avoid clobbering with raw bytes.
+ *
+ * Called from before-quit alongside requestFinalSnapshots. Best-effort and
+ * synchronous so it completes inside the bounded quit window.
+ */
+export function snapshotRetainedWindowless(): void {
+    const mgr = terminalManager();
+    for (const id of mgr.retainedIds()) {
+        const entry = ownersByTerminal.get(id);
+        const hasWindow = !!entry && entry.owners.size > 0;
+        if (hasWindow) continue; // covered by the renderer snapshot broadcast
+        const scrollback = mgr.getScrollback(id);
+        if (!scrollback) continue;
+        try {
+            const bytes = writeSnapshot(id, scrollback);
+            if (bytes == null) continue;
+            try {
+                updateTerminalSpec(id, {
+                    snapshot_at: Date.now(),
+                    snapshot_bytes: bytes,
+                });
+            } catch {
+                /* spec gone / db not ready — file is still written */
+            }
+        } catch {
+            /* best-effort */
+        }
     }
 }

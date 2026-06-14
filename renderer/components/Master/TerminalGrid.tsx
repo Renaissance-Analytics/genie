@@ -29,6 +29,8 @@ interface Props {
     onClose: (id: string) => void;
     onFocus: (id: string) => void;
     onToggleMaximize: (id: string) => void;
+    /** Tier 2: suspend a terminal (keep its pty alive, hide the panel). */
+    onDisable?: (id: string) => void;
     onAddTerminal: () => void;
     onAddCode?: () => void;
     onMarkActive: (id: string) => void;
@@ -77,6 +79,7 @@ export default function TerminalGrid({
     onClose,
     onFocus,
     onToggleMaximize,
+    onDisable,
     onAddTerminal,
     onAddCode,
     onMarkActive,
@@ -97,6 +100,7 @@ export default function TerminalGrid({
             style={{ display: 'none' }}
             onClose={() => onClose(spec.id)}
             onMaximize={() => onToggleMaximize(spec.id)}
+            onDisable={onDisable ? () => onDisable(spec.id) : undefined}
             onMarkActive={() => onMarkActive(spec.id)}
             onMarkInactive={() => onMarkInactive(spec.id)}
         />
@@ -165,6 +169,7 @@ export default function TerminalGrid({
             onClose={onClose}
             onFocus={onFocus}
             onToggleMaximize={onToggleMaximize}
+            onDisable={onDisable}
             onAddTerminal={onAddTerminal}
             onMarkActive={onMarkActive}
             onMarkInactive={onMarkInactive}
@@ -186,6 +191,7 @@ interface ResizableGridProps {
     onClose: (id: string) => void;
     onFocus: (id: string) => void;
     onToggleMaximize: (id: string) => void;
+    onDisable?: (id: string) => void;
     onAddTerminal: () => void;
     onMarkActive: (id: string) => void;
     onMarkInactive: (id: string) => void;
@@ -236,6 +242,7 @@ const ResizableGrid = ({
     onClose,
     onFocus,
     onToggleMaximize,
+    onDisable,
     onAddTerminal,
     onMarkActive,
     onMarkInactive,
@@ -430,6 +437,7 @@ const ResizableGrid = ({
                             onMinimize={
                                 isMainInStack ? () => onFocus(spec.id) : undefined
                             }
+                            onDisable={onDisable ? () => onDisable(spec.id) : undefined}
                             onMarkActive={() => onMarkActive(spec.id)}
                             onMarkInactive={() => onMarkInactive(spec.id)}
                         />
@@ -564,6 +572,7 @@ interface PanelForProps {
     onClose: () => void;
     onMaximize: () => void;
     onMinimize?: () => void;
+    onDisable?: () => void;
     onMarkActive: () => void;
     onMarkInactive: () => void;
 }
@@ -581,6 +590,7 @@ function PanelFor({
     onClose,
     onMaximize,
     onMinimize,
+    onDisable,
     onMarkActive,
     onMarkInactive,
 }: PanelForProps) {
@@ -613,6 +623,7 @@ function PanelFor({
             onClose={onClose}
             onMaximize={onMaximize}
             onMinimize={onMinimize}
+            onDisable={onDisable}
             onMarkActive={onMarkActive}
             onMarkInactive={onMarkInactive}
         />
