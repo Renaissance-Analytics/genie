@@ -25,6 +25,18 @@ export default defineConfig({
         poolOptions: { forks: { singleFork: true } },
         testTimeout: 20_000,
         hookTimeout: 20_000,
+        // Inline the terminal backend package so vitest TRANSFORMS it instead of
+        // loading it as a pre-bundled external. Genie's adapter tests (e.g.
+        // retained-ipc) `vi.mock('node-pty')` to spawn fake ptys; that mock only
+        // reaches the package's internal `import 'node-pty'` when the package is
+        // part of the transformed module graph. Without this the real node-pty
+        // tries to spawn a Windows ConPTY and the test fails with "File not
+        // found". Behaviour-identical to when the core lived in-repo.
+        server: {
+            deps: {
+                inline: [/@particle-academy\/fancy-term-host/],
+            },
+        },
     },
     resolve: {
         alias: {

@@ -1,21 +1,20 @@
 import { app, BrowserWindow, safeStorage } from 'electron';
 import { spawn } from 'node:child_process';
-import path from 'node:path';
+import fs from 'node:fs';
 import { getAllSettings, updateTerminalSpec } from '../db';
-import { resolveHostScript as resolveHostScriptAt } from './host-locate';
-import { createSnapshotStore, type SnapshotStore } from './sessions';
 import {
+    ptyHostScriptPath,
+    createSnapshotStore,
     inProcessBackend,
     configureInProcessBackend,
     terminalManager,
-} from './manager';
-import { configureHostLifecycle } from './host-lifecycle';
-import type {
-    SettingsProvider,
-    Encryptor,
-    HostSpawner,
-} from './ports';
-import type { HostStatus } from './backend';
+    configureHostLifecycle,
+    type SnapshotStore,
+    type SettingsProvider,
+    type Encryptor,
+    type HostSpawner,
+    type HostStatus,
+} from '@particle-academy/fancy-term-host';
 
 /**
  * Genie adapter — the COMPOSITION ROOT for the terminal subsystem.
@@ -77,12 +76,28 @@ export function dbSettingsProvider(): SettingsProvider {
 }
 
 /** HostSpawner over Electron: execPath + ELECTRON_RUN_AS_NODE so the detached
- *  host runs as plain Node with the app's node-pty ABI, asar-aware script
- *  resolution, and the userData dir for pidfile/socket. `__dirname` here is the
- *  compiled main bundle dir (app/), so the host script sits beside it. */
-export function electronHostSpawner(dirname: string): HostSpawner {
+ *  host runs as plain Node with the app's node-pty ABI, package-provided host
+ *  script resolution, and the userData dir for pidfile/socket.
+ *
+ *  The detached pty-host is no longer built by Genie — it ships inside
+ *  `@particle-academy/fancy-term-host`. `ptyHostScriptPath()` self-locates the
+ *  package's `dist/pty-host.js` (asar-aware: it tries the `app.asar.unpacked`
+ *  path first, then the in-asar path — see electron-builder.yml asarUnpack,
+ *  which unpacks the whole package dist + node-pty so plain Node can require
+ *  them off disk). We guard with an existence check so a mis-resolved path
+ *  returns null and the host lifecycle degrades to in-process + a non-fatal
+ *  toast rather than spawning a non-existent script. `dirname` is retained for
+ *  signature stability with the previous adapter; the package self-locates. */
+export function electronHostSpawner(_dirname: string): HostSpawner {
     return {
-        resolveHostScript: () => resolveHostScriptAt(dirname),
+        resolveHostScript: () => {
+            try {
+                const p = ptyHostScriptPath();
+                return p && fs.existsSync(p) ? p : null;
+            } catch {
+                return null;
+            }
+        },
         userDataDir: () => app.getPath('userData'),
         spawnDetached: (scriptPath: string, env: Record<string, string>) => {
             const child = spawn(process.execPath, [scriptPath], {

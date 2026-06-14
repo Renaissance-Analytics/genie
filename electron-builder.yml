@@ -23,15 +23,18 @@ asar: true
 
 # Tier 3 — detached pty-host packaging.
 #
-# The host (app/pty-host.js) is spawned via `process.execPath` with
-# ELECTRON_RUN_AS_NODE=1, i.e. it runs as PLAIN NODE whose require() is NOT
-# asar-aware — so the host script itself can't be loaded from inside app.asar.
-# And node-pty is a NATIVE module: its prebuilt .node can't be loaded from
-# inside an asar at all. Both must be UNPACKED to app.asar.unpacked so they
-# exist as real files on disk. resolveHostScript() (main/terminal/host-locate.ts)
-# resolves the host to the unpacked path first, then falls back defensively.
+# The detached host now ships inside @particle-academy/fancy-term-host
+# (dist/pty-host.js + its sibling chunk-*.js + package.json). It is spawned via
+# `process.execPath` with ELECTRON_RUN_AS_NODE=1, i.e. it runs as PLAIN NODE
+# whose require()/ESM resolution is NOT asar-aware — so the host script (and the
+# package.json that marks it `"type":"module"`) can't be loaded from inside
+# app.asar. And node-pty is a NATIVE module: its prebuilt .node can't be loaded
+# from inside an asar at all. The whole package dist + node-pty must be UNPACKED
+# to app.asar.unpacked so they exist as real files on disk. The package's
+# ptyHostScriptPath() resolves to the unpacked path first, then falls back
+# defensively (genie-adapter.ts guards with fs.existsSync → in-process fallback).
 asarUnpack:
-  - app/pty-host.js
+  - node_modules/@particle-academy/fancy-term-host/**
   - node_modules/node-pty/**/*
 
 # Custom protocol — genie:// — registered at install time. Story #150 uses

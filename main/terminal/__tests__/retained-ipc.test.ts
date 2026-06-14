@@ -70,7 +70,7 @@ vi.mock('../genie-adapter', () => ({
 }));
 
 import { registerTerminalIpc, MAX_RETAINED } from '../ipc';
-import { terminalManager, configureInProcessBackend } from '../manager';
+import { terminalManager, configureInProcessBackend } from '@particle-academy/fancy-term-host';
 
 // Configure the in-process backend with the same test-double ports so create()
 // in these IPC tests doesn't touch disk/db either.

@@ -22,8 +22,6 @@
  *   megabytes), but that's the right trade-off for an electron-main
  *   target — it loads from disk once at boot and never streams.
  */
-const path = require('path');
-
 module.exports = {
     webpack: (config /* , env */) => {
         config.optimization = {
@@ -32,18 +30,12 @@ module.exports = {
             runtimeChunk: false,
         };
 
-        // Tier 3: emit the detached pty-host as its OWN bundle (app/pty-host.js)
-        // alongside background.js/preload.js. It's a SEPARATE entrypoint — never
-        // imported by main code; it's spawned via process.execPath at runtime —
-        // so webpack won't pick it up unless we add it explicitly. node-pty stays
-        // external (nextron externalizes all `dependencies`), so the emitted host
-        // does `require('node-pty')` at runtime and must run UNPACKED from the
-        // asar (see electron-builder.yml asarUnpack).
-        const existing = config.entry ?? {};
-        config.entry = {
-            ...existing,
-            'pty-host': path.join(process.cwd(), 'main', 'terminal', 'pty-host.ts'),
-        };
+        // Tier 3 host: Genie no longer builds its own detached pty-host. The host
+        // script now ships INSIDE @particle-academy/fancy-term-host
+        // (dist/pty-host.js + its chunk). HostSpawner.resolveHostScript() locates
+        // it via the package's ptyHostScriptPath(), and electron-builder unpacks
+        // the package dist + node-pty so plain Node can require them off disk
+        // (see electron-builder.yml asarUnpack). Hence no extra webpack entry here.
         return config;
     },
 };

@@ -2,10 +2,12 @@ import { BrowserWindow, ipcMain, WebContents } from 'electron';
 import {
     terminalManager,
     subscribeBackendEvents,
-    CreateTerminalOpts,
-    TerminalInfo,
-} from './manager';
-import { detectShells, defaultShellId, resolveDefaultShell } from './shells';
+    detectShells,
+    defaultShellId,
+    resolveDefaultShell,
+    type CreateTerminalOpts,
+    type TerminalInfo,
+} from '@particle-academy/fancy-term-host';
 import { updateTerminalSpec } from '../db';
 import { getSnapshotStore, dbSettingsProvider } from './genie-adapter';
 

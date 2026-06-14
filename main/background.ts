@@ -15,7 +15,7 @@ import {
     initTerminalBackend,
     isHostBacked,
     disconnectHostLeaveRunning,
-} from './terminal/host-lifecycle';
+} from '@particle-academy/fancy-term-host';
 import { wireTerminalAdapter } from './terminal/genie-adapter';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
