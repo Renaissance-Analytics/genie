@@ -72,17 +72,18 @@ jobs:
           fi
           echo "checking $NODE_BIN"
           test -f "$NODE_BIN" || { echo "MISSING standalone node: $NODE_BIN"; exit 1; }
-          # The node-pty native binding lives EITHER in prebuilds/<plat>-<arch>/
-          # (win + mac: published N-API prebuild) OR in build/Release/ (linux:
-          # source-built by node-gyp — no published linux prebuild). Accept either.
-          BINDING="$(find resources/runtime/node-pty -name 'pty.node' \
-            \( -path '*/prebuilds/*' -o -path '*/build/Release/*' \) -print -quit 2>/dev/null || true)"
-          if [ -z "$BINDING" ]; then
-            echo "MISSING node-pty binding (no pty.node under prebuilds/ or build/Release/)"
-            find resources/runtime/node-pty -name '*.node' || true
-            exit 1
-          fi
-          echo "runtime OK: $NODE_BIN + $BINDING"
+          # The node-pty native binding for the TARGET platform lives in
+          # prebuilds/<plat>-<arch>/pty.node (win + mac: published N-API prebuild)
+          # OR build/Release/pty.node (linux: source-built — no linux prebuild).
+          case "${{ runner.os }}" in
+            Windows) WANT="resources/runtime/node-pty/prebuilds/win32-x64/pty.node" ;;
+            macOS)   WANT="resources/runtime/node-pty/prebuilds/darwin-arm64/pty.node" ;;
+            *)       WANT="resources/runtime/node-pty/build/Release/pty.node" ;;
+          esac
+          echo "checking target binding $WANT"
+          test -f "$WANT" || { echo "MISSING target node-pty binding: $WANT"; \
+            find resources/runtime/node-pty -name '*.node'; exit 1; }
+          echo "runtime OK: $NODE_BIN + $WANT"
 
       - name: Build installers (Windows) — NO publish
         if: runner.os == 'Windows'
@@ -103,6 +104,29 @@ jobs:
       - name: Build installers (Linux) — NO publish
         if: runner.os == 'Linux'
         run: npx nextron build --linux --publish never
+
+      - name: Assert runtime is INSIDE the packaged app (extraResources shipped it)
+        # Proof the runtime actually ships in the installer, not just in the
+        # workdir: electron-builder leaves an unpacked app tree in dist/, with
+        # extraResources at <unpacked>/resources/runtime. Verify node + the
+        # node-pty binding are there.
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ runner.os }}" in
+            Windows) UNPACK="dist/win-unpacked"; NODE_BIN="$UNPACK/resources/runtime/node.exe" ;;
+            macOS)   UNPACK="$(find dist -maxdepth 2 -name 'Genie.app' -print -quit)"; NODE_BIN="$UNPACK/Contents/Resources/runtime/node" ;;
+            *)       UNPACK="dist/linux-unpacked"; NODE_BIN="$UNPACK/resources/runtime/node" ;;
+          esac
+          echo "unpacked app: $UNPACK"
+          test -n "$UNPACK" && test -d "$UNPACK" || { echo "no unpacked app tree found in dist/"; ls -la dist; exit 1; }
+          echo "checking shipped node: $NODE_BIN"
+          test -f "$NODE_BIN" || { echo "runtime node NOT shipped inside app: $NODE_BIN"; exit 1; }
+          BINDING="$(find "$(dirname "$NODE_BIN")/node-pty" -name 'pty.node' \
+            \( -path '*/prebuilds/*' -o -path '*/build/Release/*' \) -print -quit 2>/dev/null || true)"
+          test -n "$BINDING" || { echo "node-pty binding NOT shipped inside app"; \
+            find "$(dirname "$NODE_BIN")/node-pty" -name '*.node' || true; exit 1; }
+          echo "SHIPPED OK: $NODE_BIN + $BINDING"
 
       - name: Drop the local auto-update manifest (defence in depth)
         # electron-builder ALWAYS writes dist/latest*.yml during packaging, even
