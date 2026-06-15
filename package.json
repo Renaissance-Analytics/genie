@@ -20,6 +20,9 @@
     "test:coverage": "vitest run --coverage",
     "build:icons": "node resources/build-icons.cjs"
   },
+  "overrides": {
+    "esbuild": "^0.28.1"
+  },
   "dependencies": {
     "@particle-academy/fancy-code": "^0.5.0",
     "@particle-academy/fancy-term": "^0.3.0",
