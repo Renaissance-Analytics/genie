@@ -21,7 +21,15 @@ import {
     wireTerminalAdapter,
     killHostForUpdate,
     snapshotHostTerminalsForUpdate,
+    getSnapshotStore,
+    detachedTerminalsEnabled,
 } from './terminal/genie-adapter';
+import {
+    activateHostService,
+    hostBackendKind,
+    selectTerminalBackend,
+    shouldKillHostForUpdate,
+} from './terminal/host-service';
 import {
     liveHostTerminals,
     shouldConfirmQuit,
@@ -452,14 +460,45 @@ app.whenReady().then(async () => {
     // toast. Doing this first means registerTerminalIpc binds its data/exit
     // fan-out to whichever backend won (subscribeBackendEvents also re-binds on
     // any later swap, so a mid-session fallback still routes correctly).
-    let backendInit: { host: boolean; reattachIds: string[] } = {
-        host: false,
-        reattachIds: [],
+    // BACKEND SELECTION (fallback chain: service → detached-spawn → in-process).
+    //
+    //   1. detached_terminals OFF → in-process only. Skip the whole host path.
+    //   2. ON → FIRST try the per-user OS service (fancy-term-host@0.2.0
+    //      /service): install-if-missing/stale → start → connect a HostClient to
+    //      the SAME socket. A service-backed host runs on its OWN standalone Node
+    //      runtime, so it survives BOTH a quit AND an update (it never pins
+    //      Genie's binary). ensureHostService NEVER throws → on {ok:false} (no
+    //      runtime shipped, unsupported OS, install/connect failure) we FALL BACK.
+    //   3. Fallback → initTerminalBackend(): connect-to-existing-or-spawn the
+    //      DETACHED host (Genie's execPath child — pins the binary, survives a
+    //      normal quit, must be killed on update). It too NEVER throws → on
+    //      failure it degrades to in-process with a non-fatal toast.
+    //
+    // selectTerminalBackend records which one won via setHostBackendKind, so
+    // hostBackendKind() drives the update-teardown branch + willRestartPtyHost.
+    const selection = await selectTerminalBackend({
+        detachedEnabled: detachedTerminalsEnabled(),
+        activateService: () =>
+            activateHostService({
+                snapshots: getSnapshotStore(),
+                userDataDir: app.getPath('userData'),
+            }),
+        initDetached: () => initTerminalBackend(),
+        isHostBackedProbe: () => isHostBacked(),
+    });
+    const backendInit: { host: boolean; reattachIds: string[] } = {
+        host: selection.host,
+        reattachIds: selection.reattachIds,
     };
-    try {
-        backendInit = await initTerminalBackend();
-    } catch {
-        /* initTerminalBackend is already try/caught internally; belt-and-braces */
+    if (selection.kind === 'service') {
+        // eslint-disable-next-line no-console
+        console.log(
+            `[terminal] per-user OS service active (action=${selection.serviceAction}); ` +
+                `${backendInit.reattachIds.length} session(s) to reattach`,
+        );
+    } else if (selection.serviceReason) {
+        // eslint-disable-next-line no-console
+        console.log(`[terminal] OS service not used: ${selection.serviceReason}`);
     }
     // Static imports above — earlier dynamic imports could fail silently
     // on some bundlers, leaving the IPC channels unregistered and
@@ -517,8 +556,19 @@ app.whenReady().then(async () => {
     // host kill before letting the quit proceed.
     const teardownTerminals = async (): Promise<void> => {
         const forUpdate = isQuittingForUpdate();
+        const kind = hostBackendKind();
         if (isHostBacked()) {
-            if (forUpdate) {
+            // UPDATE-quit teardown branches on the ACTIVE BACKEND KIND, because
+            // only ONE kind pins Genie's binary:
+            //   • 'service'  — the host runs on its OWN standalone Node runtime
+            //     via the OS service, so it NEVER pins Genie's binary. It
+            //     SURVIVES the update exactly like a normal quit: just disconnect
+            //     and leave it running, so after the swap Genie reconnects and
+            //     terminals are still live. NO kill, NO snapshot needed.
+            //   • 'detached' — the host is Genie's execPath child, so it PINS the
+            //     binary. NSIS can't overwrite it while alive → keep alpha.44's
+            //     snapshot-then-kill (now via the graceful shutdownHost path).
+            if (shouldKillHostForUpdate(forUpdate, kind)) {
                 // Snapshot windowless host ptys (windowed ones are covered by the
                 // renderer snapshot broadcast) BEFORE the host dies, so the cold
                 // post-update launch replays their history.
@@ -528,6 +578,8 @@ app.whenReady().then(async () => {
                 disconnectHostLeaveRunning();
                 await killHostForUpdate();
             } else {
+                // Normal quit (any host kind) OR update quit with a service-backed
+                // host → leave the host running so the next launch reattaches.
                 disconnectHostLeaveRunning();
             }
         } else {

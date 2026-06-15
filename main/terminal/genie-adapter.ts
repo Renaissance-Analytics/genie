@@ -66,6 +66,26 @@ export function electronEncryptor(): Encryptor {
     };
 }
 
+/** True when the user has opted into detached/persistent terminals (Settings →
+ *  Terminal → "Keep terminals running after quit"). Mirrors the same setting the
+ *  package's host lifecycle reads via the SettingsProvider, surfaced here so the
+ *  composition root (background.ts) can decide whether to even ATTEMPT the
+ *  per-user OS service / detached host before calling initTerminalBackend.
+ *
+ *  Defaults OFF (matching the package default): only 'on'/'true'/'1' enable it,
+ *  and any db error degrades to OFF so a settings read can't force the heavy
+ *  detached path on. */
+export function detachedTerminalsEnabled(): boolean {
+    try {
+        const v = (getAllSettings() as Record<string, string | undefined>)[
+            'detached_terminals'
+        ];
+        return v === 'on' || v === 'true' || v === '1';
+    } catch {
+        return false;
+    }
+}
+
 /** SettingsProvider over the SQLite settings table (typed defaults applied by
  *  getAllSettings — e.g. track_cwd defaults 'on', detached_terminals 'off'). */
 export function dbSettingsProvider(): SettingsProvider {

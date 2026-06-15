@@ -9,7 +9,7 @@ import { getAllSettings, setSettings } from '../db';
 import { setUpdateAvailable } from '../tray';
 import { showSettingsWindow } from '../background';
 import { getChangelog, type Changelog } from './changelog';
-import { isHostBacked } from '@particle-academy/fancy-term-host';
+import { hostBackendKind } from '../terminal/host-service';
 
 /**
  * Unified IPC for the updater. The renderer doesn't know whether it's
@@ -139,19 +139,27 @@ export function registerUpdaterIpc(): void {
 
 /**
  * Decorate a status payload with whether APPLYING an update will restart the
- * detached pty-host. On the update path a host-backed build must KILL the host
- * (it pins Genie's binary so NSIS can replace it — see quit-state.ts), which
- * means any running detached terminals restart from a snapshot. The update pill
- * uses this to warn the user BEFORE they apply so they can save/close live
- * sessions first. `willRestartPtyHost` === `isHostBacked()` (detached terminals
- * active + host alive).
+ * pty-host. This is true for EXACTLY ONE backend kind:
+ *
+ *   • 'detached' → the host is Genie's execPath child, so it PINS the binary.
+ *     The update teardown must snapshot + KILL it (so NSIS can overwrite the
+ *     binary), which means any running detached terminals restart from a
+ *     snapshot. The update pill warns the user BEFORE they apply so they can
+ *     save/close live sessions first. → flag TRUE.
+ *   • 'service'  → the host runs on its OWN standalone Node runtime via the OS
+ *     service, never pins Genie's binary, and SURVIVES the update seamlessly
+ *     (Genie reconnects after the swap, terminals live). → flag FALSE, no warn.
+ *   • 'inprocess' → no detached host at all. → flag FALSE.
+ *
+ * So the flag is `hostBackendKind() === 'detached'`, NOT plain `isHostBacked()`
+ * (which would also be true for a service-backed host that DOESN'T restart).
  */
 export function withHostFlag(
     status: UpdaterStatus | AutoUpdaterStatus,
 ): (UpdaterStatus | AutoUpdaterStatus) & { willRestartPtyHost: boolean } {
     let willRestartPtyHost = false;
     try {
-        willRestartPtyHost = isHostBacked();
+        willRestartPtyHost = hostBackendKind() === 'detached';
     } catch {
         /* defensive: never let the host probe break the status payload */
     }

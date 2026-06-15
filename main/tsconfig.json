@@ -5,7 +5,14 @@
     "module": "commonjs",
     "target": "ES2022",
     "jsx": "react-jsx",
-    "noEmit": false
+    "noEmit": false,
+    "paths": {
+      "@main/*": ["main/*"],
+      "@renderer/*": ["renderer/*"],
+      "@particle-academy/fancy-term-host/service": [
+        "node_modules/@particle-academy/fancy-term-host/dist/service.d.ts"
+      ]
+    }
   },
   "include": ["./**/*"]
 }

@@ -3,16 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '../../../test/electron-mock';
 
 /**
- * `willRestartPtyHost` on the updater status payload must reflect
- * `isHostBacked()` — true only when a detached pty-host is active (so applying
- * the update will kill + restart it). The update pill uses this to warn the
- * user before they apply.
+ * `willRestartPtyHost` on the updater status payload must reflect the ACTIVE
+ * BACKEND KIND, true ONLY for the 'detached' host — the one that pins Genie's
+ * binary and so must be killed + restarted on an update. A 'service'-backed host
+ * runs on its own standalone Node runtime and SURVIVES the update (no restart →
+ * flag false, no warning); 'inprocess' has no host at all (flag false). The
+ * update pill uses this to warn the user before they apply only when terminals
+ * will actually restart.
  */
 
-let hostBacked = false;
+let backendKind: 'service' | 'detached' | 'inprocess' = 'inprocess';
 
-vi.mock('@particle-academy/fancy-term-host', () => ({
-    isHostBacked: () => hostBacked,
+vi.mock('../../terminal/host-service', () => ({
+    hostBackendKind: () => backendKind,
 }));
 
 // registerUpdaterIpc transitively imports these; keep them inert so the module
@@ -41,7 +44,7 @@ const baseStatus = {
 };
 
 beforeEach(() => {
-    hostBacked = false;
+    backendKind = 'inprocess';
 });
 
 afterEach(() => {
@@ -49,16 +52,24 @@ afterEach(() => {
 });
 
 describe('withHostFlag', () => {
-    it('sets willRestartPtyHost=true when host-backed', () => {
-        hostBacked = true;
+    it('sets willRestartPtyHost=true when the active backend is the detached host', () => {
+        backendKind = 'detached';
         const out = withHostFlag(baseStatus);
+        // Detached host pins Genie's binary → update kills + restarts it → warn.
         expect(out.willRestartPtyHost).toBe(true);
         // original fields preserved
         expect(out.latestVersion).toBe('0.7.0-alpha.44');
     });
 
-    it('sets willRestartPtyHost=false when not host-backed', () => {
-        hostBacked = false;
+    it('sets willRestartPtyHost=false for a service-backed host (survives the update)', () => {
+        // Service host runs on its own standalone Node runtime — never pins the
+        // binary, reconnects after the swap, terminals stay live → no restart.
+        backendKind = 'service';
+        expect(withHostFlag(baseStatus).willRestartPtyHost).toBe(false);
+    });
+
+    it('sets willRestartPtyHost=false when in-process (no host at all)', () => {
+        backendKind = 'inprocess';
         expect(withHostFlag(baseStatus).willRestartPtyHost).toBe(false);
     });
 });

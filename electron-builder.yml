@@ -41,6 +41,58 @@ asarUnpack:
   - node_modules/@particle-academy/fancy-term-host/**
   - node_modules/node-pty/**/*
 
+# Tier 3+ — per-user OS-service pty-host runtime (fancy-term-host@0.2.0 /service).
+#
+# The OS service runs the pty-host on its OWN STANDALONE NODE runtime (NOT
+# Genie's Electron binary — that's what pins the executable across updates).
+# That standalone Node has a DIFFERENT native ABI than Electron, so node-pty's
+# .node binding must be PREBUILT for THAT Node's ABI. Both are shipped beside the
+# app as extraResources at `<resources>/runtime/`:
+#
+#   resources/runtime/node[.exe]    a pinned standalone Node (the service's runtime)
+#   resources/runtime/node-pty/     node-pty PREBUILT for that Node's ABI
+#                                   (its build/Release/*.node + package.json +
+#                                    lib/, so `require('node-pty')` resolves with
+#                                    NODE_PATH=<resources>/runtime)
+#
+# At runtime main/terminal/host-service.ts resolveShippedRuntime() probes
+# `<process.resourcesPath>/runtime/node[.exe]` and points the service at it
+# (runtime.nodePath / runtime.nodePtyDir). When this directory is ABSENT (CI
+# hasn't produced it yet, or a dev build), resolveShippedRuntime() returns null,
+# ensureHostService() returns {ok:false}, and Genie FALLS BACK to the detached
+# spawn → in-process path. The app stays fully functional; the service simply
+# doesn't activate until CI ships the runtime.
+#
+# ====================================================================
+# CI MUST PRODUCE `resources/runtime/` BEFORE `nextron build` (per OS×arch):
+#   1. Download a PINNED standalone Node for the target OS+arch (e.g. the
+#      official node-vX.Y.Z-win-x64 / -darwin-arm64 / -linux-x64 dist), and
+#      place its `node`/`node.exe` at resources/runtime/node[.exe].
+#   2. In a scratch dir, `npm i node-pty@^1.1.0` and REBUILD it against THAT
+#      standalone Node's ABI:
+#        node-gyp rebuild --target=<nodeVersion> --dist-url=https://nodejs.org/dist
+#      (or `prebuild-install --runtime=node --target=<nodeVersion>`), NOT against
+#      Electron. Copy the resulting node-pty package (lib/ + build/Release/*.node
+#      + package.json) to resources/runtime/node-pty/.
+#   3. Verify on the build agent:
+#        resources/runtime/node -e "process.env.NODE_PATH='resources/runtime'; \
+#          require('module').Module._initPaths(); require('node-pty'); \
+#          console.log('node-pty loads on standalone node ABI')"
+# This is intentionally NOT run in the local sandbox (native rebuilds can't be
+# exercised here) — the fallback covers a missing runtime. See README/the commit
+# body for the full checklist.
+# ====================================================================
+#
+# This block is a no-op until resources/runtime exists on the build agent
+# (electron-builder just skips a `from` that has no matches). It is safe to keep
+# committed: a dev/local build without the runtime simply ships nothing here and
+# uses the fallback chain.
+extraResources:
+  - from: resources/runtime
+    to: runtime
+    filter:
+      - '**/*'
+
 # Custom protocol — genie:// — registered at install time. Story #150 uses
 # this for the OAuth callback handoff from tynn.ai/login.
 protocols:

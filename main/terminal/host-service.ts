@@ -1,0 +1,351 @@
+import { app } from 'electron';
+import fs from 'node:fs';
+import path from 'node:path';
+import {
+    ensureHostService,
+    resolveServiceRuntime,
+    type EnsureResult,
+    type ServiceRuntime,
+} from '@particle-academy/fancy-term-host/service';
+import {
+    HostClient,
+    isHostBacked,
+    ptyHostScriptPath,
+    setActiveBackend,
+    socketPathFor,
+} from '@particle-academy/fancy-term-host';
+
+/**
+ * Per-user OS-service activation for the pty-host (fancy-term-host@0.2.0
+ * `/service` subpath).
+ *
+ * WHY: the detached pty-host (`HostSpawner.spawnDetached`) is launched as
+ * Genie's own `process.execPath` + ELECTRON_RUN_AS_NODE, so it PINS Genie's
+ * executable open. That's fine for a normal quit (the host outlives it and
+ * terminals reattach live), but on an auto-update the NSIS/Squirrel installer
+ * must OVERWRITE that binary — and the surviving host blocks it, so the update
+ * stalls. Killing the host to unblock the installer loses the live sessions.
+ *
+ * A per-user OS service runs the host on its OWN standalone Node runtime, which
+ * is never Genie's binary → never pinned. So a service-backed host survives
+ * BOTH a quit AND an update with terminals live. The wire protocol, pidfile,
+ * socket, and `HostClient` are all UNCHANGED — only WHO launches the host moves
+ * from "Genie spawns a child" to "the OS service manager runs it". So after the
+ * service is up we connect with the exact same `HostClient.connect(socket)`.
+ *
+ * THE ABI CRUX: the service refuses Genie's Electron binary, so it runs on a
+ * standalone Node — which means node-pty's NATIVE binding must be built for THAT
+ * Node's ABI, not Electron's. We therefore ship (via CI → extraResources) a
+ * standalone `node` runtime + an ABI-matched `node-pty` prebuild and point the
+ * service at them (`runtime.nodePath` / `runtime.nodePtyDir`). If that runtime
+ * isn't present (e.g. CI hasn't shipped it yet, or a dev build), runtime
+ * resolution returns null, `ensureHostService` returns `{ ok:false }`, and the
+ * caller FALLS BACK to the detached-spawn path → in-process. The app never
+ * breaks; the service simply doesn't activate until the runtime is shipped.
+ *
+ * Everything here is graceful: `ensureHostService` never throws, and every
+ * resolution step is guarded so a missing path can only ever DOWNGRADE us to the
+ * fallback, never crash.
+ */
+
+/** Which backend ended up active — surfaced for the update-teardown branch, the
+ *  `willRestartPtyHost` warning flag, diagnostics, and the host-status toast. */
+export type HostBackendKind = 'service' | 'detached' | 'inprocess';
+
+// Track the active backend kind. Defaults to in-process (the safe floor); the
+// init flow promotes it to 'service' or 'detached' once one of those wins.
+let backendKind: HostBackendKind = 'inprocess';
+
+/** The active terminal backend kind. Used by the update teardown (only a
+ *  'detached' host pins Genie's binary → must be killed on update) and by the
+ *  `willRestartPtyHost` flag (true ONLY for 'detached').
+ *
+ *  SELF-CORRECTING: the package's graceful-fallback can revert the active
+ *  backend to in-process mid-session if a host dies (setActiveBackend(null)).
+ *  In that case our cached 'service'/'detached' would be stale, so we re-check
+ *  the package's `isHostBacked()`: when no host is actually backing us anymore,
+ *  we report (and cache) 'inprocess'. This keeps the update-teardown branch and
+ *  the willRestartPtyHost warning honest after a mid-session host loss. */
+export function hostBackendKind(): HostBackendKind {
+    if (backendKind !== 'inprocess') {
+        let backed = false;
+        try {
+            backed = isHostBacked();
+        } catch {
+            backed = false;
+        }
+        if (!backed) backendKind = 'inprocess';
+    }
+    return backendKind;
+}
+
+/** Set by the init flow as each backend wins/falls back. Exported for the
+ *  unit tests + the init orchestrator; not for general use. */
+export function setHostBackendKind(kind: HostBackendKind): void {
+    backendKind = kind;
+}
+
+/**
+ * The stable reverse-DNS-ish service label. One per app+user; encodes the OS
+ * user (via the package's userHash on the socket side already, but the label
+ * itself is per-app — the per-user isolation comes from the LaunchAgent/systemd
+ * --user/`schtasks` being installed in the CURRENT user's domain).
+ */
+export const HOST_SERVICE_LABEL = 'ai.tynn.genie.ptyhost';
+
+/**
+ * Resolve the standalone Node runtime + ABI-matched node-pty we ship for the
+ * service. Returns null when the shipped runtime isn't found, so the caller
+ * falls back. NEVER throws.
+ *
+ * Resolution order (most-specific → least):
+ *   1. A runtime shipped beside the app as extraResources:
+ *        <resources>/runtime/node[.exe]   (the standalone Node)
+ *        <resources>/runtime/node-pty     (node-pty prebuilt for its ABI)
+ *      In a packaged build `process.resourcesPath` is `<app>/resources`; in dev
+ *      we look under the repo's `resources/runtime`.
+ *   2. The package's own `resolveServiceRuntime()` — honours `$FANCY_TERM_NODE`,
+ *      a plain-Node `process.execPath`, or a `node` on `$PATH` (it REFUSES an
+ *      Electron binary). node-pty must then resolve from the host script's own
+ *      node_modules (true for the unpacked dev tree, not for a packed asar).
+ *
+ * The shipped runtime (1) is the PRODUCTION path; (2) is a best-effort dev/CI
+ * convenience. When neither yields a usable node, we return null → fallback.
+ */
+export function resolveShippedRuntime(): ServiceRuntime | null {
+    // 1) Shipped standalone runtime (extraResources). In a packaged app this is
+    //    process.resourcesPath; in dev there is no resourcesPath sentinel, so we
+    //    probe the repo's resources/runtime too.
+    const candidateRoots: string[] = [];
+    try {
+        if (process.resourcesPath) {
+            candidateRoots.push(path.join(process.resourcesPath, 'runtime'));
+        }
+    } catch {
+        /* resourcesPath unavailable outside a packaged app */
+    }
+    try {
+        candidateRoots.push(path.join(app.getAppPath(), 'resources', 'runtime'));
+        candidateRoots.push(path.join(process.cwd(), 'resources', 'runtime'));
+    } catch {
+        /* app may not be ready in some unit contexts */
+    }
+
+    const nodeBin = process.platform === 'win32' ? 'node.exe' : 'node';
+    for (const root of candidateRoots) {
+        try {
+            const nodePath = path.join(root, nodeBin);
+            if (!fs.existsSync(nodePath)) continue;
+            const nodePtyDir = path.join(root, 'node-pty');
+            const hasNodePty = fs.existsSync(nodePtyDir);
+            return {
+                nodePath,
+                ...(hasNodePty ? { nodePtyDir } : {}),
+                source: `shipped:${root}`,
+            };
+        } catch {
+            /* probe next root */
+        }
+    }
+
+    // 2) Package default resolution (env override / plain-node / PATH). Refuses
+    //    Electron, returns null when nothing safe is found.
+    try {
+        return resolveServiceRuntime();
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Try to bring up the per-user OS service and CONNECT a HostClient to it.
+ *
+ * Returns:
+ *   - { ok: true, client } when the service is installed + running at the right
+ *     revision AND we connected — `backendKind` is set to 'service' and the
+ *     active backend is swapped to the connected client.
+ *   - { ok: false, reason } on any failure (unsupported OS, no runtime, install
+ *     error, connect/handshake failure) — `backendKind` is LEFT as-is so the
+ *     caller falls back to the detached-spawn path. NEVER throws.
+ *
+ * The connect step mirrors the detached-host connect: same socket path (derived
+ * from userData), same `HostClient.connect()` handshake + mirror seed. A failed
+ * connect after a successful ensure is still a fallback (we don't tear the
+ * service down — it may be transiently slow; the detached path or the next
+ * launch can reuse it).
+ */
+export async function activateHostService(
+    deps: {
+        snapshots: Parameters<typeof HostClient.connect>[1];
+        userDataDir: string;
+        runtime?: ServiceRuntime | null;
+    },
+): Promise<
+    | { ok: true; client: HostClient; result: EnsureResult }
+    | { ok: false; reason: string; result?: EnsureResult }
+> {
+    const runtime = deps.runtime ?? resolveShippedRuntime();
+    if (!runtime) {
+        return {
+            ok: false,
+            reason: 'no standalone Node runtime for the service (shipped runtime missing) — falling back to detached spawn',
+        };
+    }
+
+    let hostScript: string | undefined;
+    try {
+        hostScript = ptyHostScriptPath() ?? undefined;
+    } catch {
+        hostScript = undefined;
+    }
+
+    let result: EnsureResult;
+    try {
+        result = await ensureHostService({
+            label: HOST_SERVICE_LABEL,
+            userDataDir: deps.userDataDir,
+            runtime,
+            ...(hostScript ? { hostScript } : {}),
+        });
+    } catch (e) {
+        // Documented never to throw — defensive guard so a surprise can't escape.
+        return {
+            ok: false,
+            reason: `ensureHostService threw: ${e instanceof Error ? e.message : String(e)}`,
+        };
+    }
+
+    if (!result.ok) {
+        return {
+            ok: false,
+            reason:
+                result.error ??
+                `service not ready (action=${result.action})`,
+            result,
+        };
+    }
+
+    // Service is up. Connect with the SAME HostClient handshake the detached
+    // path uses — the socket/pidfile/protocol are unchanged.
+    const socketPath = socketPathFor(deps.userDataDir);
+    let client: HostClient;
+    try {
+        client = await HostClient.connect(socketPath, deps.snapshots);
+    } catch (e) {
+        return {
+            ok: false,
+            reason: `service running but connect failed: ${e instanceof Error ? e.message : String(e)}`,
+            result,
+        };
+    }
+
+    setActiveBackend(client);
+    backendKind = 'service';
+    return { ok: true, client, result };
+}
+
+/**
+ * Update-teardown decision: should the before-quit teardown KILL the host?
+ *
+ * ONLY when (a) the quit is for an auto-update AND (b) the active backend is the
+ * 'detached' host — the one launched as Genie's execPath child, which PINS the
+ * binary so NSIS can't overwrite it while it's alive. A 'service'-backed host
+ * runs on its own standalone Node runtime (never pins the binary) and SURVIVES
+ * the update, so we leave it running exactly like a normal quit. 'inprocess' has
+ * no host. Pure → directly unit-testable.
+ */
+export function shouldKillHostForUpdate(
+    forUpdate: boolean,
+    kind: HostBackendKind,
+): boolean {
+    return forUpdate && kind === 'detached';
+}
+
+/** What the backend-selection orchestrator resolved to. */
+export interface BackendSelection {
+    kind: HostBackendKind;
+    host: boolean;
+    reattachIds: string[];
+    /** Diagnostics — how the service attempt resolved (when one was made). */
+    serviceReason?: string;
+    serviceAction?: string;
+}
+
+/**
+ * The full backend-selection fallback chain, as a single injectable orchestrator
+ * so it's unit-testable without booting the whole app:
+ *
+ *   detached_terminals OFF                  → in-process (no host attempt)
+ *   ON → service ok                         → 'service'
+ *   ON → service {ok:false} → detached ok   → 'detached'
+ *   ON → service {ok:false} → detached fails → 'inprocess'
+ *
+ * Each step is graceful: a thrown service attempt or a thrown initDetached both
+ * degrade to the next link, and `setHostBackendKind` records the winner. The
+ * detached path's `initDetached` is `initTerminalBackend` from the package (it
+ * connects-or-spawns the detached host and never throws), and `isHostBackedProbe`
+ * is the package's `isHostBacked` (true → a detached host actually came up).
+ *
+ * Returns the reattach contract background.ts hands the renderer.
+ */
+export async function selectTerminalBackend(deps: {
+    detachedEnabled: boolean;
+    activateService: () => Promise<
+        | { ok: true; client: HostClient; result: EnsureResult }
+        | { ok: false; reason: string; result?: EnsureResult }
+    >;
+    initDetached: () => Promise<{ host: boolean; reattachIds: string[] }>;
+    isHostBackedProbe: () => boolean;
+}): Promise<BackendSelection> {
+    setHostBackendKind('inprocess');
+    if (!deps.detachedEnabled) {
+        return { kind: 'inprocess', host: false, reattachIds: [] };
+    }
+
+    // 1) Service first.
+    let svc:
+        | { ok: true; client: HostClient; result: EnsureResult }
+        | { ok: false; reason: string; result?: EnsureResult };
+    try {
+        svc = await deps.activateService();
+    } catch (e) {
+        svc = {
+            ok: false,
+            reason: `activateService threw: ${e instanceof Error ? e.message : String(e)}`,
+        };
+    }
+    if (svc.ok) {
+        // activateHostService already swapped the backend + set kind='service';
+        // set it here too so this orchestrator is the single source of truth for
+        // the winning kind regardless of who set it.
+        setHostBackendKind('service');
+        return {
+            kind: 'service',
+            host: true,
+            reattachIds: svc.client.liveIds(),
+            serviceAction: svc.result.action,
+        };
+    }
+
+    // 2) Fall back to the detached-spawn → in-process path.
+    let detached = { host: false, reattachIds: [] as string[] };
+    try {
+        detached = await deps.initDetached();
+    } catch {
+        /* initTerminalBackend is internally guarded; belt-and-braces */
+    }
+    let backed = false;
+    try {
+        backed = deps.isHostBackedProbe();
+    } catch {
+        backed = false;
+    }
+    const kind: HostBackendKind = backed ? 'detached' : 'inprocess';
+    setHostBackendKind(kind);
+    return {
+        kind,
+        host: detached.host,
+        reattachIds: detached.reattachIds,
+        serviceReason: svc.reason,
+    };
+}
