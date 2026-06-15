@@ -10,6 +10,7 @@ import TerminalGrid, {
     type LayoutMode,
 } from '../components/Master/TerminalGrid';
 import AddWorkspaceModal from '../components/AddWorkspaceModal';
+import DocsFlyout from '../components/Master/DocsFlyout';
 import SignInPrompt from '../components/SignInPrompt';
 import type { BackendUser, ViewType } from '../lib/genie';
 import { resolveShortcut } from '../lib/master-shortcuts';
@@ -118,6 +119,9 @@ function MasterInner() {
         y: number;
     } | null>(null);
     const [addingWorkspace, setAddingWorkspace] = useState(false);
+    // Docs flyout (the ? titlebar button toggles this in-window panel rather
+    // than opening a separate BrowserWindow).
+    const [docsOpen, setDocsOpen] = useState(false);
     // Max panels visible per workspace (Settings → max_views, default 4).
     const [maxViews, setMaxViews] = useState(4);
     // Transient notice (Tier 2 cap warnings, max-views blocks). Auto-clears.
@@ -763,6 +767,7 @@ function MasterInner() {
                             ? workspacesById.get(stageSeedWorkspace)?.project_name
                             : undefined
                     }
+                    onShowDocs={() => setDocsOpen((o) => !o)}
                 />
                 <Toolbar
                     activeWorkspace={
@@ -831,6 +836,8 @@ function MasterInner() {
                     activeCount={activeIds.size}
                 />
             </div>
+
+            <DocsFlyout open={docsOpen} onClose={() => setDocsOpen(false)} />
 
             <PromptHost />
 
@@ -1074,9 +1081,11 @@ function UpdatePopover({
 function TitleBar({
     isStage,
     stageWorkspaceName,
+    onShowDocs,
 }: {
     isStage: boolean;
     stageWorkspaceName?: string;
+    onShowDocs?: () => void;
 }) {
     const isMac =
         typeof navigator !== 'undefined' &&
@@ -1106,7 +1115,7 @@ function TitleBar({
                 type="button"
                 className="gicon"
                 title="Documentation"
-                onClick={() => api().app.showDocs().catch(() => {})}
+                onClick={() => onShowDocs?.()}
             >
                 <IconHelp />
             </button>
