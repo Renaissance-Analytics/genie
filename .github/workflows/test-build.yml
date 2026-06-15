@@ -67,20 +67,22 @@ jobs:
           set -euo pipefail
           if [ "${{ runner.os }}" = "Windows" ]; then
             NODE_BIN="resources/runtime/node.exe"
-            PREBUILD="resources/runtime/node-pty/prebuilds/win32-x64/pty.node"
-          elif [ "${{ runner.os }}" = "macOS" ]; then
-            NODE_BIN="resources/runtime/node"
-            # macOS runner is arm64 by default on macos-latest.
-            PREBUILD="resources/runtime/node-pty/prebuilds/darwin-arm64/pty.node"
           else
             NODE_BIN="resources/runtime/node"
-            PREBUILD="resources/runtime/node-pty/prebuilds/linux-x64/pty.node"
           fi
           echo "checking $NODE_BIN"
           test -f "$NODE_BIN" || { echo "MISSING standalone node: $NODE_BIN"; exit 1; }
-          echo "checking $PREBUILD"
-          test -f "$PREBUILD" || { echo "MISSING node-pty prebuild: $PREBUILD"; exit 1; }
-          echo "runtime OK: $NODE_BIN + $PREBUILD"
+          # The node-pty native binding lives EITHER in prebuilds/<plat>-<arch>/
+          # (win + mac: published N-API prebuild) OR in build/Release/ (linux:
+          # source-built by node-gyp — no published linux prebuild). Accept either.
+          BINDING="$(find resources/runtime/node-pty -name 'pty.node' \
+            \( -path '*/prebuilds/*' -o -path '*/build/Release/*' \) -print -quit 2>/dev/null || true)"
+          if [ -z "$BINDING" ]; then
+            echo "MISSING node-pty binding (no pty.node under prebuilds/ or build/Release/)"
+            find resources/runtime/node-pty -name '*.node' || true
+            exit 1
+          fi
+          echo "runtime OK: $NODE_BIN + $BINDING"
 
       - name: Build installers (Windows) — NO publish
         if: runner.os == 'Windows'
