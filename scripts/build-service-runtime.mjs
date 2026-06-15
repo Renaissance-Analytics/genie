@@ -181,14 +181,21 @@ async function fetchStandaloneNode(tmpDir) {
 /**
  * Produce an ABI-matched node-pty package at resources/runtime/node-pty/.
  *
- * node-pty@1.1.0 ships N-API prebuilds (ABI-stable), so we install a clean copy
- * (which brings down `prebuilds/<plat>-<arch>/`) and copy the package. When the
- * target platform/arch differs from the host (cross-build), npm still fetches
- * the package incl. its cross-platform prebuilds, so the right `.node` is present.
+ * node-pty@1.1.0 ships N-API prebuilds for win32-{x64,arm64} and
+ * darwin-{x64,arm64} (ABI-stable across Node majors AND Electron). For those we
+ * install with --ignore-scripts and copy the published `prebuilds/<plat>-<arch>/`.
  *
- * We install with --ignore-scripts (skip node-pty's gyp `install` hook — we want
- * the published prebuilds, not a host-ABI source build) into a scratch dir, then
- * copy node_modules/node-pty (+ its node-addon-api dep) into runtime/node-pty.
+ * node-pty ships NO linux prebuild — on Linux it builds from source via node-gyp
+ * at install time, producing `build/Release/pty.node`. That binary is ALSO N-API
+ * (node-addon-api ^7) so it's ABI-stable too; building it on the runner's Node
+ * 20 yields a binding that loads on our pinned standalone Node 20. So when no
+ * prebuild exists for the target, we run the install WITH scripts (the gyp
+ * source build) instead. node-pty's loader checks build/Release before
+ * prebuilds/, so the source-built .node is picked up.
+ *
+ * Cross-arch on Linux (host x64 → target arm64) can't source-build here; we fail
+ * loudly in that case (a native cross-compile toolchain is out of scope — run
+ * the arm64 build on an arm64 runner).
  */
 async function buildNodePty(tmpDir) {
     const scratch = path.join(tmpDir, 'np');
@@ -204,27 +211,47 @@ async function buildNodePty(tmpDir) {
         await fs.readFile(path.join(REPO_ROOT, 'package.json'), 'utf8'),
     );
     const nodePtySpec = geniePkg.dependencies?.['node-pty'] || '^1.1.0';
-    log(`installing node-pty@${nodePtySpec} (prebuilds) into scratch dir…`);
 
-    // On Windows, npm is npm.cmd; Node's execFileSync can't spawn a .cmd
-    // directly (EINVAL since the CVE-2024-27980 fix) — go through the shell.
+    // node-pty ships prebuilds for win32 + darwin, but NOT linux (source-built).
+    const hasPrebuild = platform === 'win32' || platform === 'darwin';
+    const sameHost = platform === process.platform && arch === process.arch;
+
+    // On Windows, npm is npm.cmd; Node's execFileSync can't spawn a .cmd directly
+    // (EINVAL since the CVE-2024-27980 fix) — go through the shell.
     const isWin = process.platform === 'win32';
     const npm = isWin ? 'npm.cmd' : 'npm';
-    execFileSync(
-        npm,
-        ['install', `node-pty@${nodePtySpec}`, '--ignore-scripts', '--no-audit', '--no-fund'],
-        { cwd: scratch, stdio: 'inherit', shell: isWin },
-    );
+    const baseArgs = ['install', `node-pty@${nodePtySpec}`, '--no-audit', '--no-fund'];
+
+    if (hasPrebuild) {
+        log(`installing node-pty@${nodePtySpec} (using published prebuild) …`);
+        execFileSync(npm, [...baseArgs, '--ignore-scripts'], {
+            cwd: scratch,
+            stdio: 'inherit',
+            shell: isWin,
+        });
+    } else {
+        // No prebuild (linux): must source-build, which only works for the host arch.
+        if (!sameHost) {
+            die(
+                `node-pty has no prebuild for ${platform}-${arch} and a source build ` +
+                    `can't target ${arch} from a ${process.arch} host — run on a native ${arch} runner`,
+            );
+        }
+        log(`installing node-pty@${nodePtySpec} (source build via node-gyp; no prebuild for ${platform}) …`);
+        execFileSync(npm, baseArgs, { cwd: scratch, stdio: 'inherit', shell: isWin });
+    }
 
     const src = path.join(scratch, 'node_modules', 'node-pty');
     if (!existsSync(src)) die('node-pty was not installed into the scratch dir');
 
-    // Confirm the prebuild for the TARGET platform/arch is present.
+    // Confirm an ABI-matched binding exists: a published prebuild for the target,
+    // OR a freshly source-built build/Release/pty.node.
     const prebuildDir = path.join(src, 'prebuilds', `${platform}-${arch}`);
-    if (!existsSync(prebuildDir)) {
+    const builtBinding = path.join(src, 'build', 'Release', 'pty.node');
+    if (!existsSync(prebuildDir) && !existsSync(builtBinding)) {
         die(
-            `node-pty has no prebuild for ${platform}-${arch} at ${prebuildDir} — ` +
-                `cannot ship an ABI-matched binding`,
+            `node-pty produced no binding for ${platform}-${arch} ` +
+                `(no prebuilds/${platform}-${arch} and no build/Release/pty.node)`,
         );
     }
 
