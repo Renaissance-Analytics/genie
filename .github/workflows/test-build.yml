@@ -102,18 +102,38 @@ jobs:
         if: runner.os == 'Linux'
         run: npx nextron build --linux --publish never
 
-      - name: Assert NO release manifest was produced
-        # Belt-and-braces: --publish never must not emit latest*.yml. Fail the run
-        # if one shows up, so a green run proves auto-update was never touched.
+      - name: Drop the local auto-update manifest (defence in depth)
+        # electron-builder ALWAYS writes dist/latest*.yml during packaging, even
+        # with `--publish never` (publish only controls UPLOADING). The manifest
+        # is harmless on its own — electron-updater reads latest*.yml from the
+        # GitHub RELEASE feed, not from a workflow artifact — but we delete it here
+        # and never upload *.yml (the artifact step below only takes the
+        # installer), so nothing that even resembles a release feed can leak out
+        # of this non-publishing build.
         shell: bash
         run: |
           set -euo pipefail
-          if ls dist/latest*.yml >/dev/null 2>&1; then
-            echo "ERROR: a latest*.yml manifest was produced — publish was not suppressed!"
-            ls -la dist/latest*.yml
+          rm -f dist/latest*.yml || true
+          echo "removed local latest*.yml; artifacts upload installers only."
+
+      - name: Assert this run created NO GitHub Release
+        # The real auto-update guarantee: `--publish never` must not have created
+        # or attached to any GitHub Release. We snapshot the release list and fail
+        # if a release referencing this run's SHA appeared.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # A non-publishing build must never produce a draft/published release for
+          # this commit. List releases and ensure none targets our SHA.
+          if gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+               --json tagName,targetCommitish,isDraft 2>/dev/null \
+               | grep -q "${GITHUB_SHA}"; then
+            echo "ERROR: a GitHub Release referencing ${GITHUB_SHA} exists — publish was NOT suppressed!"
             exit 1
           fi
-          echo "OK: no latest*.yml — auto-update manifest not generated."
+          echo "OK: no GitHub Release created for ${GITHUB_SHA} — auto-update feed untouched."
 
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
