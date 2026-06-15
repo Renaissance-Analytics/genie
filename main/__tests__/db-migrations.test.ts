@@ -264,3 +264,72 @@ describe('db migration v7 (Tier 3 host_session_id)', () => {
         expect(cols(db, 'terminal_specs').has('host_session_id')).toBe(true);
     });
 });
+
+describe('db migration v8 (workspace sort_order)', () => {
+    /** Insert a workspace populating only the v1-required NOT NULL columns. */
+    const insertWs = (
+        db: Database.Database,
+        id: string,
+        name: string,
+        extra: Record<string, unknown> = {},
+    ) =>
+        db.prepare(
+            `INSERT INTO workspaces
+               (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, last_opened_at, created_by_genie${
+                   'sort_order' in extra ? ', sort_order' : ''
+               })
+             VALUES (@id, 'tynn', @pid, @name, @pid, @name, 'simple', @path, @opened, 0${
+                 'sort_order' in extra ? ', @sort_order' : ''
+             })`,
+        ).run({
+            id,
+            pid: `p-${id}`,
+            name,
+            path: `/tmp/${id}`,
+            opened: (extra.opened as string) ?? null,
+            sort_order: extra.sort_order,
+        });
+
+    it('adds the sort_order column to workspaces', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(cols(db, 'workspaces').has('sort_order')).toBe(true);
+    });
+
+    it('a pre-existing (pre-v8) workspace row defaults to sort_order=0', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        insertWs(db, 'ws-pre-v8', 'pre');
+        const row = db
+            .prepare<[string], { sort_order: number }>(
+                'SELECT sort_order FROM workspaces WHERE id = ?',
+            )
+            .get('ws-pre-v8');
+        expect(row?.sort_order).toBe(0);
+    });
+
+    it('sort_order takes precedence over last_opened_at in the list ordering', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        // 'a' opened most recently but ordered last; 'c' ordered first.
+        insertWs(db, 'a', 'A', { sort_order: 2, opened: '2026-01-03T00:00:00Z' });
+        insertWs(db, 'b', 'B', { sort_order: 1, opened: '2026-01-02T00:00:00Z' });
+        insertWs(db, 'c', 'C', { sort_order: 0, opened: '2026-01-01T00:00:00Z' });
+
+        const ids = db
+            .prepare<[], { id: string }>(
+                `SELECT id FROM workspaces
+                 ORDER BY sort_order ASC, (last_opened_at IS NULL) ASC, last_opened_at DESC, project_name ASC`,
+            )
+            .all()
+            .map((r) => r.id);
+        expect(ids).toEqual(['c', 'b', 'a']);
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'workspaces').has('sort_order')).toBe(true);
+    });
+});

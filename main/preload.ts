@@ -101,6 +101,7 @@ const api = {
             ipcRenderer.invoke('workspaces:update', id, patch),
         remove: (id: string) => ipcRenderer.invoke('workspaces:remove', id),
         touch: (id: string) => ipcRenderer.invoke('workspaces:touch', id),
+        reorder: (ids: string[]) => ipcRenderer.invoke('workspaces:reorder', ids),
         open: (id: string) => ipcRenderer.invoke('workspaces:open', id),
     },
 

@@ -174,6 +174,24 @@ function MasterInner() {
         setSpecs(sp);
     }, []);
 
+    /**
+     * Persist a user-defined sidebar order (full ordered list of workspace
+     * ids from the flyout drag). Reorder locally first so the rail + flyout
+     * update instantly, then persist; main re-sorts on the next list().
+     */
+    const reorderWorkspaces = useCallback((ids: string[]) => {
+        setWorkspaces((prev) => {
+            const byId = new Map(prev.map((w) => [w.id, w]));
+            const next = ids
+                .map((id) => byId.get(id))
+                .filter((w): w is WorkspaceRow => !!w);
+            // Append any workspaces not present in the id list (defensive).
+            for (const w of prev) if (!ids.includes(w.id)) next.push(w);
+            return next;
+        });
+        void api().workspaces.reorder(ids).catch(() => {});
+    }, []);
+
     // Stage windows arrive with ?stage=<workspaceId>. Read it once on mount
     // and seed the selection with that workspace's terminals so the user
     // sees something useful immediately.
@@ -805,6 +823,7 @@ function MasterInner() {
                             setProjectMenu({ workspaceId: wsId, x: p.x, y: p.y })
                         }
                         onAddWorkspace={() => setAddingWorkspace(true)}
+                        onReorderWorkspaces={reorderWorkspaces}
                     />
                     <TerminalGrid
                         specs={selectedSpecs}

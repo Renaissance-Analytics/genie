@@ -230,6 +230,21 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v8: user-defined workspace ordering for the sidebar (alpha.47).
+            // Default 0 → pre-v8 rows keep their last-opened ordering until the
+            // user drags one; reorderWorkspaces() then writes explicit indices.
+            // Idempotent ADD COLUMN like v2/v4/v5/v6/v7.
+            version: 8,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('sort_order')) {
+                    db.exec(
+                        `ALTER TABLE workspaces ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -367,15 +382,41 @@ export interface WorkspaceRow {
     env_file: string | null;
     last_opened_at: string | null;
     created_by_genie: number;
+    /** User-defined sidebar order (lower = higher). New rows append to the bottom. */
+    sort_order: number;
 }
 
 export function listWorkspaces(): WorkspaceRow[] {
     return getDb()
         .prepare<[], WorkspaceRow>(
             `SELECT * FROM workspaces
-             ORDER BY (last_opened_at IS NULL) ASC, last_opened_at DESC, project_name ASC`,
+             ORDER BY sort_order ASC, (last_opened_at IS NULL) ASC, last_opened_at DESC, project_name ASC`,
         )
         .all();
+}
+
+/** Next sidebar order for a new workspace — appends to the bottom. */
+function nextWorkspaceOrder(): number {
+    const row = getDb()
+        .prepare<[], { mx: number | null }>(
+            'SELECT MAX(sort_order) AS mx FROM workspaces',
+        )
+        .get();
+    return (row?.mx ?? -1) + 1;
+}
+
+/**
+ * Persist a user-defined sidebar order. `ids` is the full ordered list of
+ * workspace ids (flyout order); each gets its index as sort_order. Unknown
+ * ids are ignored. Runs in one transaction so the rail never sees a partial
+ * reorder.
+ */
+export function reorderWorkspaces(ids: string[]): void {
+    const stmt = getDb().prepare('UPDATE workspaces SET sort_order = ? WHERE id = ?');
+    const tx = getDb().transaction((order: string[]) => {
+        order.forEach((id, i) => stmt.run(i, id));
+    });
+    tx(ids);
 }
 
 export function getWorkspace(id: string): WorkspaceRow | undefined {
@@ -386,7 +427,9 @@ export function getWorkspace(id: string): WorkspaceRow | undefined {
         .get(id);
 }
 
-export function addWorkspace(row: WorkspaceRow): WorkspaceRow {
+export function addWorkspace(
+    row: Omit<WorkspaceRow, 'sort_order'> & { sort_order?: number },
+): WorkspaceRow {
     // Mirror project_id / project_name into the legacy tynn_* columns
     // because they're declared NOT NULL on v1 — even Aionima rows have to
     // populate them.
@@ -395,12 +438,14 @@ export function addWorkspace(row: WorkspaceRow): WorkspaceRow {
         backend: row.backend ?? 'tynn',
         tynn_project_id: row.tynn_project_id || row.project_id,
         tynn_project_name: row.tynn_project_name || row.project_name,
+        // New workspaces append to the bottom of the user-defined order.
+        sort_order: row.sort_order ?? nextWorkspaceOrder(),
     };
     getDb()
         .prepare(
             `INSERT INTO workspaces
-             (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, editor, editor_cmd, start_cmd, env_file, last_opened_at, created_by_genie)
-             VALUES (@id, @backend, @project_id, @project_name, @tynn_project_id, @tynn_project_name, @shape, @path, @editor, @editor_cmd, @start_cmd, @env_file, @last_opened_at, @created_by_genie)`,
+             (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, editor, editor_cmd, start_cmd, env_file, last_opened_at, created_by_genie, sort_order)
+             VALUES (@id, @backend, @project_id, @project_name, @tynn_project_id, @tynn_project_name, @shape, @path, @editor, @editor_cmd, @start_cmd, @env_file, @last_opened_at, @created_by_genie, @sort_order)`,
         )
         .run(full);
     return getWorkspace(row.id)!;

@@ -943,6 +943,31 @@
     display: inline-flex;
     transition: transform var(--dur-fast) var(--ease-out);
 }
+/* Drag-to-reorder grip — dim, reveals on row hover; cursor signals draggable. */
+.tproj-head .tproj-grip {
+    color: var(--fg-4);
+    display: inline-flex;
+    align-items: center;
+    cursor: grab;
+    opacity: 0;
+    margin-left: -2px;
+    transition: opacity var(--dur-fast) var(--ease-out);
+}
+.tproj-head:hover .tproj-grip,
+.tproj.dragging .tproj-grip {
+    opacity: 0.7;
+}
+.tproj-head .tproj-grip:hover {
+    opacity: 1;
+    color: var(--fg-2);
+}
+.tproj-head .tproj-grip:active {
+    cursor: grabbing;
+}
+/* Dragged project block: lifted + dropped-into-place feedback. */
+.tproj.dragging {
+    opacity: 0.5;
+}
 .tproj.collapsed .chev {
     transform: rotate(-90deg);
 }

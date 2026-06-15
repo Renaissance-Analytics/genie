@@ -41,6 +41,8 @@ export interface WorkspaceRow {
     env_file: string | null;
     last_opened_at: string | null;
     created_by_genie: number;
+    /** User-defined sidebar order (lower = higher). Assigned by main; optional on create. */
+    sort_order?: number;
 }
 
 export interface DetectResult {
@@ -435,6 +437,8 @@ interface GenieApi {
         ) => Promise<WorkspaceRow | undefined>;
         remove: (id: string) => Promise<{ ok: boolean }>;
         touch: (id: string) => Promise<{ ok: boolean }>;
+        /** Persist a new sidebar order (full ordered list of workspace ids). */
+        reorder: (ids: string[]) => Promise<{ ok: boolean }>;
         open: (id: string) => Promise<{ ok: boolean }>;
     };
     agi: {

@@ -4,6 +4,7 @@ import {
     getAllSettings,
     listWorkspaces,
     removeWorkspace,
+    reorderWorkspaces,
     setSettings,
     touchWorkspace,
     updateWorkspace,
@@ -162,6 +163,11 @@ export function registerIpcHandlers(): void {
     });
     ipcMain.handle('workspaces:touch', (_e, id: string) => {
         touchWorkspace(id);
+        rebuildMenu();
+        return { ok: true };
+    });
+    ipcMain.handle('workspaces:reorder', (_e, ids: string[]) => {
+        reorderWorkspaces(ids);
         rebuildMenu();
         return { ok: true };
     });

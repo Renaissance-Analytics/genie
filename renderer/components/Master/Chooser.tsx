@@ -8,6 +8,7 @@ import {
     IconCode,
     IconCpu,
     IconGlobe,
+    IconGrip,
     IconPanelLeftOpen,
     IconPause,
     IconPin,
@@ -46,6 +47,8 @@ interface Props {
     onOpenContextMenu: (specId: string, position: { x: number; y: number }) => void;
     onOpenProjectMenu: (workspaceId: string, position: { x: number; y: number }) => void;
     onAddWorkspace: () => void;
+    /** Persist a new sidebar order (full ordered list of workspace ids). */
+    onReorderWorkspaces: (ids: string[]) => void;
 }
 
 /**
@@ -71,11 +74,46 @@ export default function Chooser({
     onOpenContextMenu,
     onOpenProjectMenu,
     onAddWorkspace,
+    onReorderWorkspaces,
 }: Props) {
     const [search, setSearch] = useState('');
     const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(
         () => new Set(),
     );
+
+    // Drag-to-reorder (flyout only). `dragOrder` is a live preview of the id
+    // order while a drag is in flight; the rail + flyout both render from it
+    // so the rail "updates based on the flyout". Committed on drop.
+    const [dragOrder, setDragOrder] = useState<string[] | null>(null);
+    const draggingId = useRef<string | null>(null);
+
+    const orderedWorkspaces = dragOrder
+        ? (dragOrder
+              .map((id) => workspaces.find((w) => w.id === id))
+              .filter((w): w is WorkspaceRow => !!w))
+        : workspaces;
+
+    const reorderPreview = (overId: string) => {
+        const id = draggingId.current;
+        if (!id || id === overId) return;
+        setDragOrder((cur) => {
+            const list = cur ?? workspaces.map((w) => w.id);
+            const from = list.indexOf(id);
+            const to = list.indexOf(overId);
+            if (from === -1 || to === -1 || from === to) return list;
+            const next = [...list];
+            next.splice(from, 1);
+            next.splice(to, 0, id);
+            return next;
+        });
+    };
+
+    const commitReorder = () => {
+        const list = dragOrder;
+        draggingId.current = null;
+        setDragOrder(null);
+        if (list) onReorderWorkspaces(list);
+    };
 
     const byWorkspace = new Map<string, TerminalSpec[]>();
     for (const ws of workspaces) byWorkspace.set(ws.id, []);
@@ -106,7 +144,7 @@ export default function Chooser({
                     {pinned ? <IconPin size={18} /> : <IconPanelLeftOpen size={18} />}
                 </button>
                 <span className="crail-sep" />
-                {workspaces.map((ws) => {
+                {orderedWorkspaces.map((ws) => {
                     const wsSpecs = byWorkspace.get(ws.id) ?? [];
                     const live = wsSpecs.filter((s) => activeIds.has(s.id)).length;
                     const isActive = ws.id === activeWorkspaceId;
@@ -187,10 +225,11 @@ export default function Chooser({
                         </div>
                     )}
 
-                    {workspaces.map((ws) => {
+                    {orderedWorkspaces.map((ws) => {
                         const wsSpecs = (byWorkspace.get(ws.id) ?? []).filter(matches);
                         const collapsed = collapsedWorkspaces.has(ws.id);
                         const isActive = ws.id === activeWorkspaceId;
+                        const dragging = draggingId.current === ws.id;
                         const toggleCollapse = () =>
                             setCollapsedWorkspaces((prev) => {
                                 const next = new Set(prev);
@@ -203,7 +242,17 @@ export default function Chooser({
                                 key={ws.id}
                                 className={`tproj${collapsed ? ' collapsed' : ''}${
                                     isActive ? ' is-active' : ''
-                                }`}
+                                }${dragging ? ' dragging' : ''}`}
+                                onDragOver={(e) => {
+                                    if (!draggingId.current) return;
+                                    e.preventDefault();
+                                    reorderPreview(ws.id);
+                                }}
+                                onDrop={(e) => {
+                                    if (!draggingId.current) return;
+                                    e.preventDefault();
+                                    commitReorder();
+                                }}
                             >
                                 <button
                                     type="button"
@@ -217,6 +266,24 @@ export default function Chooser({
                                         });
                                     }}
                                 >
+                                    <span
+                                        className="tproj-grip"
+                                        role="button"
+                                        tabIndex={-1}
+                                        title="Drag to reorder"
+                                        draggable
+                                        onClick={(e) => e.stopPropagation()}
+                                        onDragStart={(e) => {
+                                            draggingId.current = ws.id;
+                                            setDragOrder(workspaces.map((w) => w.id));
+                                            e.dataTransfer.effectAllowed = 'move';
+                                            // Firefox needs data set to start a drag.
+                                            e.dataTransfer.setData('text/plain', ws.id);
+                                        }}
+                                        onDragEnd={() => commitReorder()}
+                                    >
+                                        <IconGrip size={12} />
+                                    </span>
                                     <span
                                         className="chev"
                                         role="button"
