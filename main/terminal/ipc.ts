@@ -8,8 +8,9 @@ import {
     type CreateTerminalOpts,
     type TerminalInfo,
 } from '@particle-academy/fancy-term-host';
-import { getAllSettings, updateTerminalSpec } from '../db';
+import { getAllSettings, getTerminalSpec, updateTerminalSpec } from '../db';
 import { buildWishCliEnv } from '../cli/wish-cli';
+import { buildProcessArgs } from './process-spawn';
 import { getSnapshotStore, dbSettingsProvider } from './genie-adapter';
 
 /**
@@ -128,6 +129,16 @@ export function registerTerminalIpc(): void {
                     ...opts,
                     shell: resolved.command,
                     args: opts.args?.length ? opts.args : resolved.args,
+                };
+            }
+            // Process specs run their command non-interactively via the shell
+            // instead of an interactive login session. Override the args from
+            // the spec's meta.command (the shell is resolved above).
+            const spec = getTerminalSpec(opts.id);
+            if (spec?.type === 'process' && spec.meta?.command) {
+                opts = {
+                    ...opts,
+                    args: buildProcessArgs(opts.shell ?? '', spec.meta.command),
                 };
             }
             // Make the bundled wish-cli (resetme/reload/…) available + inject

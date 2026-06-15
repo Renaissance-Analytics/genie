@@ -538,8 +538,8 @@ export function setAionimaConfig(patch: BackendConfig): BackendConfig {
 
 // Terminal spec helpers -------------------------------------------------
 
-/** A view spec is either a live terminal or a fancy-code editor view. */
-export type TerminalSpecType = 'terminal' | 'code';
+/** A view spec is a terminal, a fancy-code editor, or a background process runner. */
+export type TerminalSpecType = 'terminal' | 'code' | 'process';
 
 /** Per-type metadata. Code views persist the open file's workspace-relative path. */
 export interface TerminalSpecMeta {
@@ -548,6 +548,12 @@ export interface TerminalSpecMeta {
     locked?: boolean;
     /** Workspace-relative folder the tree is rooted at when locked. */
     root?: string;
+    /** Process views: the command line run (non-interactively) by the runner. */
+    command?: string;
+    /** Process views: start automatically when the workspace/app opens. */
+    autostart?: boolean;
+    /** Process views: relaunch the command (with backoff) if it exits/crashes. */
+    restart_on_exit?: boolean;
     [key: string]: unknown;
 }
 
@@ -619,7 +625,8 @@ function rowFromRecord(r: TerminalSpecRecord): TerminalSpecRow {
     try { args = JSON.parse(r.args_json); } catch { args = []; }
     try { env = JSON.parse(r.env_json); } catch { env = {}; }
     try { meta = r.meta_json ? JSON.parse(r.meta_json) : {}; } catch { meta = {}; }
-    const type: TerminalSpecType = r.type === 'code' ? 'code' : 'terminal';
+    const type: TerminalSpecType =
+        r.type === 'code' ? 'code' : r.type === 'process' ? 'process' : 'terminal';
     return {
         id: r.id,
         workspace_id: r.workspace_id,

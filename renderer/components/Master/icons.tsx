@@ -303,6 +303,18 @@ export const IconPause = ({ size = 13, ...p }: Props) =>
 /** Resume / enable a suspended view — Tier 2. */
 export const IconPlay = ({ size = 13, ...p }: Props) =>
     wrap(size, <polygon points="6 4 20 12 6 20 6 4" />, p.className, p.style);
+/** Restart / relaunch — circular arrows. */
+export const IconRefresh = ({ size = 13, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <path d="M23 4v6h-6" />
+            <path d="M1 20v-6h6" />
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+        </>,
+        p.className,
+        p.style,
+    );
 /** Drag handle (six dots) — reorder affordance. */
 export const IconGrip = ({ size = 12, ...p }: Props) =>
     wrap(

@@ -172,8 +172,8 @@ export interface Changelog {
     partial: boolean;
 }
 
-/** A view spec is either a live terminal or a fancy-code editor view. */
-export type ViewType = 'terminal' | 'code';
+/** A view spec is a terminal, a fancy-code editor, or a background process runner. */
+export type ViewType = 'terminal' | 'code' | 'process';
 
 /** Per-type spec metadata. Code views persist the open file's relative path. */
 export interface ViewMeta {
@@ -190,6 +190,12 @@ export interface ViewMeta {
     tree_pinned?: boolean;
     /** Code view: ids of the tree folders left expanded, restored on relaunch. */
     expanded_tree_ids?: string[];
+    /** Process view: the command line run (non-interactively) by the runner. */
+    command?: string;
+    /** Process view: start automatically when the workspace/app opens. */
+    autostart?: boolean;
+    /** Process view: relaunch the command (with backoff) if it exits/crashes. */
+    restart_on_exit?: boolean;
     [key: string]: unknown;
 }
 

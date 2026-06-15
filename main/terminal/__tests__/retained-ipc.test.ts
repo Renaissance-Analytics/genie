@@ -49,6 +49,11 @@ vi.mock('node-pty', () => ({
 vi.mock('../../db', () => ({
     updateTerminalSpec: () => null,
     getAllSettings: () => ({ track_cwd: 'off' }),
+    // terminal:create resolves the spec to detect process-type runners; a plain
+    // terminal spawn path doesn't need a row, so the mock returns null.
+    getTerminalSpec: () => null,
+    // buildWishCliEnv (wish-cli env injection) looks up the workspace for a cwd.
+    listWorkspaces: () => [],
 }));
 
 // Track deleteSnapshot calls so we can assert terminal:kill cleans up. ipc.ts

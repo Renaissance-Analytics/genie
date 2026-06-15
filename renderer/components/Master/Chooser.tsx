@@ -49,6 +49,8 @@ interface Props {
     onAddWorkspace: () => void;
     /** Persist a new sidebar order (full ordered list of workspace ids). */
     onReorderWorkspaces: (ids: string[]) => void;
+    /** Create a Process (background service runner) for a workspace. */
+    onAddProcess: (workspaceId: string, command: string, label?: string) => void;
 }
 
 /**
@@ -75,7 +77,18 @@ export default function Chooser({
     onOpenProjectMenu,
     onAddWorkspace,
     onReorderWorkspaces,
+    onAddProcess,
 }: Props) {
+    const promptAddProcess = async (workspaceId: string) => {
+        const command = await showPrompt({
+            title: 'New process',
+            label: 'Command',
+            placeholder: 'php artisan queue:work',
+            confirmLabel: 'Create',
+        });
+        if (command && command.trim()) onAddProcess(workspaceId, command.trim());
+    };
+
     const [search, setSearch] = useState('');
     const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(
         () => new Set(),
@@ -226,7 +239,9 @@ export default function Chooser({
                     )}
 
                     {orderedWorkspaces.map((ws) => {
-                        const wsSpecs = (byWorkspace.get(ws.id) ?? []).filter(matches);
+                        const wsAll = (byWorkspace.get(ws.id) ?? []).filter(matches);
+                        const wsSpecs = wsAll.filter((s) => s.type !== 'process');
+                        const wsProcs = wsAll.filter((s) => s.type === 'process');
                         const collapsed = collapsedWorkspaces.has(ws.id);
                         const isActive = ws.id === activeWorkspaceId;
                         const dragging = draggingId.current === ws.id;
@@ -345,6 +360,39 @@ export default function Chooser({
                                             <span className="pick" />
                                             <IconCode size={12} />
                                             <span className="tname">Add Editor…</span>
+                                        </button>
+                                    </div>
+                                    <div className="tproj-procs">
+                                        <div className="tproj-subhead">
+                                            <IconCpu size={12} />
+                                            <span>Processes</span>
+                                        </div>
+                                        {wsProcs.map((s) => (
+                                            <SpecRow
+                                                key={s.id}
+                                                spec={s}
+                                                checked={selected.has(s.id)}
+                                                live={activeIds.has(s.id)}
+                                                suspended={s.enabled === false}
+                                                hostKind={hostBadgeKind(ws.backend)}
+                                                hostLabel="process"
+                                                onToggle={() => onToggleSpec(s.id)}
+                                                onDestroy={() => onDestroySpec(s.id)}
+                                                onDisable={() => onDisableSpec(s.id)}
+                                                onEnable={() => onEnableSpec(s.id)}
+                                                onContextMenu={(p) =>
+                                                    onOpenContextMenu(s.id, p)
+                                                }
+                                            />
+                                        ))}
+                                        <button
+                                            type="button"
+                                            className="tterm tterm-add"
+                                            onClick={() => void promptAddProcess(ws.id)}
+                                        >
+                                            <span className="pick" />
+                                            <IconCpu size={12} />
+                                            <span className="tname">Add Process…</span>
                                         </button>
                                     </div>
                                 </div>

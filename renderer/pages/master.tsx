@@ -359,6 +359,31 @@ function MasterInner() {
         [specs, workspacesById],
     );
 
+    /**
+     * Create a Process (background service runner) for a workspace. The label
+     * defaults to the command's first token; it runs the command via the pty
+     * backend with autostart + auto-restart-on-crash on by default.
+     */
+    const addProcess = useCallback(
+        async (workspaceId: string, command: string, label?: string) => {
+            const ws = workspacesById.get(workspaceId);
+            if (!ws || !command.trim()) return;
+            const cmd = command.trim();
+            const fallback = cmd.split(/\s+/).slice(0, 3).join(' ');
+            const created = await api().terminalSpec.create({
+                id: ulid(),
+                workspace_id: workspaceId,
+                label: (label?.trim() || fallback).slice(0, 60),
+                cwd: ws.path,
+                type: 'process',
+                meta: { command: cmd, autostart: true, restart_on_exit: true },
+            });
+            setSpecs((prev) => [...prev, created]);
+            setSelected((prev) => new Set(prev).add(created.id));
+        },
+        [workspacesById],
+    );
+
     const closeSelected = useCallback((id: string) => {
         setSelected((prev) => {
             const next = new Set(prev);
@@ -824,6 +849,9 @@ function MasterInner() {
                         }
                         onAddWorkspace={() => setAddingWorkspace(true)}
                         onReorderWorkspaces={reorderWorkspaces}
+                        onAddProcess={(wsId, command, label) =>
+                            void addProcess(wsId, command, label)
+                        }
                     />
                     <TerminalGrid
                         specs={selectedSpecs}
