@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# tynn - tynn-cli help and command overview
+#
+# Usage:
+#   tynn              - Show available commands
+#   tynn help         - Same as above
+#   tynn docs         - Open README in terminal
+#   tynn stacks       - Show supported stacks
+#   tynn --version    - Show version
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+VERSION="0.1.0"
+
+show_help() {
+  cat <<'EOF'
+tynn-cli - A composable bash toolkit for developer workflows
+
+Commands:
+  puse <tool>        Install/configure tools for detected stack
+                     Tools: pest, flux, vitest, jest, playwright, pytest
+                     Options: --lic <name>, --browser, --list, --stack
+
+  resetme            Reset database/state for detected stack
+                     Options: --seed, --demo, --dry-run, --stack
+
+  sandbox <cmd>      Run commands in configured sandbox directory
+                     Options: --path, --stack
+
+  pkg <pkg> <cmd>    Run commands in monorepo packages/ directories
+
+  npmx <dir> <cmd>   Run npm commands in subdirectories
+
+  copy-screenshots   Copy Cursor screenshots to project folders
+
+Help:
+  tynn               Show this help
+  tynn docs          Show full README
+  tynn stacks        Show supported stacks
+  <command> --help   Show command-specific help
+
+Docs: ~/.local/share/tynn-cli/README.md
+EOF
+}
+
+show_stacks() {
+  cat <<'EOF'
+Supported Stacks:
+
+  Laravel          artisan + composer.json
+  Node.js+Prisma   package.json + prisma
+  Node.js+Drizzle  package.json + drizzle-kit
+  Node.js+Knex     package.json + knex
+  Node.js+Sequelize package.json + sequelize
+  Node.js+TypeORM  package.json + typeorm
+  Django           manage.py + django
+  Flask+Alembic    alembic.ini
+  Go+Migrate       go.mod + migrations/
+
+See: ~/.local/share/tynn-cli/STACKS.md
+EOF
+}
+
+show_docs() {
+  if command -v less >/dev/null 2>&1; then
+    less "$REPO_ROOT/README.md"
+  elif command -v more >/dev/null 2>&1; then
+    more "$REPO_ROOT/README.md"
+  else
+    cat "$REPO_ROOT/README.md"
+  fi
+}
+
+case "${1:-}" in
+  ""|-h|--help|help)
+    show_help
+    ;;
+  docs|readme)
+    show_docs
+    ;;
+  stacks)
+    show_stacks
+    ;;
+  -v|--version|version)
+    echo "tynn-cli $VERSION"
+    ;;
+  *)
+    echo "Unknown command: $1"
+    echo "Run 'tynn' for help"
+    exit 1
+    ;;
+esac

@@ -1,0 +1,1004 @@
+#!/usr/bin/env bash
+# puse - Project Use: orchestrate project requirement changes
+#
+# Usage:
+#   puse <tool> [options]    - Install/configure a tool for the detected stack
+#   puse <domain>.<tool>     - Install tool for specific stack domain
+#   puse --list              - List available tools for detected stack
+#   puse --stack             - Show detected stack
+#   puse --help              - Show this help
+#
+# Options:
+#   --lic <name|index>       - Use license from tynn.config (by name or index)
+#   --browser                - Enable browser testing (for pest, playwright)
+#   --force                  - Force reinstall even if already installed
+#   --config <json|file>     - MCP server config (for ai.mcp)
+#   --ai <systems>           - Comma-separated AI systems (for ai.mcp)
+#   --no-interaction         - Skip all prompts, assume yes
+#
+# Tools by Stack:
+#   Laravel:     pest, pest --browser, flux (requires --lic), boost
+#   Node.js:     vitest, jest, playwright, prisma, drizzle
+#   Django:      pytest, playwright
+#   AI:          mcp (configure MCP servers for AI systems)
+#   Go:          (coming soon)
+#
+# AI Systems (for ai.mcp --ai):
+#   claude-code, claude-desktop, cursor, windsurf, vscode, continue, zed
+#
+# Examples:
+#   puse pest                - Install Pest (Laravel)
+#   puse pest --browser      - Install Pest with browser testing
+#   puse flux --lic myflux   - Install Flux Pro with license
+#   puse vitest              - Install Vitest (Node.js)
+#   puse ai.mcp              - Configure MCP server (interactive)
+#   puse ai.mcp --config '{"command":"node","args":["server.js"]}' --ai cursor,claude-code
+
+set -euo pipefail
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Setup
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Source bashrc to load aliases
+if [[ -f "${HOME}/.bashrc" ]]; then
+  source "${HOME}/.bashrc" 2>/dev/null || true
+  shopt -s expand_aliases 2>/dev/null || true
+fi
+
+# Find script directory and source libraries
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+source "$REPO_ROOT/lib/helpers.sh"
+source "$REPO_ROOT/lib/stacks.sh"
+source "$REPO_ROOT/lib/licenses.sh"
+source "$REPO_ROOT/lib/ui.sh"
+source "$REPO_ROOT/lib/mcp.sh"
+
+# Source config if exists
+CONFIG_FILE="$REPO_ROOT/tynn.config"
+if [[ -f "$CONFIG_FILE" ]]; then
+  source "$CONFIG_FILE"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Global options (parsed from args)
+# ─────────────────────────────────────────────────────────────────────────────
+
+LIC_REF=""
+BROWSER_FLAG=false
+FORCE_FLAG=false
+MCP_CONFIG=""
+AI_SYSTEMS=""
+NO_INTERACTION=false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Installation Checks
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Check if pest is installed (with optional browser support check)
+is_pest_installed() {
+  local check_browser="${1:-false}"
+
+  # Check base Pest installation
+  if ! composer show pestphp/pest >/dev/null 2>&1; then
+    return 1
+  fi
+
+  # If browser flag, also check browser plugin
+  if [[ "$check_browser" == "true" ]]; then
+    if ! composer show pestphp/pest-plugin-browser >/dev/null 2>&1; then
+      return 1
+    fi
+  fi
+
+  return 0
+}
+
+# Check if vitest is installed
+is_vitest_installed() {
+  [[ -f "package.json" ]] && grep -q '"vitest"' package.json
+}
+
+# Check if jest is installed
+is_jest_installed() {
+  [[ -f "package.json" ]] && grep -q '"jest"' package.json
+}
+
+# Check if playwright is installed (node version)
+is_playwright_node_installed() {
+  [[ -f "package.json" ]] && grep -q '"@playwright/test"' package.json
+}
+
+# Check if pytest-django is installed
+is_pytest_installed() {
+  local py_cmd="python"
+  command -v python3 >/dev/null 2>&1 && py_cmd="python3"
+
+  $py_cmd -c "import pytest" 2>/dev/null
+}
+
+# Check if flux is installed
+is_flux_installed() {
+  composer show livewire/flux-pro >/dev/null 2>&1
+}
+
+# Check if boost is installed
+is_boost_installed() {
+  composer show laravel/boost >/dev/null 2>&1
+}
+
+# MCP is always "installable" (it's config, not a package)
+is_mcp_installed() {
+  return 1  # Always allow re-running
+}
+
+# Check if tool is already installed and handle accordingly
+# Returns 0 if should proceed, 1 if should skip
+check_already_installed() {
+  local tool="$1"
+  local stack="$2"
+  local installed=false
+
+  case "$tool" in
+    pest)
+      if is_pest_installed "$BROWSER_FLAG"; then
+        installed=true
+      fi
+      ;;
+    vitest)
+      if is_vitest_installed; then
+        installed=true
+      fi
+      ;;
+    jest)
+      if is_jest_installed; then
+        installed=true
+      fi
+      ;;
+    playwright)
+      if [[ "$stack" == "laravel" ]]; then
+        if is_pest_installed "true"; then
+          installed=true
+        fi
+      elif is_node_stack "$stack"; then
+        if is_playwright_node_installed; then
+          installed=true
+        fi
+      fi
+      ;;
+    pytest)
+      if is_pytest_installed; then
+        installed=true
+      fi
+      ;;
+    flux)
+      if is_flux_installed; then
+        installed=true
+      fi
+      ;;
+    boost)
+      if is_boost_installed; then
+        installed=true
+      fi
+      ;;
+    mcp)
+      # MCP is config-based, always allow (unless specific check needed)
+      installed=false
+      ;;
+  esac
+
+  if [[ "$installed" == "true" ]]; then
+    if [[ "$FORCE_FLAG" == "true" ]]; then
+      warn "$tool is already installed, reinstalling due to --force"
+      return 0
+    else
+      local browser_note=""
+      [[ "$tool" == "pest" && "$BROWSER_FLAG" == "true" ]] && browser_note=" (with browser support)"
+      [[ "$tool" == "playwright" && "$stack" == "laravel" ]] && browser_note=" (via pest browser plugin)"
+      ok "$tool is already installed${browser_note}. Use --force to reinstall."
+      return 1
+    fi
+  fi
+
+  return 0
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tool Installers
+# ─────────────────────────────────────────────────────────────────────────────
+
+install_pest() {
+  local browser_flag="${1:-false}"
+
+  need_cmd composer
+  need_file composer.json
+
+  log "Setting up Pest 4..."
+
+  # Remove PHPUnit if it exists
+  if composer show phpunit/phpunit >/dev/null 2>&1; then
+    log "Removing PHPUnit..."
+    composer remove phpunit/phpunit --no-interaction >/dev/null 2>&1 || true
+  fi
+
+  # Install Pest
+  log "Installing Pest 4..."
+  yes n | composer require pestphp/pest --dev --with-all-dependencies --no-scripts --no-interaction >/dev/null 2>&1 && ok "Pest installed" || warn "Pest install may have issues"
+
+  # Clean vendor to avoid autoloader conflicts
+  if [[ -d "vendor" ]]; then
+    log "Rebuilding vendor dependencies..."
+    rm -rf vendor
+    composer install --no-interaction --no-scripts >/dev/null 2>&1 && ok "Dependencies rebuilt" || warn "Dependency rebuild may have issues"
+  fi
+
+  # Initialize Pest
+  log "Initializing Pest configuration..."
+  php vendor/bin/pest --init
+
+  # Browser testing (optional)
+  if [[ "$browser_flag" == "true" ]]; then
+    install_pest_browser
+  fi
+
+  echo ""
+  ok "Pest 4 setup complete!"
+  echo ""
+  echo "🚀 Run your tests with: php vendor/bin/pest"
+}
+
+install_pest_browser() {
+  log "Setting up browser testing support..."
+
+  need_cmd npm
+
+  # Install browser plugin
+  log "Installing Pest browser plugin..."
+  yes n | composer require pestphp/pest-plugin-browser --dev --no-interaction >/dev/null 2>&1 && ok "Browser plugin installed" || warn "Browser plugin install may have issues"
+
+  # Install Playwright
+  log "Installing Playwright..."
+  npm install playwright@latest >/dev/null 2>&1 && ok "Playwright installed" || warn "Playwright install may have issues"
+
+  # Install Playwright browsers
+  log "Installing Playwright browsers..."
+  npx playwright install >/dev/null 2>&1 && ok "Browsers installed" || warn "Browser install may have issues"
+
+  # Update .gitignore
+  if [[ -f ".gitignore" ]]; then
+    if ! grep -q "^tests/Browser/Screenshots" .gitignore; then
+      echo "" >> .gitignore
+      echo "# Pest browser test screenshots" >> .gitignore
+      echo "tests/Browser/Screenshots" >> .gitignore
+      ok "Added tests/Browser/Screenshots to .gitignore"
+    fi
+  fi
+
+  ok "Browser testing support installed!"
+  echo ""
+  echo "💡 Example browser test:"
+  echo "   it('may welcome the user', function () {"
+  echo "       \$page = visit('/');"
+  echo "       \$page->assertSee('Welcome');"
+  echo "   });"
+}
+
+install_vitest() {
+  local pm pm_install pm_dev
+
+  pm=$(detect_node_pm)
+  pm_install=$(node_pm_install)
+  pm_dev=$(node_pm_dev_flag)
+
+  need_file package.json
+
+  log "Installing Vitest with $pm..."
+
+  $pm_install $pm_dev vitest @vitest/ui >/dev/null 2>&1 && ok "Vitest installed" || die "Vitest install failed"
+
+  # Add test script to package.json if not present
+  if ! grep -q '"test"' package.json; then
+    log "Adding test script to package.json..."
+    node -e "
+      const fs = require('fs');
+      const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+      pkg.scripts = pkg.scripts || {};
+      pkg.scripts.test = 'vitest';
+      pkg.scripts['test:ui'] = 'vitest --ui';
+      fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+    " && ok "Added test scripts"
+  fi
+
+  echo ""
+  ok "Vitest setup complete!"
+  echo ""
+  echo "🚀 Run your tests with: $pm_install test"
+}
+
+install_jest() {
+  local pm pm_install pm_dev
+
+  pm=$(detect_node_pm)
+  pm_install=$(node_pm_install)
+  pm_dev=$(node_pm_dev_flag)
+
+  need_file package.json
+
+  log "Installing Jest with $pm..."
+
+  $pm_install $pm_dev jest @types/jest >/dev/null 2>&1 && ok "Jest installed" || die "Jest install failed"
+
+  # Add test script
+  if ! grep -q '"test"' package.json; then
+    node -e "
+      const fs = require('fs');
+      const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+      pkg.scripts = pkg.scripts || {};
+      pkg.scripts.test = 'jest';
+      fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+    " && ok "Added test script"
+  fi
+
+  echo ""
+  ok "Jest setup complete!"
+  echo ""
+  echo "🚀 Run your tests with: $pm_install test"
+}
+
+install_playwright_node() {
+  local pm_exec
+  pm_exec=$(node_pm_exec)
+
+  need_file package.json
+
+  log "Installing Playwright..."
+
+  npm install -D @playwright/test >/dev/null 2>&1 && ok "Playwright installed" || die "Playwright install failed"
+
+  log "Installing browsers..."
+  $pm_exec playwright install >/dev/null 2>&1 && ok "Browsers installed" || warn "Browser install may have issues"
+
+  echo ""
+  ok "Playwright setup complete!"
+  echo ""
+  echo "🚀 Run tests with: $pm_exec playwright test"
+}
+
+install_flux() {
+  local stack="$1"
+  local lic_ref="$2"
+
+  need_cmd composer
+  need_cmd php
+  need_file artisan
+
+  # Get license params
+  local lic_params=""
+  local lic_email=""
+  local lic_key=""
+
+  if [[ -n "$lic_ref" ]]; then
+    lic_params=$(get_license "flux" "$stack" "$lic_ref") || true
+  elif has_license "flux" "$stack"; then
+    # Try to get first available license
+    lic_params=$(get_license "flux" "$stack" "0") || true
+  fi
+
+  if [[ -n "$lic_params" ]]; then
+    lic_email=$(lic_param "$lic_params" 0) || true
+    lic_key=$(lic_param "$lic_params" 1) || true
+  fi
+
+  if [[ -z "$lic_email" || -z "$lic_key" ]]; then
+    echo ""
+    warn "No license found for Flux."
+    echo ""
+    echo "Flux Pro requires a license. Options:"
+    echo ""
+    echo "1. Add license to tynn.config:"
+    echo "   LICENSES='["
+    echo "     {\"name\": \"myflux\", \"stack\": \"laravel\", \"tool\": \"flux\", \"params\": [\"email@example.com\", \"FL-XXXX-XXXX\"]}"
+    echo "   ]'"
+    echo ""
+    echo "2. Then run: puse flux --lic myflux"
+    echo ""
+    echo "3. Or purchase at: https://flux.livewire.com"
+    echo ""
+
+    if has_license "flux" "$stack"; then
+      echo "Available licenses:"
+      list_licenses "flux" "$stack"
+      echo ""
+    fi
+
+    die "License required for Flux Pro installation"
+  fi
+
+  log "Installing Flux Pro..."
+  log "Using license: $lic_email"
+
+  # Configure composer auth for flux-pro private repo
+  log "Configuring composer authentication..."
+  composer config repositories.flux-pro '{"type": "composer", "url": "https://composer.fluxui.dev"}' 2>/dev/null
+  composer config http-basic.composer.fluxui.dev "$lic_email" "$lic_key" 2>/dev/null
+  ok "Composer auth configured"
+
+  # Check if Livewire is installed
+  if ! composer show livewire/livewire >/dev/null 2>&1; then
+    log "Installing Livewire (required by Flux)..."
+    composer require livewire/livewire >/dev/null 2>&1 && ok "Livewire installed" || die "Livewire install failed"
+  fi
+
+  # Install Flux Pro
+  log "Installing Flux Pro package..."
+  composer require livewire/flux-pro >/dev/null 2>&1 && ok "Flux Pro installed" || die "Flux Pro install failed"
+
+  echo ""
+  ok "Flux Pro setup complete!"
+  echo ""
+  echo "💡 Documentation: https://fluxui.dev/docs"
+}
+
+install_pytest_django() {
+  local py_cmd py_pm
+
+  py_cmd="python"
+  command -v python3 >/dev/null 2>&1 && py_cmd="python3"
+  py_pm=$(detect_python_pm)
+
+  need_file manage.py
+
+  log "Installing pytest-django with $py_pm..."
+
+  case "$py_pm" in
+    poetry)
+      poetry add --dev pytest pytest-django >/dev/null 2>&1 && ok "pytest-django installed" || die "Install failed"
+      ;;
+    uv)
+      uv pip install pytest pytest-django >/dev/null 2>&1 && ok "pytest-django installed" || die "Install failed"
+      ;;
+    *)
+      pip install pytest pytest-django >/dev/null 2>&1 && ok "pytest-django installed" || die "Install failed"
+      ;;
+  esac
+
+  # Create pytest.ini if not exists
+  if [[ ! -f "pytest.ini" ]]; then
+    log "Creating pytest.ini..."
+    cat > pytest.ini << 'EOF'
+[pytest]
+DJANGO_SETTINGS_MODULE = config.settings
+python_files = tests.py test_*.py *_tests.py
+EOF
+    ok "Created pytest.ini"
+  fi
+
+  echo ""
+  ok "pytest-django setup complete!"
+  echo ""
+  echo "🚀 Run tests with: pytest"
+}
+
+install_boost() {
+  need_cmd composer
+  need_file artisan
+
+  log "Installing Laravel Boost..."
+
+  # Install via composer
+  composer require laravel/boost --dev >/dev/null 2>&1 && ok "Laravel Boost installed" || die "Boost install failed"
+
+  echo ""
+  ok "Laravel Boost package installed!"
+  echo ""
+  warn "Run 'php artisan boost:install' manually to complete setup (interactive)"
+  echo ""
+  echo "💡 Documentation: https://laravel.com/docs/12.x/boost"
+}
+
+install_mcp() {
+  local mcp_config="$MCP_CONFIG"
+  local ai_systems="$AI_SYSTEMS"
+  local no_interaction="$NO_INTERACTION"
+
+  need_cmd node
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Step 1: Get MCP config
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  if [[ -z "$mcp_config" ]]; then
+    if [[ "$no_interaction" == "true" ]]; then
+      die "MCP config required in non-interactive mode. Use --config"
+    fi
+
+    echo ""
+    echo "${BOLD}MCP Server Configuration${RESET}"
+    echo ""
+
+    local server_name
+    local command
+    local args
+    local env_vars
+
+    server_name=$(prompt_input "Server name" "my-mcp-server")
+    command=$(prompt_input "Command" "node")
+    args=$(prompt_input "Arguments (comma-separated)" "")
+    env_vars=$(prompt_input "Environment variables (KEY=value,KEY2=value2)" "")
+
+    mcp_config=$(generate_mcp_config "$server_name" "$command" "$args" "$env_vars")
+
+    echo ""
+    log "Generated config:"
+    echo "$mcp_config" | node -e "console.log(JSON.stringify(JSON.parse(require('fs').readFileSync(0, 'utf8')), null, 2))"
+    echo ""
+  else
+    # Parse config from file or string
+    if [[ -f "$mcp_config" ]]; then
+      mcp_config=$(cat "$mcp_config")
+    fi
+  fi
+
+  # Extract server name from config or use default
+  local server_name
+  server_name=$(echo "$mcp_config" | node -e "
+    const config = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+    console.log(config.name || 'mcp-server');
+  " 2>/dev/null || echo "mcp-server")
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Step 2: Select AI systems
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  local selected_systems=()
+
+  if [[ -n "$ai_systems" ]]; then
+    # Parse comma-separated list
+    IFS=',' read -ra selected_systems <<< "$ai_systems"
+  elif [[ "$no_interaction" == "true" ]]; then
+    die "AI systems required in non-interactive mode. Use --ai"
+  else
+    echo ""
+    echo "${BOLD}Select AI systems to configure:${RESET}"
+    echo "${DIM}(Use arrow keys, space to toggle, enter to confirm)${RESET}"
+    echo ""
+
+    local options=("All" "Claude Code" "Claude Desktop" "Cursor" "Windsurf" "VS Code (Copilot)" "Continue (VS Code)" "Zed")
+    local system_keys=("" "claude-code" "claude-desktop" "cursor" "windsurf" "vscode" "continue" "zed")
+
+    # Simplified selection for non-TTY
+    if ! is_tty; then
+      echo "Available systems:"
+      for i in "${!options[@]}"; do
+        [[ $i -eq 0 ]] && continue
+        echo "  $i. ${options[$i]}"
+      done
+      echo ""
+      local selection
+      selection=$(prompt_input "Enter numbers (comma-separated, or 'all')" "all")
+
+      if [[ "$selection" == "all" ]]; then
+        selected_systems=("${system_keys[@]:1}")
+      else
+        IFS=',' read -ra indices <<< "$selection"
+        for idx in "${indices[@]}"; do
+          idx=$(echo "$idx" | tr -d ' ')
+          if [[ -n "${system_keys[$idx]:-}" ]]; then
+            selected_systems+=("${system_keys[$idx]}")
+          fi
+        done
+      fi
+    else
+      # Interactive checkbox selection
+      local selected_indices
+      selected_indices=$(checkbox_select "Select AI systems:" "${options[@]}")
+
+      for idx in $selected_indices; do
+        if [[ -n "${system_keys[$idx]:-}" ]]; then
+          selected_systems+=("${system_keys[$idx]}")
+        fi
+      done
+    fi
+  fi
+
+  if [[ ${#selected_systems[@]} -eq 0 ]]; then
+    die "No AI systems selected"
+  fi
+
+  echo ""
+  log "Selected systems: ${selected_systems[*]}"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Step 3: Confirm and apply
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  local changes=()
+  local total=${#selected_systems[@]}
+  local current=0
+
+  # Preview changes
+  echo ""
+  echo "${BOLD}Changes to be made:${RESET}"
+  for system in "${selected_systems[@]}"; do
+    local path scope="project"
+    path=$(get_ai_config_path "$system" "$scope")
+
+    # Fall back to user scope if no project path
+    if [[ -z "$path" || "$path" == ".continue/mcpServers" ]]; then
+      scope="user"
+      path=$(get_ai_config_path "$system" "$scope")
+    fi
+
+    local status="create"
+    [[ -f "$path" ]] && status="update"
+
+    echo "  ${AI_SYSTEMS[$system]:-$system}: $path ($status)"
+    changes+=("$system|$path|$status")
+  done
+
+  echo ""
+
+  # Get confirmation unless no-interaction
+  if [[ "$no_interaction" != "true" ]]; then
+    if ! confirm "Apply these changes?"; then
+      echo "Cancelled."
+      return 0
+    fi
+  fi
+
+  # Apply changes with progress bar
+  echo ""
+  for change in "${changes[@]}"; do
+    IFS='|' read -r system path status <<< "$change"
+    ((current++))
+
+    progress_bar "$current" "$total" "Configuring ${AI_SYSTEMS[$system]:-$system}"
+
+    local key
+    key=$(get_mcp_key "$system")
+
+    if [[ "$system" == "continue" ]]; then
+      add_continue_server "$server_name" "$mcp_config"
+    else
+      add_mcp_server "$path" "$key" "$server_name" "$mcp_config"
+    fi
+
+    sleep 0.2  # Brief pause for visual feedback
+  done
+
+  progress_done
+
+  # Summary
+  echo ""
+  ok "MCP configuration complete!"
+  echo ""
+  echo "${BOLD}Summary:${RESET}"
+  for change in "${changes[@]}"; do
+    IFS='|' read -r system path status <<< "$change"
+    local action_icon="✅"
+    local action_text="configured"
+    echo "  $action_icon ${AI_SYSTEMS[$system]:-$system}: $path"
+  done
+  echo ""
+  echo "💡 Restart your AI tools to load the new MCP server"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tool Routing
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Map of tools to stacks that support them
+declare -A TOOL_STACKS=(
+  ["pest"]="laravel"
+  ["flux"]="laravel"
+  ["boost"]="laravel"
+  ["vitest"]="node node-prisma node-drizzle node-knex node-sequelize node-typeorm"
+  ["jest"]="node node-prisma node-drizzle node-knex node-sequelize node-typeorm"
+  ["playwright"]="laravel node node-prisma node-drizzle node-knex node-sequelize node-typeorm django"
+  ["pytest"]="django flask-alembic"
+  ["prisma"]="node"
+  ["drizzle"]="node"
+  ["mcp"]="ai"
+)
+
+# Stack domains that don't require project detection
+declare -A DOMAIN_STACKS=(
+  ["ai"]="true"
+)
+
+# Tools that require licenses
+declare -A TOOL_REQUIRES_LICENSE=(
+  ["flux"]="true"
+)
+
+# Get tools available for a stack
+get_tools_for_stack() {
+  local stack="$1"
+  local tools=()
+
+  for tool in "${!TOOL_STACKS[@]}"; do
+    if [[ " ${TOOL_STACKS[$tool]} " == *" $stack "* ]]; then
+      tools+=("$tool")
+    fi
+  done
+
+  echo "${tools[*]}"
+}
+
+# Check if tool is supported for stack
+is_tool_supported() {
+  local tool="$1"
+  local stack="$2"
+
+  [[ -v TOOL_STACKS[$tool] ]] && [[ " ${TOOL_STACKS[$tool]} " == *" $stack "* ]]
+}
+
+# Route to appropriate installer
+route_tool() {
+  local tool="$1"
+  local stack="$2"
+
+  # Check stack restrictions
+  if ! is_stack_allowed "$stack"; then
+    die "Stack '$stack' is not allowed by your tynn.config"
+  fi
+
+  # Check tool restrictions
+  if ! is_tool_allowed "$stack" "$tool"; then
+    die "Tool '$tool' is not allowed for stack '$stack' by your tynn.config"
+  fi
+
+  # Check if tool is supported for this stack
+  if ! is_tool_supported "$tool" "$stack"; then
+    local available
+    available=$(get_tools_for_stack "$stack")
+    die "Tool '$tool' is not supported for $(stack_name "$stack"). Available: $available"
+  fi
+
+  # Check if already installed
+  if ! check_already_installed "$tool" "$stack"; then
+    return 0
+  fi
+
+  # Route to installer
+  case "$tool" in
+    pest)
+      if [[ "$stack" != "laravel" ]]; then
+        die "Pest is only for Laravel. For Node.js, try: puse vitest"
+      fi
+      install_pest "$BROWSER_FLAG"
+      ;;
+
+    flux)
+      if [[ "$stack" != "laravel" ]]; then
+        die "Flux is only for Laravel"
+      fi
+      install_flux "$stack" "$LIC_REF"
+      ;;
+
+    vitest)
+      if ! is_node_stack "$stack"; then
+        die "Vitest is only for Node.js projects. For Laravel, try: puse pest"
+      fi
+      install_vitest
+      ;;
+
+    jest)
+      if ! is_node_stack "$stack"; then
+        die "Jest is only for Node.js projects"
+      fi
+      install_jest
+      ;;
+
+    playwright)
+      if [[ "$stack" == "laravel" ]]; then
+        install_pest_browser
+      elif is_node_stack "$stack"; then
+        install_playwright_node
+      else
+        die "Playwright setup not yet implemented for $(stack_name "$stack")"
+      fi
+      ;;
+
+    pytest)
+      if ! is_python_stack "$stack"; then
+        die "pytest is only for Python projects"
+      fi
+      install_pytest_django
+      ;;
+
+    boost)
+      if [[ "$stack" != "laravel" ]]; then
+        die "Boost is only for Laravel"
+      fi
+      install_boost
+      ;;
+
+    mcp)
+      install_mcp
+      ;;
+
+    *)
+      die "Unknown tool: $tool"
+      ;;
+  esac
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────────────────────
+
+show_help() {
+  sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
+}
+
+show_stack() {
+  local stack
+  stack=$(detect_stack)
+  echo "Detected stack: $(stack_name "$stack") ($stack)"
+}
+
+show_list() {
+  local stack tools
+  stack=$(detect_stack)
+
+  if [[ "$stack" == "$STACK_UNKNOWN" ]]; then
+    die "Could not detect project stack. Are you in a project directory?"
+  fi
+
+  echo "Stack: $(stack_name "$stack")"
+  echo ""
+  echo "Available tools:"
+
+  tools=$(get_tools_for_stack "$stack")
+  for tool in $tools; do
+    local note=""
+    if [[ -v TOOL_REQUIRES_LICENSE[$tool] ]]; then
+      if has_license "$tool" "$stack"; then
+        note=" (license configured)"
+      else
+        note=" (requires --lic)"
+      fi
+    fi
+    echo "  - $tool$note"
+  done
+}
+
+parse_args() {
+  local tool=""
+  local positional=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --help|-h)
+        show_help
+        exit 0
+        ;;
+      --stack)
+        show_stack
+        exit 0
+        ;;
+      --list|-l)
+        show_list
+        exit 0
+        ;;
+      --lic)
+        if [[ -z "${2:-}" ]]; then
+          die "--lic requires a license name or index"
+        fi
+        LIC_REF="$2"
+        shift 2
+        ;;
+      --browser)
+        BROWSER_FLAG=true
+        shift
+        ;;
+      --force|-f)
+        FORCE_FLAG=true
+        shift
+        ;;
+      --config)
+        if [[ -z "${2:-}" ]]; then
+          die "--config requires a JSON config or file path"
+        fi
+        MCP_CONFIG="$2"
+        shift 2
+        ;;
+      --ai)
+        if [[ -z "${2:-}" ]]; then
+          die "--ai requires comma-separated AI systems"
+        fi
+        AI_SYSTEMS="$2"
+        shift 2
+        ;;
+      --no-interaction)
+        NO_INTERACTION=true
+        shift
+        ;;
+      -*)
+        die "Unknown option: $1. Use --help for usage."
+        ;;
+      *)
+        positional+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  # First positional arg is the tool
+  if [[ ${#positional[@]} -eq 0 ]]; then
+    show_help
+    exit 0
+  fi
+
+  echo "${positional[0]}"
+}
+
+main() {
+  local input
+  input=$(parse_args "$@")
+
+  local domain=""
+  local tools=()
+
+  # Parse domain.tool or domain.tool1.tool2 syntax
+  if [[ "$input" == *.* ]]; then
+    # Split by dots
+    IFS='.' read -ra parts <<< "$input"
+    domain="${parts[0]}"
+
+    # Rest are tools
+    for ((i=1; i<${#parts[@]}; i++)); do
+      tools+=("${parts[$i]}")
+    done
+  else
+    # Single tool, detect stack
+    tools=("$input")
+  fi
+
+  local stack
+
+  # Handle domain-based routing
+  if [[ -n "$domain" ]]; then
+    # Check if it's a special domain (like "ai") that doesn't need project detection
+    if [[ -v DOMAIN_STACKS[$domain] ]]; then
+      stack="$domain"
+      log "Using stack domain: $domain"
+    else
+      # Domain specifies expected stack - verify it matches
+      stack=$(detect_stack)
+
+      if [[ "$stack" == "$STACK_UNKNOWN" ]]; then
+        die "Could not detect project stack. Are you in a project directory?"
+      fi
+
+      # Check if domain matches detected stack (allow partial match)
+      if [[ "$stack" != "$domain"* && "$domain" != "$stack"* ]]; then
+        warn "Requested domain '$domain' but detected '$stack'"
+        if ! confirm "Continue anyway?"; then
+          die "Aborted"
+        fi
+      fi
+
+      log "Detected stack: $(stack_name "$stack") (domain: $domain)"
+    fi
+  else
+    # No domain, detect stack normally
+    stack=$(detect_stack)
+
+    if [[ "$stack" == "$STACK_UNKNOWN" ]]; then
+      die "Could not detect project stack. Are you in a project directory?"
+    fi
+
+    log "Detected stack: $(stack_name "$stack")"
+  fi
+
+  # Install each tool in order
+  for tool in "${tools[@]}"; do
+    route_tool "$tool" "$stack"
+  done
+}
+
+main "$@"

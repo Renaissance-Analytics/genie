@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# copy-screenshots - Copy Cursor browser screenshots to project folders
+#
+# Usage:
+#   copy-screenshots file1.png:dest1 file2.png:dest2 ...
+#   copy-screenshots --list        - List available screenshots
+#   copy-screenshots --help        - Show this help
+#
+# Env:
+#   CURSOR_TEMP_BASE   - Override Cursor temp base directory
+#   SCREENSHOTS_DIR    - Override target base directory (default: public/screenshots)
+#
+# Examples:
+#   copy-screenshots hero.png:landing modal.png:components
+#   copy-screenshots --list
+
+set -euo pipefail
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Setup
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Source bashrc to load aliases
+if [[ -f "${HOME}/.bashrc" ]]; then
+  source "${HOME}/.bashrc" 2>/dev/null || true
+  shopt -s expand_aliases 2>/dev/null || true
+fi
+
+# Find script directory and source libraries
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+source "$REPO_ROOT/lib/helpers.sh"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Best-effort default for Git Bash on Windows
+_guess_user() {
+  if [[ -n "${WINUSER:-}" ]]; then
+    printf "%s" "$WINUSER"
+    return
+  fi
+
+  # Try Windows %USERNAME%
+  local u
+  u="$(cmd.exe /c echo %USERNAME% 2>/dev/null | tr -d '\r' || true)"
+  if [[ -n "$u" && "$u" != "%USERNAME%" ]]; then
+    printf "%s" "$u"
+    return
+  fi
+
+  printf "%s" "${USERNAME:-${USER:-unknown}}"
+}
+
+WIN_USER="$(_guess_user)"
+TEMP_BASE_DEFAULT="/c/Users/${WIN_USER}/AppData/Local/Temp/cursor-browser-extension"
+TEMP_BASE="${CURSOR_TEMP_BASE:-$TEMP_BASE_DEFAULT}"
+TARGET_BASE="${SCREENSHOTS_DIR:-public/screenshots}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Functions
+# ─────────────────────────────────────────────────────────────────────────────
+
+find_source_dir() {
+  local src_dir
+  src_dir="$(ls -td "${TEMP_BASE}"/*/ 2>/dev/null | head -1 || true)"
+
+  if [[ -z "${src_dir}" ]]; then
+    die "No cursor-browser-extension temp folders found in: ${TEMP_BASE}"
+  fi
+
+  echo "$src_dir"
+}
+
+show_help() {
+  sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
+}
+
+show_list() {
+  local src_dir="$1"
+  info "Available screenshots in ${src_dir}:"
+  ls -1 "${src_dir}"*.png 2>/dev/null | xargs -n1 basename || echo "  (none)"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────────────────────
+
+main() {
+  # Handle flags
+  case "${1:-}" in
+    --help|-h)
+      show_help
+      exit 0
+      ;;
+    --list|-l)
+      local src_dir
+      src_dir=$(find_source_dir)
+      show_list "$src_dir"
+      exit 0
+      ;;
+  esac
+
+  local src_dir
+  src_dir=$(find_source_dir)
+
+  if [[ $# -eq 0 ]]; then
+    show_help
+    echo ""
+    show_list "$src_dir"
+    exit 1
+  fi
+
+  log "Source dir:  ${src_dir}"
+  log "Target base: ${TARGET_BASE}"
+  echo ""
+
+  local copied=0
+  local failed=0
+
+  for mapping in "$@"; do
+    local filename="${mapping%%:*}"
+    local destfolder="${mapping##*:}"
+
+    if [[ "$mapping" != *:* ]]; then
+      warn "Invalid mapping: '$mapping' (expected file:destfolder)"
+      ((failed++))
+      continue
+    fi
+
+    local src="${src_dir}${filename}"
+    local dest_dir="${TARGET_BASE}/${destfolder}"
+    local dest="${dest_dir}/${filename}"
+
+    mkdir -p "$dest_dir"
+
+    if [[ ! -f "$src" ]]; then
+      warn "NOT FOUND: ${filename} (expected: ${src})"
+      ((failed++))
+      continue
+    fi
+
+    if cp "$src" "$dest" 2>/dev/null; then
+      if rm "$src" 2>/dev/null; then
+        ok "${filename} → ${destfolder}/ (deleted source)"
+      else
+        ok "${filename} → ${destfolder}/ (⚠️ couldn't delete source)"
+      fi
+      ((copied++))
+    else
+      local err
+      err="$(cp "$src" "$dest" 2>&1 || true)"
+      warn "FAILED: ${filename} → ${destfolder}/ ($err)"
+      ((failed++))
+    fi
+  done
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "Copied: ${copied}  Failed: ${failed}"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
+main "$@"

@@ -25,6 +25,9 @@ export default function SettingsPage() {
     const [shellDefault, setShellDefault] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
     const [savedAt, setSavedAt] = useState<number | null>(null);
+    const [cliShipped, setCliShipped] = useState<boolean | null>(null);
+    const [cliBusy, setCliBusy] = useState(false);
+    const [cliMsg, setCliMsg] = useState<string | null>(null);
 
     useEffect(() => {
         (async () => {
@@ -45,6 +48,8 @@ export default function SettingsPage() {
             }));
             setShells(det.shells);
             setShellDefault(det.defaultId);
+            const info = await api().cli.info().catch(() => ({ shipped: false }));
+            setCliShipped(info.shipped);
         })();
     }, []);
 
@@ -204,6 +209,70 @@ export default function SettingsPage() {
                         </Text>
                     </div>
                 </div>
+            </Card>
+
+            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <Heading as="h2" size="sm">CLI tools</Heading>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                    <Switch
+                        checked={s.cli_tools_in_terminals !== 'off'}
+                        onCheckedChange={(on: boolean) =>
+                            patch({ cli_tools_in_terminals: on ? 'on' : 'off' })
+                        }
+                    />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <Text size="sm">Make wish-cli tools available in terminals</Text>
+                        <Text size="xs" className="text-zinc-500">
+                            Prepends the bundled toolkit (<code>resetme</code>,{' '}
+                            <code>reload</code>, <code>puse</code>, <code>sandbox</code>,
+                            …) to each Genie terminal&apos;s PATH and injects{' '}
+                            <code>GENIE_WORKSPACE</code> / <code>GENIE_ENVELOPE_ROOT</code>{' '}
+                            / <code>GENIE_REPO</code> so the tools and agents know which
+                            project they&apos;re working in. Bash-family shells only
+                            (Git Bash on Windows).
+                            {cliShipped === false && (
+                                <>
+                                    {' '}
+                                    <strong>Not bundled in this build.</strong>
+                                </>
+                            )}
+                        </Text>
+                    </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <Action
+                        variant="ghost"
+                        icon="download"
+                        disabled={cliBusy || cliShipped === false}
+                        onClick={async () => {
+                            setCliBusy(true);
+                            setCliMsg(null);
+                            try {
+                                const r = await api().cli.install();
+                                setCliMsg(
+                                    r.ok
+                                        ? 'Installed system-wide. Open a new Git Bash session to use the tools everywhere.'
+                                        : `Install failed: ${r.output}`,
+                                );
+                            } finally {
+                                setCliBusy(false);
+                            }
+                        }}
+                    >
+                        {cliBusy ? 'Installing…' : 'Install system-wide…'}
+                    </Action>
+                    {cliMsg && (
+                        <Text size="xs" className="text-zinc-500">
+                            {cliMsg}
+                        </Text>
+                    )}
+                </div>
+                <Text size="xs" className="text-zinc-500">
+                    System-wide install copies the toolkit to{' '}
+                    <code>~/.genie/wish-cli</code> and adds it to your{' '}
+                    <code>~/.bashrc</code> — so <code>resetme</code> works in any
+                    terminal, not just Genie&apos;s.
+                </Text>
             </Card>
 
             <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>

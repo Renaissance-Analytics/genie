@@ -8,7 +8,8 @@ import {
     type CreateTerminalOpts,
     type TerminalInfo,
 } from '@particle-academy/fancy-term-host';
-import { updateTerminalSpec } from '../db';
+import { getAllSettings, updateTerminalSpec } from '../db';
+import { buildWishCliEnv } from '../cli/wish-cli';
 import { getSnapshotStore, dbSettingsProvider } from './genie-adapter';
 
 /**
@@ -128,6 +129,15 @@ export function registerTerminalIpc(): void {
                     shell: resolved.command,
                     args: opts.args?.length ? opts.args : resolved.args,
                 };
+            }
+            // Make the bundled wish-cli (resetme/reload/…) available + inject
+            // GENIE_* workspace context. Additive + behind a setting (default
+            // on); user-supplied opts.env wins on any key collision.
+            const cliEnabled =
+                getAllSettings().cli_tools_in_terminals !== 'off';
+            const cliEnv = buildWishCliEnv(opts.cwd, cliEnabled);
+            if (Object.keys(cliEnv).length) {
+                opts = { ...opts, env: { ...cliEnv, ...opts.env } };
             }
             const result = mgr().create(opts);
             trackOwner(opts.id, event.sender);

@@ -1,0 +1,77 @@
+# Tynn CLI Configuration
+# Copy this file to tynn.config and customize for your environment
+# This file is ignored by git
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sandbox
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Path to your sandbox/test project directory
+# Used by the 'sandbox' command to quickly run commands in your test project
+SANDBOX_PATH=""
+
+# Example:
+# SANDBOX_PATH="/c/_Projects/my-test-project"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stack Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Force a specific stack (bypasses auto-detection)
+# Values: laravel, node, node-prisma, node-drizzle, node-knex, node-sequelize,
+#         node-typeorm, django, flask-alembic, go-migrate
+FORCE_STACK=""
+
+# Limit which stacks are allowed (comma-separated, empty = all allowed)
+# Commands will error if detected stack is not in this list
+ALLOWED_STACKS=""
+
+# Explicitly disallow certain stacks (comma-separated)
+# Commands will error if detected stack is in this list
+DISALLOWED_STACKS=""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tool Restrictions (per stack)
+# ─────────────────────────────────────────────────────────────────────────────
+# Limit which tools `puse` can install for each stack
+# Format: STACK_TOOLS_<STACK_ID>="tool1,tool2"
+# Empty = all tools allowed for that stack
+
+# Example: Only allow pest and flux for Laravel projects
+# STACK_TOOLS_LARAVEL="pest,flux"
+
+# Example: Only allow vitest for Node projects
+# STACK_TOOLS_NODE="vitest"
+# STACK_TOOLS_NODE_PRISMA="vitest,playwright"
+# STACK_TOOLS_NODE_DRIZZLE="vitest"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Licenses
+# ─────────────────────────────────────────────────────────────────────────────
+# Store license keys for tools that require authentication
+# Format: JSON array with objects containing:
+#   - name: A friendly name to reference with --lic flag
+#   - stack: Stack ID this license applies to (laravel, node, etc.)
+#   - tool: Tool name this license is for (flux, etc.)
+#   - params: Array of license parameters (varies by tool)
+#
+# Usage: puse flux --lic myflux
+#        puse flux --lic 0  (use first matching license)
+#
+# Example for Flux Pro (requires email + license key):
+# LICENSES='[
+#   {
+#     "name": "myflux",
+#     "stack": "laravel",
+#     "tool": "flux",
+#     "params": ["user@example.com", "FL-XXXX-XXXX-XXXX-XXXX"]
+#   },
+#   {
+#     "name": "work-flux",
+#     "stack": "laravel",
+#     "tool": "flux",
+#     "params": ["work@company.com", "FL-YYYY-YYYY-YYYY-YYYY"]
+#   }
+# ]'
+
+LICENSES='[]'

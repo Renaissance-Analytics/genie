@@ -92,6 +92,15 @@ extraResources:
     to: runtime
     filter:
       - '**/*'
+  # The wish-cli toolkit (resetme / reload / puse / sandbox / …) is vendored
+  # into resources/wish-cli (committed; refreshed by scripts/bundle-wish-cli.mjs)
+  # and shipped beside the app. main/cli/wish-cli.ts resolves
+  # <resources>/wish-cli/bin and prepends it to the PATH of Genie terminals
+  # (+ injects GENIE_* workspace context). Bash-family shells only.
+  - from: resources/wish-cli
+    to: wish-cli
+    filter:
+      - '**/*'
 
 # Custom protocol — genie:// — registered at install time. Story #150 uses
 # this for the OAuth callback handoff from tynn.ai/login.
