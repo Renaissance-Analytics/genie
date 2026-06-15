@@ -10,8 +10,18 @@ import TerminalPanel from './TerminalPanel';
 import CodePanel from '../Code/CodePanel';
 import { IconCode, IconPlus } from './icons';
 import { api, type TerminalSpec, type WorkspaceRow } from '../../lib/genie';
+import {
+    buildPanelList,
+    cellArea,
+    dims,
+    orderForMode,
+    resolveMode,
+    signature,
+    type LayoutMode,
+    type ResolvedMode,
+} from '../../lib/terminal-grid-layout';
 
-export type LayoutMode = 'auto' | 'focus-stack' | '2x2' | 'columns';
+export type { LayoutMode } from '../../lib/terminal-grid-layout';
 
 interface Props {
     /** Active-workspace specs only — these lay out the visible grid. */
@@ -42,10 +52,7 @@ interface Props {
     addDisabledReason?: string;
 }
 
-type ResolvedMode = 'g1' | 'g2x1' | 'focus-stack' | '2x2' | 'columns';
-
 const MIN_PANEL_PX = 160;
-const GUTTER_HIT = 12; // px hit area
 let LAYOUT_CACHE: Record<string, FrTracks> | null = null;
 
 interface FrTracks {
@@ -56,11 +63,19 @@ interface FrTracks {
 /**
  * Layout grid for selected terminal specs.
  *
- * Critical invariant: every panel sits as a direct child of the single
- * `.pgrid` container in every mode. Layout changes only mutate the
- * parent's grid template + each child's `gridArea`. React reconciliation
- * keeps each panel mounted by key (= spec.id), so xterm.js stays alive and
- * the pty isn't re-spawned on a layout switch.
+ * Critical invariant (the whole point of this component): EVERY selected
+ * panel — the active workspace's AND every other workspace's — is rendered in
+ * ONE keyed `.map()` inside ONE stable container. A panel's STYLE decides its
+ * role (grid placement when active+visible; `display:none` when off-workspace
+ * or hidden by a maximized sibling). Because no panel ever crosses array slots
+ * or subtrees on a workspace switch, React reconciles each instance by its
+ * stable key (= spec.id) and only mutates props — so xterm.js stays mounted and
+ * the pty isn't re-spawned. (The previous split — active panels in one array
+ * expression, background panels in a second — gave a crossing panel a different
+ * effective key per slot, which forced an unmount/remount and reset the pty.)
+ *
+ * Layout still only mutates the parent's grid template + each child's
+ * `gridArea`, so a LAYOUT switch is likewise mount-stable.
  *
  * Resizable: every split is draggable. The grid is modelled as N column
  * tracks × M row tracks of `fr` units; gutters between adjacent tracks
@@ -88,80 +103,23 @@ export default function TerminalGrid({
     addDisabled,
     addDisabledReason,
 }: Props) {
-    // Off-workspace selected panels: mounted but hidden so their PTYs keep
-    // running across a workspace switch.
-    const background = backgroundSpecs.map((spec) => (
-        <PanelFor
-            key={spec.id}
-            spec={spec}
-            workspacesById={workspacesById}
-            focused={false}
-            maximized={false}
-            style={{ display: 'none' }}
-            onClose={() => onClose(spec.id)}
-            onMaximize={() => onToggleMaximize(spec.id)}
-            onDisable={onDisable ? () => onDisable(spec.id) : undefined}
-            onMarkActive={() => onMarkActive(spec.id)}
-            onMarkInactive={() => onMarkInactive(spec.id)}
-        />
-    ));
-
-    if (specs.length === 0) {
-        return (
-            <div className="grid-wrap">
-                <div className="addtile-group">
-                    <button
-                        type="button"
-                        className="addtile"
-                        onClick={onAddTerminal}
-                        disabled={addDisabled}
-                        title={addDisabled ? addDisabledReason : undefined}
-                    >
-                        <span className="ai">
-                            <IconPlus size={18} />
-                        </span>
-                        <span className="at">Add Terminal</span>
-                        <span className="as">a live shell in this workspace</span>
-                    </button>
-                    {onAddCode && (
-                        <button
-                            type="button"
-                            className="addtile"
-                            onClick={onAddCode}
-                            disabled={addDisabled}
-                            title={addDisabled ? addDisabledReason : undefined}
-                        >
-                            <span className="ai">
-                                <IconCode size={18} />
-                            </span>
-                            <span className="at">Add Editor</span>
-                            <span className="as">
-                                browse + edit files in this workspace
-                            </span>
-                        </button>
-                    )}
-                </div>
-                <div style={{ display: 'none' }}>{background}</div>
-            </div>
-        );
-    }
-
+    // The resolved mode + ordering come from the ACTIVE workspace's visible
+    // specs only. With an empty active workspace, `specs` is empty: mode is
+    // 'g1', `ordered` is empty, and the unified list is all-background (every
+    // entry display:none). The add-tiles render as an OVERLAY sibling so the
+    // single keyed panel map stays mounted in the same parent — background
+    // panels don't remount when switching to/from an empty workspace.
     const mode: ResolvedMode = resolveMode(layoutMode, specs.length);
-
-    // Order panels for focus-stack: focused (or first) spec is the main
-    // panel; the rest fill the side stack in natural order.
-    let ordered = specs;
-    if (mode === 'focus-stack') {
-        const mainSpec = specs.find((s) => s.id === focusId) ?? specs[0];
-        ordered = [mainSpec, ...specs.filter((s) => s.id !== mainSpec.id)];
-    }
-
-    const showAddTile = mode === '2x2' && ordered.length < 4;
+    const ordered = orderForMode(mode, specs, focusId);
+    const empty = specs.length === 0;
+    const showAddTile = !empty && mode === '2x2' && ordered.length < 4;
 
     return (
         <ResizableGrid
             mode={mode}
             ordered={ordered}
+            background={backgroundSpecs}
+            empty={empty}
             workspacesById={workspacesById}
             activeWorkspaceId={activeWorkspaceId ?? null}
             focusId={focusId}
@@ -171,19 +129,24 @@ export default function TerminalGrid({
             onToggleMaximize={onToggleMaximize}
             onDisable={onDisable}
             onAddTerminal={onAddTerminal}
+            onAddCode={onAddCode}
             onMarkActive={onMarkActive}
             onMarkInactive={onMarkInactive}
             showAddTile={showAddTile}
             addDisabled={addDisabled}
             addDisabledReason={addDisabledReason}
-            background={background}
         />
     );
 }
 
 interface ResizableGridProps {
     mode: ResolvedMode;
+    /** Active-workspace visible specs, ordered for the resolved mode. */
     ordered: TerminalSpec[];
+    /** Off-workspace selected specs (kept mounted-hidden). */
+    background: TerminalSpec[];
+    /** True when the active workspace has no visible panels. */
+    empty: boolean;
     workspacesById: Map<string, WorkspaceRow>;
     activeWorkspaceId: string | null;
     focusId: string | null;
@@ -193,39 +156,12 @@ interface ResizableGridProps {
     onToggleMaximize: (id: string) => void;
     onDisable?: (id: string) => void;
     onAddTerminal: () => void;
+    onAddCode?: () => void;
     onMarkActive: (id: string) => void;
     onMarkInactive: (id: string) => void;
     showAddTile: boolean;
     addDisabled?: boolean;
     addDisabledReason?: string;
-    background: React.ReactNode;
-}
-
-/** Column/row track counts for a mode + panel count. */
-function dims(mode: ResolvedMode, count: number): { cols: number; rows: number } {
-    switch (mode) {
-        case 'g1':
-            return { cols: 1, rows: 1 };
-        case 'g2x1':
-            return { cols: 2, rows: 1 };
-        case 'columns':
-            return { cols: 3, rows: 1 };
-        case '2x2':
-            return { cols: 2, rows: 2 };
-        case 'focus-stack':
-            // Column 1 = main, column 2 = the vertical stack of (count-1).
-            return { cols: 2, rows: Math.max(1, count - 1) };
-    }
-}
-
-/**
- * A unique-per-arrangement signature so a workspace remembers sizes for
- * each distinct layout it has been arranged into (2-up vs 4-up keep their
- * own tracks). Mode + counts fully describe the gutter topology.
- */
-function signature(mode: ResolvedMode, count: number): string {
-    const d = dims(mode, count);
-    return `${mode}:${count}:${d.cols}x${d.rows}`;
 }
 
 function evenTracks(n: number): number[] {
@@ -235,6 +171,8 @@ function evenTracks(n: number): number[] {
 const ResizableGrid = ({
     mode,
     ordered,
+    background,
+    empty,
     workspacesById,
     activeWorkspaceId,
     focusId,
@@ -244,12 +182,12 @@ const ResizableGrid = ({
     onToggleMaximize,
     onDisable,
     onAddTerminal,
+    onAddCode,
     onMarkActive,
     onMarkInactive,
     showAddTile,
     addDisabled,
     addDisabledReason,
-    background,
 }: ResizableGridProps) => {
     const count = ordered.length;
     const { cols, rows } = dims(mode, count);
@@ -412,38 +350,40 @@ const ResizableGrid = ({
         gap: '1px',
     };
 
+    // THE UNIFIED LIST: active visible panels (with grid placement) followed
+    // by every off-workspace panel (display:none), all in ONE stably-ordered
+    // array. We render it through ONE keyed `.map()` below so no instance ever
+    // unmounts on a workspace switch (see the component-level comment).
+    const panels = buildPanelList({
+        ordered,
+        background,
+        mode,
+        maximizedId,
+    });
+
     return (
         <div className="grid-wrap">
             <div ref={wrapRef} className="pgrid resizable" style={gridStyle}>
-                {ordered.map((spec, i) => {
-                    const isMax = maximizedId === spec.id;
-                    const otherMaxed = maximized && !isMax;
-                    const style: CSSProperties = otherMaxed
-                        ? { display: 'none' }
-                        : isMax
-                          ? { gridArea: '1 / 1 / -1 / -1' }
-                          : cellArea(mode, i, count);
-                    const isMainInStack = mode === 'focus-stack' && i === 0;
-                    return (
-                        <PanelFor
-                            key={spec.id}
-                            spec={spec}
-                            workspacesById={workspacesById}
-                            focused={focusId === spec.id}
-                            maximized={isMax}
-                            style={style}
-                            onClose={() => onClose(spec.id)}
-                            onMaximize={() => onToggleMaximize(spec.id)}
-                            onMinimize={
-                                isMainInStack ? () => onFocus(spec.id) : undefined
-                            }
-                            onDisable={onDisable ? () => onDisable(spec.id) : undefined}
-                            onMarkActive={() => onMarkActive(spec.id)}
-                            onMarkInactive={() => onMarkInactive(spec.id)}
-                        />
-                    );
-                })}
-                {background}
+                {panels.map((p) => (
+                    <PanelFor
+                        key={p.spec.id}
+                        spec={p.spec}
+                        workspacesById={workspacesById}
+                        focused={p.visible && focusId === p.spec.id}
+                        maximized={p.isMaximized}
+                        style={p.style}
+                        onClose={() => onClose(p.spec.id)}
+                        onMaximize={() => onToggleMaximize(p.spec.id)}
+                        onMinimize={
+                            p.isMainInStack ? () => onFocus(p.spec.id) : undefined
+                        }
+                        onDisable={onDisable ? () => onDisable(p.spec.id) : undefined}
+                        onMarkActive={() => onMarkActive(p.spec.id)}
+                        onMarkInactive={() => onMarkInactive(p.spec.id)}
+                    />
+                ))}
+                {/* 2×2 add-tile: a non-panel child, AFTER the single panel map so
+                    it never re-splits the panel array. */}
                 {showAddTile && !maximized && (
                     <button
                         type="button"
@@ -460,7 +400,7 @@ const ResizableGrid = ({
                         <span className="as">from any project — pick on the left</span>
                     </button>
                 )}
-                {!maximized && (
+                {!empty && !maximized && (
                     <Gutters
                         mode={mode}
                         cols={cols}
@@ -470,6 +410,47 @@ const ResizableGrid = ({
                     />
                 )}
             </div>
+            {/* Empty-active-workspace state: the Add Terminal / Add Editor tiles
+                render as an OVERLAY over the (all-hidden) panel grid. Critically
+                the panel `.map()` above stays mounted in the SAME parent, so the
+                off-workspace background panels don't remount when switching
+                to/from an empty workspace. */}
+            {empty && (
+                <div className="addtile-overlay">
+                    <div className="addtile-group">
+                        <button
+                            type="button"
+                            className="addtile"
+                            onClick={onAddTerminal}
+                            disabled={addDisabled}
+                            title={addDisabled ? addDisabledReason : undefined}
+                        >
+                            <span className="ai">
+                                <IconPlus size={18} />
+                            </span>
+                            <span className="at">Add Terminal</span>
+                            <span className="as">a live shell in this workspace</span>
+                        </button>
+                        {onAddCode && (
+                            <button
+                                type="button"
+                                className="addtile"
+                                onClick={onAddCode}
+                                disabled={addDisabled}
+                                title={addDisabled ? addDisabledReason : undefined}
+                            >
+                                <span className="ai">
+                                    <IconCode size={18} />
+                                </span>
+                                <span className="at">Add Editor</span>
+                                <span className="as">
+                                    browse + edit files in this workspace
+                                </span>
+                            </button>
+                        )}
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
@@ -628,40 +609,4 @@ function PanelFor({
             onMarkInactive={onMarkInactive}
         />
     );
-}
-
-function resolveMode(mode: LayoutMode, count: number): ResolvedMode {
-    if (mode === 'focus-stack') return 'focus-stack';
-    if (mode === '2x2') return '2x2';
-    if (mode === 'columns') return 'columns';
-    // auto
-    if (count <= 1) return 'g1';
-    if (count === 2) return 'g2x1';
-    if (count === 3) return 'focus-stack';
-    return '2x2';
-}
-
-function cellArea(mode: ResolvedMode, index: number, count: number): CSSProperties {
-    if (mode === 'focus-stack') {
-        const stackRows = Math.max(1, count - 1);
-        if (index === 0) {
-            // main panel spans the entire column 1
-            return { gridColumn: '1', gridRow: `1 / span ${stackRows}` };
-        }
-        return { gridColumn: '2', gridRow: `${index} / span 1` };
-    }
-    if (mode === '2x2') {
-        // Cells fill in row-major order; index 0..3 maps to (row, col).
-        const row = Math.floor(index / 2) + 1;
-        const col = (index % 2) + 1;
-        return { gridColumn: String(col), gridRow: String(row) };
-    }
-    if (mode === 'g2x1') {
-        return { gridColumn: String(index + 1), gridRow: '1' };
-    }
-    if (mode === 'columns') {
-        return { gridColumn: String(index + 1), gridRow: '1' };
-    }
-    // g1
-    return { gridColumn: '1', gridRow: '1' };
 }

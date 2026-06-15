@@ -1321,8 +1321,21 @@
     flex: 1;
     min-width: 0;
     min-height: 0;
+    position: relative;
     background: var(--border-1);
     overflow: hidden;
+}
+/* Empty-active-workspace add-tiles. Rendered as an overlay sibling so the
+   single keyed panel grid (all panels display:none in this state) stays
+   mounted in the same parent — off-workspace background panels never remount
+   when switching to/from an empty workspace. Sits over the (empty) grid and
+   covers it fully. */
+.addtile-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    display: flex;
+    background: var(--border-1);
 }
 .pgrid {
     width: 100%;
