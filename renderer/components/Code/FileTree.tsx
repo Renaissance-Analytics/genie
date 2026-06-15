@@ -24,10 +24,18 @@ interface Props {
     locked: boolean;
     lockedRoot: string;
     /**
-     * Workspace-relative path of the open file when it has UNSAVED edits, or
-     * null. That node gets a `*` marker. Cleared by the panel on save.
+     * Workspace-relative paths of open tabs with UNSAVED edits. Each such node
+     * gets a `*` marker. Owned by the panel (survives tree hide/show) and
+     * cleared per-file on save.
      */
-    dirtyPath?: string | null;
+    dirtyPaths?: Set<string>;
+    /**
+     * Ids of the expanded folders. Controlled by the panel so expansion
+     * survives the tree being hidden/shown and persists across restarts.
+     */
+    expandedIds: string[];
+    /** Called whenever the expanded-folder set changes (panel persists it). */
+    onExpandedChange: (ids: string[]) => void;
     /**
      * Bumped by the panel after a save so the tree refetches git status (the
      * file just changed on disk, so its colour should update).
@@ -85,10 +93,11 @@ export default function FileTree({
     onUnlock,
     locked,
     lockedRoot,
-    dirtyPath,
+    dirtyPaths,
+    expandedIds,
+    onExpandedChange,
     gitRefreshKey,
 }: Props) {
-    const [expanded, setExpanded] = useState<string[]>([]);
     const [menu, setMenu] = useState<MenuState | null>(null);
     const [gitMap, setGitMap] = useState<GitStatusMap>({});
 
@@ -171,7 +180,7 @@ export default function FileTree({
                         : n;
                 }
                 const status = gitMap[n.id];
-                const isDirty = !!dirtyPath && n.id === dirtyPath;
+                const isDirty = !!dirtyPaths && dirtyPaths.has(n.id);
                 if (!status && !isDirty) return n;
                 const color = status ? STATUS_COLOR[status] : undefined;
                 const strike = status === 'deleted';
@@ -195,7 +204,7 @@ export default function FileTree({
                 return { ...n, label: labelNode as unknown as string };
             });
         return decorate(nodes);
-    }, [nodes, gitMap, dirtyPath]);
+    }, [nodes, gitMap, dirtyPaths]);
 
     /**
      * Resolve the folder a "create" op should target:
@@ -221,7 +230,8 @@ export default function FileTree({
         const rel = joinRel(dir, name.trim());
         try {
             await api().files.createFile(workspacePath, rel);
-            if (dir && !expanded.includes(dir)) setExpanded((p) => [...p, dir]);
+            if (dir && !expandedIds.includes(dir))
+                onExpandedChange([...expandedIds, dir]);
             await onTreeChanged();
             onOpenCreatedFile(rel);
         } catch (e) {
@@ -245,7 +255,7 @@ export default function FileTree({
         const rel = joinRel(dir, name.trim());
         try {
             await api().files.createFolder(workspacePath, rel);
-            setExpanded((p) => (p.includes(rel) ? p : [...p, rel]));
+            if (!expandedIds.includes(rel)) onExpandedChange([...expandedIds, rel]);
             await onTreeChanged();
         } catch (e) {
             await showPrompt({
@@ -340,8 +350,8 @@ export default function FileTree({
             <TreeNav
                 nodes={decorated}
                 selectedId={selectedId}
-                expandedIds={expanded}
-                onExpandedChange={setExpanded}
+                expandedIds={expandedIds}
+                onExpandedChange={onExpandedChange}
                 onSelect={(id) => {
                     if (folderIds.has(id)) return; // folder → expand/collapse only
                     onSelectFile(id);

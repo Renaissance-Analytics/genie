@@ -177,6 +177,14 @@ export interface ViewMeta {
     locked?: boolean;
     /** Workspace-relative folder the tree is rooted at when locked. '' = workspace root. */
     root?: string;
+    /** Code view: workspace-relative paths of the open editor tabs (in tab order). */
+    open_files?: string[];
+    /** Code view: workspace-relative path of the active (front) tab. */
+    active_file?: string;
+    /** Code view: when true, the file tree stays open after opening a file. */
+    tree_pinned?: boolean;
+    /** Code view: ids of the tree folders left expanded, restored on relaunch. */
+    expanded_tree_ids?: string[];
     [key: string]: unknown;
 }
 
