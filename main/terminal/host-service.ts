@@ -136,11 +136,18 @@ export function resolveShippedRuntime(): ServiceRuntime | null {
         try {
             const nodePath = path.join(root, nodeBin);
             if (!fs.existsSync(nodePath)) continue;
-            const nodePtyDir = path.join(root, 'node-pty');
-            const hasNodePty = fs.existsSync(nodePtyDir);
+            // node-pty (ABI-matched) ships as a package directory at
+            // `<root>/node-pty/`. The service sets `NODE_PATH = runtime.nodePtyDir`
+            // and the host does `require('node-pty')`, which Node resolves as
+            // `<NODE_PATH>/node-pty`. So `nodePtyDir` must be the PARENT that
+            // CONTAINS `node-pty/` — i.e. `<root>` itself, NOT `<root>/node-pty`.
+            // (Pointing NODE_PATH straight at the package dir makes the bare
+            // `require('node-pty')` resolve to `<root>/node-pty/node-pty` and fail.)
+            const nodePtyPkg = path.join(root, 'node-pty');
+            const hasNodePty = fs.existsSync(nodePtyPkg);
             return {
                 nodePath,
-                ...(hasNodePty ? { nodePtyDir } : {}),
+                ...(hasNodePty ? { nodePtyDir: root } : {}),
                 source: `shipped:${root}`,
             };
         } catch {

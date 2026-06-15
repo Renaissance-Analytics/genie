@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 /**
  * Per-user OS-service activation + backend-kind tracking (fancy-term-host@0.2.0
@@ -93,6 +96,25 @@ import {
 
 const snapshots = { writeSnapshot: () => 1, readSnapshot: () => null, deleteSnapshot: () => {} };
 
+/**
+ * Run `fn` with process.cwd() pointed at a fresh empty temp dir, restoring the
+ * original cwd afterwards. resolveShippedRuntime() probes
+ * `process.cwd()/resources/runtime`; a local `npm run build:runtime` leaves that
+ * artifact in the repo, which would otherwise make the "no shipped runtime"
+ * assertions flaky. An empty cwd guarantees the on-disk probe finds nothing.
+ */
+async function withEmptyCwd<T>(fn: () => Promise<T> | T): Promise<T> {
+    const original = process.cwd();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-host-test-'));
+    try {
+        process.chdir(dir);
+        return await fn();
+    } finally {
+        process.chdir(original);
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
 beforeEach(() => {
     state.ensureResult = {
         ok: true,
@@ -136,20 +158,27 @@ describe('activateHostService', () => {
     });
 
     it('falls back (no swap, kind stays inprocess) when no runtime resolves', async () => {
-        const r = await activateHostService({
-            snapshots: snapshots as never,
-            userDataDir: '/data',
-            runtime: null, // force resolveShippedRuntime, which falls to the mock…
+        // resolveShippedRuntime probes process.cwd()/resources/runtime; a local
+        // dev build can leave that artifact on disk, which would mask the
+        // "no runtime" path. Run from an empty cwd so only the mocked package
+        // resolver decides.
+        const r = await withEmptyCwd(async () => {
+            const r0 = await activateHostService({
+                snapshots: snapshots as never,
+                userDataDir: '/data',
+                runtime: null, // force resolveShippedRuntime, which falls to the mock…
+            });
+            // …and the mock resolveServiceRuntime returns null when state.runtime is null.
+            state.runtime = null;
+            // Re-run with the package resolver returning null.
+            const r2 = await activateHostService({
+                snapshots: snapshots as never,
+                userDataDir: '/data',
+            });
+            expect(r2.ok).toBe(false);
+            if (!r2.ok) expect(r2.reason).toMatch(/runtime/i);
+            return r0;
         });
-        // …and the mock resolveServiceRuntime returns null when state.runtime is null.
-        state.runtime = null;
-        // Re-run with the package resolver returning null.
-        const r2 = await activateHostService({
-            snapshots: snapshots as never,
-            userDataDir: '/data',
-        });
-        expect(r2.ok).toBe(false);
-        if (!r2.ok) expect(r2.reason).toMatch(/runtime/i);
         expect(ensureHostServiceMock).not.toHaveBeenCalledWith(
             expect.objectContaining({ ok: false }),
         );
@@ -206,12 +235,36 @@ describe('hostBackendKind self-correction', () => {
 });
 
 describe('resolveShippedRuntime', () => {
-    it('returns the package resolver result when no shipped runtime is on disk', () => {
+    it('returns the package resolver result when no shipped runtime is on disk', async () => {
         // No resources/runtime/node in the test env → falls through to the mocked
-        // resolveServiceRuntime, which returns state.runtime.
+        // resolveServiceRuntime, which returns state.runtime. Run from an empty
+        // cwd so a locally-built resources/runtime artifact can't be picked up.
         state.runtime = { nodePath: '/fallback/node', source: 'path' } as never;
-        const rt = resolveShippedRuntime();
+        const rt = await withEmptyCwd(async () => resolveShippedRuntime());
         expect(rt?.nodePath).toBe('/fallback/node');
+    });
+
+    it('points nodePtyDir at the runtime ROOT (parent of node-pty/) so NODE_PATH resolves require("node-pty")', () => {
+        // The service sets NODE_PATH = runtime.nodePtyDir and the host does
+        // `require('node-pty')`, which Node resolves as <NODE_PATH>/node-pty. So
+        // nodePtyDir MUST be the parent dir containing node-pty/, not the package
+        // dir itself. Build a fake shipped runtime on disk and assert the layout.
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-rt-'));
+        const original = process.cwd();
+        try {
+            const runtimeDir = path.join(root, 'resources', 'runtime');
+            fs.mkdirSync(path.join(runtimeDir, 'node-pty'), { recursive: true });
+            const nodeBin = process.platform === 'win32' ? 'node.exe' : 'node';
+            fs.writeFileSync(path.join(runtimeDir, nodeBin), '');
+            process.chdir(root);
+            const rt = resolveShippedRuntime();
+            expect(rt?.nodePath).toBe(path.join(runtimeDir, nodeBin));
+            // nodePtyDir is the ROOT, not root/node-pty.
+            expect(rt?.nodePtyDir).toBe(runtimeDir);
+        } finally {
+            process.chdir(original);
+            fs.rmSync(root, { recursive: true, force: true });
+        }
     });
 });
 

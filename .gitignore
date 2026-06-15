@@ -15,6 +15,11 @@ dist/
 release/
 out/
 
+# Per-user OS-service pty-host runtime — a BUILD ARTIFACT produced by
+# scripts/build-service-runtime.mjs (standalone Node + ABI-matched node-pty).
+# Regenerated per OS×arch in CI before packaging; never committed.
+resources/runtime/
+
 # OS / editor noise
 .DS_Store
 Thumbs.db

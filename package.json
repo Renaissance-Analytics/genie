@@ -6,9 +6,10 @@
   "main": "app/background.js",
   "scripts": {
     "dev": "nextron",
-    "build": "nextron build",
-    "build:win": "nextron build --win",
-    "build:mac": "nextron build --mac",
+    "build:runtime": "node scripts/build-service-runtime.mjs",
+    "build": "npm run build:runtime && nextron build",
+    "build:win": "npm run build:runtime && nextron build --win",
+    "build:mac": "npm run build:runtime && nextron build --mac",
     "postinstall": "electron-builder install-app-deps || echo \"native rebuild skipped — using bundled prebuilds (install VS Build Tools on Windows for ABI-clean release builds)\"",
     "typecheck:main": "tsc --noEmit -p main/tsconfig.json",
     "typecheck:renderer": "tsc --noEmit -p renderer/tsconfig.json",

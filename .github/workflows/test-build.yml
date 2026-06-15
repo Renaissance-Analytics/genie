@@ -1,0 +1,125 @@
+name: Test Build (no publish)
+
+# NON-PUBLISHING manual build. Produces the per-user OS-service runtime
+# (resources/runtime/) + the installers, and uploads the installers as workflow
+# ARTIFACTS only. It deliberately does NOT:
+#   - create a GitHub Release,
+#   - write/upload latest.yml / latest-mac.yml,
+#   - tag anything.
+# electron-builder is invoked with `--publish never`, so electron-updater is
+# NEVER triggered for existing users. Safe to run during a release freeze: the
+# artifacts here are smoke-test installers, not a release.
+on:
+  workflow_dispatch: {}
+
+# Read-only is enough — we never touch Releases. (Default is read anyway; pinned
+# explicit so a future default change can't silently grant write.)
+permissions:
+  contents: read
+
+jobs:
+  test-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # windows-2022 is the REQUIRED target (matches release.yml's pin —
+          # windows-latest 2025's VS layout broke node-gyp discovery). The
+          # runtime ships N-API prebuilds so no gyp rebuild is needed, but we
+          # keep the pin identical to the real release path.
+          - os: windows-2022
+            artifact: 'Genie*.exe'
+          - os: macos-latest
+            artifact: 'Genie-*.dmg'
+          - os: ubuntu-latest
+            artifact: 'Genie-*.AppImage'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Set up Python (node-gyp needs distutils)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        env:
+          CI: true
+        run: npm ci
+
+      - name: Build service runtime (resources/runtime)
+        # Standalone Node + ABI-matched node-pty for THIS os/arch. The script
+        # self-verifies node-pty loads under the downloaded standalone Node.
+        run: npm run build:runtime
+
+      - name: Assert runtime shipped (node + node-pty .node present)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            NODE_BIN="resources/runtime/node.exe"
+            PREBUILD="resources/runtime/node-pty/prebuilds/win32-x64/pty.node"
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            NODE_BIN="resources/runtime/node"
+            # macOS runner is arm64 by default on macos-latest.
+            PREBUILD="resources/runtime/node-pty/prebuilds/darwin-arm64/pty.node"
+          else
+            NODE_BIN="resources/runtime/node"
+            PREBUILD="resources/runtime/node-pty/prebuilds/linux-x64/pty.node"
+          fi
+          echo "checking $NODE_BIN"
+          test -f "$NODE_BIN" || { echo "MISSING standalone node: $NODE_BIN"; exit 1; }
+          echo "checking $PREBUILD"
+          test -f "$PREBUILD" || { echo "MISSING node-pty prebuild: $PREBUILD"; exit 1; }
+          echo "runtime OK: $NODE_BIN + $PREBUILD"
+
+      - name: Build installers (Windows) — NO publish
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          # No signing in the test build; explicitly opt out of auto-discovery so
+          # electron-builder doesn't treat an empty CSC_LINK as a cert path.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx nextron build --win --publish never
+
+      - name: Build installers (macOS) — NO publish
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx nextron build --mac --publish never
+
+      - name: Build installers (Linux) — NO publish
+        if: runner.os == 'Linux'
+        run: npx nextron build --linux --publish never
+
+      - name: Assert NO release manifest was produced
+        # Belt-and-braces: --publish never must not emit latest*.yml. Fail the run
+        # if one shows up, so a green run proves auto-update was never touched.
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ls dist/latest*.yml >/dev/null 2>&1; then
+            echo "ERROR: a latest*.yml manifest was produced — publish was not suppressed!"
+            ls -la dist/latest*.yml
+            exit 1
+          fi
+          echo "OK: no latest*.yml — auto-update manifest not generated."
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: genie-test-${{ matrix.os }}
+          path: |
+            dist/${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 14

@@ -114,6 +114,14 @@ jobs:
           CI: true
         run: npm ci
 
+      - name: Build service runtime (resources/runtime)
+        # Standalone Node + ABI-matched node-pty for THIS os/arch, shipped via
+        # electron-builder extraResources → <resources>/runtime. Without it the
+        # per-user OS-service host can't activate (Genie falls back to the
+        # detached host). Must run BEFORE nextron build so packaging includes it.
+        # The script self-verifies node-pty loads under the standalone Node.
+        run: npm run build:runtime
+
       # The build steps below conditionally export signing env vars only
       # when the corresponding secrets are present. Setting CSC_LINK="" (the
       # default when a secret isn't configured) makes electron-builder treat
