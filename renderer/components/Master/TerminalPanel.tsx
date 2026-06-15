@@ -23,6 +23,8 @@ interface Props {
      */
     onDisable?: () => void;
     focused?: boolean;
+    /** Agent-integration MCP: pulse the panel border (imDone) until focused. */
+    attention?: boolean;
     maximized?: boolean;
     style?: CSSProperties;
     onMarkActive: () => void;
@@ -56,6 +58,7 @@ export default function TerminalPanel({
     onMinimize,
     onDisable,
     focused,
+    attention,
     maximized,
     style,
     onMarkActive,
@@ -123,7 +126,7 @@ export default function TerminalPanel({
 
     return (
         <section
-            className={`tpanel${focused ? ' focus' : ''}`}
+            className={`tpanel${focused ? ' focus' : ''}${attention ? ' attention' : ''}`}
             style={style}
         >
             <div className="tpanel-head">

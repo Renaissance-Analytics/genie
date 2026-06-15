@@ -5,6 +5,7 @@ import {
     listWorkspaces,
     removeWorkspace,
     reorderWorkspaces,
+    setWorkspaceMcp,
     setSettings,
     touchWorkspace,
     updateWorkspace,
@@ -170,6 +171,10 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('workspaces:reorder', (_e, ids: string[]) => {
         reorderWorkspaces(ids);
         rebuildMenu();
+        return { ok: true };
+    });
+    ipcMain.handle('workspaces:set-mcp', (_e, id: string, enabled: boolean) => {
+        setWorkspaceMcp(id, enabled);
         return { ok: true };
     });
     ipcMain.handle('workspaces:open', async (_e, id: string) => {

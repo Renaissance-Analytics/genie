@@ -104,6 +104,9 @@ function MasterInner() {
     // active workspace back to most-recent.
     const seededActiveRef = useRef(false);
     const [activeIds, setActiveIds] = useState<Set<string>>(() => new Set());
+    // Agent-integration MCP: terminals that called imDone and want attention.
+    // Cleared when the terminal gets focus.
+    const [attentionIds, setAttentionIds] = useState<Set<string>>(() => new Set());
     const [focusId, setFocusId] = useState<string | null>(null);
     const [maximizedId, setMaximizedId] = useState<string | null>(null);
     const [chooserPinned, setChooserPinned] = useState(true);
@@ -137,6 +140,30 @@ function MasterInner() {
     useEffect(() => {
         return api().on.terminalHostStatus((p) => setToast(p.message));
     }, []);
+
+    // Agent-integration MCP: a terminal called imDone → start/stop its glow.
+    useEffect(() => {
+        return api().on.terminalAttention(({ id, on }) => {
+            setAttentionIds((prev) => {
+                if (on === prev.has(id)) return prev;
+                const next = new Set(prev);
+                if (on) next.add(id);
+                else next.delete(id);
+                return next;
+            });
+        });
+    }, []);
+
+    // Clear a terminal's attention glow as soon as it gets focus.
+    useEffect(() => {
+        if (!focusId) return;
+        setAttentionIds((prev) => {
+            if (!prev.has(focusId)) return prev;
+            const next = new Set(prev);
+            next.delete(focusId);
+            return next;
+        });
+    }, [focusId]);
 
     // Manual-quit terminal confirmation (T3). Main broadcasts the live host
     // terminals when the user quits with detached terminals running; we show a
@@ -832,6 +859,7 @@ function MasterInner() {
                         specs={specs}
                         selected={selected}
                         activeIds={activeIds}
+                        attentionIds={attentionIds}
                         activeWorkspaceId={activeWorkspaceId}
                         pinned={chooserPinned}
                         onTogglePin={() => setChooserPinned((p) => !p)}
@@ -861,6 +889,7 @@ function MasterInner() {
                         addDisabled={atMaxViews}
                         addDisabledReason={maxViewsReason}
                         focusId={focusId}
+                        attentionIds={attentionIds}
                         maximizedId={maximizedId}
                         onClose={closeSelected}
                         onFocus={(id) => setFocusId((cur) => (cur === id ? null : id))}
@@ -929,6 +958,17 @@ function MasterInner() {
                         onAddTerminal={() => void addSpec(ws.id)}
                         onOpenStage={() => openProjectInStage(ws.id)}
                         onOpenInBrowser={() => openProjectInBrowser(ws.id)}
+                        onToggleMcp={() => {
+                            const next = !ws.mcp_enabled;
+                            setWorkspaces((prev) =>
+                                prev.map((w) =>
+                                    w.id === ws.id
+                                        ? { ...w, mcp_enabled: next ? 1 : 0 }
+                                        : w,
+                                ),
+                            );
+                            void api().workspaces.setMcp(ws.id, next).catch(() => {});
+                        }}
                         onRemove={() => void removeWorkspaceRow(ws.id)}
                     />
                 );

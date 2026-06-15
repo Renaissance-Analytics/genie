@@ -43,6 +43,8 @@ export interface WorkspaceRow {
     created_by_genie: number;
     /** User-defined sidebar order (lower = higher). Assigned by main; optional on create. */
     sort_order?: number;
+    /** Agent-integration MCP enabled for this workspace's terminals (1/0). */
+    mcp_enabled?: number;
 }
 
 export interface DetectResult {
@@ -448,6 +450,8 @@ interface GenieApi {
         touch: (id: string) => Promise<{ ok: boolean }>;
         /** Persist a new sidebar order (full ordered list of workspace ids). */
         reorder: (ids: string[]) => Promise<{ ok: boolean }>;
+        /** Toggle the agent-integration MCP for a workspace's terminals. */
+        setMcp: (id: string, enabled: boolean) => Promise<{ ok: boolean }>;
         open: (id: string) => Promise<{ ok: boolean }>;
     };
     agi: {
@@ -707,6 +711,10 @@ interface GenieApi {
         terminalSnapshotRequest: (cb: () => void) => () => void;
         /** Live pty count broadcast (Tier 2 resource awareness). */
         terminalCount: (cb: (payload: { count: number }) => void) => () => void;
+        /** Agent-integration MCP: a terminal asked for attention (imDone) or cleared. */
+        terminalAttention: (
+            cb: (payload: { id: string; on: boolean }) => void,
+        ) => () => void;
         /** Tier 3 detached-host status — fired on fallback to in-process. */
         terminalHostStatus: (
             cb: (payload: { message: string; level: 'info' | 'warn' }) => void,

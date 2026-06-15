@@ -102,6 +102,8 @@ const api = {
         remove: (id: string) => ipcRenderer.invoke('workspaces:remove', id),
         touch: (id: string) => ipcRenderer.invoke('workspaces:touch', id),
         reorder: (ids: string[]) => ipcRenderer.invoke('workspaces:reorder', ids),
+        setMcp: (id: string, enabled: boolean) =>
+            ipcRenderer.invoke('workspaces:set-mcp', id, enabled),
         open: (id: string) => ipcRenderer.invoke('workspaces:open', id),
     },
 
@@ -362,6 +364,16 @@ const api = {
             const handler = (_e: unknown, payload: { count: number }) => cb(payload);
             ipcRenderer.on('terminal:count', handler);
             return () => ipcRenderer.off('terminal:count', handler);
+        },
+        /** Agent-integration MCP: a terminal asked for attention (imDone) or it
+         *  was cleared. The renderer pulses/clears that terminal's glow. */
+        terminalAttention: (
+            cb: (payload: { id: string; on: boolean }) => void,
+        ) => {
+            const handler = (_e: unknown, payload: { id: string; on: boolean }) =>
+                cb(payload);
+            ipcRenderer.on('terminal:attention', handler);
+            return () => ipcRenderer.off('terminal:attention', handler);
         },
         /** Tier 3 detached-host status — fired when the host is unavailable and
          *  Genie falls back to in-process. The renderer surfaces a non-fatal toast. */

@@ -18,6 +18,8 @@ interface Props {
     onMaximize?: () => void;
     onMinimize?: () => void;
     focused?: boolean;
+    /** Agent-integration MCP: pulse the panel border (imDone) until focused. */
+    attention?: boolean;
     maximized?: boolean;
     style?: CSSProperties;
     onMarkActive: () => void;
@@ -52,6 +54,7 @@ export default function ProcessPanel({
     onMaximize,
     onMinimize,
     focused,
+    attention,
     maximized,
     style,
     onMarkActive,
@@ -136,7 +139,10 @@ export default function ProcessPanel({
     const isLive = status === 'running' || status === 'restarting';
 
     return (
-        <section className={`tpanel${focused ? ' focus' : ''}`} style={style}>
+        <section
+            className={`tpanel${focused ? ' focus' : ''}${attention ? ' attention' : ''}`}
+            style={style}
+        >
             <div className="tpanel-head">
                 <span className={`pdot proc-dot proc-${status}`} />
                 <span className="pn">

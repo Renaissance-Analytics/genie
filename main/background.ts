@@ -11,7 +11,9 @@ import {
     requestFinalSnapshots,
     snapshotRetainedWindowless,
     terminalHasWindow,
+    broadcastTerminalAttention,
 } from './terminal/ipc';
+import { startMcpServer } from './mcp/server';
 import {
     initTerminalBackend,
     isHostBacked,
@@ -518,6 +520,12 @@ app.whenReady().then(async () => {
     registerFilesIpc();
     registerGithubIpc();
     registerUpdaterIpc();
+    // Agent-integration MCP server (loopback). imDone pulses the caller's
+    // terminal glow. Best-effort: a failed bind just means no MCP endpoints.
+    void startMcpServer({
+        serverVersion: app.getVersion(),
+        onImDone: (terminalId) => broadcastTerminalAttention(terminalId, true),
+    }).catch((e) => console.error('[mcp] failed to start', e));
     // Docs viewer IPC (docs:list / docs:read). __dirname is the compiled main
     // bundle dir; resolveDocsDir uses it to find the bundled docs/ in both dev
     // and the packaged asar.

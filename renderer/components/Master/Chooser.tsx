@@ -33,6 +33,8 @@ interface Props {
     specs: TerminalSpec[];
     selected: Set<string>;
     activeIds: Set<string>;
+    /** Agent-integration MCP: terminals pulsing for attention (imDone). */
+    attentionIds: Set<string>;
     activeWorkspaceId: string | null;
     pinned: boolean;
     onTogglePin: () => void;
@@ -64,6 +66,7 @@ export default function Chooser({
     specs,
     selected,
     activeIds,
+    attentionIds,
     activeWorkspaceId,
     pinned,
     onTogglePin,
@@ -160,6 +163,7 @@ export default function Chooser({
                 {orderedWorkspaces.map((ws) => {
                     const wsSpecs = byWorkspace.get(ws.id) ?? [];
                     const live = wsSpecs.filter((s) => activeIds.has(s.id)).length;
+                    const wsAttention = wsSpecs.some((s) => attentionIds.has(s.id));
                     const isActive = ws.id === activeWorkspaceId;
                     return (
                         <button
@@ -167,7 +171,7 @@ export default function Chooser({
                             type="button"
                             className={`crail-btn${live > 0 ? ' active' : ''}${
                                 isActive ? ' is-active' : ''
-                            }`}
+                            }${wsAttention ? ' attention' : ''}`}
                             onClick={() => onActivateWorkspace(ws.id)}
                             title={`${ws.project_name}${live > 0 ? ` · ${live} live` : ''}`}
                         >
@@ -330,6 +334,7 @@ export default function Chooser({
                                             spec={s}
                                             checked={selected.has(s.id)}
                                             live={activeIds.has(s.id)}
+                                            attention={attentionIds.has(s.id)}
                                             suspended={s.enabled === false}
                                             hostKind={hostBadgeKind(ws.backend)}
                                             hostLabel={ws.backend}
@@ -373,6 +378,7 @@ export default function Chooser({
                                                 spec={s}
                                                 checked={selected.has(s.id)}
                                                 live={activeIds.has(s.id)}
+                                                attention={attentionIds.has(s.id)}
                                                 suspended={s.enabled === false}
                                                 hostKind={hostBadgeKind(ws.backend)}
                                                 hostLabel="process"
@@ -419,6 +425,7 @@ export default function Chooser({
                                         spec={s}
                                         checked={selected.has(s.id)}
                                         live={activeIds.has(s.id)}
+                                        attention={attentionIds.has(s.id)}
                                         suspended={s.enabled === false}
                                         hostKind="desktop"
                                         hostLabel="local"
@@ -690,6 +697,8 @@ interface SpecRowProps {
     spec: TerminalSpec;
     checked: boolean;
     live: boolean;
+    /** Agent-integration MCP: this terminal is pulsing for attention (imDone). */
+    attention?: boolean;
     /** Tier 2: this spec is disabled-but-retained (suspended). */
     suspended: boolean;
     hostKind: string;
@@ -717,6 +726,7 @@ function SpecRow({
     spec,
     checked,
     live,
+    attention,
     suspended,
     hostKind,
     hostLabel,
@@ -741,7 +751,7 @@ function SpecRow({
     const onRowClick = suspended ? onEnable : onToggle;
     return (
         <div
-            className={`tterm${checked ? ' on sel' : ''}${suspended ? ' suspended' : ''}`}
+            className={`tterm${checked ? ' on sel' : ''}${suspended ? ' suspended' : ''}${attention ? ' attention' : ''}`}
             role="button"
             tabIndex={0}
             onClick={onRowClick}

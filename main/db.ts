@@ -245,6 +245,20 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v9: per-workspace agent-integration MCP toggle (alpha.47). Default
+            // 0 (OFF) — terminals in a workspace only get the Genie MCP endpoint
+            // + GENIE_MCP_URL env once the user opts the workspace in. Idempotent.
+            version: 9,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('mcp_enabled')) {
+                    db.exec(
+                        `ALTER TABLE workspaces ADD COLUMN mcp_enabled INTEGER NOT NULL DEFAULT 0`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -387,6 +401,8 @@ export interface WorkspaceRow {
     created_by_genie: number;
     /** User-defined sidebar order (lower = higher). New rows append to the bottom. */
     sort_order: number;
+    /** Agent-integration MCP enabled for this workspace's terminals. 0=off (default). */
+    mcp_enabled: number;
 }
 
 export function listWorkspaces(): WorkspaceRow[] {
@@ -431,7 +447,10 @@ export function getWorkspace(id: string): WorkspaceRow | undefined {
 }
 
 export function addWorkspace(
-    row: Omit<WorkspaceRow, 'sort_order'> & { sort_order?: number },
+    row: Omit<WorkspaceRow, 'sort_order' | 'mcp_enabled'> & {
+        sort_order?: number;
+        mcp_enabled?: number;
+    },
 ): WorkspaceRow {
     // Mirror project_id / project_name into the legacy tynn_* columns
     // because they're declared NOT NULL on v1 — even Aionima rows have to
@@ -498,6 +517,23 @@ export function touchWorkspace(id: string): void {
     getDb()
         .prepare('UPDATE workspaces SET last_opened_at = ? WHERE id = ?')
         .run(new Date().toISOString(), id);
+}
+
+/** Toggle the agent-integration MCP for a workspace's terminals. */
+export function setWorkspaceMcp(id: string, enabled: boolean): void {
+    getDb()
+        .prepare('UPDATE workspaces SET mcp_enabled = ? WHERE id = ?')
+        .run(enabled ? 1 : 0, id);
+}
+
+/** Whether the agent-integration MCP is enabled for a workspace (default off). */
+export function workspaceMcpEnabled(id: string): boolean {
+    const row = getDb()
+        .prepare<[string], { mcp_enabled: number } | undefined>(
+            'SELECT mcp_enabled FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    return !!row && row.mcp_enabled === 1;
 }
 
 // Backend connection helpers --------------------------------------------

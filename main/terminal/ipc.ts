@@ -8,9 +8,18 @@ import {
     type CreateTerminalOpts,
     type TerminalInfo,
 } from '@particle-academy/fancy-term-host';
-import { getAllSettings, getTerminalSpec, updateTerminalSpec } from '../db';
+import {
+    getAllSettings,
+    getTerminalSpec,
+    updateTerminalSpec,
+    workspaceMcpEnabled,
+} from '../db';
 import { buildWishCliEnv } from '../cli/wish-cli';
 import { buildProcessArgs } from './process-spawn';
+import {
+    registerTerminalEndpoint,
+    unregisterTerminalEndpoint,
+} from '../mcp/server';
 import { getSnapshotStore, dbSettingsProvider } from './genie-adapter';
 
 /**
@@ -150,6 +159,22 @@ export function registerTerminalIpc(): void {
             if (Object.keys(cliEnv).length) {
                 opts = { ...opts, env: { ...cliEnv, ...opts.env } };
             }
+            // Agent-integration MCP: when the spec's workspace has opted in, mint
+            // this terminal's auto-wired endpoint and expose it as GENIE_MCP_URL
+            // (+ GENIE_TERMINAL_ID) so an agent can drive the Genie UI (imDone).
+            if (spec?.workspace_id && workspaceMcpEnabled(spec.workspace_id)) {
+                const mcpUrl = registerTerminalEndpoint(opts.id);
+                if (mcpUrl) {
+                    opts = {
+                        ...opts,
+                        env: {
+                            GENIE_MCP_URL: mcpUrl,
+                            GENIE_TERMINAL_ID: opts.id,
+                            ...opts.env,
+                        },
+                    };
+                }
+            }
             const result = mgr().create(opts);
             trackOwner(opts.id, event.sender);
             return result;
@@ -179,6 +204,8 @@ export function registerTerminalIpc(): void {
 
     ipcMain.handle('terminal:kill', (_event, id: string): boolean => {
         ownersByTerminal.delete(id);
+        // Drop the per-terminal MCP endpoint so its token stops resolving.
+        unregisterTerminalEndpoint(id);
         // kill() also clears the retained flag in the manager.
         const killed = mgr().kill(id);
         // Delete (not just disable): drop the Tier 1 snapshot too so a deleted
@@ -326,6 +353,17 @@ export function broadcastTerminalCount(): void {
     const count = terminalManager().list().length;
     for (const w of BrowserWindow.getAllWindows()) {
         w.webContents.send('terminal:count', { count });
+    }
+}
+
+/**
+ * Push a terminal's "attention" state to every window (agent-integration MCP).
+ * The renderer pulses the matching terminal's glow in the rail, the flyout row,
+ * and the panel border until it gets focus. Called by the MCP `imDone` tool.
+ */
+export function broadcastTerminalAttention(id: string, on: boolean): void {
+    for (const w of BrowserWindow.getAllWindows()) {
+        w.webContents.send('terminal:attention', { id, on });
     }
 }
 

@@ -36,6 +36,8 @@ interface Props {
     /** Active workspace id — keys the persisted per-workspace track sizes. */
     activeWorkspaceId?: string | null;
     focusId: string | null;
+    /** Agent-integration MCP: terminals pulsing for attention (imDone). */
+    attentionIds: Set<string>;
     maximizedId: string | null;
     onClose: (id: string) => void;
     onFocus: (id: string) => void;
@@ -91,6 +93,7 @@ export default function TerminalGrid({
     workspacesById,
     activeWorkspaceId,
     focusId,
+    attentionIds,
     maximizedId,
     onClose,
     onFocus,
@@ -124,6 +127,7 @@ export default function TerminalGrid({
             workspacesById={workspacesById}
             activeWorkspaceId={activeWorkspaceId ?? null}
             focusId={focusId}
+            attentionIds={attentionIds}
             maximizedId={maximizedId}
             onClose={onClose}
             onFocus={onFocus}
@@ -151,6 +155,7 @@ interface ResizableGridProps {
     workspacesById: Map<string, WorkspaceRow>;
     activeWorkspaceId: string | null;
     focusId: string | null;
+    attentionIds: Set<string>;
     maximizedId: string | null;
     onClose: (id: string) => void;
     onFocus: (id: string) => void;
@@ -177,6 +182,7 @@ const ResizableGrid = ({
     workspacesById,
     activeWorkspaceId,
     focusId,
+    attentionIds,
     maximizedId,
     onClose,
     onFocus,
@@ -371,6 +377,7 @@ const ResizableGrid = ({
                         spec={p.spec}
                         workspacesById={workspacesById}
                         focused={p.visible && focusId === p.spec.id}
+                        attention={attentionIds.has(p.spec.id)}
                         maximized={p.isMaximized}
                         style={p.style}
                         onClose={() => onClose(p.spec.id)}
@@ -549,6 +556,8 @@ interface PanelForProps {
     spec: TerminalSpec;
     workspacesById: Map<string, WorkspaceRow>;
     focused: boolean;
+    /** Agent-integration MCP: pulse this panel's border (imDone). */
+    attention: boolean;
     maximized: boolean;
     style: CSSProperties;
     onClose: () => void;
@@ -567,6 +576,7 @@ function PanelFor({
     spec,
     workspacesById,
     focused,
+    attention,
     maximized,
     style,
     onClose,
@@ -586,6 +596,7 @@ function PanelFor({
                 spec={spec}
                 workspace={workspace}
                 focused={focused}
+                attention={attention}
                 maximized={maximized}
                 style={style}
                 onClose={onClose}
@@ -601,6 +612,7 @@ function PanelFor({
                 spec={spec}
                 workspace={workspace}
                 focused={focused}
+                attention={attention}
                 maximized={maximized}
                 style={style}
                 onClose={onClose}
@@ -616,6 +628,7 @@ function PanelFor({
         <TerminalPanel
             spec={spec}
             workspace={workspace}
+            attention={attention}
             focused={focused}
             maximized={maximized}
             style={style}

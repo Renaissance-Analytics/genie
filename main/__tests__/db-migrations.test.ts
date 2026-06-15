@@ -333,3 +333,34 @@ describe('db migration v8 (workspace sort_order)', () => {
         expect(cols(db, 'workspaces').has('sort_order')).toBe(true);
     });
 });
+
+describe('db migration v9 (per-workspace MCP toggle)', () => {
+    it('adds the mcp_enabled column to workspaces', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(cols(db, 'workspaces').has('mcp_enabled')).toBe(true);
+    });
+
+    it('a pre-existing workspace row defaults to mcp_enabled=0 (opt-in)', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces
+               (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, last_opened_at, created_by_genie)
+             VALUES ('w-mcp', 'tynn', 'p', 'P', 'p', 'P', 'simple', '/tmp/p', NULL, 0)`,
+        ).run();
+        const row = db
+            .prepare<[string], { mcp_enabled: number }>(
+                'SELECT mcp_enabled FROM workspaces WHERE id = ?',
+            )
+            .get('w-mcp');
+        expect(row?.mcp_enabled).toBe(0);
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'workspaces').has('mcp_enabled')).toBe(true);
+    });
+});

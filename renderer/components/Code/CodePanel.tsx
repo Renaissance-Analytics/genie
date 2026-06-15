@@ -29,6 +29,8 @@ interface Props {
     onMaximize?: () => void;
     onMinimize?: () => void;
     focused?: boolean;
+    /** Agent-integration MCP: pulse the panel border (imDone) until focused. */
+    attention?: boolean;
     maximized?: boolean;
     style?: CSSProperties;
 }
@@ -110,6 +112,7 @@ export default function CodePanel({
     onMaximize,
     onMinimize,
     focused,
+    attention,
     maximized,
     style,
 }: Props) {
@@ -433,7 +436,10 @@ export default function CodePanel({
     }, [locked, unlock, persistMeta]);
 
     return (
-        <section className={`tpanel${focused ? ' focus' : ''}`} style={style}>
+        <section
+            className={`tpanel${focused ? ' focus' : ''}${attention ? ' attention' : ''}`}
+            style={style}
+        >
             <div className="tpanel-head">
                 {/* LEFT cluster: tree-toggle + pin sit where the tree opens. */}
                 <span className="pa pa-left">
