@@ -429,7 +429,11 @@ export async function convertToAgiPlan(opts: ConvertPlanOpts): Promise<CreateAgi
     for (const r of opts.repos) {
         const submodulePath = `repos/${r.submodule_name}`;
         try {
-            await runGitSubmoduleAdd(base.path, r.source, submodulePath);
+            // The plan declares whether a member is sourced from a local path
+            // (a nested repo with no usable origin) vs. a clonable remote. Pass
+            // that through so local members get protocol.file.allow=always even
+            // when their path shape (relative / UNC) escapes isLocalPathLikeUrl.
+            await runGitSubmoduleAdd(base.path, r.source, submodulePath, r.is_local);
         } catch (e) {
             throw new Error(
                 `Failed to add submodule from ${r.source} → ${submodulePath}: ${(e as Error).message}`,
@@ -646,9 +650,18 @@ async function runGitSubmoduleAdd(
     cwd: string,
     url: string,
     targetPath: string,
+    /**
+     * Force the local-path treatment (protocol.file.allow=always) even when
+     * `url` doesn't look absolute. The interactive plan marks members
+     * `is_local` explicitly — their source can be a relative or UNC path that
+     * `isLocalPathLikeUrl` wouldn't recognise, but which still needs the flag
+     * or git refuses with "transport 'file' not allowed". When omitted we fall
+     * back to sniffing the URL shape (the single-source convert path).
+     */
+    forceLocal = false,
 ): Promise<void> {
     const env: NodeJS.ProcessEnv = { ...process.env };
-    if (isLocalPathLikeUrl(url)) {
+    if (forceLocal || isLocalPathLikeUrl(url)) {
         env.GIT_CONFIG_COUNT = String((Number(env.GIT_CONFIG_COUNT ?? '0') || 0) + 1);
         const idx = Number(env.GIT_CONFIG_COUNT) - 1;
         env[`GIT_CONFIG_KEY_${idx}`] = 'protocol.file.allow';
@@ -695,14 +708,25 @@ async function readSubmoduleBranch(
 }
 
 /**
- * True for absolute local paths (POSIX or Windows) and `file://` URLs —
- * the cases where modern git refuses to fetch a submodule without an
- * explicit `protocol.file.allow=always`.
+ * True for local filesystem paths and `file://` URLs — the cases where
+ * modern git refuses to fetch a submodule without an explicit
+ * `protocol.file.allow=always`. Covers absolute POSIX (`/…`) and Windows
+ * (`C:\…`) paths, `file://` URLs, UNC shares (`\\server\share`), and
+ * relative paths (`./…`, `../…`). It deliberately does NOT match scheme
+ * URLs (`https://`, `ssh://`, `git@host:…`) — those clone over the network
+ * and ignore the flag. The leading guard rules out a `scheme://` before the
+ * relative-path check so a URL like `https://x` isn't mistaken for local.
  */
 function isLocalPathLikeUrl(value: string): boolean {
     if (value.startsWith('file://')) return true;
     if (value.startsWith('/')) return true;
-    if (/^[A-Za-z]:[\\/]/.test(value)) return true;
+    if (/^[A-Za-z]:[\\/]/.test(value)) return true; // C:\ or C:/
+    if (value.startsWith('\\\\')) return true; // UNC \\server\share
+    // Relative paths (./ ../ .\ ..\) — local, but only when this isn't a
+    // scheme URL (those never start with . anyway, but be explicit).
+    if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(value) && /^\.\.?[\\/]/.test(value)) {
+        return true;
+    }
     return false;
 }
 

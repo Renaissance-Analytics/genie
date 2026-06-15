@@ -309,6 +309,77 @@ describe('convertToAgi (local source)', () => {
     });
 });
 
+describe('local-only paths (no GitHub, no remote)', () => {
+    it('createAgiEnvelope with {kind:none} builds a valid local repo and NO remote', async () => {
+        const parent = makeTmpDir('local-create');
+        const res = await createAgiEnvelope({
+            slug: 'localcreate',
+            name: 'Local Create',
+            parent_path: parent,
+            remote: { kind: 'none' },
+        });
+        expect(res.remote).toBeUndefined();
+        expect(res.git_log_count).toBe(1);
+        const git = simpleGit(res.path);
+        // A real local git repo with an initial commit and zero remotes.
+        const remotes = await git.getRemotes();
+        expect(remotes.length).toBe(0);
+        const log = await git.log();
+        expect(log.total).toBe(1);
+    });
+
+    it('convertToAgi wraps a no-origin local repo with {kind:none} — local submodule, no remote', async () => {
+        const source = makeTmpDir('local-conv-src');
+        await seedGitRepo(source); // seedGitRepo never sets an origin
+        // No origin remote on the source — the submodule must source from the
+        // local path itself, not error on a missing remote.
+        const origin = await simpleGit(source).getConfig('remote.origin.url');
+        expect(origin.value).toBeFalsy();
+
+        const parent = makeTmpDir('local-conv-dest');
+        const res = await convertToAgi({
+            slug: 'localwrap',
+            name: 'Local Wrap',
+            parent_path: parent,
+            source: { kind: 'local', path: source },
+            sub_name: 'core',
+            remote: { kind: 'none' },
+        });
+
+        // Submodule materialised from the local path; .gitmodules records it.
+        expect(fs.existsSync(path.join(res.path, 'repos/core'))).toBe(true);
+        expect(res.submodule_url).toBe(source);
+        const gm = fs.readFileSync(path.join(res.path, '.gitmodules'), 'utf8');
+        expect(gm).toMatch(/path = repos\/core/);
+        // Envelope has no remote — nothing was pushed or required from GitHub.
+        const remotes = await simpleGit(res.path).getRemotes();
+        expect(remotes.length).toBe(0);
+    });
+
+    it('convertToAgiPlan honours is_local for a member whose source is a no-origin local repo', async () => {
+        // Mirrors the interactive Upgrade wizard's explode path: a member repo
+        // with no GitHub origin is submoduled straight from its local path.
+        const mem = makeTmpDir('local-plan-mem');
+        await seedGitRepo(mem);
+        const parent = makeTmpDir('local-plan-dest');
+
+        const res = await convertToAgiPlan({
+            slug: 'localplan',
+            name: 'Local Plan',
+            parent_path: parent,
+            repos: [{ source: mem, is_local: true, submodule_name: 'app' }],
+            knowledge: [],
+            remote: { kind: 'none' },
+        });
+
+        expect(fs.existsSync(path.join(res.path, 'repos', 'app'))).toBe(true);
+        const remotes = await simpleGit(res.path).getRemotes();
+        expect(remotes.length).toBe(0);
+        const pj = readProjectJson(res.path)!;
+        expect(pj.repos?.[0].url).toBe(mem);
+    });
+});
+
 describe('convertToAgiPlan (monorepo explode)', () => {
     it('adds members as submodules with branches + host/package roles', async () => {
         // Three independent member repos — the explode flow sources each by
