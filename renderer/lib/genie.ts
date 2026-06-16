@@ -55,6 +55,22 @@ export interface DetectResult {
     repos: string[];
 }
 
+/** A ForceTheQuestion question pushed to the modal (mirrors the MCP schema). */
+export interface ForceQuestionSpec {
+    header: string;
+    question: string;
+    multiSelect?: boolean;
+    options: Array<{ label: string; description?: string }>;
+}
+
+/** The user's answer to one ForceTheQuestion question. */
+export interface ForceAnswerSpec {
+    header: string;
+    question: string;
+    selected: string[];
+    note: string;
+}
+
 export interface Settings {
     primary_workspace?: string;
     /** Last-activated workspace id in the master view. */
@@ -81,6 +97,11 @@ export interface Settings {
     /** Prepend the bundled tynn-cli bin to terminal PATH + inject GENIE_* env.
      *  Defaults ON; 'off' disables. */
     cli_tools_in_terminals?: 'on' | 'off';
+    /** Play a chime when an agent calls imDone. Defaults 'off'. */
+    notify_sound?: 'on' | 'off';
+    /** Show an OS notification (tray popup) when an agent calls imDone.
+     *  Defaults 'off'. */
+    notify_toast?: 'on' | 'off';
 }
 
 export interface DocEntry {
@@ -460,6 +481,8 @@ interface GenieApi {
         reorder: (ids: string[]) => Promise<{ ok: boolean }>;
         /** Toggle the agent-integration MCP for a workspace's terminals. */
         setMcp: (id: string, enabled: boolean) => Promise<{ ok: boolean }>;
+        /** Repo subfolder names under the workspace envelope (for Add Process cwd). */
+        repos: (id: string) => Promise<string[]>;
         open: (id: string) => Promise<{ ok: boolean }>;
     };
     agi: {
@@ -710,6 +733,16 @@ interface GenieApi {
         ) => Promise<{ ok: boolean; retainedCount: number; max: number; reason?: string }>;
         kill: (id: string) => Promise<boolean>;
         list: () => Promise<Array<{ id: string; pid: number; shell: string }>>;
+        /** Agent-integration MCP: clear a terminal's attention glow (imDone). */
+        clearAttention: (id: string) => Promise<void>;
+    };
+    /** Agent-integration MCP: the ForceTheQuestion OS-level modal. */
+    ask: {
+        onShow: (
+            cb: (payload: { id: string; questions: ForceQuestionSpec[] }) => void,
+        ) => () => void;
+        answer: (id: string, answers: ForceAnswerSpec[]) => Promise<void>;
+        cancel: (id: string) => Promise<void>;
     };
     on: {
         authChanged: (
@@ -719,6 +752,8 @@ interface GenieApi {
             }) => void,
         ) => () => void;
         inboxUpdated: (cb: (payload: { count: number }) => void) => () => void;
+        /** Customization: play a notification chime (agent imDone). */
+        notifySound: (cb: (payload: { kind: string }) => void) => () => void;
         terminalData: (
             cb: (payload: { id: string; data: string }) => void,
         ) => () => void;

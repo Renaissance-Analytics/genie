@@ -7,6 +7,7 @@ import {
     Input,
     Select,
     Switch,
+    Tabs,
     Text,
 } from '@particle-academy/react-fancy';
 import {
@@ -83,6 +84,18 @@ export default function SettingsPage() {
             <Heading as="h1" size="lg">
                 <Icon name="settings" size="md" className="text-zinc-500" /> Settings
             </Heading>
+
+            <Tabs defaultTab="general" variant="underline">
+                <Tabs.List>
+                    <Tabs.Tab value="general">General</Tabs.Tab>
+                    <Tabs.Tab value="tools">Tools</Tabs.Tab>
+                    <Tabs.Tab value="workspaces">Workspaces</Tabs.Tab>
+                    <Tabs.Tab value="customization">Customization</Tabs.Tab>
+                    <Tabs.Tab value="connections">Connections</Tabs.Tab>
+                    <Tabs.Tab value="updates">Updates</Tabs.Tab>
+                </Tabs.List>
+                <Tabs.Panels>
+                    <Tabs.Panel value="general" className="settings-tab">
 
             <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Heading as="h2" size="sm">Primary workspace</Heading>
@@ -211,6 +224,9 @@ export default function SettingsPage() {
                 </div>
             </Card>
 
+                    </Tabs.Panel>
+                    <Tabs.Panel value="tools" className="settings-tab">
+
             <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Heading as="h2" size="sm">CLI tools</Heading>
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
@@ -275,6 +291,9 @@ export default function SettingsPage() {
                 </Text>
             </Card>
 
+                    </Tabs.Panel>
+                    <Tabs.Panel value="workspaces" className="settings-tab">
+
             <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Heading as="h2" size="sm">Workspace layout</Heading>
                 <Input
@@ -310,6 +329,47 @@ export default function SettingsPage() {
                 />
             </Card>
 
+                    </Tabs.Panel>
+                    <Tabs.Panel value="customization" className="settings-tab">
+
+            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <Heading as="h2" size="sm">Notifications</Heading>
+                <Text size="xs" className="text-zinc-500">
+                    How Genie alerts you when an agent in a terminal calls{' '}
+                    <code>imDone</code>. The terminal always glows in the sidebar;
+                    these add an audible and/or system-tray alert on top.
+                </Text>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                    <Switch
+                        checked={s.notify_sound === 'on'}
+                        onCheckedChange={(on: boolean) =>
+                            patch({ notify_sound: on ? 'on' : 'off' })
+                        }
+                    />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <Text size="sm">Play a sound</Text>
+                        <Text size="xs" className="text-zinc-500">
+                            A short chime when an agent finishes.
+                        </Text>
+                    </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                    <Switch
+                        checked={s.notify_toast === 'on'}
+                        onCheckedChange={(on: boolean) =>
+                            patch({ notify_toast: on ? 'on' : 'off' })
+                        }
+                    />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <Text size="sm">Show a tray popup</Text>
+                        <Text size="xs" className="text-zinc-500">
+                            A system notification from the tray; click it to bring
+                            Genie to the front.
+                        </Text>
+                    </div>
+                </div>
+            </Card>
+
             <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Heading as="h2" size="sm">Quick capture hotkey</Heading>
                 <Input
@@ -320,6 +380,9 @@ export default function SettingsPage() {
                 />
             </Card>
 
+                    </Tabs.Panel>
+                    <Tabs.Panel value="connections" className="settings-tab">
+
             <TynnSection
                 hostOverride={s.tynn_host ?? ''}
                 onHostOverrideChange={(v) => patch({ tynn_host: v })}
@@ -327,11 +390,18 @@ export default function SettingsPage() {
 
             <GitHubSection />
 
+            <AionimaSection />
+
+                    </Tabs.Panel>
+                    <Tabs.Panel value="updates" className="settings-tab">
+
             <UpdaterSection />
 
             <StartupSection />
 
-            <AionimaSection />
+                    </Tabs.Panel>
+                </Tabs.Panels>
+            </Tabs>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                 {savedAt && (

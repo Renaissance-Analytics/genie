@@ -1,6 +1,11 @@
 import http from 'http';
 import crypto from 'crypto';
-import { handleMcpMessage, type JsonRpcRequest } from './protocol';
+import {
+    handleMcpMessage,
+    type ForceQuestion,
+    type ForceQuestionResult,
+    type JsonRpcRequest,
+} from './protocol';
 
 /**
  * Genie's local MCP server — a tiny HTTP/JSON-RPC endpoint that lets agents
@@ -20,6 +25,11 @@ interface ServerDeps {
     serverVersion: string;
     /** Pulse the given terminal's attention glow (imDone). */
     onImDone: (terminalId: string) => void;
+    /** Raise the OS-level question modal (ForceTheQuestion). */
+    onForceQuestion: (
+        terminalId: string,
+        questions: ForceQuestion[],
+    ) => Promise<ForceQuestionResult>;
 }
 
 let server: http.Server | null = null;
@@ -91,11 +101,12 @@ async function handle(
         return;
     }
 
-    const response = handleMcpMessage(msg, {
+    const response = await handleMcpMessage(msg, {
         terminalId,
         serverName: SERVER_NAME,
         serverVersion: deps.serverVersion,
         onImDone: deps.onImDone,
+        onForceQuestion: deps.onForceQuestion,
     });
     // Notifications get a 202 with no body; requests get their JSON-RPC result.
     if (response === null) send(res, 202);

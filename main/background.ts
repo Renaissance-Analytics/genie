@@ -1,11 +1,19 @@
-import { app, BrowserWindow, ipcMain, nativeImage, session } from 'electron';
+import {
+    app,
+    BrowserWindow,
+    ipcMain,
+    nativeImage,
+    Notification,
+    session,
+} from 'electron';
 import fs from 'fs';
 import path from 'path';
 import { createTray } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { registerIpcHandlers } from './ipc';
-import { initDatabase, listWorkspaces } from './db';
+import { initDatabase, listWorkspaces, getAllSettings, getTerminalSpec } from './db';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
+import { registerForceQuestionIpc, forceQuestion } from './ask/force-question';
 import { registerProtocolHandler, handleGenieUrl } from './auth';
 import {
     registerTerminalIpc,
@@ -64,6 +72,45 @@ import { installAppMenu } from './app-menu';
 
 const isProd = process.env.NODE_ENV === 'production';
 const isDev = !isProd;
+
+/**
+ * Notify the user that an agent called imDone, per the Customization settings:
+ *   - notify_sound → broadcast `notify:sound` so a renderer synthesizes a chime
+ *     (no audio asset shipped; the tray window is always alive to play it).
+ *   - notify_toast → an OS notification (the "tray popup"), reusing Electron's
+ *     native Notification (proven in updater/ipc.ts).
+ * Both default off and are independent of the always-on attention glow.
+ */
+function notifyImDone(terminalId: string): void {
+    let settings;
+    try {
+        settings = getAllSettings();
+    } catch {
+        return;
+    }
+    if (settings.notify_sound === 'on') {
+        // Send to exactly one live renderer so the chime plays once. A hidden
+        // window still runs its renderer, so this works tray-resident too.
+        const target =
+            (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null) ??
+            BrowserWindow.getAllWindows()[0];
+        target?.webContents.send('notify:sound', { kind: 'imDone' });
+    }
+    if (settings.notify_toast === 'on' && Notification.isSupported()) {
+        const label = getTerminalSpec(terminalId)?.label ?? 'A terminal';
+        const n = new Notification({
+            title: 'Genie — agent finished',
+            body: `${label} is done and waiting for you.`,
+            silent: settings.notify_sound === 'on', // don't double up with our chime
+        });
+        n.on('click', () => {
+            const win = mainWindow ?? BrowserWindow.getAllWindows()[0];
+            win?.show();
+            win?.focus();
+        });
+        n.show();
+    }
+}
 
 // Single-instance lock. If a second copy of Genie is launched (e.g. clicking
 // a genie:// URL), the existing process gets the activation event and the
@@ -585,11 +632,21 @@ app.whenReady().then(async () => {
     // they run in the pty backend with no panel; the supervisor broadcasts
     // status to the workspace-row indicator + inline manager.
     startAutostartProcesses();
+    // ForceTheQuestion modal IPC (the agent-integration MCP raises it).
+    registerForceQuestionIpc({
+        isDev,
+        preloadPath: path.join(__dirname, 'preload.js'),
+    });
     // Agent-integration MCP server (loopback). imDone pulses the caller's
-    // terminal glow. Best-effort: a failed bind just means no MCP endpoints.
+    // terminal glow + optional chime/toast; ForceTheQuestion raises the modal.
+    // Best-effort: a failed bind just means no MCP endpoints.
     void startMcpServer({
         serverVersion: app.getVersion(),
-        onImDone: (terminalId) => broadcastTerminalAttention(terminalId, true),
+        onImDone: (terminalId) => {
+            broadcastTerminalAttention(terminalId, true);
+            notifyImDone(terminalId);
+        },
+        onForceQuestion: (_terminalId, questions) => forceQuestion(questions),
     }).catch((e) => console.error('[mcp] failed to start', e));
     // Backfill the genie MCP entry into the Claude/Cursor config of any
     // workspace already opted in (covers workspaces enabled before agent-config

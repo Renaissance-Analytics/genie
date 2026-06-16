@@ -52,8 +52,14 @@ interface Props {
     onAddWorkspace: () => void;
     /** Persist a new sidebar order (full ordered list of workspace ids). */
     onReorderWorkspaces: (ids: string[]) => void;
-    /** Create a Process (background service runner) for a workspace. */
-    onAddProcess: (workspaceId: string, command: string, label?: string) => void;
+    /** Create a Process (background service runner) for a workspace. `cwd`
+     *  targets a specific repo (or the envelope root when omitted). */
+    onAddProcess: (
+        workspaceId: string,
+        command: string,
+        label?: string,
+        cwd?: string,
+    ) => void;
 }
 
 /**
@@ -83,14 +89,33 @@ export default function Chooser({
     onReorderWorkspaces,
     onAddProcess,
 }: Props) {
-    const promptAddProcess = async (workspaceId: string) => {
-        const command = await showPrompt({
-            title: 'New process',
-            label: 'Command',
-            placeholder: 'php artisan queue:work',
-            confirmLabel: 'Create',
-        });
-        if (command && command.trim()) onAddProcess(workspaceId, command.trim());
+    // Inline Add-Process form: which workspace's form is open, its fields, and
+    // the cached repo list (root + repos/<name>) for the cwd picker.
+    const [addProcFor, setAddProcFor] = useState<string | null>(null);
+    const [procLabel, setProcLabel] = useState('');
+    const [procCommand, setProcCommand] = useState('');
+    const [procCwd, setProcCwd] = useState(''); // '' = envelope root
+    const [procRepos, setProcRepos] = useState<string[]>([]);
+
+    const openAddProcess = (ws: WorkspaceRow) => {
+        setAddProcFor(ws.id);
+        setProcLabel('');
+        setProcCommand('');
+        setProcCwd('');
+        setProcRepos([]);
+        void api()
+            .workspaces.repos(ws.id)
+            .then(setProcRepos)
+            .catch(() => setProcRepos([]));
+    };
+
+    const submitAddProcess = (ws: WorkspaceRow) => {
+        const cmd = procCommand.trim();
+        if (!cmd) return;
+        // procCwd holds a repo name; resolve to <root>/repos/<name>, or root.
+        const cwd = procCwd ? `${ws.path}/repos/${procCwd}` : undefined;
+        onAddProcess(ws.id, cmd, procLabel.trim() || undefined, cwd);
+        setAddProcFor(null);
     };
 
     const [search, setSearch] = useState('');
@@ -539,19 +564,89 @@ export default function Chooser({
                                                     </div>
                                                 );
                                             })}
-                                            <button
-                                                type="button"
-                                                className="tterm tterm-add"
-                                                onClick={() =>
-                                                    void promptAddProcess(ws.id)
-                                                }
-                                            >
-                                                <span className="pick" />
-                                                <IconPlus size={12} />
-                                                <span className="tname">
-                                                    Add Process…
-                                                </span>
-                                            </button>
+                                            {addProcFor === ws.id ? (
+                                                <div className="proc-add-form">
+                                                    <input
+                                                        className="input"
+                                                        autoFocus
+                                                        value={procCommand}
+                                                        onChange={(e) =>
+                                                            setProcCommand(e.target.value)
+                                                        }
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === 'Enter')
+                                                                submitAddProcess(ws);
+                                                            if (e.key === 'Escape')
+                                                                setAddProcFor(null);
+                                                        }}
+                                                        placeholder="Command e.g. php artisan queue:work"
+                                                    />
+                                                    <input
+                                                        className="input"
+                                                        value={procLabel}
+                                                        onChange={(e) =>
+                                                            setProcLabel(e.target.value)
+                                                        }
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === 'Enter')
+                                                                submitAddProcess(ws);
+                                                            if (e.key === 'Escape')
+                                                                setAddProcFor(null);
+                                                        }}
+                                                        placeholder="Label (optional)"
+                                                    />
+                                                    <select
+                                                        className="input proc-add-cwd"
+                                                        value={procCwd}
+                                                        onChange={(e) =>
+                                                            setProcCwd(e.target.value)
+                                                        }
+                                                        title="Where the process runs"
+                                                    >
+                                                        <option value="">
+                                                            Workspace root
+                                                        </option>
+                                                        {procRepos.map((r) => (
+                                                            <option key={r} value={r}>
+                                                                repos/{r}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                    <div className="proc-add-actions">
+                                                        <button
+                                                            type="button"
+                                                            className="proc-add-btn"
+                                                            onClick={() =>
+                                                                setAddProcFor(null)
+                                                            }
+                                                        >
+                                                            Cancel
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            className="proc-add-btn proc-add-go"
+                                                            disabled={!procCommand.trim()}
+                                                            onClick={() =>
+                                                                submitAddProcess(ws)
+                                                            }
+                                                        >
+                                                            Create
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    className="tterm tterm-add"
+                                                    onClick={() => openAddProcess(ws)}
+                                                >
+                                                    <span className="pick" />
+                                                    <IconPlus size={12} />
+                                                    <span className="tname">
+                                                        Add Process…
+                                                    </span>
+                                                </button>
+                                            )}
                                         </div>
                                     )}
                                 </div>

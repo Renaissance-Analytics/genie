@@ -335,6 +335,11 @@ export interface Settings {
     /** Prepend the bundled tynn-cli bin to terminal PATH + inject GENIE_* env.
      *  'off' disables it; anything else (incl. unset) is ON. */
     cli_tools_in_terminals?: 'on' | 'off';
+    /** Play a chime when an agent calls imDone. Defaults 'off'. */
+    notify_sound?: 'on' | 'off';
+    /** Show an OS notification (tray popup) when an agent calls imDone.
+     *  Defaults 'off'. */
+    notify_toast?: 'on' | 'off';
 }
 
 export function getAllSettings(): Settings {
@@ -377,6 +382,8 @@ export function getAllSettings(): Settings {
         layout_json: out['layout_json'] ?? '{}',
         track_cwd: (out['track_cwd'] as 'on' | 'off') ?? 'on',
         detached_terminals: (out['detached_terminals'] as 'on' | 'off') ?? 'off',
+        notify_sound: (out['notify_sound'] as 'on' | 'off') ?? 'off',
+        notify_toast: (out['notify_toast'] as 'on' | 'off') ?? 'off',
     };
 }
 

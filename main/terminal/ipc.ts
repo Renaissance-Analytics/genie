@@ -214,6 +214,12 @@ export function registerTerminalIpc(): void {
         killTerminalById(id),
     );
 
+    // Agent-integration MCP: the user focused a terminal that called imDone —
+    // clear its attention glow everywhere (rail, flyout row, panel border).
+    ipcMain.handle('terminal:clear-attention', (_event, id: string): void => {
+        broadcastTerminalAttention(id, false);
+    });
+
     /**
      * Tier 2: mark a terminal as retained (kept alive on zero owners) or not.
      * CRITICAL ordering: the renderer MUST set retained=true BEFORE the last

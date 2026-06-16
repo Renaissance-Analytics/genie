@@ -37,6 +37,8 @@ interface Props {
     focusId: string | null;
     /** Agent-integration MCP: terminals pulsing for attention (imDone). */
     attentionIds: Set<string>;
+    /** Clear a terminal's attention glow when its panel gains focus. */
+    onAttentionClear?: (id: string) => void;
     maximizedId: string | null;
     onClose: (id: string) => void;
     onFocus: (id: string) => void;
@@ -93,6 +95,7 @@ export default function TerminalGrid({
     activeWorkspaceId,
     focusId,
     attentionIds,
+    onAttentionClear,
     maximizedId,
     onClose,
     onFocus,
@@ -127,6 +130,7 @@ export default function TerminalGrid({
             activeWorkspaceId={activeWorkspaceId ?? null}
             focusId={focusId}
             attentionIds={attentionIds}
+            onAttentionClear={onAttentionClear}
             maximizedId={maximizedId}
             onClose={onClose}
             onFocus={onFocus}
@@ -155,6 +159,7 @@ interface ResizableGridProps {
     activeWorkspaceId: string | null;
     focusId: string | null;
     attentionIds: Set<string>;
+    onAttentionClear?: (id: string) => void;
     maximizedId: string | null;
     onClose: (id: string) => void;
     onFocus: (id: string) => void;
@@ -182,6 +187,7 @@ const ResizableGrid = ({
     activeWorkspaceId,
     focusId,
     attentionIds,
+    onAttentionClear,
     maximizedId,
     onClose,
     onFocus,
@@ -377,6 +383,11 @@ const ResizableGrid = ({
                         workspacesById={workspacesById}
                         focused={p.visible && focusId === p.spec.id}
                         attention={attentionIds.has(p.spec.id)}
+                        onAttentionClear={
+                            onAttentionClear
+                                ? () => onAttentionClear(p.spec.id)
+                                : undefined
+                        }
                         maximized={p.isMaximized}
                         style={p.style}
                         onClose={() => onClose(p.spec.id)}
@@ -557,6 +568,8 @@ interface PanelForProps {
     focused: boolean;
     /** Agent-integration MCP: pulse this panel's border (imDone). */
     attention: boolean;
+    /** Clear this panel's attention glow when it gains focus. */
+    onAttentionClear?: () => void;
     maximized: boolean;
     style: CSSProperties;
     onClose: () => void;
@@ -576,6 +589,7 @@ function PanelFor({
     workspacesById,
     focused,
     attention,
+    onAttentionClear,
     maximized,
     style,
     onClose,
@@ -610,6 +624,7 @@ function PanelFor({
             spec={spec}
             workspace={workspace}
             attention={attention}
+            onAttentionClear={onAttentionClear}
             focused={focused}
             maximized={maximized}
             style={style}

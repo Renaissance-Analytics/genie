@@ -141,6 +141,40 @@ function MasterInner() {
         return api().on.terminalHostStatus((p) => setToast(p.message));
     }, []);
 
+    // Customization: play a short two-note chime when an agent calls imDone
+    // (gated by Settings → Customization → notify_sound on the main side).
+    // Synthesized via Web Audio so no audio asset has to ship.
+    useEffect(() => {
+        return api().on.notifySound(() => {
+            try {
+                const Ctx =
+                    window.AudioContext ||
+                    (window as unknown as { webkitAudioContext?: typeof AudioContext })
+                        .webkitAudioContext;
+                if (!Ctx) return;
+                const ctx = new Ctx();
+                const now = ctx.currentTime;
+                const tone = (freq: number, start: number, dur: number) => {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.value = freq;
+                    gain.gain.setValueAtTime(0.0001, now + start);
+                    gain.gain.exponentialRampToValueAtTime(0.18, now + start + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + start + dur);
+                    osc.connect(gain).connect(ctx.destination);
+                    osc.start(now + start);
+                    osc.stop(now + start + dur);
+                };
+                tone(660, 0, 0.18); // E5
+                tone(880, 0.16, 0.24); // A5
+                setTimeout(() => void ctx.close().catch(() => {}), 700);
+            } catch {
+                /* audio is best-effort */
+            }
+        });
+    }, []);
+
     // Agent-integration MCP: a terminal called imDone → start/stop its glow.
     useEffect(() => {
         return api().on.terminalAttention(({ id, on }) => {
@@ -164,6 +198,22 @@ function MasterInner() {
             return next;
         });
     }, [focusId]);
+
+    // Clear a terminal's attention glow when the user actually focuses its
+    // panel (clicks/tabs into the xterm). The focusId effect above only fires
+    // on focus *transitions* — but a terminal that called imDone is usually
+    // already the focused one, so re-clicking it never re-fires that effect.
+    // This is the robust path: it reacts to the real DOM focus event and
+    // broadcasts a clear so the rail/flyout/border stop pulsing in every window.
+    const clearAttention = useCallback((id: string) => {
+        setAttentionIds((prev) => {
+            if (!prev.has(id)) return prev;
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+        });
+        void api().terminal.clearAttention(id).catch(() => {});
+    }, []);
 
     // Manual-quit terminal confirmation (T3). Main broadcasts the live host
     // terminals when the user quits with detached terminals running; we show a
@@ -400,7 +450,7 @@ function MasterInner() {
      * idle); auto-restart-on-crash is on.
      */
     const addProcess = useCallback(
-        async (workspaceId: string, command: string, label?: string) => {
+        async (workspaceId: string, command: string, label?: string, cwd?: string) => {
             const ws = workspacesById.get(workspaceId);
             if (!ws || !command.trim()) return;
             const cmd = command.trim();
@@ -409,7 +459,9 @@ function MasterInner() {
                 id: ulid(),
                 workspace_id: workspaceId,
                 label: (label?.trim() || fallback).slice(0, 60),
-                cwd: ws.path,
+                // cwd defaults to the envelope root; the Add Process UX can point
+                // it at a specific repo (e.g. <root>/repos/tynn).
+                cwd: cwd?.trim() || ws.path,
                 type: 'process',
                 meta: { command: cmd, autostart: false, restart_on_exit: true },
             });
@@ -885,8 +937,8 @@ function MasterInner() {
                         }
                         onAddWorkspace={() => setAddingWorkspace(true)}
                         onReorderWorkspaces={reorderWorkspaces}
-                        onAddProcess={(wsId, command, label) =>
-                            void addProcess(wsId, command, label)
+                        onAddProcess={(wsId, command, label, cwd) =>
+                            void addProcess(wsId, command, label, cwd)
                         }
                     />
                     <TerminalGrid
@@ -898,6 +950,7 @@ function MasterInner() {
                         addDisabledReason={maxViewsReason}
                         focusId={focusId}
                         attentionIds={attentionIds}
+                        onAttentionClear={clearAttention}
                         maximizedId={maximizedId}
                         onClose={closeSelected}
                         onFocus={(id) => setFocusId((cur) => (cur === id ? null : id))}

@@ -104,6 +104,8 @@ const api = {
         reorder: (ids: string[]) => ipcRenderer.invoke('workspaces:reorder', ids),
         setMcp: (id: string, enabled: boolean) =>
             ipcRenderer.invoke('workspaces:set-mcp', id, enabled),
+        repos: (id: string) =>
+            ipcRenderer.invoke('workspaces:repos', id) as Promise<string[]>,
         open: (id: string) => ipcRenderer.invoke('workspaces:open', id),
     },
 
@@ -325,6 +327,41 @@ const api = {
             ipcRenderer.invoke('terminal:list') as Promise<
                 Array<{ id: string; pid: number; shell: string }>
             >,
+        // Agent-integration MCP: clear a terminal's attention glow (imDone)
+        // when the user focuses it. Broadcasts to every window so the rail,
+        // flyout row, and panel border all stop pulsing.
+        clearAttention: (id: string) =>
+            ipcRenderer.invoke('terminal:clear-attention', id) as Promise<void>,
+    },
+
+    // Agent-integration MCP: the ForceTheQuestion modal. Main pushes a question
+    // payload via `ask:show`; the modal replies with answer/cancel.
+    ask: {
+        onShow: (
+            cb: (payload: {
+                id: string;
+                questions: Array<{
+                    header: string;
+                    question: string;
+                    multiSelect?: boolean;
+                    options: Array<{ label: string; description?: string }>;
+                }>;
+            }) => void,
+        ) => {
+            const handler = (_e: unknown, payload: any) => cb(payload);
+            ipcRenderer.on('ask:show', handler);
+            return () => ipcRenderer.off('ask:show', handler);
+        },
+        answer: (
+            id: string,
+            answers: Array<{
+                header: string;
+                question: string;
+                selected: string[];
+                note: string;
+            }>,
+        ) => ipcRenderer.invoke('ask:answer', id, answers) as Promise<void>,
+        cancel: (id: string) => ipcRenderer.invoke('ask:cancel', id) as Promise<void>,
     },
 
     on: {
@@ -346,6 +383,13 @@ const api = {
                 cb(payload);
             ipcRenderer.on('inbox:updated', handler);
             return () => ipcRenderer.off('inbox:updated', handler);
+        },
+        // Customization: play a notification chime (agent imDone). The renderer
+        // synthesizes the tone — no audio asset is shipped.
+        notifySound: (cb: (payload: { kind: string }) => void) => {
+            const handler = (_e: unknown, payload: { kind: string }) => cb(payload);
+            ipcRenderer.on('notify:sound', handler);
+            return () => ipcRenderer.off('notify:sound', handler);
         },
         terminalData: (cb: (payload: { id: string; data: string }) => void) => {
             const handler = (_e: unknown, payload: { id: string; data: string }) =>

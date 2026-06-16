@@ -189,6 +189,18 @@ export function registerIpcHandlers(): void {
         await openWorkspace(id);
         return { ok: true };
     });
+    // The repo subfolders under a workspace's envelope (names only). Used by the
+    // Add Process UX so a background process can target a specific repo's cwd
+    // (e.g. repos/tynn) instead of the envelope root.
+    ipcMain.handle('workspaces:repos', (_e, id: string): string[] => {
+        const ws = getWorkspace(id);
+        if (!ws) return [];
+        try {
+            return detectFolder(ws.path).repos ?? [];
+        } catch {
+            return [];
+        }
+    });
 
     // --- tynn-cli toolkit ----------------------------------------------
     ipcMain.handle('cli:info', () => tynnCliInfo());

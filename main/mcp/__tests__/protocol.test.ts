@@ -11,13 +11,14 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
         serverName: 'genie',
         serverVersion: '0.7.0',
         onImDone: vi.fn(),
+        onForceQuestion: vi.fn().mockResolvedValue({ cancelled: true, answers: [] }),
         ...overrides,
     };
 }
 
 describe('handleMcpMessage', () => {
-    it('answers initialize with the protocol version + serverInfo', () => {
-        const res = handleMcpMessage(
+    it('answers initialize with the protocol version + serverInfo', async () => {
+        const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 1, method: 'initialize' },
             ctx(),
         );
@@ -30,27 +31,27 @@ describe('handleMcpMessage', () => {
         });
     });
 
-    it('returns null (no body) for the initialized notification', () => {
+    it('returns null (no body) for the initialized notification', async () => {
         expect(
-            handleMcpMessage(
+            await handleMcpMessage(
                 { jsonrpc: '2.0', method: 'notifications/initialized' },
                 ctx(),
             ),
         ).toBeNull();
     });
 
-    it('lists the imDone tool', () => {
-        const res = handleMcpMessage(
+    it('lists the imDone + ForceTheQuestion tools', async () => {
+        const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 2, method: 'tools/list' },
             ctx(),
         );
         const tools = (res?.result as { tools: Array<{ name: string }> }).tools;
-        expect(tools.map((t) => t.name)).toEqual(['imDone']);
+        expect(tools.map((t) => t.name)).toEqual(['imDone', 'ForceTheQuestion']);
     });
 
-    it('invokes onImDone with the bound terminal id on tools/call', () => {
+    it('invokes onImDone with the bound terminal id on tools/call', async () => {
         const onImDone = vi.fn();
-        const res = handleMcpMessage(
+        const res = await handleMcpMessage(
             {
                 jsonrpc: '2.0',
                 id: 3,
@@ -63,8 +64,50 @@ describe('handleMcpMessage', () => {
         expect((res?.result as { content: unknown[] }).content).toBeInstanceOf(Array);
     });
 
-    it('errors on an unknown tool', () => {
-        const res = handleMcpMessage(
+    it('routes ForceTheQuestion to onForceQuestion and returns the answers', async () => {
+        const onForceQuestion = vi.fn().mockResolvedValue({
+            cancelled: false,
+            answers: [
+                { header: 'Deploy', question: 'Ship it?', selected: ['Yes'], note: 'go' },
+            ],
+        });
+        const questions = [
+            {
+                header: 'Deploy',
+                question: 'Ship it?',
+                options: [{ label: 'Yes' }, { label: 'No' }],
+            },
+        ];
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 6,
+                method: 'tools/call',
+                params: { name: 'ForceTheQuestion', arguments: { questions } },
+            },
+            ctx({ terminalId: 'term-Q', onForceQuestion }),
+        );
+        expect(onForceQuestion).toHaveBeenCalledWith('term-Q', questions);
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('Deploy');
+        expect(text).toContain('Yes');
+    });
+
+    it('errors when ForceTheQuestion is called without questions', async () => {
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 7,
+                method: 'tools/call',
+                params: { name: 'ForceTheQuestion', arguments: {} },
+            },
+            ctx(),
+        );
+        expect(res?.error?.code).toBe(-32602);
+    });
+
+    it('errors on an unknown tool', async () => {
+        const res = await handleMcpMessage(
             {
                 jsonrpc: '2.0',
                 id: 4,
@@ -76,8 +119,8 @@ describe('handleMcpMessage', () => {
         expect(res?.error?.code).toBe(-32602);
     });
 
-    it('errors on an unknown method', () => {
-        const res = handleMcpMessage(
+    it('errors on an unknown method', async () => {
+        const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 5, method: 'frobnicate' },
             ctx(),
         );

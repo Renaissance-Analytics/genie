@@ -175,6 +175,122 @@ textarea.input {
     -webkit-app-region: no-drag;
 }
 
+/* ForceTheQuestion modal (pages/ask.tsx) — frameless always-on-top window an
+   agent raises via the MCP. Mirrors the capture frame's chrome. */
+.ask-frame {
+    background: var(--bg-0);
+    color: var(--fg-1);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-2xl);
+    box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.55);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.ask-loading {
+    align-items: center;
+    justify-content: center;
+}
+.ask-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border-1);
+    -webkit-app-region: drag;
+}
+.ask-head .fancy-action,
+.ask-head button {
+    -webkit-app-region: no-drag;
+}
+.ask-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+.ask-q {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.ask-q-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.ask-chip {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--violet-400, #a78bfa);
+    background: color-mix(in srgb, #a78bfa 14%, transparent);
+    border: 1px solid color-mix(in srgb, #a78bfa 30%, var(--border-1));
+    border-radius: 6px;
+    padding: 2px 7px;
+}
+.ask-options {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.ask-opt {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    text-align: left;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-1);
+    background: var(--bg-1);
+    color: var(--fg-1);
+    cursor: pointer;
+    transition: border-color 0.12s, background 0.12s;
+}
+.ask-opt:hover {
+    border-color: var(--border-2, #3f3f46);
+}
+.ask-opt.on {
+    border-color: var(--blue-500, #3b82f6);
+    background: color-mix(in srgb, #3b82f6 14%, var(--bg-1));
+}
+.ask-opt-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+}
+.ask-opt-desc {
+    font-size: 11.5px;
+    color: var(--fg-3);
+}
+.ask-note {
+    width: 100%;
+    resize: none;
+    font-size: 12.5px;
+}
+.ask-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px;
+    border-top: 1px solid var(--border-1);
+}
+
+/* Settings tab panels — stack their cards with the same gap the old single
+   column used. */
+.settings-tab {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-top: 16px;
+}
+
 /* Interactive upgrade wizard tables — used inside the AddWorkspace modal. */
 .upgrade-tbl {
     width: 100%;

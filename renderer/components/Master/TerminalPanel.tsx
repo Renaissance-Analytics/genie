@@ -25,6 +25,8 @@ interface Props {
     focused?: boolean;
     /** Agent-integration MCP: pulse the panel border (imDone) until focused. */
     attention?: boolean;
+    /** Clear the attention glow when the user focuses this panel's xterm. */
+    onAttentionClear?: () => void;
     maximized?: boolean;
     style?: CSSProperties;
     onMarkActive: () => void;
@@ -59,6 +61,7 @@ export default function TerminalPanel({
     onDisable,
     focused,
     attention,
+    onAttentionClear,
     maximized,
     style,
     onMarkActive,
@@ -128,6 +131,10 @@ export default function TerminalPanel({
         <section
             className={`tpanel${focused ? ' focus' : ''}${attention ? ' attention' : ''}`}
             style={style}
+            // React's onFocus fires on focusin (bubbles), so clicking/tabbing
+            // into the xterm clears this terminal's imDone glow — the robust
+            // path that doesn't depend on focusId transitions.
+            onFocus={attention ? onAttentionClear : undefined}
         >
             <div className="tpanel-head">
                 <span className="pdot" style={{ background: '#10b981' }} />
