@@ -8,7 +8,6 @@ import {
     IconCode,
     IconCpu,
     IconGlobe,
-    IconGrip,
     IconPanelLeftOpen,
     IconPause,
     IconPin,
@@ -344,6 +343,7 @@ export default function Chooser({
                                 <button
                                     type="button"
                                     className="tproj-head"
+                                    title="Click to activate · drag to reorder"
                                     onClick={() => onActivateWorkspace(ws.id)}
                                     onContextMenu={(e) => {
                                         e.preventDefault();
@@ -352,25 +352,20 @@ export default function Chooser({
                                             y: e.clientY,
                                         });
                                     }}
+                                    // The whole row is the drag handle (a plain click
+                                    // still activates; a drag reorders). No leading
+                                    // grip element — that pushed the header content in
+                                    // past the view rows.
+                                    draggable
+                                    onDragStart={(e) => {
+                                        draggingId.current = ws.id;
+                                        setDragOrder(workspaces.map((w) => w.id));
+                                        e.dataTransfer.effectAllowed = 'move';
+                                        // Firefox needs data set to start a drag.
+                                        e.dataTransfer.setData('text/plain', ws.id);
+                                    }}
+                                    onDragEnd={() => commitReorder()}
                                 >
-                                    <span
-                                        className="tproj-grip"
-                                        role="button"
-                                        tabIndex={-1}
-                                        title="Drag to reorder"
-                                        draggable
-                                        onClick={(e) => e.stopPropagation()}
-                                        onDragStart={(e) => {
-                                            draggingId.current = ws.id;
-                                            setDragOrder(workspaces.map((w) => w.id));
-                                            e.dataTransfer.effectAllowed = 'move';
-                                            // Firefox needs data set to start a drag.
-                                            e.dataTransfer.setData('text/plain', ws.id);
-                                        }}
-                                        onDragEnd={() => commitReorder()}
-                                    >
-                                        <IconGrip size={12} />
-                                    </span>
                                     <span
                                         className="chev"
                                         role="button"

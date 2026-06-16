@@ -926,6 +926,7 @@
     gap: 8px;
     padding: 8px;
     border-radius: var(--radius-lg);
+    position: relative;
     cursor: pointer;
     transition: background var(--dur-fast) var(--ease-out);
     background: transparent;
@@ -943,25 +944,10 @@
     display: inline-flex;
     transition: transform var(--dur-fast) var(--ease-out);
 }
-/* Drag-to-reorder grip — dim, reveals on row hover; cursor signals draggable. */
-.tproj-head .tproj-grip {
-    color: var(--fg-4);
-    display: inline-flex;
-    align-items: center;
-    cursor: grab;
-    opacity: 0;
-    margin-left: -2px;
-    transition: opacity var(--dur-fast) var(--ease-out);
-}
-.tproj-head:hover .tproj-grip,
-.tproj.dragging .tproj-grip {
-    opacity: 0.7;
-}
-.tproj-head .tproj-grip:hover {
-    opacity: 1;
-    color: var(--fg-2);
-}
-.tproj-head .tproj-grip:active {
+/* The whole header row is the drag handle (click activates, drag reorders) —
+   no leading grip element, so the header content isn't pushed in past the
+   view rows beneath it. `grab` only on hover so the row still reads clickable. */
+.tproj-head:active {
     cursor: grabbing;
 }
 /* Dragged project block: lifted + dropped-into-place feedback. */
@@ -2005,8 +1991,22 @@ body.gutter-dragging .grid-gutter {
     border-color: var(--agent);
     box-shadow: inset 0 0 0 1px var(--agent-ring);
 }
+/* The active workspace HEADER must read as the dominant anchor of its group —
+   stronger than the selected view rows beneath it. A left accent bar at the
+   container edge + an inset ring lift it above the plain-bg rows. */
 .tproj.is-active > .tproj-head {
     background: var(--agent-soft);
+    box-shadow: inset 0 0 0 1px var(--agent-ring);
+}
+.tproj.is-active > .tproj-head::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: 6px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--agent);
 }
 .tproj.is-active > .tproj-head .pname {
     color: var(--agent);
