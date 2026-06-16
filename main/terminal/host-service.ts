@@ -1,10 +1,12 @@
 import { app } from 'electron';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
     ensureHostService,
     resolveServiceRuntime,
     type EnsureResult,
+    type ServiceIo,
     type ServiceRuntime,
 } from '@particle-academy/fancy-term-host/service';
 import {
@@ -181,6 +183,96 @@ export function resolveShippedRuntime(): ServiceRuntime | null {
  * service down — it may be transiently slow; the detached path or the next
  * launch can reuse it).
  */
+/**
+ * Append a line to the host-service diagnostics log (best-effort). The service
+ * install/connect path used to fail SILENTLY (a lone console.log), so a fallback
+ * to the detached host — the thing that makes every update restart terminals —
+ * was invisible. This persists the outcome to `<userData>/logs/host-service.log`.
+ */
+export function logHostService(line: string): void {
+    try {
+        const dir = path.join(app.getPath('userData'), 'logs');
+        fs.mkdirSync(dir, { recursive: true });
+        fs.appendFileSync(
+            path.join(dir, 'host-service.log'),
+            `[${new Date().toISOString()}] ${line}\n`,
+        );
+    } catch {
+        /* logging is best-effort — never let it break activation */
+    }
+}
+
+/**
+ * A {@link ServiceIo} that runs commands WITHOUT a shell, and logs each one.
+ *
+ * The package's default `nodeServiceIo()` spawns with `shell: true` on win32.
+ * That breaks the Windows scheduled-task install: the `/TR` value is
+ * `cmd /c "<path>"` — it has spaces AND embedded quotes, and shell arg-joining
+ * doesn't escape the inner quotes, so `schtasks /Create` receives a mangled
+ * command line and fails. The service then never installs and Genie silently
+ * falls back to the detached host (which pins its own binary, so every update
+ * must kill + restart terminals). Spawning WITHOUT a shell lets Node quote the
+ * args correctly. Cross-platform: launchctl/systemctl resolve fine without a
+ * shell; on win32 we append `.exe` since there's no PATHEXT resolution without
+ * one. Every command + exit code + stderr is logged for visibility.
+ */
+function genieServiceIo(): ServiceIo {
+    const fsp = fs.promises;
+    return {
+        run(argv) {
+            let cmd = argv[0];
+            const args = argv.slice(1);
+            if (process.platform === 'win32' && !path.extname(cmd)) {
+                cmd = `${cmd}.exe`;
+            }
+            return new Promise((resolve) => {
+                let stdout = '';
+                let stderr = '';
+                const child = spawn(cmd, args, { shell: false, windowsHide: true });
+                child.stdout?.on('data', (d) => (stdout += d.toString()));
+                child.stderr?.on('data', (d) => (stderr += d.toString()));
+                child.on('error', (err) => {
+                    logHostService(`run [${argv.join(' ')}] → spawn error: ${err.message}`);
+                    resolve({ code: -1, stdout, stderr: stderr + String(err) });
+                });
+                child.on('close', (code) => {
+                    logHostService(
+                        `run [${argv.join(' ')}] → code ${code}${
+                            stderr.trim() ? ` · stderr: ${stderr.trim()}` : ''
+                        }`,
+                    );
+                    resolve({ code: code ?? -1, stdout, stderr });
+                });
+            });
+        },
+        async writeFile(p, contents, opts) {
+            await fsp.mkdir(path.dirname(p), { recursive: true });
+            await fsp.writeFile(p, contents, { mode: opts?.mode ?? 0o600 });
+        },
+        async readFile(p) {
+            try {
+                return await fsp.readFile(p, 'utf8');
+            } catch {
+                return null;
+            }
+        },
+        async mkdirp(dir) {
+            await fsp.mkdir(dir, { recursive: true });
+        },
+        async rm(p) {
+            await fsp.rm(p, { force: true }).catch(() => {});
+        },
+        async exists(p) {
+            try {
+                await fsp.access(p);
+                return true;
+            } catch {
+                return false;
+            }
+        },
+    };
+}
+
 export async function activateHostService(
     deps: {
         snapshots: Parameters<typeof HostClient.connect>[1];
@@ -208,12 +300,17 @@ export async function activateHostService(
 
     let result: EnsureResult;
     try {
-        result = await ensureHostService({
-            label: HOST_SERVICE_LABEL,
-            userDataDir: deps.userDataDir,
-            runtime,
-            ...(hostScript ? { hostScript } : {}),
-        });
+        // Pass our shell-free, logging io (NOT the package default, whose
+        // shell:true mangles the Windows schtasks /TR quoting).
+        result = await ensureHostService(
+            {
+                label: HOST_SERVICE_LABEL,
+                userDataDir: deps.userDataDir,
+                runtime,
+                ...(hostScript ? { hostScript } : {}),
+            },
+            genieServiceIo(),
+        );
     } catch (e) {
         // Documented never to throw — defensive guard so a surprise can't escape.
         return {
@@ -223,13 +320,10 @@ export async function activateHostService(
     }
 
     if (!result.ok) {
-        return {
-            ok: false,
-            reason:
-                result.error ??
-                `service not ready (action=${result.action})`,
-            result,
-        };
+        const reason =
+            result.error ?? `service not ready (action=${result.action})`;
+        logHostService(`service NOT ready → falling back to detached: ${reason}`);
+        return { ok: false, reason, result };
     }
 
     // Service is up. Connect with the SAME HostClient handshake the detached
@@ -239,15 +333,14 @@ export async function activateHostService(
     try {
         client = await HostClient.connect(socketPath, deps.snapshots);
     } catch (e) {
-        return {
-            ok: false,
-            reason: `service running but connect failed: ${e instanceof Error ? e.message : String(e)}`,
-            result,
-        };
+        const reason = `service running but connect failed: ${e instanceof Error ? e.message : String(e)}`;
+        logHostService(`${reason} → falling back to detached`);
+        return { ok: false, reason, result };
     }
 
     setActiveBackend(client);
     backendKind = 'service';
+    logHostService(`per-user OS service ACTIVE (action=${result.action})`);
     return { ok: true, client, result };
 }
 
