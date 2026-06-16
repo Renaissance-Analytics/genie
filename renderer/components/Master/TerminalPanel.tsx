@@ -131,10 +131,18 @@ export default function TerminalPanel({
         <section
             className={`tpanel${focused ? ' focus' : ''}${attention ? ' attention' : ''}`}
             style={style}
-            // React's onFocus fires on focusin (bubbles), so clicking/tabbing
-            // into the xterm clears this terminal's imDone glow — the robust
-            // path that doesn't depend on focusId transitions.
-            onFocus={attention ? onAttentionClear : undefined}
+            // Clear this terminal's imDone glow on ANY real interaction with the
+            // panel — focusin (onFocus), a click anywhere in it (onMouseDown), or
+            // a keystroke (onKeyDownCapture). onFocus alone misses the common
+            // case where the terminal was ALREADY focused when imDone fired (the
+            // agent finished while you were in it): no focus transition occurs, so
+            // only the next click/keypress acknowledges it. Gated on `attention`
+            // so we don't fire a clear IPC on every interaction otherwise.
+            // Capture phase so xterm's own handlers (which may stopPropagation)
+            // can't swallow these before the glow clears.
+            onFocusCapture={attention ? onAttentionClear : undefined}
+            onMouseDownCapture={attention ? onAttentionClear : undefined}
+            onKeyDownCapture={attention ? onAttentionClear : undefined}
         >
             <div className="tpanel-head">
                 <span className="pdot" style={{ background: '#10b981' }} />
