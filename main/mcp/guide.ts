@@ -12,31 +12,51 @@
 /** Full reference — served by the MCP itself (instructions + `genieGuide`). */
 export const GENIE_MCP_GUIDE = `# Genie MCP
 
-You are running in a terminal hosted by **Genie** (a desktop workspace manager).
-This \`genie\` MCP server lets you drive the Genie UI. Your endpoint is auto-wired
-per-terminal via the \`GENIE_MCP_URL\` env var, so the tools below resolve *this*
-terminal with no setup on your part.
+You are running inside **Genie** — a desktop UX for **agentic engineering**.
+Genie hosts **many projects (workspaces) at once**, each with **multiple
+terminals, editors, and background processes**, all in one window. You are very
+likely **one of several agents**, each working in its own terminal across
+different projects.
+
+**What this means for you:** the user is almost never watching THIS terminal.
+They're in another terminal, another project, or another app entirely. Output
+you print here — "done", "which option?", "I need X to continue" — will sit
+**unseen**, stalling your work. This \`genie\` MCP server is how you reach across
+to the user. Your endpoint is auto-wired per-terminal via \`GENIE_MCP_URL\`, so
+the tools resolve *this* terminal with zero setup.
+
+**Use these tools whenever you need the user's attention — don't just print and
+wait.** Assume they can't see your terminal until you pull them to it.
 
 ## Tools
 
 ### imDone
-Signal that you have finished your work in THIS terminal. Genie pulses the
-terminal's glow in the workspace rail, the flyout row, and the panel border until
-the user focuses it. Takes no arguments — the terminal is resolved from the
-connection. Call it when you've completed a task and want to hand back to the user.
+Call this the moment you **finish your work / hand back to the user** in THIS
+terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row,
+and the panel border until the user focuses it — so they're drawn to the terminal
+that needs them even from another project. Takes no arguments (the terminal is
+resolved from the connection). Prefer this over silently ending: a finished task
+the user never notices isn't really done.
 
 ### ForceTheQuestion
-Raise an OS-level, always-on-top modal (it floats above every window, not just
-Genie) to ask the user one or more questions, and block until they answer. Use it
-when you're blocked on a decision only the user can make.
+Call this whenever you are **blocked on a decision, clarification, or approval
+only the user can give**. It raises an OS-level, always-on-top modal that floats
+above EVERY window (not just Genie), so the user sees it even if they're heads-
+down in another app — then it blocks until they answer. Far better than printing
+a question into a terminal they aren't looking at.
 
 - Pass a \`questions\` array (1–4). Each question has a \`header\` (short chip), a
   \`question\` string, 2–4 \`options\` ({ label, description? }), and optional
   \`multiSelect\`.
 - Every question ALSO gets a free-text note field in the UI automatically.
-- **Batch all your open questions into a single call** — there's no reason to call
-  this repeatedly in a row.
+- **Batch ALL your open questions into a single call** — never fire it repeatedly
+  in a row; gather everything you need and ask once.
 - Returns each question's selected option(s) + note, or a cancellation.
+
+## Rule of thumb
+If you would otherwise stop and wait for the user — **finished**, **blocked**, or
+**need a decision** — reach for these tools first. In a multi-terminal,
+multi-project workspace, an agent that waits silently is an agent that's stuck.
 
 ## Notes
 - These tools only work from inside a Genie terminal (where \`GENIE_MCP_URL\` is set).
@@ -45,9 +65,9 @@ when you're blocked on a decision only the user can make.
 `;
 
 /** Brief body synced into a workspace's AGENTS.md (points back to the full guide). */
-export const GENIE_AGENTS_BRIEF = `This workspace runs inside **Genie**. A local \`genie\` MCP server is auto-wired into every Genie terminal (via \`GENIE_MCP_URL\`), giving agents tools to drive the Genie UI:
+export const GENIE_AGENTS_BRIEF = `This workspace runs inside **Genie** — a desktop UX for agentic engineering that hosts many projects at once, each with multiple terminals/editors/processes. You are likely **one of several agents in different terminals**, and **the user is probably NOT watching this terminal**. A local \`genie\` MCP server (auto-wired via \`GENIE_MCP_URL\`) lets you pull their attention:
 
-- **\`imDone\`** — signal you've finished in this terminal; Genie glows it until the user looks. No args.
-- **\`ForceTheQuestion\`** — pop an OS-level, always-on-top modal to ask the user question(s) (each with options + a free-text note) and block for the answer. Batch all questions into one call.
+- **\`imDone\`** — call when you **finish / hand back**; Genie glows this terminal across the whole UI until the user looks. No args.
+- **\`ForceTheQuestion\`** — call when **blocked or needing a decision**; pops an OS-level, always-on-top modal (above every app) with your question(s) (options + a free-text note) and blocks for the answer. Batch all questions into one call.
 
-For full usage, call the **\`genieGuide\`** tool on the \`genie\` MCP server (or read the server's instructions). More tools may appear contextually per project type.`;
+**Don't just print "done" or a question and wait** — the user won't see it. Use these tools whenever you'd otherwise stop and wait. For full usage call the **\`genieGuide\`** tool (or read the server's instructions).`;
