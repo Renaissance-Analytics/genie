@@ -35,7 +35,7 @@ import { analyseFolder } from './workspace/analyse';
 import { validateSimpleWorkspace } from './workspace/create-simple';
 import { openWorkspace } from './workspace/open';
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
-import { wishCliInfo, installWishCliSystemWide } from './cli/wish-cli';
+import { tynnCliInfo, installTynnCliSystemWide } from './cli/tynn-cli';
 import { registerShortcuts } from './shortcuts';
 import { startSignIn, redeemCode } from './auth';
 import {
@@ -183,9 +183,9 @@ export function registerIpcHandlers(): void {
         return { ok: true };
     });
 
-    // --- wish-cli toolkit ----------------------------------------------
-    ipcMain.handle('cli:info', () => wishCliInfo());
-    ipcMain.handle('cli:install', () => installWishCliSystemWide());
+    // --- tynn-cli toolkit ----------------------------------------------
+    ipcMain.handle('cli:info', () => tynnCliInfo());
+    ipcMain.handle('cli:install', () => installTynnCliSystemWide());
 
     // --- AGI envelope ---------------------------------------------------
     ipcMain.handle('agi:detect', (_e, folder: string) => detectFolder(folder));

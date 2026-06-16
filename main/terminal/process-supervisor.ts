@@ -6,7 +6,7 @@ import {
 import { getAllSettings, getTerminalSpec, listTerminalSpecs } from '../db';
 import { dbSettingsProvider } from './genie-adapter';
 import { buildProcessArgs } from './process-spawn';
-import { buildWishCliEnv } from '../cli/wish-cli';
+import { buildTynnCliEnv } from '../cli/tynn-cli';
 import { decideOnExit, type ProcessStatus } from './process-lifecycle';
 
 /**
@@ -92,7 +92,7 @@ export function startProcess(specId: string): void {
     const shell = spec.shell || resolved.command;
     const args = buildProcessArgs(shell, spec.meta.command);
     const cliEnabled = getAllSettings().cli_tools_in_terminals !== 'off';
-    const env = buildWishCliEnv(spec.cwd, cliEnabled);
+    const env = buildTynnCliEnv(spec.cwd, cliEnabled);
 
     try {
         terminalManager().create({

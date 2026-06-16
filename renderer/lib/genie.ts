@@ -78,7 +78,7 @@ export interface Settings {
     /** Tier 3: keep terminals running in a detached host so they survive a full
      *  quit. Defaults 'off' (in-process). 'on' opts in. */
     detached_terminals?: 'on' | 'off';
-    /** Prepend the bundled wish-cli bin to terminal PATH + inject GENIE_* env.
+    /** Prepend the bundled tynn-cli bin to terminal PATH + inject GENIE_* env.
      *  Defaults ON; 'off' disables. */
     cli_tools_in_terminals?: 'on' | 'off';
 }
@@ -533,7 +533,7 @@ interface GenieApi {
         statuses: () => Promise<Record<string, ProcessStatus>>;
     };
     cli: {
-        /** Whether the wish-cli toolkit is shipped with this build + its home dir. */
+        /** Whether the tynn-cli toolkit is shipped with this build + its home dir. */
         info: () => Promise<{ shipped: boolean; home: string | null }>;
         /** Run the bundled install.sh to add the tools to PATH system-wide (Git Bash). */
         install: () => Promise<{ ok: boolean; output: string }>;

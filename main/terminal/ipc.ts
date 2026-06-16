@@ -14,7 +14,7 @@ import {
     updateTerminalSpec,
     workspaceMcpEnabled,
 } from '../db';
-import { buildWishCliEnv } from '../cli/wish-cli';
+import { buildTynnCliEnv } from '../cli/tynn-cli';
 import { buildProcessArgs } from './process-spawn';
 import {
     startProcess,
@@ -158,12 +158,12 @@ export function registerTerminalIpc(): void {
                     args: buildProcessArgs(opts.shell ?? '', spec.meta.command),
                 };
             }
-            // Make the bundled wish-cli (resetme/reload/…) available + inject
+            // Make the bundled tynn-cli (resetme/reload/…) available + inject
             // GENIE_* workspace context. Additive + behind a setting (default
             // on); user-supplied opts.env wins on any key collision.
             const cliEnabled =
                 getAllSettings().cli_tools_in_terminals !== 'off';
-            const cliEnv = buildWishCliEnv(opts.cwd, cliEnabled);
+            const cliEnv = buildTynnCliEnv(opts.cwd, cliEnabled);
             if (Object.keys(cliEnv).length) {
                 opts = { ...opts, env: { ...cliEnv, ...opts.env } };
             }

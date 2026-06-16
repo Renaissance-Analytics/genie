@@ -221,7 +221,7 @@ export default function SettingsPage() {
                         }
                     />
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <Text size="sm">Make wish-cli tools available in terminals</Text>
+                        <Text size="sm">Make tynn-cli tools available in terminals</Text>
                         <Text size="xs" className="text-zinc-500">
                             Prepends the bundled toolkit (<code>resetme</code>,{' '}
                             <code>reload</code>, <code>puse</code>, <code>sandbox</code>,
@@ -269,7 +269,7 @@ export default function SettingsPage() {
                 </div>
                 <Text size="xs" className="text-zinc-500">
                     System-wide install copies the toolkit to{' '}
-                    <code>~/.genie/wish-cli</code> and adds it to your{' '}
+                    <code>~/.genie/tynn-cli</code> and adds it to your{' '}
                     <code>~/.bashrc</code> — so <code>resetme</code> works in any
                     terminal, not just Genie&apos;s.
                 </Text>

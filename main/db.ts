@@ -317,7 +317,7 @@ export interface Settings {
     /** Tier 3: keep terminals running in a detached pty-host so they survive a
      *  full quit of the app. Defaults OFF (in-process T1/T2). 'on' opts in. */
     detached_terminals?: 'on' | 'off';
-    /** Prepend the bundled wish-cli bin to terminal PATH + inject GENIE_* env.
+    /** Prepend the bundled tynn-cli bin to terminal PATH + inject GENIE_* env.
      *  'off' disables it; anything else (incl. unset) is ON. */
     cli_tools_in_terminals?: 'on' | 'off';
 }

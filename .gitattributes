@@ -1,8 +1,8 @@
-# The vendored wish-cli toolkit is bash. It MUST keep LF line endings — CRLF
+# The vendored tynn-cli toolkit is bash. It MUST keep LF line endings — CRLF
 # breaks the shebang line and `\r`-terminated commands once the scripts are
 # unpacked from the app bundle on a user's machine (and on the CI build agent).
-resources/wish-cli/bin/** text eol=lf
-resources/wish-cli/lib/** text eol=lf
-resources/wish-cli/install.sh text eol=lf
-resources/wish-cli/*.example text eol=lf
-resources/wish-cli/BUNDLED.txt text eol=lf
+resources/tynn-cli/bin/** text eol=lf
+resources/tynn-cli/lib/** text eol=lf
+resources/tynn-cli/install.sh text eol=lf
+resources/tynn-cli/*.example text eol=lf
+resources/tynn-cli/BUNDLED.txt text eol=lf

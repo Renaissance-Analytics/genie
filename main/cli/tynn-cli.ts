@@ -5,37 +5,37 @@ import path from 'path';
 import { listWorkspaces } from '../db';
 
 /**
- * Bundled wish-cli toolkit (resetme / reload / puse / sandbox / …).
+ * Bundled tynn-cli toolkit (resetme / reload / puse / sandbox / …).
  *
- * The toolkit is vendored into `resources/wish-cli/` (committed; refreshed by
- * `scripts/bundle-wish-cli.mjs`) and shipped beside the app as extraResources.
+ * The toolkit is vendored into `resources/tynn-cli/` (committed; refreshed by
+ * `scripts/bundle-tynn-cli.mjs`) and shipped beside the app as extraResources.
  * This module resolves the shipped copy and builds the env overrides that make
  * the tools available + workspace-aware inside Genie terminals.
  *
  * Mirrors `host-service.ts resolveShippedRuntime()`: probe the packaged
- * `process.resourcesPath/wish-cli` first, then the dev tree's
- * `resources/wish-cli`. Returns null when neither exists (env injection then
+ * `process.resourcesPath/tynn-cli` first, then the dev tree's
+ * `resources/tynn-cli`. Returns null when neither exists (env injection then
  * no-ops; the terminal still works, the tools just aren't on PATH).
  */
-export interface ShippedWishCli {
-    /** The wish-cli root (holds bin/, lib/, install.sh, tynn.config.example). */
+export interface ShippedTynnCli {
+    /** The tynn-cli root (holds bin/, lib/, install.sh, tynn.config.example). */
     home: string;
     /** The bin/ directory to prepend to PATH. */
     bin: string;
 }
 
-export function resolveShippedWishCli(): ShippedWishCli | null {
+export function resolveShippedTynnCli(): ShippedTynnCli | null {
     const roots: string[] = [];
     try {
         if (process.resourcesPath) {
-            roots.push(path.join(process.resourcesPath, 'wish-cli'));
+            roots.push(path.join(process.resourcesPath, 'tynn-cli'));
         }
     } catch {
         /* resourcesPath unavailable outside a packaged app */
     }
     try {
-        roots.push(path.join(app.getAppPath(), 'resources', 'wish-cli'));
-        roots.push(path.join(process.cwd(), 'resources', 'wish-cli'));
+        roots.push(path.join(app.getAppPath(), 'resources', 'tynn-cli'));
+        roots.push(path.join(process.cwd(), 'resources', 'tynn-cli'));
     } catch {
         /* app may not be ready in some unit contexts */
     }
@@ -53,8 +53,8 @@ export function resolveShippedWishCli(): ShippedWishCli | null {
 }
 
 /** Whether the toolkit shipped with this build, and where it lives. */
-export function wishCliInfo(): { shipped: boolean; home: string | null } {
-    const cli = resolveShippedWishCli();
+export function tynnCliInfo(): { shipped: boolean; home: string | null } {
+    const cli = resolveShippedTynnCli();
     return { shipped: !!cli, home: cli?.home ?? null };
 }
 
@@ -75,30 +75,30 @@ function copyRecursive(src: string, dst: string): void {
  * Genie terminals). The shipped copy lives under the app's read-only resources,
  * but install.sh writes into its own dir (.custom/, tynn.config) and edits
  * ~/.bashrc — so we first copy the toolkit to a writable, update-stable home
- * (`~/.genie/wish-cli`) and run install.sh from there.
+ * (`~/.genie/tynn-cli`) and run install.sh from there.
  *
  * Bash-only (Git Bash on Windows). Resolves with the script output; `ok:false`
  * when the toolkit isn't shipped or bash/install fails.
  */
-export function installWishCliSystemWide(): Promise<{
+export function installTynnCliSystemWide(): Promise<{
     ok: boolean;
     output: string;
 }> {
     return new Promise((resolve) => {
-        const cli = resolveShippedWishCli();
+        const cli = resolveShippedTynnCli();
         if (!cli) {
-            resolve({ ok: false, output: 'wish-cli is not bundled with this build.' });
+            resolve({ ok: false, output: 'tynn-cli is not bundled with this build.' });
             return;
         }
         let dest: string;
         try {
-            dest = path.join(app.getPath('home'), '.genie', 'wish-cli');
+            dest = path.join(app.getPath('home'), '.genie', 'tynn-cli');
             fs.rmSync(dest, { recursive: true, force: true });
             copyRecursive(cli.home, dest);
         } catch (e) {
             resolve({
                 ok: false,
-                output: `Could not stage wish-cli to a writable location: ${
+                output: `Could not stage tynn-cli to a writable location: ${
                     e instanceof Error ? e.message : String(e)
                 }`,
             });
@@ -174,11 +174,11 @@ function workspaceForCwd(cwd: string): { path: string; name: string } | null {
     return best;
 }
 
-/** Pure inputs for {@link shapeWishCliEnv} — gathered impurely by buildWishCliEnv. */
-export interface WishCliEnvInputs {
-    /** wish-cli bin dir to prepend to PATH. */
+/** Pure inputs for {@link shapeTynnCliEnv} — gathered impurely by buildTynnCliEnv. */
+export interface TynnCliEnvInputs {
+    /** tynn-cli bin dir to prepend to PATH. */
     binDir: string;
-    /** wish-cli home (GENIE_CLI_HOME). */
+    /** tynn-cli home (GENIE_CLI_HOME). */
     home: string;
     /** The terminal's working directory. */
     cwd: string;
@@ -199,7 +199,7 @@ export interface WishCliEnvInputs {
  * to PATH (under the host's PATH key casing) and derives the GENIE_* context.
  * Kept pure so the PATH/repo-derivation rules are unit-testable.
  */
-export function shapeWishCliEnv(i: WishCliEnvInputs): Record<string, string> {
+export function shapeTynnCliEnv(i: TynnCliEnvInputs): Record<string, string> {
     const env: Record<string, string> = {};
     env[i.pathKey] = i.existingPath
         ? `${i.binDir}${i.delimiter}${i.existingPath}`
@@ -226,7 +226,7 @@ export function shapeWishCliEnv(i: WishCliEnvInputs): Record<string, string> {
 }
 
 /**
- * Build the env overrides for a Genie terminal: prepend the bundled wish-cli
+ * Build the env overrides for a Genie terminal: prepend the bundled tynn-cli
  * bin to PATH and inject GENIE_* workspace context the tools (and agents) can
  * read. Additive — returns `{}` when the toolkit isn't shipped or the feature
  * is disabled, so terminals work unchanged.
@@ -234,15 +234,15 @@ export function shapeWishCliEnv(i: WishCliEnvInputs): Record<string, string> {
  * @param cwd      The terminal's working directory.
  * @param enabled  The `cli_tools_in_terminals` setting (default on).
  */
-export function buildWishCliEnv(
+export function buildTynnCliEnv(
     cwd: string,
     enabled: boolean,
 ): Record<string, string> {
     if (!enabled) return {};
-    const cli = resolveShippedWishCli();
+    const cli = resolveShippedTynnCli();
     if (!cli) return {};
     const key = pathEnvKey();
-    return shapeWishCliEnv({
+    return shapeTynnCliEnv({
         binDir: cli.bin,
         home: cli.home,
         cwd,

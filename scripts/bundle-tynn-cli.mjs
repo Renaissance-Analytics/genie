@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Refresh the vendored wish-cli snapshot under `resources/wish-cli/`.
+ * Refresh the vendored tynn-cli snapshot under `resources/tynn-cli/`.
  *
  * Genie's Release CI checks out the genie repo ALONE (no envelope, no
- * tynn-cli submodule), so the wish-cli toolkit can't be copied at build time —
+ * tynn-cli submodule), so the tynn-cli toolkit can't be copied at build time —
  * it must be COMMITTED into genie's repo. This script is the dev-time refresh
  * tool: run it from inside the `.agi` envelope (where `../tynn-cli` exists) to
  * re-vendor the latest toolkit, then commit the result.
@@ -11,7 +11,7 @@
  * Outside the envelope (CI, a standalone genie clone) the source isn't present,
  * so this no-ops and the already-committed snapshot stands.
  *
- *   node scripts/bundle-wish-cli.mjs
+ *   node scripts/bundle-tynn-cli.mjs
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,7 +21,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const genieRoot = path.resolve(here, '..');
 // genie lives at <envelope>/repos/genie; tynn-cli at <envelope>/repos/tynn-cli.
 const source = path.resolve(genieRoot, '..', 'tynn-cli');
-const dest = path.join(genieRoot, 'resources', 'wish-cli');
+const dest = path.join(genieRoot, 'resources', 'tynn-cli');
 
 // What we ship: the executable toolkit + its libs + the config TEMPLATE (the
 // real tynn.config is user-specific and gitignored upstream; the tools treat a
@@ -38,7 +38,7 @@ const ITEMS = [
 
 if (!fs.existsSync(source)) {
     console.log(
-        `[bundle-wish-cli] source not found at ${source} — keeping the committed snapshot (CI/standalone build).`,
+        `[bundle-tynn-cli] source not found at ${source} — keeping the committed snapshot (CI/standalone build).`,
     );
     process.exit(0);
 }
@@ -62,7 +62,7 @@ for (const item of ITEMS) {
     const srcPath = path.join(source, item);
     const dstPath = path.join(dest, item);
     if (!fs.existsSync(srcPath)) {
-        console.warn(`[bundle-wish-cli] skip missing ${item}`);
+        console.warn(`[bundle-tynn-cli] skip missing ${item}`);
         continue;
     }
     fs.rmSync(dstPath, { recursive: true, force: true });
@@ -72,7 +72,7 @@ for (const item of ITEMS) {
 // A small marker so the app + a human can tell where the snapshot came from.
 fs.writeFileSync(
     path.join(dest, 'BUNDLED.txt'),
-    `Vendored from repos/tynn-cli by scripts/bundle-wish-cli.mjs.\nDo not edit here — edit tynn-cli and re-run the bundler.\n`,
+    `Vendored from repos/tynn-cli by scripts/bundle-tynn-cli.mjs.\nDo not edit here — edit tynn-cli and re-run the bundler.\n`,
 );
 
-console.log(`[bundle-wish-cli] refreshed ${dest} from ${source}`);
+console.log(`[bundle-tynn-cli] refreshed ${dest} from ${source}`);
