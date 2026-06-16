@@ -4,7 +4,6 @@ import simpleGit from 'simple-git';
 import {
     getWorkspace,
     listIssueWatches,
-    listEnabledIssueWatches,
     listWorkspaces,
     setIssueWatch,
     markIssueWatchSeen,
@@ -145,16 +144,25 @@ export async function pollWorkspace(workspaceId: string): Promise<void> {
     );
 }
 
-/** Poll every enabled watch across all workspaces (the interval tick). */
+/**
+ * Poll every workspace's enabled/default-on repos (the interval tick + the
+ * startup kick). Goes through `pollWorkspace`, which resolves repos via
+ * `getWorkspaceRepoViews` — so it covers auto-detected, default-on repos that
+ * have no persisted `issue_watches` row yet. Without this, a workspace whose
+ * repos were never toggled would have no rows for `listEnabledIssueWatches`,
+ * leaving its feed cache empty and its 3-dot pill grey until the flyout was
+ * opened. Per-workspace failures are swallowed so one bad workspace doesn't
+ * sink the rest; a single `broadcastUpdate()` fires at the end.
+ */
 async function pollAll(): Promise<void> {
     if (!getToken()) return;
-    const rows = listEnabledIssueWatches();
-    // Dedupe repos shared across workspaces.
-    const uniq = new Map<string, { owner: string; repo: string }>();
-    for (const r of rows) uniq.set(cacheKey(r.owner, r.repo), { owner: r.owner, repo: r.repo });
-    await Promise.all(
-        [...uniq.values()].map((r) => pollRepo(r.owner, r.repo).catch(() => [])),
-    );
+    for (const ws of listWorkspaces()) {
+        try {
+            await pollWorkspace(ws.id);
+        } catch {
+            /* best-effort — one workspace's failure shouldn't sink the rest */
+        }
+    }
     broadcastUpdate();
 }
 

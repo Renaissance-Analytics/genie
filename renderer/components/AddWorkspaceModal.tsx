@@ -1118,6 +1118,7 @@ function ProjectPicker({
             value={value}
             onValueChange={onChange}
             list={options}
+            placeholder="Choose a project…"
             required
         />
     );

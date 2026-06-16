@@ -73,7 +73,7 @@ interface KnowledgeRow extends AnalyseKnowledgeCandidate {
  * project.json).
  */
 interface DispositionRow extends RootEntry {
-    disposition: 'codebase' | 'knowledge' | 'root';
+    disposition: 'codebase' | 'knowledge' | 'root' | 'ignore';
     target_subdir: string;
 }
 
@@ -369,7 +369,9 @@ export default function InteractiveUpgradeWizard({
     const selectedKnowledgeCount = useMemo(
         () =>
             usesDisposition
-                ? dispositionRows.filter((r) => r.disposition !== 'codebase').length
+                ? dispositionRows.filter(
+                      (r) => r.disposition !== 'codebase' && r.disposition !== 'ignore',
+                  ).length
                 : knowledgeRows.filter((r) => r.included).length,
         [usesDisposition, dispositionRows, knowledgeRows],
     );
@@ -523,7 +525,13 @@ export default function InteractiveUpgradeWizard({
                     }),
                 knowledge: usesDisposition
                     ? dispositionRows
-                          .filter((r) => r.disposition !== 'codebase')
+                          // 'codebase' stays in the repo; 'ignore' is left out
+                          // of the .agi mapping entirely — neither is copied.
+                          .filter(
+                              (r) =>
+                                  r.disposition !== 'codebase' &&
+                                  r.disposition !== 'ignore',
+                          )
                           .map((r) => ({
                               source_abs_path: r.abs_path,
                               kind: r.kind,
@@ -1094,15 +1102,23 @@ function DispositionStep({
                 git (a gitignored <code>.ai/</code>, loose notes) would be left
                 behind on a fresh clone: send those to{' '}
                 <strong>Knowledge</strong> (<code>.ai/…</code>) or{' '}
-                <strong>Root</strong> (beside <code>project.json</code>).
+                <strong>Root</strong> (beside <code>project.json</code>). Pick{' '}
+                <strong>Ignore</strong> to leave an item out of the envelope
+                entirely (nothing is moved or copied).
             </Text>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <Text size="xs" className="text-zinc-500">
                     Set all:
                 </Text>
-                {(['codebase', 'knowledge', 'root'] as const).map((d) => (
+                {(['codebase', 'knowledge', 'root', 'ignore'] as const).map((d) => (
                     <Action key={d} size="sm" variant="ghost" onClick={() => setAll(d)}>
-                        {d === 'codebase' ? 'Codebase' : d === 'knowledge' ? 'Knowledge' : 'Root'}
+                        {d === 'codebase'
+                            ? 'Codebase'
+                            : d === 'knowledge'
+                                ? 'Knowledge'
+                                : d === 'root'
+                                    ? 'Root'
+                                    : 'Ignore'}
                     </Action>
                 ))}
             </div>
@@ -1149,6 +1165,7 @@ function DispositionStep({
                                         { value: 'codebase', label: 'Codebase (stays in repo)' },
                                         { value: 'knowledge', label: 'Knowledge / WIP → .ai/' },
                                         { value: 'root', label: 'Envelope root' },
+                                        { value: 'ignore', label: 'Ignore (leave out)' },
                                     ]}
                                 />
                             </td>
@@ -1166,7 +1183,9 @@ function DispositionStep({
                                     <Text size="xs" className="text-zinc-500">
                                         {r.disposition === 'root'
                                             ? `/${r.rel_path}${r.kind === 'directory' ? '/' : ''}`
-                                            : '—'}
+                                            : r.disposition === 'ignore'
+                                                ? 'left out'
+                                                : '—'}
                                     </Text>
                                 )}
                             </td>
@@ -1334,6 +1353,7 @@ function EnvelopeStep({
                         value={projectId}
                         onValueChange={setProjectId}
                         list={projects.map((p) => ({ value: p.id, label: p.name }))}
+                        placeholder="Choose a project…"
                     />
                 </div>
             )}
