@@ -1,7 +1,7 @@
 /**
- * Pure helpers for the Process service lifecycle (auto-restart-on-crash with
- * backoff). The ProcessPanel owns the timers + pty; these functions decide the
- * status transitions so they stay unit-testable.
+ * Pure lifecycle helpers for headless Process service runners (auto-restart
+ * with backoff). The supervisor owns the ptys + timers; these functions decide
+ * the status transitions so they stay unit-testable.
  */
 
 export type ProcessStatus =
@@ -46,12 +46,10 @@ export function decideOnExit({
     exitCode: number;
     attempt: number;
 }): ExitDecision {
-    // A deliberate stop is terminal — never auto-restart over the user.
     if (userStopped) {
         return { status: 'stopped', restartInMs: null, nextAttempt: 0 };
     }
     const crashed = exitCode !== 0;
-    // Clean exit of a non-restarting process: it simply finished.
     if (!restartOnExit) {
         return {
             status: crashed ? 'crashed' : 'stopped',
@@ -59,7 +57,6 @@ export function decideOnExit({
             nextAttempt: 0,
         };
     }
-    // Restart-on-exit: relaunch with backoff until we hit the cap.
     if (attempt >= MAX_RESTART_ATTEMPTS) {
         return { status: 'failed', restartInMs: null, nextAttempt: attempt };
     }
@@ -68,4 +65,20 @@ export function decideOnExit({
         restartInMs: restartDelay(attempt),
         nextAttempt: attempt + 1,
     };
+}
+
+/**
+ * Aggregate a workspace's per-process statuses into a single indicator for the
+ * nav row icon: red if anything crashed/failed, green if anything is live,
+ * yellow if processes exist but none are live, grey if there are none.
+ */
+export type WorkspaceProcStatus = 'none' | 'idle' | 'running' | 'crashed';
+
+export function aggregateWorkspaceStatus(
+    statuses: ProcessStatus[],
+): WorkspaceProcStatus {
+    if (statuses.length === 0) return 'none';
+    if (statuses.some((s) => s === 'crashed' || s === 'failed')) return 'crashed';
+    if (statuses.some((s) => s === 'running' || s === 'restarting')) return 'running';
+    return 'idle';
 }

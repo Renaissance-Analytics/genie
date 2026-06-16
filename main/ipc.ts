@@ -34,6 +34,7 @@ import {
 import { analyseFolder } from './workspace/analyse';
 import { validateSimpleWorkspace } from './workspace/create-simple';
 import { openWorkspace } from './workspace/open';
+import { stopProcess, forgetProcess } from './terminal/process-supervisor';
 import { wishCliInfo, installWishCliSystemWide } from './cli/wish-cli';
 import { registerShortcuts } from './shortcuts';
 import { startSignIn, redeemCode } from './auth';
@@ -243,7 +244,15 @@ export function registerIpcHandlers(): void {
         (_e, id: string, patch: Record<string, unknown>) =>
             updateTerminalSpec(id, patch as Parameters<typeof updateTerminalSpec>[1]),
     );
-    ipcMain.handle('terminal-spec:delete', (_e, id: string) => deleteTerminalSpec(id));
+    ipcMain.handle('terminal-spec:delete', (_e, id: string) => {
+        // If it's a running Process, stop + forget it before dropping the spec.
+        const spec = getTerminalSpec(id);
+        if (spec?.type === 'process') {
+            stopProcess(id);
+            forgetProcess(id);
+        }
+        return deleteTerminalSpec(id);
+    });
     ipcMain.handle('terminal-spec:get', (_e, id: string) => getTerminalSpec(id));
     ipcMain.handle('terminal-spec:touch', (_e, id: string) => {
         touchTerminalSpec(id);

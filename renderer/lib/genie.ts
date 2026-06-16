@@ -177,6 +177,14 @@ export interface Changelog {
 /** A view spec is a terminal, a fancy-code editor, or a background process runner. */
 export type ViewType = 'terminal' | 'code' | 'process';
 
+/** Lifecycle status of a background Process service runner. */
+export type ProcessStatus =
+    | 'running'
+    | 'stopped'
+    | 'crashed'
+    | 'restarting'
+    | 'failed';
+
 /** Per-type spec metadata. Code views persist the open file's relative path. */
 export interface ViewMeta {
     file_path?: string;
@@ -514,6 +522,16 @@ interface GenieApi {
         list: () => Promise<DocEntry[]>;
         read: (slug: string) => Promise<string | null>;
     };
+    process: {
+        /** Start a background Process service runner. */
+        start: (id: string) => Promise<{ ok: boolean }>;
+        /** Stop a Process (deliberate — won't auto-restart). */
+        stop: (id: string) => Promise<{ ok: boolean }>;
+        /** Restart a Process. */
+        restart: (id: string) => Promise<{ ok: boolean }>;
+        /** Current status of every managed Process (id → status). */
+        statuses: () => Promise<Record<string, ProcessStatus>>;
+    };
     cli: {
         /** Whether the wish-cli toolkit is shipped with this build + its home dir. */
         info: () => Promise<{ shipped: boolean; home: string | null }>;
@@ -714,6 +732,10 @@ interface GenieApi {
         /** Agent-integration MCP: a terminal asked for attention (imDone) or cleared. */
         terminalAttention: (
             cb: (payload: { id: string; on: boolean }) => void,
+        ) => () => void;
+        /** A background Process changed status. */
+        processStatus: (
+            cb: (payload: { id: string; status: ProcessStatus }) => void,
         ) => () => void;
         /** Tier 3 detached-host status — fired on fallback to in-process. */
         terminalHostStatus: (

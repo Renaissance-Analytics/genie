@@ -14,6 +14,7 @@ import {
     IconPin,
     IconPlay,
     IconPlus,
+    IconRefresh,
     IconSearch,
     IconTerminal,
     IconTrash,
@@ -22,6 +23,7 @@ import { showPrompt } from './Prompt';
 import {
     api,
     type McpStatus,
+    type ProcessStatus,
     type StructureDocStatus,
     type TerminalSpec,
     type ViewType,
@@ -129,6 +131,72 @@ export default function Chooser({
         draggingId.current = null;
         setDragOrder(null);
         if (list) onReorderWorkspaces(list);
+    };
+
+    // Background-process status (the headless supervisor in main is the source
+    // of truth). The workspace-row indicator + the inline manager read from
+    // this; processes keep running regardless of whether a row is expanded.
+    const [processStatus, setProcessStatus] = useState<
+        Map<string, ProcessStatus>
+    >(() => new Map());
+    const [expandedProcs, setExpandedProcs] = useState<Set<string>>(
+        () => new Set(),
+    );
+
+    useEffect(() => {
+        let alive = true;
+        void api()
+            .process.statuses()
+            .then((m) => {
+                if (alive)
+                    setProcessStatus(
+                        new Map(Object.entries(m) as [string, ProcessStatus][]),
+                    );
+            })
+            .catch(() => {});
+        const off = api().on.processStatus(({ id, status }) =>
+            setProcessStatus((prev) => {
+                const next = new Map(prev);
+                next.set(id, status);
+                return next;
+            }),
+        );
+        return () => {
+            alive = false;
+            off();
+        };
+    }, []);
+
+    const toggleProcs = (wsId: string) =>
+        setExpandedProcs((prev) => {
+            const next = new Set(prev);
+            if (next.has(wsId)) next.delete(wsId);
+            else next.add(wsId);
+            return next;
+        });
+
+    /** Aggregate a workspace's process statuses into the row indicator colour. */
+    const wsProcStatus = (
+        procSpecs: TerminalSpec[],
+    ): 'none' | 'idle' | 'running' | 'crashed' => {
+        if (!procSpecs.length) return 'none';
+        let running = false;
+        for (const s of procSpecs) {
+            const st = processStatus.get(s.id) ?? 'stopped';
+            if (st === 'crashed' || st === 'failed') return 'crashed';
+            if (st === 'running' || st === 'restarting') running = true;
+        }
+        return running ? 'running' : 'idle';
+    };
+
+    const deleteProcess = async (s: TerminalSpec) => {
+        const ok = await showPrompt({
+            title: 'Delete process',
+            body: `Delete "${s.label}"? It will be stopped and removed.`,
+            confirmLabel: 'Delete',
+            destructive: true,
+        });
+        if (ok !== null) onDestroySpec(s.id);
     };
 
     const byWorkspace = new Map<string, TerminalSpec[]>();
@@ -325,6 +393,26 @@ export default function Chooser({
                                         </span>
                                     )}
                                     {ws.shape === 'agi' && <AgiHealth ws={ws} />}
+                                    <span
+                                        className={`proc-ind proc-${wsProcStatus(
+                                            wsProcs,
+                                        )}${
+                                            expandedProcs.has(ws.id) ? ' open' : ''
+                                        }`}
+                                        role="button"
+                                        tabIndex={-1}
+                                        title={
+                                            wsProcs.length
+                                                ? `Background processes (${wsProcs.length})`
+                                                : 'Background processes'
+                                        }
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            toggleProcs(ws.id);
+                                        }}
+                                    >
+                                        <IconCpu size={13} />
+                                    </span>
                                     <span className="pcount">{wsSpecs.length}</span>
                                 </button>
                                 <div className="tproj-body">
@@ -367,40 +455,102 @@ export default function Chooser({
                                             <span className="tname">Add Editor…</span>
                                         </button>
                                     </div>
-                                    <div className="tproj-procs">
-                                        <div className="tproj-subhead">
-                                            <IconCpu size={12} />
-                                            <span>Processes</span>
-                                        </div>
-                                        {wsProcs.map((s) => (
-                                            <SpecRow
-                                                key={s.id}
-                                                spec={s}
-                                                checked={selected.has(s.id)}
-                                                live={activeIds.has(s.id)}
-                                                attention={attentionIds.has(s.id)}
-                                                suspended={s.enabled === false}
-                                                hostKind={hostBadgeKind(ws.backend)}
-                                                hostLabel="process"
-                                                onToggle={() => onToggleSpec(s.id)}
-                                                onDestroy={() => onDestroySpec(s.id)}
-                                                onDisable={() => onDisableSpec(s.id)}
-                                                onEnable={() => onEnableSpec(s.id)}
-                                                onContextMenu={(p) =>
-                                                    onOpenContextMenu(s.id, p)
+                                    {expandedProcs.has(ws.id) && (
+                                        <div className="tproj-procs">
+                                            <div className="tproj-subhead">
+                                                <IconCpu size={12} />
+                                                <span>Processes</span>
+                                            </div>
+                                            {wsProcs.length === 0 && (
+                                                <div className="proc-empty">
+                                                    No background processes yet.
+                                                </div>
+                                            )}
+                                            {wsProcs.map((s) => {
+                                                const st =
+                                                    processStatus.get(s.id) ?? 'stopped';
+                                                const live =
+                                                    st === 'running' ||
+                                                    st === 'restarting';
+                                                return (
+                                                    <div
+                                                        key={s.id}
+                                                        className="proc-row"
+                                                        title={s.meta?.command}
+                                                    >
+                                                        <span
+                                                            className={`proc-dot proc-${st}`}
+                                                        />
+                                                        <span className="proc-name">
+                                                            {s.label}
+                                                        </span>
+                                                        {live ? (
+                                                            <button
+                                                                type="button"
+                                                                className="proc-act"
+                                                                title="Stop"
+                                                                onClick={() =>
+                                                                    void api().process.stop(
+                                                                        s.id,
+                                                                    )
+                                                                }
+                                                            >
+                                                                <IconPause size={12} />
+                                                            </button>
+                                                        ) : (
+                                                            <button
+                                                                type="button"
+                                                                className="proc-act proc-go"
+                                                                title="Start"
+                                                                onClick={() =>
+                                                                    void api().process.start(
+                                                                        s.id,
+                                                                    )
+                                                                }
+                                                            >
+                                                                <IconPlay size={12} />
+                                                            </button>
+                                                        )}
+                                                        <button
+                                                            type="button"
+                                                            className="proc-act"
+                                                            title="Restart"
+                                                            onClick={() =>
+                                                                void api().process.restart(
+                                                                    s.id,
+                                                                )
+                                                            }
+                                                        >
+                                                            <IconRefresh size={12} />
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            className="proc-act proc-del"
+                                                            title="Delete process"
+                                                            onClick={() =>
+                                                                void deleteProcess(s)
+                                                            }
+                                                        >
+                                                            <IconTrash size={12} />
+                                                        </button>
+                                                    </div>
+                                                );
+                                            })}
+                                            <button
+                                                type="button"
+                                                className="tterm tterm-add"
+                                                onClick={() =>
+                                                    void promptAddProcess(ws.id)
                                                 }
-                                            />
-                                        ))}
-                                        <button
-                                            type="button"
-                                            className="tterm tterm-add"
-                                            onClick={() => void promptAddProcess(ws.id)}
-                                        >
-                                            <span className="pick" />
-                                            <IconCpu size={12} />
-                                            <span className="tname">Add Process…</span>
-                                        </button>
-                                    </div>
+                                            >
+                                                <span className="pick" />
+                                                <IconPlus size={12} />
+                                                <span className="tname">
+                                                    Add Process…
+                                                </span>
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         );

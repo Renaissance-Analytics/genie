@@ -7,7 +7,6 @@ import {
     type PointerEvent as ReactPointerEvent,
 } from 'react';
 import TerminalPanel from './TerminalPanel';
-import ProcessPanel from './ProcessPanel';
 import CodePanel from '../Code/CodePanel';
 import { IconCode, IconPlus } from './icons';
 import { api, type TerminalSpec, type WorkspaceRow } from '../../lib/genie';
@@ -602,24 +601,6 @@ function PanelFor({
                 onClose={onClose}
                 onMaximize={onMaximize}
                 onMinimize={onMinimize}
-            />
-        );
-    }
-
-    if (spec.type === 'process') {
-        return (
-            <ProcessPanel
-                spec={spec}
-                workspace={workspace}
-                focused={focused}
-                attention={attention}
-                maximized={maximized}
-                style={style}
-                onClose={onClose}
-                onMaximize={onMaximize}
-                onMinimize={onMinimize}
-                onMarkActive={onMarkActive}
-                onMarkInactive={onMarkInactive}
             />
         );
     }

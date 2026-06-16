@@ -2014,11 +2014,46 @@ body.gutter-dragging .grid-gutter {
     flex: 0 0 auto;
 }
 
-/* ===== Processes subsection (Chooser flyout) ========================= */
+/* ===== Background Processes (workspace-row indicator + inline manager) === */
+/* Status indicator on the workspace row: a CPU glyph tinted by aggregate
+   process state (grey none · yellow idle · green running · red crashed). */
+.tproj-head .proc-ind {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--fg-4);
+    flex: 0 0 auto;
+    cursor: pointer;
+    border-radius: var(--radius-sm, 4px);
+    padding: 1px;
+    transition: color var(--dur-fast) var(--ease-out);
+}
+.tproj-head .proc-ind:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+.tproj-head .proc-ind.open {
+    background: rgba(255, 255, 255, 0.06);
+}
+.proc-ind.proc-none {
+    color: var(--fg-4);
+    opacity: 0.55;
+}
+.proc-ind.proc-idle {
+    color: var(--term-warn, #e2c08d);
+}
+.proc-ind.proc-running {
+    color: #10b981;
+}
+.proc-ind.proc-crashed {
+    color: #f48771;
+}
+
+/* Inline process manager, revealed under the row when the indicator is clicked. */
 .tproj-procs {
     display: flex;
     flex-direction: column;
-    margin-top: 2px;
+    gap: 1px;
+    margin: 2px 0 4px;
     padding-top: 4px;
     border-top: 1px solid var(--bg-3);
 }
@@ -2033,11 +2068,62 @@ body.gutter-dragging .grid-gutter {
     letter-spacing: 0.04em;
     color: var(--fg-4);
 }
-
-/* ===== Process panel (service runner) ================================ */
-.tpanel-head .pdot.proc-dot {
-    transition: background var(--dur-fast) var(--ease-out);
+.tproj-procs .proc-empty {
+    padding: 4px 8px 6px;
+    font-size: 11.5px;
+    color: var(--fg-4);
 }
+.tproj-procs .proc-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 8px;
+    border-radius: var(--radius-md);
+}
+.tproj-procs .proc-row:hover {
+    background: var(--bg-2);
+}
+.tproj-procs .proc-row .proc-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+}
+.tproj-procs .proc-row .proc-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--fg-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.tproj-procs .proc-row .proc-act {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: var(--radius-sm, 4px);
+    background: transparent;
+    color: var(--fg-3);
+    cursor: pointer;
+    opacity: 0.7;
+}
+.tproj-procs .proc-row .proc-act:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--fg-1);
+    opacity: 1;
+}
+.tproj-procs .proc-row .proc-act.proc-go:hover {
+    color: #10b981;
+}
+.tproj-procs .proc-row .proc-act.proc-del:hover {
+    color: var(--term-err, #f48771);
+}
+/* Status dot colours (shared): grey stopped · yellow restarting · green
+   running · red crashed/failed. */
 .proc-dot.proc-running {
     background: #10b981;
 }
@@ -2050,69 +2136,6 @@ body.gutter-dragging .grid-gutter {
 .proc-dot.proc-crashed,
 .proc-dot.proc-failed {
     background: #f48771;
-}
-.tpanel-head .proc-status {
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: #71717a;
-}
-.proc-status.proc-running {
-    color: #10b981;
-}
-.proc-status.proc-restarting {
-    color: var(--term-warn, #e2c08d);
-}
-.proc-status.proc-crashed,
-.proc-status.proc-failed {
-    color: #f48771;
-}
-.pctl.proc-start {
-    color: #10b981;
-}
-/* Idle (stopped/crashed) process body — centred status + Start affordance. */
-.proc-idle {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    color: var(--term-dim, #71717a);
-}
-.proc-idle .proc-idle-status {
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-}
-.proc-idle .proc-idle-cmd {
-    font-family: ui-monospace, 'Geist Mono', monospace;
-    font-size: 11px;
-    color: #a1a1aa;
-    background: rgba(255, 255, 255, 0.05);
-    padding: 3px 8px;
-    border-radius: var(--radius-md);
-    max-width: 80%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.proc-idle .proc-idle-start {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 12px;
-    border: 1px solid color-mix(in srgb, #10b981 45%, transparent);
-    border-radius: 999px;
-    background: transparent;
-    color: #10b981;
-    font-size: 12px;
-    cursor: pointer;
-}
-.proc-idle .proc-idle-start:hover {
-    background: color-mix(in srgb, #10b981 18%, transparent);
 }
 
 /* add-terminal tile (used in 4-panel layout) */

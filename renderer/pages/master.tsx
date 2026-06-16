@@ -329,11 +329,15 @@ function MasterInner() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [workspaces.length]);
 
-    // Active-workspace views drive the grid layout + counts.
+    // Active-workspace views drive the grid layout + counts. Processes are
+    // headless services — they never surface in the main grid.
     const selectedSpecs = useMemo(
         () =>
             specs.filter(
-                (s) => s.workspace_id === activeWorkspaceId && selected.has(s.id),
+                (s) =>
+                    s.type !== 'process' &&
+                    s.workspace_id === activeWorkspaceId &&
+                    selected.has(s.id),
             ),
         [specs, selected, activeWorkspaceId],
     );
@@ -343,7 +347,10 @@ function MasterInner() {
     const backgroundSpecs = useMemo(
         () =>
             specs.filter(
-                (s) => s.workspace_id !== activeWorkspaceId && selected.has(s.id),
+                (s) =>
+                    s.type !== 'process' &&
+                    s.workspace_id !== activeWorkspaceId &&
+                    selected.has(s.id),
             ),
         [specs, selected, activeWorkspaceId],
     );
@@ -387,9 +394,10 @@ function MasterInner() {
     );
 
     /**
-     * Create a Process (background service runner) for a workspace. The label
-     * defaults to the command's first token; it runs the command via the pty
-     * backend with autostart + auto-restart-on-crash on by default.
+     * Create a Process (background service runner) for a workspace. Headless —
+     * it does NOT surface in the main grid; it's managed from the workspace's
+     * inline process panel in the nav. Autostart is OFF by default (starts
+     * idle); auto-restart-on-crash is on.
      */
     const addProcess = useCallback(
         async (workspaceId: string, command: string, label?: string) => {
@@ -403,10 +411,10 @@ function MasterInner() {
                 label: (label?.trim() || fallback).slice(0, 60),
                 cwd: ws.path,
                 type: 'process',
-                meta: { command: cmd, autostart: true, restart_on_exit: true },
+                meta: { command: cmd, autostart: false, restart_on_exit: true },
             });
+            // Not added to `selected` — processes aren't grid panels.
             setSpecs((prev) => [...prev, created]);
-            setSelected((prev) => new Set(prev).add(created.id));
         },
         [workspacesById],
     );

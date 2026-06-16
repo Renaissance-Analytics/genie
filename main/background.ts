@@ -14,6 +14,7 @@ import {
     broadcastTerminalAttention,
 } from './terminal/ipc';
 import { startMcpServer } from './mcp/server';
+import { startAutostartProcesses } from './terminal/process-supervisor';
 import {
     initTerminalBackend,
     isHostBacked,
@@ -520,6 +521,10 @@ app.whenReady().then(async () => {
     registerFilesIpc();
     registerGithubIpc();
     registerUpdaterIpc();
+    // Start background Process service runners flagged autostart. Headless —
+    // they run in the pty backend with no panel; the supervisor broadcasts
+    // status to the workspace-row indicator + inline manager.
+    startAutostartProcesses();
     // Agent-integration MCP server (loopback). imDone pulses the caller's
     // terminal glow. Best-effort: a failed bind just means no MCP endpoints.
     void startMcpServer({

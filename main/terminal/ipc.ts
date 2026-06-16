@@ -17,6 +17,14 @@ import {
 import { buildWishCliEnv } from '../cli/wish-cli';
 import { buildProcessArgs } from './process-spawn';
 import {
+    startProcess,
+    stopProcess,
+    restartProcess,
+    getProcessStatuses,
+    onProcessPtyExit,
+    forgetProcess,
+} from './process-supervisor';
+import {
     registerTerminalEndpoint,
     unregisterTerminalEndpoint,
 } from '../mcp/server';
@@ -302,6 +310,9 @@ export function registerTerminalIpc(): void {
             }
         },
         onExit: (id: string, payload: { exitCode: number; signal?: number }) => {
+            // Headless Process runners have no window owner — let the supervisor
+            // decide their fate (restart/crash/stop). No-ops for other ids.
+            onProcessPtyExit(id, payload);
             const entry = ownersByTerminal.get(id);
             ownersByTerminal.delete(id);
             if (!entry) return;
@@ -311,6 +322,21 @@ export function registerTerminalIpc(): void {
             }
         },
     });
+
+    // --- Process service runners (headless) -----------------------------
+    ipcMain.handle('process:start', (_e, id: string) => {
+        startProcess(id);
+        return { ok: true };
+    });
+    ipcMain.handle('process:stop', (_e, id: string) => {
+        stopProcess(id);
+        return { ok: true };
+    });
+    ipcMain.handle('process:restart', (_e, id: string) => {
+        restartProcess(id);
+        return { ok: true };
+    });
+    ipcMain.handle('process:statuses', () => getProcessStatuses());
 }
 
 /** Tear down every pty on app quit so dangling shell processes don't survive. */

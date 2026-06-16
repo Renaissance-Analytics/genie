@@ -195,6 +195,16 @@ const api = {
             ipcRenderer.invoke('docs:read', slug) as Promise<string | null>,
     },
 
+    process: {
+        start: (id: string) => ipcRenderer.invoke('process:start', id),
+        stop: (id: string) => ipcRenderer.invoke('process:stop', id),
+        restart: (id: string) => ipcRenderer.invoke('process:restart', id),
+        statuses: () =>
+            ipcRenderer.invoke('process:statuses') as Promise<
+                Record<string, string>
+            >,
+    },
+
     cli: {
         info: () =>
             ipcRenderer.invoke('cli:info') as Promise<{
@@ -374,6 +384,17 @@ const api = {
                 cb(payload);
             ipcRenderer.on('terminal:attention', handler);
             return () => ipcRenderer.off('terminal:attention', handler);
+        },
+        /** A background Process changed status (running/stopped/crashed/…). */
+        processStatus: (
+            cb: (payload: { id: string; status: string }) => void,
+        ) => {
+            const handler = (
+                _e: unknown,
+                payload: { id: string; status: string },
+            ) => cb(payload);
+            ipcRenderer.on('process:status', handler);
+            return () => ipcRenderer.off('process:status', handler);
         },
         /** Tier 3 detached-host status — fired when the host is unavailable and
          *  Genie falls back to in-process. The renderer surfaces a non-fatal toast. */
