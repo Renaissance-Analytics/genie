@@ -393,6 +393,14 @@ export default function Chooser({
                                         </span>
                                     )}
                                     {ws.shape === 'agi' && <AgiHealth ws={ws} />}
+                                    {ws.mcp_enabled ? (
+                                        <span
+                                            className="mcp-badge"
+                                            title="Agent MCP enabled — terminals in this workspace get a GENIE_MCP_URL endpoint"
+                                        >
+                                            MCP
+                                        </span>
+                                    ) : null}
                                     <span
                                         className={`proc-ind proc-${wsProcStatus(
                                             wsProcs,

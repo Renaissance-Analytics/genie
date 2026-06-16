@@ -1034,6 +1034,19 @@
     border-radius: var(--radius-full);
     padding: 1px 6px;
 }
+/* Agent-MCP-enabled marker on a workspace row — violet to match the
+   agent-integration theme (the imDone attention glow). */
+.mcp-badge {
+    flex: 0 0 auto;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: #c4b5fd;
+    background: color-mix(in srgb, var(--violet-500) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--violet-500) 45%, transparent);
+    border-radius: var(--radius-full);
+    padding: 1px 5px;
+}
 .agi-health {
     position: relative;
     display: inline-flex;
