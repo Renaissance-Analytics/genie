@@ -71,6 +71,8 @@ interface Props {
         patch: { command: string; label?: string; cwd?: string; shell?: string },
         wasRunning: boolean,
     ) => void;
+    /** Issue Watch: per-workspace unread counts → a rail dot when > 0. */
+    issueWatchCounts?: Record<string, number>;
 }
 
 /**
@@ -100,6 +102,7 @@ export default function Chooser({
     onReorderWorkspaces,
     onAddProcess,
     onUpdateProcess,
+    issueWatchCounts = {},
 }: Props) {
     // Inline Add-Process form: which workspace's form is open, its fields, and
     // the cached repo list (root + repos/<name>) for the cwd picker. When
@@ -401,6 +404,12 @@ export default function Chooser({
                         >
                             {workspaceIcon(ws)}
                             {live > 0 && <span className="cnt">{live}</span>}
+                            {(issueWatchCounts[ws.id] ?? 0) > 0 && (
+                                <span
+                                    className="iw-rail-dot"
+                                    title={`${issueWatchCounts[ws.id]} unread issue/PR/alert`}
+                                />
+                            )}
                         </button>
                     );
                 })}

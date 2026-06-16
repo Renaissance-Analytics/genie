@@ -23,6 +23,19 @@ const api = {
         summary: () => ipcRenderer.invoke('app:signed-in-summary'),
     },
 
+    issueWatch: {
+        repos: (workspaceId: string) =>
+            ipcRenderer.invoke('issue-watch:repos', workspaceId),
+        set: (workspaceId: string, owner: string, repo: string, enabled: boolean) =>
+            ipcRenderer.invoke('issue-watch:set', workspaceId, owner, repo, enabled),
+        feed: (workspaceId: string) =>
+            ipcRenderer.invoke('issue-watch:feed', workspaceId),
+        markSeen: (workspaceId: string) =>
+            ipcRenderer.invoke('issue-watch:mark-seen', workspaceId),
+        counts: () =>
+            ipcRenderer.invoke('issue-watch:counts') as Promise<Record<string, number>>,
+    },
+
     aionima: {
         getConfig: () => ipcRenderer.invoke('auth:aionima-config'),
         setConfig: (patch: { host?: string; token?: string | null }) =>
@@ -396,6 +409,15 @@ const api = {
             const handler = (_e: unknown, payload: { kind: string }) => cb(payload);
             ipcRenderer.on('notify:sound', handler);
             return () => ipcRenderer.off('notify:sound', handler);
+        },
+        // Issue Watch: per-workspace unread counts changed (poll / toggle / seen).
+        issueWatchUpdate: (
+            cb: (payload: { counts: Record<string, number> }) => void,
+        ) => {
+            const handler = (_e: unknown, payload: { counts: Record<string, number> }) =>
+                cb(payload);
+            ipcRenderer.on('issue-watch:update', handler);
+            return () => ipcRenderer.off('issue-watch:update', handler);
         },
         terminalData: (cb: (payload: { id: string; data: string }) => void) => {
             const handler = (_e: unknown, payload: { id: string; data: string }) =>

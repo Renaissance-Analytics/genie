@@ -11,6 +11,7 @@ import TerminalGrid, {
 } from '../components/Master/TerminalGrid';
 import AddWorkspaceModal from '../components/AddWorkspaceModal';
 import DocsFlyout from '../components/Master/DocsFlyout';
+import IssueWatchFlyout from '../components/Master/IssueWatchFlyout';
 import SignInPrompt from '../components/SignInPrompt';
 import type { BackendUser, ViewType } from '../lib/genie';
 import { resolveShortcut } from '../lib/master-shortcuts';
@@ -24,6 +25,7 @@ import {
     IconPanelLeft,
     IconPlus,
     IconHelp,
+    IconEye,
     IconSettings,
 } from '../components/Master/icons';
 import {
@@ -125,6 +127,20 @@ function MasterInner() {
     // Docs flyout (the ? titlebar button toggles this in-window panel rather
     // than opening a separate BrowserWindow).
     const [docsOpen, setDocsOpen] = useState(false);
+    // Issue Watch: the flyout + per-workspace unread counts (rail dots + badge).
+    const [issueWatchOpen, setIssueWatchOpen] = useState(false);
+    const [issueWatchCounts, setIssueWatchCounts] = useState<Record<string, number>>(
+        () => ({}),
+    );
+    useEffect(() => {
+        const load = () =>
+            void api()
+                .issueWatch.counts()
+                .then(setIssueWatchCounts)
+                .catch(() => {});
+        load();
+        return api().on.issueWatchUpdate(({ counts }) => setIssueWatchCounts(counts));
+    }, []);
     // Max panels visible per workspace (Settings → max_views, default 4).
     const [maxViews, setMaxViews] = useState(4);
     // Transient notice (Tier 2 cap warnings, max-views blocks). Auto-clears.
@@ -933,6 +949,12 @@ function MasterInner() {
                             : undefined
                     }
                     onShowDocs={() => setDocsOpen((o) => !o)}
+                    onShowIssueWatch={() => setIssueWatchOpen((o) => !o)}
+                    issueWatchUnread={
+                        activeWorkspaceId
+                            ? issueWatchCounts[activeWorkspaceId] ?? 0
+                            : 0
+                    }
                 />
                 <Toolbar
                     activeWorkspace={
@@ -955,6 +977,7 @@ function MasterInner() {
                         selected={selected}
                         activeIds={activeIds}
                         attentionIds={attentionIds}
+                        issueWatchCounts={issueWatchCounts}
                         activeWorkspaceId={activeWorkspaceId}
                         pinned={chooserPinned}
                         onTogglePin={() => setChooserPinned((p) => !p)}
@@ -1013,6 +1036,11 @@ function MasterInner() {
             </div>
 
             <DocsFlyout open={docsOpen} onClose={() => setDocsOpen(false)} />
+            <IssueWatchFlyout
+                open={issueWatchOpen}
+                workspaceId={activeWorkspaceId}
+                onClose={() => setIssueWatchOpen(false)}
+            />
 
             <PromptHost />
 
@@ -1268,10 +1296,14 @@ function TitleBar({
     isStage,
     stageWorkspaceName,
     onShowDocs,
+    onShowIssueWatch,
+    issueWatchUnread = 0,
 }: {
     isStage: boolean;
     stageWorkspaceName?: string;
     onShowDocs?: () => void;
+    onShowIssueWatch?: () => void;
+    issueWatchUnread?: number;
 }) {
     const isMac =
         typeof navigator !== 'undefined' &&
@@ -1297,6 +1329,19 @@ function TitleBar({
             )}
             <span className="spacer" />
             <UpdatePill />
+            <button
+                type="button"
+                className="gicon iw-btn"
+                title="Issue Watch — GitHub issues, PRs & Dependabot"
+                onClick={() => onShowIssueWatch?.()}
+            >
+                <IconEye />
+                {issueWatchUnread > 0 && (
+                    <span className="iw-btn-badge">
+                        {issueWatchUnread > 99 ? '99+' : issueWatchUnread}
+                    </span>
+                )}
+            </button>
             <button
                 type="button"
                 className="gicon"

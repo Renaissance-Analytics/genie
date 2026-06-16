@@ -14,6 +14,7 @@ import { registerIpcHandlers } from './ipc';
 import { initDatabase, listWorkspaces, getAllSettings, getTerminalSpec } from './db';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import { registerForceQuestionIpc, forceQuestion } from './ask/force-question';
+import { registerIssueWatchIpc } from './issue-watch';
 import { registerProtocolHandler, handleGenieUrl } from './auth';
 import {
     registerTerminalIpc,
@@ -629,6 +630,8 @@ app.whenReady().then(async () => {
     registerFilesIpc();
     registerGithubIpc();
     registerUpdaterIpc();
+    // Issue Watch: per-workspace GitHub issue/PR/Dependabot watching + poller.
+    registerIssueWatchIpc();
     // Start background Process service runners flagged autostart. Headless —
     // they run in the pty backend with no panel; the supervisor broadcasts
     // status to the workspace-row indicator + inline manager.

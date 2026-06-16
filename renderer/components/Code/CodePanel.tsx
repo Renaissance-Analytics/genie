@@ -10,6 +10,7 @@ import {
     IconMinimize,
     IconPin,
     IconUnlock,
+    IconWrap,
     IconX,
 } from '../Master/icons';
 import { showPrompt } from '../Master/Prompt';
@@ -130,6 +131,8 @@ export default function CodePanel({
 
     // Tree pinned open (stays after opening a file) + remembered expansion.
     const [treePinned, setTreePinned] = useState<boolean>(!!spec.meta?.tree_pinned);
+    // Editor word-wrap toggle (persisted per view).
+    const [wordWrap, setWordWrap] = useState<boolean>(!!spec.meta?.word_wrap);
     const [expandedIds, setExpandedIds] = useState<string[]>(
         spec.meta?.expanded_tree_ids ?? [],
     );
@@ -501,6 +504,20 @@ export default function CodePanel({
                     </button>
                     <button
                         type="button"
+                        className={`pctl${wordWrap ? ' is-on' : ''}`}
+                        onClick={() =>
+                            setWordWrap((w) => {
+                                const next = !w;
+                                persistMeta({ word_wrap: next });
+                                return next;
+                            })
+                        }
+                        title={wordWrap ? 'Word wrap: on' : 'Word wrap: off'}
+                    >
+                        <IconWrap size={14} />
+                    </button>
+                    <button
+                        type="button"
                         className={`pctl${locked ? ' is-on' : ''}`}
                         onClick={() => void toggleLock()}
                         title={
@@ -601,6 +618,7 @@ export default function CodePanel({
                             value={active.content}
                             language={active.language}
                             theme="dark"
+                            wordWrap={wordWrap}
                             onChange={(v) => {
                                 setFiles((m) =>
                                     m[activeFile]

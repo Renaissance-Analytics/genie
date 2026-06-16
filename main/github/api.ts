@@ -169,6 +169,117 @@ export function parseGitHubRemote(url: string): ParsedRepoRef | null {
     return null;
 }
 
+// --- Issue Watch ------------------------------------------------------------
+
+/** A normalized watched item (issue / PR / Dependabot alert) for the feed. */
+export interface WatchItem {
+    kind: 'issue' | 'pr' | 'dependabot';
+    /** Stable key across polls: `<owner>/<repo>:<kind>:<number|ghsa>`. */
+    key: string;
+    number: number | null;
+    title: string;
+    url: string;
+    /** ISO timestamp used for unread (updated since last seen). */
+    updatedAt: string;
+    author?: string;
+    /** Dependabot severity (low|medium|high|critical). */
+    severity?: string;
+}
+
+type GhIssue = {
+    number: number;
+    title: string;
+    html_url: string;
+    updated_at: string;
+    user?: { login?: string };
+    pull_request?: unknown; // present ⇒ it's a PR, not an issue
+};
+type GhPull = {
+    number: number;
+    title: string;
+    html_url: string;
+    updated_at: string;
+    user?: { login?: string };
+};
+type GhAlert = {
+    number: number;
+    html_url?: string;
+    updated_at?: string;
+    created_at?: string;
+    security_advisory?: { summary?: string; ghsa_id?: string };
+    security_vulnerability?: { severity?: string };
+    dependency?: { package?: { name?: string } };
+};
+
+/** Best-effort GET that returns [] on any error (e.g. feature disabled, 404). */
+async function ghListSafe<T>(path: string): Promise<T[]> {
+    try {
+        const r = await gh<T[]>('GET', path);
+        return Array.isArray(r) ? r : [];
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * Fetch a repo's open Issues, PRs, and Dependabot alerts as normalized
+ * WatchItems. Each category is fetched independently and degrades to [] on
+ * error so one disabled feature (e.g. Dependabot off) doesn't sink the rest.
+ */
+export async function fetchRepoWatchItems(
+    owner: string,
+    repo: string,
+): Promise<WatchItem[]> {
+    const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    const [issuesRaw, pullsRaw, alertsRaw] = await Promise.all([
+        ghListSafe<GhIssue>(`${base}/issues?state=open&per_page=50&sort=updated`),
+        ghListSafe<GhPull>(`${base}/pulls?state=open&per_page=50&sort=updated`),
+        ghListSafe<GhAlert>(`${base}/dependabot/alerts?state=open&per_page=50`),
+    ]);
+    const slug = `${owner}/${repo}`;
+    const items: WatchItem[] = [];
+    for (const i of issuesRaw) {
+        if (i.pull_request) continue; // the issues endpoint also returns PRs
+        items.push({
+            kind: 'issue',
+            key: `${slug}:issue:${i.number}`,
+            number: i.number,
+            title: i.title,
+            url: i.html_url,
+            updatedAt: i.updated_at,
+            author: i.user?.login,
+        });
+    }
+    for (const p of pullsRaw) {
+        items.push({
+            kind: 'pr',
+            key: `${slug}:pr:${p.number}`,
+            number: p.number,
+            title: p.title,
+            url: p.html_url,
+            updatedAt: p.updated_at,
+            author: p.user?.login,
+        });
+    }
+    for (const a of alertsRaw) {
+        const ghsa = a.security_advisory?.ghsa_id ?? String(a.number);
+        items.push({
+            kind: 'dependabot',
+            key: `${slug}:dependabot:${ghsa}`,
+            number: a.number ?? null,
+            title:
+                a.security_advisory?.summary ??
+                `Vulnerability in ${a.dependency?.package?.name ?? 'a dependency'}`,
+            url:
+                a.html_url ??
+                `https://github.com/${slug}/security/dependabot/${a.number}`,
+            updatedAt: a.updated_at ?? a.created_at ?? new Date(0).toISOString(),
+            severity: a.security_vulnerability?.severity,
+        });
+    }
+    return items;
+}
+
 export interface ForkRepoOpts {
     /** Source repo to fork. */
     owner: string;

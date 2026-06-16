@@ -71,6 +71,29 @@ export interface ForceAnswerSpec {
     note: string;
 }
 
+/** Issue Watch: a detected repo + its watch state for the flyout. */
+export interface WatchRepoView {
+    owner: string;
+    repo: string;
+    enabled: boolean;
+    unread: number;
+}
+
+/** Issue Watch: one feed item (issue / PR / Dependabot alert). */
+export interface WatchFeedItem {
+    kind: 'issue' | 'pr' | 'dependabot';
+    key: string;
+    number: number | null;
+    title: string;
+    url: string;
+    updatedAt: string;
+    author?: string;
+    severity?: string;
+    owner: string;
+    repo: string;
+    unread: boolean;
+}
+
 export interface Settings {
     primary_workspace?: string;
     /** Last-activated workspace id in the master view. */
@@ -221,6 +244,8 @@ export interface ViewMeta {
     tree_pinned?: boolean;
     /** Code view: ids of the tree folders left expanded, restored on relaunch. */
     expanded_tree_ids?: string[];
+    /** Code view: word-wrap toggle state. */
+    word_wrap?: boolean;
     /** Process view: the command line run (non-interactively) by the runner. */
     command?: string;
     /** Process view: start automatically when the workspace/app opens. */
@@ -448,6 +473,18 @@ interface GenieApi {
         signOut: (kind?: BackendKind) => Promise<{ ok: boolean }>;
         whoami: (kind?: BackendKind) => Promise<BackendUser | null | Record<string, BackendUser | null>>;
         summary: () => Promise<SignedInSummaryItem[]>;
+    };
+    issueWatch: {
+        repos: (workspaceId: string) => Promise<WatchRepoView[]>;
+        set: (
+            workspaceId: string,
+            owner: string,
+            repo: string,
+            enabled: boolean,
+        ) => Promise<{ ok: boolean }>;
+        feed: (workspaceId: string) => Promise<WatchFeedItem[]>;
+        markSeen: (workspaceId: string) => Promise<{ ok: boolean }>;
+        counts: () => Promise<Record<string, number>>;
     };
     aionima: {
         getConfig: () => Promise<AionimaConfig>;
@@ -762,6 +799,10 @@ interface GenieApi {
         inboxUpdated: (cb: (payload: { count: number }) => void) => () => void;
         /** Customization: play a notification chime (agent imDone). */
         notifySound: (cb: (payload: { kind: string }) => void) => () => void;
+        /** Issue Watch: per-workspace unread counts changed. */
+        issueWatchUpdate: (
+            cb: (payload: { counts: Record<string, number> }) => void,
+        ) => () => void;
         terminalData: (
             cb: (payload: { id: string; data: string }) => void,
         ) => () => void;

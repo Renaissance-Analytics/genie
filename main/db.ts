@@ -287,6 +287,25 @@ export function runMigrations(d: Database.Database): void {
                 db.exec(`UPDATE workspaces SET mcp_enabled = 1`);
             },
         },
+        {
+            // v12: Issue Watch (alpha.63). Per (workspace, owner/repo) watch row:
+            // whether it's actively watched (default ON for auto-detected repos)
+            // and `seen_at` — the high-water timestamp; an item is "unread" when
+            // its updatedAt > seen_at. Marking the feed seen bumps seen_at.
+            version: 12,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS issue_watches (
+                        workspace_id TEXT NOT NULL,
+                        owner        TEXT NOT NULL,
+                        repo         TEXT NOT NULL,
+                        enabled      INTEGER NOT NULL DEFAULT 1,
+                        seen_at      TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
+                        PRIMARY KEY (workspace_id, owner, repo)
+                    )
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -864,4 +883,67 @@ export function touchTerminalSpec(id: string): void {
     getDb()
         .prepare('UPDATE terminal_specs SET last_opened_at = ? WHERE id = ?')
         .run(new Date().toISOString(), id);
+}
+
+// Issue Watch ----------------------------------------------------------------
+
+export interface IssueWatchRow {
+    workspace_id: string;
+    owner: string;
+    repo: string;
+    enabled: number; // 1/0
+    seen_at: string; // ISO; items updated after this are "unread"
+}
+
+/** All watch rows for a workspace. */
+export function listIssueWatches(workspaceId: string): IssueWatchRow[] {
+    return getDb()
+        .prepare<[string], IssueWatchRow>(
+            'SELECT workspace_id, owner, repo, enabled, seen_at FROM issue_watches WHERE workspace_id = ?',
+        )
+        .all(workspaceId);
+}
+
+/** Every enabled watch across all workspaces (for the background poller). */
+export function listEnabledIssueWatches(): IssueWatchRow[] {
+    return getDb()
+        .prepare<[], IssueWatchRow>(
+            'SELECT workspace_id, owner, repo, enabled, seen_at FROM issue_watches WHERE enabled = 1',
+        )
+        .all();
+}
+
+/**
+ * Upsert a watch's enabled flag. Auto-detected repos call this with the prior
+ * enabled value (default 1) so toggling persists without resetting seen_at.
+ */
+export function setIssueWatch(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    enabled: boolean,
+): void {
+    getDb()
+        .prepare(
+            `INSERT INTO issue_watches (workspace_id, owner, repo, enabled)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(workspace_id, owner, repo) DO UPDATE SET enabled = excluded.enabled`,
+        )
+        .run(workspaceId, owner, repo, enabled ? 1 : 0);
+}
+
+/** Bump seen_at (mark everything currently in the feed as read). */
+export function markIssueWatchSeen(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    seenAt: string,
+): void {
+    getDb()
+        .prepare(
+            `INSERT INTO issue_watches (workspace_id, owner, repo, enabled, seen_at)
+             VALUES (?, ?, ?, 1, ?)
+             ON CONFLICT(workspace_id, owner, repo) DO UPDATE SET seen_at = excluded.seen_at`,
+        )
+        .run(workspaceId, owner, repo, seenAt);
 }
