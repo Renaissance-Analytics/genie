@@ -150,6 +150,10 @@ export function registerIpcHandlers(): void {
             ...row,
             backend: (row.backend ?? 'tynn') as 'tynn' | 'aionima',
         });
+        // MCP is ON by default for new workspaces — write the genie server into
+        // its Claude (.mcp.json) + Cursor (.cursor/mcp.json) config so agents
+        // there discover it immediately. Best-effort.
+        if (r.mcp_enabled) writeWorkspaceAgentMcp(r.path, true);
         rebuildMenu();
         return r;
     });

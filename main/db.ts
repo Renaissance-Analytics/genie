@@ -274,6 +274,19 @@ export function runMigrations(d: Database.Database): void {
                 );
             },
         },
+        {
+            // v11: enable the agent-integration MCP for ALL workspaces by
+            // default (alpha.53). v9 shipped it OFF + opt-in; we now want the
+            // Genie MCP (imDone, ForceTheQuestion, …) available everywhere out
+            // of the box. One-time backfill — runs once, so a user who later
+            // toggles a workspace off stays off. New workspaces default ON via
+            // addWorkspace. The startup loop in background.ts writes each
+            // enabled workspace's Claude/Cursor .mcp.json on the next launch.
+            version: 11,
+            runner: (db) => {
+                db.exec(`UPDATE workspaces SET mcp_enabled = 1`);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -484,12 +497,16 @@ export function addWorkspace(
         tynn_project_name: row.tynn_project_name || row.project_name,
         // New workspaces append to the bottom of the user-defined order.
         sort_order: row.sort_order ?? nextWorkspaceOrder(),
+        // Agent-integration MCP is ON by default for every workspace so the
+        // Genie MCP (imDone, ForceTheQuestion, …) is available to agents
+        // everywhere out of the box. The per-workspace toggle can opt out.
+        mcp_enabled: row.mcp_enabled ?? 1,
     };
     getDb()
         .prepare(
             `INSERT INTO workspaces
-             (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, editor, editor_cmd, start_cmd, env_file, last_opened_at, created_by_genie, sort_order)
-             VALUES (@id, @backend, @project_id, @project_name, @tynn_project_id, @tynn_project_name, @shape, @path, @editor, @editor_cmd, @start_cmd, @env_file, @last_opened_at, @created_by_genie, @sort_order)`,
+             (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, editor, editor_cmd, start_cmd, env_file, last_opened_at, created_by_genie, sort_order, mcp_enabled)
+             VALUES (@id, @backend, @project_id, @project_name, @tynn_project_id, @tynn_project_name, @shape, @path, @editor, @editor_cmd, @start_cmd, @env_file, @last_opened_at, @created_by_genie, @sort_order, @mcp_enabled)`,
         )
         .run(full);
     return getWorkspace(row.id)!;

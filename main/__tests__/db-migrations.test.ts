@@ -341,7 +341,11 @@ describe('db migration v9 (per-workspace MCP toggle)', () => {
         expect(cols(db, 'workspaces').has('mcp_enabled')).toBe(true);
     });
 
-    it('a pre-existing workspace row defaults to mcp_enabled=0 (opt-in)', () => {
+    // The COLUMN default is still 0; the product default-on is applied by
+    // addWorkspace (new rows) + the v11 backfill (existing rows). This asserts
+    // the raw column behaviour, which v11 doesn't change (it ran on the empty
+    // table before this insert).
+    it('a raw workspace row uses the column default mcp_enabled=0', () => {
         const db = new Database(':memory:');
         runMigrations(db);
         db.prepare(
@@ -405,5 +409,36 @@ describe('db migration v10 (reclassify mis-stored process specs)', () => {
             db.prepare<[], { type: string }>(`SELECT type FROM terminal_specs WHERE id='${id}'`).get()?.type;
         expect(get('t1')).toBe('terminal');
         expect(get('c1')).toBe('code');
+    });
+});
+
+describe('db migration v11 (enable MCP for all workspaces by default)', () => {
+    // The migration body is this UPDATE; test it directly (runMigrations runs
+    // the whole chain in one call, so v11 fires on the empty table before any
+    // test row exists — exercise the backfill against seeded rows instead).
+    const backfill = (db: Database.Database) =>
+        db.exec(`UPDATE workspaces SET mcp_enabled = 1`);
+
+    const insertWs = (db: Database.Database, id: string, mcp: number) =>
+        db.prepare(
+            `INSERT INTO workspaces
+               (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, last_opened_at, created_by_genie, mcp_enabled)
+             VALUES (@id, 'tynn', 'p', 'P', 'p', 'P', 'simple', @path, NULL, 0, @mcp)`,
+        ).run({ id, path: `/tmp/${id}`, mcp });
+
+    it('flips every workspace to mcp_enabled=1', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        insertWs(db, 'w-off', 0);
+        insertWs(db, 'w-on', 1);
+        backfill(db);
+        const mcp = (id: string) =>
+            db
+                .prepare<[string], { mcp_enabled: number }>(
+                    'SELECT mcp_enabled FROM workspaces WHERE id = ?',
+                )
+                .get(id)?.mcp_enabled;
+        expect(mcp('w-off')).toBe(1);
+        expect(mcp('w-on')).toBe(1);
     });
 });
