@@ -2,6 +2,7 @@ import { app, dialog, ipcMain, BrowserWindow } from 'electron';
 import {
     addWorkspace,
     getAllSettings,
+    getWorkspace,
     listWorkspaces,
     removeWorkspace,
     reorderWorkspaces,
@@ -35,6 +36,7 @@ import { analyseFolder } from './workspace/analyse';
 import { validateSimpleWorkspace } from './workspace/create-simple';
 import { openWorkspace } from './workspace/open';
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
+import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import { tynnCliInfo, installTynnCliSystemWide } from './cli/tynn-cli';
 import { registerShortcuts } from './shortcuts';
 import { startSignIn, redeemCode } from './auth';
@@ -176,6 +178,11 @@ export function registerIpcHandlers(): void {
     });
     ipcMain.handle('workspaces:set-mcp', (_e, id: string, enabled: boolean) => {
         setWorkspaceMcp(id, enabled);
+        // Auto-register (or remove) the genie MCP server in the workspace's
+        // Claude (.mcp.json) + Cursor (.cursor/mcp.json) config so agents there
+        // discover it. Best-effort; the env injection works regardless.
+        const ws = getWorkspace(id);
+        if (ws) writeWorkspaceAgentMcp(ws.path, enabled);
         return { ok: true };
     });
     ipcMain.handle('workspaces:open', async (_e, id: string) => {

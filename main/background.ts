@@ -3,7 +3,8 @@ import path from 'path';
 import { createTray } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { registerIpcHandlers } from './ipc';
-import { initDatabase } from './db';
+import { initDatabase, listWorkspaces } from './db';
+import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import { registerProtocolHandler, handleGenieUrl } from './auth';
 import {
     registerTerminalIpc,
@@ -531,6 +532,12 @@ app.whenReady().then(async () => {
         serverVersion: app.getVersion(),
         onImDone: (terminalId) => broadcastTerminalAttention(terminalId, true),
     }).catch((e) => console.error('[mcp] failed to start', e));
+    // Backfill the genie MCP entry into the Claude/Cursor config of any
+    // workspace already opted in (covers workspaces enabled before agent-config
+    // writing existed). Best-effort.
+    for (const ws of listWorkspaces()) {
+        if (ws.mcp_enabled) writeWorkspaceAgentMcp(ws.path, true);
+    }
     // Docs viewer IPC (docs:list / docs:read). __dirname is the compiled main
     // bundle dir; resolveDocsDir uses it to find the bundled docs/ in both dev
     // and the packaged asar.

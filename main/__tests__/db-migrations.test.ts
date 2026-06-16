@@ -364,3 +364,46 @@ describe('db migration v9 (per-workspace MCP toggle)', () => {
         expect(cols(db, 'workspaces').has('mcp_enabled')).toBe(true);
     });
 });
+
+describe('db migration v10 (reclassify mis-stored process specs)', () => {
+    const insertSpec = (
+        db: Database.Database,
+        id: string,
+        type: string,
+        meta: Record<string, unknown>,
+    ) =>
+        db.prepare(
+            `INSERT INTO terminal_specs
+               (id, workspace_id, label, cwd, shell, args_json, env_json, type, meta_json, sort_order, created_at)
+             VALUES (@id, NULL, @id, '/tmp', NULL, '[]', '{}', @type, @meta, 0, @now)`,
+        ).run({ id, type, meta: JSON.stringify(meta), now: new Date().toISOString() });
+
+    // The migration body is this UPDATE; assert it reclassifies the right rows.
+    const heal = (db: Database.Database) =>
+        db.exec(
+            `UPDATE terminal_specs SET type = 'process'
+             WHERE type = 'terminal' AND meta_json LIKE '%"command"%'`,
+        );
+
+    it('promotes a terminal-typed row carrying meta.command to process', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        insertSpec(db, 'p1', 'terminal', { command: 'php artisan queue:work' });
+        heal(db);
+        expect(
+            db.prepare<[], { type: string }>("SELECT type FROM terminal_specs WHERE id='p1'").get()?.type,
+        ).toBe('process');
+    });
+
+    it('leaves a plain terminal (no command) and a code view untouched', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        insertSpec(db, 't1', 'terminal', {});
+        insertSpec(db, 'c1', 'code', { file_path: 'x.ts' });
+        heal(db);
+        const get = (id: string) =>
+            db.prepare<[], { type: string }>(`SELECT type FROM terminal_specs WHERE id='${id}'`).get()?.type;
+        expect(get('t1')).toBe('terminal');
+        expect(get('c1')).toBe('code');
+    });
+});

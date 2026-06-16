@@ -259,6 +259,21 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v10: heal Process specs mis-stored as 'terminal'. createTerminalSpec
+            // clamped the written type to 'code'|'terminal' (the 'process' case
+            // was missed), so processes added before that fix landed as type
+            // 'terminal' with a meta.command — which only Process specs ever set.
+            // Reclassify those rows so they show in the Processes manager, not the
+            // view list. Idempotent: re-running matches nothing once converted.
+            version: 10,
+            runner: (db) => {
+                db.exec(
+                    `UPDATE terminal_specs SET type = 'process'
+                     WHERE type = 'terminal' AND meta_json LIKE '%"command"%'`,
+                );
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -733,7 +748,12 @@ export function createTerminalSpec(input: {
             shell: input.shell ?? null,
             args_json: JSON.stringify(input.args ?? []),
             env_json: JSON.stringify(input.env ?? {}),
-            type: input.type === 'code' ? 'code' : 'terminal',
+            type:
+                input.type === 'code'
+                    ? 'code'
+                    : input.type === 'process'
+                      ? 'process'
+                      : 'terminal',
             meta_json: JSON.stringify(input.meta ?? {}),
             sort_order: nextOrder,
             created_at: now,
