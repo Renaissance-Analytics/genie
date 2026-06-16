@@ -454,6 +454,8 @@ interface GenieApi {
         setConfig: (patch: AionimaConfig) => Promise<{
             config: AionimaConfig;
             user: BackendUser | null;
+            /** Probe failure detail when user is null (e.g. bad host / network). */
+            error?: string;
         }>;
         hostInfo: () => Promise<string>;
     };
@@ -554,6 +556,8 @@ interface GenieApi {
         restart: (id: string) => Promise<{ ok: boolean }>;
         /** Current status of every managed Process (id → status). */
         statuses: () => Promise<Record<string, ProcessStatus>>;
+        /** Recent output tail for a Process (ANSI-stripped) — the hover log. */
+        log: (id: string) => Promise<string>;
     };
     cli: {
         /** Whether the tynn-cli toolkit is shipped with this build + its home dir. */

@@ -111,9 +111,9 @@ export function registerIpcHandlers(): void {
         'auth:aionima-set',
         async (_e, patch: BackendConfig) => {
             const next = setAionimaConfig(patch);
-            const user = await getAionimaBackend().whoami();
+            const { user, error } = await getAionimaBackend().probe();
             broadcast('auth:changed', { backend: 'aionima', signedIn: !!user });
-            return { config: next, user };
+            return { config: next, user, error };
         },
     );
 

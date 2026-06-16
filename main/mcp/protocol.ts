@@ -9,6 +9,8 @@
  * terminal is known from the endpoint. ctx carries that resolved id.
  */
 
+import { GENIE_MCP_GUIDE } from './guide';
+
 export const MCP_PROTOCOL_VERSION = '2024-11-05';
 
 export interface JsonRpcRequest {
@@ -75,6 +77,13 @@ const IMDONE_TOOL = {
     name: 'imDone',
     description:
         "Signal that the agent has finished its work in THIS terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row, and the panel border until you focus it. Takes no arguments — the terminal is resolved from the connection.",
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+};
+
+const GUIDE_TOOL = {
+    name: 'genieGuide',
+    description:
+        'Return the full usage guide for the Genie MCP server (what each tool does, when to use it, and the zero-setup per-terminal contract). Call this when you want details beyond the brief in AGENTS.md.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
 };
 
@@ -164,6 +173,8 @@ export async function handleMcpMessage(
                 protocolVersion: MCP_PROTOCOL_VERSION,
                 capabilities: { tools: { listChanged: false } },
                 serverInfo: { name: ctx.serverName, version: ctx.serverVersion },
+                // MCP-native "how to use this server" channel. Mirrors genieGuide.
+                instructions: GENIE_MCP_GUIDE,
             });
 
         case 'notifications/initialized':
@@ -173,7 +184,9 @@ export async function handleMcpMessage(
             return ok(msg.id, {});
 
         case 'tools/list':
-            return ok(msg.id, { tools: [IMDONE_TOOL, FORCE_QUESTION_TOOL] });
+            return ok(msg.id, {
+                tools: [IMDONE_TOOL, FORCE_QUESTION_TOOL, GUIDE_TOOL],
+            });
 
         case 'tools/call': {
             const params = (msg.params ?? {}) as {
@@ -189,6 +202,11 @@ export async function handleMcpMessage(
                             text: 'Done — this terminal is now glowing in Genie until you focus it.',
                         },
                     ],
+                });
+            }
+            if (params.name === 'genieGuide') {
+                return ok(msg.id, {
+                    content: [{ type: 'text', text: GENIE_MCP_GUIDE }],
                 });
             }
             if (params.name === 'ForceTheQuestion') {

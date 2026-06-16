@@ -135,6 +135,27 @@ export const IconPlus = ({ size = 14, ...p }: Props) =>
     );
 export const IconCheck = ({ size = 11, ...p }: Props) =>
     wrap(size, <polyline points="20 6 9 17 4 12" />, p.className, p.style);
+export const IconEye = ({ size = 13, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+            <circle cx="12" cy="12" r="3" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconEyeOff = ({ size = 13, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+            <path d="M6.61 6.61A13.5 13.5 0 0 0 2 12s3.5 7 10 7a9.12 9.12 0 0 0 5.39-1.61" />
+            <line x1="2" y1="2" x2="22" y2="22" />
+        </>,
+        p.className,
+        p.style,
+    );
 export const IconLayoutGrid = ({ size = 15, ...p }: Props) =>
     wrap(
         size,

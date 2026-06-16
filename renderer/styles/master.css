@@ -1187,6 +1187,25 @@
     color: #09090b;
 }
 
+/* Eyeball visibility toggle (replaces the checkbox). Clicking it shows/hides the
+   view in the grid; clicking the row no longer hides. Dim when hidden, accent
+   when shown. Overrides the checkbox-style .pick box above. */
+.tterm .pick.eye-toggle {
+    background: transparent;
+    border: none;
+    color: var(--fg-4);
+    cursor: pointer;
+    padding: 0;
+}
+.tterm .pick.eye-toggle:hover {
+    color: var(--fg-1);
+}
+.tterm.on .pick.eye-toggle {
+    background: transparent;
+    border: none;
+    color: var(--agent);
+}
+
 .tterm-trash {
     flex: 0 0 auto;
     width: 22px;
@@ -2128,6 +2147,54 @@ body.gutter-dragging .grid-gutter {
 .tproj-procs .proc-add-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+/* Process hover log popover — anchored to the right of the hovered proc row. */
+.proc-log-pop {
+    position: fixed;
+    z-index: 9999;
+    width: 420px;
+    max-width: 60vw;
+    background: var(--bg-0);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-lg, 10px);
+    box-shadow: 0 18px 48px -16px rgba(0, 0, 0, 0.6);
+    overflow: hidden;
+    pointer-events: none;
+}
+.proc-log-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border-1);
+    background: var(--bg-1);
+}
+.proc-log-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg-1);
+}
+.proc-log-cmd {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.proc-log-body {
+    margin: 0;
+    padding: 8px 10px;
+    max-height: 240px;
+    overflow-y: auto;
+    background: #0b0b0f;
+    color: #d4d4d8;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 .tproj-procs .proc-row {
     display: flex;

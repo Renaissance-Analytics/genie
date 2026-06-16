@@ -3,9 +3,10 @@ import { createPortal } from 'react-dom';
 import {
     IconAlert,
     IconBox,
-    IconCheck,
     IconChevronDown,
     IconCode,
+    IconEye,
+    IconEyeOff,
     IconCpu,
     IconGlobe,
     IconPanelLeftOpen,
@@ -223,6 +224,37 @@ export default function Chooser({
         if (ok !== null) onDestroySpec(s.id);
     };
 
+    // Hover log popover for processes — fetch the recent output tail and show it
+    // anchored to the right of the hovered row. Cleared on mouse-leave.
+    const [procLog, setProcLog] = useState<{
+        id: string;
+        label: string;
+        command: string;
+        text: string;
+        top: number;
+        left: number;
+    } | null>(null);
+
+    const showProcLog = (e: React.MouseEvent, s: TerminalSpec) => {
+        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        setProcLog({
+            id: s.id,
+            label: s.label,
+            command: s.meta?.command ?? '',
+            text: '',
+            top: r.top,
+            left: r.right + 8,
+        });
+        void api()
+            .process.log(s.id)
+            .then((text) =>
+                setProcLog((cur) => (cur && cur.id === s.id ? { ...cur, text } : cur)),
+            )
+            .catch(() => {});
+    };
+    const hideProcLog = (id: string) =>
+        setProcLog((cur) => (cur && cur.id === id ? null : cur));
+
     const byWorkspace = new Map<string, TerminalSpec[]>();
     for (const ws of workspaces) byWorkspace.set(ws.id, []);
     const orphaned: TerminalSpec[] = [];
@@ -241,6 +273,7 @@ export default function Chooser({
     };
 
     return (
+        <>
         <div className={`chooser${pinned ? ' pinned' : ''}`}>
             <aside className="chooser-rail">
                 <button
@@ -504,7 +537,12 @@ export default function Chooser({
                                                     <div
                                                         key={s.id}
                                                         className="proc-row"
-                                                        title={s.meta?.command}
+                                                        onMouseEnter={(e) =>
+                                                            showProcLog(e, s)
+                                                        }
+                                                        onMouseLeave={() =>
+                                                            hideProcLog(s.id)
+                                                        }
                                                     >
                                                         <span
                                                             className={`proc-dot proc-${st}`}
@@ -692,6 +730,27 @@ export default function Chooser({
                 </div>
             </aside>
         </div>
+        {procLog &&
+            typeof document !== 'undefined' &&
+            createPortal(
+                <div
+                    className="proc-log-pop"
+                    style={{ top: procLog.top, left: procLog.left }}
+                    role="tooltip"
+                >
+                    <div className="proc-log-head">
+                        <span className="proc-log-name">{procLog.label}</span>
+                        {procLog.command && (
+                            <code className="proc-log-cmd">{procLog.command}</code>
+                        )}
+                    </div>
+                    <pre className="proc-log-body">
+                        {procLog.text.trim() || 'No output captured yet.'}
+                    </pre>
+                </div>,
+                document.body,
+            )}
+        </>
     );
 }
 
@@ -995,8 +1054,10 @@ function SpecRow({
         if (ok !== null) onDestroy();
     };
     const isTerminal = spec.type !== 'code';
-    // Suspended rows resume on click; live rows toggle grid selection.
-    const onRowClick = suspended ? onEnable : onToggle;
+    // Suspended rows resume on click. For a normal view, clicking the row never
+    // HIDES it (that's the eyeball's job) — it only reveals a hidden one. So a
+    // shown row is a no-op on click; a hidden row shows on click.
+    const onRowClick = suspended ? onEnable : checked ? () => {} : onToggle;
     return (
         <div
             className={`tterm${checked ? ' on sel' : ''}${suspended ? ' suspended' : ''}${attention ? ' attention' : ''}`}
@@ -1015,7 +1076,22 @@ function SpecRow({
             }}
             style={{ cursor: 'pointer' }}
         >
-            <span className="pick">{checked && !suspended && <IconCheck size={11} />}</span>
+            <button
+                type="button"
+                className={`pick eye-toggle${checked ? ' on' : ''}`}
+                onClick={(e) => {
+                    e.stopPropagation();
+                    onToggle();
+                }}
+                title={checked ? 'Hide from grid' : 'Show in grid'}
+                aria-label={`${checked ? 'Hide' : 'Show'} ${spec.label}`}
+            >
+                {suspended ? null : checked ? (
+                    <IconEye size={12} />
+                ) : (
+                    <IconEyeOff size={12} />
+                )}
+            </button>
             {spec.type === 'code' ? (
                 <span className="srow-ico code" title="Editor">
                     <IconCode size={12} />

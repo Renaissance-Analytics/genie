@@ -585,7 +585,9 @@ function AionimaSection() {
             setStatus(
                 res.user
                     ? `Connected as ${res.user.name}`
-                    : 'Saved — could not reach Aionima with that host + token.',
+                    : res.error
+                      ? `Couldn't reach Aionima: ${res.error}`
+                      : 'Saved — could not reach Aionima with that host + token.',
             );
         } catch (e: unknown) {
             setStatus(e instanceof Error ? e.message : String(e));

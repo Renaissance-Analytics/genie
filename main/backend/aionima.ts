@@ -43,7 +43,18 @@ export class AionimaBackend implements Backend {
     }
 
     async whoami(): Promise<BackendUser | null> {
-        if (!this.isConfigured()) return null;
+        return (await this.probe()).user;
+    }
+
+    /**
+     * Like whoami(), but SURFACES the failure reason instead of swallowing it.
+     * Used by the Settings "Save + test" flow so a misconfigured host/token
+     * shows an actionable message ("Failed to parse URL", "ECONNREFUSED", a 401
+     * body, …) rather than a generic "could not reach". whoami() delegates here.
+     */
+    async probe(): Promise<{ user: BackendUser | null; error?: string }> {
+        if (!this.host()) return { user: null, error: 'No Aionima host set.' };
+        if (!this.bearer()) return { user: null, error: 'No bearer token set.' };
         try {
             const u = await this.fetch<{
                 entityId?: string;
@@ -54,14 +65,19 @@ export class AionimaBackend implements Backend {
                 kind?: string;
             }>('/api/auth/me');
             return {
-                backend: 'aionima',
-                id: u.entityId ?? u.id ?? 'unknown',
-                name: u.displayName ?? u.name ?? 'Aionima user',
-                email: u.email,
-                kind: u.kind,
+                user: {
+                    backend: 'aionima',
+                    id: u.entityId ?? u.id ?? 'unknown',
+                    name: u.displayName ?? u.name ?? 'Aionima user',
+                    email: u.email,
+                    kind: u.kind,
+                },
             };
-        } catch {
-            return null;
+        } catch (e) {
+            return {
+                user: null,
+                error: e instanceof Error ? e.message : String(e),
+            };
         }
     }
 
@@ -173,9 +189,22 @@ export class AionimaBackend implements Backend {
         setAionimaConfig({ token: null });
     }
 
+    /**
+     * The host with a guaranteed scheme + no trailing slash. Users routinely
+     * paste a bare `192.168.0.144:3100` — without a scheme, fetch throws a URL
+     * parse error instantly (the "it just flashes and fails" symptom), so we
+     * default to http:// (Aionima is a LAN gateway; https is opt-in by typing it).
+     */
+    private baseUrl(): string {
+        let h = this.host().trim().replace(/\/+$/, '');
+        if (!h) return '';
+        if (!/^https?:\/\//i.test(h)) h = 'http://' + h;
+        return h;
+    }
+
     private absUrl(pathOrUrl: string): string {
-        if (pathOrUrl.startsWith('http')) return pathOrUrl;
-        const base = this.host().replace(/\/$/, '');
+        if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+        const base = this.baseUrl();
         return base + (pathOrUrl.startsWith('/') ? pathOrUrl : '/' + pathOrUrl);
     }
 

@@ -36,6 +36,28 @@ interface ProcState {
 
 const procs = new Map<string, ProcState>();
 
+/** Recent stdout/stderr per process, for the hover log popover. Capped so a
+ *  chatty process can't grow this unbounded; we only keep the tail. */
+const procLogs = new Map<string, string>();
+const PROC_LOG_CAP = 8000; // chars of tail kept per process
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+
+/**
+ * Record pty output for a managed process (no-op for non-process ids). Wired
+ * from the single subscribeBackendEvents onData in ipc.ts. Keeps only the tail.
+ */
+export function recordProcessOutput(id: string, data: string): void {
+    if (!procs.has(id)) return;
+    const next = (procLogs.get(id) ?? '') + data;
+    procLogs.set(id, next.length > PROC_LOG_CAP ? next.slice(-PROC_LOG_CAP) : next);
+}
+
+/** The recent output tail for a process (ANSI stripped), or '' if none. */
+export function getProcessLog(id: string): string {
+    return (procLogs.get(id) ?? '').replace(ANSI_RE, '');
+}
+
 function ensure(id: string): ProcState {
     let st = procs.get(id);
     if (!st) {
@@ -197,4 +219,5 @@ export function forgetProcess(specId: string): void {
     const st = procs.get(specId);
     if (st) clearTimer(st);
     procs.delete(specId);
+    procLogs.delete(specId);
 }

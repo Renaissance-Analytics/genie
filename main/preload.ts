@@ -205,6 +205,8 @@ const api = {
             ipcRenderer.invoke('process:statuses') as Promise<
                 Record<string, string>
             >,
+        log: (id: string) =>
+            ipcRenderer.invoke('process:log', id) as Promise<string>,
     },
 
     cli: {

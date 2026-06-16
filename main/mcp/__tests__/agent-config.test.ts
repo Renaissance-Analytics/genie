@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { applyGenieServer, GENIE_SERVER_NAME } from '../agent-config';
+import {
+    applyAgentsSection,
+    applyGenieServer,
+    GENIE_SERVER_NAME,
+} from '../agent-config';
 
 const entry = { type: 'http', url: '${GENIE_MCP_URL}' };
 
@@ -44,5 +48,46 @@ describe('applyGenieServer', () => {
             mcpServers: Record<string, { url: string }>;
         };
         expect(out.mcpServers[GENIE_SERVER_NAME].url).toBe('${GENIE_MCP_URL}');
+    });
+});
+
+describe('applyAgentsSection', () => {
+    const BEGIN = '<!-- BEGIN GENIE MCP (auto-managed by Genie) -->';
+    const END = '<!-- END GENIE MCP (auto-managed by Genie) -->';
+
+    it('appends the genie block to the end of an existing AGENTS.md', () => {
+        const out = applyAgentsSection('# My Project\n\nNotes.\n', true);
+        expect(out.startsWith('# My Project\n\nNotes.\n')).toBe(true);
+        expect(out).toContain(BEGIN);
+        expect(out).toContain(END);
+        expect(out).toContain('genieGuide');
+    });
+
+    it('is idempotent — re-running does not duplicate the block', () => {
+        const once = applyAgentsSection('# P\n', true);
+        const twice = applyAgentsSection(once, true);
+        expect(twice).toBe(once);
+        expect(twice.match(/BEGIN GENIE MCP/g)?.length).toBe(1);
+    });
+
+    it('updates the block in place when content changes, not appends', () => {
+        const stale = `# P\n\n${BEGIN}\n## Genie MCP\n\nOLD BODY\n${END}\n`;
+        const out = applyAgentsSection(stale, true);
+        expect(out.match(/BEGIN GENIE MCP/g)?.length).toBe(1);
+        expect(out).not.toContain('OLD BODY');
+        expect(out).toContain('genieGuide');
+    });
+
+    it('removes the block on disable, leaving the rest intact', () => {
+        const withBlock = applyAgentsSection('# P\n\nbody\n', true);
+        const out = applyAgentsSection(withBlock, false);
+        expect(out).not.toContain(BEGIN);
+        expect(out).toContain('# P');
+        expect(out).toContain('body');
+    });
+
+    it('disable is a no-op when no block is present', () => {
+        const input = '# P\n\nbody\n';
+        expect(applyAgentsSection(input, false)).toBe(input);
     });
 });

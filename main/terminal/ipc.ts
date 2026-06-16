@@ -23,6 +23,8 @@ import {
     getProcessStatuses,
     onProcessPtyExit,
     forgetProcess,
+    recordProcessOutput,
+    getProcessLog,
 } from './process-supervisor';
 import {
     registerTerminalEndpoint,
@@ -299,6 +301,9 @@ export function registerTerminalIpc(): void {
     // firing from a stale backend after a fallback.
     subscribeBackendEvents({
         onData: (id: string, data: string) => {
+            // Buffer output for headless Process runners (the hover log popover).
+            // No-ops for non-process ids.
+            recordProcessOutput(id, data);
             const entry = ownersByTerminal.get(id);
             if (!entry) return;
             for (const target of entry.owners) {
@@ -334,6 +339,7 @@ export function registerTerminalIpc(): void {
         return { ok: true };
     });
     ipcMain.handle('process:statuses', () => getProcessStatuses());
+    ipcMain.handle('process:log', (_e, id: string) => getProcessLog(id));
 }
 
 /** Tear down every pty on app quit so dangling shell processes don't survive. */

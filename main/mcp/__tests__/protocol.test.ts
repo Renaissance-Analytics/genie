@@ -40,13 +40,40 @@ describe('handleMcpMessage', () => {
         ).toBeNull();
     });
 
-    it('lists the imDone + ForceTheQuestion tools', async () => {
+    it('lists the imDone + ForceTheQuestion + genieGuide tools', async () => {
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 2, method: 'tools/list' },
             ctx(),
         );
         const tools = (res?.result as { tools: Array<{ name: string }> }).tools;
-        expect(tools.map((t) => t.name)).toEqual(['imDone', 'ForceTheQuestion']);
+        expect(tools.map((t) => t.name)).toEqual([
+            'imDone',
+            'ForceTheQuestion',
+            'genieGuide',
+        ]);
+    });
+
+    it('serves the guide via initialize instructions and genieGuide', async () => {
+        const init = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 8, method: 'initialize' },
+            ctx(),
+        );
+        expect((init?.result as { instructions: string }).instructions).toContain(
+            'Genie MCP',
+        );
+        const call = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 9,
+                method: 'tools/call',
+                params: { name: 'genieGuide', arguments: {} },
+            },
+            ctx(),
+        );
+        const text = (call?.result as { content: Array<{ text: string }> }).content[0]
+            .text;
+        expect(text).toContain('imDone');
+        expect(text).toContain('ForceTheQuestion');
     });
 
     it('invokes onImDone with the bound terminal id on tools/call', async () => {
