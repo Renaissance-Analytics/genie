@@ -20,9 +20,15 @@ export function buildProcessArgs(shell: string, command: string): string[] {
     switch (base) {
         case 'bash':
         case 'zsh':
-            // Login shell so the user's env (nvm, asdf, PATH tweaks) loads, then
-            // run the command. The runner is non-interactive (no -i).
-            return ['-lc', command];
+            // Login + INTERACTIVE shell so the user's full env loads, then run
+            // the command. Interactive (-i) is required because some setups
+            // expose tools only via interactive shell config (~/.bashrc): e.g.
+            // Laravel Herd installs `php` as a Git Bash alias, and nvm/asdf
+            // shims + PATH tweaks live there too — a non-interactive login
+            // shell skips all of that, so `php` would be "command not found".
+            // node-pty allocates a real pty (tty), so -i won't emit a
+            // "no job control in this shell" warning.
+            return ['-lic', command];
         case 'sh':
         case 'dash':
             return ['-c', command];

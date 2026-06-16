@@ -140,11 +140,15 @@ export function startProcess(specId: string): void {
     const cwd = path.normalize(spec.cwd);
     const env = buildTynnCliEnv(cwd, cliEnabled);
 
-    // Make the launch context visible in the hover log — what shell, where, and
-    // the exact command — so a "command not found" / wrong-dir issue is obvious.
+    // Make the launch context visible in the hover log as CONTEXT, not as
+    // commands — location first, then the human command (not the full
+    // `bash -lic …` argv) with the shell it runs under in parens. Reads as
+    // "launching in <dir>" then "$ <command> (via <shell>)", so a
+    // "command not found" / wrong-dir issue is obvious without looking like
+    // two out-of-order commands.
     recordProcessOutput(
         specId,
-        `\n[genie] start: ${shell} ${args.join(' ')}\n[genie] cwd:   ${cwd}\n`,
+        `\n[genie] launching in ${cwd}\n[genie] $ ${spec.meta.command}  (via ${path.basename(shell)})\n\n`,
     );
 
     try {

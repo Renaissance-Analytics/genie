@@ -4,9 +4,9 @@ import { buildProcessArgs } from '../process-spawn';
 describe('buildProcessArgs', () => {
     const cmd = 'php artisan queue:work';
 
-    it('runs bash/zsh as a login command shell', () => {
-        expect(buildProcessArgs('/usr/bin/bash', cmd)).toEqual(['-lc', cmd]);
-        expect(buildProcessArgs('zsh', cmd)).toEqual(['-lc', cmd]);
+    it('runs bash/zsh as a login + interactive command shell', () => {
+        expect(buildProcessArgs('/usr/bin/bash', cmd)).toEqual(['-lic', cmd]);
+        expect(buildProcessArgs('zsh', cmd)).toEqual(['-lic', cmd]);
     });
 
     it('runs sh/dash with -c (no login)', () => {
@@ -27,7 +27,7 @@ describe('buildProcessArgs', () => {
 
     it('handles a Windows Git Bash path', () => {
         expect(buildProcessArgs('C:\\Program Files\\Git\\bin\\bash.exe', cmd)).toEqual([
-            '-lc',
+            '-lic',
             cmd,
         ]);
     });
