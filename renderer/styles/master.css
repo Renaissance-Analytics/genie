@@ -2160,7 +2160,6 @@ body.gutter-dragging .grid-gutter {
     border-radius: var(--radius-lg, 10px);
     box-shadow: 0 18px 48px -16px rgba(0, 0, 0, 0.6);
     overflow: hidden;
-    pointer-events: none;
 }
 .proc-log-head {
     display: flex;
@@ -2195,6 +2194,31 @@ body.gutter-dragging .grid-gutter {
     line-height: 1.45;
     white-space: pre-wrap;
     word-break: break-word;
+}
+.proc-log-foot {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    padding: 7px 10px;
+    border-top: 1px solid var(--border-1);
+    background: var(--bg-1);
+}
+.proc-log-btn {
+    font-size: 11px;
+    padding: 4px 9px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-1);
+    background: var(--bg-0);
+    color: var(--fg-2);
+    cursor: pointer;
+}
+.proc-log-btn:hover {
+    border-color: var(--border-2, #3f3f46);
+    color: var(--fg-1);
+}
+.proc-log-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 .tproj-procs .proc-row {
     display: flex;

@@ -39,7 +39,7 @@ const procs = new Map<string, ProcState>();
 /** Recent stdout/stderr per process, for the hover log popover. Capped so a
  *  chatty process can't grow this unbounded; we only keep the tail. */
 const procLogs = new Map<string, string>();
-const PROC_LOG_CAP = 8000; // chars of tail kept per process
+const PROC_LOG_CAP = 256_000; // chars of tail kept per process (hover + download)
 // eslint-disable-next-line no-control-regex
 const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 

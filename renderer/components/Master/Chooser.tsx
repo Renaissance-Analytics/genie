@@ -22,8 +22,10 @@ import {
 import { showPrompt } from './Prompt';
 import {
     api,
+    detectedShells,
     type McpStatus,
     type ProcessStatus,
+    type ShellDetection,
     type StructureDocStatus,
     type TerminalSpec,
     type ViewType,
@@ -54,12 +56,14 @@ interface Props {
     /** Persist a new sidebar order (full ordered list of workspace ids). */
     onReorderWorkspaces: (ids: string[]) => void;
     /** Create a Process (background service runner) for a workspace. `cwd`
-     *  targets a specific repo (or the envelope root when omitted). */
+     *  targets a specific repo (or the envelope root when omitted); `shell`
+     *  picks the interpreter (empty → default shell). */
     onAddProcess: (
         workspaceId: string,
         command: string,
         label?: string,
         cwd?: string,
+        shell?: string,
     ) => void;
 }
 
@@ -96,18 +100,24 @@ export default function Chooser({
     const [procLabel, setProcLabel] = useState('');
     const [procCommand, setProcCommand] = useState('');
     const [procCwd, setProcCwd] = useState(''); // '' = envelope root
+    const [procShell, setProcShell] = useState(''); // '' = default shell
     const [procRepos, setProcRepos] = useState<string[]>([]);
+    const [procShells, setProcShells] = useState<ShellDetection[]>([]);
 
     const openAddProcess = (ws: WorkspaceRow) => {
         setAddProcFor(ws.id);
         setProcLabel('');
         setProcCommand('');
         setProcCwd('');
+        setProcShell('');
         setProcRepos([]);
         void api()
             .workspaces.repos(ws.id)
             .then(setProcRepos)
             .catch(() => setProcRepos([]));
+        void detectedShells()
+            .then(({ shells }) => setProcShells(shells))
+            .catch(() => setProcShells([]));
     };
 
     const submitAddProcess = (ws: WorkspaceRow) => {
@@ -115,7 +125,13 @@ export default function Chooser({
         if (!cmd) return;
         // procCwd holds a repo name; resolve to <root>/repos/<name>, or root.
         const cwd = procCwd ? `${ws.path}/repos/${procCwd}` : undefined;
-        onAddProcess(ws.id, cmd, procLabel.trim() || undefined, cwd);
+        onAddProcess(
+            ws.id,
+            cmd,
+            procLabel.trim() || undefined,
+            cwd,
+            procShell || undefined,
+        );
         setAddProcFor(null);
     };
 
@@ -235,7 +251,17 @@ export default function Chooser({
         left: number;
     } | null>(null);
 
+    // Delay-hide so the user can move the cursor INTO the (now interactive)
+    // popover to use its Copy/Download buttons without it vanishing.
+    const procLogHideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const cancelProcLogHide = () => {
+        if (procLogHideRef.current) {
+            clearTimeout(procLogHideRef.current);
+            procLogHideRef.current = null;
+        }
+    };
     const showProcLog = (e: React.MouseEvent, s: TerminalSpec) => {
+        cancelProcLogHide();
         const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
         setProcLog({
             id: s.id,
@@ -252,8 +278,32 @@ export default function Chooser({
             )
             .catch(() => {});
     };
-    const hideProcLog = (id: string) =>
-        setProcLog((cur) => (cur && cur.id === id ? null : cur));
+    const scheduleHideProcLog = (id: string) => {
+        cancelProcLogHide();
+        procLogHideRef.current = setTimeout(() => {
+            setProcLog((cur) => (cur && cur.id === id ? null : cur));
+        }, 250);
+    };
+    const copyProcLogTail = (text: string) => {
+        const tail = text.split('\n').slice(-100).join('\n');
+        void navigator.clipboard.writeText(tail).catch(() => {});
+    };
+    const downloadProcLog = (id: string, label: string) => {
+        void api()
+            .process.log(id)
+            .then((text) => {
+                const blob = new Blob([text], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${(label || 'process').replace(/[^\w.-]+/g, '_')}.log`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            })
+            .catch(() => {});
+    };
 
     const byWorkspace = new Map<string, TerminalSpec[]>();
     for (const ws of workspaces) byWorkspace.set(ws.id, []);
@@ -541,7 +591,7 @@ export default function Chooser({
                                                             showProcLog(e, s)
                                                         }
                                                         onMouseLeave={() =>
-                                                            hideProcLog(s.id)
+                                                            scheduleHideProcLog(s.id)
                                                         }
                                                     >
                                                         <span
@@ -650,6 +700,26 @@ export default function Chooser({
                                                             </option>
                                                         ))}
                                                     </select>
+                                                    <select
+                                                        className="input proc-add-cwd"
+                                                        value={procShell}
+                                                        onChange={(e) =>
+                                                            setProcShell(e.target.value)
+                                                        }
+                                                        title="Which shell runs the command"
+                                                    >
+                                                        <option value="">
+                                                            Default shell
+                                                        </option>
+                                                        {procShells.map((sh) => (
+                                                            <option
+                                                                key={sh.id}
+                                                                value={sh.command}
+                                                            >
+                                                                {sh.label}
+                                                            </option>
+                                                        ))}
+                                                    </select>
                                                     <div className="proc-add-actions">
                                                         <button
                                                             type="button"
@@ -737,6 +807,8 @@ export default function Chooser({
                     className="proc-log-pop"
                     style={{ top: procLog.top, left: procLog.left }}
                     role="tooltip"
+                    onMouseEnter={cancelProcLogHide}
+                    onMouseLeave={() => setProcLog(null)}
                 >
                     <div className="proc-log-head">
                         <span className="proc-log-name">{procLog.label}</span>
@@ -747,6 +819,23 @@ export default function Chooser({
                     <pre className="proc-log-body">
                         {procLog.text.trim() || 'No output captured yet.'}
                     </pre>
+                    <div className="proc-log-foot">
+                        <button
+                            type="button"
+                            className="proc-log-btn"
+                            onClick={() => copyProcLogTail(procLog.text)}
+                            disabled={!procLog.text.trim()}
+                        >
+                            Copy last 100 lines
+                        </button>
+                        <button
+                            type="button"
+                            className="proc-log-btn"
+                            onClick={() => downloadProcLog(procLog.id, procLog.label)}
+                        >
+                            Download log
+                        </button>
+                    </div>
                 </div>,
                 document.body,
             )}

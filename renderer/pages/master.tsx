@@ -450,7 +450,13 @@ function MasterInner() {
      * idle); auto-restart-on-crash is on.
      */
     const addProcess = useCallback(
-        async (workspaceId: string, command: string, label?: string, cwd?: string) => {
+        async (
+            workspaceId: string,
+            command: string,
+            label?: string,
+            cwd?: string,
+            shell?: string,
+        ) => {
             const ws = workspacesById.get(workspaceId);
             if (!ws || !command.trim()) return;
             const cmd = command.trim();
@@ -462,6 +468,10 @@ function MasterInner() {
                 // cwd defaults to the envelope root; the Add Process UX can point
                 // it at a specific repo (e.g. <root>/repos/tynn).
                 cwd: cwd?.trim() || ws.path,
+                // shell lets the user pick the interpreter the command runs in —
+                // e.g. pwsh, where `php` is on PATH, vs Git Bash where it isn't.
+                // Empty → the supervisor falls back to the default shell.
+                shell: shell?.trim() || null,
                 type: 'process',
                 meta: { command: cmd, autostart: false, restart_on_exit: true },
             });
