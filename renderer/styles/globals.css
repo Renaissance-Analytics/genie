@@ -204,6 +204,28 @@ textarea.input {
 .ask-head button {
     -webkit-app-region: no-drag;
 }
+/* Always-visible close control for the modal (frameless window has no OS X). */
+.ask-x {
+    flex: 0 0 auto;
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    border: 1px solid var(--border-1);
+    background: var(--bg-1);
+    color: var(--fg-2);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.ask-x:hover {
+    background: var(--rose-500, #f43f5e);
+    border-color: var(--rose-500, #f43f5e);
+    color: #fff;
+}
 .ask-body {
     flex: 1;
     overflow-y: auto;

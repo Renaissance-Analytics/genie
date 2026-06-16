@@ -1,6 +1,6 @@
 {
   "name": "genie",
-  "version": "0.7.0-alpha.56",
+  "version": "0.7.0-alpha.57",
   "description": "Tynn desktop companion — tray-resident workspace manager",
   "private": true,
   "main": "app/background.js",

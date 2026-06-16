@@ -27,11 +27,21 @@ interface Config {
 interface Pending {
     resolve: (r: ForceQuestionResult) => void;
     win: BrowserWindow;
+    /** The payload to (re)deliver when the renderer signals it's ready. */
+    payload: { id: string; questions: ForceQuestion[] };
 }
 
 let config: Config | null = null;
 let registered = false;
 const pending = new Map<string, Pending>();
+
+/** Find the pending request whose window owns the given webContents id. */
+function findBySender(senderId: number): Pending | undefined {
+    for (const p of pending.values()) {
+        if (!p.win.isDestroyed() && p.win.webContents.id === senderId) return p;
+    }
+    return undefined;
+}
 
 function finish(id: string, result: ForceQuestionResult): void {
     const p = pending.get(id);
@@ -52,6 +62,19 @@ export function registerForceQuestionIpc(cfg: Config): void {
     });
     ipcMain.handle('ask:cancel', (_e, id: string) => {
         finish(id, { cancelled: true, answers: [] });
+    });
+    // The renderer signals it has attached its `ask:show` listener. Deliver the
+    // payload NOW (race-free) — pushing on did-finish-load could fire before the
+    // React effect registers the listener, leaving the modal stuck "Waiting…".
+    ipcMain.handle('ask:ready', (e) => {
+        const p = findBySender(e.sender.id);
+        if (p && !p.win.isDestroyed()) p.win.webContents.send('ask:show', p.payload);
+    });
+    // Dismiss this window regardless of state (works even before the payload
+    // loads — the loading view's only escape). Resolves the call as cancelled.
+    ipcMain.handle('ask:dismiss', (e) => {
+        const p = findBySender(e.sender.id);
+        if (p) finish(p.payload.id, { cancelled: true, answers: [] });
     });
 }
 
@@ -110,7 +133,8 @@ export function forceQuestion(
             return;
         }
         const id = crypto.randomBytes(9).toString('hex');
-        pending.set(id, { resolve, win });
+        const payload = { id, questions };
+        pending.set(id, { resolve, win, payload });
 
         // A close without an answer (window control, OS) resolves cancelled.
         win.on('closed', () => {
@@ -120,11 +144,11 @@ export function forceQuestion(
             }
         });
 
-        const payload = { id, questions };
+        // Primary delivery is the renderer's `ask:ready` handshake (race-free).
+        // Also push on load as a best-effort fallback; the renderer dedupes.
         const push = () => {
             if (!win.isDestroyed()) win.webContents.send('ask:show', payload);
         };
-        // Send once the renderer has loaded its listener.
         if (win.webContents.isLoading()) {
             win.webContents.once('did-finish-load', push);
         } else {

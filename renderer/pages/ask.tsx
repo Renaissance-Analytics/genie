@@ -31,12 +31,17 @@ export default function AskPage() {
 
     useEffect(() => {
         if (!bridgeReady) return;
-        return api().ask.onShow(({ id, questions: qs }) => {
+        const off = api().ask.onShow(({ id, questions: qs }) => {
             setReqId(id);
             setQuestions(qs);
             setSelected({});
             setNotes({});
         });
+        // Now that the listener is attached, tell main to deliver the payload.
+        // (Pushing on did-finish-load can fire before this effect runs, so the
+        // ready handshake is what guarantees the modal actually loads.)
+        void api().ask.ready().catch(() => {});
+        return off;
     }, [bridgeReady]);
 
     const toggle = (qi: number, label: string, multi: boolean) => {
@@ -69,22 +74,23 @@ export default function AskPage() {
         }
     };
 
-    const cancel = async () => {
-        if (!reqId) return;
-        await api().ask.cancel(reqId).catch(() => {});
+    // Close the window regardless of state. Uses dismiss() (resolves by sender
+    // window) so it works even in the loading view where reqId isn't set yet —
+    // the user is never trapped.
+    const dismiss = () => {
+        void api().ask.dismiss().catch(() => {});
     };
 
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             if (e.key === 'Escape') {
                 e.preventDefault();
-                void cancel();
+                dismiss();
             }
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [reqId]);
+    }, []);
 
     // Require at least one selection OR a note per question before submit.
     const ready =
@@ -95,10 +101,28 @@ export default function AskPage() {
 
     if (!bridgeReady || !reqId) {
         return (
-            <div className="ask-frame ask-loading">
-                <Text size="sm" className="text-zinc-500">
-                    Waiting for the question…
-                </Text>
+            <div className="ask-frame">
+                <div className="ask-head">
+                    <Icon name="sparkles" size="sm" className="text-violet-500" />
+                    <Heading as="h1" size="sm" style={{ margin: 0 }}>
+                        An agent needs your input
+                    </Heading>
+                    <div style={{ flex: 1 }} />
+                    <button
+                        type="button"
+                        className="ask-x"
+                        onClick={dismiss}
+                        title="Close (Esc)"
+                        aria-label="Close"
+                    >
+                        ✕
+                    </button>
+                </div>
+                <div className="ask-loading">
+                    <Text size="sm" className="text-zinc-500">
+                        Waiting for the question…
+                    </Text>
+                </div>
             </div>
         );
     }
@@ -111,13 +135,15 @@ export default function AskPage() {
                     An agent needs your input
                 </Heading>
                 <div style={{ flex: 1 }} />
-                <Action
-                    variant="ghost"
-                    size="xs"
-                    icon="x"
-                    onClick={cancel}
-                    title="Dismiss (Esc)"
-                />
+                <button
+                    type="button"
+                    className="ask-x"
+                    onClick={dismiss}
+                    title="Close (Esc)"
+                    aria-label="Close"
+                >
+                    ✕
+                </button>
             </div>
 
             <div className="ask-body">
@@ -173,7 +199,7 @@ export default function AskPage() {
                     dismiss
                 </Text>
                 <div style={{ flex: 1 }} />
-                <Action variant="ghost" size="sm" onClick={cancel}>
+                <Action variant="ghost" size="sm" onClick={dismiss}>
                     Cancel
                 </Action>
                 <Action

@@ -364,6 +364,10 @@ const api = {
             }>,
         ) => ipcRenderer.invoke('ask:answer', id, answers) as Promise<void>,
         cancel: (id: string) => ipcRenderer.invoke('ask:cancel', id) as Promise<void>,
+        /** Tell main the show-listener is attached → main delivers the payload. */
+        ready: () => ipcRenderer.invoke('ask:ready') as Promise<void>,
+        /** Close this modal window regardless of state (resolves cancelled). */
+        dismiss: () => ipcRenderer.invoke('ask:dismiss') as Promise<void>,
     },
 
     on: {

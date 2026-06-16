@@ -747,6 +747,10 @@ interface GenieApi {
         ) => () => void;
         answer: (id: string, answers: ForceAnswerSpec[]) => Promise<void>;
         cancel: (id: string) => Promise<void>;
+        /** Signal main the show-listener is attached (race-free delivery). */
+        ready: () => Promise<void>;
+        /** Close this modal window regardless of state (resolves cancelled). */
+        dismiss: () => Promise<void>;
     };
     on: {
         authChanged: (
