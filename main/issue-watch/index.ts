@@ -39,9 +39,23 @@ export interface ResolvedRepo {
     path: string;
 }
 
+/** Per-watch-type unread tallies (for the workspace 3-dot pill). */
+export interface TypeCounts {
+    issue: number;
+    pr: number;
+    dependabot: number;
+}
+
 /** Pure: count items updated strictly after the seen-at high-water mark. */
 export function unreadCount(items: WatchItem[], seenAt: string): number {
     return items.filter((i) => i.updatedAt > seenAt).length;
+}
+
+/** Pure: bucket unread (updated after seenAt) by kind. */
+export function unreadByKind(items: WatchItem[], seenAt: string): TypeCounts {
+    const out: TypeCounts = { issue: 0, pr: 0, dependabot: 0 };
+    for (const i of items) if (i.updatedAt > seenAt) out[i.kind] += 1;
+    return out;
 }
 
 const cacheKey = (owner: string, repo: string) => `${owner}/${repo}`;
@@ -163,16 +177,19 @@ export async function getWorkspaceFeed(
     return out;
 }
 
-/** Per-workspace unread totals (for the rail dots + titlebar badge). */
-export function getUnreadCounts(): Record<string, number> {
-    const out: Record<string, number> = {};
+/** Per-workspace unread tallies by type (for the workspace 3-dot pill). */
+export function getUnreadCounts(): Record<string, TypeCounts> {
+    const out: Record<string, TypeCounts> = {};
     for (const ws of listWorkspaces()) {
-        let n = 0;
+        const acc: TypeCounts = { issue: 0, pr: 0, dependabot: 0 };
         for (const w of listIssueWatches(ws.id)) {
             if (w.enabled !== 1) continue;
-            n += unreadCount(feedCache.get(cacheKey(w.owner, w.repo)) ?? [], w.seen_at);
+            const k = unreadByKind(feedCache.get(cacheKey(w.owner, w.repo)) ?? [], w.seen_at);
+            acc.issue += k.issue;
+            acc.pr += k.pr;
+            acc.dependabot += k.dependabot;
         }
-        if (n > 0) out[ws.id] = n;
+        if (acc.issue || acc.pr || acc.dependabot) out[ws.id] = acc;
     }
     return out;
 }

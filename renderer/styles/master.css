@@ -498,6 +498,35 @@
     background: var(--blue-500, #3b82f6);
     box-shadow: 0 0 0 2px var(--shell);
 }
+/* Per-workspace Issue Watch pill in the flyout row: 3 dots (Issues · PRs ·
+   Dependabot), grey when nothing to act on, green when there's unread. */
+.iw-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex: 0 0 auto;
+    padding: 3px 6px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-1);
+    cursor: pointer;
+}
+.iw-pill:hover {
+    border-color: var(--border-2, #3f3f46);
+}
+.iw-pill .iw-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--fg-4);
+    opacity: 0.45;
+    transition: background 0.12s, opacity 0.12s;
+}
+.iw-pill .iw-dot.on {
+    background: #34d399;
+    opacity: 1;
+    box-shadow: 0 0 5px rgba(52, 211, 153, 0.6);
+}
 .iw-flyout .iw-body {
     flex: 1;
     overflow-y: auto;

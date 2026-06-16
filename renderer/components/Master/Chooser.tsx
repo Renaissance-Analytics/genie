@@ -25,6 +25,7 @@ import {
     detectedShells,
     type McpStatus,
     type ProcessStatus,
+    type WatchTypeCounts,
     type ShellDetection,
     type StructureDocStatus,
     type TerminalSpec,
@@ -71,8 +72,10 @@ interface Props {
         patch: { command: string; label?: string; cwd?: string; shell?: string },
         wasRunning: boolean,
     ) => void;
-    /** Issue Watch: per-workspace unread counts → a rail dot when > 0. */
-    issueWatchCounts?: Record<string, number>;
+    /** Issue Watch: per-workspace unread counts by type (the 3-dot pill). */
+    issueWatchCounts?: Record<string, WatchTypeCounts>;
+    /** Open the Issue Watch flyout for a specific workspace (the pill click). */
+    onShowIssueWatch: (workspaceId: string) => void;
 }
 
 /**
@@ -103,6 +106,7 @@ export default function Chooser({
     onAddProcess,
     onUpdateProcess,
     issueWatchCounts = {},
+    onShowIssueWatch,
 }: Props) {
     // Inline Add-Process form: which workspace's form is open, its fields, and
     // the cached repo list (root + repos/<name>) for the cwd picker. When
@@ -404,12 +408,16 @@ export default function Chooser({
                         >
                             {workspaceIcon(ws)}
                             {live > 0 && <span className="cnt">{live}</span>}
-                            {(issueWatchCounts[ws.id] ?? 0) > 0 && (
-                                <span
-                                    className="iw-rail-dot"
-                                    title={`${issueWatchCounts[ws.id]} unread issue/PR/alert`}
-                                />
-                            )}
+                            {(() => {
+                                const c = issueWatchCounts[ws.id];
+                                const n = c ? c.issue + c.pr + c.dependabot : 0;
+                                return n > 0 ? (
+                                    <span
+                                        className="iw-rail-dot"
+                                        title={`${n} unread issue/PR/alert`}
+                                    />
+                                ) : null;
+                            })()}
                         </button>
                     );
                 })}
@@ -554,14 +562,41 @@ export default function Chooser({
                                         </span>
                                     )}
                                     {ws.shape === 'agi' && <AgiHealth ws={ws} />}
-                                    {ws.mcp_enabled ? (
-                                        <span
-                                            className="mcp-badge"
-                                            title="Agent MCP enabled — terminals in this workspace get a GENIE_MCP_URL endpoint"
-                                        >
-                                            MCP
-                                        </span>
-                                    ) : null}
+                                    <span
+                                        className="iw-pill"
+                                        role="button"
+                                        tabIndex={-1}
+                                        title="Issue Watch — Issues · PRs · Dependabot (click to open)"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            onShowIssueWatch(ws.id);
+                                        }}
+                                    >
+                                        <i
+                                            className={`iw-dot iw-dot-issue${
+                                                (issueWatchCounts[ws.id]?.issue ?? 0) > 0
+                                                    ? ' on'
+                                                    : ''
+                                            }`}
+                                            title="Issues"
+                                        />
+                                        <i
+                                            className={`iw-dot iw-dot-pr${
+                                                (issueWatchCounts[ws.id]?.pr ?? 0) > 0
+                                                    ? ' on'
+                                                    : ''
+                                            }`}
+                                            title="PRs"
+                                        />
+                                        <i
+                                            className={`iw-dot iw-dot-dependabot${
+                                                (issueWatchCounts[ws.id]?.dependabot ?? 0) > 0
+                                                    ? ' on'
+                                                    : ''
+                                            }`}
+                                            title="Dependabot alerts"
+                                        />
+                                    </span>
                                     <span
                                         className={`proc-ind proc-${wsProcStatus(
                                             wsProcs,

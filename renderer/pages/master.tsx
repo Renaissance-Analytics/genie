@@ -33,6 +33,7 @@ import {
     hasGenieBridge,
     ulid,
     type Changelog,
+    type WatchTypeCounts,
     type TerminalSpec,
     type UpdaterStatus,
     type WorkspaceRow,
@@ -127,11 +128,13 @@ function MasterInner() {
     // Docs flyout (the ? titlebar button toggles this in-window panel rather
     // than opening a separate BrowserWindow).
     const [docsOpen, setDocsOpen] = useState(false);
-    // Issue Watch: the flyout + per-workspace unread counts (rail dots + badge).
+    // Issue Watch: the flyout (scoped to a chosen workspace) + per-workspace
+    // unread counts by type (the sidebar 3-dot pill: Issues · PRs · Dependabot).
     const [issueWatchOpen, setIssueWatchOpen] = useState(false);
-    const [issueWatchCounts, setIssueWatchCounts] = useState<Record<string, number>>(
-        () => ({}),
-    );
+    const [issueWatchWsId, setIssueWatchWsId] = useState<string | null>(null);
+    const [issueWatchCounts, setIssueWatchCounts] = useState<
+        Record<string, WatchTypeCounts>
+    >(() => ({}));
     useEffect(() => {
         const load = () =>
             void api()
@@ -140,6 +143,10 @@ function MasterInner() {
                 .catch(() => {});
         load();
         return api().on.issueWatchUpdate(({ counts }) => setIssueWatchCounts(counts));
+    }, []);
+    const openIssueWatch = useCallback((wsId: string) => {
+        setIssueWatchWsId(wsId);
+        setIssueWatchOpen(true);
     }, []);
     // Max panels visible per workspace (Settings → max_views, default 4).
     const [maxViews, setMaxViews] = useState(4);
@@ -949,12 +956,15 @@ function MasterInner() {
                             : undefined
                     }
                     onShowDocs={() => setDocsOpen((o) => !o)}
-                    onShowIssueWatch={() => setIssueWatchOpen((o) => !o)}
-                    issueWatchUnread={
-                        activeWorkspaceId
-                            ? issueWatchCounts[activeWorkspaceId] ?? 0
-                            : 0
+                    onShowIssueWatch={() =>
+                        activeWorkspaceId && openIssueWatch(activeWorkspaceId)
                     }
+                    issueWatchUnread={(() => {
+                        const c = activeWorkspaceId
+                            ? issueWatchCounts[activeWorkspaceId]
+                            : undefined;
+                        return c ? c.issue + c.pr + c.dependabot : 0;
+                    })()}
                 />
                 <Toolbar
                     activeWorkspace={
@@ -978,6 +988,7 @@ function MasterInner() {
                         activeIds={activeIds}
                         attentionIds={attentionIds}
                         issueWatchCounts={issueWatchCounts}
+                        onShowIssueWatch={openIssueWatch}
                         activeWorkspaceId={activeWorkspaceId}
                         pinned={chooserPinned}
                         onTogglePin={() => setChooserPinned((p) => !p)}
@@ -1038,7 +1049,7 @@ function MasterInner() {
             <DocsFlyout open={docsOpen} onClose={() => setDocsOpen(false)} />
             <IssueWatchFlyout
                 open={issueWatchOpen}
-                workspaceId={activeWorkspaceId}
+                workspaceId={issueWatchWsId}
                 onClose={() => setIssueWatchOpen(false)}
             />
 
@@ -1085,17 +1096,6 @@ function MasterInner() {
                         onAddTerminal={() => void addSpec(ws.id)}
                         onOpenStage={() => openProjectInStage(ws.id)}
                         onOpenInBrowser={() => openProjectInBrowser(ws.id)}
-                        onToggleMcp={() => {
-                            const next = !ws.mcp_enabled;
-                            setWorkspaces((prev) =>
-                                prev.map((w) =>
-                                    w.id === ws.id
-                                        ? { ...w, mcp_enabled: next ? 1 : 0 }
-                                        : w,
-                                ),
-                            );
-                            void api().workspaces.setMcp(ws.id, next).catch(() => {});
-                        }}
                         onRemove={() => void removeWorkspaceRow(ws.id)}
                     />
                 );

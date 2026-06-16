@@ -33,7 +33,9 @@ const api = {
         markSeen: (workspaceId: string) =>
             ipcRenderer.invoke('issue-watch:mark-seen', workspaceId),
         counts: () =>
-            ipcRenderer.invoke('issue-watch:counts') as Promise<Record<string, number>>,
+            ipcRenderer.invoke('issue-watch:counts') as Promise<
+                Record<string, { issue: number; pr: number; dependabot: number }>
+            >,
     },
 
     aionima: {
@@ -410,12 +412,13 @@ const api = {
             ipcRenderer.on('notify:sound', handler);
             return () => ipcRenderer.off('notify:sound', handler);
         },
-        // Issue Watch: per-workspace unread counts changed (poll / toggle / seen).
+        // Issue Watch: per-workspace unread counts (by type) changed.
         issueWatchUpdate: (
-            cb: (payload: { counts: Record<string, number> }) => void,
+            cb: (payload: {
+                counts: Record<string, { issue: number; pr: number; dependabot: number }>;
+            }) => void,
         ) => {
-            const handler = (_e: unknown, payload: { counts: Record<string, number> }) =>
-                cb(payload);
+            const handler = (_e: unknown, payload: any) => cb(payload);
             ipcRenderer.on('issue-watch:update', handler);
             return () => ipcRenderer.off('issue-watch:update', handler);
         },

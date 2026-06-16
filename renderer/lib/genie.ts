@@ -71,6 +71,13 @@ export interface ForceAnswerSpec {
     note: string;
 }
 
+/** Issue Watch: per-workspace unread tallies by type (the 3-dot pill). */
+export interface WatchTypeCounts {
+    issue: number;
+    pr: number;
+    dependabot: number;
+}
+
 /** Issue Watch: a detected repo + its watch state for the flyout. */
 export interface WatchRepoView {
     owner: string;
@@ -484,7 +491,7 @@ interface GenieApi {
         ) => Promise<{ ok: boolean }>;
         feed: (workspaceId: string) => Promise<WatchFeedItem[]>;
         markSeen: (workspaceId: string) => Promise<{ ok: boolean }>;
-        counts: () => Promise<Record<string, number>>;
+        counts: () => Promise<Record<string, WatchTypeCounts>>;
     };
     aionima: {
         getConfig: () => Promise<AionimaConfig>;
@@ -799,9 +806,9 @@ interface GenieApi {
         inboxUpdated: (cb: (payload: { count: number }) => void) => () => void;
         /** Customization: play a notification chime (agent imDone). */
         notifySound: (cb: (payload: { kind: string }) => void) => () => void;
-        /** Issue Watch: per-workspace unread counts changed. */
+        /** Issue Watch: per-workspace unread counts (by type) changed. */
         issueWatchUpdate: (
-            cb: (payload: { counts: Record<string, number> }) => void,
+            cb: (payload: { counts: Record<string, WatchTypeCounts> }) => void,
         ) => () => void;
         terminalData: (
             cb: (payload: { id: string; data: string }) => void,

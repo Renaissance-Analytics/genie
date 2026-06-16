@@ -22,7 +22,6 @@ interface Props {
     onAddTerminal: () => void;
     onOpenStage: () => void;
     onOpenInBrowser: () => void;
-    onToggleMcp: () => void;
     onRemove: () => void;
 }
 
@@ -39,7 +38,6 @@ export default function ProjectContextMenu({
     onAddTerminal,
     onOpenStage,
     onOpenInBrowser,
-    onToggleMcp,
     onRemove,
 }: Props) {
     const menuRef = useRef<HTMLDivElement>(null);
@@ -116,14 +114,6 @@ export default function ProjectContextMenu({
                     label="Open project in browser"
                     onClick={() => {
                         onOpenInBrowser();
-                        onClose();
-                    }}
-                />
-                <CtxItem
-                    icon={<IconCpu size={14} />}
-                    label={`Agent MCP: ${workspace.mcp_enabled ? 'On' : 'Off'}`}
-                    onClick={() => {
-                        onToggleMcp();
                         onClose();
                     }}
                 />
