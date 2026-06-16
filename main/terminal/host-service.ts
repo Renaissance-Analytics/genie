@@ -191,6 +191,50 @@ export function resolveShippedRuntime(): ServiceRuntime | null {
  * to the detached host — the thing that makes every update restart terminals —
  * was invisible. This persists the outcome to `<userData>/logs/host-service.log`.
  */
+/**
+ * Detached-host launch mode, persisted next to the pidfile so it survives across
+ * Genie restarts (the host outlives Genie; a later Genie that merely CONNECTS to
+ * the running host still needs to know how it was launched).
+ *
+ *   'standalone' — spawned on the shipped standalone Node runtime. Does NOT pin
+ *                  Genie's Electron binary, so an auto-update can overwrite
+ *                  genie.exe while the host stays alive (terminals survive — the
+ *                  same property the OS service has). The shipped node.exe is
+ *                  version-pinned + identical across normal updates, so it isn't
+ *                  overwritten and its lock is harmless.
+ *   'electron'   — spawned as Genie's execPath child (+ ELECTRON_RUN_AS_NODE).
+ *                  PINS genie.exe → the update must kill it (terminals restart).
+ */
+const DETACHED_MODE_FILE = 'ptyhost-mode';
+
+export function writeDetachedMode(mode: 'standalone' | 'electron'): void {
+    try {
+        fs.writeFileSync(
+            path.join(app.getPath('userData'), DETACHED_MODE_FILE),
+            mode,
+        );
+    } catch {
+        /* best-effort */
+    }
+}
+
+/**
+ * True unless we POSITIVELY know the detached host runs on the standalone Node.
+ * Conservative on purpose: a missing/unknown marker is treated as pinning, so an
+ * update still kills + warns rather than risk a stalled binary overwrite. Only a
+ * confirmed 'standalone' marker flips a detached host to "survives the update".
+ */
+export function detachedHostPinsBinary(): boolean {
+    try {
+        const m = fs
+            .readFileSync(path.join(app.getPath('userData'), DETACHED_MODE_FILE), 'utf8')
+            .trim();
+        return m !== 'standalone';
+    } catch {
+        return true;
+    }
+}
+
 export function logHostService(line: string): void {
     try {
         const dir = path.join(app.getPath('userData'), 'logs');

@@ -20,6 +20,11 @@ import {
     type HostSpawner,
     type HostStatus,
 } from '@particle-academy/fancy-term-host';
+import {
+    resolveShippedRuntime,
+    writeDetachedMode,
+    logHostService,
+} from './host-service';
 
 /**
  * Genie adapter — the COMPOSITION ROOT for the terminal subsystem.
@@ -125,6 +130,37 @@ export function electronHostSpawner(_dirname: string): HostSpawner {
         },
         userDataDir: () => app.getPath('userData'),
         spawnDetached: (scriptPath: string, env: Record<string, string>) => {
+            // PREFER the shipped standalone Node runtime. Running the detached
+            // host on its OWN node.exe (not Genie's Electron binary) means it does
+            // NOT pin genie.exe — so an auto-update can overwrite Genie while the
+            // host stays alive and terminals survive (the same property the OS
+            // service has, but with no schtasks/launchd/systemd install — which is
+            // exactly what's blocked on locked-down Windows). The shipped node-pty
+            // (N-API) loads via NODE_PATH=<runtime>. We record the mode so the
+            // update-teardown + the willRestartPtyHost warning know it won't pin.
+            const rt = resolveShippedRuntime();
+            if (rt?.nodePath) {
+                const standaloneEnv: Record<string, string | undefined> = {
+                    ...process.env,
+                    ...(rt.nodePtyDir ? { NODE_PATH: rt.nodePtyDir } : {}),
+                    ...env,
+                };
+                // Make sure no inherited Electron flag confuses standalone Node.
+                delete standaloneEnv.ELECTRON_RUN_AS_NODE;
+                const child = spawn(rt.nodePath, [scriptPath], {
+                    detached: true,
+                    stdio: 'ignore',
+                    env: standaloneEnv,
+                });
+                child.unref();
+                writeDetachedMode('standalone');
+                logHostService(
+                    `detached host spawned on standalone Node — ${rt.nodePath}`,
+                );
+                return;
+            }
+            // Fallback: no standalone runtime shipped → run as Genie's execPath
+            // child (pins the binary; the update will kill + restart it).
             const child = spawn(process.execPath, [scriptPath], {
                 detached: true,
                 stdio: 'ignore',
@@ -135,6 +171,10 @@ export function electronHostSpawner(_dirname: string): HostSpawner {
                 },
             });
             child.unref();
+            writeDetachedMode('electron');
+            logHostService(
+                'detached host spawned on Genie binary (no standalone runtime shipped)',
+            );
         },
     };
 }

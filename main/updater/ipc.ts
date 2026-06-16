@@ -9,7 +9,7 @@ import { getAllSettings, setSettings } from '../db';
 import { setUpdateAvailable } from '../tray';
 import { showSettingsWindow } from '../background';
 import { getChangelog, type Changelog } from './changelog';
-import { hostBackendKind } from '../terminal/host-service';
+import { hostBackendKind, detachedHostPinsBinary } from '../terminal/host-service';
 
 /**
  * Unified IPC for the updater. The renderer doesn't know whether it's
@@ -159,7 +159,11 @@ export function withHostFlag(
 ): (UpdaterStatus | AutoUpdaterStatus) & { willRestartPtyHost: boolean } {
     let willRestartPtyHost = false;
     try {
-        willRestartPtyHost = hostBackendKind() === 'detached';
+        // A detached host only restarts on update if it PINS Genie's binary —
+        // i.e. it was launched as Genie's execPath child. A detached host on the
+        // shipped standalone Node survives the update like the service does.
+        willRestartPtyHost =
+            hostBackendKind() === 'detached' && detachedHostPinsBinary();
     } catch {
         /* defensive: never let the host probe break the status payload */
     }

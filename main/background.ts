@@ -44,6 +44,7 @@ import {
     hostBackendKind,
     selectTerminalBackend,
     shouldKillHostForUpdate,
+    detachedHostPinsBinary,
 } from './terminal/host-service';
 import {
     liveHostTerminals,
@@ -710,10 +711,13 @@ app.whenReady().then(async () => {
             //     SURVIVES the update exactly like a normal quit: just disconnect
             //     and leave it running, so after the swap Genie reconnects and
             //     terminals are still live. NO kill, NO snapshot needed.
-            //   • 'detached' — the host is Genie's execPath child, so it PINS the
-            //     binary. NSIS can't overwrite it while alive → keep alpha.44's
-            //     snapshot-then-kill (now via the graceful shutdownHost path).
-            if (shouldKillHostForUpdate(forUpdate, kind)) {
+            //   • 'detached' — the host is a detached child. It only PINS the
+            //     binary when launched as Genie's execPath child; a detached host
+            //     on the shipped standalone Node (the default when the runtime is
+            //     present) does NOT pin genie.exe and SURVIVES the update like a
+            //     service-backed host. So only kill when it actually pins
+            //     (detachedHostPinsBinary) — conservative: unknown ⇒ pins ⇒ kill.
+            if (shouldKillHostForUpdate(forUpdate, kind) && detachedHostPinsBinary()) {
                 // Snapshot windowless host ptys (windowed ones are covered by the
                 // renderer snapshot broadcast) BEFORE the host dies, so the cold
                 // post-update launch replays their history.

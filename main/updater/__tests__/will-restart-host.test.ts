@@ -13,9 +13,13 @@ import '../../../test/electron-mock';
  */
 
 let backendKind: 'service' | 'detached' | 'inprocess' = 'inprocess';
+// Whether the detached host pins Genie's binary (electron-spawn) — true unless
+// it ran on the standalone Node. Conservative default mirrors production.
+let pinsBinary = true;
 
 vi.mock('../../terminal/host-service', () => ({
     hostBackendKind: () => backendKind,
+    detachedHostPinsBinary: () => pinsBinary,
 }));
 
 // registerUpdaterIpc transitively imports these; keep them inert so the module
@@ -45,6 +49,7 @@ const baseStatus = {
 
 beforeEach(() => {
     backendKind = 'inprocess';
+    pinsBinary = true;
 });
 
 afterEach(() => {
@@ -59,6 +64,14 @@ describe('withHostFlag', () => {
         expect(out.willRestartPtyHost).toBe(true);
         // original fields preserved
         expect(out.latestVersion).toBe('0.7.0-alpha.44');
+    });
+
+    it('sets willRestartPtyHost=false for a detached host on standalone Node (does not pin)', () => {
+        // Detached, but launched on the shipped standalone Node → does not pin
+        // genie.exe → survives the update → no restart, no warning.
+        backendKind = 'detached';
+        pinsBinary = false;
+        expect(withHostFlag(baseStatus).willRestartPtyHost).toBe(false);
     });
 
     it('sets willRestartPtyHost=false for a service-backed host (survives the update)', () => {
