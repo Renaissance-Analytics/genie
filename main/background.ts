@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, nativeImage, session } from 'electron';
+import fs from 'fs';
 import path from 'path';
 import { createTray } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
@@ -13,8 +14,10 @@ import {
     snapshotRetainedWindowless,
     terminalHasWindow,
     broadcastTerminalAttention,
+    killTerminalById,
 } from './terminal/ipc';
 import { startMcpServer } from './mcp/server';
+import { startControlServer } from './control';
 import { startAutostartProcesses } from './terminal/process-supervisor';
 import {
     initTerminalBackend,
@@ -430,6 +433,71 @@ app.on('open-url', (event, url) => {
     handleGenieUrl(url);
 });
 
+/**
+ * The terminal-backend fallback chain (service → detached → in-process).
+ * Reused by startup and the `genie host start/restart` control commands.
+ */
+async function runBackendSelection() {
+    return selectTerminalBackend({
+        detachedEnabled: detachedTerminalsEnabled(),
+        activateService: () =>
+            activateHostService({
+                snapshots: getSnapshotStore(),
+                userDataDir: app.getPath('userData'),
+            }),
+        initDetached: () => initTerminalBackend(),
+        isHostBackedProbe: () => isHostBacked(),
+    });
+}
+
+function readPtyHostPid(): number | null {
+    try {
+        const j = JSON.parse(
+            fs.readFileSync(
+                path.join(app.getPath('userData'), 'ptyhost.json'),
+                'utf8',
+            ),
+        );
+        return typeof j.pid === 'number' ? j.pid : null;
+    } catch {
+        return null;
+    }
+}
+
+/** `genie host stop` — kill the running pty-host (terminates its terminals). */
+async function hostStop(): Promise<string> {
+    const pid = readPtyHostPid();
+    try {
+        disconnectHostLeaveRunning();
+    } catch {
+        /* in-process backend — nothing to disconnect */
+    }
+    if (pid == null) return 'no host process recorded (in-process backend?)';
+    try {
+        process.kill(pid);
+    } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code === 'ESRCH') return `host pid ${pid} was not running`;
+        return `failed to stop host pid ${pid}: ${e instanceof Error ? e.message : String(e)}`;
+    }
+    return `stopped host (pid ${pid}) — its running terminals were terminated`;
+}
+
+/** `genie host start` — (re)initialise the terminal backend. */
+async function hostStart(): Promise<string> {
+    const sel = await runBackendSelection();
+    return `host start → backend: ${sel.kind}${
+        sel.serviceReason ? ` (${sel.serviceReason})` : ''
+    }`;
+}
+
+/** `genie host restart` — stop the host, then re-init the backend. */
+async function hostRestart(): Promise<string> {
+    const stopped = await hostStop().catch(() => 'stop skipped');
+    const sel = await runBackendSelection();
+    return `${stopped}\nhost restart → backend: ${sel.kind}`;
+}
+
 app.whenReady().then(async () => {
     // Persistent session under "persist:tynn" so cookies survive restarts.
     // tynn-api.ts uses this session for all outbound calls.
@@ -480,16 +548,7 @@ app.whenReady().then(async () => {
     //
     // selectTerminalBackend records which one won via setHostBackendKind, so
     // hostBackendKind() drives the update-teardown branch + willRestartPtyHost.
-    const selection = await selectTerminalBackend({
-        detachedEnabled: detachedTerminalsEnabled(),
-        activateService: () =>
-            activateHostService({
-                snapshots: getSnapshotStore(),
-                userDataDir: app.getPath('userData'),
-            }),
-        initDetached: () => initTerminalBackend(),
-        isHostBackedProbe: () => isHostBacked(),
-    });
+    const selection = await runBackendSelection();
     const backendInit: { host: boolean; reattachIds: string[] } = {
         host: selection.host,
         reattachIds: selection.reattachIds,
@@ -538,6 +597,15 @@ app.whenReady().then(async () => {
     for (const ws of listWorkspaces()) {
         if (ws.mcp_enabled) writeWorkspaceAgentMcp(ws.path, true);
     }
+    // Control server for the bundled `genie` CLI (status / kill / host control).
+    // Loopback + token; writes <userData>/genie-control.json for discovery.
+    void startControlServer({
+        userDataDir: app.getPath('userData'),
+        killTerminal: (id) => killTerminalById(id),
+        hostStop,
+        hostStart,
+        hostRestart,
+    }).catch((e) => console.error('[control] failed to start', e));
     // Docs viewer IPC (docs:list / docs:read). __dirname is the compiled main
     // bundle dir; resolveDocsDir uses it to find the bundled docs/ in both dev
     // and the packaged asar.

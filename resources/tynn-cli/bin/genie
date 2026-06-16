@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# genie — control the Genie terminal host from inside a Genie terminal.
+#
+#   genie status                          host state + running terminals
+#                                         (id · label · kind · pid · state · path)
+#   genie kill <id>                       kill a single terminal/process
+#   genie host status|start|stop|restart  control the pty-host itself
+#
+# Talks to Genie's local control server, discovered via
+# $GENIE_USERDATA/genie-control.json (written by Genie at launch). Loopback +
+# per-launch token, so only this user can reach it.
+
+set -euo pipefail
+
+die() { echo "genie: $*" >&2; exit 1; }
+
+[[ -n "${GENIE_USERDATA:-}" ]] || die "GENIE_USERDATA not set — run this inside a Genie terminal."
+CTRL="${GENIE_USERDATA}/genie-control.json"
+[[ -f "$CTRL" ]] || die "control file not found ($CTRL) — is Genie running?"
+
+# Pull port + token out of the small JSON without a jq dependency.
+PORT="$(grep -oE '"port":[[:space:]]*[0-9]+' "$CTRL" | grep -oE '[0-9]+' | head -1)"
+TOKEN="$(grep -oE '"token":[[:space:]]*"[^"]+"' "$CTRL" | sed -E 's/.*"token":[[:space:]]*"([^"]+)".*/\1/')"
+[[ -n "$PORT" && -n "$TOKEN" ]] || die "could not read control port/token from $CTRL"
+BASE="http://127.0.0.1:${PORT}/${TOKEN}"
+
+get()  { curl -fsS "$1"          2>/dev/null || die "control server not responding (is Genie running?)"; }
+post() { curl -fsS -X POST "$1"  2>/dev/null || die "control server not responding (is Genie running?)"; }
+
+cmd="${1:-status}"; shift || true
+case "$cmd" in
+  status)
+    get "$BASE/status" ;;
+  kill)
+    [[ $# -ge 1 ]] || die "usage: genie kill <id>"
+    post "$BASE/terminal/$1/kill" ;;
+  host)
+    sub="${1:-status}"; shift || true
+    case "$sub" in
+      status)             get  "$BASE/status" ;;
+      start|stop|restart) post "$BASE/host/$sub" ;;
+      *) die "usage: genie host {status|start|stop|restart}" ;;
+    esac ;;
+  -h|--help|help)
+    cat <<'USAGE'
+genie — control the Genie terminal host
+  genie status                          host state + running terminals
+  genie kill <id>                       kill a single terminal/process
+  genie host status|start|stop|restart  control the pty-host
+USAGE
+    ;;
+  *)
+    die "unknown command: $cmd (try: genie status | genie kill <id> | genie host restart)" ;;
+esac

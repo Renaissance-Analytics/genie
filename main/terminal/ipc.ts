@@ -210,18 +210,9 @@ export function registerTerminalIpc(): void {
         return true;
     });
 
-    ipcMain.handle('terminal:kill', (_event, id: string): boolean => {
-        ownersByTerminal.delete(id);
-        // Drop the per-terminal MCP endpoint so its token stops resolving.
-        unregisterTerminalEndpoint(id);
-        // kill() also clears the retained flag in the manager.
-        const killed = mgr().kill(id);
-        // Delete (not just disable): drop the Tier 1 snapshot too so a deleted
-        // terminal can never resurrect on the next launch. Best-effort.
-        getSnapshotStore().deleteSnapshot(id);
-        broadcastTerminalCount();
-        return killed;
-    });
+    ipcMain.handle('terminal:kill', (_event, id: string): boolean =>
+        killTerminalById(id),
+    );
 
     /**
      * Tier 2: mark a terminal as retained (kept alive on zero owners) or not.
@@ -372,6 +363,31 @@ export function requestFinalSnapshots(): void {
             /* window tearing down — skip */
         }
     }
+}
+
+/**
+ * Kill a single terminal or process by id — the shared teardown behind the
+ * `terminal:kill` IPC and the `genie kill <id>` CLI. A PROCESS is stopped
+ * deliberately (so its supervisor doesn't auto-restart it); a terminal has its
+ * pty killed + snapshot dropped + MCP endpoint released. Returns false when the
+ * id matches no live pty (and isn't a known process spec).
+ */
+export function killTerminalById(id: string): boolean {
+    const spec = getTerminalSpec(id);
+    if (spec?.type === 'process') {
+        stopProcess(id);
+        return true;
+    }
+    ownersByTerminal.delete(id);
+    // Drop the per-terminal MCP endpoint so its token stops resolving.
+    unregisterTerminalEndpoint(id);
+    // kill() also clears the retained flag in the manager.
+    const killed = terminalManager().kill(id);
+    // Drop the Tier 1 snapshot too so a killed terminal can't resurrect on the
+    // next launch. Best-effort.
+    getSnapshotStore().deleteSnapshot(id);
+    broadcastTerminalCount();
+    return killed;
 }
 
 /** Forward the broadcast helper for callers that want it. */
