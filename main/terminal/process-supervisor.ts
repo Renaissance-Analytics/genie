@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron';
+import path from 'node:path';
 import {
     terminalManager,
     resolveDefaultShell,
@@ -40,8 +41,27 @@ const procs = new Map<string, ProcState>();
  *  chatty process can't grow this unbounded; we only keep the tail. */
 const procLogs = new Map<string, string>();
 const PROC_LOG_CAP = 256_000; // chars of tail kept per process (hover + download)
+
+/**
+ * Strip terminal control sequences so the log popover shows clean text. The pty
+ * stream carries more than CSI color codes — Git Bash emits an OSC title
+ * sequence (`ESC ]0;...BEL`) on every prompt, which previously leaked as
+ * `]0;C:\Program Files\Git\bin\bash.exe` garbage. Order matters: OSC first
+ * (it contains `]`), then CSI, then any stray ESC/control bytes (keep \n \t).
+ */
 // eslint-disable-next-line no-control-regex
-const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+const OSC_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+// eslint-disable-next-line no-control-regex
+const CSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+// eslint-disable-next-line no-control-regex
+const CTRL_RE = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
+
+function stripControl(s: string): string {
+    return s
+        .replace(OSC_RE, '')
+        .replace(CSI_RE, '')
+        .replace(CTRL_RE, '');
+}
 
 /**
  * Record pty output for a managed process (no-op for non-process ids). Wired
@@ -53,9 +73,9 @@ export function recordProcessOutput(id: string, data: string): void {
     procLogs.set(id, next.length > PROC_LOG_CAP ? next.slice(-PROC_LOG_CAP) : next);
 }
 
-/** The recent output tail for a process (ANSI stripped), or '' if none. */
+/** The recent output tail for a process (control sequences stripped), or ''. */
 export function getProcessLog(id: string): string {
-    return (procLogs.get(id) ?? '').replace(ANSI_RE, '');
+    return stripControl(procLogs.get(id) ?? '');
 }
 
 function ensure(id: string): ProcState {
@@ -114,18 +134,27 @@ export function startProcess(specId: string): void {
     const shell = spec.shell || resolved.command;
     const args = buildProcessArgs(shell, spec.meta.command);
     const cliEnabled = getAllSettings().cli_tools_in_terminals !== 'off';
-    const env = buildTynnCliEnv(spec.cwd, cliEnabled);
+    // A service runs at its CONFIGURED cwd every time — never a tracked live_cwd
+    // (processes don't meaningfully track cwd, and a stale one is the "doesn't
+    // open in the correct location" bug). Normalize for the platform.
+    const cwd = path.normalize(spec.cwd);
+    const env = buildTynnCliEnv(cwd, cliEnabled);
+
+    // Make the launch context visible in the hover log — what shell, where, and
+    // the exact command — so a "command not found" / wrong-dir issue is obvious.
+    recordProcessOutput(
+        specId,
+        `\n[genie] start: ${shell} ${args.join(' ')}\n[genie] cwd:   ${cwd}\n`,
+    );
 
     try {
-        terminalManager().create({
-            id: specId,
-            cwd: spec.live_cwd ?? spec.cwd,
-            shell,
-            args,
-            env,
-        });
+        terminalManager().create({ id: specId, cwd, shell, args, env });
         setStatus(specId, 'running');
-    } catch {
+    } catch (e) {
+        recordProcessOutput(
+            specId,
+            `[genie] spawn failed: ${e instanceof Error ? e.message : String(e)}\n`,
+        );
         setStatus(specId, 'crashed');
     }
 }
