@@ -643,6 +643,7 @@ app.whenReady().then(async () => {
     // Best-effort: a failed bind just means no MCP endpoints.
     void startMcpServer({
         serverVersion: app.getVersion(),
+        userDataDir: app.getPath('userData'),
         onImDone: (terminalId) => {
             broadcastTerminalAttention(terminalId, true);
             notifyImDone(terminalId);
