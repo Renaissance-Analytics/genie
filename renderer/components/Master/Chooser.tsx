@@ -65,6 +65,12 @@ interface Props {
         cwd?: string,
         shell?: string,
     ) => void;
+    /** Edit an existing Process (right-click → Edit). Restarts it if running. */
+    onUpdateProcess: (
+        id: string,
+        patch: { command: string; label?: string; cwd?: string; shell?: string },
+        wasRunning: boolean,
+    ) => void;
 }
 
 /**
@@ -93,10 +99,19 @@ export default function Chooser({
     onAddWorkspace,
     onReorderWorkspaces,
     onAddProcess,
+    onUpdateProcess,
 }: Props) {
     // Inline Add-Process form: which workspace's form is open, its fields, and
-    // the cached repo list (root + repos/<name>) for the cwd picker.
+    // the cached repo list (root + repos/<name>) for the cwd picker. When
+    // editProcId is set the form edits that process instead of creating one.
     const [addProcFor, setAddProcFor] = useState<string | null>(null);
+    const [editProcId, setEditProcId] = useState<string | null>(null);
+    // Right-click context menu for a process row.
+    const [procMenu, setProcMenu] = useState<{
+        spec: TerminalSpec;
+        x: number;
+        y: number;
+    } | null>(null);
     const [procLabel, setProcLabel] = useState('');
     const [procCommand, setProcCommand] = useState('');
     const [procCwd, setProcCwd] = useState(''); // '' = envelope root
@@ -104,12 +119,7 @@ export default function Chooser({
     const [procRepos, setProcRepos] = useState<string[]>([]);
     const [procShells, setProcShells] = useState<ShellDetection[]>([]);
 
-    const openAddProcess = (ws: WorkspaceRow) => {
-        setAddProcFor(ws.id);
-        setProcLabel('');
-        setProcCommand('');
-        setProcCwd('');
-        setProcShell('');
+    const loadProcFormMeta = (ws: WorkspaceRow) => {
         setProcRepos([]);
         void api()
             .workspaces.repos(ws.id)
@@ -120,19 +130,58 @@ export default function Chooser({
             .catch(() => setProcShells([]));
     };
 
+    const openAddProcess = (ws: WorkspaceRow) => {
+        setEditProcId(null);
+        setAddProcFor(ws.id);
+        setProcLabel('');
+        setProcCommand('');
+        setProcCwd('');
+        setProcShell('');
+        loadProcFormMeta(ws);
+    };
+
+    const openEditProcess = (ws: WorkspaceRow, s: TerminalSpec) => {
+        setEditProcId(s.id);
+        setAddProcFor(ws.id);
+        setProcLabel(s.label);
+        setProcCommand(s.meta?.command ?? '');
+        // Reverse-map the absolute cwd back to a repo name (or '' = root).
+        const prefix = `${ws.path}/repos/`;
+        setProcCwd(s.cwd?.startsWith(prefix) ? s.cwd.slice(prefix.length) : '');
+        setProcShell(s.shell ?? '');
+        loadProcFormMeta(ws);
+    };
+
     const submitAddProcess = (ws: WorkspaceRow) => {
         const cmd = procCommand.trim();
         if (!cmd) return;
         // procCwd holds a repo name; resolve to <root>/repos/<name>, or root.
         const cwd = procCwd ? `${ws.path}/repos/${procCwd}` : undefined;
-        onAddProcess(
-            ws.id,
-            cmd,
-            procLabel.trim() || undefined,
-            cwd,
-            procShell || undefined,
-        );
+        if (editProcId) {
+            const wasRunning = ['running', 'restarting'].includes(
+                processStatus.get(editProcId) ?? 'stopped',
+            );
+            onUpdateProcess(
+                editProcId,
+                {
+                    command: cmd,
+                    label: procLabel.trim() || undefined,
+                    cwd,
+                    shell: procShell || undefined,
+                },
+                wasRunning,
+            );
+        } else {
+            onAddProcess(
+                ws.id,
+                cmd,
+                procLabel.trim() || undefined,
+                cwd,
+                procShell || undefined,
+            );
+        }
         setAddProcFor(null);
+        setEditProcId(null);
     };
 
     const [search, setSearch] = useState('');
@@ -593,6 +642,15 @@ export default function Chooser({
                                                         onMouseLeave={() =>
                                                             scheduleHideProcLog(s.id)
                                                         }
+                                                        onContextMenu={(e) => {
+                                                            e.preventDefault();
+                                                            setProcLog(null);
+                                                            setProcMenu({
+                                                                spec: s,
+                                                                x: e.clientX,
+                                                                y: e.clientY,
+                                                            });
+                                                        }}
                                                     >
                                                         <span
                                                             className={`proc-dot proc-${st}`}
@@ -724,9 +782,10 @@ export default function Chooser({
                                                         <button
                                                             type="button"
                                                             className="proc-add-btn"
-                                                            onClick={() =>
-                                                                setAddProcFor(null)
-                                                            }
+                                                            onClick={() => {
+                                                                setAddProcFor(null);
+                                                                setEditProcId(null);
+                                                            }}
                                                         >
                                                             Cancel
                                                         </button>
@@ -738,7 +797,7 @@ export default function Chooser({
                                                                 submitAddProcess(ws)
                                                             }
                                                         >
-                                                            Create
+                                                            {editProcId ? 'Save' : 'Create'}
                                                         </button>
                                                     </div>
                                                 </div>
@@ -837,6 +896,52 @@ export default function Chooser({
                         </button>
                     </div>
                 </div>,
+                document.body,
+            )}
+        {procMenu &&
+            typeof document !== 'undefined' &&
+            createPortal(
+                <>
+                    <div
+                        className="proc-menu-scrim"
+                        onMouseDown={() => setProcMenu(null)}
+                        onContextMenu={(e) => {
+                            e.preventDefault();
+                            setProcMenu(null);
+                        }}
+                    />
+                    <div
+                        className="proj-popover ctx-menu proc-ctx-menu"
+                        style={{ top: procMenu.y, left: procMenu.x }}
+                    >
+                        <button
+                            type="button"
+                            className="proj-popover-item"
+                            onMouseDown={(e) => {
+                                e.preventDefault();
+                                const ws = workspaces.find(
+                                    (w) => w.id === procMenu.spec.workspace_id,
+                                );
+                                if (ws) openEditProcess(ws, procMenu.spec);
+                                setProcMenu(null);
+                            }}
+                        >
+                            <span className="lbl">Edit process…</span>
+                        </button>
+                        <button
+                            type="button"
+                            className="proj-popover-item is-destructive"
+                            onMouseDown={(e) => {
+                                e.preventDefault();
+                                const s = procMenu.spec;
+                                setProcMenu(null);
+                                void deleteProcess(s);
+                            }}
+                        >
+                            <span className="lbl">Delete process</span>
+                        </button>
+                    </div>
+                </>,
                 document.body,
             )}
         </>

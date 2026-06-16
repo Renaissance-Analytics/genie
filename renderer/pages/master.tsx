@@ -481,6 +481,31 @@ function MasterInner() {
         [workspacesById],
     );
 
+    // Edit an existing Process in place (right-click → Edit). Updates the spec,
+    // then restarts it if it's currently running so the new shell/command/cwd
+    // take effect immediately (the supervisor reads these at (re)start).
+    const editProcess = useCallback(
+        async (
+            id: string,
+            patch: { command: string; label?: string; cwd?: string; shell?: string },
+            wasRunning: boolean,
+        ) => {
+            const spec = specs.find((s) => s.id === id);
+            if (!spec) return;
+            const updated = await api().terminalSpec.update(id, {
+                label: (patch.label?.trim() || spec.label).slice(0, 60),
+                cwd: patch.cwd?.trim() || spec.cwd,
+                shell: patch.shell?.trim() || null,
+                meta: { ...spec.meta, command: patch.command.trim() },
+            });
+            if (updated) {
+                setSpecs((prev) => prev.map((s) => (s.id === id ? updated : s)));
+            }
+            if (wasRunning) await api().process.restart(id).catch(() => {});
+        },
+        [specs],
+    );
+
     const closeSelected = useCallback((id: string) => {
         setSelected((prev) => {
             const next = new Set(prev);
@@ -947,8 +972,11 @@ function MasterInner() {
                         }
                         onAddWorkspace={() => setAddingWorkspace(true)}
                         onReorderWorkspaces={reorderWorkspaces}
-                        onAddProcess={(wsId, command, label, cwd) =>
-                            void addProcess(wsId, command, label, cwd)
+                        onAddProcess={(wsId, command, label, cwd, shell) =>
+                            void addProcess(wsId, command, label, cwd, shell)
+                        }
+                        onUpdateProcess={(id, patch, wasRunning) =>
+                            void editProcess(id, patch, wasRunning)
                         }
                     />
                     <TerminalGrid

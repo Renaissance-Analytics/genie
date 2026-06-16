@@ -72,11 +72,17 @@
    for the native min/max/close overlay on Windows. The titlebar-area env
    vars resolve to the drag-safe region; the 100vw fallback collapses the
    inset to 0 where no overlay exists (macOS, plain Linux). */
+:root {
+    /* Height of the draggable window titlebar. In-window flyouts/modals offset
+       their top by this so they sit BELOW the header (never over the drag
+       region / window controls). Keep in sync with .titlebar height. */
+    --titlebar-h: 46px;
+}
 .titlebar {
     display: flex;
     align-items: center;
     gap: 14px;
-    height: 46px;
+    height: var(--titlebar-h);
     padding: 0 14px;
     padding-right: calc(100vw - env(titlebar-area-width, 100vw) + 14px);
     flex: 0 0 auto;
@@ -463,6 +469,16 @@
     left: auto;
     margin: 0;
 }
+/* Process right-click menu — tighter than the project popover. */
+.proc-ctx-menu {
+    min-width: 160px;
+    z-index: 120;
+}
+.proc-menu-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 119;
+}
 .ctx-header {
     padding: 4px 10px 6px;
     border-bottom: 1px solid var(--border-1);
@@ -478,7 +494,7 @@
 /* ===== Modal prompt (rename / confirm) =================================== */
 .prompt-scrim {
     position: fixed;
-    inset: 0;
+    inset: var(--titlebar-h) 0 0 0;
     z-index: 100;
     background: rgba(0, 0, 0, 0.55);
     display: grid;
@@ -2373,7 +2389,7 @@ body.gutter-dragging .grid-gutter {
    becomes non-interactive + offscreen when closed. */
 .docs-flyout-root {
     position: fixed;
-    inset: 0;
+    inset: var(--titlebar-h) 0 0 0;
     z-index: 60;
     pointer-events: none;
 }
