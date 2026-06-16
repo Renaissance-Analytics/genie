@@ -3,7 +3,9 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+    buildServiceDescriptor,
     ensureHostService,
+    resolveServiceConfig,
     resolveServiceRuntime,
     type EnsureResult,
     type ServiceIo,
@@ -296,6 +298,42 @@ export async function activateHostService(
         hostScript = ptyHostScriptPath() ?? undefined;
     } catch {
         hostScript = undefined;
+    }
+
+    // WORKAROUND (win32 stale-state): the package treats "installed" as "the
+    // unit file exists", not "the OS task is actually registered". A pre-fix
+    // run (when the old shell:true io mangled the schtasks /TR quoting) could
+    // leave a stale `<label>.cmd` on disk — writeFile succeeded but /Create
+    // failed. ensureHostService then sees installed + matching-revision and
+    // only ever issues /Run, which fails forever ("cannot find the file
+    // specified") because the task was never created. Reconcile: if the unit
+    // file exists but the real task query fails, delete the stale unit (and
+    // best-effort /Delete) so ensureHostService takes the full install path and
+    // /Create finally runs under our shell-free io.
+    try {
+        const io = genieServiceIo();
+        const desc = buildServiceDescriptor(
+            resolveServiceConfig({
+                label: HOST_SERVICE_LABEL,
+                userDataDir: deps.userDataDir,
+                runtime,
+                ...(hostScript ? { hostScript } : {}),
+            }),
+        );
+        if (desc.platform === 'windows-task' && fs.existsSync(desc.unitPath)) {
+            const q = await io.run(desc.statusArgv);
+            if (q.code !== 0) {
+                logHostService(
+                    `stale unit file with no registered task (query code ${q.code}) — clearing ${desc.unitPath} to force a clean /Create`,
+                );
+                for (const argv of desc.uninstallArgv) await io.run(argv);
+                await fs.promises.rm(desc.unitPath, { force: true }).catch(() => {});
+            }
+        }
+    } catch (e) {
+        logHostService(
+            `stale-task reconcile skipped: ${e instanceof Error ? e.message : String(e)}`,
+        );
     }
 
     let result: EnsureResult;
