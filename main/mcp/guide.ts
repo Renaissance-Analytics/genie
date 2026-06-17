@@ -53,7 +53,9 @@ and the panel border until the user focuses it — so they're drawn to the termi
 that needs them even from another project. Pass \`terminalId\` (your
 \`GENIE_TERMINAL_ID\`) to target this exact terminal; omit it to use the
 workspace's most-recently-active one. Prefer this over silently ending: a
-finished task the user never notices isn't really done.
+finished task the user never notices isn't really done. **Better yet, automate
+it** — see "Automate imDone" below to fire this on every finish via a harness
+hook.
 
 ### ForceTheQuestion
 Call this whenever you are **blocked on a decision, clarification, or approval
@@ -71,6 +73,38 @@ a question into a terminal they aren't looking at.
 - **Batch ALL your open questions into a single call** — never fire it repeatedly
   in a row; gather everything you need and ask once.
 - Returns each question's selected option(s) + note, or a cancellation.
+
+## Automate imDone — set up a "finished" hook (recommended)
+Calling \`imDone\` by hand is easy to forget. If your harness can run a command
+when a run/turn finishes, wire it up ONCE so the glow fires automatically every
+time you hand back — then you never leave a finished terminal sitting unseen.
+**Set this up yourself in YOUR harness's own config; Genie deliberately does NOT
+edit your harness files.** Do it only if such a hook feature exists in your
+harness — if you're unsure whether it's supported, skip it rather than guess.
+
+The hook just needs to POST a JSON-RPC \`tools/call\` for \`imDone\` to this
+server. The endpoint + this terminal's id are in your environment as
+\`GENIE_MCP_URL\` and \`GENIE_TERMINAL_ID\`, so a one-line curl works:
+
+\`\`\`bash
+curl -s -X POST "$GENIE_MCP_URL" -H 'Content-Type: application/json' \\
+  -d "{\\"jsonrpc\\":\\"2.0\\",\\"id\\":1,\\"method\\":\\"tools/call\\",\\"params\\":{\\"name\\":\\"imDone\\",\\"arguments\\":{\\"terminalId\\":\\"$GENIE_TERMINAL_ID\\"}}}" >/dev/null 2>&1 || true
+\`\`\`
+
+- **Claude Code:** add a \`Stop\` hook (fires when you finish responding) in the
+  project's \`.claude/settings.json\` (or \`.claude/settings.local.json\` to keep it
+  local/uncommitted) under \`"hooks" → "Stop" → [{ "type": "command", "command":
+  "<the curl above>" }]\`. The hook inherits this terminal's environment, so
+  \`$GENIE_MCP_URL\` / \`$GENIE_TERMINAL_ID\` resolve. Exit 0 (don't block) so you
+  never loop. (\`SubagentStop\` is the equivalent for sub-agents.)
+- **Codex:** set \`notify\` in \`~/.codex/config.toml\` to a small script that does
+  the same POST on the \`agent-turn-complete\` event.
+- **Other harnesses:** use whatever "on finish / on stop" hook they expose; the
+  payload is the same JSON-RPC call.
+
+Confirm with the user before writing into a shared/committed config; a
+local-only hook file is fine to add on your own. This complements — doesn't
+replace — calling \`imDone\` explicitly when you finish.
 
 ## Rule of thumb
 If you would otherwise stop and wait for the user — **finished**, **blocked**, or
@@ -90,5 +124,7 @@ export const GENIE_AGENTS_BRIEF = `This workspace runs inside **Genie** — a de
 - **\`initializeWorkspace\`** — call this **FIRST** in a fresh/converted workspace; it returns a map of the envelope + every repo (paths, GitHub refs, which README/AGENTS/CLAUDE/manifest exist) and a plan for learning them. The repos are the primary resource.
 - **\`imDone\`** — call when you **finish / hand back**; Genie glows this terminal across the whole UI until the user looks. Pass \`terminalId\` (your \`GENIE_TERMINAL_ID\`) for exact targeting; optional.
 - **\`ForceTheQuestion\`** — call when **blocked or needing a decision**; pops an OS-level, always-on-top modal (above every app) with your question(s) (options + a free-text note) and blocks for the answer. Batch all questions into one call.
+
+**Automate \`imDone\`:** if your harness supports an on-finish hook (Claude Code's \`Stop\` hook in \`.claude/settings.json\`; Codex's \`notify\`), wire it ONCE to POST a \`tools/call\` for \`imDone\` to \`$GENIE_MCP_URL\` (passing \`$GENIE_TERMINAL_ID\`) so the glow fires automatically every finish. Set this up in YOUR harness config yourself — Genie won't touch it. Call \`genieGuide\` for the exact hook snippet.
 
 **Don't just print "done" or a question and wait** — the user won't see it. Use these tools whenever you'd otherwise stop and wait. For full usage call the **\`genieGuide\`** tool (or read the server's instructions).`;

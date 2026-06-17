@@ -94,6 +94,8 @@ describe('handleMcpMessage', () => {
         expect(text).toContain('acme/api'); // the repo's GitHub ref
         expect(text).toContain('/ws/demo.agi/repos/api'); // its absolute path
         expect(text).toContain('How to learn this workspace'); // the numbered plan
+        expect(text).toContain('imDone'); // recommends the auto-finish hook
+        expect(text).toMatch(/Stop hook|\.claude\/settings\.json/); // harness hook hint
         expect(text).toContain('"isAgiEnvelope": true'); // machine-parseable JSON block
     });
 
@@ -132,6 +134,10 @@ describe('handleMcpMessage', () => {
             .text;
         expect(text).toContain('imDone');
         expect(text).toContain('ForceTheQuestion');
+        // The full guide tells the agent how to self-configure an on-finish hook.
+        expect(text).toContain('Automate imDone');
+        expect(text).toContain('Stop');
+        expect(text).toContain('$GENIE_MCP_URL');
     });
 
     it('invokes onImDone with the bound terminal id on tools/call', async () => {

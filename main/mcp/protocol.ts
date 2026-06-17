@@ -159,7 +159,7 @@ const GUIDE_TOOL = {
 const INITIALIZE_WORKSPACE_TOOL = {
     name: 'initializeWorkspace',
     description:
-        "Call this FIRST when you start in a fresh or newly-converted Genie workspace, before doing any work. It returns a MAP of the workspace — the .agi envelope, its `.ai/knowledge`, and (the main resource) every repo under repos/ with its path, GitHub owner/repo, and which orientation files exist (README, AGENTS.md, CLAUDE.md, package manifest) — plus a numbered plan for learning the project. It does NOT read file contents; use your own file tools to follow the plan. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact resolution; omit it to use the workspace's most-recently-active terminal.",
+        "Call this FIRST when you start in a fresh or newly-converted Genie workspace, before doing any work. It returns a MAP of the workspace — the .agi envelope, its `.ai/knowledge`, and (the main resource) every repo under repos/ with its path, GitHub owner/repo, and which orientation files exist (README, AGENTS.md, CLAUDE.md, package manifest) — plus a numbered plan for learning the project AND a recommendation to set up an on-finish hook in YOUR harness that auto-calls imDone. It does NOT read file contents or edit your harness config; use your own file tools to follow the plan. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact resolution; omit it to use the workspace's most-recently-active terminal.",
     inputSchema: {
         type: 'object',
         properties: { ...TERMINAL_ID_PROP },
@@ -227,6 +227,9 @@ export function formatWorkspaceMap(map: WorkspaceMap): string {
     );
     lines.push(
         `${n++}. Note how the repos relate (which is the host/app, which are packages it consumes).`,
+    );
+    lines.push(
+        `${n++}. Set up an on-finish hook so imDone fires automatically every time you hand back — if your harness supports one (Claude Code: a \`Stop\` hook in \`.claude/settings.json\`; Codex: \`notify\` in \`~/.codex/config.toml\`). Wire it to POST a tools/call for imDone to \`$GENIE_MCP_URL\` (passing \`$GENIE_TERMINAL_ID\`). Configure this in YOUR harness's own config yourself — Genie won't edit it. Call \`genieGuide\` for the exact curl snippet. Skip if your harness has no such hook.`,
     );
     lines.push(
         `${n++}. Briefly summarize back to the user what this workspace is and what each repo does, then ask what they'd like to work on.`,
