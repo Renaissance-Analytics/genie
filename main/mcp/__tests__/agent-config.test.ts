@@ -70,9 +70,12 @@ describe('applyAgentsSection', () => {
         expect(out).toContain(BEGIN);
         expect(out).toContain(END);
         expect(out).toContain('genieGuide');
-        // beta.4 framing: manageProcess documented; initializeWorkspace is a prompt.
+        // beta.5: the block lists ONLY agent-callable tools — the user-run
+        // initializeWorkspace prompt is gone; imDone/ForceTheQuestion/manageProcess stay.
+        expect(out).toContain('imDone');
+        expect(out).toContain('ForceTheQuestion');
         expect(out).toContain('manageProcess');
-        expect(out).toContain('prompt');
+        expect(out).not.toContain('initializeWorkspace');
     });
 
     it('is idempotent — re-running does not duplicate the block', () => {
