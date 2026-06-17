@@ -37,7 +37,7 @@
     "simple-git": "^3.27.0"
   },
   "devDependencies": {
-    "@particle-academy/react-fancy": "^4.4.3",
+    "@particle-academy/react-fancy": "^4.7.0",
     "@tailwindcss/postcss": "^4.0.0",
     "@tailwindcss/typography": "^0.5.19",
     "@types/better-sqlite3": "^7.6.12",
