@@ -5,7 +5,7 @@ manager for projects you track in [Tynn](https://tynn.ai) and (later)
 sessions you run against an [Aionima](https://github.com/Civicognita/agi)
 local AGI gateway.
 
-> **Status:** alpha. Public so developers can audit what the binary
+> **Status:** beta. Public so developers can audit what the binary
 > does on their machine and contribute back. Expect rapid iteration.
 
 ## What Genie is
