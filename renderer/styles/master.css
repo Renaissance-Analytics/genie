@@ -2682,3 +2682,186 @@ body.gutter-dragging .grid-gutter {
     font-size: 13px;
     color: #f43f5e;
 }
+
+/* ===== BootScreen — magical loading screen ============================== */
+
+.boot-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    /* Brand-dark by default — continuous with the window's native bg color so
+       the very first frame is already on-brand (no white flash). */
+    background: radial-gradient(
+        120% 120% at 50% 38%,
+        #16131f 0%,
+        #0a0a0c 62%
+    );
+    overflow: hidden;
+    animation: boot-in 420ms ease-out both;
+}
+/* Light mode: a soft, airy wash instead of the dark radial. */
+:root:not(.dark) .boot-screen {
+    background: radial-gradient(
+        120% 120% at 50% 38%,
+        #f5f3ff 0%,
+        #eef2ff 62%
+    );
+}
+
+/* Fade-out when the app is ready; the host keeps it mounted for the transition. */
+.boot-screen.boot-fade {
+    animation: boot-out 520ms ease forwards;
+    pointer-events: none;
+}
+
+/* The breathing gradient aura behind the mark. */
+.boot-aura {
+    position: absolute;
+    width: 440px;
+    height: 440px;
+    border-radius: 50%;
+    background: conic-gradient(from 0deg, #7dd3fc, #818cf8, #c4b5fd, #7dd3fc);
+    filter: blur(70px);
+    opacity: 0.32;
+    animation: boot-aura-spin 9s linear infinite, boot-aura-pulse 3.4s ease-in-out infinite;
+}
+:root:not(.dark) .boot-aura {
+    opacity: 0.45;
+}
+
+.boot-stage {
+    position: relative;
+    width: 96px;
+    height: 96px;
+    display: grid;
+    place-items: center;
+}
+
+.boot-mark {
+    filter: drop-shadow(0 6px 18px rgba(129, 140, 248, 0.45));
+    animation: boot-mark-rise 700ms cubic-bezier(0.16, 1, 0.3, 1) both,
+        boot-mark-float 4.2s ease-in-out 700ms infinite;
+}
+
+/* The escaping wisp draws itself, then loops a gentle shimmer. */
+.boot-wisp {
+    stroke-dasharray: 60;
+    stroke-dashoffset: 60;
+    animation: boot-wisp-draw 1.5s ease-out 500ms forwards,
+        boot-wisp-glow 3s ease-in-out 2s infinite;
+}
+
+/* Twinkling sparkles around the lamp. */
+.boot-spark {
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: radial-gradient(circle, #fff 0%, #c4b5fd 55%, transparent 70%);
+    opacity: 0;
+    animation: boot-twinkle 2.6s ease-in-out infinite;
+}
+.boot-spark-1 { top: -6px; left: 64px; animation-delay: 0.2s; }
+.boot-spark-2 { top: 20px; left: -10px; animation-delay: 0.9s; }
+.boot-spark-3 { bottom: 4px; right: -8px; animation-delay: 1.5s; width: 4px; height: 4px; }
+.boot-spark-4 { top: -2px; right: 10px; animation-delay: 2.1s; width: 5px; height: 5px; }
+
+.boot-word {
+    position: relative;
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    background: linear-gradient(100deg, #7dd3fc, #818cf8, #c4b5fd);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: boot-mark-rise 700ms cubic-bezier(0.16, 1, 0.3, 1) 120ms both;
+}
+/* A light sweep that travels across the wordmark. */
+.boot-shimmer {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        100deg,
+        transparent 30%,
+        rgba(255, 255, 255, 0.7) 50%,
+        transparent 70%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    mix-blend-mode: screen;
+    transform: translateX(-120%);
+    animation: boot-shimmer-sweep 2.8s ease-in-out 900ms infinite;
+}
+
+.boot-sub {
+    font-size: 12.5px;
+    letter-spacing: 0.02em;
+    color: #a1a1aa;
+    animation: boot-mark-rise 700ms cubic-bezier(0.16, 1, 0.3, 1) 220ms both;
+}
+:root:not(.dark) .boot-sub {
+    color: #6366f1;
+}
+
+@keyframes boot-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+@keyframes boot-out {
+    from { opacity: 1; }
+    to { opacity: 0; visibility: hidden; }
+}
+@keyframes boot-aura-spin {
+    to { transform: rotate(360deg); }
+}
+@keyframes boot-aura-pulse {
+    0%, 100% { transform: scale(0.92); }
+    50% { transform: scale(1.06); }
+}
+@keyframes boot-mark-rise {
+    from { opacity: 0; transform: translateY(10px) scale(0.96); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes boot-mark-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-5px); }
+}
+@keyframes boot-wisp-draw {
+    to { stroke-dashoffset: 0; }
+}
+@keyframes boot-wisp-glow {
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 1; }
+}
+@keyframes boot-twinkle {
+    0%, 100% { opacity: 0; transform: scale(0.4); }
+    45% { opacity: 1; transform: scale(1); }
+    60% { opacity: 0.6; transform: scale(0.85); }
+}
+@keyframes boot-shimmer-sweep {
+    0% { transform: translateX(-120%); }
+    55%, 100% { transform: translateX(120%); }
+}
+
+/* Honour reduced-motion: keep the brand look, drop the animation. */
+@media (prefers-reduced-motion: reduce) {
+    .boot-screen,
+    .boot-aura,
+    .boot-mark,
+    .boot-wisp,
+    .boot-spark,
+    .boot-word,
+    .boot-shimmer,
+    .boot-sub {
+        animation: none !important;
+    }
+    .boot-wisp { stroke-dashoffset: 0; }
+    .boot-spark { opacity: 0.7; }
+    .boot-screen.boot-fade { opacity: 0; }
+}

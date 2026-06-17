@@ -10,6 +10,7 @@ import TerminalGrid, {
     type LayoutMode,
 } from '../components/Master/TerminalGrid';
 import AddWorkspaceModal from '../components/AddWorkspaceModal';
+import BootScreen from '../components/Master/BootScreen';
 import DocsFlyout from '../components/Master/DocsFlyout';
 import IssueWatchFlyout from '../components/Master/IssueWatchFlyout';
 import SignInPrompt from '../components/SignInPrompt';
@@ -55,6 +56,10 @@ import {
  */
 export default function MasterPage() {
     const [ready, setReady] = useState(false);
+    // Keep the magical boot screen mounted briefly after readiness so it can
+    // fade out smoothly over the workspace UI instead of snapping away.
+    const [showBoot, setShowBoot] = useState(true);
+
     useEffect(() => {
         if (hasGenieBridge()) {
             setReady(true);
@@ -69,24 +74,22 @@ export default function MasterPage() {
         return () => clearInterval(t);
     }, []);
 
-    if (!ready) {
-        return (
-            <div
-                style={{
-                    minHeight: '100vh',
-                    display: 'grid',
-                    placeItems: 'center',
-                    background: '#0a0a0c',
-                    color: '#a1a1aa',
-                    fontSize: 13,
-                }}
-            >
-                Waiting for preload bridge…
-            </div>
-        );
-    }
+    useEffect(() => {
+        if (!ready) return;
+        // Match the boot-out CSS duration (520ms) before unmounting the overlay.
+        const t = setTimeout(() => setShowBoot(false), 560);
+        return () => clearTimeout(t);
+    }, [ready]);
 
-    return <MasterInner />;
+    return (
+        <>
+            {/* Mount the real UI as soon as the bridge is up; the boot screen
+                sits on top (z-index) and fades out, so the workspace is already
+                painted underneath when the fade completes — no second flash. */}
+            {ready && <MasterInner />}
+            {showBoot && <BootScreen fadingOut={ready} />}
+        </>
+    );
 }
 
 function MasterInner() {
