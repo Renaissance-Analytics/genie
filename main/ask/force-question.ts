@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain } from 'electron';
 import crypto from 'crypto';
 import path from 'path';
+import { getAllSettings } from '../db';
 import type {
     ForceAnswer,
     ForceQuestion,
@@ -28,7 +29,22 @@ interface Pending {
     resolve: (r: ForceQuestionResult) => void;
     win: BrowserWindow;
     /** The payload to (re)deliver when the renderer signals it's ready. */
-    payload: { id: string; questions: ForceQuestion[] };
+    payload: { id: string; questions: ForceQuestion[]; workspaceLabel?: string };
+}
+
+/**
+ * Play the distinct ForceTheQuestion chime (gated by Settings → notify_sound).
+ * Mirrors notifyImDone: send `notify:sound` to ONE live renderer so the chime
+ * plays once; the renderer branches on `kind` to a more urgent motif.
+ */
+function notifyForceQuestion(): void {
+    try {
+        if (getAllSettings().notify_sound !== 'on') return;
+    } catch {
+        return; // settings unreadable — skip the chime, never block the modal
+    }
+    const target = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+    target?.webContents.send('notify:sound', { kind: 'force-question' });
 }
 
 let config: Config | null = null;
@@ -123,6 +139,7 @@ function createAskWindow(): BrowserWindow {
  */
 export function forceQuestion(
     questions: ForceQuestion[],
+    workspaceLabel?: string,
 ): Promise<ForceQuestionResult> {
     return new Promise((resolve) => {
         let win: BrowserWindow;
@@ -132,8 +149,10 @@ export function forceQuestion(
             resolve({ cancelled: true, answers: [] });
             return;
         }
+        // Distinct chime so the user can tell ForceTheQuestion from imDone by ear.
+        notifyForceQuestion();
         const id = crypto.randomBytes(9).toString('hex');
-        const payload = { id, questions };
+        const payload = { id, questions, workspaceLabel };
         pending.set(id, { resolve, win, payload });
 
         // A close without an answer (window control, OS) resolves cancelled.

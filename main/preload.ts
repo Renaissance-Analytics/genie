@@ -374,6 +374,8 @@ const api = {
         onShow: (
             cb: (payload: {
                 id: string;
+                /** The requesting workspace's display name (for the modal title). */
+                workspaceLabel?: string;
                 questions: Array<{
                     header: string;
                     question: string;

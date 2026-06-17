@@ -376,6 +376,16 @@ export interface Settings {
      *  (settings are k/v text). Default '51717' (obscure, outside the OS
      *  ephemeral range). Changing it requires restarting the MCP server. */
     mcp_port?: string;
+    /** Keep the Genie endpoint synced into a workspace's Claude `.mcp.json`.
+     *  Default 'on'; 'off' means Genie never touches that file (manual edits
+     *  stick). */
+    mcp_sync_claude?: 'on' | 'off';
+    /** Keep the Genie endpoint synced into a workspace's Cursor
+     *  `.cursor/mcp.json`. Default 'on'; 'off' leaves it alone. */
+    mcp_sync_cursor?: 'on' | 'off';
+    /** Keep the Genie brief synced into a workspace's AGENTS.md. Default 'on';
+     *  'off' leaves it alone. */
+    mcp_sync_agents?: 'on' | 'off';
 }
 
 export function getAllSettings(): Settings {
@@ -421,6 +431,9 @@ export function getAllSettings(): Settings {
         notify_sound: (out['notify_sound'] as 'on' | 'off') ?? 'off',
         notify_toast: (out['notify_toast'] as 'on' | 'off') ?? 'off',
         mcp_port: out['mcp_port'] ?? '51717',
+        mcp_sync_claude: (out['mcp_sync_claude'] as 'on' | 'off') ?? 'on',
+        mcp_sync_cursor: (out['mcp_sync_cursor'] as 'on' | 'off') ?? 'on',
+        mcp_sync_agents: (out['mcp_sync_agents'] as 'on' | 'off') ?? 'on',
     };
 }
 

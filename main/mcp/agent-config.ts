@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { GENIE_AGENTS_BRIEF } from './guide';
+import { getAllSettings } from '../db';
 
 /**
  * Write/remove the Genie MCP server entry in a workspace's agent config files
@@ -151,6 +152,12 @@ function syncAgentsMd(workspacePath: string, enabled: boolean): void {
  * `url` is the workspace's stable endpoint (`http://127.0.0.1:<port>/mcp/<tok>`);
  * it's required when enabling. On disable the url is ignored (the entry is just
  * removed), so callers may pass null there.
+ *
+ * Each target is gated by a per-target sync setting (default on): Claude
+ * (`mcp_sync_claude`), Cursor (`mcp_sync_cursor`), AGENTS.md (`mcp_sync_agents`).
+ * A target that's OFF is left ENTIRELY ALONE — Genie neither writes nor removes
+ * its file — so a user's manual deletion sticks and a Cursor non-user isn't
+ * forced a `.cursor/mcp.json`.
  */
 export function writeWorkspaceAgentMcp(
     workspacePath: string,
@@ -158,17 +165,32 @@ export function writeWorkspaceAgentMcp(
     url: string | null,
 ): void {
     if (!workspacePath) return;
+    let sync = { claude: true, cursor: true, agents: true };
+    try {
+        const s = getAllSettings();
+        sync = {
+            claude: s.mcp_sync_claude !== 'off',
+            cursor: s.mcp_sync_cursor !== 'off',
+            agents: s.mcp_sync_agents !== 'off',
+        };
+    } catch {
+        /* best-effort — default to syncing all if settings can't be read */
+    }
     // Enabling without a resolved URL (server not listening yet) would write a
-    // broken entry — skip the config write but still keep AGENTS.md in sync.
+    // broken entry — skip the config writes but still keep AGENTS.md in sync.
     if (enabled && !url) {
-        syncAgentsMd(workspacePath, true);
+        if (sync.agents) syncAgentsMd(workspacePath, true);
         return;
     }
-    upsert(path.join(workspacePath, '.mcp.json'), claudeEntry(url ?? ''), enabled);
-    upsert(
-        path.join(workspacePath, '.cursor', 'mcp.json'),
-        cursorEntry(url ?? ''),
-        enabled,
-    );
-    syncAgentsMd(workspacePath, enabled);
+    if (sync.claude) {
+        upsert(path.join(workspacePath, '.mcp.json'), claudeEntry(url ?? ''), enabled);
+    }
+    if (sync.cursor) {
+        upsert(
+            path.join(workspacePath, '.cursor', 'mcp.json'),
+            cursorEntry(url ?? ''),
+            enabled,
+        );
+    }
+    if (sync.agents) syncAgentsMd(workspacePath, enabled);
 }

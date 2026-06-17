@@ -168,7 +168,7 @@ function MasterInner() {
     // (gated by Settings → Customization → notify_sound on the main side).
     // Synthesized via Web Audio so no audio asset has to ship.
     useEffect(() => {
-        return api().on.notifySound(() => {
+        return api().on.notifySound((payload) => {
             try {
                 const Ctx =
                     window.AudioContext ||
@@ -177,10 +177,10 @@ function MasterInner() {
                 if (!Ctx) return;
                 const ctx = new Ctx();
                 const now = ctx.currentTime;
-                const tone = (freq: number, start: number, dur: number) => {
+                const tone = (freq: number, start: number, dur: number, type: OscillatorType = 'sine') => {
                     const osc = ctx.createOscillator();
                     const gain = ctx.createGain();
-                    osc.type = 'sine';
+                    osc.type = type;
                     osc.frequency.value = freq;
                     gain.gain.setValueAtTime(0.0001, now + start);
                     gain.gain.exponentialRampToValueAtTime(0.18, now + start + 0.02);
@@ -189,9 +189,20 @@ function MasterInner() {
                     osc.start(now + start);
                     osc.stop(now + start + dur);
                 };
-                tone(660, 0, 0.18); // E5
-                tone(880, 0.16, 0.24); // A5
-                setTimeout(() => void ctx.close().catch(() => {}), 700);
+                if (payload?.kind === 'force-question') {
+                    // Distinct, more urgent motif: a fast triple-knock on a
+                    // brighter triangle wave (A5 ×3) so it's unmistakably NOT the
+                    // gentle imDone rise — "someone needs you NOW".
+                    tone(880, 0, 0.1, 'triangle');
+                    tone(880, 0.14, 0.1, 'triangle');
+                    tone(1175, 0.28, 0.26, 'triangle'); // D6 lift on the last knock
+                    setTimeout(() => void ctx.close().catch(() => {}), 900);
+                } else {
+                    // imDone: gentle rising two-note chime.
+                    tone(660, 0, 0.18); // E5
+                    tone(880, 0.16, 0.24); // A5
+                    setTimeout(() => void ctx.close().catch(() => {}), 700);
+                }
             } catch {
                 /* audio is best-effort */
             }

@@ -388,6 +388,12 @@ export default function SettingsPage() {
             <AgentMcpSection
                 port={s.mcp_port ?? '51717'}
                 onPortChange={(v) => patch({ mcp_port: v })}
+                syncClaude={s.mcp_sync_claude !== 'off'}
+                syncCursor={s.mcp_sync_cursor !== 'off'}
+                syncAgents={s.mcp_sync_agents !== 'off'}
+                onSyncChange={(target, on) =>
+                    patch({ [`mcp_sync_${target}`]: on ? 'on' : 'off' })
+                }
             />
 
                     </Tabs.Panel>
@@ -1289,9 +1295,17 @@ function StartupSection() {
 function AgentMcpSection({
     port,
     onPortChange,
+    syncClaude,
+    syncCursor,
+    syncAgents,
+    onSyncChange,
 }: {
     port: string;
     onPortChange: (v: string) => void;
+    syncClaude: boolean;
+    syncCursor: boolean;
+    syncAgents: boolean;
+    onSyncChange: (target: 'claude' | 'cursor' | 'agents', on: boolean) => void;
 }) {
     const [state, setState] = useState<McpServerState | null>(null);
     const [busy, setBusy] = useState(false);
@@ -1405,6 +1419,46 @@ function AgentMcpSection({
                     Save the page first if you changed the port, then restart to
                     rebind and rewrite workspace configs.
                 </Text>
+            </div>
+
+            <div
+                style={{
+                    marginTop: 4,
+                    paddingTop: 12,
+                    borderTop: '1px solid var(--border-1)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                }}
+            >
+                <Heading as="h3" size="xs" style={{ margin: 0 }}>
+                    Config sync
+                </Heading>
+                <Text size="xs" className="text-zinc-500">
+                    Keep the Genie endpoint in these agent configs. Unchecking one
+                    leaves that file alone — Genie won&apos;t re-add or remove its
+                    entry, so your manual edits stick.
+                </Text>
+                {([
+                    ['claude', syncClaude, 'Claude', '.mcp.json'],
+                    ['cursor', syncCursor, 'Cursor', '.cursor/mcp.json'],
+                    ['agents', syncAgents, 'AGENTS.md', 'Genie brief block'],
+                ] as const).map(([target, on, label, file]) => (
+                    <label
+                        key={target}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+                    >
+                        <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={(e) => onSyncChange(target, e.target.checked)}
+                        />
+                        <Text size="sm">
+                            {label}{' '}
+                            <code style={{ color: 'var(--fg-3)' }}>{file}</code>
+                        </Text>
+                    </label>
+                ))}
             </div>
         </Card>
     );

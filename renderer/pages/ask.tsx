@@ -19,6 +19,7 @@ import {
 export default function AskPage() {
     const [bridgeReady, setBridgeReady] = useState(false);
     const [reqId, setReqId] = useState<string | null>(null);
+    const [workspaceLabel, setWorkspaceLabel] = useState<string | null>(null);
     const [questions, setQuestions] = useState<ForceQuestionSpec[]>([]);
     // Per-question selected labels + free-text note, keyed by question index.
     const [selected, setSelected] = useState<Record<number, string[]>>({});
@@ -31,8 +32,9 @@ export default function AskPage() {
 
     useEffect(() => {
         if (!bridgeReady) return;
-        const off = api().ask.onShow(({ id, questions: qs }) => {
+        const off = api().ask.onShow(({ id, questions: qs, workspaceLabel: ws }) => {
             setReqId(id);
+            setWorkspaceLabel(ws ?? null);
             setQuestions(qs);
             setSelected({});
             setNotes({});
@@ -99,13 +101,17 @@ export default function AskPage() {
             (_q, qi) => (selected[qi]?.length ?? 0) > 0 || (notes[qi]?.trim() ?? '') !== '',
         );
 
+    const title = workspaceLabel
+        ? `An agent in ${workspaceLabel} needs your input`
+        : 'An agent needs your input';
+
     if (!bridgeReady || !reqId) {
         return (
             <div className="ask-frame">
                 <div className="ask-head">
                     <Icon name="sparkles" size="sm" className="text-violet-500" />
                     <Heading as="h1" size="sm" style={{ margin: 0 }}>
-                        An agent needs your input
+                        {title}
                     </Heading>
                     <div style={{ flex: 1 }} />
                     <button
@@ -132,7 +138,7 @@ export default function AskPage() {
             <div className="ask-head">
                 <Icon name="sparkles" size="sm" className="text-violet-500" />
                 <Heading as="h1" size="sm" style={{ margin: 0 }}>
-                    An agent needs your input
+                    {title}
                 </Heading>
                 <div style={{ flex: 1 }} />
                 <button

@@ -753,7 +753,25 @@ app.whenReady().then(async () => {
             broadcastTerminalAttention(terminalId, true);
             notifyImDone(terminalId);
         },
-        onForceQuestion: (_terminalId, questions) => forceQuestion(questions),
+        onForceQuestion: (terminalId, questions) => {
+            // Resolve the requesting terminal → its workspace name, so the modal
+            // title says WHICH project needs the user (a multi-project Genie
+            // raises these from any of them). Best-effort: an unattached terminal
+            // or lookup failure just falls back to the generic title.
+            let workspaceLabel: string | undefined;
+            try {
+                const wsId = terminalId
+                    ? getTerminalSpec(terminalId)?.workspace_id
+                    : null;
+                if (wsId) {
+                    workspaceLabel = listWorkspaces().find((w) => w.id === wsId)
+                        ?.project_name;
+                }
+            } catch {
+                /* fall back to the generic title */
+            }
+            return forceQuestion(questions, workspaceLabel);
+        },
         describeWorkspace: (terminalId) => describeWorkspaceForMcp(terminalId),
     }).catch((e) => console.error('[mcp] failed to start', e));
     // Backfill the genie MCP entry into the Claude/Cursor config of any

@@ -135,6 +135,13 @@ export interface Settings {
     /** Fixed loopback port for the agent-integration MCP server. String-encoded;
      *  default '51717'. Changing it requires restarting the MCP server. */
     mcp_port?: string;
+    /** Keep the Genie endpoint synced into each workspace's Claude `.mcp.json`.
+     *  Default 'on'; 'off' leaves that file alone. */
+    mcp_sync_claude?: 'on' | 'off';
+    /** Keep it synced into Cursor `.cursor/mcp.json`. Default 'on'. */
+    mcp_sync_cursor?: 'on' | 'off';
+    /** Keep the Genie brief synced into AGENTS.md. Default 'on'. */
+    mcp_sync_agents?: 'on' | 'off';
 }
 
 /** Live state of the agent-integration MCP server (Settings → Agent MCP). */
@@ -808,7 +815,11 @@ interface GenieApi {
     /** Agent-integration MCP: the ForceTheQuestion OS-level modal. */
     ask: {
         onShow: (
-            cb: (payload: { id: string; questions: ForceQuestionSpec[] }) => void,
+            cb: (payload: {
+                id: string;
+                workspaceLabel?: string;
+                questions: ForceQuestionSpec[];
+            }) => void,
         ) => () => void;
         answer: (id: string, answers: ForceAnswerSpec[]) => Promise<void>;
         cancel: (id: string) => Promise<void>;
