@@ -18,6 +18,7 @@ import {
     IconSearch,
     IconTerminal,
     IconTrash,
+    IconTynn,
 } from './icons';
 import { showPrompt } from './Prompt';
 import {
@@ -554,7 +555,17 @@ export default function Chooser({
                                     >
                                         <IconChevronDown />
                                     </span>
-                                    <span className="pico">{workspaceIcon(ws, 14)}</span>
+                                    <span className="pico">
+                                        {workspaceIcon(ws, 14)}
+                                        {wsSpecs.length > 1 && (
+                                            <span
+                                                className="pico-count"
+                                                title={`${wsSpecs.length} views`}
+                                            >
+                                                {wsSpecs.length}
+                                            </span>
+                                        )}
+                                    </span>
                                     <span className="pname">{ws.project_name}</span>
                                     {ws.shape === 'agi' && (
                                         <span className="agi-badge" title="Aionima .agi envelope">
@@ -617,7 +628,6 @@ export default function Chooser({
                                     >
                                         <IconCpu size={13} />
                                     </span>
-                                    <span className="pcount">{wsSpecs.length}</span>
                                 </button>
                                 <div className="tproj-body">
                                     {wsSpecs.map((s) => (
@@ -1359,7 +1369,13 @@ function SpecRow({
                     Suspended
                 </span>
             ) : (
-                <span className={`host ${hostKind}`}>{hostLabel}</span>
+                <span
+                    className={`host ${hostKind}`}
+                    title={hostLabel}
+                    aria-label={hostLabel}
+                >
+                    {hostKind === 'tynn' ? <IconTynn size={12} /> : hostLabel}
+                </span>
             )}
             {suspended ? (
                 <button
