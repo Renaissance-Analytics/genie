@@ -53,6 +53,10 @@ const api = {
                 configuredPort: number;
                 conflict: boolean;
             }>,
+        docHealth: (workspaceId: string) =>
+            ipcRenderer.invoke('mcp:doc-health', workspaceId),
+        repairDocs: (workspaceId: string) =>
+            ipcRenderer.invoke('mcp:repair-docs', workspaceId),
     },
 
     aionima: {

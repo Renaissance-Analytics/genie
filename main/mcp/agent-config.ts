@@ -92,6 +92,13 @@ function upsert(file: string, entry: JsonObj, enabled: boolean): void {
 const AGENTS_BEGIN = '<!-- BEGIN GENIE MCP (auto-managed by Genie) -->';
 const AGENTS_END = '<!-- END GENIE MCP (auto-managed by Genie) -->';
 
+/** True when `content` carries the auto-managed Genie MCP block (both markers). */
+export function hasGenieAgentsSection(content: string): boolean {
+    const begin = content.indexOf(AGENTS_BEGIN);
+    const end = content.indexOf(AGENTS_END);
+    return begin !== -1 && end !== -1 && end > begin;
+}
+
 /**
  * Pure: produce the next AGENTS.md content given the existing content.
  *   - enabled: insert the genie block, or replace it in place if already present

@@ -1,5 +1,6 @@
 import { execFile } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
 import { simpleGit } from 'simple-git';
@@ -10,6 +11,8 @@ import {
     type ProjectJsonRepoInput,
 } from './project-json';
 import { consolidateMcp } from './mcp';
+import { applyAgentsSection, hasGenieAgentsSection } from '../mcp/agent-config';
+import { getAllSettings } from '../db';
 
 const execFileAsync = promisify(execFile);
 
@@ -193,21 +196,172 @@ async function makeClaudeSymlink(
         ]);
         // Materialise the working tree from the index so it matches the
         // 120000 entry — a real symlink where the OS allows (macOS/Linux),
-        // a plain "AGENTS.md" file where it doesn't (Windows). Either way
-        // the tree is clean against the index.
+        // a plain "AGENTS.md" file where it doesn't (Windows).
         await git.raw(['checkout-index', '-f', '--', 'CLAUDE.md']);
+        // On a no-symlink platform (Windows w/o privileges) checkout-index
+        // leaves the working file literally containing "AGENTS.md", which
+        // Claude Code reads as a useless one-liner. Replace it with a real
+        // content mirror of AGENTS.md so the local file actually carries the
+        // instructions. The git INDEX entry stays a 120000 symlink, so a POSIX
+        // clone still gets a proper link. (No-op where symlinks work — the
+        // checked-out file is already a real link.)
+        if (!symlinksSupported()) {
+            try {
+                const agents = fs.readFileSync(
+                    path.join(envelopePath, 'AGENTS.md'),
+                    'utf8',
+                );
+                fs.writeFileSync(claude, agents, 'utf8');
+            } catch {
+                /* best effort — leave the checked-out file as-is */
+            }
+        }
     } catch {
-        // Worst case the index flip failed — CLAUDE.md stays a plain file
-        // containing the AGENTS.md content path. Rewrite it as a readable
-        // pointer so it's not a confusing one-liner.
+        // Worst case the index flip failed — fall back to a full content
+        // mirror of AGENTS.md (NOT the link-target one-liner), so CLAUDE.md
+        // still carries the real instructions, and stage it.
         try {
-            fs.writeFileSync(
-                claude,
-                '# CLAUDE.md\n\nSee [AGENTS.md](./AGENTS.md) — the envelope structure guide.\n',
+            const agents = fs.readFileSync(
+                path.join(envelopePath, 'AGENTS.md'),
+                'utf8',
             );
+            fs.writeFileSync(claude, agents, 'utf8');
             await git.add('CLAUDE.md');
         } catch {
             /* best effort */
+        }
+    }
+}
+
+/** The readable-pointer fallback body older builds wrote when symlinking failed. */
+const CLAUDE_POINTER_TEXT =
+    '# CLAUDE.md\n\nSee [AGENTS.md](./AGENTS.md) — the envelope structure guide.\n';
+
+/**
+ * Probe whether real filesystem symlinks work here. POSIX: yes. Windows: only
+ * with Developer Mode / elevation. We try to create (and immediately remove) a
+ * throwaway symlink in the OS temp dir; failure (EPERM/ENOSYS/…) means we must
+ * fall back to a real content mirror instead of a link. Cached per process.
+ */
+let _symlinkCap: boolean | null = null;
+export function symlinksSupported(): boolean {
+    if (_symlinkCap !== null) return _symlinkCap;
+    let ok = false;
+    const probe = path.join(
+        os.tmpdir(),
+        `genie-symlink-probe-${process.pid}-${Date.now()}`,
+    );
+    try {
+        fs.symlinkSync('target', probe);
+        ok = true;
+    } catch {
+        ok = false;
+    } finally {
+        try {
+            fs.rmSync(probe, { force: true });
+        } catch {
+            /* nothing to clean up */
+        }
+    }
+    _symlinkCap = ok;
+    return ok;
+}
+
+export type ClaudeKind =
+    | 'missing' // no CLAUDE.md
+    | 'symlink' // a real filesystem symlink (→ AGENTS.md)
+    | 'broken-pointer' // the legacy one-liner "AGENTS.md" or the readable pointer
+    | 'mirror' // a real file whose content matches AGENTS.md
+    | 'divergent'; // a real file whose content DIFFERS from AGENTS.md
+
+/**
+ * Classify the envelope's CLAUDE.md against its AGENTS.md. `divergent` is the
+ * "an external optimizer rewrote it" case — richer content we must NOT clobber.
+ * `broken-pointer` is the Windows breakage: a plain file literally containing
+ * the link-target text, which Claude Code reads as a useless one-liner.
+ */
+export function classifyClaude(envelopePath: string): ClaudeKind {
+    const claude = path.join(envelopePath, 'CLAUDE.md');
+    let lst: fs.Stats;
+    try {
+        lst = fs.lstatSync(claude);
+    } catch {
+        return 'missing';
+    }
+    if (lst.isSymbolicLink()) return 'symlink';
+    let body: string;
+    try {
+        body = fs.readFileSync(claude, 'utf8');
+    } catch {
+        return 'missing';
+    }
+    const trimmed = body.trim();
+    if (trimmed === 'AGENTS.md' || body === CLAUDE_POINTER_TEXT) {
+        return 'broken-pointer';
+    }
+    let agents: string | null = null;
+    try {
+        agents = fs.readFileSync(path.join(envelopePath, 'AGENTS.md'), 'utf8');
+    } catch {
+        agents = null;
+    }
+    if (agents !== null && body === agents) return 'mirror';
+    return 'divergent';
+}
+
+export type ClaudeSyncResult =
+    | 'no-agents' // nothing to mirror from
+    | 'symlinked' // (re)established a real symlink
+    | 'mirrored' // wrote a full content copy
+    | 'in-sync' // already a symlink or an identical mirror — no-op
+    | 'divergent'; // a real divergent CLAUDE.md — left ALONE, reported
+
+/**
+ * Repair CLAUDE.md from the canonical AGENTS.md: a real symlink where symlinks
+ * work, otherwise a byte-identical content mirror. SAFE: a real, divergent
+ * CLAUDE.md (an external "optimizer" rewrote it with richer content) is NEVER
+ * clobbered — we return 'divergent' and leave it. Only missing / broken-pointer
+ * / already-matching CLAUDE.md is (re)synced. AGENTS.md is always canonical.
+ */
+export function syncClaudeFromAgents(envelopePath: string): ClaudeSyncResult {
+    const agentsPath = path.join(envelopePath, 'AGENTS.md');
+    const claudePath = path.join(envelopePath, 'CLAUDE.md');
+    let agents: string;
+    try {
+        agents = fs.readFileSync(agentsPath, 'utf8');
+    } catch {
+        return 'no-agents';
+    }
+    const kind = classifyClaude(envelopePath);
+    if (kind === 'symlink') return 'in-sync'; // a real link tracks AGENTS.md
+    if (kind === 'mirror') {
+        // Already identical content. If symlinks work, upgrade to a true link;
+        // otherwise it's already the mirror we'd write — no-op.
+        if (!symlinksSupported()) return 'in-sync';
+    }
+    if (kind === 'divergent') return 'divergent'; // don't clobber richer content
+
+    // missing | broken-pointer | (mirror + symlinks now supported) → (re)sync.
+    try {
+        if (symlinksSupported()) {
+            try {
+                fs.rmSync(claudePath, { force: true });
+            } catch {
+                /* nothing there */
+            }
+            fs.symlinkSync('AGENTS.md', claudePath);
+            return 'symlinked';
+        }
+        fs.writeFileSync(claudePath, agents, 'utf8');
+        return 'mirrored';
+    } catch {
+        // Last-resort: at least write a full mirror so CLAUDE.md isn't the
+        // broken one-liner. (e.g. symlink probe lied / EPERM on rm.)
+        try {
+            fs.writeFileSync(claudePath, agents, 'utf8');
+            return 'mirrored';
+        } catch {
+            return 'divergent'; // couldn't write — report rather than claim success
         }
     }
 }
@@ -913,6 +1067,123 @@ export async function addStructureDocs(
     }
 
     return { added, committed: true, pushed, pushError };
+}
+
+/**
+ * Health of a workspace's agent docs — surfaced in the initializeWorkspace MCP
+ * tool and consumed by the repair action. Reports whether AGENTS.md exists,
+ * whether it carries the auto-managed Genie MCP block, and how CLAUDE.md
+ * relates to AGENTS.md (in sync via symlink/mirror, a broken one-liner, a
+ * divergent rewrite, or missing).
+ */
+export interface WorkspaceDocHealth {
+    hasAgents: boolean;
+    /** AGENTS.md carries the `<!-- BEGIN GENIE MCP -->`…`<!-- END -->` block. */
+    hasGenieSection: boolean;
+    claude: ClaudeKind;
+    /** True when CLAUDE.md is a real, divergent file we must not clobber. */
+    claudeDivergent: boolean;
+    /** True when nothing needs repair (AGENTS + section present, CLAUDE in sync). */
+    healthy: boolean;
+}
+
+export function workspaceDocHealth(envelopePath: string): WorkspaceDocHealth {
+    let agents: string | null = null;
+    try {
+        agents = fs.readFileSync(path.join(envelopePath, 'AGENTS.md'), 'utf8');
+    } catch {
+        agents = null;
+    }
+    const hasAgents = agents !== null;
+    const hasGenieSection = hasAgents && hasGenieAgentsSection(agents!);
+    const claude = classifyClaude(envelopePath);
+    const claudeDivergent = claude === 'divergent';
+    const claudeOk = claude === 'symlink' || claude === 'mirror';
+    return {
+        hasAgents,
+        hasGenieSection,
+        claude,
+        claudeDivergent,
+        healthy: hasAgents && hasGenieSection && claudeOk,
+    };
+}
+
+export interface RepairDocsResult {
+    health: WorkspaceDocHealth; // health AFTER the repair pass
+    /** What the repair did, for the UI/agent to report. */
+    actions: string[];
+    /** A real, divergent CLAUDE.md was found and LEFT ALONE (needs the user). */
+    claudeDivergent: boolean;
+    /** Where a divergent CLAUDE.md was backed up, when we did replace it. */
+    backedUpTo?: string;
+}
+
+/**
+ * Re-runnable, idempotent repair of a workspace's agent docs. Safe to run any
+ * time:
+ *   1. ensure AGENTS.md exists (scaffold from the template if missing),
+ *   2. ensure the Genie MCP block is present/updated via applyAgentsSection —
+ *      gated on the mcp_sync_agents opt-out (default on),
+ *   3. syncClaudeFromAgents to repair CLAUDE.md (symlink or mirror).
+ *
+ * SAFETY: a real, divergent CLAUDE.md (an external optimizer rewrote it) is NOT
+ * clobbered — we report it so the user decides. `name`/`slug` seed the AGENTS
+ * template only when it has to be scaffolded.
+ */
+export function repairWorkspaceDocs(
+    envelopePath: string,
+    name: string,
+    slug: string,
+): RepairDocsResult {
+    const actions: string[] = [];
+    const agentsPath = path.join(envelopePath, 'AGENTS.md');
+
+    // 1. Ensure AGENTS.md exists.
+    let agents: string;
+    try {
+        agents = fs.readFileSync(agentsPath, 'utf8');
+    } catch {
+        agents = agentsTemplate(name);
+        try {
+            fs.writeFileSync(agentsPath, agents, 'utf8');
+            actions.push('created AGENTS.md');
+        } catch {
+            /* best-effort — if we can't write AGENTS, the rest no-ops */
+        }
+    }
+    void slug; // reserved for future template variants; AGENTS template is name-only
+
+    // 2. Ensure the Genie MCP block (idempotent), gated on the opt-out.
+    let syncAgents = true;
+    try {
+        syncAgents = getAllSettings().mcp_sync_agents !== 'off';
+    } catch {
+        /* default to syncing */
+    }
+    if (syncAgents) {
+        const next = applyAgentsSection(agents, true);
+        if (next !== agents) {
+            try {
+                fs.writeFileSync(agentsPath, next, 'utf8');
+                actions.push('added/updated the Genie MCP section in AGENTS.md');
+                agents = next;
+            } catch {
+                /* best-effort */
+            }
+        }
+    }
+
+    // 3. Repair CLAUDE.md. A divergent file is backed up to .trash/ ONLY if the
+    // caller later chooses to overwrite — by default we leave it and report.
+    const sync = syncClaudeFromAgents(envelopePath);
+    if (sync === 'symlinked') actions.push('relinked CLAUDE.md → AGENTS.md');
+    else if (sync === 'mirrored') actions.push('mirrored CLAUDE.md from AGENTS.md');
+
+    return {
+        health: workspaceDocHealth(envelopePath),
+        actions,
+        claudeDivergent: sync === 'divergent',
+    };
 }
 
 export interface ConsolidateMcpCommitResult {

@@ -144,6 +144,24 @@ export interface Settings {
     mcp_sync_agents?: 'on' | 'off';
 }
 
+/** Health of a workspace's agent docs (AGENTS.md + Genie section + CLAUDE sync). */
+export interface WorkspaceDocHealth {
+    hasAgents: boolean;
+    hasGenieSection: boolean;
+    /** missing | symlink | broken-pointer | mirror | divergent */
+    claude: string;
+    claudeDivergent: boolean;
+    healthy: boolean;
+}
+
+/** Result of a re-runnable workspace-doc repair pass. */
+export interface RepairDocsResult {
+    health: WorkspaceDocHealth;
+    actions: string[];
+    claudeDivergent: boolean;
+    backedUpTo?: string;
+}
+
 /** Live state of the agent-integration MCP server (Settings → Agent MCP). */
 export interface McpServerState {
     running: boolean;
@@ -520,6 +538,8 @@ interface GenieApi {
     mcp: {
         status: () => Promise<McpServerState>;
         restart: () => Promise<McpServerState>;
+        docHealth: (workspaceId: string) => Promise<WorkspaceDocHealth | null>;
+        repairDocs: (workspaceId: string) => Promise<RepairDocsResult | null>;
     };
     aionima: {
         getConfig: () => Promise<AionimaConfig>;

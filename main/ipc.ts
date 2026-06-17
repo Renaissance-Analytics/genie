@@ -31,6 +31,8 @@ import {
     ConvertToAgiOpts,
     convertToAgiPlan,
     ConvertPlanOpts,
+    workspaceDocHealth,
+    repairWorkspaceDocs,
 } from './workspace/create-agi';
 import { analyseFolder } from './workspace/analyse';
 import { validateSimpleWorkspace } from './workspace/create-simple';
@@ -208,6 +210,19 @@ export function registerIpcHandlers(): void {
         }
         return mcpServerState();
     });
+
+    // --- Workspace doc health + repair (Settings → Agent MCP) -----------
+    ipcMain.handle('mcp:doc-health', (_e, id: string) => {
+        const ws = getWorkspace(id);
+        if (!ws) return null;
+        return workspaceDocHealth(ws.path);
+    });
+    ipcMain.handle('mcp:repair-docs', (_e, id: string) => {
+        const ws = getWorkspace(id);
+        if (!ws) return null;
+        return repairWorkspaceDocs(ws.path, ws.project_name, ws.project_name);
+    });
+
     ipcMain.handle('workspaces:open', async (_e, id: string) => {
         await openWorkspace(id);
         return { ok: true };

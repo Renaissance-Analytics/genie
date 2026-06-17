@@ -4,6 +4,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { simpleGit } from 'simple-git';
 import {
     addStructureDocs,
+    classifyClaude,
     consolidateMcpAndCommit,
     convertToAgi,
     convertToAgiPlan,
@@ -11,7 +12,11 @@ import {
     createAgiEnvelope,
     deriveRepoName,
     envelopeFolderName,
+    repairWorkspaceDocs,
     structureDocStatus,
+    symlinksSupported,
+    syncClaudeFromAgents,
+    workspaceDocHealth,
 } from '../create-agi';
 import { readProjectJson } from '../project-json';
 import { cleanupTmpRoot, makeTmpDir, seedGitRepo } from '../../../test/helpers';
@@ -493,5 +498,94 @@ describe('copyEnvFiles', () => {
         const dst = makeTmpDir('env-dst-missing');
         expect(() => copyEnvFiles('/no/such/source/dir', dst)).not.toThrow();
         expect(fs.readdirSync(dst)).toEqual([]);
+    });
+});
+
+describe('syncClaudeFromAgents (symlink-or-mirror)', () => {
+    it('repairs a missing CLAUDE.md and brings it into sync (symlink or mirror)', () => {
+        const ws = makeTmpDir('claude-missing');
+        fs.writeFileSync(path.join(ws, 'AGENTS.md'), '# AGENTS\n\nbody\n');
+        const result = syncClaudeFromAgents(ws);
+        // Platform-dependent which path we take — both are "in sync".
+        expect(['symlinked', 'mirrored']).toContain(result);
+        const kind = classifyClaude(ws);
+        expect(['symlink', 'mirror']).toContain(kind);
+        if (symlinksSupported()) {
+            expect(kind).toBe('symlink');
+        } else {
+            expect(kind).toBe('mirror');
+            // The mirror carries the real AGENTS.md content, not "AGENTS.md".
+            expect(fs.readFileSync(path.join(ws, 'CLAUDE.md'), 'utf8')).toBe(
+                '# AGENTS\n\nbody\n',
+            );
+        }
+    });
+
+    it('repairs the broken "AGENTS.md" one-liner (the Windows breakage)', () => {
+        const ws = makeTmpDir('claude-broken');
+        fs.writeFileSync(path.join(ws, 'AGENTS.md'), '# AGENTS\n\nreal instructions\n');
+        fs.writeFileSync(path.join(ws, 'CLAUDE.md'), 'AGENTS.md'); // the broken pointer
+        expect(classifyClaude(ws)).toBe('broken-pointer');
+        const result = syncClaudeFromAgents(ws);
+        expect(['symlinked', 'mirrored']).toContain(result);
+        expect(['symlink', 'mirror']).toContain(classifyClaude(ws));
+    });
+
+    it('does NOT clobber a real, divergent CLAUDE.md — reports divergent', () => {
+        const ws = makeTmpDir('claude-divergent');
+        fs.writeFileSync(path.join(ws, 'AGENTS.md'), '# AGENTS\n\ncanonical\n');
+        fs.writeFileSync(
+            path.join(ws, 'CLAUDE.md'),
+            '# CLAUDE\n\nRicher, optimizer-written content.\n',
+        );
+        expect(classifyClaude(ws)).toBe('divergent');
+        expect(syncClaudeFromAgents(ws)).toBe('divergent');
+        // The divergent content is preserved untouched.
+        expect(fs.readFileSync(path.join(ws, 'CLAUDE.md'), 'utf8')).toBe(
+            '# CLAUDE\n\nRicher, optimizer-written content.\n',
+        );
+    });
+
+    it('no-ops when AGENTS.md is absent', () => {
+        const ws = makeTmpDir('claude-no-agents');
+        expect(syncClaudeFromAgents(ws)).toBe('no-agents');
+    });
+});
+
+describe('repairWorkspaceDocs', () => {
+    const BEGIN = '<!-- BEGIN GENIE MCP (auto-managed by Genie) -->';
+
+    it('scaffolds AGENTS.md, adds the Genie MCP section, and syncs CLAUDE.md', () => {
+        const ws = makeTmpDir('repair-fresh');
+        const r = repairWorkspaceDocs(ws, 'Demo', 'demo');
+        const agents = fs.readFileSync(path.join(ws, 'AGENTS.md'), 'utf8');
+        expect(agents).toContain(BEGIN); // Genie block present
+        expect(r.health.hasAgents).toBe(true);
+        expect(r.health.hasGenieSection).toBe(true);
+        expect(['symlink', 'mirror']).toContain(r.health.claude);
+        expect(r.claudeDivergent).toBe(false);
+    });
+
+    it('re-adds the Genie MCP block when it has been stripped (idempotent repair)', () => {
+        const ws = makeTmpDir('repair-stripped');
+        // An AGENTS.md WITHOUT the Genie block (e.g. an external rewrite).
+        fs.writeFileSync(path.join(ws, 'AGENTS.md'), '# AGENTS\n\nNo genie section here.\n');
+        expect(workspaceDocHealth(ws).hasGenieSection).toBe(false);
+        repairWorkspaceDocs(ws, 'Demo', 'demo');
+        const agents = fs.readFileSync(path.join(ws, 'AGENTS.md'), 'utf8');
+        expect(agents).toContain(BEGIN); // block re-added
+        expect(agents).toContain('No genie section here.'); // original kept
+        expect(workspaceDocHealth(ws).hasGenieSection).toBe(true);
+    });
+
+    it('reports (does not clobber) a divergent CLAUDE.md during repair', () => {
+        const ws = makeTmpDir('repair-divergent');
+        fs.writeFileSync(path.join(ws, 'AGENTS.md'), '# AGENTS\n\ncanonical\n');
+        fs.writeFileSync(path.join(ws, 'CLAUDE.md'), '# CLAUDE\n\nrich divergent\n');
+        const r = repairWorkspaceDocs(ws, 'Demo', 'demo');
+        expect(r.claudeDivergent).toBe(true);
+        expect(fs.readFileSync(path.join(ws, 'CLAUDE.md'), 'utf8')).toBe(
+            '# CLAUDE\n\nrich divergent\n',
+        );
     });
 });

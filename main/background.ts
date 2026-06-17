@@ -19,6 +19,7 @@ import {
     getTerminalSpec,
 } from './db';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
+import { workspaceDocHealth, repairWorkspaceDocs } from './workspace/create-agi';
 import { registerForceQuestionIpc, forceQuestion } from './ask/force-question';
 import { registerIssueWatchIpc, resolveWorkspaceRepos } from './issue-watch';
 import { detectFolder } from './workspace/detect';
@@ -196,6 +197,16 @@ async function describeWorkspaceForMcp(
         envelopeAgents: exists('AGENTS.md') ? path.join(root, 'AGENTS.md') : null,
         envelopeClaude: exists('CLAUDE.md') ? path.join(root, 'CLAUDE.md') : null,
         repos,
+        docHealth: (() => {
+            const dh = workspaceDocHealth(root);
+            return {
+                hasAgents: dh.hasAgents,
+                hasGenieSection: dh.hasGenieSection,
+                claude: dh.claude,
+                claudeDivergent: dh.claudeDivergent,
+                healthy: dh.healthy,
+            };
+        })(),
     };
 }
 

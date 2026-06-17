@@ -94,6 +94,15 @@ export interface WorkspaceMap {
     envelopeAgents: string | null;
     envelopeClaude: string | null;
     repos: WorkspaceRepoInfo[];
+    /** Health of the agent docs (AGENTS.md + Genie MCP section + CLAUDE sync). */
+    docHealth?: {
+        hasAgents: boolean;
+        hasGenieSection: boolean;
+        /** missing | symlink | broken-pointer | mirror | divergent */
+        claude: string;
+        claudeDivergent: boolean;
+        healthy: boolean;
+    };
 }
 
 export interface McpContext {
@@ -222,6 +231,33 @@ export function formatWorkspaceMap(map: WorkspaceMap): string {
     lines.push(
         `${n++}. Briefly summarize back to the user what this workspace is and what each repo does, then ask what they'd like to work on.`,
     );
+
+    // Doc health — flag anything the user may want repaired (the repair is
+    // idempotent and available from Genie's Settings → Agent MCP).
+    const h = map.docHealth;
+    if (h && !h.healthy) {
+        lines.push('');
+        lines.push('## Doc health — needs attention');
+        if (!h.hasAgents) lines.push('- AGENTS.md is MISSING.');
+        else if (!h.hasGenieSection) {
+            lines.push('- AGENTS.md is missing the Genie MCP section.');
+        }
+        if (h.claudeDivergent) {
+            lines.push(
+                '- CLAUDE.md is a SEPARATE, divergent file (not a link/mirror of AGENTS.md) — it may have richer content; do NOT assume it matches AGENTS.md.',
+            );
+        } else if (h.claude === 'broken-pointer') {
+            lines.push(
+                '- CLAUDE.md is a broken one-liner (literally "AGENTS.md") and carries no instructions.',
+            );
+        } else if (h.claude === 'missing') {
+            lines.push('- CLAUDE.md is MISSING.');
+        }
+        lines.push(
+            'Run Genie → Settings → Agent MCP → "Repair workspace docs" to fix these (a divergent CLAUDE.md is reported, never clobbered).',
+        );
+    }
+
     lines.push('');
     lines.push('```json');
     lines.push(JSON.stringify(map, null, 2));
