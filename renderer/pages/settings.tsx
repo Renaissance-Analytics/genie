@@ -13,6 +13,7 @@ import {
 import {
     api,
     type EditorDetection,
+    type McpServerState,
     type Settings,
     type ShellDetection,
     type UpdaterConfig,
@@ -91,6 +92,7 @@ export default function SettingsPage() {
                     <Tabs.Tab value="tools">Tools</Tabs.Tab>
                     <Tabs.Tab value="workspaces">Workspaces</Tabs.Tab>
                     <Tabs.Tab value="customization">Customization</Tabs.Tab>
+                    <Tabs.Tab value="agent-mcp">Agent MCP</Tabs.Tab>
                     <Tabs.Tab value="connections">Connections</Tabs.Tab>
                     <Tabs.Tab value="updates">Updates</Tabs.Tab>
                 </Tabs.List>
@@ -379,6 +381,14 @@ export default function SettingsPage() {
                     onValueChange={(v) => patch({ global_hotkey: v })}
                 />
             </Card>
+
+                    </Tabs.Panel>
+                    <Tabs.Panel value="agent-mcp" className="settings-tab">
+
+            <AgentMcpSection
+                port={s.mcp_port ?? '51717'}
+                onPortChange={(v) => patch({ mcp_port: v })}
+            />
 
                     </Tabs.Panel>
                     <Tabs.Panel value="connections" className="settings-tab">
@@ -1264,6 +1274,137 @@ function StartupSection() {
                         Install the packaged release to use this.
                     </Text>
                 )}
+            </div>
+        </Card>
+    );
+}
+
+/**
+ * Settings → Agent MCP. Surfaces the loopback MCP server's live state (running
+ * on which port, or a port-conflict fallback), lets the user set the fixed
+ * `mcp_port`, and exposes a Restart button. The port input writes the
+ * `mcp_port` setting (saved with the page's Save button); Restart rebinds the
+ * server on the configured port and rewrites enabled workspaces' .mcp.json.
+ */
+function AgentMcpSection({
+    port,
+    onPortChange,
+}: {
+    port: string;
+    onPortChange: (v: string) => void;
+}) {
+    const [state, setState] = useState<McpServerState | null>(null);
+    const [busy, setBusy] = useState(false);
+
+    const refresh = async () => {
+        try {
+            setState(await api().mcp.status());
+        } catch {
+            setState(null);
+        }
+    };
+
+    useEffect(() => {
+        void refresh();
+    }, []);
+
+    const restart = async () => {
+        setBusy(true);
+        try {
+            setState(await api().mcp.restart());
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const statusLabel = !state
+        ? '—'
+        : state.conflict
+            ? `Port conflict — fell back to ${state.port ?? '?'}`
+            : state.running
+                ? `Running on port ${state.port}`
+                : 'Not running';
+    const statusColor = !state
+        ? 'var(--fg-3)'
+        : state.conflict
+            ? 'var(--amber-500)'
+            : state.running
+                ? 'var(--emerald-600)'
+                : 'var(--rose-500)';
+
+    // The bound port doesn't match the configured one → a restart is needed to
+    // pick up a port change (or to retry after a conflict).
+    const needsRestart =
+        !!state &&
+        (state.conflict ||
+            (state.running && state.port !== state.configuredPort) ||
+            String(state.configuredPort) !== String(port));
+
+    return (
+        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Heading as="h2" size="sm" style={{ margin: 0 }}>
+                    Agent MCP server
+                </Heading>
+                <Text size="xs" className="text-zinc-500">
+                    Loopback server that lets agents call <code>imDone</code> /{' '}
+                    <code>ForceTheQuestion</code>
+                </Text>
+                <span style={{ flex: 1 }} />
+                <Text size="xs" style={{ color: statusColor }}>
+                    <Icon
+                        name={
+                            state?.conflict
+                                ? 'alert-triangle'
+                                : state?.running
+                                    ? 'check'
+                                    : 'circle'
+                        }
+                        size="xs"
+                    />{' '}
+                    {statusLabel}
+                </Text>
+            </div>
+
+            {state?.conflict && (
+                <Text size="xs" style={{ color: 'var(--amber-600)' }}>
+                    The configured port {state.configuredPort} was in use, so the
+                    server bound a temporary port instead. Workspace{' '}
+                    <code>.mcp.json</code> URLs point at {state.configuredPort} and
+                    won&apos;t resolve until you free that port (or pick another)
+                    and restart the server below.
+                </Text>
+            )}
+
+            <Input
+                label="Server port"
+                type="number"
+                min={1024}
+                max={65535}
+                description="A fixed, obscure loopback port baked into each workspace's .mcp.json (e.g. 51717). Changing it requires a restart of the server below; open terminals keep their old endpoint until recreated."
+                value={port}
+                onValueChange={(v) => {
+                    const n = parseInt(v, 10);
+                    if (v === '') onPortChange('');
+                    else if (Number.isFinite(n)) onPortChange(String(Math.min(65535, Math.max(1, n))));
+                }}
+                placeholder="51717"
+            />
+
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Action
+                    color={needsRestart ? 'blue' : undefined}
+                    variant={needsRestart ? 'default' : 'ghost'}
+                    icon="refresh-cw"
+                    onClick={restart}
+                    disabled={busy}
+                >
+                    {busy ? 'Restarting…' : 'Restart MCP server'}
+                </Action>
+                <Text size="xs" className="text-zinc-500">
+                    Save the page first if you changed the port, then restart to
+                    rebind and rewrite workspace configs.
+                </Text>
             </div>
         </Card>
     );

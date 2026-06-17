@@ -11,7 +11,13 @@ import path from 'path';
 import { createTray } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { registerIpcHandlers } from './ipc';
-import { initDatabase, listWorkspaces, getAllSettings, getTerminalSpec } from './db';
+import {
+    initDatabase,
+    listWorkspaces,
+    listTerminalSpecs,
+    getAllSettings,
+    getTerminalSpec,
+} from './db';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import { registerForceQuestionIpc, forceQuestion } from './ask/force-question';
 import { registerIssueWatchIpc } from './issue-watch';
@@ -24,8 +30,13 @@ import {
     terminalHasWindow,
     broadcastTerminalAttention,
     killTerminalById,
+    lastActiveTerminalForWorkspace,
 } from './terminal/ipc';
-import { startMcpServer } from './mcp/server';
+import {
+    startMcpServer,
+    workspaceEndpointUrl,
+    DEFAULT_MCP_PORT,
+} from './mcp/server';
 import { startControlServer } from './control';
 import { startAutostartProcesses } from './terminal/process-supervisor';
 import {
@@ -644,20 +655,40 @@ app.whenReady().then(async () => {
     // Agent-integration MCP server (loopback). imDone pulses the caller's
     // terminal glow + optional chime/toast; ForceTheQuestion raises the modal.
     // Best-effort: a failed bind just means no MCP endpoints.
-    void startMcpServer({
+    await startMcpServer({
         serverVersion: app.getVersion(),
         userDataDir: app.getPath('userData'),
+        // The fixed, user-settable port (Settings → Agent MCP). Parsed from the
+        // k/v setting; falls back to the obscure default when unset/garbage.
+        configuredPort: () => {
+            const raw = (getAllSettings() as Record<string, string>)['mcp_port'];
+            const n = raw ? parseInt(raw, 10) : NaN;
+            return Number.isInteger(n) && n > 0 && n < 65536 ? n : DEFAULT_MCP_PORT;
+        },
+        // Resolve a workspace's terminals (for the workspace-scoped endpoint):
+        // the set of its terminal-spec ids + the most-recently-active one, so a
+        // tool call with no explicit terminalId still targets the right one.
+        workspaceTerminals: (workspaceId) => ({
+            ids: listTerminalSpecs()
+                .filter((t) => t.workspace_id === workspaceId)
+                .map((t) => t.id),
+            lastActive: lastActiveTerminalForWorkspace(workspaceId),
+        }),
         onImDone: (terminalId) => {
+            if (!terminalId) return;
             broadcastTerminalAttention(terminalId, true);
             notifyImDone(terminalId);
         },
         onForceQuestion: (_terminalId, questions) => forceQuestion(questions),
     }).catch((e) => console.error('[mcp] failed to start', e));
     // Backfill the genie MCP entry into the Claude/Cursor config of any
-    // workspace already opted in (covers workspaces enabled before agent-config
-    // writing existed). Best-effort.
+    // workspace already opted in — now with the stable workspace endpoint URL,
+    // so older configs that carried the broken ${GENIE_MCP_URL} ref are
+    // rewritten to the hard-coded URL on launch. Best-effort.
     for (const ws of listWorkspaces()) {
-        if (ws.mcp_enabled) writeWorkspaceAgentMcp(ws.path, true);
+        if (ws.mcp_enabled) {
+            writeWorkspaceAgentMcp(ws.path, true, workspaceEndpointUrl(ws.id));
+        }
     }
     // Control server for the bundled `genie` CLI (status / kill / host control).
     // Loopback + token; writes <userData>/genie-control.json for discovery.

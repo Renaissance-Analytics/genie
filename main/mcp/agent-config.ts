@@ -9,26 +9,32 @@ import { GENIE_AGENTS_BRIEF } from './guide';
  *   Claude Code → <workspace>/.mcp.json
  *   Cursor      → <workspace>/.cursor/mcp.json
  *
- * The url is the literal `${GENIE_MCP_URL}`, NOT a baked-in address: the MCP
- * server binds an ephemeral port each launch, and every terminal gets its OWN
- * endpoint token (so `imDone` resolves the caller). Genie injects the full
- * per-terminal URL as GENIE_MCP_URL into each terminal's env; both Claude Code
- * and Cursor expand `${VAR}` in mcp.json at agent start, so each terminal's
- * agent connects to its own endpoint. (It therefore only resolves inside a
- * Genie terminal — agents launched outside one won't have GENIE_MCP_URL.)
+ * The url is a HARD-CODED literal — `http://127.0.0.1:<port>/mcp/<token>` — NOT
+ * an `${ENV}` reference. The server now binds a FIXED, user-settable port, and
+ * each workspace gets one stable endpoint token, so the URL is stable and needs
+ * no env-var expansion. (The old `${GENIE_MCP_URL}` ref was the connection bug:
+ * Claude Code refuses to parse a config whose referenced var is unset — so an
+ * agent launched outside a Genie terminal broke ALL its MCP servers — and
+ * Cursor uses a different `${env:NAME}` syntax entirely, so it never resolved
+ * there. A literal URL just works in both.) Per-terminal resolution for
+ * imDone/ForceTheQuestion is preserved server-side via the tools' optional
+ * `terminalId` arg (read from GENIE_TERMINAL_ID) with a last-active fallback.
  *
  * Merges into existing config (never clobbers other servers); on disable it
  * removes only the `genie` key.
  */
 
 export const GENIE_SERVER_NAME = 'genie';
-const URL_REF = '${GENIE_MCP_URL}';
-
-/** Claude Code uses an explicit transport `type`; Cursor infers from `url`. */
-const CLAUDE_ENTRY = { type: 'http', url: URL_REF };
-const CURSOR_ENTRY = { url: URL_REF };
 
 type JsonObj = Record<string, unknown>;
+
+/** Claude Code uses an explicit transport `type`; Cursor infers from `url`. */
+export function claudeEntry(url: string): JsonObj {
+    return { type: 'http', url };
+}
+export function cursorEntry(url: string): JsonObj {
+    return { url };
+}
 
 /**
  * Pure: apply (or remove) the genie server entry to a parsed config object.
@@ -140,10 +146,29 @@ function syncAgentsMd(workspacePath: string, enabled: boolean): void {
     }
 }
 
-/** Write or remove the genie entry in a workspace's Claude + Cursor MCP configs. */
-export function writeWorkspaceAgentMcp(workspacePath: string, enabled: boolean): void {
+/**
+ * Write or remove the genie entry in a workspace's Claude + Cursor MCP configs.
+ * `url` is the workspace's stable endpoint (`http://127.0.0.1:<port>/mcp/<tok>`);
+ * it's required when enabling. On disable the url is ignored (the entry is just
+ * removed), so callers may pass null there.
+ */
+export function writeWorkspaceAgentMcp(
+    workspacePath: string,
+    enabled: boolean,
+    url: string | null,
+): void {
     if (!workspacePath) return;
-    upsert(path.join(workspacePath, '.mcp.json'), CLAUDE_ENTRY, enabled);
-    upsert(path.join(workspacePath, '.cursor', 'mcp.json'), CURSOR_ENTRY, enabled);
+    // Enabling without a resolved URL (server not listening yet) would write a
+    // broken entry — skip the config write but still keep AGENTS.md in sync.
+    if (enabled && !url) {
+        syncAgentsMd(workspacePath, true);
+        return;
+    }
+    upsert(path.join(workspacePath, '.mcp.json'), claudeEntry(url ?? ''), enabled);
+    upsert(
+        path.join(workspacePath, '.cursor', 'mcp.json'),
+        cursorEntry(url ?? ''),
+        enabled,
+    );
     syncAgentsMd(workspacePath, enabled);
 }

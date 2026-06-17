@@ -132,6 +132,20 @@ export interface Settings {
     /** Show an OS notification (tray popup) when an agent calls imDone.
      *  Defaults 'off'. */
     notify_toast?: 'on' | 'off';
+    /** Fixed loopback port for the agent-integration MCP server. String-encoded;
+     *  default '51717'. Changing it requires restarting the MCP server. */
+    mcp_port?: string;
+}
+
+/** Live state of the agent-integration MCP server (Settings → Agent MCP). */
+export interface McpServerState {
+    running: boolean;
+    /** The port actually bound (null when not running). */
+    port: number | null;
+    /** The port the user configured (what the server tries to bind). */
+    configuredPort: number;
+    /** True when the configured port was taken and the server fell back. */
+    conflict: boolean;
 }
 
 export interface DocEntry {
@@ -492,6 +506,10 @@ interface GenieApi {
         feed: (workspaceId: string) => Promise<WatchFeedItem[]>;
         markSeen: (workspaceId: string) => Promise<{ ok: boolean }>;
         counts: () => Promise<Record<string, WatchTypeCounts>>;
+    };
+    mcp: {
+        status: () => Promise<McpServerState>;
+        restart: () => Promise<McpServerState>;
     };
     aionima: {
         getConfig: () => Promise<AionimaConfig>;

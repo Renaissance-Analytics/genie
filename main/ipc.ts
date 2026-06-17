@@ -37,6 +37,11 @@ import { validateSimpleWorkspace } from './workspace/create-simple';
 import { openWorkspace } from './workspace/open';
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
+import {
+    workspaceEndpointUrl,
+    mcpServerState,
+    restartMcpServer,
+} from './mcp/server';
 import { tynnCliInfo, installTynnCliSystemWide } from './cli/tynn-cli';
 import { registerShortcuts } from './shortcuts';
 import { startSignIn, redeemCode } from './auth';
@@ -153,7 +158,7 @@ export function registerIpcHandlers(): void {
         // MCP is ON by default for new workspaces — write the genie server into
         // its Claude (.mcp.json) + Cursor (.cursor/mcp.json) config so agents
         // there discover it immediately. Best-effort.
-        if (r.mcp_enabled) writeWorkspaceAgentMcp(r.path, true);
+        if (r.mcp_enabled) writeWorkspaceAgentMcp(r.path, true, workspaceEndpointUrl(r.id));
         rebuildMenu();
         return r;
     });
@@ -186,8 +191,22 @@ export function registerIpcHandlers(): void {
         // Claude (.mcp.json) + Cursor (.cursor/mcp.json) config so agents there
         // discover it. Best-effort; the env injection works regardless.
         const ws = getWorkspace(id);
-        if (ws) writeWorkspaceAgentMcp(ws.path, enabled);
+        if (ws) writeWorkspaceAgentMcp(ws.path, enabled, workspaceEndpointUrl(id));
         return { ok: true };
+    });
+
+    // --- Agent MCP server status / restart (Settings → Agent MCP) -------
+    ipcMain.handle('mcp:status', () => mcpServerState());
+    ipcMain.handle('mcp:restart', async () => {
+        await restartMcpServer();
+        // Rewrite enabled workspaces' configs so their .mcp.json picks up the
+        // (possibly new) port — endpoint tokens are stable across the rebind.
+        for (const ws of listWorkspaces()) {
+            if (ws.mcp_enabled) {
+                writeWorkspaceAgentMcp(ws.path, true, workspaceEndpointUrl(ws.id));
+            }
+        }
+        return mcpServerState();
     });
     ipcMain.handle('workspaces:open', async (_e, id: string) => {
         await openWorkspace(id);

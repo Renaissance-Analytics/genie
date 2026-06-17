@@ -73,11 +73,23 @@ export interface McpContext {
     ) => Promise<ForceQuestionResult>;
 }
 
+const TERMINAL_ID_PROP = {
+    terminalId: {
+        type: 'string',
+        description:
+            "The terminal to act on. Pass the value of your GENIE_TERMINAL_ID environment variable so Genie targets exactly THIS terminal. If omitted, Genie falls back to the workspace's most-recently-active terminal.",
+    },
+} as const;
+
 const IMDONE_TOOL = {
     name: 'imDone',
     description:
-        "Signal that the agent has finished its work in THIS terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row, and the panel border until you focus it. Takes no arguments — the terminal is resolved from the connection.",
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+        "Signal that the agent has finished its work in THIS terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row, and the panel border until you focus it. Pass `terminalId` (from your GENIE_TERMINAL_ID env) to target this exact terminal; omit it to use the workspace's most-recently-active terminal.",
+    inputSchema: {
+        type: 'object',
+        properties: { ...TERMINAL_ID_PROP },
+        additionalProperties: false,
+    },
 };
 
 const GUIDE_TOOL = {
@@ -94,6 +106,7 @@ const FORCE_QUESTION_TOOL = {
     inputSchema: {
         type: 'object',
         properties: {
+            ...TERMINAL_ID_PROP,
             questions: {
                 type: 'array',
                 minItems: 1,

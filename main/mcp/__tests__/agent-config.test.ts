@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
     applyAgentsSection,
     applyGenieServer,
+    claudeEntry,
+    cursorEntry,
     GENIE_SERVER_NAME,
 } from '../agent-config';
 
-const entry = { type: 'http', url: '${GENIE_MCP_URL}' };
+const URL = 'http://127.0.0.1:51717/mcp/abc123';
+const entry = claudeEntry(URL);
 
 describe('applyGenieServer', () => {
     it('adds the genie server to an empty/new config', () => {
@@ -43,11 +46,17 @@ describe('applyGenieServer', () => {
         expect(applyGenieServer(existing, entry, false)).toEqual(existing);
     });
 
-    it('uses the literal env-ref url (resolved per-terminal, not baked in)', () => {
+    it('bakes a static literal url (no ${ENV} ref to expand)', () => {
         const out = applyGenieServer(null, entry, true) as {
             mcpServers: Record<string, { url: string }>;
         };
-        expect(out.mcpServers[GENIE_SERVER_NAME].url).toBe('${GENIE_MCP_URL}');
+        expect(out.mcpServers[GENIE_SERVER_NAME].url).toBe(URL);
+        expect(out.mcpServers[GENIE_SERVER_NAME].url).not.toContain('${');
+    });
+
+    it('claudeEntry sets an explicit http transport type; cursorEntry omits it', () => {
+        expect(claudeEntry(URL)).toEqual({ type: 'http', url: URL });
+        expect(cursorEntry(URL)).toEqual({ url: URL });
     });
 });
 

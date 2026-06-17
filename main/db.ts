@@ -372,6 +372,10 @@ export interface Settings {
     /** Show an OS notification (tray popup) when an agent calls imDone.
      *  Defaults 'off'. */
     notify_toast?: 'on' | 'off';
+    /** Fixed loopback port for the agent-integration MCP server. String-encoded
+     *  (settings are k/v text). Default '51717' (obscure, outside the OS
+     *  ephemeral range). Changing it requires restarting the MCP server. */
+    mcp_port?: string;
 }
 
 export function getAllSettings(): Settings {
@@ -416,6 +420,7 @@ export function getAllSettings(): Settings {
         detached_terminals: (out['detached_terminals'] as 'on' | 'off') ?? 'off',
         notify_sound: (out['notify_sound'] as 'on' | 'off') ?? 'off',
         notify_toast: (out['notify_toast'] as 'on' | 'off') ?? 'off',
+        mcp_port: out['mcp_port'] ?? '51717',
     };
 }
 

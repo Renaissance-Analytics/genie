@@ -38,6 +38,23 @@ const api = {
             >,
     },
 
+    mcp: {
+        status: () =>
+            ipcRenderer.invoke('mcp:status') as Promise<{
+                running: boolean;
+                port: number | null;
+                configuredPort: number;
+                conflict: boolean;
+            }>,
+        restart: () =>
+            ipcRenderer.invoke('mcp:restart') as Promise<{
+                running: boolean;
+                port: number | null;
+                configuredPort: number;
+                conflict: boolean;
+            }>,
+    },
+
     aionima: {
         getConfig: () => ipcRenderer.invoke('auth:aionima-config'),
         setConfig: (patch: { host?: string; token?: string | null }) =>

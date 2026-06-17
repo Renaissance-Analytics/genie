@@ -80,6 +80,26 @@ interface OwnerEntry {
  */
 const ownersByTerminal = new Map<string, OwnerEntry>();
 
+/**
+ * workspaceId → the terminal id most recently created/written in it. The
+ * workspace-scoped MCP endpoint uses this to resolve which terminal a tool call
+ * (imDone / ForceTheQuestion) targets when the agent doesn't pass an explicit
+ * `terminalId`. Module-scoped so the MCP server's workspaceTerminals() dep can
+ * read it via lastActiveTerminalForWorkspace().
+ */
+const lastActiveByWorkspace = new Map<string, string>();
+
+/** Record that a terminal saw activity, so it becomes its workspace's default. */
+function noteTerminalActivity(terminalId: string): void {
+    const ws = getTerminalSpec(terminalId)?.workspace_id;
+    if (ws) lastActiveByWorkspace.set(ws, terminalId);
+}
+
+/** The most-recently-active terminal id for a workspace (or null). */
+export function lastActiveTerminalForWorkspace(workspaceId: string): string | null {
+    return lastActiveByWorkspace.get(workspaceId) ?? null;
+}
+
 export function registerTerminalIpc(): void {
     // Always resolve the LIVE active backend per-call. Tier 3 can swap the
     // backend (in-process ↔ host client) under us; capturing it once would
@@ -187,6 +207,7 @@ export function registerTerminalIpc(): void {
             }
             const result = mgr().create(opts);
             trackOwner(opts.id, event.sender);
+            noteTerminalActivity(opts.id);
             return result;
         },
     );
@@ -197,6 +218,7 @@ export function registerTerminalIpc(): void {
     });
 
     ipcMain.handle('terminal:write', (_event, id: string, data: string): boolean => {
+        noteTerminalActivity(id);
         return mgr().write(id, data);
     });
 
