@@ -653,6 +653,14 @@ export interface TerminalSpecMeta {
     autostart?: boolean;
     /** Process views: relaunch the command (with backoff) if it exits/crashes. */
     restart_on_exit?: boolean;
+    /**
+     * Process views: persisted "was running" intent. Set true while the process
+     * is running and false on a deliberate stop or terminal failure, so a
+     * process active when Genie went down (quit/update/crash) is auto-restored
+     * on next launch — like a service. Distinct from `autostart` (which the
+     * user opts into); this tracks live state.
+     */
+    was_running?: boolean;
     [key: string]: unknown;
 }
 

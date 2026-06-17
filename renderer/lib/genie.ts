@@ -273,6 +273,9 @@ export interface ViewMeta {
     autostart?: boolean;
     /** Process view: relaunch the command (with backoff) if it exits/crashes. */
     restart_on_exit?: boolean;
+    /** Process view: persisted "was running" intent — restores the process on
+     *  next launch if Genie went down while it was running (service-like). */
+    was_running?: boolean;
     [key: string]: unknown;
 }
 

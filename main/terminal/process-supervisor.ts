@@ -4,7 +4,12 @@ import {
     terminalManager,
     resolveDefaultShell,
 } from '@particle-academy/fancy-term-host';
-import { getAllSettings, getTerminalSpec, listTerminalSpecs } from '../db';
+import {
+    getAllSettings,
+    getTerminalSpec,
+    listTerminalSpecs,
+    updateTerminalSpec,
+} from '../db';
 import { dbSettingsProvider } from './genie-adapter';
 import { buildProcessArgs } from './process-spawn';
 import { buildTynnCliEnv } from '../cli/tynn-cli';
@@ -109,6 +114,25 @@ function setStatus(id: string, status: ProcessStatus): void {
     }
 }
 
+/**
+ * Persist a process's "was running" intent on its spec meta, so a process
+ * active when Genie went down (quit/update/crash) is auto-restored next launch.
+ * Only writes when the value actually changes (avoids DB churn on every status
+ * transition) and is best-effort (a failed write must not break the
+ * supervisor). Set true while running; false on a deliberate stop or a terminal
+ * 'failed', so those don't boot-loop.
+ */
+function persistWasRunning(id: string, value: boolean): void {
+    try {
+        const spec = getTerminalSpec(id);
+        if (!spec || spec.type !== 'process') return;
+        if ((spec.meta?.was_running ?? false) === value) return; // no change
+        updateTerminalSpec(id, { meta: { ...spec.meta, was_running: value } });
+    } catch {
+        /* best-effort — persistence failure shouldn't break the supervisor */
+    }
+}
+
 /** Current status of every managed process (id → status). */
 export function getProcessStatuses(): Record<string, ProcessStatus> {
     const out: Record<string, ProcessStatus> = {};
@@ -154,6 +178,9 @@ export function startProcess(specId: string): void {
     try {
         terminalManager().create({ id: specId, cwd, shell, args, env });
         setStatus(specId, 'running');
+        // Record the running intent so this process is restored on next launch
+        // if Genie goes down (quit/update/crash) while it's up.
+        persistWasRunning(specId, true);
     } catch (e) {
         recordProcessOutput(
             specId,
@@ -176,6 +203,8 @@ export function stopProcess(specId: string): void {
         /* no live pty — fine */
     }
     setStatus(specId, 'stopped');
+    // A deliberate stop clears the running intent so it does NOT auto-restore.
+    persistWasRunning(specId, false);
 }
 
 /** Restart a process: kill then respawn once the old pty's exit lands. */
@@ -233,6 +262,12 @@ export function onProcessPtyExit(
     st.attempt = d.nextAttempt;
     st.userStopped = false;
     setStatus(id, d.status);
+    // A permanently-broken process (retries exhausted) clears its running
+    // intent so it doesn't boot-loop on the next launch. A 'restarting' exit
+    // keeps the intent (it's coming back); 'crashed'/'stopped' from a non-
+    // deliberate clean exit also keep it so a recoverable process still
+    // restores, matching "if it was active, bring it back".
+    if (d.status === 'failed') persistWasRunning(id, false);
     if (d.restartInMs !== null) {
         st.restartTimer = setTimeout(() => {
             st.restartTimer = null;
@@ -241,13 +276,20 @@ export function onProcessPtyExit(
     }
 }
 
-/** Start every autostart-enabled process across all workspaces (app launch). */
+/**
+ * Start every process that should be live on app launch: those the user marked
+ * `autostart`, AND those that were RUNNING when Genie last went down
+ * (`was_running` — restored like a service). startProcess() no-ops if the pty
+ * is already live (e.g. a detached host kept it alive and Genie reattached), so
+ * this only spawns the ones that actually died. A deliberately-stopped or
+ * permanently-failed process has `was_running === false`, so it stays down.
+ */
 export function startAutostartProcesses(): void {
     for (const spec of listTerminalSpecs()) {
         if (
             spec.type === 'process' &&
             spec.enabled !== false &&
-            spec.meta?.autostart === true &&
+            (spec.meta?.autostart === true || spec.meta?.was_running === true) &&
             spec.meta?.command
         ) {
             startProcess(spec.id);
