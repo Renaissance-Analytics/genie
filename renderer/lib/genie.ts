@@ -839,6 +839,8 @@ interface GenieApi {
                 id: string;
                 workspaceLabel?: string;
                 questions: ForceQuestionSpec[];
+                /** How many other requests are still queued behind this one. */
+                queued?: number;
             }) => void,
         ) => () => void;
         answer: (id: string, answers: ForceAnswerSpec[]) => Promise<void>;

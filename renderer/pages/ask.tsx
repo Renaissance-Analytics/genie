@@ -21,6 +21,8 @@ export default function AskPage() {
     const [reqId, setReqId] = useState<string | null>(null);
     const [workspaceLabel, setWorkspaceLabel] = useState<string | null>(null);
     const [questions, setQuestions] = useState<ForceQuestionSpec[]>([]);
+    // How many other ForceTheQuestion requests are queued behind this one.
+    const [queuedCount, setQueuedCount] = useState(0);
     // Per-question selected labels + free-text note, keyed by question index.
     const [selected, setSelected] = useState<Record<number, string[]>>({});
     const [notes, setNotes] = useState<Record<number, string>>({});
@@ -32,12 +34,17 @@ export default function AskPage() {
 
     useEffect(() => {
         if (!bridgeReady) return;
-        const off = api().ask.onShow(({ id, questions: qs, workspaceLabel: ws }) => {
+        const off = api().ask.onShow(({ id, questions: qs, workspaceLabel: ws, queued }) => {
             setReqId(id);
             setWorkspaceLabel(ws ?? null);
             setQuestions(qs);
+            setQueuedCount(queued ?? 0);
+            // The window is shared across queued requests, so reset per-request
+            // input state whenever a new one is shown (id may stay the same only
+            // for a re-delivery of the SAME request — harmless to reset then).
             setSelected({});
             setNotes({});
+            setSubmitting(false);
         });
         // Now that the listener is attached, tell main to deliver the payload.
         // (Pushing on did-finish-load can fire before this effect runs, so the
@@ -105,6 +112,14 @@ export default function AskPage() {
         ? `An agent in ${workspaceLabel} needs your input`
         : 'An agent needs your input';
 
+    // Subtle badge so the user knows more questions are waiting behind this one.
+    const queuedBadge =
+        queuedCount > 0 ? (
+            <span className="ask-queued" title={`${queuedCount} more waiting`}>
+                +{queuedCount} more queued
+            </span>
+        ) : null;
+
     if (!bridgeReady || !reqId) {
         return (
             <div className="ask-frame">
@@ -113,6 +128,7 @@ export default function AskPage() {
                     <Heading as="h1" size="sm" style={{ margin: 0 }}>
                         {title}
                     </Heading>
+                    {queuedBadge}
                     <div style={{ flex: 1 }} />
                     <button
                         type="button"
@@ -140,6 +156,7 @@ export default function AskPage() {
                 <Heading as="h1" size="sm" style={{ margin: 0 }}>
                     {title}
                 </Heading>
+                {queuedBadge}
                 <div style={{ flex: 1 }} />
                 <button
                     type="button"

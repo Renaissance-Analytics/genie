@@ -15,9 +15,15 @@ import type {
  * window floats above EVERY application (`screen-saver` z-level) so the user
  * can't miss it.
  *
- * One window per call (concurrent agents stack their own modals). The request
- * id rides in `ask:show`; the renderer replies with `ask:answer` / `ask:cancel`,
- * and closing the window without answering counts as a cancel.
+ * Genie is multi-agent, so several agents can call ForceTheQuestion at once. We
+ * present them ONE AT A TIME via a FIFO queue through a SINGLE shared window:
+ * the first request opens the window, later requests enqueue, and each
+ * answer/cancel/dismiss advances to the next. Each `forceQuestion(...)` call
+ * still returns its OWN promise that resolves with THAT request's result, so the
+ * MCP `tools/call` per-caller await is preserved. The request id rides in
+ * `ask:show` (along with how many more are queued); the renderer replies with
+ * `ask:answer` / `ask:cancel`, and closing the window counts as cancelling the
+ * whole queue.
  */
 
 interface Config {
@@ -25,11 +31,12 @@ interface Config {
     preloadPath: string;
 }
 
-interface Pending {
+/** One queued ForceTheQuestion request awaiting (or currently taking) its turn. */
+interface QueueItem {
+    id: string;
     resolve: (r: ForceQuestionResult) => void;
-    win: BrowserWindow;
-    /** The payload to (re)deliver when the renderer signals it's ready. */
-    payload: { id: string; questions: ForceQuestion[]; workspaceLabel?: string };
+    questions: ForceQuestion[];
+    workspaceLabel?: string;
 }
 
 /**
@@ -49,22 +56,66 @@ function notifyForceQuestion(): void {
 
 let config: Config | null = null;
 let registered = false;
-const pending = new Map<string, Pending>();
 
-/** Find the pending request whose window owns the given webContents id. */
-function findBySender(senderId: number): Pending | undefined {
-    for (const p of pending.values()) {
-        if (!p.win.isDestroyed() && p.win.webContents.id === senderId) return p;
-    }
-    return undefined;
+/** The single shared modal window, or null when nothing is being asked. */
+let win: BrowserWindow | null = null;
+/** FIFO queue. The head (index 0) is the request currently shown in the window. */
+const queue: QueueItem[] = [];
+
+/** Build the payload the renderer renders, including how many requests follow. */
+function payloadFor(item: QueueItem): {
+    id: string;
+    questions: ForceQuestion[];
+    workspaceLabel?: string;
+    queued: number;
+} {
+    return {
+        id: item.id,
+        questions: item.questions,
+        workspaceLabel: item.workspaceLabel,
+        // How many OTHER requests are still waiting behind the current one.
+        queued: Math.max(0, queue.length - 1),
+    };
 }
 
+/** Push the current head's payload to the renderer (no-op if nothing pending). */
+function showHead(): void {
+    const head = queue[0];
+    if (head && win && !win.isDestroyed()) {
+        win.webContents.send('ask:show', payloadFor(head));
+    }
+}
+
+/**
+ * Resolve the request with the given id and advance the queue. If it was the
+ * head (the shown one), reveal the next request in the same window, or close
+ * the window when the queue drains. Resolving a NON-head id (rare) just removes
+ * it without disturbing what's shown.
+ */
 function finish(id: string, result: ForceQuestionResult): void {
-    const p = pending.get(id);
-    if (!p) return;
-    pending.delete(id);
-    p.resolve(result);
-    if (!p.win.isDestroyed()) p.win.close();
+    const idx = queue.findIndex((q) => q.id === id);
+    if (idx === -1) return;
+    const [item] = queue.splice(idx, 1);
+    item.resolve(result);
+
+    // Only the head drives the window. If a queued (not-yet-shown) item was
+    // resolved, leave the current view alone.
+    if (idx !== 0) return;
+
+    if (queue.length === 0) {
+        // Nothing left — close the shared window. The `closed` handler is a
+        // no-op now that the queue is empty.
+        if (win && !win.isDestroyed()) win.close();
+        win = null;
+        return;
+    }
+    showHead();
+}
+
+/** Find the queued request whose window owns the given webContents id. */
+function itemBySender(senderId: number): QueueItem | undefined {
+    if (!win || win.isDestroyed() || win.webContents.id !== senderId) return undefined;
+    return queue[0];
 }
 
 /** Register the ask IPC handlers + capture window config. Idempotent. */
@@ -80,23 +131,24 @@ export function registerForceQuestionIpc(cfg: Config): void {
         finish(id, { cancelled: true, answers: [] });
     });
     // The renderer signals it has attached its `ask:show` listener. Deliver the
-    // payload NOW (race-free) — pushing on did-finish-load could fire before the
-    // React effect registers the listener, leaving the modal stuck "Waiting…".
+    // current head NOW (race-free) — pushing on did-finish-load could fire
+    // before the React effect registers the listener, leaving the modal stuck
+    // "Waiting…".
     ipcMain.handle('ask:ready', (e) => {
-        const p = findBySender(e.sender.id);
-        if (p && !p.win.isDestroyed()) p.win.webContents.send('ask:show', p.payload);
+        if (win && !win.isDestroyed() && win.webContents.id === e.sender.id) showHead();
     });
-    // Dismiss this window regardless of state (works even before the payload
-    // loads — the loading view's only escape). Resolves the call as cancelled.
+    // Dismiss the current question regardless of state (works even before the
+    // payload loads — the loading view's only escape). Resolves the SHOWN
+    // request as cancelled and advances to the next queued one.
     ipcMain.handle('ask:dismiss', (e) => {
-        const p = findBySender(e.sender.id);
-        if (p) finish(p.payload.id, { cancelled: true, answers: [] });
+        const item = itemBySender(e.sender.id);
+        if (item) finish(item.id, { cancelled: true, answers: [] });
     });
 }
 
 function createAskWindow(): BrowserWindow {
     if (!config) throw new Error('ForceTheQuestion IPC not registered');
-    const win = new BrowserWindow({
+    const w = new BrowserWindow({
         width: 560,
         height: 560,
         show: false,
@@ -118,60 +170,70 @@ function createAskWindow(): BrowserWindow {
     });
     // Float above full-screen apps and other always-on-top windows, then grab
     // focus so the user lands on the modal immediately.
-    win.setAlwaysOnTop(true, 'screen-saver');
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    w.setAlwaysOnTop(true, 'screen-saver');
+    w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
     if (config.isDev) {
-        win.loadURL('http://localhost:8888/ask');
+        w.loadURL('http://localhost:8888/ask');
     } else {
-        win.loadFile(path.join(__dirname, 'ask.html'));
+        w.loadFile(path.join(__dirname, 'ask.html'));
     }
-    win.once('ready-to-show', () => {
-        win.show();
-        win.focus();
+    w.once('ready-to-show', () => {
+        w.show();
+        w.focus();
     });
-    return win;
+    // A close without an answer (window control, OS, or our own teardown when
+    // the queue drains) cancels EVERY still-queued request so no caller hangs.
+    w.on('closed', () => {
+        if (win === w) win = null;
+        const dropped = queue.splice(0, queue.length);
+        for (const item of dropped) item.resolve({ cancelled: true, answers: [] });
+    });
+    return w;
 }
 
 /**
- * Raise the modal and resolve with the user's answers. Resolves cancelled if
- * the window is closed without a submit.
+ * Raise the modal and resolve with the user's answers. Concurrent calls queue:
+ * each resolves with ITS OWN result when its turn is answered or dismissed.
+ * Resolves cancelled if the window is closed before this request is answered.
  */
 export function forceQuestion(
     questions: ForceQuestion[],
     workspaceLabel?: string,
 ): Promise<ForceQuestionResult> {
     return new Promise((resolve) => {
-        let win: BrowserWindow;
+        const id = crypto.randomBytes(9).toString('hex');
+        const item: QueueItem = { id, resolve, questions, workspaceLabel };
+
+        // First in line opens the shared window; later ones just enqueue and
+        // wait their turn (the window is reused as each is answered).
+        const startsQueue = queue.length === 0;
+        queue.push(item);
+
+        if (!startsQueue) {
+            // A modal is already up. Refresh its "N more queued" badge so the
+            // user sees the new arrival, then return — this item shows later.
+            showHead();
+            return;
+        }
+
         try {
             win = createAskWindow();
         } catch {
+            queue.pop();
             resolve({ cancelled: true, answers: [] });
             return;
         }
         // Distinct chime so the user can tell ForceTheQuestion from imDone by ear.
         notifyForceQuestion();
-        const id = crypto.randomBytes(9).toString('hex');
-        const payload = { id, questions, workspaceLabel };
-        pending.set(id, { resolve, win, payload });
-
-        // A close without an answer (window control, OS) resolves cancelled.
-        win.on('closed', () => {
-            if (pending.has(id)) {
-                pending.delete(id);
-                resolve({ cancelled: true, answers: [] });
-            }
-        });
 
         // Primary delivery is the renderer's `ask:ready` handshake (race-free).
         // Also push on load as a best-effort fallback; the renderer dedupes.
-        const push = () => {
-            if (!win.isDestroyed()) win.webContents.send('ask:show', payload);
-        };
-        if (win.webContents.isLoading()) {
-            win.webContents.once('did-finish-load', push);
+        const w = win;
+        if (w.webContents.isLoading()) {
+            w.webContents.once('did-finish-load', () => showHead());
         } else {
-            push();
+            showHead();
         }
     });
 }

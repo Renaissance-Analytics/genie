@@ -386,6 +386,8 @@ const api = {
                     multiSelect?: boolean;
                     options: Array<{ label: string; description?: string }>;
                 }>;
+                /** How many other requests are still queued behind this one. */
+                queued?: number;
             }) => void,
         ) => {
             const handler = (_e: unknown, payload: any) => cb(payload);
