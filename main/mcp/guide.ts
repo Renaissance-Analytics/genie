@@ -36,6 +36,16 @@ wait.** Assume they can't see your terminal until you pull them to it.
 
 ## Tools
 
+### initializeWorkspace
+Call this **FIRST**, before doing any work, whenever you start in a fresh or
+newly-converted Genie workspace. It returns a MAP of the workspace — the \`.agi\`
+envelope, its \`.ai/knowledge\`, and (the main resource) every repo under
+\`repos/\` with its path, GitHub owner/repo, and which orientation files exist
+(README, AGENTS.md, CLAUDE.md, manifest) — plus a numbered plan for learning the
+project. It doesn't read file contents; follow the plan with your own file
+tools. The repos are the primary resource — learn them. Pass \`terminalId\`
+(your \`GENIE_TERMINAL_ID\`) for exact resolution; optional.
+
 ### imDone
 Call this the moment you **finish your work / hand back to the user** in THIS
 terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row,
@@ -77,6 +87,7 @@ multi-project workspace, an agent that waits silently is an agent that's stuck.
 /** Brief body synced into a workspace's AGENTS.md (points back to the full guide). */
 export const GENIE_AGENTS_BRIEF = `This workspace runs inside **Genie** — a desktop UX for agentic engineering that hosts many projects at once, each with multiple terminals/editors/processes. You are likely **one of several agents in different terminals**, and **the user is probably NOT watching this terminal**. A local \`genie\` MCP server (a fixed URL in this workspace's \`.mcp.json\`) lets you pull their attention:
 
+- **\`initializeWorkspace\`** — call this **FIRST** in a fresh/converted workspace; it returns a map of the envelope + every repo (paths, GitHub refs, which README/AGENTS/CLAUDE/manifest exist) and a plan for learning them. The repos are the primary resource.
 - **\`imDone\`** — call when you **finish / hand back**; Genie glows this terminal across the whole UI until the user looks. Pass \`terminalId\` (your \`GENIE_TERMINAL_ID\`) for exact targeting; optional.
 - **\`ForceTheQuestion\`** — call when **blocked or needing a decision**; pops an OS-level, always-on-top modal (above every app) with your question(s) (options + a free-text note) and blocks for the answer. Batch all questions into one call.
 

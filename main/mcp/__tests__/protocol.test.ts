@@ -12,6 +12,7 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
         serverVersion: '0.7.0',
         onImDone: vi.fn(),
         onForceQuestion: vi.fn().mockResolvedValue({ cancelled: true, answers: [] }),
+        describeWorkspace: vi.fn().mockResolvedValue(null),
         ...overrides,
     };
 }
@@ -40,17 +41,74 @@ describe('handleMcpMessage', () => {
         ).toBeNull();
     });
 
-    it('lists the imDone + ForceTheQuestion + genieGuide tools', async () => {
+    it('lists the initializeWorkspace + imDone + ForceTheQuestion + genieGuide tools', async () => {
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 2, method: 'tools/list' },
             ctx(),
         );
         const tools = (res?.result as { tools: Array<{ name: string }> }).tools;
         expect(tools.map((t) => t.name)).toEqual([
+            'initializeWorkspace',
             'imDone',
             'ForceTheQuestion',
             'genieGuide',
         ]);
+    });
+
+    it('initializeWorkspace routes to describeWorkspace and returns a map + plan', async () => {
+        const describeWorkspace = vi.fn().mockResolvedValue({
+            root: '/ws/demo.agi',
+            isAgiEnvelope: true,
+            hasProjectJson: true,
+            hasGitmodules: true,
+            knowledgeDir: '/ws/demo.agi/.ai/knowledge',
+            envelopeAgents: '/ws/demo.agi/AGENTS.md',
+            envelopeClaude: '/ws/demo.agi/CLAUDE.md',
+            repos: [
+                {
+                    name: 'api',
+                    path: '/ws/demo.agi/repos/api',
+                    owner: 'acme',
+                    repo: 'api',
+                    orientation: {
+                        readme: true,
+                        agents: false,
+                        claude: false,
+                        manifests: ['composer.json'],
+                    },
+                },
+            ],
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 10,
+                method: 'tools/call',
+                params: { name: 'initializeWorkspace', arguments: { terminalId: 'term-X' } },
+            },
+            ctx({ terminalId: 'term-X', describeWorkspace }),
+        );
+        expect(describeWorkspace).toHaveBeenCalledWith('term-X');
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('orientation');
+        expect(text).toContain('acme/api'); // the repo's GitHub ref
+        expect(text).toContain('/ws/demo.agi/repos/api'); // its absolute path
+        expect(text).toContain('How to learn this workspace'); // the numbered plan
+        expect(text).toContain('"isAgiEnvelope": true'); // machine-parseable JSON block
+    });
+
+    it('initializeWorkspace explains when the terminal maps to no workspace', async () => {
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 11,
+                method: 'tools/call',
+                params: { name: 'initializeWorkspace', arguments: {} },
+            },
+            ctx({ describeWorkspace: vi.fn().mockResolvedValue(null) }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain("Couldn't resolve this terminal");
     });
 
     it('serves the guide via initialize instructions and genieGuide', async () => {

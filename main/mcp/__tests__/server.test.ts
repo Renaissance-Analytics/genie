@@ -60,6 +60,7 @@ const deps = (
     workspaceTerminals: () => terminals,
     onImDone,
     onForceQuestion: async () => ({ cancelled: true, answers: [] }),
+    describeWorkspace: async () => null,
 });
 
 afterEach(() => stopMcpServer());

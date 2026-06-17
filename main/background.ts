@@ -20,7 +20,9 @@ import {
 } from './db';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import { registerForceQuestionIpc, forceQuestion } from './ask/force-question';
-import { registerIssueWatchIpc } from './issue-watch';
+import { registerIssueWatchIpc, resolveWorkspaceRepos } from './issue-watch';
+import { detectFolder } from './workspace/detect';
+import type { WorkspaceMap, WorkspaceRepoInfo } from './mcp/protocol';
 import { registerProtocolHandler, handleGenieUrl } from './auth';
 import {
     registerTerminalIpc,
@@ -123,6 +125,78 @@ function notifyImDone(terminalId: string): void {
         });
         n.show();
     }
+}
+
+/** Detect which package manifests sit at a repo root (orientation hint). */
+const MANIFEST_FILES = [
+    'package.json',
+    'composer.json',
+    'Cargo.toml',
+    'go.mod',
+    'pyproject.toml',
+];
+
+/**
+ * Build the workspace map for the `initializeWorkspace` MCP tool: resolve the
+ * caller's terminal → its workspace, enumerate the repos (reusing the issue-
+ * watch repo+remote resolver) and the envelope's orientation files, so a fresh
+ * agent gets a map + learning plan. Returns null when the terminal can't be
+ * mapped to a workspace.
+ */
+async function describeWorkspaceForMcp(
+    terminalId: string,
+): Promise<WorkspaceMap | null> {
+    const workspaceId = terminalId
+        ? getTerminalSpec(terminalId)?.workspace_id ?? null
+        : null;
+    if (!workspaceId) return null;
+    const ws = listWorkspaces().find((w) => w.id === workspaceId);
+    if (!ws) return null;
+
+    const root = ws.path;
+    const exists = (...segs: string[]) => fs.existsSync(path.join(root, ...segs));
+    const detect = (() => {
+        try {
+            return detectFolder(root);
+        } catch {
+            return null;
+        }
+    })();
+    const isAgiEnvelope =
+        ws.shape === 'agi' ||
+        detect?.state === 'FULL_ENVELOPE' ||
+        exists('project.json') ||
+        exists('.gitmodules');
+
+    const resolved = await resolveWorkspaceRepos(workspaceId).catch(() => []);
+    const repos: WorkspaceRepoInfo[] = resolved.map((r) => {
+        const at = (f: string) => fs.existsSync(path.join(r.path, f));
+        return {
+            name: path.basename(r.path),
+            path: r.path,
+            owner: r.owner ?? null,
+            repo: r.repo ?? null,
+            orientation: {
+                readme: at('README.md'),
+                agents: at('AGENTS.md'),
+                claude: at('CLAUDE.md'),
+                manifests: MANIFEST_FILES.filter((m) => at(m)),
+            },
+        };
+    });
+
+    return {
+        root,
+        isAgiEnvelope,
+        hasProjectJson: exists('project.json'),
+        hasGitmodules: exists('.gitmodules'),
+        knowledgeDir: exists('.ai', 'knowledge')
+            ? path.join(root, '.ai', 'knowledge')
+            : null,
+        envelopeAgents: exists('AGENTS.md') ? path.join(root, 'AGENTS.md') : null,
+        envelopeClaude: exists('CLAUDE.md') ? path.join(root, 'CLAUDE.md') : null,
+        repos,
+    };
 }
 
 // Single-instance lock. If a second copy of Genie is launched (e.g. clicking
@@ -680,6 +754,7 @@ app.whenReady().then(async () => {
             notifyImDone(terminalId);
         },
         onForceQuestion: (_terminalId, questions) => forceQuestion(questions),
+        describeWorkspace: (terminalId) => describeWorkspaceForMcp(terminalId),
     }).catch((e) => console.error('[mcp] failed to start', e));
     // Backfill the genie MCP entry into the Claude/Cursor config of any
     // workspace already opted in — now with the stable workspace endpoint URL,

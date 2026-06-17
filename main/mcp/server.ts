@@ -7,6 +7,7 @@ import {
     type ForceQuestion,
     type ForceQuestionResult,
     type JsonRpcRequest,
+    type WorkspaceMap,
 } from './protocol';
 
 /**
@@ -56,6 +57,8 @@ interface ServerDeps {
         terminalId: string,
         questions: ForceQuestion[],
     ) => Promise<ForceQuestionResult>;
+    /** Map the caller's workspace for the initializeWorkspace tool. */
+    describeWorkspace: (terminalId: string) => Promise<WorkspaceMap | null>;
 }
 
 let server: http.Server | null = null;
@@ -221,6 +224,7 @@ async function handle(
         serverVersion: deps.serverVersion,
         onImDone: deps.onImDone,
         onForceQuestion: deps.onForceQuestion,
+        describeWorkspace: deps.describeWorkspace,
     });
     // Notifications get a 202 with no body; requests get their JSON-RPC result.
     if (response === null) send(res, 202);

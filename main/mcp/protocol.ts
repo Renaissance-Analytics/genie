@@ -55,6 +55,47 @@ export interface ForceQuestionResult {
     answers: ForceAnswer[];
 }
 
+/** One repo in a workspace map (a member submodule, or the lone simple repo). */
+export interface WorkspaceRepoInfo {
+    /** Directory name under repos/ (or the basename for a simple workspace). */
+    name: string;
+    /** Absolute path to the repo's local checkout. */
+    path: string;
+    /** GitHub owner from the origin remote, if parseable. */
+    owner: string | null;
+    /** GitHub repo from the origin remote, if parseable. */
+    repo: string | null;
+    /** Which orientation files exist at the repo root. */
+    orientation: {
+        readme: boolean;
+        agents: boolean;
+        claude: boolean;
+        /** Detected package manifests (package.json, composer.json, …). */
+        manifests: string[];
+    };
+}
+
+/**
+ * The workspace map the `initializeWorkspace` tool hands a fresh agent. The
+ * dep (wired in background.ts) does the filesystem + git I/O; the protocol just
+ * formats this into guidance. Null when the terminal can't be mapped to a
+ * workspace (e.g. an unattached terminal).
+ */
+export interface WorkspaceMap {
+    /** Absolute path to the workspace root. */
+    root: string;
+    /** True when the root looks like a `.agi` envelope. */
+    isAgiEnvelope: boolean;
+    hasProjectJson: boolean;
+    hasGitmodules: boolean;
+    /** Absolute path to `.ai/knowledge` when present, else null. */
+    knowledgeDir: string | null;
+    /** Absolute path to the envelope's AGENTS.md / CLAUDE.md when present. */
+    envelopeAgents: string | null;
+    envelopeClaude: string | null;
+    repos: WorkspaceRepoInfo[];
+}
+
 export interface McpContext {
     /** The terminal id this endpoint is bound to (from the URL token). */
     terminalId: string;
@@ -71,6 +112,13 @@ export interface McpContext {
         terminalId: string,
         questions: ForceQuestion[],
     ) => Promise<ForceQuestionResult>;
+    /**
+     * Map the caller's workspace (root + repos + orientation files) so the
+     * `initializeWorkspace` tool can hand a fresh agent a learning plan. Does
+     * the filesystem/git I/O (kept out of this pure module). Null when the
+     * terminal can't be resolved to a workspace.
+     */
+    describeWorkspace: (terminalId: string) => Promise<WorkspaceMap | null>;
 }
 
 const TERMINAL_ID_PROP = {
@@ -98,6 +146,88 @@ const GUIDE_TOOL = {
         'Return the full usage guide for the Genie MCP server (what each tool does, when to use it, and the zero-setup per-terminal contract). Call this when you want details beyond the brief in AGENTS.md.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
 };
+
+const INITIALIZE_WORKSPACE_TOOL = {
+    name: 'initializeWorkspace',
+    description:
+        "Call this FIRST when you start in a fresh or newly-converted Genie workspace, before doing any work. It returns a MAP of the workspace — the .agi envelope, its `.ai/knowledge`, and (the main resource) every repo under repos/ with its path, GitHub owner/repo, and which orientation files exist (README, AGENTS.md, CLAUDE.md, package manifest) — plus a numbered plan for learning the project. It does NOT read file contents; use your own file tools to follow the plan. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact resolution; omit it to use the workspace's most-recently-active terminal.",
+    inputSchema: {
+        type: 'object',
+        properties: { ...TERMINAL_ID_PROP },
+        additionalProperties: false,
+    },
+};
+
+/**
+ * Format a workspace map into the agent-facing orientation: a numbered learning
+ * plan (envelope docs first, then each repo's README/AGENTS/CLAUDE + manifest,
+ * then how they relate, then summarize back) followed by a machine-parseable
+ * JSON block of the map. The repos are framed as the PRIMARY resource.
+ */
+export function formatWorkspaceMap(map: WorkspaceMap): string {
+    const lines: string[] = [];
+    lines.push('# Genie workspace — orientation');
+    lines.push('');
+    lines.push(
+        map.isAgiEnvelope
+            ? `This is a \`.agi\` envelope at ${map.root}. The repos under \`repos/\` are the PRIMARY resource — learn them first.`
+            : `This is a simple (single-repo) workspace at ${map.root}.`,
+    );
+    lines.push('');
+
+    if (map.repos.length === 0) {
+        lines.push('No repos detected yet. Once repos are added, re-run this tool.');
+    } else {
+        lines.push(
+            `## Repos (${map.repos.length}) — the main thing to learn`,
+        );
+        for (const r of map.repos) {
+            const gh = r.owner && r.repo ? ` (${r.owner}/${r.repo})` : '';
+            const has = [
+                r.orientation.readme && 'README',
+                r.orientation.agents && 'AGENTS.md',
+                r.orientation.claude && 'CLAUDE.md',
+                r.orientation.manifests.length
+                    ? `manifest: ${r.orientation.manifests.join(', ')}`
+                    : null,
+            ]
+                .filter(Boolean)
+                .join(' · ');
+            lines.push(`- **${r.name}**${gh} — ${r.path}`);
+            if (has) lines.push(`  has: ${has}`);
+        }
+    }
+    lines.push('');
+
+    lines.push('## How to learn this workspace');
+    let n = 1;
+    if (map.envelopeAgents || map.envelopeClaude) {
+        lines.push(
+            `${n++}. Read the envelope's ${
+                map.envelopeAgents ? 'AGENTS.md' : 'CLAUDE.md'
+            } at the root for the project-wide overview.`,
+        );
+    }
+    if (map.knowledgeDir) {
+        lines.push(
+            `${n++}. Skim \`.ai/knowledge\` (${map.knowledgeDir}) for shared notes and design docs.`,
+        );
+    }
+    lines.push(
+        `${n++}. For EACH repo above, read its README, then its AGENTS.md/CLAUDE.md (if present), then its manifest — to learn its stack, purpose, and available scripts. The repos are the primary resource.`,
+    );
+    lines.push(
+        `${n++}. Note how the repos relate (which is the host/app, which are packages it consumes).`,
+    );
+    lines.push(
+        `${n++}. Briefly summarize back to the user what this workspace is and what each repo does, then ask what they'd like to work on.`,
+    );
+    lines.push('');
+    lines.push('```json');
+    lines.push(JSON.stringify(map, null, 2));
+    lines.push('```');
+    return lines.join('\n');
+}
 
 const FORCE_QUESTION_TOOL = {
     name: 'ForceTheQuestion',
@@ -198,7 +328,12 @@ export async function handleMcpMessage(
 
         case 'tools/list':
             return ok(msg.id, {
-                tools: [IMDONE_TOOL, FORCE_QUESTION_TOOL, GUIDE_TOOL],
+                tools: [
+                    INITIALIZE_WORKSPACE_TOOL,
+                    IMDONE_TOOL,
+                    FORCE_QUESTION_TOOL,
+                    GUIDE_TOOL,
+                ],
             });
 
         case 'tools/call': {
@@ -220,6 +355,22 @@ export async function handleMcpMessage(
             if (params.name === 'genieGuide') {
                 return ok(msg.id, {
                     content: [{ type: 'text', text: GENIE_MCP_GUIDE }],
+                });
+            }
+            if (params.name === 'initializeWorkspace') {
+                const map = await ctx.describeWorkspace(ctx.terminalId);
+                if (!map) {
+                    return ok(msg.id, {
+                        content: [
+                            {
+                                type: 'text',
+                                text: "Couldn't resolve this terminal to a Genie workspace. Open this terminal inside a workspace (or pass your GENIE_TERMINAL_ID as `terminalId`) and try again.",
+                            },
+                        ],
+                    });
+                }
+                return ok(msg.id, {
+                    content: [{ type: 'text', text: formatWorkspaceMap(map) }],
                 });
             }
             if (params.name === 'ForceTheQuestion') {
