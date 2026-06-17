@@ -57,7 +57,7 @@ export default function WorkspaceList({ rows, onOpen, onRemove, onAdd }: Props) 
                                     justifyContent: 'center',
                                     color:
                                         w.shape === 'agi'
-                                            ? 'var(--violet-500)'
+                                            ? 'var(--amber-500)'
                                             : 'var(--blue-500)',
                                 }}
                             >
@@ -80,7 +80,7 @@ export default function WorkspaceList({ rows, onOpen, onRemove, onAdd }: Props) 
                                         {w.project_name ?? w.tynn_project_name}
                                     </Text>
                                     {w.shape === 'agi' && (
-                                        <Badge color="violet" size="sm" variant="soft">
+                                        <Badge color="amber" size="sm" variant="soft">
                                             .agi
                                         </Badge>
                                     )}

@@ -503,7 +503,9 @@ export default function Chooser({
                                 key={ws.id}
                                 className={`tproj${collapsed ? ' collapsed' : ''}${
                                     isActive ? ' is-active' : ''
-                                }${dragging ? ' dragging' : ''}`}
+                                }${dragging ? ' dragging' : ''}${
+                                    ws.shape === 'agi' ? ' agi' : ''
+                                }`}
                                 onDragOver={(e) => {
                                     if (!draggingId.current) return;
                                     e.preventDefault();

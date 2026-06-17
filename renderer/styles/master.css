@@ -31,6 +31,14 @@
     --host-desktop: #a1a1aa;
     --host-aionima: #8b5cf6;
 
+    /* Aionima .agi envelope mark — a 1px gold border + matching badge, so an
+       envelope reads as gold rather than the indigo --agent treatment it used
+       to borrow. A single muted gold reads on both the white and near-black
+       theme backgrounds (it's only ever a hairline border / soft fill). */
+    --agi-gold: #d4af37;
+    --agi-gold-border: color-mix(in srgb, var(--agi-gold) 60%, transparent);
+    --agi-gold-soft: color-mix(in srgb, var(--agi-gold) 16%, transparent);
+
     --agent: #818cf8;
     --agent-soft: color-mix(in srgb, #818cf8 18%, transparent);
     --agent-ring: color-mix(in srgb, #818cf8 42%, transparent);
@@ -1230,15 +1238,26 @@
 .tproj-head .pico {
     color: var(--fg-2);
 }
+/* An .agi envelope is marked by a 1px gold border around its row. Drawn as an
+   inset ring (box-shadow) so it adds no layout box and sits inside the rounded
+   header. When the row is also active, the active indigo ring wins (below) so
+   the selection state stays legible; the gold .agi badge still carries the
+   envelope signal. */
+.tproj.agi > .tproj-head {
+    box-shadow: inset 0 0 0 1px var(--agi-gold-border);
+}
+.tproj.agi.is-active > .tproj-head {
+    box-shadow: inset 0 0 0 1px var(--agent-ring);
+}
 .agi-badge {
     flex: 0 0 auto;
     font-size: 9.5px;
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: lowercase;
-    color: var(--agent);
-    background: color-mix(in srgb, var(--agent) 16%, transparent);
-    border: 1px solid color-mix(in srgb, var(--agent) 35%, transparent);
+    color: var(--agi-gold);
+    background: var(--agi-gold-soft);
+    border: 1px solid var(--agi-gold-border);
     border-radius: var(--radius-full);
     padding: 1px 6px;
 }
