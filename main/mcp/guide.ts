@@ -34,17 +34,31 @@ still the right one, but passing \`GENIE_TERMINAL_ID\` is exact.
 **Use these tools whenever you need the user's attention — don't just print and
 wait.** Assume they can't see your terminal until you pull them to it.
 
+## Orientation prompt (user-run, not a tool)
+
+**\`initializeWorkspace\`** is an MCP **prompt** the USER runs from their client's
+prompt / slash-command UI on first boot of a fresh or newly-converted Genie
+workspace — you do NOT call it yourself. When the user runs it, it hands you a
+MAP of the workspace — the \`.agi\` envelope, its \`.ai/knowledge\`, and (the main
+resource) every repo under \`repos/\` with its path, GitHub owner/repo, and which
+orientation files exist (README, AGENTS.md, CLAUDE.md, manifest) — plus a
+numbered plan for learning the project. Follow that plan with your own file
+tools; the repos are the primary resource.
+
 ## Tools
 
-### initializeWorkspace
-Call this **FIRST**, before doing any work, whenever you start in a fresh or
-newly-converted Genie workspace. It returns a MAP of the workspace — the \`.agi\`
-envelope, its \`.ai/knowledge\`, and (the main resource) every repo under
-\`repos/\` with its path, GitHub owner/repo, and which orientation files exist
-(README, AGENTS.md, CLAUDE.md, manifest) — plus a numbered plan for learning the
-project. It doesn't read file contents; follow the plan with your own file
-tools. The repos are the primary resource — learn them. Pass \`terminalId\`
-(your \`GENIE_TERMINAL_ID\`) for exact resolution; optional.
+### manageProcess
+Set up and control this workspace's **background processes** — Genie's Processes
+feature: long-running dev servers, queue workers, SSR, etc., supervised with
+status + crash auto-restart. Use it whenever your work needs a service running.
+Actions (\`action\` arg):
+- \`list\` — the workspace's processes + their status (use this to get ids).
+- \`create\` — register a new process. Needs \`label\` + \`command\`; optional
+  \`repo\` to run inside \`repos/<repo>\` (else the workspace root); optional
+  \`autostart\` to start it now and on every launch.
+- \`start\` / \`stop\` / \`restart\` — by \`processId\` (from a \`list\`).
+Returns the resulting process list. Pass \`terminalId\` (your
+\`GENIE_TERMINAL_ID\`) for exact workspace resolution; optional.
 
 ### imDone
 Call this the moment you **finish your work / hand back to the user** in THIS
@@ -114,6 +128,8 @@ multi-project workspace, an agent that waits silently is an agent that's stuck.
 ## Notes
 - The server is reached at a fixed local URL written into this workspace's
   \`.mcp.json\`. Pass \`GENIE_TERMINAL_ID\` as \`terminalId\` for exact targeting.
+- \`initializeWorkspace\` is an MCP **prompt** (\`prompts/list\` / \`prompts/get\`),
+  user-run — not in \`tools/list\`.
 - More tools may appear over time, some contextual to the project type. Re-read this
   guide (or \`tools/list\`) if you need the current set.
 `;
@@ -121,9 +137,10 @@ multi-project workspace, an agent that waits silently is an agent that's stuck.
 /** Brief body synced into a workspace's AGENTS.md (points back to the full guide). */
 export const GENIE_AGENTS_BRIEF = `This workspace runs inside **Genie** — a desktop UX for agentic engineering that hosts many projects at once, each with multiple terminals/editors/processes. You are likely **one of several agents in different terminals**, and **the user is probably NOT watching this terminal**. A local \`genie\` MCP server (a fixed URL in this workspace's \`.mcp.json\`) lets you pull their attention:
 
-- **\`initializeWorkspace\`** — call this **FIRST** in a fresh/converted workspace; it returns a map of the envelope + every repo (paths, GitHub refs, which README/AGENTS/CLAUDE/manifest exist) and a plan for learning them. The repos are the primary resource.
+- **\`initializeWorkspace\`** (a user-run **prompt**, not a tool) — the user runs it from their client's prompt/slash-command UI on first boot of a fresh/converted workspace; it hands you a map of the envelope + every repo (paths, GitHub refs, which README/AGENTS/CLAUDE/manifest exist) and a plan for learning them. Follow that plan — the repos are the primary resource.
 - **\`imDone\`** — call when you **finish / hand back**; Genie glows this terminal across the whole UI until the user looks. Pass \`terminalId\` (your \`GENIE_TERMINAL_ID\`) for exact targeting; optional.
 - **\`ForceTheQuestion\`** — call when **blocked or needing a decision**; pops an OS-level, always-on-top modal (above every app) with your question(s) (options + a free-text note) and blocks for the answer. Batch all questions into one call.
+- **\`manageProcess\`** — set up / control this workspace's background processes (dev servers, workers, SSR) — \`list\` / \`create\` (label + command, optional repo + autostart) / \`start\` / \`stop\` / \`restart\`.
 
 **Automate \`imDone\`:** if your harness supports an on-finish hook (Claude Code's \`Stop\` hook in \`.claude/settings.json\`; Codex's \`notify\`), wire it ONCE to POST a \`tools/call\` for \`imDone\` to \`$GENIE_MCP_URL\` (passing \`$GENIE_TERMINAL_ID\`) so the glow fires automatically every finish. Set this up in YOUR harness config yourself — Genie won't touch it. Call \`genieGuide\` for the exact hook snippet.
 

@@ -11,12 +11,15 @@ import path from 'path';
 import { createTray } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { registerIpcHandlers } from './ipc';
+import crypto from 'node:crypto';
 import {
     initDatabase,
     listWorkspaces,
     listTerminalSpecs,
     getAllSettings,
     getTerminalSpec,
+    getWorkspace,
+    createTerminalSpec,
 } from './db';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import { workspaceDocHealth, repairWorkspaceDocs } from './workspace/create-agi';
@@ -41,7 +44,18 @@ import {
     DEFAULT_MCP_PORT,
 } from './mcp/server';
 import { startControlServer } from './control';
-import { startAutostartProcesses } from './terminal/process-supervisor';
+import {
+    startAutostartProcesses,
+    startProcess,
+    stopProcess,
+    restartProcess,
+    getProcessStatuses,
+} from './terminal/process-supervisor';
+import type {
+    ManageProcessRequest,
+    ManageProcessResult,
+    ManagedProcessInfo,
+} from './mcp/protocol';
 import {
     initTerminalBackend,
     isHostBacked,
@@ -208,6 +222,125 @@ async function describeWorkspaceForMcp(
             };
         })(),
     };
+}
+
+/** A process spec's human command (meta.command), for the manageProcess result. */
+function processInfo(workspaceRoot: string, statuses: Record<string, string>) {
+    return (spec: ReturnType<typeof listTerminalSpecs>[number]): ManagedProcessInfo => {
+        const abs = spec.cwd ?? workspaceRoot;
+        let rel = '';
+        try {
+            rel = path.relative(workspaceRoot, abs).replace(/\\/g, '/');
+        } catch {
+            rel = '';
+        }
+        return {
+            id: spec.id,
+            label: spec.label,
+            command: spec.meta?.command ?? '',
+            status: statuses[spec.id] ?? 'stopped',
+            autostart: spec.meta?.autostart === true,
+            cwd: rel,
+        };
+    };
+}
+
+/**
+ * Back the manageProcess MCP tool. Resolves the workspace from the (already
+ * terminal-resolved) caller, then lists / creates / starts / stops / restarts
+ * its background process specs via the existing supervisor + spec store.
+ */
+async function manageProcessForMcp(
+    terminalId: string,
+    req: ManageProcessRequest,
+): Promise<ManageProcessResult> {
+    const wsId = terminalId ? getTerminalSpec(terminalId)?.workspace_id ?? null : null;
+    const ws = wsId ? getWorkspace(wsId) : null;
+    if (!ws) {
+        return { ok: false, error: 'No Genie workspace resolved for this terminal.', processes: [] };
+    }
+    const listFor = (): ManagedProcessInfo[] => {
+        const statuses = getProcessStatuses();
+        return listTerminalSpecs()
+            .filter((s) => s.workspace_id === ws.id && s.type === 'process')
+            .map(processInfo(ws.path, statuses));
+    };
+
+    let affectedId: string | undefined;
+    try {
+        switch (req.action) {
+            case 'list':
+                break;
+            case 'create': {
+                const label = req.label?.trim();
+                const command = req.command?.trim();
+                if (!label || !command) {
+                    return { ok: false, error: 'create requires `label` and `command`.', processes: listFor() };
+                }
+                // Optional repo subfolder → cwd; else the workspace root. Validate
+                // the repo name against the envelope's detected repos.
+                let cwd = ws.path;
+                if (req.repo) {
+                    let repos: string[] = [];
+                    try {
+                        repos = detectFolder(ws.path).repos ?? [];
+                    } catch {
+                        repos = [];
+                    }
+                    if (!repos.includes(req.repo)) {
+                        return {
+                            ok: false,
+                            error: `Unknown repo "${req.repo}". Available: ${repos.join(', ') || '(none)'}.`,
+                            processes: listFor(),
+                        };
+                    }
+                    cwd = path.join(ws.path, 'repos', req.repo);
+                }
+                const id = crypto.randomUUID();
+                createTerminalSpec({
+                    id,
+                    workspace_id: ws.id,
+                    label,
+                    cwd,
+                    type: 'process',
+                    meta: { command, autostart: req.autostart === true },
+                });
+                affectedId = id;
+                // autostart → start it now too (matches the "starts on launch" intent).
+                if (req.autostart === true) startProcess(id);
+                break;
+            }
+            case 'start':
+            case 'stop':
+            case 'restart': {
+                const id = req.processId;
+                const target = id
+                    ? listTerminalSpecs().find(
+                          (s) => s.id === id && s.workspace_id === ws.id && s.type === 'process',
+                      )
+                    : undefined;
+                if (!target) {
+                    return {
+                        ok: false,
+                        error: `No process "${id ?? ''}" in this workspace. Use action "list" to see ids.`,
+                        processes: listFor(),
+                    };
+                }
+                if (req.action === 'start') startProcess(target.id);
+                else if (req.action === 'stop') stopProcess(target.id);
+                else restartProcess(target.id);
+                affectedId = target.id;
+                break;
+            }
+        }
+    } catch (e) {
+        return {
+            ok: false,
+            error: e instanceof Error ? e.message : String(e),
+            processes: listFor(),
+        };
+    }
+    return { ok: true, processes: listFor(), affectedId };
 }
 
 // Single-instance lock. If a second copy of Genie is launched (e.g. clicking
@@ -784,6 +917,7 @@ app.whenReady().then(async () => {
             return forceQuestion(questions, workspaceLabel);
         },
         describeWorkspace: (terminalId) => describeWorkspaceForMcp(terminalId),
+        manageProcess: (terminalId, req) => manageProcessForMcp(terminalId, req),
     }).catch((e) => console.error('[mcp] failed to start', e));
     // Backfill the genie MCP entry into the Claude/Cursor config of any
     // workspace already opted in — now with the stable workspace endpoint URL,

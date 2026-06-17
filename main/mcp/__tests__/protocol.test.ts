@@ -13,6 +13,7 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
         onImDone: vi.fn(),
         onForceQuestion: vi.fn().mockResolvedValue({ cancelled: true, answers: [] }),
         describeWorkspace: vi.fn().mockResolvedValue(null),
+        manageProcess: vi.fn().mockResolvedValue({ ok: true, processes: [] }),
         ...overrides,
     };
 }
@@ -41,21 +42,41 @@ describe('handleMcpMessage', () => {
         ).toBeNull();
     });
 
-    it('lists the initializeWorkspace + imDone + ForceTheQuestion + genieGuide tools', async () => {
+    it('lists imDone + ForceTheQuestion + manageProcess + genieGuide tools (NOT initializeWorkspace — it is a prompt)', async () => {
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 2, method: 'tools/list' },
             ctx(),
         );
         const tools = (res?.result as { tools: Array<{ name: string }> }).tools;
         expect(tools.map((t) => t.name)).toEqual([
-            'initializeWorkspace',
             'imDone',
             'ForceTheQuestion',
+            'manageProcess',
             'genieGuide',
         ]);
+        expect(tools.map((t) => t.name)).not.toContain('initializeWorkspace');
     });
 
-    it('initializeWorkspace routes to describeWorkspace and returns a map + plan', async () => {
+    it('advertises the prompts capability on initialize', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 20, method: 'initialize' },
+            ctx(),
+        );
+        const caps = (res?.result as { capabilities: Record<string, unknown> }).capabilities;
+        expect(caps.prompts).toBeDefined();
+        expect(caps.tools).toBeDefined();
+    });
+
+    it('lists the initializeWorkspace prompt via prompts/list', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 21, method: 'prompts/list' },
+            ctx(),
+        );
+        const prompts = (res?.result as { prompts: Array<{ name: string }> }).prompts;
+        expect(prompts.map((p) => p.name)).toEqual(['initializeWorkspace']);
+    });
+
+    it('prompts/get initializeWorkspace routes to describeWorkspace and returns map + plan messages', async () => {
         const describeWorkspace = vi.fn().mockResolvedValue({
             root: '/ws/demo.agi',
             isAgiEnvelope: true,
@@ -70,47 +91,84 @@ describe('handleMcpMessage', () => {
                     path: '/ws/demo.agi/repos/api',
                     owner: 'acme',
                     repo: 'api',
-                    orientation: {
-                        readme: true,
-                        agents: false,
-                        claude: false,
-                        manifests: ['composer.json'],
-                    },
+                    orientation: { readme: true, agents: false, claude: false, manifests: ['composer.json'] },
                 },
             ],
         });
         const res = await handleMcpMessage(
             {
                 jsonrpc: '2.0',
-                id: 10,
-                method: 'tools/call',
-                params: { name: 'initializeWorkspace', arguments: { terminalId: 'term-X' } },
+                id: 22,
+                method: 'prompts/get',
+                params: { name: 'initializeWorkspace' },
             },
             ctx({ terminalId: 'term-X', describeWorkspace }),
         );
         expect(describeWorkspace).toHaveBeenCalledWith('term-X');
-        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
-        expect(text).toContain('orientation');
+        const messages = (res?.result as { messages: Array<{ role: string; content: { text: string } }> }).messages;
+        expect(messages.length).toBeGreaterThan(0);
+        const text = messages[0].content.text;
         expect(text).toContain('acme/api'); // the repo's GitHub ref
-        expect(text).toContain('/ws/demo.agi/repos/api'); // its absolute path
         expect(text).toContain('How to learn this workspace'); // the numbered plan
-        expect(text).toContain('imDone'); // recommends the auto-finish hook
-        expect(text).toMatch(/Stop hook|\.claude\/settings\.json/); // harness hook hint
         expect(text).toContain('"isAgiEnvelope": true'); // machine-parseable JSON block
     });
 
-    it('initializeWorkspace explains when the terminal maps to no workspace', async () => {
+    it('prompts/get explains when the terminal maps to no workspace', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 23, method: 'prompts/get', params: { name: 'initializeWorkspace' } },
+            ctx({ describeWorkspace: vi.fn().mockResolvedValue(null) }),
+        );
+        const messages = (res?.result as { messages: Array<{ content: { text: string } }> }).messages;
+        expect(messages[0].content.text).toContain("Couldn't resolve this terminal");
+    });
+
+    it('prompts/get errors on an unknown prompt name', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 24, method: 'prompts/get', params: { name: 'nope' } },
+            ctx(),
+        );
+        expect(res?.error?.code).toBe(-32602);
+    });
+
+    it('manageProcess routes to the dep and returns its result', async () => {
+        const manageProcess = vi.fn().mockResolvedValue({
+            ok: true,
+            affectedId: 'p-1',
+            processes: [
+                { id: 'p-1', label: 'dev', command: 'npm run dev', status: 'running', autostart: false, cwd: '' },
+            ],
+        });
         const res = await handleMcpMessage(
             {
                 jsonrpc: '2.0',
-                id: 11,
+                id: 25,
                 method: 'tools/call',
-                params: { name: 'initializeWorkspace', arguments: {} },
+                params: {
+                    name: 'manageProcess',
+                    arguments: { action: 'create', label: 'dev', command: 'npm run dev', terminalId: 'term-X' },
+                },
             },
-            ctx({ describeWorkspace: vi.fn().mockResolvedValue(null) }),
+            ctx({ terminalId: 'term-X', manageProcess }),
         );
+        expect(manageProcess).toHaveBeenCalledWith('term-X', {
+            action: 'create',
+            label: 'dev',
+            command: 'npm run dev',
+            repo: undefined,
+            autostart: undefined,
+            processId: undefined,
+        });
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
-        expect(text).toContain("Couldn't resolve this terminal");
+        expect(text).toContain('process'); // summary line
+        expect(text).toContain('npm run dev'); // the JSON block
+    });
+
+    it('manageProcess rejects a bad/missing action', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 26, method: 'tools/call', params: { name: 'manageProcess', arguments: {} } },
+            ctx(),
+        );
+        expect(res?.error?.code).toBe(-32602);
     });
 
     it('serves the guide via initialize instructions and genieGuide', async () => {
@@ -138,6 +196,9 @@ describe('handleMcpMessage', () => {
         expect(text).toContain('Automate imDone');
         expect(text).toContain('Stop');
         expect(text).toContain('$GENIE_MCP_URL');
+        // Documents the process tool + frames initializeWorkspace as a user-run prompt.
+        expect(text).toContain('manageProcess');
+        expect(text).toMatch(/initializeWorkspace[\s\S]*prompt/);
     });
 
     it('invokes onImDone with the bound terminal id on tools/call', async () => {

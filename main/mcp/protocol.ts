@@ -128,6 +128,52 @@ export interface McpContext {
      * terminal can't be resolved to a workspace.
      */
     describeWorkspace: (terminalId: string) => Promise<WorkspaceMap | null>;
+    /**
+     * Manage the caller's workspace background processes (the Genie Processes
+     * feature) for the manageProcess tool: list / create / start / stop /
+     * restart. Resolves the workspace from the terminal (same fallback as the
+     * other tools). Does the db + supervisor I/O (kept out of this pure module).
+     */
+    manageProcess: (
+        terminalId: string,
+        req: ManageProcessRequest,
+    ) => Promise<ManageProcessResult>;
+}
+
+/** A managed background process as the manageProcess tool reports it. */
+export interface ManagedProcessInfo {
+    id: string;
+    label: string;
+    command: string;
+    /** running | stopped | crashed | restarting | failed | (unknown) */
+    status: string;
+    autostart: boolean;
+    /** cwd relative to the workspace root, or '' for the root. */
+    cwd: string;
+}
+
+export interface ManageProcessRequest {
+    action: 'list' | 'create' | 'start' | 'stop' | 'restart';
+    /** create: human label. */
+    label?: string;
+    /** create: the command line the runner executes. */
+    command?: string;
+    /** create: a repo subfolder name (repos/<repo>) to run in, else the root. */
+    repo?: string;
+    /** create: start now + on every launch. Default false. */
+    autostart?: boolean;
+    /** start | stop | restart: the target process id (from a prior list). */
+    processId?: string;
+}
+
+export interface ManageProcessResult {
+    ok: boolean;
+    /** Set when ok is false (bad workspace, missing args, unknown id, …). */
+    error?: string;
+    /** The workspace's processes after the action (always returned on ok). */
+    processes: ManagedProcessInfo[];
+    /** The process the action targeted/created, when applicable. */
+    affectedId?: string;
 }
 
 const TERMINAL_ID_PROP = {
@@ -156,13 +202,58 @@ const GUIDE_TOOL = {
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
 };
 
-const INITIALIZE_WORKSPACE_TOOL = {
-    name: 'initializeWorkspace',
+/**
+ * The workspace-orientation PROMPT (was a tool through beta.3). It's USER-run —
+ * the user invokes it from their client's prompt/slash-command UI on first boot
+ * of a converted workspace — not something the agent calls autonomously. So it
+ * lives under MCP prompts (prompts/list + prompts/get), not tools.
+ */
+export const INITIALIZE_WORKSPACE_PROMPT_NAME = 'initializeWorkspace';
+const INITIALIZE_WORKSPACE_PROMPT = {
+    name: INITIALIZE_WORKSPACE_PROMPT_NAME,
+    title: 'Initialize workspace',
     description:
-        "Call this FIRST when you start in a fresh or newly-converted Genie workspace, before doing any work. It returns a MAP of the workspace — the .agi envelope, its `.ai/knowledge`, and (the main resource) every repo under repos/ with its path, GitHub owner/repo, and which orientation files exist (README, AGENTS.md, CLAUDE.md, package manifest) — plus a numbered plan for learning the project AND a recommendation to set up an on-finish hook in YOUR harness that auto-calls imDone. It does NOT read file contents or edit your harness config; use your own file tools to follow the plan. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact resolution; omit it to use the workspace's most-recently-active terminal.",
+        'Orient in this Genie workspace: a map of the .agi envelope + every repo (paths, GitHub refs, orientation files) and a numbered plan for learning the project. Run this on first boot of a fresh/converted workspace.',
+    // No required arguments; terminal is resolved from the connection.
+    arguments: [],
+};
+
+const MANAGE_PROCESS_TOOL = {
+    name: 'manageProcess',
+    description:
+        "Manage this workspace's background processes (Genie's Processes feature — long-running dev servers, queue workers, SSR, etc., supervised with status + crash auto-restart). Use it to set up or control processes you need while working. Actions: `list` (current processes + status); `create` (register a new one — needs `label` + `command`, optional `repo` to run inside repos/<repo>, optional `autostart` to start it now and on every launch); `start` / `stop` / `restart` (by `processId` from a prior list). Returns the resulting process list. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; omit to use the most-recently-active terminal.",
     inputSchema: {
         type: 'object',
-        properties: { ...TERMINAL_ID_PROP },
+        properties: {
+            ...TERMINAL_ID_PROP,
+            action: {
+                type: 'string',
+                enum: ['list', 'create', 'start', 'stop', 'restart'],
+                description: 'What to do.',
+            },
+            label: {
+                type: 'string',
+                description: 'create: a human label for the process.',
+            },
+            command: {
+                type: 'string',
+                description: 'create: the command line the runner executes (e.g. "npm run dev").',
+            },
+            repo: {
+                type: 'string',
+                description:
+                    'create (optional): a repo subfolder name to run inside (repos/<repo>); omit to run at the workspace root.',
+            },
+            autostart: {
+                type: 'boolean',
+                description: 'create (optional): start now and on every launch. Default false.',
+            },
+            processId: {
+                type: 'string',
+                description: 'start | stop | restart: the target process id (from a `list`).',
+            },
+        },
+        required: ['action'],
         additionalProperties: false,
     },
 };
@@ -268,6 +359,37 @@ export function formatWorkspaceMap(map: WorkspaceMap): string {
     return lines.join('\n');
 }
 
+/** One MCP prompt message (the subset we emit: a single text content part). */
+export interface PromptMessage {
+    role: 'user' | 'assistant';
+    content: { type: 'text'; text: string };
+}
+
+/**
+ * Build the prompts/get messages for the initializeWorkspace prompt. The user
+ * invokes the prompt; we return an assistant-authored orientation (the same map
+ * + plan formatWorkspaceMap produces) so the agent receives it as context.
+ */
+export function workspacePromptMessages(map: WorkspaceMap | null): PromptMessage[] {
+    if (!map) {
+        return [
+            {
+                role: 'assistant',
+                content: {
+                    type: 'text',
+                    text: "Couldn't resolve this terminal to a Genie workspace. Open this prompt from a terminal inside a workspace and try again.",
+                },
+            },
+        ];
+    }
+    return [
+        {
+            role: 'assistant',
+            content: { type: 'text', text: formatWorkspaceMap(map) },
+        },
+    ];
+}
+
 const FORCE_QUESTION_TOOL = {
     name: 'ForceTheQuestion',
     description:
@@ -353,7 +475,10 @@ export async function handleMcpMessage(
         case 'initialize':
             return ok(msg.id, {
                 protocolVersion: MCP_PROTOCOL_VERSION,
-                capabilities: { tools: { listChanged: false } },
+                capabilities: {
+                    tools: { listChanged: false },
+                    prompts: { listChanged: false },
+                },
                 serverInfo: { name: ctx.serverName, version: ctx.serverVersion },
                 // MCP-native "how to use this server" channel. Mirrors genieGuide.
                 instructions: GENIE_MCP_GUIDE,
@@ -368,17 +493,34 @@ export async function handleMcpMessage(
         case 'tools/list':
             return ok(msg.id, {
                 tools: [
-                    INITIALIZE_WORKSPACE_TOOL,
                     IMDONE_TOOL,
                     FORCE_QUESTION_TOOL,
+                    MANAGE_PROCESS_TOOL,
                     GUIDE_TOOL,
                 ],
             });
 
+        case 'prompts/list':
+            return ok(msg.id, { prompts: [INITIALIZE_WORKSPACE_PROMPT] });
+
+        case 'prompts/get': {
+            const name = (msg.params as { name?: string } | undefined)?.name;
+            if (name !== INITIALIZE_WORKSPACE_PROMPT_NAME) {
+                return err(msg.id, -32602, `Unknown prompt: ${String(name)}`);
+            }
+            const map = await ctx.describeWorkspace(ctx.terminalId);
+            return ok(msg.id, {
+                description: INITIALIZE_WORKSPACE_PROMPT.description,
+                messages: workspacePromptMessages(map),
+            });
+        }
+
         case 'tools/call': {
             const params = (msg.params ?? {}) as {
                 name?: string;
-                arguments?: { questions?: ForceQuestion[] };
+                arguments?: {
+                    questions?: ForceQuestion[];
+                } & Partial<ManageProcessRequest>;
             };
             if (params.name === 'imDone') {
                 ctx.onImDone(ctx.terminalId);
@@ -396,20 +538,42 @@ export async function handleMcpMessage(
                     content: [{ type: 'text', text: GENIE_MCP_GUIDE }],
                 });
             }
-            if (params.name === 'initializeWorkspace') {
-                const map = await ctx.describeWorkspace(ctx.terminalId);
-                if (!map) {
-                    return ok(msg.id, {
-                        content: [
-                            {
-                                type: 'text',
-                                text: "Couldn't resolve this terminal to a Genie workspace. Open this terminal inside a workspace (or pass your GENIE_TERMINAL_ID as `terminalId`) and try again.",
-                            },
-                        ],
-                    });
+            if (params.name === 'manageProcess') {
+                const a = params.arguments ?? {};
+                const action = a.action;
+                if (
+                    action !== 'list' &&
+                    action !== 'create' &&
+                    action !== 'start' &&
+                    action !== 'stop' &&
+                    action !== 'restart'
+                ) {
+                    return err(
+                        msg.id,
+                        -32602,
+                        'manageProcess requires `action`: list | create | start | stop | restart.',
+                    );
                 }
+                const result = await ctx.manageProcess(ctx.terminalId, {
+                    action,
+                    label: a.label,
+                    command: a.command,
+                    repo: a.repo,
+                    autostart: a.autostart,
+                    processId: a.processId,
+                });
+                const summary = result.ok
+                    ? `${result.processes.length} process${result.processes.length === 1 ? '' : 'es'} in this workspace${
+                          result.affectedId ? ` (acted on ${result.affectedId})` : ''
+                      }.`
+                    : `manageProcess failed: ${result.error ?? 'unknown error'}`;
                 return ok(msg.id, {
-                    content: [{ type: 'text', text: formatWorkspaceMap(map) }],
+                    content: [
+                        {
+                            type: 'text',
+                            text: `${summary}\n\n${JSON.stringify(result, null, 2)}`,
+                        },
+                    ],
                 });
             }
             if (params.name === 'ForceTheQuestion') {

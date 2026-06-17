@@ -70,6 +70,9 @@ describe('applyAgentsSection', () => {
         expect(out).toContain(BEGIN);
         expect(out).toContain(END);
         expect(out).toContain('genieGuide');
+        // beta.4 framing: manageProcess documented; initializeWorkspace is a prompt.
+        expect(out).toContain('manageProcess');
+        expect(out).toContain('prompt');
     });
 
     it('is idempotent — re-running does not duplicate the block', () => {

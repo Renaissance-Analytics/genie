@@ -61,6 +61,7 @@ const deps = (
     onImDone,
     onForceQuestion: async () => ({ cancelled: true, answers: [] }),
     describeWorkspace: async () => null,
+    manageProcess: async () => ({ ok: true, processes: [] }),
 });
 
 afterEach(() => stopMcpServer());
