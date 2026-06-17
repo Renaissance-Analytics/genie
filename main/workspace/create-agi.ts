@@ -439,6 +439,13 @@ export async function convertToAgiPlan(opts: ConvertPlanOpts): Promise<CreateAgi
                 `Failed to add submodule from ${r.source} → ${submodulePath}: ${(e as Error).message}`,
             );
         }
+        // Local sources clone only tracked files — restore their gitignored
+        // working-tree env files (.env / .env.*) so the converted app runs.
+        // `r.source` IS the local working-tree path when is_local. Remote
+        // members have no local tree (copyEnvFiles no-ops on a non-dir).
+        if (r.is_local) {
+            copyEnvFiles(r.source, path.join(base.path, submodulePath));
+        }
         // Record the submodule's tracked branch so `git submodule update
         // --remote` can advance the pin later. A freshly cloned submodule is
         // normally on its default branch; a detached HEAD (clone pinned to a
@@ -538,6 +545,43 @@ export async function pushEnvelopeToOrigin(
 }
 
 /**
+ * Copy a LOCAL source's root-level env files into the freshly-added submodule
+ * dir. `git submodule add` clones via git, which only brings TRACKED files —
+ * but `.env` is conventionally gitignored, so the converted workspace's app
+ * would start with no env and fail to run. We restore the local working-tree
+ * `.env` / `.env.*` files so the app still runs.
+ *
+ * SAFETY: the submodule's own `.gitignore` still ignores `.env`, so these stay
+ * UNTRACKED there — we're restoring local working files, not committing secrets.
+ * We never git-add them. Root-level only (no recursion): env files live at the
+ * repo root, and recursing could scoop secrets out of nested dirs. Best-effort
+ * — a failed copy must never fail the conversion. No-op when `sourceDir` isn't
+ * a readable directory (e.g. a remote-only source has no local working tree).
+ */
+export function copyEnvFiles(sourceDir: string, submoduleDir: string): void {
+    try {
+        if (!fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
+            return;
+        }
+        for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+            if (!entry.isFile()) continue;
+            // `.env` exactly, or `.env.<anything>` (.env.local, .env.production.local).
+            if (entry.name !== '.env' && !entry.name.startsWith('.env.')) continue;
+            try {
+                fs.copyFileSync(
+                    path.join(sourceDir, entry.name),
+                    path.join(submoduleDir, entry.name),
+                );
+            } catch {
+                /* skip this file — never fail the conversion over an env copy */
+            }
+        }
+    } catch {
+        /* best-effort — unreadable source dir, etc. */
+    }
+}
+
+/**
  * Walk a directory and copy its contents into `dest`. We can't use
  * `fs.cpSync` directly because Electron's Node version doesn't ship a
  * stable variant on all platforms — this is the small recursive version
@@ -592,6 +636,13 @@ export async function convertToAgi(opts: ConvertToAgiOpts): Promise<ConvertToAgi
     // to plain `git` via execFile. Everything else still goes through
     // simple-git.
     await runGitSubmoduleAdd(base.path, submoduleUrl, submodulePath);
+    // A local source clones only tracked files — restore its gitignored
+    // working-tree env files (.env / .env.*) so the converted app still runs.
+    // (Even a local folder WITH an origin clones from the remote, so its
+    // working tree at source.path is still the place to copy env from.)
+    if (opts.source.kind === 'local') {
+        copyEnvFiles(opts.source.path, path.join(base.path, submodulePath));
+    }
     // Surface the submodule's MCP config (if any) at the envelope root.
     consolidateMcp(base.path);
     const git = simpleGit({ baseDir: base.path });

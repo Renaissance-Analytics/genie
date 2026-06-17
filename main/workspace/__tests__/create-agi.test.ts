@@ -7,6 +7,7 @@ import {
     consolidateMcpAndCommit,
     convertToAgi,
     convertToAgiPlan,
+    copyEnvFiles,
     createAgiEnvelope,
     deriveRepoName,
     envelopeFolderName,
@@ -449,5 +450,48 @@ describe('convertToAgiPlan (monorepo explode)', () => {
         expect(pj.primaryRepo).toBe('app');
         expect(pj.hosting?.enabled).toBe(true);
         expect(pj.repos?.[0].role).toBe('host');
+    });
+});
+
+describe('copyEnvFiles', () => {
+    it('copies root-level .env / .env.* working files into the submodule dir', () => {
+        const src = makeTmpDir('env-src');
+        const dst = makeTmpDir('env-dst');
+        fs.writeFileSync(path.join(src, '.env'), 'SECRET=1\n');
+        fs.writeFileSync(path.join(src, '.env.local'), 'LOCAL=2\n');
+        fs.writeFileSync(path.join(src, '.env.production.local'), 'PROD=3\n');
+        // Non-env files are NOT copied.
+        fs.writeFileSync(path.join(src, 'README.md'), '# readme\n');
+
+        copyEnvFiles(src, dst);
+
+        expect(fs.readFileSync(path.join(dst, '.env'), 'utf8')).toBe('SECRET=1\n');
+        expect(fs.readFileSync(path.join(dst, '.env.local'), 'utf8')).toBe('LOCAL=2\n');
+        expect(fs.existsSync(path.join(dst, '.env.production.local'))).toBe(true);
+        expect(fs.existsSync(path.join(dst, 'README.md'))).toBe(false);
+    });
+
+    it('does not recurse — only root-level env files are copied', () => {
+        const src = makeTmpDir('env-src-nested');
+        const dst = makeTmpDir('env-dst-nested');
+        fs.mkdirSync(path.join(src, 'nested'));
+        fs.writeFileSync(path.join(src, 'nested', '.env'), 'NESTED=1\n');
+        copyEnvFiles(src, dst);
+        expect(fs.existsSync(path.join(dst, 'nested'))).toBe(false);
+        expect(fs.existsSync(path.join(dst, '.env'))).toBe(false);
+    });
+
+    it('is a no-op when the source has no env files', () => {
+        const src = makeTmpDir('env-src-empty');
+        const dst = makeTmpDir('env-dst-empty');
+        fs.writeFileSync(path.join(src, 'package.json'), '{}\n');
+        expect(() => copyEnvFiles(src, dst)).not.toThrow();
+        expect(fs.readdirSync(dst)).toEqual([]);
+    });
+
+    it('does not throw on a missing source dir', () => {
+        const dst = makeTmpDir('env-dst-missing');
+        expect(() => copyEnvFiles('/no/such/source/dir', dst)).not.toThrow();
+        expect(fs.readdirSync(dst)).toEqual([]);
     });
 });
