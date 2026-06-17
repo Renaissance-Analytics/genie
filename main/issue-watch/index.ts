@@ -57,6 +57,20 @@ export function unreadByKind(items: WatchItem[], seenAt: string): TypeCounts {
     return out;
 }
 
+/**
+ * Pure: bucket ALL items by kind (no seen_at filter). This drives the
+ * workspace 3-dot pill / rail dot, which signal PRESENCE — "is there anything
+ * to act on?" — not unread-since-last-seen. A repo with ≥1 open issue keeps a
+ * green issue-dot until that issue closes; opening the flyout (which marks
+ * seen) must NOT grey the dot. The seen-based `unreadByKind` still drives the
+ * feed's per-item "new since you looked" highlight.
+ */
+export function countByKind(items: WatchItem[]): TypeCounts {
+    const out: TypeCounts = { issue: 0, pr: 0, dependabot: 0 };
+    for (const i of items) out[i.kind] += 1;
+    return out;
+}
+
 const cacheKey = (owner: string, repo: string) => `${owner}/${repo}`;
 
 /**
@@ -185,19 +199,20 @@ export async function getWorkspaceFeed(
     return out;
 }
 
-/** Epoch sentinel: a default-on repo with no row has "seen nothing". */
-const EPOCH = '1970-01-01T00:00:00.000Z';
-
 /**
- * Per-workspace unread tallies by type (for the workspace 3-dot pill).
+ * Per-workspace OPEN-item tallies by type — the source for the workspace
+ * 3-dot pill / rail dot, which signal PRESENCE ("is there anything to act
+ * on?"), NOT unread-since-last-seen.
  *
  * Counts the workspace's AUTO-DETECTED repos (default-on), not just persisted
- * `issue_watches` rows — mirroring getWorkspaceRepoViews. A repo with no row is
- * treated as enabled with seen_at = epoch, so all its open items count as
- * unread and the pill goes green until the user opens the flyout (which
- * mark-seens). Async because resolving a workspace's repos reads git remotes.
+ * `issue_watches` rows — mirroring getWorkspaceRepoViews; a repo with no row is
+ * treated as enabled. Each enabled repo's open items are bucketed by kind with
+ * `countByKind` (NO seen_at filter), so a dot stays green as long as items of
+ * that type are open and opening the flyout (which mark-seens) does NOT grey
+ * it. The seen-based unread highlight lives in the feed, not here. Async
+ * because resolving a workspace's repos reads git remotes.
  */
-export async function getUnreadCounts(): Promise<Record<string, TypeCounts>> {
+export async function getOpenCounts(): Promise<Record<string, TypeCounts>> {
     const out: Record<string, TypeCounts> = {};
     for (const ws of listWorkspaces()) {
         let repos: ResolvedRepo[];
@@ -214,10 +229,7 @@ export async function getUnreadCounts(): Promise<Record<string, TypeCounts>> {
             const w = byKey.get(cacheKey(r.owner, r.repo));
             const enabled = w ? w.enabled === 1 : true; // default ON
             if (!enabled) continue;
-            const k = unreadByKind(
-                feedCache.get(cacheKey(r.owner, r.repo)) ?? [],
-                w?.seen_at ?? EPOCH,
-            );
+            const k = countByKind(feedCache.get(cacheKey(r.owner, r.repo)) ?? []);
             acc.issue += k.issue;
             acc.pr += k.pr;
             acc.dependabot += k.dependabot;
@@ -228,7 +240,7 @@ export async function getUnreadCounts(): Promise<Record<string, TypeCounts>> {
 }
 
 async function broadcastUpdate(): Promise<void> {
-    const counts = await getUnreadCounts();
+    const counts = await getOpenCounts();
     for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) win.webContents.send('issue-watch:update', { counts });
     }
@@ -267,7 +279,7 @@ export function registerIssueWatchIpc(): void {
         })();
         return { ok: true };
     });
-    ipcMain.handle('issue-watch:counts', () => getUnreadCounts());
+    ipcMain.handle('issue-watch:counts', () => getOpenCounts());
 
     if (!pollTimer) {
         pollTimer = setInterval(() => void pollAll(), POLL_INTERVAL_MS);

@@ -12,8 +12,10 @@ import {
  * inherits the titlebar offset + slide animation). For the active workspace it
  * lists the auto-detected GitHub repos with a per-repo watch toggle + unread
  * count, and a unified feed of open Issues / PRs / Dependabot alerts (newest
- * first), unread items highlighted. Opening marks the workspace seen (clears the
- * rail dot + badge); the current view keeps its unread highlights.
+ * first), unread items highlighted. Opening marks the workspace seen, which
+ * clears the per-item "new since you looked" highlights on the next view — it
+ * does NOT clear the rail dot / 3-dot pill: those signal PRESENCE of open items
+ * (getOpenCounts), so they stay lit until the items themselves are closed.
  */
 const KIND_LABEL: Record<WatchFeedItem['kind'], string> = {
     issue: 'Issue',
