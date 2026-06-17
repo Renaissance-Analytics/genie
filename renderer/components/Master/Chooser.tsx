@@ -634,6 +634,7 @@ export default function Chooser({
                                             onDestroy={() => onDestroySpec(s.id)}
                                             onDisable={() => onDisableSpec(s.id)}
                                             onEnable={() => onEnableSpec(s.id)}
+                                            onActivate={() => onActivateWorkspace(ws.id)}
                                             onContextMenu={(p) =>
                                                 onOpenContextMenu(s.id, p)
                                             }
@@ -892,6 +893,13 @@ export default function Chooser({
                                         onDestroy={() => onDestroySpec(s.id)}
                                         onDisable={() => onDisableSpec(s.id)}
                                         onEnable={() => onEnableSpec(s.id)}
+                                        onActivate={() => {
+                                            // Orphaned specs may have no workspace;
+                                            // activate one only when attached.
+                                            if (s.workspace_id) {
+                                                onActivateWorkspace(s.workspace_id);
+                                            }
+                                        }}
                                         onContextMenu={(p) =>
                                             onOpenContextMenu(s.id, p)
                                         }
@@ -1252,6 +1260,8 @@ interface SpecRowProps {
     onDestroy: () => void;
     onDisable: () => void;
     onEnable: () => void;
+    /** Activate this view's workspace on row-click (jump to it in the master view). */
+    onActivate: () => void;
     onContextMenu: (position: { x: number; y: number }) => void;
 }
 
@@ -1279,6 +1289,7 @@ function SpecRow({
     onDestroy,
     onDisable,
     onEnable,
+    onActivate,
     onContextMenu,
 }: SpecRowProps) {
     const handleDestroy = async (e: React.MouseEvent) => {
@@ -1292,10 +1303,15 @@ function SpecRow({
         if (ok !== null) onDestroy();
     };
     const isTerminal = spec.type !== 'code';
-    // Suspended rows resume on click. For a normal view, clicking the row never
-    // HIDES it (that's the eyeball's job) — it only reveals a hidden one. So a
-    // shown row is a no-op on click; a hidden row shows on click.
-    const onRowClick = suspended ? onEnable : checked ? () => {} : onToggle;
+    // Clicking a view ALWAYS activates its workspace (jump to it), matching a
+    // click on the workspace row. On top of that: suspended rows resume; a
+    // hidden row is shown; a visible row stays put (the eyeball is the dedicated
+    // hide toggle — row-click never hides).
+    const onRowClick = () => {
+        onActivate();
+        if (suspended) onEnable();
+        else if (!checked) onToggle();
+    };
     return (
         <div
             className={`tterm${checked ? ' on sel' : ''}${suspended ? ' suspended' : ''}${attention ? ' attention' : ''}`}

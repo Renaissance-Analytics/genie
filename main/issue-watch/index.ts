@@ -163,7 +163,7 @@ async function pollAll(): Promise<void> {
             /* best-effort — one workspace's failure shouldn't sink the rest */
         }
     }
-    broadcastUpdate();
+    await broadcastUpdate();
 }
 
 /** The flattened, unread-flagged feed for a workspace (newest first). */
@@ -185,14 +185,39 @@ export async function getWorkspaceFeed(
     return out;
 }
 
-/** Per-workspace unread tallies by type (for the workspace 3-dot pill). */
-export function getUnreadCounts(): Record<string, TypeCounts> {
+/** Epoch sentinel: a default-on repo with no row has "seen nothing". */
+const EPOCH = '1970-01-01T00:00:00.000Z';
+
+/**
+ * Per-workspace unread tallies by type (for the workspace 3-dot pill).
+ *
+ * Counts the workspace's AUTO-DETECTED repos (default-on), not just persisted
+ * `issue_watches` rows — mirroring getWorkspaceRepoViews. A repo with no row is
+ * treated as enabled with seen_at = epoch, so all its open items count as
+ * unread and the pill goes green until the user opens the flyout (which
+ * mark-seens). Async because resolving a workspace's repos reads git remotes.
+ */
+export async function getUnreadCounts(): Promise<Record<string, TypeCounts>> {
     const out: Record<string, TypeCounts> = {};
     for (const ws of listWorkspaces()) {
+        let repos: ResolvedRepo[];
+        try {
+            repos = await resolveWorkspaceRepos(ws.id);
+        } catch {
+            continue; // best-effort — a bad workspace shouldn't sink the rest
+        }
+        if (repos.length === 0) continue;
+        const watches = listIssueWatches(ws.id);
+        const byKey = new Map(watches.map((w) => [cacheKey(w.owner, w.repo), w]));
         const acc: TypeCounts = { issue: 0, pr: 0, dependabot: 0 };
-        for (const w of listIssueWatches(ws.id)) {
-            if (w.enabled !== 1) continue;
-            const k = unreadByKind(feedCache.get(cacheKey(w.owner, w.repo)) ?? [], w.seen_at);
+        for (const r of repos) {
+            const w = byKey.get(cacheKey(r.owner, r.repo));
+            const enabled = w ? w.enabled === 1 : true; // default ON
+            if (!enabled) continue;
+            const k = unreadByKind(
+                feedCache.get(cacheKey(r.owner, r.repo)) ?? [],
+                w?.seen_at ?? EPOCH,
+            );
             acc.issue += k.issue;
             acc.pr += k.pr;
             acc.dependabot += k.dependabot;
@@ -202,8 +227,8 @@ export function getUnreadCounts(): Record<string, TypeCounts> {
     return out;
 }
 
-function broadcastUpdate(): void {
-    const counts = getUnreadCounts();
+async function broadcastUpdate(): Promise<void> {
+    const counts = await getUnreadCounts();
     for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) win.webContents.send('issue-watch:update', { counts });
     }
@@ -220,7 +245,7 @@ export function registerIssueWatchIpc(): void {
         async (_e, workspaceId: string, owner: string, repo: string, enabled: boolean) => {
             setIssueWatch(workspaceId, owner, repo, enabled);
             if (enabled) await pollRepo(owner, repo).catch(() => []);
-            broadcastUpdate();
+            await broadcastUpdate();
             return { ok: true };
         },
     );
@@ -238,7 +263,7 @@ export function registerIssueWatchIpc(): void {
             for (const v of await getWorkspaceRepoViews(workspaceId)) {
                 markIssueWatchSeen(workspaceId, v.owner, v.repo, now);
             }
-            broadcastUpdate();
+            await broadcastUpdate();
         })();
         return { ok: true };
     });
