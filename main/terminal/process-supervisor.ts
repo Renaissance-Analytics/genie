@@ -211,6 +211,14 @@ export function onProcessPtyExit(
     if (st.restartRequested) {
         st.restartRequested = false;
         st.userStopped = false;
+        // The old pty just died, but the status is still 'running' from before
+        // the restart kill. startProcess()'s guard bounces 'running'/'restarting'
+        // straight back into restartProcess() — which (the pty already dead)
+        // throws, catches, and re-enters startProcess on a still-'running'
+        // status, looping without ever spawning. Clear to 'stopped' so the
+        // guard passes and a fresh pty actually launches. ('restarting' would
+        // also be caught by the guard, so it must be 'stopped'.)
+        st.status = 'stopped';
         startProcess(id);
         return;
     }
