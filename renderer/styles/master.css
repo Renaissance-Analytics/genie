@@ -35,7 +35,7 @@
        envelope reads as gold rather than the indigo --agent treatment it used
        to borrow. A single muted gold reads on both the white and near-black
        theme backgrounds (it's only ever a hairline border / soft fill). */
-    --agi-gold: #d4af37;
+    --agi-gold: #fcd34d;
     --agi-gold-border: color-mix(in srgb, var(--agi-gold) 60%, transparent);
     --agi-gold-soft: color-mix(in srgb, var(--agi-gold) 16%, transparent);
 
