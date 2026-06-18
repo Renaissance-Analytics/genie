@@ -679,14 +679,17 @@ function AionimaSection() {
 }
 
 /**
- * GitHub connection — Device Flow OAuth so we don't need to ship a
- * client secret or run an embedded browser. The user registers an
- * OAuth App at https://github.com/settings/applications/new with
- * Device Flow enabled and pastes the client ID here.
+ * GitHub connection — Device Flow against the "Genie IDE" GitHub App, so
+ * we don't ship a client secret or run an embedded browser. The App's
+ * fine-grained permissions are declared on the App (no scopes are
+ * requested at sign-in) and only apply where the App is installed.
  *
  * Connect: click Connect → modal shows the user_code + the URL to
  * visit. While the modal is open, we poll the main-side status until
- * GitHub returns a token (success) or the code expires.
+ * GitHub returns a token (success) or the code expires. Tokens are
+ * non-expiring (App configured with token-expiry off), so there's no
+ * refresh handling; old OAuth-App tokens keep working until the user
+ * reconnects here to switch to the App.
  */
 function GitHubSection() {
     const [connected, setConnected] = useState(false);
@@ -802,7 +805,7 @@ function GitHubSection() {
                     GitHub
                 </Heading>
                 <Text size="xs" className="text-zinc-500">
-                    Device Flow auth · used to create .agi repos
+                    GitHub App (Device Flow) · used to create .agi repos
                 </Text>
                 <span style={{ flex: 1 }} />
                 {connected && username && (
@@ -821,10 +824,10 @@ function GitHubSection() {
 
             {!builtInClientId && !showAdvanced && (
                 <Text size="xs" style={{ color: 'var(--rose-500)' }}>
-                    This Genie build doesn't ship a baked-in OAuth Client ID.
-                    Open Advanced to paste one (you'll need to register your own
-                    OAuth App at github.com/settings/applications/new with
-                    Enable Device Flow ticked).
+                    This Genie build doesn't ship a baked-in GitHub App Client
+                    ID. Open Advanced to paste one (you'll need to register your
+                    own GitHub App at github.com/settings/apps/new with Device
+                    Flow enabled).
                 </Text>
             )}
 
@@ -845,7 +848,7 @@ function GitHubSection() {
                     }}
                 >
                     <Text size="xs" style={{ flex: 1 }}>
-                        Using a custom OAuth Client ID (<code>{activeClientId}</code>)
+                        Using a custom GitHub App Client ID (<code>{activeClientId}</code>)
                         instead of the one bundled with Genie. If sign-in fails,
                         this is the likely cause.
                     </Text>
@@ -871,6 +874,19 @@ function GitHubSection() {
                         Disconnect
                     </Action>
                 )}
+                {connected && (
+                    <Action
+                        variant="ghost"
+                        size="sm"
+                        icon="external-link"
+                        onClick={async () => {
+                            const url = await api().github.installUrl();
+                            void api().tynn.openInBrowser(url);
+                        }}
+                    >
+                        Manage installation…
+                    </Action>
+                )}
                 <span style={{ flex: 1 }} />
                 <Action
                     variant="ghost"
@@ -884,15 +900,15 @@ function GitHubSection() {
             {showAdvanced && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 8, borderTop: '1px solid var(--border-1)' }}>
                     <Input
-                        label="OAuth App client ID override"
+                        label="GitHub App Client ID override"
                         description={
                             builtInClientId
-                                ? 'This Genie build ships with a baked-in OAuth Client ID. Use this field only if you want to point Genie at a different OAuth App (self-hosters, devs testing forks). Leave blank to use the bundle default. The Client ID is public, not a secret. Required scopes: repo, read:org.'
-                                : 'Register an OAuth App at github.com/settings/applications/new with Enable Device Flow ticked, then paste its Client ID here. The Client ID is public, not a secret. Required scopes: repo, read:org.'
+                                ? 'This Genie build ships with a baked-in GitHub App Client ID. Use this field only if you want to point Genie at a different GitHub App (self-hosters, devs testing forks). Leave blank to use the bundle default. The Client ID is public, not a secret. Permissions live on the App (no scopes requested at sign-in).'
+                                : 'Register a GitHub App at github.com/settings/apps/new with Device Flow enabled, then paste its Client ID here. The Client ID is public, not a secret. Permissions live on the App (no scopes requested at sign-in).'
                         }
                         value={clientId}
                         onValueChange={setClientId}
-                        placeholder="e.g. Iv1.a1b2c3d4e5f6g7h8"
+                        placeholder="e.g. Iv23liXXXXXXXXXXXXXX"
                     />
                     <div>
                         <Action color="blue" size="sm" onClick={saveClientId}>

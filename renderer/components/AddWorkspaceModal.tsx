@@ -13,7 +13,12 @@ import {
 import { api, ulid } from '../lib/genie';
 import type { DetectResult, TynnProject, WorkspaceRow } from '../lib/genie';
 import InteractiveUpgradeWizard from './InteractiveUpgradeWizard';
-import { useGitHubAccount, GitHubConnect, OwnerSelect } from './GitHubConnect';
+import {
+    useGitHubAccount,
+    GitHubConnect,
+    OwnerSelect,
+    GitHubErrorNotice,
+} from './GitHubConnect';
 
 type Stage =
     | 'shape'
@@ -943,7 +948,7 @@ function AgiCreateWizard({
                 )}
             </div>
 
-            {error && <Text size="xs" style={{ color: 'var(--rose-500)' }}>{error}</Text>}
+            {error && <GitHubErrorNotice message={error} />}
             <Footer
                 onCancel={onCancel}
                 onSubmit={submit}

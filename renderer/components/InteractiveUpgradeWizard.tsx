@@ -24,6 +24,7 @@ import {
 import {
     useGitHubAccount,
     GitHubConnect,
+    GitHubErrorNotice,
     OwnerSelect,
     type GitHubAccount,
 } from './GitHubConnect';
@@ -689,12 +690,9 @@ export default function InteractiveUpgradeWizard({
                 </Carousel.Panels>
 
                 {error && (
-                    <Text
-                        size="xs"
-                        style={{ color: 'var(--rose-500)', display: 'block', marginTop: 8 }}
-                    >
-                        {error}
-                    </Text>
+                    <div style={{ marginTop: 8 }}>
+                        <GitHubErrorNotice message={error} />
+                    </div>
                 )}
 
                 <WizardFooter

@@ -71,6 +71,7 @@ const api = {
         startDevice: () => ipcRenderer.invoke('github:device:start'),
         cancelDevice: () => ipcRenderer.invoke('github:device:cancel'),
         resetClientId: () => ipcRenderer.invoke('github:reset-client-id'),
+        installUrl: () => ipcRenderer.invoke('github:install-url'),
         disconnect: () => ipcRenderer.invoke('github:disconnect'),
         user: () => ipcRenderer.invoke('github:user'),
         orgs: () => ipcRenderer.invoke('github:orgs'),

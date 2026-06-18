@@ -1,45 +1,35 @@
 /**
- * GitHub Device Flow OAuth — the right shape for desktop apps. No
- * embedded browser, no client secret embedded in the binary, no
- * loopback redirect listener.
+ * GitHub Device Flow — the right shape for desktop apps. No embedded
+ * browser, no client secret embedded in the binary, no loopback redirect
+ * listener.
  *
  *   1. POST https://github.com/login/device/code     — get device_code + user_code
  *   2. Show the user_code + verification_uri to the user.
  *   3. POST https://github.com/login/oauth/access_token (every `interval` seconds)
  *      until the user finishes (success), denies, or the code expires.
  *
- * The client_id is a public identifier baked into your OAuth App on
- * GitHub. It is not a secret — but it IS a config value, so we read it
- * from settings instead of hardcoding it. You register an OAuth App at
- * https://github.com/settings/applications/new (or under an org), tick
- * "Enable Device Flow", and paste the client ID into Genie's Settings.
+ * Genie authenticates as a **GitHub App** ("Genie IDE"), not the older
+ * OAuth App. The client_id is a public identifier baked into the App on
+ * GitHub (starts with `Iv`). It is not a secret — but it IS a config
+ * value, so we read it from settings instead of hardcoding it.
  *
- * Scopes (least-privilege — Genie is a full workspace + bridge between
- * Tynn, local dev, and Aionima, so it needs broad repo access, but only
- * what the code actually exercises):
- *   - `repo`     — full control of repositories (read code incl.
- *                  private, write commits + branches, manage PRs/issues,
- *                  create new repos under the user's account/orgs,
- *                  fork). The classic-OAuth floor for private read +
- *                  create. One scope, lumped by GitHub.
- *   - `read:org` — list orgs the user belongs to so the wizard can
- *                  offer "create in <org>" alongside "create in <user>".
+ * No `scope` here, on purpose. A GitHub App's permissions are declared on
+ * the App itself (Metadata/Issues/Pull requests/Dependabot read,
+ * Administration read+write) and only take effect where the App is
+ * installed — the device flow takes no scope parameter, and sending one
+ * is at best ignored. What Genie can actually reach is discovered after
+ * sign-in via `GET /user/installations`.
  *
- * Notably absent: `workflow` (write `.github/workflows/*.yml`). Genie
- * does not scaffold or push CI workflow files today, so the token never
- * needs it. Re-add `workflow` if/when Genie actually writes workflow
- * files on the user's behalf.
- *
- * Notably absent: `delete_repo`. Genie should not be capable of
- * deleting repositories; add this scope only when there's a concrete
- * workflow that needs it.
+ * The App is configured with token expiry OFF, so it mints non-expiring
+ * user-to-server tokens. There is therefore no refresh-token handling
+ * here — the token Genie stores stays valid until the user revokes the
+ * App or disconnects in Settings.
  */
 
 import { net } from 'electron';
 
 const DEVICE_CODE_URL = 'https://github.com/login/device/code';
 const TOKEN_URL = 'https://github.com/login/oauth/access_token';
-export const SCOPE = 'repo read:org';
 
 export interface DeviceCodeResponse {
     device_code: string;
@@ -52,7 +42,9 @@ export interface DeviceCodeResponse {
 export interface TokenResponse {
     access_token: string;
     token_type: string;
-    scope: string;
+    /** Present for OAuth Apps; GitHub Apps return no scope. Kept optional
+     *  so callers don't depend on it. */
+    scope?: string;
 }
 
 export class DeviceFlowError extends Error {
@@ -95,12 +87,13 @@ export async function requestDeviceCode(
     if (!clientId) {
         throw new DeviceFlowError(
             'missing_client_id',
-            'No GitHub client ID configured. Register an OAuth App with Device Flow enabled and paste its client ID into Settings.',
+            'No GitHub App Client ID configured. Register a GitHub App with Device Flow enabled and paste its Client ID into Settings.',
         );
     }
+    // No `scope` — a GitHub App's permissions live on the App, not on the
+    // device-code request.
     const json = await postForm(DEVICE_CODE_URL, {
         client_id: clientId,
-        scope: SCOPE,
     });
     return {
         device_code: json.device_code,
@@ -157,7 +150,8 @@ export async function pollForToken(
             return {
                 access_token: res.access_token,
                 token_type: res.token_type ?? 'bearer',
-                scope: res.scope ?? SCOPE,
+                // GitHub Apps return no scope; leave it undefined.
+                scope: res.scope,
             };
         }
 

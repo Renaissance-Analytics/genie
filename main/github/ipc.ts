@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron';
+import { genieInstallUrl } from '../config';
 import {
     DeviceCodeResponse,
     DeviceFlowError,
@@ -91,6 +92,13 @@ export function registerGithubIpc(): void {
         clearClientIdOverride();
         return { ok: true };
     });
+
+    // Where to send the user to install the "Genie IDE" GitHub App on a new
+    // account/org (the renderer opens this in a browser when a target
+    // account turns out to have no installation).
+    ipcMain.handle('github:install-url', async (): Promise<string> =>
+        genieInstallUrl(),
+    );
 
     ipcMain.handle('github:device:start', async (): Promise<DeviceCodeResponse> => {
         if (abortCtl) abortCtl.abort();

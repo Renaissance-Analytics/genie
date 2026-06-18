@@ -766,13 +766,15 @@ interface GenieApi {
         }>;
         cancelDevice: () => Promise<{ ok: boolean }>;
         resetClientId: () => Promise<{ ok: boolean }>;
+        /** Install URL for the "Genie IDE" GitHub App (install on a new account/org). */
+        installUrl: () => Promise<string>;
         disconnect: () => Promise<{ ok: boolean }>;
         user: () => Promise<{ login: string; name: string | null; avatar_url: string }>;
+        /** Accounts where the GitHub App is installed (org installations). */
         orgs: () => Promise<
             Array<{
                 login: string;
                 avatar_url: string;
-                can_create_repository?: boolean;
             }>
         >;
         createRepo: (opts: {

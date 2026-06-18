@@ -16,6 +16,13 @@ import { api } from '../lib/genie';
  * Empty owner string === the authenticated user's personal account; any
  * other value is an org login. That's the same convention createRepo /
  * forkRepo use on the main side.
+ *
+ * Genie authenticates as a GitHub App ("Genie IDE"). The org list here is
+ * the set of accounts where the App is INSTALLED (via /user/installations,
+ * not /user/orgs — which returns empty for App tokens). An org the user
+ * belongs to but hasn't installed Genie on simply won't appear; the
+ * OwnerSelect surfaces an "Install Genie on another org…" link for that
+ * case so the user can grant access instead of dead-ending.
  */
 
 export interface GitHubOrgLite {
@@ -168,7 +175,7 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
             )}
             {!clientIdSet && (
                 <Text size="xs" style={{ color: 'var(--rose-500)', display: 'block' }}>
-                    No GitHub OAuth Client ID configured. Set one in
+                    No GitHub App Client ID configured. Set one in
                     Settings → GitHub → Advanced.
                 </Text>
             )}
@@ -185,7 +192,8 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
                         Connect GitHub…
                     </Action>
                     <Text size="xs" className="text-zinc-500">
-                        Needed to create or fork repositories.
+                        Needed to create or fork repositories. Genie can only
+                        act on accounts where the GitHub App is installed.
                     </Text>
                 </div>
             )}
@@ -226,6 +234,47 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
                 <Text size="xs" style={{ color: 'var(--rose-500)', display: 'block' }}>
                     {flow.message}
                 </Text>
+            )}
+        </div>
+    );
+}
+
+/**
+ * Pull the install URL out of a "Genie isn't installed on X — install it:
+ * <url>" error (the shape `GitHubNotInstalledError` produces on the main
+ * side, serialized to a string across IPC). Returns null for any other
+ * error so callers fall back to plain text.
+ */
+export function parseNotInstalled(
+    message: string,
+): { url: string } | null {
+    const m = /install it:\s*(https?:\/\/\S+)/i.exec(message);
+    return m ? { url: m[1] } : null;
+}
+
+/**
+ * Renders an error string, upgrading a "not installed on <account>" error
+ * into an actionable install prompt (a button that opens the App's install
+ * page) instead of dead-ending on the raw message.
+ */
+export function GitHubErrorNotice({ message }: { message: string }) {
+    const notInstalled = parseNotInstalled(message);
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Text size="xs" style={{ color: 'var(--rose-500)', display: 'block' }}>
+                {message}
+            </Text>
+            {notInstalled && (
+                <Action
+                    size="sm"
+                    color="blue"
+                    icon="external-link"
+                    onClick={() =>
+                        api().tynn.openInBrowser(notInstalled.url)
+                    }
+                >
+                    Install Genie on this account…
+                </Action>
             )}
         </div>
     );
@@ -278,6 +327,39 @@ export function OwnerSelect({
                 {label}
             </Text>
             <Select value={value} onValueChange={onChange} list={options} />
+            <InstallOnOrgLink />
         </div>
+    );
+}
+
+/**
+ * "Install Genie on another org…" — the GitHub App only sees accounts it's
+ * installed on, so an org the user wants but doesn't see in the dropdown is
+ * fixed by installing the App there (not by re-authing). Opens the App's
+ * install page; the new org appears in the list after a refresh.
+ */
+export function InstallOnOrgLink() {
+    const open = async () => {
+        try {
+            const url = await api().github.installUrl();
+            await api().tynn.openInBrowser(url);
+        } catch {
+            // Best-effort; the link is a convenience, not load-bearing.
+        }
+    };
+    return (
+        <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
+            Don&apos;t see an org?{' '}
+            <a
+                href="#"
+                onClick={(e) => {
+                    e.preventDefault();
+                    void open();
+                }}
+                style={{ color: 'var(--blue-400)' }}
+            >
+                Install Genie on another org…
+            </a>
+        </Text>
     );
 }

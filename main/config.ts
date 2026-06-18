@@ -1,21 +1,38 @@
 /**
  * Build-time constants baked into the Genie binary.
  *
- * The GitHub OAuth Client ID is intentionally NOT a secret — Device
- * Flow is designed for public clients where the client_id can ship
- * in the binary. The OAuth App's "Enable Device Flow" toggle is what
- * makes Device Flow legal for the client_id; without that toggle,
- * GitHub rejects the device-code request regardless of who's holding
- * the ID.
+ * The GitHub App Client ID is intentionally NOT a secret — Device Flow is
+ * designed for public clients where the client_id can ship in the binary.
+ * The GitHub App's "Enable Device Flow" toggle is what makes Device Flow
+ * legal for the client_id; without it, GitHub rejects the device-code
+ * request regardless of who's holding the ID.
  *
- * Replace the placeholder below with the Client ID GitHub assigned
- * to the "Genie" OAuth App once you register it
- * (https://github.com/settings/applications/new). Commit the value
- * — that's the point: every Genie installer in the wild needs to
+ * Genie authenticates as a **GitHub App** ("Genie IDE"), not the older
+ * OAuth App. GitHub App IDs start with `Iv` (the legacy OAuth App ID
+ * started with `Ov`). The difference that matters at runtime: a GitHub
+ * App's permissions are fine-grained and declared ON THE APP, not requested
+ * as scopes at sign-in, and they only apply to accounts/repos where the App
+ * is INSTALLED. So the device flow takes no `scope`, and Genie discovers
+ * what it can reach via `GET /user/installations` rather than `/user/orgs`.
+ *
+ * Replace the value below with the Client ID GitHub assigned to the App.
+ * Commit it — that's the point: every Genie installer in the wild needs to
  * Device-Flow against this exact ID.
  *
- * Override at runtime via the Settings → GitHub → "OAuth App client
- * ID" field. That path stays in for self-hosters and devs who want
- * to point Genie at their own OAuth App without rebuilding.
+ * Override at runtime via the Settings → GitHub → "GitHub App Client ID"
+ * field. That path stays in for self-hosters and devs who want to point
+ * Genie at their own GitHub App without rebuilding.
  */
-export const GENIE_GITHUB_CLIENT_ID = 'Ov23liKwoD8eBnzFWN4x';
+export const GENIE_GITHUB_CLIENT_ID = 'Iv23liPssWsCpaUIxtIT';
+
+/**
+ * The GitHub App's public slug, used to build the "install this App on an
+ * account" URL. Derived from the App name "Genie IDE". If GitHub assigned a
+ * different slug, change it here — it's the only place the slug lives.
+ */
+export const GENIE_GITHUB_APP_SLUG = 'genie-ide';
+
+/** Where to send the user to install the App on a new account/org. */
+export function genieInstallUrl(): string {
+    return `https://github.com/apps/${GENIE_GITHUB_APP_SLUG}/installations/new`;
+}

@@ -1,5 +1,6 @@
 import { net } from 'electron';
 import { getToken } from './storage';
+import { genieInstallUrl } from '../config';
 
 /**
  * Thin GitHub API client. Uses the token in safeStorage; throws
@@ -80,6 +81,54 @@ function isNameExists(e: unknown): boolean {
     );
 }
 
+/**
+ * Heuristic: a write that fails because the GitHub App isn't installed on
+ * the target account. With a GitHub-App user token, GitHub answers 403
+ * (sometimes 404) for an account where the App has no installation — the
+ * App simply can't see/act on it. We can't always distinguish this from a
+ * genuine permission denial, so we treat 403/404 on a write as "probably
+ * not installed" and rewrite the error into an actionable install prompt
+ * that the renderer keys off (`code === 'not_installed'`).
+ */
+function isLikelyNotInstalled(e: unknown): boolean {
+    return (
+        e instanceof GitHubApiError && (e.status === 403 || e.status === 404)
+    );
+}
+
+/**
+ * Raised when a write (create/fork) fails on an account the App isn't
+ * installed on. Carries the install URL + target so the UI can offer a
+ * one-click "Install Genie on <account>" instead of dead-ending.
+ */
+export class GitHubNotInstalledError extends Error {
+    readonly code = 'not_installed';
+    constructor(
+        public account: string,
+        public installUrl: string,
+        cause?: GitHubApiError,
+    ) {
+        super(
+            `Genie isn't installed on ${account} — install it: ${installUrl}` +
+                (cause ? ` (GitHub said: ${cause.message})` : ''),
+        );
+        this.name = 'GitHubNotInstalledError';
+    }
+}
+
+/** Wrap a write error in a not-installed prompt when it looks like the App
+ *  isn't installed on `account`; otherwise rethrow unchanged. */
+function asNotInstalled(e: unknown, account: string): never {
+    if (isLikelyNotInstalled(e)) {
+        throw new GitHubNotInstalledError(
+            account,
+            genieInstallUrl(),
+            e as GitHubApiError,
+        );
+    }
+    throw e;
+}
+
 export interface GitHubUser {
     login: string;
     name: string | null;
@@ -89,16 +138,55 @@ export interface GitHubUser {
 export interface GitHubOrg {
     login: string;
     avatar_url: string;
-    /** True when the authenticated user can create repos in this org. */
-    can_create_repository?: boolean;
 }
 
 export async function getViewer(): Promise<GitHubUser> {
     return gh<GitHubUser>('GET', '/user');
 }
 
+/** One installation of the GitHub App, as returned by /user/installations. */
+interface GhInstallation {
+    account?: {
+        login?: string;
+        avatar_url?: string;
+        /** 'Organization' | 'User' — distinguishes an org install from a
+         *  personal-account install. */
+        type?: string;
+    };
+}
+
+/**
+ * List the accounts Genie can act on — i.e. where the "Genie IDE" GitHub
+ * App is INSTALLED. This is the App-token equivalent of the old
+ * `GET /user/orgs` call: for a GitHub-App user token `/user/orgs` returns
+ * an empty list (org membership isn't a granted permission), so we read
+ * `GET /user/installations` instead and map each installation's `account`.
+ *
+ * We surface every installation account regardless of type. An
+ * Organization install is an org option; a User install is the personal
+ * account (which the owner picker also offers as the empty-string option),
+ * but listing it here is harmless and keeps the mapping faithful to where
+ * the App can actually create/fork.
+ */
 export async function listOrgs(): Promise<GitHubOrg[]> {
-    return gh<GitHubOrg[]>('GET', '/user/orgs');
+    const res = await gh<{ installations?: GhInstallation[] }>(
+        'GET',
+        '/user/installations',
+    );
+    const installations = Array.isArray(res?.installations)
+        ? res.installations
+        : [];
+    const orgs: GitHubOrg[] = [];
+    for (const inst of installations) {
+        const login = inst.account?.login;
+        if (!login) continue;
+        // Personal-account installs surface as the empty-string owner in the
+        // picker already; only list Organization installs as orgs.
+        if (inst.account?.type === 'Organization') {
+            orgs.push({ login, avatar_url: inst.account.avatar_url ?? '' });
+        }
+    }
+    return orgs;
 }
 
 export interface CreateRepoOpts {
@@ -144,7 +232,21 @@ export async function createRepo(opts: CreateRepoOpts): Promise<CreatedRepo> {
             const owner = opts.owner || (await getViewer()).login;
             return gh<CreatedRepo>('GET', `/repos/${owner}/${opts.name}`);
         }
-        throw e;
+        // The App must be installed on the target account to create there.
+        // (Creating a PERSONAL repo via an App user token is historically
+        // flaky; this turns that failure into an actionable install prompt
+        // rather than a crash.)
+        asNotInstalled(e, opts.owner || (await viewerLogin()));
+    }
+}
+
+/** The authenticated user's login, used to name the personal account in
+ *  install prompts. Best-effort — falls back to a generic label. */
+async function viewerLogin(): Promise<string> {
+    try {
+        return (await getViewer()).login;
+    } catch {
+        return 'your account';
     }
 }
 
@@ -305,9 +407,16 @@ export async function forkRepo(opts: ForkRepoOpts): Promise<CreatedRepo> {
     const body: Record<string, unknown> = { default_branch_only: false };
     if (opts.intoOrg) body.organization = opts.intoOrg;
     if (opts.name) body.name = opts.name;
-    return gh<CreatedRepo>(
-        'POST',
-        `/repos/${opts.owner}/${opts.repo}/forks`,
-        body,
-    );
+    try {
+        return await gh<CreatedRepo>(
+            'POST',
+            `/repos/${opts.owner}/${opts.repo}/forks`,
+            body,
+        );
+    } catch (e) {
+        // A fork lands under the destination account; if the App isn't
+        // installed there it can't write the fork. Surface an install
+        // prompt for that account.
+        asNotInstalled(e, opts.intoOrg || (await viewerLogin()));
+    }
 }
