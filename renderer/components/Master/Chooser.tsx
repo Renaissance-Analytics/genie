@@ -265,6 +265,43 @@ export default function Chooser({
         };
     }, []);
 
+    // Which workspaces' `.agi` envelopes declare a Tynn MCP server. The Tynn
+    // glyph on a spec reflects REAL Tynn-MCP presence (a server named `tynn` in
+    // the envelope's .mcp.json / .cursor/mcp.json), not the product backend
+    // (ws.backend). Only .agi envelopes have an mcpStatus; a simple workspace
+    // never gets the glyph. Re-runs when the set of .agi workspace paths
+    // changes (refetch is cheap; mcpStatus is a small file read in main).
+    const [tynnMcpWs, setTynnMcpWs] = useState<Set<string>>(() => new Set());
+    const agiPathsKey = workspaces
+        .filter((w) => w.shape === 'agi')
+        .map((w) => `${w.id}:${w.path}`)
+        .join('|');
+    useEffect(() => {
+        let alive = true;
+        const agi = workspaces.filter((w) => w.shape === 'agi');
+        void Promise.all(
+            agi.map((w) =>
+                api()
+                    .agi.mcpStatus(w.path)
+                    .then((m) => {
+                        // Match the server named `tynn` (case-insensitive) in
+                        // either the repo-sourced or envelope-root servers.
+                        const names = [...m.repoServers, ...m.rootServers];
+                        const has = names.some((n) => n.toLowerCase() === 'tynn');
+                        return [w.id, has] as const;
+                    })
+                    .catch(() => [w.id, false] as const),
+            ),
+        ).then((pairs) => {
+            if (!alive) return;
+            setTynnMcpWs(new Set(pairs.filter(([, has]) => has).map(([id]) => id)));
+        });
+        return () => {
+            alive = false;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [agiPathsKey]);
+
     const toggleProcs = (wsId: string) =>
         setExpandedProcs((prev) => {
             const next = new Set(prev);
@@ -637,6 +674,7 @@ export default function Chooser({
                                             suspended={s.enabled === false}
                                             hostKind={hostBadgeKind(ws.backend)}
                                             hostLabel={ws.backend}
+                                            hasTynnMcp={tynnMcpWs.has(ws.id)}
                                             onToggle={() => onToggleSpec(s.id)}
                                             onDestroy={() => onDestroySpec(s.id)}
                                             onDisable={() => onDisableSpec(s.id)}
@@ -1263,6 +1301,10 @@ interface SpecRowProps {
     suspended: boolean;
     hostKind: string;
     hostLabel: string;
+    /** The workspace's `.agi` envelope declares a Tynn MCP server (a `tynn`
+     *  server in its .mcp.json) — gates the Tynn brand glyph. Reflects real
+     *  Tynn-MCP presence, not the product backend. */
+    hasTynnMcp?: boolean;
     onToggle: () => void;
     onDestroy: () => void;
     onDisable: () => void;
@@ -1292,6 +1334,7 @@ function SpecRow({
     suspended,
     hostKind,
     hostLabel,
+    hasTynnMcp,
     onToggle,
     onDestroy,
     onDisable,
@@ -1367,11 +1410,15 @@ function SpecRow({
                 </span>
             ) : (
                 <span
-                    className={`host ${hostKind}`}
-                    title={hostLabel}
-                    aria-label={hostLabel}
+                    className={`host ${hasTynnMcp ? 'tynn' : hostKind}`}
+                    title={hasTynnMcp ? 'Tynn MCP' : hostLabel}
+                    aria-label={hasTynnMcp ? 'Tynn MCP' : hostLabel}
                 >
-                    {hostKind === 'tynn' ? <IconTynn size={12} /> : hostLabel}
+                    {/* The Tynn glyph means the workspace's .agi envelope
+                        actually declares a Tynn MCP server — NOT that the
+                        product backend is "tynn". Otherwise show the host
+                        label as plain text. */}
+                    {hasTynnMcp ? <IconTynn size={12} /> : hostLabel}
                 </span>
             )}
             {suspended ? (
