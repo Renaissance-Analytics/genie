@@ -18,6 +18,8 @@ import {
     GitHubNotInstalledError,
     createRepo,
     forkRepo,
+    getRepoOwner,
+    listInstallations,
     listOrgs,
 } from '../api';
 
@@ -65,6 +67,80 @@ describe('listOrgs (GitHub App installations)', () => {
     it('tolerates a missing installations array', async () => {
         fetchMock.mockResolvedValueOnce(res(200, {}));
         expect(await listOrgs()).toEqual([]);
+    });
+});
+
+describe('listInstallations (every installed account)', () => {
+    it('returns personal AND org installs with id + isOrg', async () => {
+        fetchMock.mockResolvedValueOnce(
+            res(200, {
+                installations: [
+                    { account: { login: 'me', id: 1, type: 'User', avatar_url: 'a' } },
+                    { account: { login: 'acme-co', id: 2, type: 'Organization', avatar_url: 'b' } },
+                ],
+            }),
+        );
+
+        const installs = await listInstallations();
+        expect(installs).toEqual([
+            { login: 'me', avatar_url: 'a', id: 1, isOrg: false },
+            { login: 'acme-co', avatar_url: 'b', id: 2, isOrg: true },
+        ]);
+    });
+
+    it('returns [] when the App is installed nowhere', async () => {
+        fetchMock.mockResolvedValueOnce(res(200, { total_count: 0, installations: [] }));
+        expect(await listInstallations()).toEqual([]);
+    });
+});
+
+describe('getRepoOwner (source repo owner)', () => {
+    it('resolves login + id + isOrg from the repo', async () => {
+        fetchMock.mockResolvedValueOnce(
+            res(200, { owner: { login: 'acme-co', id: 42, type: 'Organization' } }),
+        );
+        expect(await getRepoOwner('acme-co', 'thing')).toEqual({
+            login: 'acme-co',
+            id: 42,
+            isOrg: true,
+        });
+    });
+
+    it('falls back to the passed login when the lookup fails', async () => {
+        fetchMock.mockResolvedValueOnce(res(404, { message: 'Not Found' }));
+        expect(await getRepoOwner('hidden', 'repo')).toEqual({
+            login: 'hidden',
+            id: null,
+            isOrg: false,
+        });
+    });
+});
+
+describe('not-installed install URL targeting', () => {
+    it('createRepo pre-targets the chooser at the owner account id', async () => {
+        fetchMock.mockResolvedValueOnce(res(403, { message: 'Resource not accessible by integration' }));
+        try {
+            await createRepo({ name: 'foo.agi', owner: 'acme-co', ownerId: 777 });
+            throw new Error('should have thrown');
+        } catch (e) {
+            expect(e).toBeInstanceOf(GitHubNotInstalledError);
+            expect((e as GitHubNotInstalledError).installUrl).toMatch(
+                /installations\/new\?suggested_target_id=777$/,
+            );
+        }
+    });
+
+    it('forkRepo passes the destination org id through to the install URL', async () => {
+        fetchMock.mockResolvedValueOnce(res(403, { message: 'Resource not accessible by integration' }));
+        try {
+            await forkRepo({ owner: 'src', repo: 'thing', intoOrg: 'acme-co', intoOrgId: 99 });
+            throw new Error('should have thrown');
+        } catch (e) {
+            expect(e).toBeInstanceOf(GitHubNotInstalledError);
+            expect((e as GitHubNotInstalledError).installUrl).toMatch(
+                /suggested_target_id=99$/,
+            );
+        }
     });
 });
 

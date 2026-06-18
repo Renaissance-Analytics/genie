@@ -71,13 +71,18 @@ const api = {
         startDevice: () => ipcRenderer.invoke('github:device:start'),
         cancelDevice: () => ipcRenderer.invoke('github:device:cancel'),
         resetClientId: () => ipcRenderer.invoke('github:reset-client-id'),
-        installUrl: () => ipcRenderer.invoke('github:install-url'),
+        installUrl: (targetId?: number | null) =>
+            ipcRenderer.invoke('github:install-url', targetId),
         disconnect: () => ipcRenderer.invoke('github:disconnect'),
         user: () => ipcRenderer.invoke('github:user'),
         orgs: () => ipcRenderer.invoke('github:orgs'),
+        installations: () => ipcRenderer.invoke('github:installations'),
+        repoOwner: (owner: string, repo: string) =>
+            ipcRenderer.invoke('github:repo-owner', owner, repo),
         createRepo: (opts: {
             name: string;
             owner?: string | null;
+            ownerId?: number | null;
             description?: string;
             private?: boolean;
         }) => ipcRenderer.invoke('github:create-repo', opts),
@@ -85,6 +90,7 @@ const api = {
             owner: string;
             repo: string;
             intoOrg?: string | null;
+            intoOrgId?: number | null;
             name?: string;
         }) => ipcRenderer.invoke('github:fork-repo', opts),
         parseRemote: (url: string) =>

@@ -701,6 +701,10 @@ function GitHubSection() {
     const [activeClientId, setActiveClientId] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [storageOk, setStorageOk] = useState(true);
+    const [installations, setInstallations] = useState<
+        Array<{ login: string; id: number | null; isOrg: boolean }>
+    >([]);
+    const [installationsLoaded, setInstallationsLoaded] = useState(false);
     const [flow, setFlow] = useState<
         | { kind: 'idle' }
         | { kind: 'starting' }
@@ -723,6 +727,23 @@ function GitHubSection() {
         setUsingOverride(st.usingOverride);
         setActiveClientId(st.activeClientId);
         setStorageOk(st.storageOk);
+        // Where the App is installed — drives the zero-install prompt + the
+        // "installed on X" summary. Authorizing alone grants no repo access.
+        if (st.connected) {
+            try {
+                const list = await api().github.installations();
+                setInstallations(
+                    list.map((i) => ({ login: i.login, id: i.id, isOrg: i.isOrg })),
+                );
+            } catch {
+                setInstallations([]);
+            } finally {
+                setInstallationsLoaded(true);
+            }
+        } else {
+            setInstallations([]);
+            setInstallationsLoaded(false);
+        }
         if (st.flow.kind === 'pending') {
             setFlow({
                 kind: 'pending',
@@ -884,7 +905,7 @@ function GitHubSection() {
                             void api().tynn.openInBrowser(url);
                         }}
                     >
-                        Manage installation…
+                        Add account/org…
                     </Action>
                 )}
                 <span style={{ flex: 1 }} />
@@ -896,6 +917,60 @@ function GitHubSection() {
                     {showAdvanced ? 'Hide Advanced' : 'Advanced'}
                 </Action>
             </div>
+
+            {/* Installation is a distinct step from authorizing: a GitHub App's
+                repo access only exists where it's INSTALLED. When connected but
+                installed nowhere, lead with a prominent install action; once
+                installed, confirm where so the user knows which accounts/orgs
+                Genie can create + fork on. */}
+            {connected && installationsLoaded && installations.length === 0 && (
+                <div
+                    style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        background: 'color-mix(in srgb, #f59e0b 12%, transparent)',
+                        border: '1px solid color-mix(in srgb, #f59e0b 35%, var(--border-1))',
+                    }}
+                >
+                    <Text size="xs">
+                        You're signed in, but Genie isn't installed on any account
+                        yet — so it can't create or fork repositories. Install it to
+                        choose which of your accounts/orgs Genie can act on.
+                    </Text>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <Action
+                            color="blue"
+                            size="sm"
+                            icon="github"
+                            onClick={async () => {
+                                const url = await api().github.installUrl();
+                                void api().tynn.openInBrowser(url);
+                            }}
+                        >
+                            Install Genie on your accounts/orgs…
+                        </Action>
+                        <Action
+                            variant="ghost"
+                            size="sm"
+                            icon="refresh-cw"
+                            onClick={refresh}
+                        >
+                            I've installed it
+                        </Action>
+                    </div>
+                </div>
+            )}
+
+            {connected && installationsLoaded && installations.length > 0 && (
+                <Text size="xs" className="text-zinc-500">
+                    Installed on{' '}
+                    <strong>{installations.map((i) => i.login).join(', ')}</strong>.
+                    Use “Add account/org…” to install it elsewhere.
+                </Text>
+            )}
 
             {showAdvanced && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 8, borderTop: '1px solid var(--border-1)' }}>

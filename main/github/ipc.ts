@@ -20,15 +20,19 @@ import {
 import {
     createRepo,
     forkRepo,
+    getRepoOwner,
     getViewer,
+    listInstallations,
     listOrgs,
     parseGitHubRemote,
     type CreateRepoOpts,
     type CreatedRepo,
     type ForkRepoOpts,
+    type GitHubInstallation,
     type GitHubOrg,
     type GitHubUser,
     type ParsedRepoRef,
+    type RepoOwner,
 } from './api';
 
 /**
@@ -93,11 +97,14 @@ export function registerGithubIpc(): void {
         return { ok: true };
     });
 
-    // Where to send the user to install the "Genie IDE" GitHub App on a new
-    // account/org (the renderer opens this in a browser when a target
-    // account turns out to have no installation).
-    ipcMain.handle('github:install-url', async (): Promise<string> =>
-        genieInstallUrl(),
+    // Where to send the user to install the "Genie IDE" GitHub App. With no
+    // arg this is the account chooser (personal + every installable org); pass
+    // a numeric account id to pre-target the chooser at that account (e.g. the
+    // owner of a repo being forked).
+    ipcMain.handle(
+        'github:install-url',
+        async (_e, targetId?: number | null): Promise<string> =>
+            genieInstallUrl(targetId),
     );
 
     ipcMain.handle('github:device:start', async (): Promise<DeviceCodeResponse> => {
@@ -164,6 +171,19 @@ export function registerGithubIpc(): void {
 
     ipcMain.handle('github:user', async (): Promise<GitHubUser> => getViewer());
     ipcMain.handle('github:orgs', async (): Promise<GitHubOrg[]> => listOrgs());
+    // Every account the App is installed on (personal + orgs) — the connect
+    // flow uses this to detect zero/missing installs and drive the chooser.
+    ipcMain.handle(
+        'github:installations',
+        async (): Promise<GitHubInstallation[]> => listInstallations(),
+    );
+    // Resolve a source repo's owner so create/fork can target the SAME
+    // account (personal or org) the original repo lives in.
+    ipcMain.handle(
+        'github:repo-owner',
+        async (_e, owner: string, repo: string): Promise<RepoOwner> =>
+            getRepoOwner(owner, repo),
+    );
     ipcMain.handle(
         'github:create-repo',
         async (_e, opts: CreateRepoOpts): Promise<CreatedRepo> => createRepo(opts),

@@ -828,6 +828,12 @@ function AgiCreateWizard({
                 const created = await api().github.createRepo({
                     name: `${slug}.agi`,
                     owner: remoteOwner || null,
+                    // Pre-target the install chooser at the chosen org if Genie
+                    // isn't installed there (so the prompt lands on the right
+                    // account instead of failing).
+                    ownerId: remoteOwner
+                        ? account.installations.find((i) => i.login === remoteOwner)?.id ?? null
+                        : null,
                     description: `Aionima envelope for ${project.name}`,
                     private: true,
                 });

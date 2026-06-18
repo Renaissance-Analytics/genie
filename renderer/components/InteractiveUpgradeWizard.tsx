@@ -164,7 +164,17 @@ export default function InteractiveUpgradeWizard({
     // BOTH the envelope remote and any repo forks. One account choice.
     const account = useGitHubAccount();
     const [ghOwner, setGhOwner] = useState<string>(''); // empty = personal user account
+    // True once the user has manually picked an owner — after that we stop
+    // defaulting it to the source repo's owner.
+    const [ghOwnerTouched, setGhOwnerTouched] = useState(false);
     const [ghPrivate, setGhPrivate] = useState(true);
+
+    /** Owner picker handler — records the manual choice so the source-owner
+     *  default stops overriding it. */
+    const chooseGhOwner = (login: string) => {
+        setGhOwnerTouched(true);
+        setGhOwner(login);
+    };
 
     useEffect(() => {
         void api()
@@ -358,6 +368,29 @@ export default function InteractiveUpgradeWizard({
         if (p) setParentFolder(p);
     };
 
+    // Default the GitHub owner to the SOURCE repo's owner (personal or org),
+    // so a create/fork lands in the same account the original lives in — not
+    // a personal-only default. We read the first included GitHub-origin repo's
+    // owner; an org owner only sticks if Genie can actually act there (it's an
+    // installed org), otherwise we leave it personal and the OwnerSelect
+    // surfaces a per-account install prompt. Stops once the user picks an owner.
+    const sourceOwner = useMemo(() => {
+        const withRef = repoRows.find((r) => r.included && r.gh_ref);
+        return withRef?.gh_ref?.owner ?? null;
+    }, [repoRows]);
+    useEffect(() => {
+        if (ghOwnerTouched || !account.connected || !sourceOwner) return;
+        if (!account.installationsLoaded) return;
+        // Only default to the source owner when it's an installed ORG (the
+        // personal account is the empty-string default already, and forking a
+        // personal repo into its own owner is invalid).
+        const inst = account.installations.find((i) => i.login === sourceOwner);
+        if (inst?.isOrg && ghOwner !== sourceOwner) {
+            setGhOwner(sourceOwner);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [sourceOwner, account.connected, account.installationsLoaded, ghOwnerTouched]);
+
     const selectedRepoCount = useMemo(
         () => repoRows.filter((r) => r.included).length,
         [repoRows],
@@ -463,6 +496,13 @@ export default function InteractiveUpgradeWizard({
             const forkRows = repoRows.filter(
                 (r) => r.included && r.source_mode === 'fork' && r.gh_ref,
             );
+            // The fork destination's numeric id pre-targets the install
+            // chooser at THAT account if Genie isn't installed there (instead
+            // of failing or defaulting elsewhere). Prefer the known
+            // installation id; empty owner = personal (no id needed).
+            const intoOrgId = ghOwner
+                ? account.installations.find((i) => i.login === ghOwner)?.id ?? null
+                : null;
             for (const r of forkRows) {
                 if (!account.connected) {
                     throw new Error('Connect GitHub to fork repositories.');
@@ -472,6 +512,7 @@ export default function InteractiveUpgradeWizard({
                     owner: r.gh_ref!.owner,
                     repo: r.gh_ref!.repo,
                     intoOrg: ghOwner || null,
+                    intoOrgId,
                 });
                 forkUrlByPath.set(r.abs_path, fork.clone_url);
             }
@@ -490,6 +531,9 @@ export default function InteractiveUpgradeWizard({
                 const created = await api().github.createRepo({
                     name: `${slug.trim()}.agi`,
                     owner: ghOwner || null,
+                    ownerId: ghOwner
+                        ? account.installations.find((i) => i.login === ghOwner)?.id ?? null
+                        : null,
                     description: `Aionima envelope for ${project.name}`,
                     private: ghPrivate,
                 });
@@ -678,7 +722,7 @@ export default function InteractiveUpgradeWizard({
                             setRemoteUrl={setRemoteUrl}
                             account={account}
                             ghOwner={ghOwner}
-                            setGhOwner={setGhOwner}
+                            setGhOwner={chooseGhOwner}
                             ghPrivate={ghPrivate}
                             setGhPrivate={setGhPrivate}
                             forkCount={repoRows.filter((r) => r.included && r.source_mode === 'fork').length}

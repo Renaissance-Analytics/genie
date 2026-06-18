@@ -770,20 +770,41 @@ interface GenieApi {
         }>;
         cancelDevice: () => Promise<{ ok: boolean }>;
         resetClientId: () => Promise<{ ok: boolean }>;
-        /** Install URL for the "Genie IDE" GitHub App (install on a new account/org). */
-        installUrl: () => Promise<string>;
+        /**
+         * Install URL for the "Genie IDE" GitHub App. With no arg this is the
+         * account chooser (personal + every installable org); pass a numeric
+         * account id to pre-target the chooser at that account.
+         */
+        installUrl: (targetId?: number | null) => Promise<string>;
         disconnect: () => Promise<{ ok: boolean }>;
         user: () => Promise<{ login: string; name: string | null; avatar_url: string }>;
-        /** Accounts where the GitHub App is installed (org installations). */
+        /** Org accounts where the GitHub App is installed (for the owner picker). */
         orgs: () => Promise<
             Array<{
                 login: string;
                 avatar_url: string;
             }>
         >;
+        /** Every account the App is installed on — personal AND orgs. Source of
+         *  truth for "is Genie installed anywhere / on this account". */
+        installations: () => Promise<
+            Array<{
+                login: string;
+                avatar_url: string;
+                id: number | null;
+                isOrg: boolean;
+            }>
+        >;
+        /** Resolve a source repo's owner (login + id + isOrg) so create/fork
+         *  can target the SAME account the original repo lives in. */
+        repoOwner: (
+            owner: string,
+            repo: string,
+        ) => Promise<{ login: string; id: number | null; isOrg: boolean }>;
         createRepo: (opts: {
             name: string;
             owner?: string | null;
+            ownerId?: number | null;
             description?: string;
             private?: boolean;
         }) => Promise<{
@@ -797,6 +818,7 @@ interface GenieApi {
             owner: string;
             repo: string;
             intoOrg?: string | null;
+            intoOrgId?: number | null;
             name?: string;
         }) => Promise<{
             full_name: string;

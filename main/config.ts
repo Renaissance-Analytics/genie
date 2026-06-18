@@ -32,7 +32,18 @@ export const GENIE_GITHUB_CLIENT_ID = 'Iv23liPssWsCpaUIxtIT';
  */
 export const GENIE_GITHUB_APP_SLUG = 'genie-ide';
 
-/** Where to send the user to install the App on a new account/org. */
-export function genieInstallUrl(): string {
-    return `https://github.com/apps/${GENIE_GITHUB_APP_SLUG}/installations/new`;
+/**
+ * Where to send the user to install the App. With no argument this is the
+ * account chooser: GitHub's `installations/new` lists the personal account
+ * plus every org the user can install on, then lets them pick repositories.
+ *
+ * When the caller knows WHICH account the install needs to land on (e.g. the
+ * owner of a repo being forked), pass that account's numeric id as
+ * `targetId`. GitHub honours `suggested_target_id` to pre-select that account
+ * in the chooser — the user still confirms, and the plain chooser is shown if
+ * the hint is ignored, so this is a convenience, never load-bearing.
+ */
+export function genieInstallUrl(targetId?: number | null): string {
+    const base = `https://github.com/apps/${GENIE_GITHUB_APP_SLUG}/installations/new`;
+    return targetId ? `${base}?suggested_target_id=${targetId}` : base;
 }

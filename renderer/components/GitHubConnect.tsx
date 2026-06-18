@@ -29,6 +29,14 @@ export interface GitHubOrgLite {
     login: string;
 }
 
+/** One account the App is installed on — personal or org — with the numeric
+ *  id used to pre-target the install chooser. */
+export interface GitHubInstallationLite {
+    login: string;
+    id: number | null;
+    isOrg: boolean;
+}
+
 type Flow =
     | { kind: 'idle' }
     | { kind: 'starting' }
@@ -40,12 +48,25 @@ export interface GitHubAccount {
     connected: boolean;
     username: string | null;
     orgs: GitHubOrgLite[];
+    /** Every account the App is installed on (personal + orgs). */
+    installations: GitHubInstallationLite[];
+    /** True once installations have been fetched at least once after connect. */
+    installationsLoaded: boolean;
+    /** True when the App is installed NOWHERE — authorized but can't act yet. */
+    noInstallations: boolean;
+    /** True when the App is installed on the user's personal account. */
+    personalInstalled: boolean;
     storageOk: boolean;
     clientIdSet: boolean;
     flow: Flow;
     connect: () => Promise<void>;
     cancel: () => Promise<void>;
     refresh: () => Promise<unknown>;
+    /** Open GitHub's install chooser (optionally pre-targeted at an account
+     *  id), so the user can pick which accounts/orgs to install Genie on. */
+    openInstall: (targetId?: number | null) => Promise<void>;
+    /** Returns true when the given owner login is installed (empty = personal). */
+    isInstalledFor: (ownerLogin: string) => boolean;
 }
 
 export function useGitHubAccount(): GitHubAccount {
@@ -53,6 +74,8 @@ export function useGitHubAccount(): GitHubAccount {
     const [connected, setConnected] = useState(false);
     const [username, setUsername] = useState<string | null>(null);
     const [orgs, setOrgs] = useState<GitHubOrgLite[]>([]);
+    const [installations, setInstallations] = useState<GitHubInstallationLite[]>([]);
+    const [installationsLoaded, setInstallationsLoaded] = useState(false);
     const [storageOk, setStorageOk] = useState(true);
     const [clientIdSet, setClientIdSet] = useState(false);
     const [flow, setFlow] = useState<Flow>({ kind: 'idle' });
@@ -66,12 +89,24 @@ export function useGitHubAccount(): GitHubAccount {
         setClientIdSet(st.clientIdSet);
         setLoaded(true);
         if (st.connected) {
+            // One installations fetch covers both the org picker AND the
+            // "where is Genie installed" detection — orgs are derived from it.
             try {
-                const list = await api().github.orgs();
-                setOrgs(list.map((o) => ({ login: o.login })));
+                const list = await api().github.installations();
+                setInstallations(
+                    list.map((i) => ({ login: i.login, id: i.id, isOrg: i.isOrg })),
+                );
+                setOrgs(list.filter((i) => i.isOrg).map((o) => ({ login: o.login })));
             } catch {
+                setInstallations([]);
                 setOrgs([]);
+            } finally {
+                setInstallationsLoaded(true);
             }
+        } else {
+            setInstallations([]);
+            setOrgs([]);
+            setInstallationsLoaded(false);
         }
         // Reflect the main-side flow outcome into local state.
         if (st.flow.kind === 'success') {
@@ -80,6 +115,26 @@ export function useGitHubAccount(): GitHubAccount {
             setFlow({ kind: 'error', message: st.flow.message });
         }
         return st;
+    };
+
+    const openInstall = async (targetId?: number | null) => {
+        try {
+            const url = await api().github.installUrl(targetId);
+            await api().tynn.openInBrowser(url);
+        } catch {
+            // Best-effort; the chooser is a convenience, not load-bearing.
+        }
+    };
+
+    const isInstalledFor = (ownerLogin: string): boolean => {
+        if (!ownerLogin) {
+            // Personal account: installed when a non-org installation matches
+            // the connected username (GitHub lists the personal install too).
+            return installations.some(
+                (i) => !i.isOrg && (!username || i.login === username),
+            );
+        }
+        return installations.some((i) => i.login === ownerLogin);
     };
 
     useEffect(() => {
@@ -132,22 +187,44 @@ export function useGitHubAccount(): GitHubAccount {
         setFlow({ kind: 'idle' });
     };
 
+    const noInstallations =
+        connected && installationsLoaded && installations.length === 0;
+    const personalInstalled = installations.some(
+        (i) => !i.isOrg && (!username || i.login === username),
+    );
+
     return {
         loaded,
         connected,
         username,
         orgs,
+        installations,
+        installationsLoaded,
+        noInstallations,
+        personalInstalled,
         storageOk,
         clientIdSet,
         flow,
         connect,
         cancel,
         refresh,
+        openInstall,
+        isInstalledFor,
     };
 }
 
 export function GitHubConnect({ account }: { account: GitHubAccount }) {
-    const { loaded, connected, username, storageOk, clientIdSet, flow } = account;
+    const {
+        loaded,
+        connected,
+        username,
+        storageOk,
+        clientIdSet,
+        flow,
+        installations,
+        installationsLoaded,
+        noInstallations,
+    } = account;
 
     if (!loaded) {
         return (
@@ -158,10 +235,71 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
     }
 
     if (connected) {
+        // Authorizing (a user token) is only HALF of connecting a GitHub App —
+        // the App also has to be INSTALLED somewhere to read/write repos. Make
+        // installation a visible, first-class step instead of a buried link:
+        // when the App is installed nowhere, lead with the install action;
+        // otherwise confirm where it's installed and offer to add more.
         return (
-            <Text size="xs" style={{ color: 'var(--emerald-600)', display: 'block' }}>
-                ✓ Connected as <strong>{username}</strong>
-            </Text>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <Text size="xs" style={{ color: 'var(--emerald-600)', display: 'block' }}>
+                    ✓ Connected as <strong>{username}</strong>
+                </Text>
+                {noInstallations ? (
+                    <div
+                        style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 6,
+                            padding: '8px 10px',
+                            borderRadius: 8,
+                            background: 'color-mix(in srgb, #f59e0b 12%, transparent)',
+                            border: '1px solid color-mix(in srgb, #f59e0b 35%, var(--border-1))',
+                        }}
+                    >
+                        <Text size="xs" style={{ display: 'block' }}>
+                            Genie isn't installed on any account yet — install it
+                            to choose which of your accounts/orgs it can create
+                            and fork repos on.
+                        </Text>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <Action
+                                size="sm"
+                                color="blue"
+                                icon="github"
+                                onClick={() => void account.openInstall()}
+                            >
+                                Install Genie on your accounts/orgs…
+                            </Action>
+                            <Action
+                                size="sm"
+                                variant="ghost"
+                                icon="refresh-cw"
+                                onClick={() => void account.refresh()}
+                            >
+                                I've installed it
+                            </Action>
+                        </div>
+                    </div>
+                ) : (
+                    installationsLoaded && (
+                        <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                            Installed on{' '}
+                            <strong>{installations.map((i) => i.login).join(', ')}</strong>.{' '}
+                            <a
+                                href="#"
+                                onClick={(e) => {
+                                    e.preventDefault();
+                                    void account.openInstall();
+                                }}
+                                style={{ color: 'var(--blue-400)' }}
+                            >
+                                Add another account/org…
+                            </a>
+                        </Text>
+                    )
+                )}
+            </div>
         );
     }
 
@@ -317,48 +455,64 @@ export function OwnerSelect({
     label?: string;
 }) {
     if (!account.connected) return null;
+    // The owner dropdown offers the personal account + every installed org. A
+    // chosen account that ISN'T installed can't be written to — surface a
+    // per-account install prompt for exactly that account instead of letting
+    // the create/fork fail later. (The personal account may legitimately not
+    // be installed even though the user authorized.)
     const options = [
         { value: '', label: `${account.username ?? '(you)'} · personal` },
         ...account.orgs.map((o) => ({ value: o.login, label: `${o.login} · org` })),
     ];
+    const chosenInstalled = account.isInstalledFor(value);
+    const chosenInstall = account.installations.find((i) => i.login === value);
+    const chosenLabel = value || account.username || 'your personal account';
     return (
         <div>
             <Text size="xs" style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
                 {label}
             </Text>
             <Select value={value} onValueChange={onChange} list={options} />
-            <InstallOnOrgLink />
+            {account.installationsLoaded && !chosenInstalled && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                    <Text size="xs" style={{ color: 'var(--amber-600)', flex: 1 }}>
+                        Genie isn't installed on <strong>{chosenLabel}</strong> — install
+                        it there to create/fork under this account.
+                    </Text>
+                    <Action
+                        size="sm"
+                        variant="ghost"
+                        icon="external-link"
+                        onClick={() => void account.openInstall(chosenInstall?.id ?? null)}
+                    >
+                        Install here…
+                    </Action>
+                </div>
+            )}
+            <InstallOnOrgLink account={account} />
         </div>
     );
 }
 
 /**
- * "Install Genie on another org…" — the GitHub App only sees accounts it's
- * installed on, so an org the user wants but doesn't see in the dropdown is
- * fixed by installing the App there (not by re-authing). Opens the App's
- * install page; the new org appears in the list after a refresh.
+ * "Install Genie on another account/org…" — the GitHub App only sees accounts
+ * it's installed on, so an account the user wants but doesn't see in the
+ * dropdown is fixed by installing the App there (not by re-authing). Opens the
+ * App's install chooser; the new account appears after a refresh.
  */
-export function InstallOnOrgLink() {
-    const open = async () => {
-        try {
-            const url = await api().github.installUrl();
-            await api().tynn.openInBrowser(url);
-        } catch {
-            // Best-effort; the link is a convenience, not load-bearing.
-        }
-    };
+export function InstallOnOrgLink({ account }: { account: GitHubAccount }) {
     return (
         <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
-            Don&apos;t see an org?{' '}
+            Don&apos;t see an account?{' '}
             <a
                 href="#"
                 onClick={(e) => {
                     e.preventDefault();
-                    void open();
+                    void account.openInstall();
                 }}
                 style={{ color: 'var(--blue-400)' }}
             >
-                Install Genie on another org…
+                Install Genie on another account/org…
             </a>
         </Text>
     );
