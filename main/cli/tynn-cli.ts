@@ -2,6 +2,7 @@ import { app } from 'electron';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { detectShells } from '@particle-academy/fancy-term-host';
 import { listWorkspaces } from '../db';
 
 /**
@@ -71,6 +72,54 @@ function copyRecursive(src: string, dst: string): void {
 }
 
 /**
+ * Resolve a real Git Bash executable to run install.sh with.
+ *
+ * On Windows, spawning the bare command `bash` is a trap: PATH commonly
+ * resolves it to `C:\Windows\System32\bash.exe`, the **WSL launcher**, which —
+ * with no WSL distro installed — fails at process creation with
+ * `Bash/Service/CreateInstance/CreateVm/HCS/...ERROR_FILE_NOT_FOUND` (HCS =
+ * Hyper-V/WSL Host Compute Service). We want Git Bash instead, so we ask the
+ * host's shell detector (it already prefers Git Bash and knows its absolute
+ * path), then fall back to the standard Git-for-Windows install locations.
+ *
+ * Returns the executable path, or null when no Git Bash is found (caller turns
+ * that into an actionable "install Git for Windows" message). On non-Windows,
+ * the bare `bash` on PATH is correct.
+ */
+export function resolveBashExe(): string | null {
+    if (process.platform !== 'win32') return 'bash';
+    // Prefer the detected Git Bash — its `command` is the absolute bash.exe,
+    // and detection explicitly skips the WSL System32 launcher.
+    try {
+        const isGitBash = (cmd: string): boolean =>
+            /git[\\/].*bin[\\/]bash\.exe$/i.test(cmd) ||
+            /git[\\/]usr[\\/]bin[\\/]bash\.exe$/i.test(cmd);
+        const fromDetect = detectShells().find(
+            (s) => s.label === 'Git Bash' || isGitBash(s.command),
+        );
+        if (fromDetect && fs.existsSync(fromDetect.command)) return fromDetect.command;
+    } catch {
+        /* fall through to the static probe */
+    }
+    const candidates = [
+        process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Git', 'bin', 'bash.exe'),
+        process.env['ProgramFiles(x86)'] &&
+            path.join(process.env['ProgramFiles(x86)'], 'Git', 'bin', 'bash.exe'),
+        process.env.LOCALAPPDATA &&
+            path.join(process.env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'),
+        'C:\\Program Files\\Git\\bin\\bash.exe',
+    ].filter((c): c is string => !!c);
+    for (const c of candidates) {
+        try {
+            if (fs.existsSync(c)) return c;
+        } catch {
+            /* probe next */
+        }
+    }
+    return null;
+}
+
+/**
  * Install the toolkit system-wide (for ALL the user's bash sessions, not just
  * Genie terminals). The shipped copy lives under the app's read-only resources,
  * but install.sh writes into its own dir (.custom/, tynn.config) and edits
@@ -104,9 +153,19 @@ export function installTynnCliSystemWide(): Promise<{
             });
             return;
         }
+        const bashExe = resolveBashExe();
+        if (!bashExe) {
+            resolve({
+                ok: false,
+                output:
+                    'Git Bash not found. The toolkit is a bash toolkit — install ' +
+                    'Git for Windows (https://git-scm.com/download/win), then try again. ' +
+                    '(Windows’ built-in `bash` is the WSL launcher and can’t run it.)',
+            });
+            return;
+        }
         const installScript = path.join(dest, 'install.sh');
-        // `bash` resolves to Git Bash when it's on PATH (the common case).
-        const child = spawn('bash', [installScript], {
+        const child = spawn(bashExe, [installScript], {
             cwd: dest,
             env: process.env,
         });
@@ -116,7 +175,7 @@ export function installTynnCliSystemWide(): Promise<{
         child.on('error', (e) =>
             resolve({
                 ok: false,
-                output: `Could not run bash (Git Bash required): ${e.message}`,
+                output: `Could not run Git Bash at ${bashExe}: ${e.message}`,
             }),
         );
         child.on('close', (code) =>
