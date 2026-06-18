@@ -26,6 +26,7 @@ import { getAllSettings } from '../db';
  */
 
 export const GENIE_SERVER_NAME = 'genie';
+export const TYNN_SERVER_NAME = 'tynn';
 
 type JsonObj = Record<string, unknown>;
 
@@ -38,12 +39,23 @@ export function cursorEntry(url: string): JsonObj {
 }
 
 /**
- * Pure: apply (or remove) the genie server entry to a parsed config object.
- * Returns the next config, or null when there's nothing to write (disabling a
- * config that never had a genie entry — so we don't create files just to omit).
+ * The Tynn MCP server entry — an authenticated remote endpoint, so unlike the
+ * loopback `genie` entry it carries the project agent token as a Bearer header.
+ * Claude Code wants the explicit `type`; Cursor infers it but tolerates the
+ * extra key, so one shape serves both targets.
  */
-export function applyGenieServer(
+export function tynnEntry(url: string, token: string): JsonObj {
+    return { type: 'http', url, headers: { Authorization: `Bearer ${token}` } };
+}
+
+/**
+ * Pure: apply (or remove) a named MCP server entry to a parsed config object.
+ * Returns the next config, or null when there's nothing to write (disabling a
+ * config that never had the entry — so we don't create files just to omit).
+ */
+export function applyServer(
     existing: JsonObj | null,
+    name: string,
     entry: JsonObj,
     enabled: boolean,
 ): JsonObj | null {
@@ -53,13 +65,22 @@ export function applyGenieServer(
             ? { ...(base.mcpServers as JsonObj) }
             : {};
     if (enabled) {
-        servers[GENIE_SERVER_NAME] = entry;
+        servers[name] = entry;
     } else {
-        if (!(GENIE_SERVER_NAME in servers) && existing === null) return null;
-        delete servers[GENIE_SERVER_NAME];
+        if (!(name in servers) && existing === null) return null;
+        delete servers[name];
     }
     base.mcpServers = servers;
     return base;
+}
+
+/** Back-compat wrapper — the genie entry is just a named server. */
+export function applyGenieServer(
+    existing: JsonObj | null,
+    entry: JsonObj,
+    enabled: boolean,
+): JsonObj | null {
+    return applyServer(existing, GENIE_SERVER_NAME, entry, enabled);
 }
 
 function readJson(file: string): JsonObj | null {
@@ -70,15 +91,52 @@ function readJson(file: string): JsonObj | null {
     }
 }
 
-function upsert(file: string, entry: JsonObj, enabled: boolean): void {
+function upsert(file: string, name: string, entry: JsonObj, enabled: boolean): void {
     const existing = fs.existsSync(file) ? readJson(file) : null;
-    const next = applyGenieServer(existing, entry, enabled);
+    const next = applyServer(existing, name, entry, enabled);
     if (next === null) return; // nothing to remove and no file to touch
     try {
         fs.mkdirSync(path.dirname(file), { recursive: true });
         fs.writeFileSync(file, JSON.stringify(next, null, 2) + '\n');
     } catch {
         /* best-effort — a read-only/locked file shouldn't break the toggle */
+    }
+}
+
+/** True when a workspace's `.mcp.json` already has a `tynn` server entry. */
+export function hasTynnServer(workspacePath: string): boolean {
+    const file = path.join(workspacePath, '.mcp.json');
+    const cfg = fs.existsSync(file) ? readJson(file) : null;
+    const servers = cfg?.mcpServers;
+    return !!servers && typeof servers === 'object' && TYNN_SERVER_NAME in (servers as JsonObj);
+}
+
+/**
+ * Write (or remove) the `tynn` MCP server in a workspace's Claude + Cursor
+ * configs. Mirrors writeWorkspaceAgentMcp's per-target sync gating. The entry
+ * carries the project agent token — callers must ensure `.mcp.json` is
+ * gitignored (the provisioner does) so the secret never gets committed.
+ */
+export function writeWorkspaceTynnMcp(
+    workspacePath: string,
+    enabled: boolean,
+    opts: { url: string; token: string } | null,
+): void {
+    if (!workspacePath) return;
+    if (enabled && (!opts?.url || !opts?.token)) return; // never write a broken/empty entry
+    let sync = { claude: true, cursor: true };
+    try {
+        const s = getAllSettings();
+        sync = { claude: s.mcp_sync_claude !== 'off', cursor: s.mcp_sync_cursor !== 'off' };
+    } catch {
+        /* default to syncing if settings can't be read */
+    }
+    const entry = opts ? tynnEntry(opts.url, opts.token) : {};
+    if (sync.claude) {
+        upsert(path.join(workspacePath, '.mcp.json'), TYNN_SERVER_NAME, entry, enabled);
+    }
+    if (sync.cursor) {
+        upsert(path.join(workspacePath, '.cursor', 'mcp.json'), TYNN_SERVER_NAME, entry, enabled);
     }
 }
 
@@ -190,11 +248,12 @@ export function writeWorkspaceAgentMcp(
         return;
     }
     if (sync.claude) {
-        upsert(path.join(workspacePath, '.mcp.json'), claudeEntry(url ?? ''), enabled);
+        upsert(path.join(workspacePath, '.mcp.json'), GENIE_SERVER_NAME, claudeEntry(url ?? ''), enabled);
     }
     if (sync.cursor) {
         upsert(
             path.join(workspacePath, '.cursor', 'mcp.json'),
+            GENIE_SERVER_NAME,
             cursorEntry(url ?? ''),
             enabled,
         );

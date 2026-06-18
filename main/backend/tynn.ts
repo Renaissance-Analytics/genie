@@ -94,6 +94,39 @@ export class TynnBackend implements Backend {
         }
     }
 
+    /**
+     * Mint an MCP agent token for a project the signed-in user maintains
+     * (POST /api/v1/projects/agent-token). Rides the web session cookie like
+     * every other call here. Returns the one-time token + the MCP endpoint URL
+     * Genie writes into the workspace .mcp.json. Throws TynnAuthError when the
+     * session is dead (caller re-signs-in) and a plain Error on 403/other.
+     */
+    async mintAgentToken(projectId: string): Promise<{
+        token: string;
+        mcpUrl: string;
+        scopes: string[];
+        isOpsProject: boolean;
+        agent: { id: string; name: string };
+    }> {
+        const data = await this.fetch<{
+            token: string;
+            mcp_url: string;
+            scopes: string[];
+            is_ops_project: boolean;
+            agent: { id: string; name: string };
+        }>('/api/v1/projects/agent-token', {
+            method: 'POST',
+            body: { project_id: projectId },
+        });
+        return {
+            token: data.token,
+            mcpUrl: data.mcp_url,
+            scopes: data.scopes ?? [],
+            isOpsProject: !!data.is_ops_project,
+            agent: data.agent,
+        };
+    }
+
     async captureWish(
         projectId: string,
         content: string,

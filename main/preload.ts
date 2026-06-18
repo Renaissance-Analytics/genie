@@ -195,6 +195,16 @@ const api = {
             path: string,
             backendKind: 'tynn' | 'aionima' = 'tynn',
         ) => ipcRenderer.invoke('tynn:open-in-browser', path, backendKind),
+        // Auto-provisioning: link a workspace to a Tynn project, read its
+        // provision status (no mint), or provision/refresh (mint + write config).
+        link: (
+            workspacePath: string,
+            link: { host?: string; owner?: string; project?: string; projectId?: string },
+        ) => ipcRenderer.invoke('tynn:link', workspacePath, link),
+        provisionStatus: (workspacePath: string) =>
+            ipcRenderer.invoke('tynn:provision-status', workspacePath),
+        provision: (workspacePath: string, force = false) =>
+            ipcRenderer.invoke('tynn:provision', workspacePath, force),
     },
 
     tynnHost: {

@@ -41,6 +41,12 @@ import { openWorkspace } from './workspace/open';
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import {
+    provisionWorkspaceTynn,
+    provisionStatus,
+    linkWorkspaceTynn,
+} from './tynn/provision';
+import type { ProjectJsonTynn } from './workspace/project-json';
+import {
     workspaceEndpointUrl,
     mcpServerState,
     restartMcpServer,
@@ -345,6 +351,27 @@ export function registerIpcHandlers(): void {
             backendOfKind(backendKind).openInBrowser(urlOrPath);
             return { ok: true };
         },
+    );
+
+    // --- Tynn auto-provisioning (agent token + Agent MCP config) --------
+    // Link a workspace to a Tynn project (writes the secret-free project.json
+    // tynn block), check status without minting, or provision/refresh (mint a
+    // token + write the workspace .mcp.json tynn server). "Auto on open" is
+    // driven by the renderer calling tynn:provision when a workspace opens.
+    ipcMain.handle(
+        'tynn:link',
+        async (_e, workspacePath: string, link: ProjectJsonTynn) => {
+            linkWorkspaceTynn(workspacePath, link);
+            return { ok: true };
+        },
+    );
+    ipcMain.handle('tynn:provision-status', async (_e, workspacePath: string) =>
+        provisionStatus(workspacePath),
+    );
+    ipcMain.handle(
+        'tynn:provision',
+        async (_e, workspacePath: string, force = false) =>
+            provisionWorkspaceTynn(workspacePath, { force }),
     );
 
     // --- Open external URLs --------------------------------------------

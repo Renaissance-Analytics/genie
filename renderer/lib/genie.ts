@@ -616,6 +616,26 @@ interface GenieApi {
             urlOrPath: string,
             backendKind?: BackendKind,
         ) => Promise<{ ok: boolean }>;
+        /** Link a workspace to a Tynn project (writes the secret-free project.json block). */
+        link: (
+            workspacePath: string,
+            link: { host?: string; owner?: string; project?: string; projectId?: string },
+        ) => Promise<{ ok: boolean }>;
+        /** Where the workspace stands without minting anything (UI display). */
+        provisionStatus: (workspacePath: string) => Promise<{
+            status: 'unlinked' | 'signed-out' | 'already' | 'provision';
+            link: { host?: string; owner?: string; project?: string; projectId?: string } | null;
+        }>;
+        /** Mint the agent token + write the workspace Agent MCP config. */
+        provision: (
+            workspacePath: string,
+            force?: boolean,
+        ) => Promise<{
+            status: 'unlinked' | 'signed-out' | 'already' | 'provision' | 'error';
+            agent?: { id: string; name: string };
+            isOpsProject?: boolean;
+            error?: string;
+        }>;
     };
     tynnHost: {
         get: () => Promise<string>;
