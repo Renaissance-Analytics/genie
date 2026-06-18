@@ -65,6 +65,9 @@ export interface GitHubAccount {
     /** Open GitHub's install chooser (optionally pre-targeted at an account
      *  id), so the user can pick which accounts/orgs to install Genie on. */
     openInstall: (targetId?: number | null) => Promise<void>;
+    /** Disarm the one-shot post-connect auto-open of the install chooser.
+     *  Call before a manual openInstall() so the browser isn't double-opened. */
+    markInstallSurfaced: () => void;
     /** Returns true when the given owner login is installed (empty = personal). */
     isInstalledFor: (ownerLogin: string) => boolean;
 }
@@ -80,6 +83,12 @@ export function useGitHubAccount(): GitHubAccount {
     const [clientIdSet, setClientIdSet] = useState(false);
     const [flow, setFlow] = useState<Flow>({ kind: 'idle' });
     const polling = useRef(false);
+    // Guards the one-shot post-connect install-chooser bounce so it fires at
+    // most once per fresh connect — not on every status refresh (mount, poll
+    // tick, window-focus refetch), which would re-spam the browser. Armed
+    // (reset to false) by connect(); disarmed at mount for a pre-existing
+    // connection and by any manual open via markInstallSurfaced().
+    const autoOpenedInstall = useRef(false);
 
     const refresh = async () => {
         const st = await api().github.status();
@@ -126,6 +135,13 @@ export function useGitHubAccount(): GitHubAccount {
         }
     };
 
+    // Mark the install chooser as already-surfaced so the one-shot auto-open
+    // doesn't fire after the user has manually opened it (or after we've
+    // bounced them once). Lets the UI route the user without double-opening.
+    const markInstallSurfaced = () => {
+        autoOpenedInstall.current = true;
+    };
+
     const isInstalledFor = (ownerLogin: string): boolean => {
         if (!ownerLogin) {
             // Personal account: installed when a non-org installation matches
@@ -138,7 +154,13 @@ export function useGitHubAccount(): GitHubAccount {
     };
 
     useEffect(() => {
-        void refresh();
+        void (async () => {
+            const st = await refresh();
+            // A connection that already existed at mount (token from a prior
+            // session) must NOT trigger the auto-open bounce — only an explicit
+            // connect() this session should. Disarm the one-shot here.
+            if (st.connected) autoOpenedInstall.current = true;
+        })();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -162,8 +184,38 @@ export function useGitHubAccount(): GitHubAccount {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [flow.kind]);
 
+    // After authorize completes, GitHub has only handed Genie a USER TOKEN —
+    // the App still has to be INSTALLED before it can read/write repos. Bounce
+    // the user to the install chooser exactly ONCE per fresh connect so they
+    // land on the account/org picker (installations/new) rather than stalling
+    // on the authorize screen. Pre-existing connects (token already present at
+    // mount) don't trigger this — `connect()` arms it by resetting the guards.
+    useEffect(() => {
+        if (!connected || !installationsLoaded) return;
+        if (autoOpenedInstall.current) return;
+        autoOpenedInstall.current = true;
+        void openInstall();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [connected, installationsLoaded]);
+
+    // Returning from the install page gives no callback into the app, so
+    // re-fetch installations when the window regains focus while connected —
+    // that's how a freshly-installed org appears in the dropdown.
+    useEffect(() => {
+        const onFocus = () => {
+            if (connected) void refresh();
+        };
+        window.addEventListener('focus', onFocus);
+        return () => window.removeEventListener('focus', onFocus);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [connected]);
+
     const connect = async () => {
         try {
+            // Arm the one-shot install-chooser bounce for THIS connect: once
+            // the token lands and installations load, the effect above opens
+            // the account/org picker a single time.
+            autoOpenedInstall.current = false;
             setFlow({ kind: 'starting' });
             const code = await api().github.startDevice();
             setFlow({
@@ -209,6 +261,7 @@ export function useGitHubAccount(): GitHubAccount {
         cancel,
         refresh,
         openInstall,
+        markInstallSurfaced,
         isInstalledFor,
     };
 }
@@ -236,10 +289,17 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
 
     if (connected) {
         // Authorizing (a user token) is only HALF of connecting a GitHub App —
-        // the App also has to be INSTALLED somewhere to read/write repos. Make
-        // installation a visible, first-class step instead of a buried link:
-        // when the App is installed nowhere, lead with the install action;
-        // otherwise confirm where it's installed and offer to add more.
+        // the App also has to be INSTALLED somewhere to read/write repos. The
+        // hook auto-opens the install chooser once on a fresh connect; here we
+        // ALSO surface installation as a permanent, first-class step so the
+        // user can pick orgs whether or not they followed the auto-open, and
+        // can ADD an org later even after the personal account is installed.
+        const openChooser = () => {
+            // Treat any manual open as "surfaced" so the one-shot auto-open
+            // won't also fire and double-open the browser.
+            account.markInstallSurfaced();
+            void account.openInstall();
+        };
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <Text size="xs" style={{ color: 'var(--emerald-600)', display: 'block' }}>
@@ -258,18 +318,18 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
                         }}
                     >
                         <Text size="xs" style={{ display: 'block' }}>
-                            Genie isn't installed on any account yet — install it
-                            to choose which of your accounts/orgs it can create
-                            and fork repos on.
+                            One more step: choose where to install Genie. Pick
+                            your personal account and/or any orgs — that's what
+                            lets Genie create and fork repos there.
                         </Text>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                             <Action
                                 size="sm"
                                 color="blue"
                                 icon="github"
-                                onClick={() => void account.openInstall()}
+                                onClick={openChooser}
                             >
-                                Install Genie on your accounts/orgs…
+                                Choose where to install Genie…
                             </Action>
                             <Action
                                 size="sm"
@@ -283,20 +343,30 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
                     </div>
                 ) : (
                     installationsLoaded && (
-                        <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
-                            Installed on{' '}
-                            <strong>{installations.map((i) => i.login).join(', ')}</strong>.{' '}
-                            <a
-                                href="#"
-                                onClick={(e) => {
-                                    e.preventDefault();
-                                    void account.openInstall();
-                                }}
-                                style={{ color: 'var(--blue-400)' }}
-                            >
-                                Add another account/org…
-                            </a>
-                        </Text>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                                Installed on{' '}
+                                <strong>{installations.map((i) => i.login).join(', ')}</strong>.
+                            </Text>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                <Action
+                                    size="sm"
+                                    variant="ghost"
+                                    icon="github"
+                                    onClick={openChooser}
+                                >
+                                    Install on another org…
+                                </Action>
+                                <Action
+                                    size="sm"
+                                    variant="ghost"
+                                    icon="refresh-cw"
+                                    onClick={() => void account.refresh()}
+                                >
+                                    Refresh
+                                </Action>
+                            </div>
+                        </div>
                     )
                 )}
             </div>
@@ -483,7 +553,10 @@ export function OwnerSelect({
                         size="sm"
                         variant="ghost"
                         icon="external-link"
-                        onClick={() => void account.openInstall(chosenInstall?.id ?? null)}
+                        onClick={() => {
+                            account.markInstallSurfaced();
+                            void account.openInstall(chosenInstall?.id ?? null);
+                        }}
                     >
                         Install here…
                     </Action>
@@ -508,6 +581,7 @@ export function InstallOnOrgLink({ account }: { account: GitHubAccount }) {
                 href="#"
                 onClick={(e) => {
                     e.preventDefault();
+                    account.markInstallSurfaced();
                     void account.openInstall();
                 }}
                 style={{ color: 'var(--blue-400)' }}
