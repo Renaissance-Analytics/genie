@@ -279,6 +279,20 @@ function MasterInner() {
         return m;
     }, [workspaces]);
 
+    // Auto-provision the Tynn agent token + Agent MCP config when a workspace
+    // becomes active. Silent + best-effort + once per workspace per session:
+    // main-side decideProvision() no-ops when the workspace is unlinked, the
+    // user is signed out, or it's already configured — so this only mints when
+    // a linked, signed-in workspace is missing its token.
+    const tynnProvisionedRef = useRef<Set<string>>(new Set());
+    useEffect(() => {
+        if (!activeWorkspaceId || tynnProvisionedRef.current.has(activeWorkspaceId)) return;
+        const ws = workspacesById.get(activeWorkspaceId);
+        if (!ws?.path) return;
+        tynnProvisionedRef.current.add(activeWorkspaceId);
+        void api().tynn.provision(ws.path).catch(() => {});
+    }, [activeWorkspaceId, workspacesById]);
+
     const refresh = useCallback(async () => {
         const [ws, sp] = await Promise.all([
             api().workspaces.list(),
