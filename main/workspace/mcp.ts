@@ -24,15 +24,35 @@ export interface McpServers {
 const ROOT_FILE = '.mcp.json';
 const CURSOR_FILE = path.join('.cursor', 'mcp.json');
 
+/**
+ * MCP servers that a Claude Code plugin (or similar tool) injects into a
+ * client's config at runtime — they are NOT declared in the envelope's own
+ * `.mcp.json` / `.cursor/mcp.json`, so their presence in one config but not
+ * the other must never count as an out-of-sync discrepancy, and consolidation
+ * must never try to relocate them into the envelope config. Stripped from
+ * every read below so the ignore applies uniformly to the sync boolean, the
+ * missing-servers list, and the consolidate action. Add other plugin-provided
+ * server names here as they surface.
+ */
+const IGNORED_SERVERS = new Set<string>(['fancy-ui']);
+
 function readServers(file: string): McpServers {
     try {
         if (!fs.existsSync(file)) return {};
         const json = JSON.parse(fs.readFileSync(file, 'utf8')) as {
             mcpServers?: McpServers;
         };
-        return json.mcpServers && typeof json.mcpServers === 'object'
-            ? json.mcpServers
-            : {};
+        const servers =
+            json.mcpServers && typeof json.mcpServers === 'object'
+                ? json.mcpServers
+                : {};
+        // Drop plugin-provided servers so they're invisible to every
+        // comparison and to consolidation.
+        const filtered: McpServers = {};
+        for (const [name, def] of Object.entries(servers)) {
+            if (!IGNORED_SERVERS.has(name)) filtered[name] = def;
+        }
+        return filtered;
     } catch {
         // Malformed JSON — skip rather than crash the whole conversion.
         return {};

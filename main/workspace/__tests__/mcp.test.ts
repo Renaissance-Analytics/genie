@@ -68,4 +68,45 @@ describe('mcp consolidation', () => {
         expect(fs.existsSync(path.join(env, '.mcp.json'))).toBe(false);
         expect(mcpStatus(env).needsConsolidation).toBe(false);
     });
+
+    it('ignores plugin-provided servers (fancy-ui) when diffing the two root files', () => {
+        const env = makeEnvelope();
+        // The only difference between the two root files is `fancy-ui`, a
+        // Claude Code plugin server — not declared by the envelope. It must
+        // not register as out-of-sync.
+        writeJson(path.join(env, '.mcp.json'), {
+            mcpServers: {
+                tynn: { command: 'tynn-mcp' },
+                'fancy-ui': { command: 'fancy-ui-mcp' },
+            },
+        });
+        writeJson(path.join(env, '.cursor', 'mcp.json'), {
+            mcpServers: { tynn: { command: 'tynn-mcp' } },
+        });
+
+        const status = mcpStatus(env);
+        expect(status.needsConsolidation).toBe(false);
+        // fancy-ui is invisible to the status entirely.
+        expect(status.rootServers).toEqual(['tynn']);
+        expect(status.missingAtRoot).toEqual([]);
+    });
+
+    it('never surfaces or relocates a plugin-provided server (fancy-ui) from a repo', () => {
+        const env = makeEnvelope();
+        writeJson(path.join(env, 'repos', 'app', '.mcp.json'), {
+            mcpServers: {
+                real: { command: 'real-mcp' },
+                'fancy-ui': { command: 'fancy-ui-mcp' },
+            },
+        });
+
+        const status = mcpStatus(env);
+        expect(status.repoServers).toEqual(['real']);
+        expect(status.missingAtRoot).toEqual(['real']);
+
+        const res = consolidateMcp(env);
+        expect(res.servers).toEqual(['real']);
+        const j = JSON.parse(fs.readFileSync(path.join(env, '.mcp.json'), 'utf8'));
+        expect(Object.keys(j.mcpServers)).toEqual(['real']);
+    });
 });
