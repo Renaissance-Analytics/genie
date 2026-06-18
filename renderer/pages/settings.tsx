@@ -775,6 +775,19 @@ function GitHubSection() {
         return () => clearInterval(t);
     }, [flow.kind]);
 
+    // Installing on an org happens in the browser and gives no callback into
+    // the app, so the mount-time installations snapshot goes stale the moment
+    // the user adds an account. Re-fetch when the window regains focus while
+    // connected — that's how a freshly-installed org appears in "Installed on".
+    useEffect(() => {
+        const onFocus = () => {
+            if (connected) void refresh();
+        };
+        window.addEventListener('focus', onFocus);
+        return () => window.removeEventListener('focus', onFocus);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [connected]);
+
     const start = async () => {
         try {
             setFlow({ kind: 'starting' });
@@ -906,6 +919,17 @@ function GitHubSection() {
                         }}
                     >
                         Add account/org…
+                    </Action>
+                )}
+                {connected && (
+                    <Action
+                        variant="ghost"
+                        size="sm"
+                        icon="refresh-cw"
+                        title="Re-check where Genie is installed"
+                        onClick={() => void refresh()}
+                    >
+                        Refresh
                     </Action>
                 )}
                 <span style={{ flex: 1 }} />
