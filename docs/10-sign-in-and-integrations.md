@@ -45,7 +45,7 @@ into the app:
    &lt;username&gt;**.
 
 GitHub is used to create the backing repositories for **`.agi` envelopes**
-(scopes: `repo`, `workflow`, `read:org`).
+(scopes: `repo`, `read:org`).
 
 Notes you may encounter:
 

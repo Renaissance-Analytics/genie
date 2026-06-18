@@ -887,8 +887,8 @@ function GitHubSection() {
                         label="OAuth App client ID override"
                         description={
                             builtInClientId
-                                ? 'This Genie build ships with a baked-in OAuth Client ID. Use this field only if you want to point Genie at a different OAuth App (self-hosters, devs testing forks). Leave blank to use the bundle default. The Client ID is public, not a secret. Required scopes: repo, workflow, read:org.'
-                                : 'Register an OAuth App at github.com/settings/applications/new with Enable Device Flow ticked, then paste its Client ID here. The Client ID is public, not a secret. Required scopes: repo, workflow, read:org.'
+                                ? 'This Genie build ships with a baked-in OAuth Client ID. Use this field only if you want to point Genie at a different OAuth App (self-hosters, devs testing forks). Leave blank to use the bundle default. The Client ID is public, not a secret. Required scopes: repo, read:org.'
+                                : 'Register an OAuth App at github.com/settings/applications/new with Enable Device Flow ticked, then paste its Client ID here. The Client ID is public, not a secret. Required scopes: repo, read:org.'
                         }
                         value={clientId}
                         onValueChange={setClientId}

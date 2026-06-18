@@ -14,17 +14,21 @@
  * https://github.com/settings/applications/new (or under an org), tick
  * "Enable Device Flow", and paste the client ID into Genie's Settings.
  *
- * Scopes (Genie is a full workspace + bridge between Tynn, local dev,
- * and Aionima — it needs broad repo access, not just create):
- *   - `repo`     — full control of repositories (read code, write
- *                  commits + branches, manage PRs/issues, create new
- *                  repos under the user's account). One scope, lumped
- *                  by GitHub.
- *   - `workflow` — write `.github/workflows/*.yml`. Needed when Genie
- *                  scaffolds CI for `.agi` envelopes. Granted at
- *                  connect time so the user doesn't re-auth later.
+ * Scopes (least-privilege — Genie is a full workspace + bridge between
+ * Tynn, local dev, and Aionima, so it needs broad repo access, but only
+ * what the code actually exercises):
+ *   - `repo`     — full control of repositories (read code incl.
+ *                  private, write commits + branches, manage PRs/issues,
+ *                  create new repos under the user's account/orgs,
+ *                  fork). The classic-OAuth floor for private read +
+ *                  create. One scope, lumped by GitHub.
  *   - `read:org` — list orgs the user belongs to so the wizard can
  *                  offer "create in <org>" alongside "create in <user>".
+ *
+ * Notably absent: `workflow` (write `.github/workflows/*.yml`). Genie
+ * does not scaffold or push CI workflow files today, so the token never
+ * needs it. Re-add `workflow` if/when Genie actually writes workflow
+ * files on the user's behalf.
  *
  * Notably absent: `delete_repo`. Genie should not be capable of
  * deleting repositories; add this scope only when there's a concrete
@@ -35,7 +39,7 @@ import { net } from 'electron';
 
 const DEVICE_CODE_URL = 'https://github.com/login/device/code';
 const TOKEN_URL = 'https://github.com/login/oauth/access_token';
-export const SCOPE = 'repo workflow read:org';
+export const SCOPE = 'repo read:org';
 
 export interface DeviceCodeResponse {
     device_code: string;
