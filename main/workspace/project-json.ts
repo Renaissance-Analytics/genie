@@ -18,6 +18,22 @@ import path from 'path';
  */
 export type ProjectJsonRepoRole = 'host' | 'package';
 
+/**
+ * Links this envelope to a Tynn project so Genie can auto-provision the MCP
+ * agent token + Agent config for it. MAPPING ONLY — never a token/secret (see
+ * the no-secret note on ProjectJson). The provisioned `rpk_` token lives in
+ * Genie's encrypted storage and is written into the workspace `.mcp.json`, not
+ * here. `projectId` (Tynn ULID) is what the mint endpoint resolves against;
+ * `owner`/`project` slugs are for display + re-resolution; `host` selects the
+ * Tynn instance (e.g. https://tynn.ai).
+ */
+export interface ProjectJsonTynn {
+    host?: string;
+    owner?: string;
+    project?: string;
+    projectId?: string;
+}
+
 export interface ProjectJsonRepo {
     name: string;
     url?: string;
@@ -46,6 +62,8 @@ export interface ProjectJson {
         mode?: 'development' | 'staging' | 'production';
     };
     repos?: ProjectJsonRepo[];
+    /** Tynn project link for auto-provisioning. MAPPING ONLY — no secret. */
+    tynn?: ProjectJsonTynn;
     // NB: project.json ships inside the monorepo and must NEVER carry a
     // token/secret. Tokens come from the user copying an MCP config — never
     // from here. Don't reintroduce a tynnToken (or any secret) field.
@@ -115,6 +133,9 @@ export function writeProjectJson(folder: string, patch: ProjectJson): void {
     // Merge nested known objects rather than replacing them outright.
     if (patch.hosting || existing.hosting) {
         merged.hosting = { ...(existing.hosting ?? {}), ...(patch.hosting ?? {}) };
+    }
+    if (patch.tynn || existing.tynn) {
+        merged.tynn = { ...(existing.tynn ?? {}), ...(patch.tynn ?? {}) };
     }
 
     // Atomic write: temp file → rename.

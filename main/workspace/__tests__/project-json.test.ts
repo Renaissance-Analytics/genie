@@ -72,6 +72,25 @@ describe('project-json', () => {
         expect(read?.hosting?.mode).toBe('staging');
     });
 
+    it('merges the nested tynn link block and never stores a token', () => {
+        const dir = makeTmpDir('pj-tynn');
+        writeProjectJson(dir, {
+            name: 'Foo',
+            tynn: { host: 'https://tynn.ai', owner: 'wishborn', project: 'foo', projectId: '01ABC' },
+        });
+
+        // A later patch updates one field; the rest of the link survives.
+        writeProjectJson(dir, { tynn: { projectId: '01XYZ' } });
+
+        const read = readProjectJson(dir);
+        expect(read?.tynn?.projectId).toBe('01XYZ');
+        expect(read?.tynn?.host).toBe('https://tynn.ai');
+        expect(read?.tynn?.owner).toBe('wishborn');
+        expect(read?.tynn?.project).toBe('foo');
+        // Mapping only — the tynn block must never carry a secret.
+        expect(read?.tynn).not.toHaveProperty('token');
+    });
+
     it('atomic-writes via a temp file (no lingering .tmp)', () => {
         const dir = makeTmpDir('pj-atomic');
         writeProjectJson(dir, blankProjectJson('Foo', 'foo'));
