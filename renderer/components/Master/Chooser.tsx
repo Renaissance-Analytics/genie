@@ -569,11 +569,6 @@ export default function Chooser({
                                         )}
                                     </span>
                                     <span className="pname">{ws.project_name}</span>
-                                    {ws.shape === 'agi' && (
-                                        <span className="agi-badge" title="Aionima .agi envelope">
-                                            .agi
-                                        </span>
-                                    )}
                                     {ws.shape === 'agi' && <AgiHealth ws={ws} />}
                                     <span
                                         className="iw-pill"

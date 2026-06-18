@@ -38,6 +38,14 @@
     --agi-gold: #fcd34d;
     --agi-gold-border: color-mix(in srgb, var(--agi-gold) 60%, transparent);
     --agi-gold-soft: color-mix(in srgb, var(--agi-gold) 16%, transparent);
+    /* Selected-row background for an .agi workspace: a subtle gold gradient.
+       Both stops are low-alpha tints over the row, so it reads as a faint
+       golden wash on either theme and leaves the --fg-1 row text legible. */
+    --agi-gold-grad: linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--agi-gold) 26%, transparent),
+        color-mix(in srgb, var(--agi-gold) 9%, transparent)
+    );
 
     --agent: #818cf8;
     --agent-soft: color-mix(in srgb, #818cf8 18%, transparent);
@@ -1238,28 +1246,14 @@
 .tproj-head .pico {
     color: var(--fg-2);
 }
-/* An .agi envelope is marked by a 1px gold border around its row. Drawn as an
-   inset ring (box-shadow) so it adds no layout box and sits inside the rounded
-   header. When the row is also active, the active indigo ring wins (below) so
-   the selection state stays legible; the gold .agi badge still carries the
-   envelope signal. */
+/* An .agi envelope is marked SOLELY by a 1px gold border around its row (the
+   old "agi" text badge was removed as redundant). Drawn as an inset ring
+   (box-shadow) so it adds no layout box and sits inside the rounded header.
+   When the row is also active it keeps a gold ring (not the indigo selection
+   ring) so the envelope signal stays gold — see the .agi.is-active rule with
+   the gold gradient background near the active-row treatment below. */
 .tproj.agi > .tproj-head {
     box-shadow: inset 0 0 0 1px var(--agi-gold-border);
-}
-.tproj.agi.is-active > .tproj-head {
-    box-shadow: inset 0 0 0 1px var(--agent-ring);
-}
-.agi-badge {
-    flex: 0 0 auto;
-    font-size: 9.5px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: lowercase;
-    color: var(--agi-gold);
-    background: var(--agi-gold-soft);
-    border: 1px solid var(--agi-gold-border);
-    border-radius: var(--radius-full);
-    padding: 1px 6px;
 }
 /* Agent-MCP-enabled marker on a workspace row — violet to match the
    agent-integration theme (the imDone attention glow). */
@@ -2276,6 +2270,23 @@ body.gutter-dragging .grid-gutter {
 }
 .tproj.is-active > .tproj-head .pname {
     color: var(--agent);
+}
+/* A SELECTED .agi workspace gets the gold treatment instead of the indigo
+   one: a subtle gold gradient background + gold inset ring + gold accent bar,
+   so the active-envelope reads as gold end-to-end (the gold border already
+   marks it as .agi; selecting it deepens that signal). Non-agi selected rows
+   keep the indigo look above. Source order + the extra `.agi` class let these
+   win over the plain .is-active rules. The gradient is a low-alpha gold wash,
+   so the row's --fg-1 / --fg-2 text stays legible in both light and dark. */
+.tproj.agi.is-active > .tproj-head {
+    background: var(--agi-gold-grad);
+    box-shadow: inset 0 0 0 1px var(--agi-gold-border);
+}
+.tproj.agi.is-active > .tproj-head::before {
+    background: var(--agi-gold);
+}
+.tproj.agi.is-active > .tproj-head .pname {
+    color: var(--fg-1);
 }
 .tproj-adds {
     display: flex;
