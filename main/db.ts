@@ -306,6 +306,22 @@ export function runMigrations(d: Database.Database): void {
                 `);
             },
         },
+        {
+            // v13: per-workspace "Background process approval" gate. When ON
+            // (the safe default), an agent creating/starting a background
+            // process via the manageProcess MCP tool must be approved by the
+            // user first; OFF runs it immediately (pre-v13 behavior). Default 1
+            // so agents can't silently spawn processes out of the box.
+            version: 13,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('process_approval')) {
+                    db.exec(
+                        `ALTER TABLE workspaces ADD COLUMN process_approval INTEGER NOT NULL DEFAULT 1`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -475,6 +491,9 @@ export interface WorkspaceRow {
     sort_order: number;
     /** Agent-integration MCP enabled for this workspace's terminals. 0=off (default). */
     mcp_enabled: number;
+    /** Require user approval before an agent (manageProcess MCP tool) creates or
+     *  starts a background process. 1=require approval (default), 0=auto-run. */
+    process_approval: number;
 }
 
 export function listWorkspaces(): WorkspaceRow[] {
@@ -519,9 +538,10 @@ export function getWorkspace(id: string): WorkspaceRow | undefined {
 }
 
 export function addWorkspace(
-    row: Omit<WorkspaceRow, 'sort_order' | 'mcp_enabled'> & {
+    row: Omit<WorkspaceRow, 'sort_order' | 'mcp_enabled' | 'process_approval'> & {
         sort_order?: number;
         mcp_enabled?: number;
+        process_approval?: number;
     },
 ): WorkspaceRow {
     // Mirror project_id / project_name into the legacy tynn_* columns
@@ -610,6 +630,27 @@ export function workspaceMcpEnabled(id: string): boolean {
         )
         .get(id);
     return !!row && row.mcp_enabled === 1;
+}
+
+/** Toggle the "require approval before an agent starts a process" gate. */
+export function setWorkspaceProcessApproval(id: string, require: boolean): void {
+    getDb()
+        .prepare('UPDATE workspaces SET process_approval = ? WHERE id = ?')
+        .run(require ? 1 : 0, id);
+}
+
+/**
+ * Whether an agent-created/started background process needs user approval in
+ * this workspace. Defaults to TRUE (require approval) — for an unknown id too,
+ * so the safe gate is the fallback, never a silent auto-run.
+ */
+export function workspaceProcessApproval(id: string): boolean {
+    const row = getDb()
+        .prepare<[string], { process_approval: number } | undefined>(
+            'SELECT process_approval FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    return !row || row.process_approval !== 0;
 }
 
 // Backend connection helpers --------------------------------------------

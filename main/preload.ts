@@ -140,6 +140,8 @@ const api = {
         reorder: (ids: string[]) => ipcRenderer.invoke('workspaces:reorder', ids),
         setMcp: (id: string, enabled: boolean) =>
             ipcRenderer.invoke('workspaces:set-mcp', id, enabled),
+        setProcessApproval: (id: string, require: boolean) =>
+            ipcRenderer.invoke('workspaces:set-process-approval', id, require),
         repos: (id: string) =>
             ipcRenderer.invoke('workspaces:repos', id) as Promise<string[]>,
         open: (id: string) => ipcRenderer.invoke('workspaces:open', id),

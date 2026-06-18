@@ -1316,6 +1316,37 @@ function AgentMcpSection({
     const [docHealth, setDocHealth] = useState<WorkspaceDocHealth | null>(null);
     const [repairing, setRepairing] = useState(false);
     const [repairMsg, setRepairMsg] = useState<string | null>(null);
+    // Per-workspace "require approval before an agent starts a process" toggle.
+    // null until loaded / when no active workspace.
+    const [processApproval, setProcessApprovalState] = useState<boolean | null>(
+        null,
+    );
+
+    const refreshProcessApproval = async () => {
+        if (!activeWorkspace) {
+            setProcessApprovalState(null);
+            return;
+        }
+        try {
+            const ws = (await api().workspaces.list()).find(
+                (w) => w.id === activeWorkspace,
+            );
+            // Default to require-approval (true) when the column is unset.
+            setProcessApprovalState(ws ? ws.process_approval !== 0 : null);
+        } catch {
+            setProcessApprovalState(null);
+        }
+    };
+
+    const toggleProcessApproval = async (require: boolean) => {
+        if (!activeWorkspace) return;
+        setProcessApprovalState(require); // optimistic
+        try {
+            await api().workspaces.setProcessApproval(activeWorkspace, require);
+        } catch {
+            void refreshProcessApproval(); // revert to truth on failure
+        }
+    };
 
     const refreshDocHealth = async () => {
         if (!activeWorkspace) {
@@ -1364,6 +1395,7 @@ function AgentMcpSection({
     useEffect(() => {
         void refresh();
         void refreshDocHealth();
+        void refreshProcessApproval();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeWorkspace]);
 
@@ -1504,6 +1536,47 @@ function AgentMcpSection({
                         </Text>
                     </label>
                 ))}
+            </div>
+
+            <div
+                style={{
+                    marginTop: 4,
+                    paddingTop: 12,
+                    borderTop: '1px solid var(--border-1)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                }}
+            >
+                <Heading as="h3" size="xs" style={{ margin: 0 }}>
+                    Background process approval
+                </Heading>
+                <Text size="xs" className="text-zinc-500">
+                    When ON, an agent that tries to create or start a background
+                    process (via the <code>manageProcess</code> tool) must be
+                    approved by you first — Genie pops a prompt showing the
+                    command and blocks the agent until you approve or deny. OFF
+                    lets agents start processes immediately.
+                </Text>
+                {!activeWorkspace ? (
+                    <Text size="xs" className="text-zinc-500">
+                        Open a workspace to change its process-approval setting.
+                    </Text>
+                ) : (
+                    <label
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+                    >
+                        <input
+                            type="checkbox"
+                            checked={processApproval ?? true}
+                            disabled={processApproval === null}
+                            onChange={(e) => void toggleProcessApproval(e.target.checked)}
+                        />
+                        <Text size="sm">
+                            Require my approval before an agent starts a process
+                        </Text>
+                    </label>
+                )}
             </div>
 
             <div

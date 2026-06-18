@@ -45,6 +45,9 @@ export interface WorkspaceRow {
     sort_order?: number;
     /** Agent-integration MCP enabled for this workspace's terminals (1/0). */
     mcp_enabled?: number;
+    /** Require user approval before an agent (manageProcess) starts a background
+     *  process. 1=require approval (default), 0=auto-run. */
+    process_approval?: number;
 }
 
 export interface DetectResult {
@@ -575,6 +578,11 @@ interface GenieApi {
         reorder: (ids: string[]) => Promise<{ ok: boolean }>;
         /** Toggle the agent-integration MCP for a workspace's terminals. */
         setMcp: (id: string, enabled: boolean) => Promise<{ ok: boolean }>;
+        /** Toggle "require approval before an agent starts a background process". */
+        setProcessApproval: (
+            id: string,
+            require: boolean,
+        ) => Promise<{ ok: boolean }>;
         /** Repo subfolder names under the workspace envelope (for Add Process cwd). */
         repos: (id: string) => Promise<string[]>;
         open: (id: string) => Promise<{ ok: boolean }>;

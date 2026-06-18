@@ -7,6 +7,7 @@ import {
     removeWorkspace,
     reorderWorkspaces,
     setWorkspaceMcp,
+    setWorkspaceProcessApproval,
     setSettings,
     touchWorkspace,
     updateWorkspace,
@@ -196,6 +197,13 @@ export function registerIpcHandlers(): void {
         if (ws) writeWorkspaceAgentMcp(ws.path, enabled, workspaceEndpointUrl(id));
         return { ok: true };
     });
+    ipcMain.handle(
+        'workspaces:set-process-approval',
+        (_e, id: string, require: boolean) => {
+            setWorkspaceProcessApproval(id, require);
+            return { ok: true };
+        },
+    );
 
     // --- Agent MCP server status / restart (Settings → Agent MCP) -------
     ipcMain.handle('mcp:status', () => mcpServerState());

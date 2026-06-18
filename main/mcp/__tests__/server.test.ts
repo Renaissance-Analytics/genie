@@ -104,6 +104,10 @@ const deps = (
         cancelled: true,
         answers: [],
     }),
+    manageProcess: () => Promise<{ ok: boolean; processes: any[] }> = async () => ({
+        ok: true,
+        processes: [],
+    }),
 ) => ({
     serverVersion: '0.0.0-test',
     userDataDir,
@@ -112,7 +116,7 @@ const deps = (
     onImDone,
     onForceQuestion,
     describeWorkspace: async () => null,
-    manageProcess: async () => ({ ok: true, processes: [] }),
+    manageProcess,
 });
 
 afterEach(() => stopMcpServer());
@@ -232,6 +236,62 @@ describe('mcp server', () => {
 
     it('exposes DEFAULT_MCP_PORT as an obscure fixed port', () => {
         expect(DEFAULT_MCP_PORT).toBe(51717);
+    });
+
+    it('serves a manageProcess CREATE over SSE so an approval gate never times out', async () => {
+        // A create can block on the per-workspace process-approval prompt, so it
+        // must take the heartbeat SSE path (like ForceTheQuestion). Simulate the
+        // gate wait with a manageProcess dep that resolves after a delay.
+        const prev = process.env.GENIE_MCP_HEARTBEAT_MS;
+        process.env.GENIE_MCP_HEARTBEAT_MS = '20';
+        try {
+            const dir = tmpUserDir();
+            await startMcpServer(
+                deps(
+                    dir,
+                    0,
+                    { ids: ['t-a'], lastActive: 't-a' },
+                    () => {},
+                    undefined,
+                    () =>
+                        new Promise((r) =>
+                            setTimeout(() => r({ ok: true, processes: [] }), 120),
+                        ),
+                ),
+            );
+            const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+            const res = await rpcStream(mcpServerPort()!, token, {
+                jsonrpc: '2.0',
+                id: 11,
+                method: 'tools/call',
+                params: {
+                    name: 'manageProcess',
+                    arguments: { action: 'create', label: 'dev', command: 'npm run dev' },
+                },
+            });
+            expect(res.contentType).toContain('text/event-stream');
+            expect(res.raw).toContain(': heartbeat'); // kept alive during the gate
+            expect(res.events.some((e) => e.id === 11)).toBe(true); // final response delivered
+        } finally {
+            if (prev === undefined) delete process.env.GENIE_MCP_HEARTBEAT_MS;
+            else process.env.GENIE_MCP_HEARTBEAT_MS = prev;
+        }
+    });
+
+    it('serves a manageProcess LIST as a single JSON response (no blocking path)', async () => {
+        const dir = tmpUserDir();
+        await startMcpServer(deps(dir, 0, { ids: ['t-a'], lastActive: 't-a' }, () => {}));
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+        const res = await rpc(mcpServerPort()!, token, {
+            jsonrpc: '2.0',
+            id: 12,
+            method: 'tools/call',
+            params: { name: 'manageProcess', arguments: { action: 'list' } },
+        });
+        expect(res.status).toBe(200);
+        // Plain JSON-RPC, not an SSE stream.
+        const body = JSON.parse(res.body);
+        expect(body.id).toBe(12);
     });
 
     it('answers ForceTheQuestion over an SSE stream (never a timed-out single response)', async () => {

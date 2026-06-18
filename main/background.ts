@@ -20,6 +20,7 @@ import {
     getTerminalSpec,
     getWorkspace,
     createTerminalSpec,
+    workspaceProcessApproval,
 } from './db';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import { workspaceDocHealth, repairWorkspaceDocs } from './workspace/create-agi';
@@ -247,6 +248,42 @@ function processInfo(workspaceRoot: string, statuses: Record<string, string>) {
 }
 
 /**
+ * When a workspace requires approval (Settings → Agent MCP → "Background
+ * process approval"), raise the OS-level ForceTheQuestion modal showing exactly
+ * what's about to run (label / command / cwd) and BLOCK until the user decides.
+ * Reuses forceQuestion(), so it inherits the wait-indefinitely SSE heartbeat at
+ * the MCP layer (it never times out). Returns true to proceed, false on deny or
+ * a dismissed modal (treated as deny — never auto-run on dismissal). When the
+ * setting is OFF this isn't called and the process runs immediately.
+ */
+async function approveProcessRun(
+    ws: { id: string; project_name: string },
+    what: { verb: 'start' | 'run'; label: string; command: string; cwd: string },
+): Promise<boolean> {
+    const result = await forceQuestion(
+        [
+            {
+                header: 'Run process?',
+                question:
+                    `An agent wants to ${what.verb} a background process in this workspace:\n\n` +
+                    `• ${what.label}\n` +
+                    `• command: ${what.command}\n` +
+                    `• in: ${what.cwd}\n\n` +
+                    `Approve to ${what.verb} it, or deny to block it.`,
+                options: [
+                    { label: 'Approve', description: `Let the agent ${what.verb} this process.` },
+                    { label: 'Deny', description: 'Block it — nothing runs.' },
+                ],
+            },
+        ],
+        ws.project_name,
+    );
+    if (result.cancelled) return false; // dismissed = deny
+    const selected = result.answers[0]?.selected ?? [];
+    return selected.includes('Approve');
+}
+
+/**
  * Back the manageProcess MCP tool. Resolves the workspace from the (already
  * terminal-resolved) caller, then lists / creates / starts / stops / restarts
  * its background process specs via the existing supervisor + spec store.
@@ -297,6 +334,24 @@ async function manageProcessForMcp(
                     }
                     cwd = path.join(ws.path, 'repos', req.repo);
                 }
+                // Approval gate: when the workspace requires it, block until the
+                // user approves THIS process (label/command/cwd). Deny → nothing
+                // is created or started. OFF → straight through (current behavior).
+                if (workspaceProcessApproval(ws.id)) {
+                    const approved = await approveProcessRun(ws, {
+                        verb: 'run',
+                        label,
+                        command,
+                        cwd,
+                    });
+                    if (!approved) {
+                        return {
+                            ok: false,
+                            error: 'Denied by user — the process was not created.',
+                            processes: listFor(),
+                        };
+                    }
+                }
                 const id = crypto.randomUUID();
                 createTerminalSpec({
                     id,
@@ -333,8 +388,27 @@ async function manageProcessForMcp(
                         processes: listFor(),
                     };
                 }
-                if (req.action === 'start') startProcess(target.id);
-                else if (req.action === 'stop') stopProcess(target.id);
+                if (req.action === 'start') {
+                    // Starting is an agent spawning a process — gate it too.
+                    // stop (teardown) and restart (an already-approved process)
+                    // are not gated.
+                    if (workspaceProcessApproval(ws.id)) {
+                        const approved = await approveProcessRun(ws, {
+                            verb: 'start',
+                            label: target.label,
+                            command: target.meta?.command ?? '(unknown)',
+                            cwd: target.cwd,
+                        });
+                        if (!approved) {
+                            return {
+                                ok: false,
+                                error: 'Denied by user — the process was not started.',
+                                processes: listFor(),
+                            };
+                        }
+                    }
+                    startProcess(target.id);
+                } else if (req.action === 'stop') stopProcess(target.id);
                 else restartProcess(target.id);
                 affectedId = target.id;
                 break;

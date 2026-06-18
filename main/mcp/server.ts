@@ -169,15 +169,26 @@ function heartbeatMs(): number {
 }
 
 /**
- * True for a `tools/call` that BLOCKS on the user — currently only
- * ForceTheQuestion, which can sit pending for minutes or hours waiting for an
- * answer (and may queue behind other ForceTheQuestion calls). Such a request
- * gets the SSE keepalive path below instead of a single JSON response.
+ * True for a `tools/call` that may BLOCK on the user — so it gets the SSE
+ * keepalive path (heartbeat) below instead of a single JSON response, and never
+ * times the client out while it waits:
+ *  - ForceTheQuestion always blocks on an answer.
+ *  - manageProcess create/start can block on the per-workspace process-approval
+ *    gate (when OFF the handler resolves immediately, so the SSE path just sends
+ *    the response at once — harmless). stop/restart/list never block.
  */
 function isBlockingCall(msg: JsonRpcRequest): boolean {
     if (msg.method !== 'tools/call') return false;
-    const name = (msg.params as { name?: unknown } | undefined)?.name;
-    return name === 'ForceTheQuestion';
+    const params = msg.params as
+        | { name?: unknown; arguments?: { action?: unknown } }
+        | undefined;
+    const name = params?.name;
+    if (name === 'ForceTheQuestion') return true;
+    if (name === 'manageProcess') {
+        const action = params?.arguments?.action;
+        return action === 'create' || action === 'start';
+    }
+    return false;
 }
 
 /** The client's progress token for this request, if it asked for progress. */

@@ -369,6 +369,39 @@ describe('db migration v9 (per-workspace MCP toggle)', () => {
     });
 });
 
+describe('db migration v13 (per-workspace process-approval gate)', () => {
+    it('adds the process_approval column to workspaces', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(cols(db, 'workspaces').has('process_approval')).toBe(true);
+    });
+
+    // The safe default is require-approval (1): an agent must NOT be able to
+    // silently spawn a process. A raw insert that omits the column gets it.
+    it('a raw workspace row defaults to process_approval=1 (require approval)', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces
+               (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, last_opened_at, created_by_genie)
+             VALUES ('w-pa', 'tynn', 'p', 'P', 'p', 'P', 'simple', '/tmp/pa', NULL, 0)`,
+        ).run();
+        const row = db
+            .prepare<[string], { process_approval: number }>(
+                'SELECT process_approval FROM workspaces WHERE id = ?',
+            )
+            .get('w-pa');
+        expect(row?.process_approval).toBe(1);
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'workspaces').has('process_approval')).toBe(true);
+    });
+});
+
 describe('db migration v10 (reclassify mis-stored process specs)', () => {
     const insertSpec = (
         db: Database.Database,
