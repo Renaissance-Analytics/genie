@@ -743,6 +743,7 @@ interface GenieApi {
         status: () => Promise<{
             connected: boolean;
             username: string | null;
+            needsReauth: boolean;
             clientIdSet: boolean;
             builtInClientId: boolean;
             usingOverride: boolean;

@@ -701,10 +701,12 @@ function GitHubSection() {
     const [activeClientId, setActiveClientId] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [storageOk, setStorageOk] = useState(true);
+    const [needsReauth, setNeedsReauth] = useState(false);
     const [installations, setInstallations] = useState<
-        Array<{ login: string; id: number | null; isOrg: boolean }>
+        Array<{ login: string; avatar_url: string; id: number | null; isOrg: boolean }>
     >([]);
     const [installationsLoaded, setInstallationsLoaded] = useState(false);
+    const [installError, setInstallError] = useState(false);
     const [flow, setFlow] = useState<
         | { kind: 'idle' }
         | { kind: 'starting' }
@@ -727,22 +729,33 @@ function GitHubSection() {
         setUsingOverride(st.usingOverride);
         setActiveClientId(st.activeClientId);
         setStorageOk(st.storageOk);
+        setNeedsReauth(st.needsReauth);
         // Where the App is installed — drives the zero-install prompt + the
         // "installed on X" summary. Authorizing alone grants no repo access.
         if (st.connected) {
             try {
                 const list = await api().github.installations();
                 setInstallations(
-                    list.map((i) => ({ login: i.login, id: i.id, isOrg: i.isOrg })),
+                    list.map((i) => ({
+                        login: i.login,
+                        avatar_url: i.avatar_url,
+                        id: i.id,
+                        isOrg: i.isOrg,
+                    })),
                 );
+                setInstallError(false);
             } catch {
-                setInstallations([]);
+                // Distinct from "installed nowhere": the fetch itself failed
+                // (almost always a dead token). Keep the prior list and flag
+                // the error so the UI shows "reconnect", not "install nowhere".
+                setInstallError(true);
             } finally {
                 setInstallationsLoaded(true);
             }
         } else {
             setInstallations([]);
             setInstallationsLoaded(false);
+            setInstallError(false);
         }
         if (st.flow.kind === 'pending') {
             setFlow({
@@ -815,6 +828,16 @@ function GitHubSection() {
     const disconnect = async () => {
         await api().github.disconnect();
         await refresh();
+    };
+
+    // Clear the dead token, then start a fresh device flow. Used by the
+    // "session expired" banner so the user fixes it in one click instead of
+    // hunting for Disconnect → Connect.
+    const reconnect = async () => {
+        await api().github.disconnect();
+        setNeedsReauth(false);
+        setInstallError(false);
+        await start();
     };
 
     const saveClientId = async () => {
@@ -942,12 +965,49 @@ function GitHubSection() {
                 </Action>
             </div>
 
+            {/* A stored token that no longer works (expired beyond refresh, or
+                revoked) used to masquerade as "installed nowhere" because the
+                installations fetch failed silently. Surface it as what it is —
+                an expired session — with a one-click reconnect, and suppress
+                the install prompt below so the two don't contradict. */}
+            {connected && (needsReauth || installError) && (
+                <div
+                    style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        background: 'color-mix(in srgb, #f43f5e 12%, transparent)',
+                        border: '1px solid color-mix(in srgb, #f43f5e 35%, var(--border-1))',
+                    }}
+                >
+                    <Text size="xs">
+                        Your GitHub session has expired, so Genie can't reach
+                        GitHub right now — that's why the install list and
+                        IssueWatch may look empty. Reconnect to restore access
+                        (your installs on GitHub are untouched).
+                    </Text>
+                    <div>
+                        <Action
+                            color="blue"
+                            size="sm"
+                            icon="github"
+                            onClick={reconnect}
+                            disabled={flow.kind === 'pending' || flow.kind === 'starting'}
+                        >
+                            Reconnect GitHub…
+                        </Action>
+                    </div>
+                </div>
+            )}
+
             {/* Installation is a distinct step from authorizing: a GitHub App's
                 repo access only exists where it's INSTALLED. When connected but
                 installed nowhere, lead with a prominent install action; once
                 installed, confirm where so the user knows which accounts/orgs
                 Genie can create + fork on. */}
-            {connected && installationsLoaded && installations.length === 0 && (
+            {connected && installationsLoaded && !needsReauth && !installError && installations.length === 0 && (
                 <div
                     style={{
                         display: 'flex',
@@ -988,12 +1048,47 @@ function GitHubSection() {
                 </div>
             )}
 
-            {connected && installationsLoaded && installations.length > 0 && (
-                <Text size="xs" className="text-zinc-500">
-                    Installed on{' '}
-                    <strong>{installations.map((i) => i.login).join(', ')}</strong>.
-                    Use “Add account/org…” to install it elsewhere.
-                </Text>
+            {connected && installationsLoaded && !installError && installations.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <Text size="xs" className="text-zinc-500">
+                        Genie can create &amp; fork repos on{' '}
+                        {installations.length} account
+                        {installations.length === 1 ? '' : 's'} — add more with
+                        “Add account/org…”.
+                    </Text>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {installations.map((i) => (
+                            <span
+                                key={i.login}
+                                title={i.isOrg ? 'Organization' : 'Personal account'}
+                                style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 6,
+                                    padding: '3px 8px 3px 4px',
+                                    borderRadius: 999,
+                                    background: 'var(--bg-2)',
+                                    border: '1px solid var(--border-1)',
+                                }}
+                            >
+                                {i.avatar_url ? (
+                                    <img
+                                        src={i.avatar_url}
+                                        alt=""
+                                        width={16}
+                                        height={16}
+                                        style={{ borderRadius: i.isOrg ? 4 : '50%' }}
+                                    />
+                                ) : (
+                                    <Icon name={i.isOrg ? 'building-2' : 'user'} size="xs" />
+                                )}
+                                <Text size="xs" style={{ fontWeight: 600 }}>
+                                    {i.login}
+                                </Text>
+                            </span>
+                        ))}
+                    </div>
+                </div>
             )}
 
             {showAdvanced && (

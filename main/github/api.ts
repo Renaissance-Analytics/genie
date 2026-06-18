@@ -1,5 +1,15 @@
 import { net } from 'electron';
-import { getToken } from './storage';
+import {
+    getAccessExpiryMs,
+    getClientId,
+    getRefreshExpiryMs,
+    getRefreshToken,
+    getToken,
+    getUsername,
+    markReauthNeeded,
+    saveTokenSet,
+} from './storage';
+import { refreshUserToken } from './device-flow';
 import { genieInstallUrl } from '../config';
 
 /**
@@ -24,13 +34,63 @@ export class GitHubApiError extends Error {
     }
 }
 
+/** Skew (ms) before the recorded expiry at which we treat the access token as
+ *  already stale, so a request never goes out with a token about to die. */
+const EXPIRY_SKEW_MS = 60_000;
+
+/**
+ * Return a usable access token, refreshing first when the stored one has (or
+ * is about to) expire and a refresh token is available. When the App opts out
+ * of token expiration there is no recorded expiry and the token is returned
+ * as-is. Throws GitHubAuthError (after flagging reauth) when there is no token
+ * or the refresh token is itself dead.
+ */
+async function freshAccessToken(): Promise<string> {
+    const token = getToken();
+    if (!token) throw new GitHubAuthError();
+
+    const expMs = getAccessExpiryMs();
+    if (expMs === null || Date.now() < expMs - EXPIRY_SKEW_MS) {
+        return token; // non-expiring, or still comfortably valid
+    }
+    return refreshOrFail();
+}
+
+/** Exchange the refresh token for a new grant, persist it, and return the new
+ *  access token. On any failure, flag reauth and surface GitHubAuthError. */
+async function refreshOrFail(): Promise<string> {
+    const refreshToken = getRefreshToken();
+    const refreshExp = getRefreshExpiryMs();
+    const refreshDead = refreshExp !== null && Date.now() >= refreshExp;
+    if (!refreshToken || refreshDead) {
+        markReauthNeeded();
+        throw new GitHubAuthError();
+    }
+    try {
+        const next = await refreshUserToken(getClientId(), refreshToken);
+        saveTokenSet(
+            {
+                accessToken: next.access_token,
+                refreshToken: next.refresh_token ?? refreshToken,
+                expiresInSec: next.expires_in,
+                refreshTokenExpiresInSec: next.refresh_token_expires_in,
+            },
+            getUsername() ?? '',
+        );
+        return next.access_token;
+    } catch {
+        markReauthNeeded();
+        throw new GitHubAuthError();
+    }
+}
+
 async function gh<T = unknown>(
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     path: string,
     body?: unknown,
+    retriedAfterAuth = false,
 ): Promise<T> {
-    const token = getToken();
-    if (!token) throw new GitHubAuthError();
+    const token = await freshAccessToken();
     const res = await net.fetch(`${API_BASE}${path}`, {
         method,
         headers: {
@@ -42,6 +102,13 @@ async function gh<T = unknown>(
         },
         body: body === undefined ? undefined : JSON.stringify(body),
     });
+    // A 401 means the access token was rejected (e.g. expired earlier than our
+    // recorded skew, or revoked). Refresh once and retry before giving up — a
+    // second 401 falls through to the normal error path / reauth flag.
+    if (res.status === 401 && !retriedAfterAuth && getRefreshToken()) {
+        await refreshOrFail();
+        return gh<T>(method, path, body, true);
+    }
     if (res.status === 204) return null as T;
     const text = await res.text();
     let json: unknown = null;
@@ -49,6 +116,12 @@ async function gh<T = unknown>(
         json = text ? JSON.parse(text) : null;
     } catch {
         // GitHub sometimes returns HTML on 5xx; fall through with raw text.
+    }
+    if (res.status === 401) {
+        // Unrecoverable here: either no refresh token (a revoked non-expiring
+        // token) or a second 401 after refreshing. Flag a reconnect so the UI
+        // stops showing a stale "Connected" and the user can re-authorize.
+        markReauthNeeded();
     }
     if (!res.ok) {
         // GitHub's top-level `message` is often generic ("Repository

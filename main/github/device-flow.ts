@@ -20,10 +20,14 @@
  * is at best ignored. What Genie can actually reach is discovered after
  * sign-in via `GET /user/installations`.
  *
- * The App is configured with token expiry OFF, so it mints non-expiring
- * user-to-server tokens. There is therefore no refresh-token handling
- * here — the token Genie stores stays valid until the user revokes the
- * App or disconnects in Settings.
+ * Token expiry is the App owner's choice. When "User-to-server token
+ * expiration" is OPTED OUT, GitHub mints non-expiring tokens (no refresh
+ * token, no `expires_in`) and the stored token lives until revoke/disconnect.
+ * When it's ON, the access token lasts ~8h and GitHub also returns a
+ * `refresh_token` (~6 months); {@link refreshUserToken} renews the access
+ * token silently. Device-flow refresh needs NO client secret (GitHub waives
+ * it specifically for the device flow), which is why Genie can refresh as a
+ * secretless public client.
  */
 
 import { net } from 'electron';
@@ -45,6 +49,52 @@ export interface TokenResponse {
     /** Present for OAuth Apps; GitHub Apps return no scope. Kept optional
      *  so callers don't depend on it. */
     scope?: string;
+    /** Present only when the App expires user tokens. Absent (undefined) when
+     *  expiration is opted out — the token is then non-expiring. */
+    refresh_token?: string;
+    /** Access-token lifetime in seconds (GitHub's `expires_in`). */
+    expires_in?: number;
+    /** Refresh-token lifetime in seconds. */
+    refresh_token_expires_in?: number;
+}
+
+/** Parse the common token fields GitHub returns from the access-token and
+ *  refresh-token endpoints into a typed {@link TokenResponse}. */
+function toTokenResponse(res: Record<string, string>): TokenResponse {
+    return {
+        access_token: res.access_token,
+        token_type: res.token_type ?? 'bearer',
+        scope: res.scope,
+        refresh_token: res.refresh_token,
+        expires_in: res.expires_in ? Number(res.expires_in) : undefined,
+        refresh_token_expires_in: res.refresh_token_expires_in
+            ? Number(res.refresh_token_expires_in)
+            : undefined,
+    };
+}
+
+/**
+ * Exchange a refresh token for a fresh access (+ refresh) token. Used by the
+ * API client when an 8h access token has expired but the ~6-month refresh
+ * token is still good — the user never sees a reconnect prompt. No client
+ * secret: GitHub waives it for device-flow grants. Throws DeviceFlowError when
+ * the refresh token is itself expired/revoked (`error` in the body), so the
+ * caller can fall back to a reconnect.
+ */
+export async function refreshUserToken(
+    clientId: string,
+    refreshToken: string,
+): Promise<TokenResponse> {
+    const res = await postForm(TOKEN_URL, {
+        client_id: clientId,
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+    });
+    if (res.access_token) return toTokenResponse(res);
+    throw new DeviceFlowError(
+        res.error ?? 'refresh_failed',
+        res.error_description ?? 'Refresh token rejected — reconnect required.',
+    );
 }
 
 export class DeviceFlowError extends Error {
@@ -147,12 +197,9 @@ export async function pollForToken(
         }
 
         if (res.access_token) {
-            return {
-                access_token: res.access_token,
-                token_type: res.token_type ?? 'bearer',
-                // GitHub Apps return no scope; leave it undefined.
-                scope: res.scope,
-            };
+            // Carries refresh_token + expires_in too when the App expires
+            // tokens; both undefined when expiration is opted out.
+            return toTokenResponse(res);
         }
 
         // Documented error codes — most are "keep polling" signals.

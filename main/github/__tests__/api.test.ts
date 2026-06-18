@@ -9,12 +9,41 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const fetchMock = vi.fn();
 
+// Mutable storage state so individual tests can drive the token-refresh path
+// (expired access token + a live refresh token) without re-mocking the module.
+const store = {
+    token: 'tok_test' as string | null,
+    refreshToken: null as string | null,
+    accessExpiryMs: null as number | null,
+    refreshExpiryMs: null as number | null,
+    reauthFlagged: false,
+    saved: null as unknown,
+};
+const refreshUserTokenMock = vi.fn();
+
 vi.mock('electron', () => ({
     net: { fetch: (...args: unknown[]) => fetchMock(...args) },
 }));
-vi.mock('../storage', () => ({ getToken: () => 'tok_test' }));
+vi.mock('../storage', () => ({
+    getToken: () => store.token,
+    getRefreshToken: () => store.refreshToken,
+    getAccessExpiryMs: () => store.accessExpiryMs,
+    getRefreshExpiryMs: () => store.refreshExpiryMs,
+    getClientId: () => 'Iv_test',
+    getUsername: () => 'me',
+    markReauthNeeded: () => {
+        store.reauthFlagged = true;
+    },
+    saveTokenSet: (set: unknown) => {
+        store.saved = set;
+    },
+}));
+vi.mock('../device-flow', () => ({
+    refreshUserToken: (...args: unknown[]) => refreshUserTokenMock(...args),
+}));
 
 import {
+    GitHubAuthError,
     GitHubNotInstalledError,
     createRepo,
     forkRepo,
@@ -35,6 +64,13 @@ function res(status: number, body: unknown) {
 
 afterEach(() => {
     fetchMock.mockReset();
+    refreshUserTokenMock.mockReset();
+    store.token = 'tok_test';
+    store.refreshToken = null;
+    store.accessExpiryMs = null;
+    store.refreshExpiryMs = null;
+    store.reauthFlagged = false;
+    store.saved = null;
 });
 
 describe('listOrgs (GitHub App installations)', () => {
@@ -200,5 +236,68 @@ describe('create/fork not-installed errors', () => {
 
         const repo = await createRepo({ name: 'foo.agi' });
         expect(repo.full_name).toBe('me/foo.agi');
+    });
+});
+
+describe('token refresh (expiring user-to-server tokens)', () => {
+    it('refreshes proactively when the access token is past its recorded expiry', async () => {
+        store.accessExpiryMs = Date.now() - 1000; // already expired
+        store.refreshToken = 'ghr_old';
+        refreshUserTokenMock.mockResolvedValueOnce({
+            access_token: 'ghu_new',
+            token_type: 'bearer',
+            refresh_token: 'ghr_new',
+            expires_in: 28800,
+            refresh_token_expires_in: 15897600,
+        });
+        // After refresh, the actual API call succeeds.
+        fetchMock.mockResolvedValueOnce(res(200, { installations: [] }));
+
+        await listInstallations();
+
+        expect(refreshUserTokenMock).toHaveBeenCalledWith('Iv_test', 'ghr_old');
+        // The refreshed grant is persisted with the new access + refresh token.
+        expect(store.saved).toMatchObject({ accessToken: 'ghu_new', refreshToken: 'ghr_new' });
+        // The live request went out with the refreshed token.
+        const authHeader = (fetchMock.mock.calls[0][1] as { headers: Record<string, string> })
+            .headers.Authorization;
+        expect(authHeader).toBe('Bearer ghu_new');
+    });
+
+    it('refreshes reactively on a 401, then retries the request once', async () => {
+        store.refreshToken = 'ghr_old';
+        fetchMock
+            .mockResolvedValueOnce(res(401, { message: 'Bad credentials' }))
+            .mockResolvedValueOnce(res(200, { installations: [] }));
+        refreshUserTokenMock.mockResolvedValueOnce({
+            access_token: 'ghu_new',
+            token_type: 'bearer',
+            refresh_token: 'ghr_new',
+            expires_in: 28800,
+        });
+
+        await listInstallations();
+
+        expect(refreshUserTokenMock).toHaveBeenCalledTimes(1);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(store.reauthFlagged).toBe(false);
+    });
+
+    it('flags reauth when there is no refresh token and the call 401s', async () => {
+        store.refreshToken = null;
+        fetchMock.mockResolvedValueOnce(res(401, { message: 'Bad credentials' }));
+
+        await expect(listInstallations()).rejects.toBeTruthy();
+        expect(store.reauthFlagged).toBe(true);
+        expect(refreshUserTokenMock).not.toHaveBeenCalled();
+    });
+
+    it('flags reauth when the refresh token itself is rejected', async () => {
+        store.accessExpiryMs = Date.now() - 1000;
+        store.refreshToken = 'ghr_dead';
+        refreshUserTokenMock.mockRejectedValueOnce(new Error('refresh rejected'));
+
+        await expect(listInstallations()).rejects.toBeInstanceOf(GitHubAuthError);
+        expect(store.reauthFlagged).toBe(true);
     });
 });

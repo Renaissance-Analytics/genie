@@ -15,7 +15,8 @@ import {
     getToken,
     getUsername,
     isStorageAvailable,
-    saveToken,
+    needsReauth,
+    saveTokenSet,
 } from './storage';
 import {
     createRepo,
@@ -63,6 +64,7 @@ export function registerGithubIpc(): void {
     ipcMain.handle('github:status', async (): Promise<{
         connected: boolean;
         username: string | null;
+        needsReauth: boolean;
         clientIdSet: boolean;
         builtInClientId: boolean;
         usingOverride: boolean;
@@ -75,6 +77,9 @@ export function registerGithubIpc(): void {
         return {
             connected: !!getToken(),
             username: getUsername(),
+            // True when a stored token died (refresh exhausted / revoked) and
+            // the user must reconnect — distinct from "never connected".
+            needsReauth: needsReauth(),
             clientIdSet: !!active,
             // True when the binary ships with a baked-in client ID
             // (config.GENIE_GITHUB_CLIENT_ID). Settings UI uses this
@@ -130,7 +135,15 @@ export function registerGithubIpc(): void {
             .then(async (tok) => {
                 try {
                     const user = await fetchUserWithToken(tok.access_token);
-                    saveToken(tok.access_token, user.login);
+                    saveTokenSet(
+                        {
+                            accessToken: tok.access_token,
+                            refreshToken: tok.refresh_token,
+                            expiresInSec: tok.expires_in,
+                            refreshTokenExpiresInSec: tok.refresh_token_expires_in,
+                        },
+                        user.login,
+                    );
                     status = { kind: 'success', user };
                 } catch (e) {
                     status = {
