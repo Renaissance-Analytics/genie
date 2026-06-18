@@ -352,6 +352,21 @@ function MasterInner() {
         };
     }, [refresh, refreshAuth]);
 
+    // Keep the spec list live when main mutates it behind the renderer's back —
+    // notably a process created via the MCP `manageProcess` tool. The renderer
+    // mirrors its own create/delete edits locally, so this only re-fetches for
+    // changes it can't see; the new process appears in the Processes list at
+    // once, no restart. Re-fetch only specs (workspaces are unaffected).
+    useEffect(() => {
+        const off = api().on.terminalSpecsChanged(() => {
+            void api()
+                .terminalSpec.list()
+                .then(setSpecs)
+                .catch(() => {});
+        });
+        return off;
+    }, []);
+
     // Load the max_views setting and keep it fresh — the Settings screen is
     // a separate window, so re-read whenever this window regains focus.
     useEffect(() => {

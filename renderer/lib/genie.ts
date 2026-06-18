@@ -882,6 +882,9 @@ interface GenieApi {
         processStatus: (
             cb: (payload: { id: string; status: ProcessStatus }) => void,
         ) => () => void;
+        /** The set of terminal specs changed outside the renderer's own edits
+         *  (e.g. an MCP-created process) — re-fetch the spec list to stay live. */
+        terminalSpecsChanged: (cb: () => void) => () => void;
         /** Tier 3 detached-host status — fired on fallback to in-process. */
         terminalHostStatus: (
             cb: (payload: { message: string; level: 'info' | 'warn' }) => void,

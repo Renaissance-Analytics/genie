@@ -35,6 +35,7 @@ import {
     snapshotRetainedWindowless,
     terminalHasWindow,
     broadcastTerminalAttention,
+    broadcastTerminalSpecsChanged,
     killTerminalById,
     lastActiveTerminalForWorkspace,
 } from './terminal/ipc';
@@ -306,6 +307,12 @@ async function manageProcessForMcp(
                     meta: { command, autostart: req.autostart === true },
                 });
                 affectedId = id;
+                // The renderer mirrors its OWN spec edits locally but can't see
+                // this MCP-side create — tell it the spec set changed so the
+                // Processes list shows the new process live (no restart). Must
+                // fire whether or not we autostart below (a non-autostart process
+                // emits no process:status, so this is its only signal).
+                broadcastTerminalSpecsChanged();
                 // autostart → start it now too (matches the "starts on launch" intent).
                 if (req.autostart === true) startProcess(id);
                 break;

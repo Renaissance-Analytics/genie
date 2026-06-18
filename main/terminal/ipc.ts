@@ -444,6 +444,22 @@ export function broadcastTerminalAttention(id: string, on: boolean): void {
 }
 
 /**
+ * Tell every window the set of terminal specs changed (a spec was created,
+ * deleted, or otherwise mutated outside the renderer's own local edits) so the
+ * UI re-fetches `terminal-spec:list` and stays live. The renderer mirrors its
+ * OWN create/delete edits locally, so this is for changes it can't see —
+ * notably a process created via the MCP `manageProcess` tool, which must appear
+ * in the Processes list immediately, never only after a restart.
+ */
+export function broadcastTerminalSpecsChanged(): void {
+    for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.webContents.isDestroyed()) {
+            w.webContents.send('terminal-spec:changed');
+        }
+    }
+}
+
+/**
  * Tier 2 → Tier 1 degrade. On a real app quit, retained ptys still die via
  * stopAllTerminals (the detached pty-host is a later tier, T3). To make
  * reopening replay correctly we capture a Tier 1 snapshot for every retained

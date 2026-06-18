@@ -496,6 +496,14 @@ const api = {
             ipcRenderer.on('process:status', handler);
             return () => ipcRenderer.off('process:status', handler);
         },
+        /** The set of terminal specs changed outside the renderer's own edits
+         *  (e.g. a process created via the MCP manageProcess tool) — re-fetch
+         *  terminal-spec:list so the Processes list stays live. */
+        terminalSpecsChanged: (cb: () => void) => {
+            const handler = () => cb();
+            ipcRenderer.on('terminal-spec:changed', handler);
+            return () => ipcRenderer.off('terminal-spec:changed', handler);
+        },
         /** Tier 3 detached-host status — fired when the host is unavailable and
          *  Genie falls back to in-process. The renderer surfaces a non-fatal toast. */
         terminalHostStatus: (
