@@ -48,18 +48,69 @@ function rpc(
     });
 }
 
+/**
+ * POST a JSON-RPC message and collect a streamed (text/event-stream) response.
+ * Resolves once the socket closes with the raw stream text + the parsed
+ * JSON-RPC `message` events (data: lines), so tests can assert on both the
+ * heartbeat/progress traffic and the final response.
+ */
+function rpcStream(
+    port: number,
+    token: string,
+    msg: unknown,
+): Promise<{ status: number; contentType: string; raw: string; events: any[] }> {
+    return new Promise((resolve, reject) => {
+        const data = JSON.stringify(msg);
+        const req = http.request(
+            {
+                host: '127.0.0.1',
+                port,
+                path: `/mcp/${token}`,
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json, text/event-stream',
+                    'Content-Length': Buffer.byteLength(data),
+                },
+            },
+            (res) => {
+                let raw = '';
+                res.on('data', (c) => (raw += c));
+                res.on('end', () => {
+                    const events = raw
+                        .split('\n')
+                        .filter((l) => l.startsWith('data:'))
+                        .map((l) => JSON.parse(l.slice(5).trim()));
+                    resolve({
+                        status: res.statusCode ?? 0,
+                        contentType: String(res.headers['content-type'] ?? ''),
+                        raw,
+                        events,
+                    });
+                });
+            },
+        );
+        req.on('error', reject);
+        req.end(data);
+    });
+}
+
 const deps = (
     userDataDir: string,
     configuredPort: number,
     terminals: { ids: string[]; lastActive: string | null },
     onImDone: (id: string) => void,
+    onForceQuestion: () => Promise<{ cancelled: boolean; answers: any[] }> = async () => ({
+        cancelled: true,
+        answers: [],
+    }),
 ) => ({
     serverVersion: '0.0.0-test',
     userDataDir,
     configuredPort: () => configuredPort,
     workspaceTerminals: () => terminals,
     onImDone,
-    onForceQuestion: async () => ({ cancelled: true, answers: [] }),
+    onForceQuestion,
     describeWorkspace: async () => null,
     manageProcess: async () => ({ ok: true, processes: [] }),
 });
@@ -181,5 +232,96 @@ describe('mcp server', () => {
 
     it('exposes DEFAULT_MCP_PORT as an obscure fixed port', () => {
         expect(DEFAULT_MCP_PORT).toBe(51717);
+    });
+
+    it('answers ForceTheQuestion over an SSE stream (never a timed-out single response)', async () => {
+        const dir = tmpUserDir();
+        await startMcpServer(
+            deps(
+                dir,
+                0,
+                { ids: ['t-a'], lastActive: 't-a' },
+                () => {},
+                async () => ({
+                    cancelled: false,
+                    answers: [{ header: 'Go?', question: 'Proceed?', selected: ['Yes'], note: '' }],
+                }),
+            ),
+        );
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+        const res = await rpcStream(mcpServerPort()!, token, {
+            jsonrpc: '2.0',
+            id: 7,
+            method: 'tools/call',
+            params: {
+                name: 'ForceTheQuestion',
+                arguments: {
+                    questions: [
+                        { header: 'Go?', question: 'Proceed?', options: [{ label: 'Yes' }, { label: 'No' }] },
+                    ],
+                },
+            },
+        });
+        expect(res.status).toBe(200);
+        expect(res.contentType).toContain('text/event-stream');
+        // The final JSON-RPC response arrives as the last data event and carries
+        // the user's answer.
+        const final = res.events.find((e) => e.id === 7);
+        expect(final).toBeTruthy();
+        expect(final.result.content[0].text).toContain('Yes');
+    });
+
+    it('heartbeats a pending ForceTheQuestion so the request stays alive past the idle window', async () => {
+        // Tiny heartbeat for the test; restored after.
+        const prev = process.env.GENIE_MCP_HEARTBEAT_MS;
+        process.env.GENIE_MCP_HEARTBEAT_MS = '20';
+        try {
+            const dir = tmpUserDir();
+            await startMcpServer(
+                deps(
+                    dir,
+                    0,
+                    { ids: ['t-a'], lastActive: 't-a' },
+                    () => {},
+                    // Resolve only after several heartbeat intervals have passed.
+                    () =>
+                        new Promise((r) =>
+                            setTimeout(
+                                () => r({ cancelled: false, answers: [] }),
+                                150,
+                            ),
+                        ),
+                ),
+            );
+            const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+            const res = await rpcStream(mcpServerPort()!, token, {
+                jsonrpc: '2.0',
+                id: 9,
+                method: 'tools/call',
+                // Opt into progress so we get spec notifications too.
+                params: {
+                    name: 'ForceTheQuestion',
+                    _meta: { progressToken: 'p9' },
+                    arguments: {
+                        questions: [
+                            { header: 'Q', question: 'Wait?', options: [{ label: 'A' }, { label: 'B' }] },
+                        ],
+                    },
+                },
+            });
+            // At least one heartbeat comment kept the stream warm before the answer.
+            expect(res.raw).toContain(': heartbeat');
+            // Progress notifications were emitted against the supplied token.
+            const progress = res.events.filter(
+                (e) => e.method === 'notifications/progress',
+            );
+            expect(progress.length).toBeGreaterThan(0);
+            expect(progress[0].params.progressToken).toBe('p9');
+            // And the final response still arrived after all that waiting.
+            expect(res.events.some((e) => e.id === 9)).toBe(true);
+        } finally {
+            if (prev === undefined) delete process.env.GENIE_MCP_HEARTBEAT_MS;
+            else process.env.GENIE_MCP_HEARTBEAT_MS = prev;
+        }
     });
 });

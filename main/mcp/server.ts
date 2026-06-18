@@ -7,6 +7,7 @@ import {
     type ForceQuestion,
     type ForceQuestionResult,
     type JsonRpcRequest,
+    type JsonRpcResponse,
     type ManageProcessRequest,
     type ManageProcessResult,
     type WorkspaceMap,
@@ -157,6 +158,110 @@ function send(res: http.ServerResponse, status: number, body?: unknown): void {
 }
 
 /**
+ * How often we heartbeat a long-blocking request so the client doesn't time
+ * out. ~25s sits comfortably under the common 30–60s client idle windows.
+ * Read per request (not memoised) so GENIE_MCP_HEARTBEAT_MS can drive tests
+ * without a 25s wait.
+ */
+function heartbeatMs(): number {
+    const n = Number(process.env.GENIE_MCP_HEARTBEAT_MS);
+    return Number.isFinite(n) && n > 0 ? n : 25_000;
+}
+
+/**
+ * True for a `tools/call` that BLOCKS on the user — currently only
+ * ForceTheQuestion, which can sit pending for minutes or hours waiting for an
+ * answer (and may queue behind other ForceTheQuestion calls). Such a request
+ * gets the SSE keepalive path below instead of a single JSON response.
+ */
+function isBlockingCall(msg: JsonRpcRequest): boolean {
+    if (msg.method !== 'tools/call') return false;
+    const name = (msg.params as { name?: unknown } | undefined)?.name;
+    return name === 'ForceTheQuestion';
+}
+
+/** The client's progress token for this request, if it asked for progress. */
+function progressTokenOf(msg: JsonRpcRequest): string | number | undefined {
+    const t = (msg.params as { _meta?: { progressToken?: unknown } } | undefined)
+        ?._meta?.progressToken;
+    return typeof t === 'string' || typeof t === 'number' ? t : undefined;
+}
+
+/**
+ * Respond to a long-blocking request over an SSE stream (the MCP Streamable
+ * HTTP transport's other allowed response shape for a POSTed request). While
+ * the handler is pending we emit a heartbeat every HEARTBEAT_MS — an SSE
+ * comment line always (resets the client's socket/idle timer) plus a spec
+ * `notifications/progress` when the client supplied a progressToken. Each beat
+ * keeps the call alive, so an unanswered ForceTheQuestion never times out. When
+ * the handler settles we send the JSON-RPC response as a final SSE event and
+ * end the stream.
+ */
+async function sendBlockingViaSse(
+    res: http.ServerResponse,
+    msg: JsonRpcRequest,
+    run: () => Promise<JsonRpcResponse | null>,
+): Promise<void> {
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'Access-Control-Allow-Origin': '127.0.0.1',
+    });
+
+    // Guard every write: if the client (the agent) disconnected mid-wait the
+    // socket is gone, but force-question.ts keeps the modal open — we just stop
+    // writing rather than crash.
+    const write = (chunk: string): void => {
+        if (res.writableEnded || res.destroyed) return;
+        try {
+            res.write(chunk);
+        } catch {
+            /* socket went away — nothing to do */
+        }
+    };
+    const sseMessage = (obj: unknown): void =>
+        write(`event: message\ndata: ${JSON.stringify(obj)}\n\n`);
+
+    // Open the stream immediately so the client sees bytes and commits to it.
+    write(': open\n\n');
+
+    const token = progressTokenOf(msg);
+    let progress = 0;
+    const beat = setInterval(() => {
+        // Transport-level keepalive — a comment line carries no JSON-RPC
+        // meaning but counts as activity, so the client's idle timeout resets.
+        write(': heartbeat\n\n');
+        // Spec-level progress, only when the client opted in with a token. The
+        // total is left open-ended (we genuinely don't know when the user will
+        // answer); the rising `progress` value satisfies the monotonic rule.
+        if (token !== undefined) {
+            progress += 1;
+            sseMessage({
+                jsonrpc: '2.0',
+                method: 'notifications/progress',
+                params: {
+                    progressToken: token,
+                    progress,
+                    message: 'Waiting for the user to answer…',
+                },
+            });
+        }
+    }, heartbeatMs());
+    // Don't let the heartbeat keep the process alive on its own.
+    if (typeof beat.unref === 'function') beat.unref();
+
+    try {
+        const response = await run();
+        // The final JSON-RPC response rides the stream as the last event.
+        if (response !== null) sseMessage(response);
+    } finally {
+        clearInterval(beat);
+        if (!res.writableEnded) res.end();
+    }
+}
+
+/**
  * Resolve which terminal a tool call should act on for a request that arrived
  * on a token. A per-terminal (legacy) token IS the terminal. A per-workspace
  * token resolves to the explicit `terminalId` arg if it's a valid member of
@@ -225,7 +330,7 @@ async function handle(
             typeof argTerminalId === 'string' ? argTerminalId : undefined,
         ) ?? '';
 
-    const response = await handleMcpMessage(msg, {
+    const mcpCtx = {
         terminalId,
         serverName: SERVER_NAME,
         serverVersion: deps.serverVersion,
@@ -233,7 +338,18 @@ async function handle(
         onForceQuestion: deps.onForceQuestion,
         describeWorkspace: deps.describeWorkspace,
         manageProcess: deps.manageProcess,
-    });
+    };
+
+    // A blocking call (ForceTheQuestion) can sit pending indefinitely while the
+    // user decides. Answer it over an SSE stream with a heartbeat so the MCP
+    // client never times the request out; everything else gets a single JSON
+    // response as before.
+    if (isBlockingCall(msg)) {
+        await sendBlockingViaSse(res, msg, () => handleMcpMessage(msg, mcpCtx));
+        return;
+    }
+
+    const response = await handleMcpMessage(msg, mcpCtx);
     // Notifications get a 202 with no body; requests get their JSON-RPC result.
     if (response === null) send(res, 202);
     else send(res, 200, response);
