@@ -37,7 +37,8 @@ that need to land before the feature can ship to users.
 
 ### Renderer
 - `renderer/components/Terminal/XTerm.tsx` — one component per pty.
-  Wires xterm.js (with FitAddon + WebLinksAddon) to the IPC bridge.
+  Wires xterm.js (FitAddon comes from fancy-term; SerializeAddon for
+  snapshots; a custom link provider for clickable URLs) to the IPC bridge.
   Resize is driven by `ResizeObserver` on the host element, so
   whatever container the component sits in dictates the terminal
   dimensions. Cleanup on unmount: kills the pty and disposes the
@@ -50,7 +51,11 @@ that need to land before the feature can ship to users.
 ### Dependencies
 - `node-pty` — Windows + macOS prebuilds ship with the npm package;
   Linux either picks up a prebuild or rebuilds via `node-gyp`.
-- `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`.
+- `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-serialize`.
+  Clickable URLs use a hand-rolled xterm link provider
+  (`renderer/lib/terminal-links.ts`), not `@xterm/addon-web-links` — the
+  addon's built-in `new URL()` validator rejects scheme-less URLs, so it
+  can't make bare `github.com/x` clickable.
 - `electron-builder install-app-deps` is now non-fatal in
   `postinstall` so installs still work on Windows without VS Build
   Tools (the prebuilds carry us through dev). Release builds with

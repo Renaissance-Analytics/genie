@@ -5,8 +5,8 @@ import {
     type ShellProfile,
 } from '@particle-academy/fancy-term';
 import { SerializeAddon } from '@xterm/addon-serialize';
-import { WebLinksAddon } from '@xterm/addon-web-links';
 import { api, ulid } from '../../lib/genie';
+import { findUrls } from '../../lib/terminal-links';
 import '@xterm/xterm/css/xterm.css';
 
 interface XTermProps {
@@ -115,21 +115,54 @@ export default function XTerm({
                 serializeRef.current = null;
             }
 
-            // Clickable URLs: xterm's official web-links addon detects URLs in
-            // the buffer and underlines them. The click handler routes through
-            // the preload bridge → main shell.openExternal so links open in the
-            // user's default browser (NOT in-app navigation). Only http/https
-            // is opened — main re-validates the scheme as a final gate. Loading
-            // this is best-effort; a failure just leaves links non-clickable.
+            // Clickable URLs. We register our OWN xterm link provider rather
+            // than @xterm/addon-web-links: that addon hard-validates every
+            // candidate with `new URL(uri)` before firing, which throws for
+            // scheme-less URLs — so bare `github.com/x` / `www.x.com` can never
+            // be linkified through it. Our provider (findUrls) matches http(s)
+            // AND scheme-less hosts, prefixing https:// on click. The handler
+            // routes through the preload bridge → main shell.openExternal so
+            // links open in the user's default browser (NOT in-app); main
+            // re-validates the scheme as the final gate. Best-effort — a
+            // failure here just leaves links non-clickable, never breaks the
+            // session. This is the SAME live xterm every terminal uses (new,
+            // restored, and agent/Claude-Code panels all mount this one
+            // component), so the provider covers every terminal path.
             try {
-                const links = new WebLinksAddon((event, uri) => {
-                    // Honor modifier-click semantics implicitly: any plain click
-                    // on the link opens it externally. Guard the scheme here too
-                    // so we never even round-trip a non-web URL to main.
-                    if (!/^https?:\/\//i.test(uri)) return;
-                    void api().shell.openExternal(uri).catch(() => {});
+                live.registerLinkProvider({
+                    provideLinks(lineNo, callback) {
+                        const buf = live.buffer.active;
+                        // lineNo is 1-based; the buffer API is 0-based.
+                        const row = buf.getLine(lineNo - 1);
+                        if (!row) {
+                            callback(undefined);
+                            return;
+                        }
+                        const text = row.translateToString(true);
+                        const found = findUrls(text);
+                        if (found.length === 0) {
+                            callback(undefined);
+                            return;
+                        }
+                        callback(
+                            found.map((u) => ({
+                                text: u.text,
+                                // xterm ranges are 1-based and inclusive of the
+                                // end cell. findUrls gives 0-based half-open
+                                // [start, end), so start+1 and end map directly.
+                                range: {
+                                    start: { x: u.start + 1, y: lineNo },
+                                    end: { x: u.end, y: lineNo },
+                                },
+                                activate: () => {
+                                    void api()
+                                        .shell.openExternal(u.href)
+                                        .catch(() => {});
+                                },
+                            })),
+                        );
+                    },
                 });
-                live.loadAddon(links);
             } catch {
                 // non-fatal — terminal works, links just aren't clickable
             }
