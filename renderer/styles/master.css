@@ -1594,6 +1594,20 @@
     background: color-mix(in srgb, #8b5cf6 16%, transparent);
 }
 
+/* Trailing Tynn-MCP indicator — pinned to the far-right end of a terminal
+   row (after the trash button), not inline by the host label. The Tynn brand
+   glyph as a snug square chip; terminal rows only. */
+.tterm .srow-tynn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px;
+    border-radius: var(--radius-sm);
+    color: var(--host-tynn);
+    background: color-mix(in srgb, #0ea5e9 14%, transparent);
+}
+
 /* ===== Panel grid ===================================================== */
 /* Tiles mash together: no padding, no per-tile margin, no radius. The
    single 1px seam between adjacent panels comes from a 1px grid/flex gap

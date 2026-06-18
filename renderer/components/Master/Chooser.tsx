@@ -1410,15 +1410,11 @@ function SpecRow({
                 </span>
             ) : (
                 <span
-                    className={`host ${hasTynnMcp ? 'tynn' : hostKind}`}
-                    title={hasTynnMcp ? 'Tynn MCP' : hostLabel}
-                    aria-label={hasTynnMcp ? 'Tynn MCP' : hostLabel}
+                    className={`host ${hostKind}`}
+                    title={hostLabel}
+                    aria-label={hostLabel}
                 >
-                    {/* The Tynn glyph means the workspace's .agi envelope
-                        actually declares a Tynn MCP server — NOT that the
-                        product backend is "tynn". Otherwise show the host
-                        label as plain text. */}
-                    {hasTynnMcp ? <IconTynn size={12} /> : hostLabel}
+                    {hostLabel}
                 </span>
             )}
             {suspended ? (
@@ -1459,6 +1455,15 @@ function SpecRow({
             >
                 <IconTrash size={13} />
             </button>
+            {/* Trailing Tynn indicator: the workspace's .agi envelope declares
+                a Tynn MCP server. Terminal views only — never on editor/code
+                rows — and pinned to the far-right end of the row as a trailing
+                marker, not inline near the host label. */}
+            {isTerminal && hasTynnMcp && (
+                <span className="srow-tynn" title="Tynn MCP" aria-label="Tynn MCP">
+                    <IconTynn size={12} />
+                </span>
+            )}
         </div>
     );
 }
