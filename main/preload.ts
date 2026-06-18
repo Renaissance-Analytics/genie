@@ -227,6 +227,18 @@ const api = {
         },
     },
 
+    shell: {
+        /**
+         * Open an http/https URL in the OS default browser. Used by the
+         * terminal's clickable web links. Main re-validates the scheme, so a
+         * non-http(s) URL resolves `{ ok: false }` and opens nothing.
+         */
+        openExternal: (url: string) =>
+            ipcRenderer.invoke('shell:open-external', url) as Promise<{
+                ok: boolean;
+            }>,
+    },
+
     docs: {
         list: () =>
             ipcRenderer.invoke('docs:list') as Promise<

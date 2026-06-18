@@ -5,6 +5,7 @@ import {
     type ShellProfile,
 } from '@particle-academy/fancy-term';
 import { SerializeAddon } from '@xterm/addon-serialize';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import { api, ulid } from '../../lib/genie';
 import '@xterm/xterm/css/xterm.css';
 
@@ -112,6 +113,25 @@ export default function XTerm({
                 serializeRef.current = addon;
             } catch {
                 serializeRef.current = null;
+            }
+
+            // Clickable URLs: xterm's official web-links addon detects URLs in
+            // the buffer and underlines them. The click handler routes through
+            // the preload bridge → main shell.openExternal so links open in the
+            // user's default browser (NOT in-app navigation). Only http/https
+            // is opened — main re-validates the scheme as a final gate. Loading
+            // this is best-effort; a failure just leaves links non-clickable.
+            try {
+                const links = new WebLinksAddon((event, uri) => {
+                    // Honor modifier-click semantics implicitly: any plain click
+                    // on the link opens it externally. Guard the scheme here too
+                    // so we never even round-trip a non-web URL to main.
+                    if (!/^https?:\/\//i.test(uri)) return;
+                    void api().shell.openExternal(uri).catch(() => {});
+                });
+                live.loadAddon(links);
+            } catch {
+                // non-fatal — terminal works, links just aren't clickable
             }
         }
 

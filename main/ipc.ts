@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, BrowserWindow } from 'electron';
+import { app, dialog, ipcMain, shell, BrowserWindow } from 'electron';
 import {
     addWorkspace,
     getAllSettings,
@@ -346,6 +346,28 @@ export function registerIpcHandlers(): void {
             return { ok: true };
         },
     );
+
+    // --- Open external URLs --------------------------------------------
+    // Generic external-open used by terminal web links (and anything else in
+    // the renderer that needs the OS browser). The renderer can't reach
+    // shell.openExternal directly, so it routes here. Sanitize to http/https
+    // as defense-in-depth — the renderer-side WebLinksAddon already filters,
+    // but main never trusts a renderer-supplied URL: anything that isn't a
+    // plain http(s) URL (file://, javascript:, etc.) is dropped.
+    ipcMain.handle('shell:open-external', async (_e, url: string) => {
+        if (typeof url !== 'string') return { ok: false };
+        let parsed: URL;
+        try {
+            parsed = new URL(url);
+        } catch {
+            return { ok: false };
+        }
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            return { ok: false };
+        }
+        await shell.openExternal(parsed.toString());
+        return { ok: true };
+    });
 
     // --- Backend hosts (renderer footer / sign-in hint) ----------------
     ipcMain.handle('tynn-host:get', () => getTynnBackend().host());

@@ -643,6 +643,10 @@ interface GenieApi {
             set: (enabled: boolean) => Promise<{ enabled: boolean }>;
         };
     };
+    shell: {
+        /** Open an http/https URL in the OS default browser (terminal links). */
+        openExternal: (url: string) => Promise<{ ok: boolean }>;
+    };
     docs: {
         list: () => Promise<DocEntry[]>;
         read: (slug: string) => Promise<string | null>;
