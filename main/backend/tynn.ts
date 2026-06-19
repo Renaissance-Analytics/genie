@@ -127,6 +127,30 @@ export class TynnBackend implements Backend {
         };
     }
 
+    /**
+     * For an Ops project, the projects it governs (POST /api/v1/projects/
+     * ops-slaves). Genie maps each slave to a local workspace to resolve its
+     * `*.agi` repo. Returns {isOpsProject:false, slaves:[]} for non-Ops.
+     */
+    async opsSlaves(projectId: string): Promise<{
+        isOpsProject: boolean;
+        slaves: Array<{ id: string; name: string; slug: string; owner_name: string | null; base_url?: string }>;
+    }> {
+        try {
+            const data = await this.fetch<{
+                is_ops_project: boolean;
+                slaves: Array<{ id: string; name: string; slug: string; owner_name: string | null; base_url?: string }>;
+            }>('/api/v1/projects/ops-slaves', {
+                method: 'POST',
+                body: { project_id: projectId },
+            });
+
+            return { isOpsProject: !!data.is_ops_project, slaves: data.slaves ?? [] };
+        } catch {
+            return { isOpsProject: false, slaves: [] };
+        }
+    }
+
     async captureWish(
         projectId: string,
         content: string,

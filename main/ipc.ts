@@ -45,6 +45,11 @@ import {
     provisionStatus,
     linkWorkspaceTynn,
 } from './tynn/provision';
+import {
+    computeOpsRepoPlan,
+    applyOpsRepoPlan,
+    type OpsRepoDesired,
+} from './tynn/ops-repos';
 import type { ProjectJsonTynn } from './workspace/project-json';
 import {
     workspaceEndpointUrl,
@@ -372,6 +377,20 @@ export function registerIpcHandlers(): void {
         'tynn:provision',
         async (_e, workspacePath: string, force = false) =>
             provisionWorkspaceTynn(workspacePath, { force }),
+    );
+
+    // Ops-project repo auto-management: compute the reconcile plan (read-only),
+    // and apply only the user-APPROVED add/remove subset (mutates the envelope).
+    ipcMain.handle('tynn:ops-plan', async (_e, workspacePath: string) =>
+        computeOpsRepoPlan(workspacePath),
+    );
+    ipcMain.handle(
+        'tynn:ops-apply',
+        async (
+            _e,
+            workspacePath: string,
+            approved: { add?: OpsRepoDesired[]; remove?: string[] },
+        ) => applyOpsRepoPlan(workspacePath, approved),
     );
 
     // --- Open external URLs --------------------------------------------

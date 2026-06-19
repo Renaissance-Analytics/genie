@@ -205,6 +205,16 @@ const api = {
             ipcRenderer.invoke('tynn:provision-status', workspacePath),
         provision: (workspacePath: string, force = false) =>
             ipcRenderer.invoke('tynn:provision', workspacePath, force),
+        // Ops-project repo auto-management.
+        opsPlan: (workspacePath: string) =>
+            ipcRenderer.invoke('tynn:ops-plan', workspacePath),
+        opsApply: (
+            workspacePath: string,
+            approved: {
+                add?: Array<{ name: string; url: string; projectId: string }>;
+                remove?: string[];
+            },
+        ) => ipcRenderer.invoke('tynn:ops-apply', workspacePath, approved),
     },
 
     tynnHost: {

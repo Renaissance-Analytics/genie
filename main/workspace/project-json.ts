@@ -43,6 +43,13 @@ export interface ProjectJsonRepo {
     role?: ProjectJsonRepoRole;
     /** Tracked branch for `git submodule update --remote`. */
     branch?: string;
+    /**
+     * Set when Genie added this repo automatically because it's the `*.agi`
+     * envelope of an Ops project's slave. Only `managedByOps` repos are eligible
+     * for automatic removal when a slave is detached — hand-added repos are
+     * never touched by the Ops reconcile.
+     */
+    managedByOps?: boolean;
 }
 
 export interface ProjectJson {

@@ -645,6 +645,22 @@ interface GenieApi {
             isOpsProject?: boolean;
             error?: string;
         }>;
+        /** Ops-project repo reconcile plan (read-only). */
+        opsPlan: (workspacePath: string) => Promise<{
+            isOps: boolean;
+            signedIn: boolean;
+            toAdd: Array<{ name: string; url: string; projectId: string }>;
+            toRemove: Array<{ name: string }>;
+            missingLocally: Array<{ name: string; projectId: string }>;
+        }>;
+        /** Apply the user-approved add/remove subset (mutates the envelope). */
+        opsApply: (
+            workspacePath: string,
+            approved: {
+                add?: Array<{ name: string; url: string; projectId: string }>;
+                remove?: string[];
+            },
+        ) => Promise<{ added: string[]; removed: string[]; errors: string[] }>;
     };
     tynnHost: {
         get: () => Promise<string>;
