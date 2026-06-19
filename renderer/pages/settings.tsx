@@ -384,6 +384,26 @@ export default function SettingsPage() {
                 />
             </Card>
 
+            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <Heading as="h2" size="sm">Terminal copy &amp; paste</Heading>
+                <Text size="xs" className="text-zinc-500">
+                    How copy and paste work inside terminals. Pasting always
+                    refocuses the terminal so you can keep typing. Applies to
+                    newly-opened terminals.
+                </Text>
+                <Select
+                    value={s.terminal_copy_paste ?? 'contextmenu'}
+                    onValueChange={(v) =>
+                        patch({ terminal_copy_paste: v as 'contextmenu' | 'linux' | 'winmac' })
+                    }
+                    list={[
+                        { value: 'contextmenu', label: 'Context menu — right-click for Copy/Paste (+ Ctrl+Shift+C/V)' },
+                        { value: 'linux', label: 'Linux — highlight to copy, right-/middle-click to paste' },
+                        { value: 'winmac', label: 'Windows / Mac — Ctrl/Cmd+C copies, Ctrl/Cmd+V pastes' },
+                    ]}
+                />
+            </Card>
+
                     </Tabs.Panel>
                     <Tabs.Panel value="agent-mcp" className="settings-tab">
 

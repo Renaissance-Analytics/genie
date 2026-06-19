@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
     Terminal as FancyTerminal,
     type TerminalHandle,
@@ -78,6 +78,88 @@ export default function XTerm({
     // OR after create. Track it either way: create uses the latest
     // known size, and any later resize is forwarded to the pty.
     const sizeRef = useRef<{ cols: number; rows: number }>({ cols: 80, rows: 24 });
+
+    // Copy/paste behaviour (Settings → Customization). Read once on mount; new
+    // terminals pick up a changed setting. 'contextmenu' keeps fancy-term's
+    // built-in right-click menu; 'linux'/'winmac' wire custom handlers below.
+    const [copyPaste, setCopyPaste] = useState<'contextmenu' | 'linux' | 'winmac'>(
+        'contextmenu',
+    );
+    useEffect(() => {
+        void api()
+            .settings.get()
+            .then((s) => {
+                const m = s.terminal_copy_paste;
+                if (m === 'linux' || m === 'winmac' || m === 'contextmenu') setCopyPaste(m);
+            })
+            .catch(() => {});
+    }, []);
+
+    // Apply the chosen copy/paste behaviour to the live xterm. Re-runs when the
+    // mode resolves. EVERY paste path also refocuses the terminal (see onPaste).
+    useEffect(() => {
+        const handle = handleRef.current;
+        const live = handle?.xterm;
+        if (!handle || !live) return;
+        if (copyPaste === 'contextmenu') return; // fancy-term's menu handles it
+
+        const pasteAndFocus = () => {
+            void handle.paste().finally(() => handle.focus());
+        };
+        const disposers: Array<() => void> = [];
+
+        if (copyPaste === 'linux') {
+            // Highlight-to-copy.
+            const sel = live.onSelectionChange(() => {
+                if (live.hasSelection()) void handle.copySelection();
+            });
+            disposers.push(() => sel.dispose());
+            // Right-click (and classic middle-click) paste; suppress the menu.
+            const el = live.element;
+            if (el) {
+                const onCtx = (e: MouseEvent) => {
+                    e.preventDefault();
+                    pasteAndFocus();
+                };
+                const onMouse = (e: MouseEvent) => {
+                    if (e.button === 1) {
+                        e.preventDefault();
+                        pasteAndFocus();
+                    }
+                };
+                el.addEventListener('contextmenu', onCtx);
+                el.addEventListener('mousedown', onMouse);
+                disposers.push(() => {
+                    el.removeEventListener('contextmenu', onCtx);
+                    el.removeEventListener('mousedown', onMouse);
+                });
+            }
+        } else {
+            // winmac: Ctrl/Cmd+C copies the selection (else falls through to ^C
+            // interrupt); Ctrl/Cmd+V pastes.
+            live.attachCustomKeyEventHandler((e) => {
+                if (e.type !== 'keydown') return true;
+                const mod = e.ctrlKey || e.metaKey;
+                if (!mod || e.shiftKey || e.altKey) return true;
+                const k = e.key.toLowerCase();
+                if (k === 'c' && live.hasSelection()) {
+                    void handle.copySelection();
+                    return false;
+                }
+                if (k === 'v') {
+                    pasteAndFocus();
+                    return false;
+                }
+                return true;
+            });
+            // Reset to a pass-through handler on cleanup / mode change.
+            disposers.push(() => live.attachCustomKeyEventHandler(() => true));
+        }
+
+        return () => {
+            for (const d of disposers) d();
+        };
+    }, [copyPaste]);
 
     useEffect(() => {
         const handle = handleRef.current;
@@ -269,6 +351,14 @@ export default function XTerm({
                 activeShell={activeShell}
                 onShellChange={onShellChange}
                 showShellBar={Boolean(shells && shells.length > 1)}
+                // 'linux'/'winmac' use custom handlers (effect above); only the
+                // 'contextmenu' mode keeps fancy-term's built-in right-click menu.
+                contextMenu={copyPaste === 'contextmenu'}
+                // The terminal should keep focus after a paste so you can type
+                // immediately — refocus on every paste, regardless of mode/path.
+                onPaste={() => {
+                    handleRef.current?.focus();
+                }}
                 onData={(data) => {
                     // Swallow IPC errors — if the main-side handler is briefly
                     // unavailable (bootstrap, hot-reload) the keystroke is lost;

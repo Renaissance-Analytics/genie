@@ -402,6 +402,11 @@ export interface Settings {
     /** Keep the Genie brief synced into a workspace's AGENTS.md. Default 'on';
      *  'off' leaves it alone. */
     mcp_sync_agents?: 'on' | 'off';
+    /** Terminal copy/paste behaviour:
+     *  - 'contextmenu' (default): right-click Copy/Paste menu + Ctrl+Shift+C/V.
+     *  - 'linux': highlight-to-copy, right-click (and middle-click) to paste.
+     *  - 'winmac': Ctrl/Cmd+C copies the selection, Ctrl/Cmd+V pastes. */
+    terminal_copy_paste?: 'contextmenu' | 'linux' | 'winmac';
 }
 
 export function getAllSettings(): Settings {
@@ -450,6 +455,8 @@ export function getAllSettings(): Settings {
         mcp_sync_claude: (out['mcp_sync_claude'] as 'on' | 'off') ?? 'on',
         mcp_sync_cursor: (out['mcp_sync_cursor'] as 'on' | 'off') ?? 'on',
         mcp_sync_agents: (out['mcp_sync_agents'] as 'on' | 'off') ?? 'on',
+        terminal_copy_paste:
+            (out['terminal_copy_paste'] as 'contextmenu' | 'linux' | 'winmac') ?? 'contextmenu',
     };
 }
 

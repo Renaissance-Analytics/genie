@@ -145,6 +145,9 @@ export interface Settings {
     mcp_sync_cursor?: 'on' | 'off';
     /** Keep the Genie brief synced into AGENTS.md. Default 'on'. */
     mcp_sync_agents?: 'on' | 'off';
+    /** Terminal copy/paste behaviour: 'contextmenu' (default) | 'linux'
+     *  (highlight-to-copy, right/middle-click paste) | 'winmac' (Ctrl/Cmd+C / +V). */
+    terminal_copy_paste?: 'contextmenu' | 'linux' | 'winmac';
 }
 
 /** Health of a workspace's agent docs (AGENTS.md + Genie section + CLAUDE sync). */
