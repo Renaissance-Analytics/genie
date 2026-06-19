@@ -47,6 +47,13 @@ export interface AutoUpdaterStatus {
     error: string | null;
     /** 0..1 during 'downloading'. */
     progress: number | null;
+    /**
+     * Set when auto-update can't complete on THIS platform and the user should
+     * download a build manually instead — currently macOS, where Squirrel.Mac
+     * rejects an unsigned/ad-hoc build's signature. Points at the GitHub release
+     * to download. Null when auto-update is healthy.
+     */
+    manualDownloadUrl: string | null;
 }
 
 const LOG_MAX = 2000;
@@ -66,6 +73,7 @@ class AutoUpdater extends EventEmitter {
             log: [],
             error: null,
             progress: null,
+            manualDownloadUrl: null,
         };
         this.bind();
     }
@@ -103,7 +111,7 @@ class AutoUpdater extends EventEmitter {
 
     async checkForUpdate(): Promise<void> {
         if (this.status.state === 'downloading') return;
-        this.setStatus({ state: 'checking', error: null });
+        this.setStatus({ state: 'checking', error: null, manualDownloadUrl: null });
         try {
             const res = await autoUpdater.checkForUpdates();
             if (!res || !res.updateInfo) {
@@ -128,6 +136,7 @@ class AutoUpdater extends EventEmitter {
             this.setStatus({
                 state: 'error',
                 error: e instanceof Error ? e.message : String(e),
+                manualDownloadUrl: this.manualUrlForPlatform(),
             });
         }
     }
@@ -145,6 +154,7 @@ class AutoUpdater extends EventEmitter {
             this.setStatus({
                 state: 'error',
                 error: e instanceof Error ? e.message : String(e),
+                manualDownloadUrl: this.manualUrlForPlatform(),
             });
         }
     }
@@ -199,11 +209,30 @@ class AutoUpdater extends EventEmitter {
             });
         });
         autoUpdater.on('error', (err) => {
+            // macOS Squirrel rejects an unsigned/ad-hoc build's signature on
+            // apply ("code has no resources but signature indicates they must
+            // be present") — there's no in-app recovery, so route the user to a
+            // manual download instead of leaving them on a dead error.
             this.setStatus({
                 state: 'error',
                 error: err?.message ?? String(err),
+                manualDownloadUrl: this.manualUrlForPlatform(),
             });
         });
+    }
+
+    /**
+     * The release to download by hand when auto-update can't apply on this
+     * platform (macOS today). Prefers the exact tag once known, else the
+     * latest-release page. Returns null on platforms where auto-update works.
+     */
+    private manualUrlForPlatform(): string | null {
+        if (process.platform !== 'darwin') return null;
+        const tag = this.status.latestVersion ? `v${this.status.latestVersion}` : null;
+
+        return tag
+            ? `https://github.com/Renaissance-Analytics/genie/releases/tag/${tag}`
+            : 'https://github.com/Renaissance-Analytics/genie/releases/latest';
     }
 
     private appendLog(line: string): void {

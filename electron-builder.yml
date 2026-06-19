@@ -119,8 +119,14 @@ mac:
   icon: resources/icon.png
   hardenedRuntime: true
   gatekeeperAssess: false
-  # Notarisation envs are picked up from CI at release time.
-  # APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
+  # Notarize when the build is Developer-ID signed (CI provides MAC_CSC_LINK +
+  # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID). electron-builder
+  # skips notarization automatically for unsigned/ad-hoc builds, so this stays
+  # safe even before the signing secrets exist. macOS auto-update REQUIRES a
+  # signed + notarized app — an ad-hoc signature fails Squirrel.Mac validation
+  # ("code has no resources but signature indicates they must be present"),
+  # which is the exact failure this readies the real fix for.
+  notarize: true
 
 win:
   target:

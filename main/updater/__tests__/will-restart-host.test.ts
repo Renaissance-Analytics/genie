@@ -45,6 +45,7 @@ const baseStatus = {
     log: [],
     error: null,
     progress: 1,
+    manualDownloadUrl: null,
 };
 
 beforeEach(() => {

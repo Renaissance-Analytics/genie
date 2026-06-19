@@ -252,6 +252,12 @@ export interface UpdaterStatus {
      * running processes stop). The update pill warns the user when this is set.
      */
     willRestartPtyHost?: boolean;
+    /**
+     * Set when auto-update can't apply on this platform (macOS, where an
+     * unsigned/ad-hoc build fails Squirrel.Mac signature validation). The UI
+     * shows a "Download manually" button pointing here instead of a dead error.
+     */
+    manualDownloadUrl?: string | null;
 }
 
 export interface UpdaterConfig {

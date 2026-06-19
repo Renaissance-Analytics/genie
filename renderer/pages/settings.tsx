@@ -1421,11 +1421,32 @@ function UpdaterSection() {
                         </Text>
                     )}
                 </div>
-                {status?.error && (
+                {status?.manualDownloadUrl ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <Text size="xs" style={{ color: 'var(--amber-600)' }}>
+                            Automatic update isn&apos;t available on macOS for this build (it
+                            isn&apos;t Developer-ID signed yet). Download the latest version and
+                            drag it into Applications to update.
+                        </Text>
+                        <div>
+                            <Action
+                                size="sm"
+                                color="blue"
+                                icon="download"
+                                onClick={() => {
+                                const url = status.manualDownloadUrl;
+                                if (url) void api().shell.openExternal(url);
+                            }}
+                            >
+                                Download {status.latestVersion ? `v${status.latestVersion}` : 'the latest'} for macOS
+                            </Action>
+                        </div>
+                    </div>
+                ) : status?.error ? (
                     <Text size="xs" style={{ color: 'var(--rose-500)' }}>
                         {status.error}
                     </Text>
-                )}
+                ) : null}
             </div>
 
             {status &&
