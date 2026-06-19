@@ -1562,37 +1562,9 @@
     background: #f43f5e;
 }
 
-/* host badge */
-.host {
-    font-family: ui-monospace, 'Geist Mono', monospace;
-    font-size: 9.5px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    text-transform: lowercase;
-    padding: 1px 6px;
-    border-radius: var(--radius-sm);
-    flex: 0 0 auto;
-    background: var(--bg-2);
-    color: var(--fg-3);
-}
-.host.tynn {
-    color: var(--host-tynn);
-    background: color-mix(in srgb, #0ea5e9 14%, transparent);
-    /* Holds the Tynn glyph (IconTynn) rather than text — center it as a
-       snug square chip instead of the text badge's wider horizontal pad. */
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 2px;
-}
-.host.desktop {
-    color: var(--fg-3);
-    background: var(--bg-2);
-}
-.host.aionima {
-    color: var(--host-aionima);
-    background: color-mix(in srgb, #8b5cf6 16%, transparent);
-}
+/* The per-row host badge (text "tynn"/"local"/"aionima") was removed — the
+   gold Tynn glyph (.srow-tynn, terminal rows only) is the only host signal.
+   Its .host/.host.* styles were deleted with it so the label can't reappear. */
 
 /* Trailing Tynn-MCP indicator — pinned to the far-right end of a terminal
    row (after the trash button), not inline by the host label. The Tynn brand
