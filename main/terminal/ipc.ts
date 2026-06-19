@@ -11,10 +11,12 @@ import {
 import {
     getAllSettings,
     getTerminalSpec,
+    listTerminalSpecs,
     updateTerminalSpec,
     workspaceMcpEnabled,
 } from '../db';
 import { buildTynnCliEnv } from '../cli/tynn-cli';
+import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
 import {
     startProcess,
@@ -291,6 +293,8 @@ export function registerTerminalIpc(): void {
     ipcMain.handle('terminal:list', (): TerminalInfo[] => {
         return mgr().list();
     });
+    // Manual orphan sweep (Settings/diagnostics): kill host PTYs with no spec.
+    ipcMain.handle('terminal:reap-orphans', () => reapOrphanTerminals());
 
     // Tier 1 capture: the renderer sends a SerializeAddon reconstruction of a
     // terminal's buffer. Persist it (encrypted gz on disk) and record the
@@ -430,6 +434,37 @@ export function broadcastTerminalCount(): void {
     for (const w of BrowserWindow.getAllWindows()) {
         w.webContents.send('terminal:count', { count });
     }
+}
+
+/**
+ * Reap host PTYs that no longer have a spec. The detached pty-host keeps
+ * terminals alive across Genie restarts by design (Tier 3) — but nothing pruned
+ * a pty whose spec was deleted, so orphans accumulated in the host. Run on
+ * startup (after the host has loaded its persisted terminals) and on demand.
+ * Uses killTerminalById so each orphan is torn down fully (pty + MCP endpoint +
+ * snapshot). Best-effort per terminal.
+ */
+export function reapOrphanTerminals(): { reaped: string[]; live: number } {
+    let live: string[] = [];
+    try {
+        live = terminalManager().list().map((t) => t.id);
+    } catch {
+        return { reaped: [], live: 0 };
+    }
+    const orphans = computeOrphans(live, listTerminalSpecs().map((s) => s.id));
+    for (const id of orphans) {
+        try {
+            killTerminalById(id);
+        } catch {
+            /* best-effort — one stubborn pty shouldn't abort the sweep */
+        }
+    }
+    if (orphans.length) {
+        // eslint-disable-next-line no-console
+        console.log(`[Genie] reaped ${orphans.length} orphaned host terminal(s): ${orphans.join(', ')}`);
+    }
+
+    return { reaped: orphans, live: live.length };
 }
 
 /**

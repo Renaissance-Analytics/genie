@@ -39,6 +39,7 @@ import {
     broadcastTerminalSpecsChanged,
     killTerminalById,
     lastActiveTerminalForWorkspace,
+    reapOrphanTerminals,
 } from './terminal/ipc';
 import {
     startMcpServer,
@@ -951,6 +952,17 @@ app.whenReady().then(async () => {
             `[terminal] reattached to detached host: ${backendInit.reattachIds.length} session(s)`,
         );
     }
+    // Reap orphaned host PTYs (a spec deleted out from under a detached
+    // terminal, or a crashed session) once the host has settled its reattach.
+    // Deferred + unref'd so it never blocks startup; safe because it only kills
+    // ids with NO spec — retained/reattaching terminals all still have specs.
+    setTimeout(() => {
+        try {
+            reapOrphanTerminals();
+        } catch {
+            /* best-effort */
+        }
+    }, 8000).unref?.();
     registerFilesIpc();
     registerGithubIpc();
     registerUpdaterIpc();
