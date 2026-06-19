@@ -1054,32 +1054,26 @@
 }
 
 .rail-head {
-    padding: 13px 14px 10px;
+    padding: 11px 12px 9px;
     display: flex;
     align-items: center;
     gap: 8px;
 }
-.rail-head .rt {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--fg-1);
+
+/* System Workspace reveal toggle — sits left of the search box on the
+   sidebar's top line. Uses the same chip icon a workspace shows; lights up
+   in the agent accent while the System Workspace is revealed. */
+.rail-system-toggle {
+    flex: 0 0 auto;
 }
-.rail-head .rsub {
-    font-size: 11px;
-    color: var(--fg-4);
-}
-.rail-head .grow {
-    flex: 1;
-}
-.flyout-pin {
-    margin-left: auto;
-}
-.chooser.pinned .flyout-pin {
+.rail-system-toggle.on {
     color: var(--agent);
+    background: var(--agent-soft);
 }
 
 .rail-search {
-    margin: 0 12px 8px;
+    flex: 1 1 auto;
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -2363,6 +2357,30 @@ body.gutter-dragging .grid-gutter {
 }
 .tproj-procs .proc-add-cwd {
     cursor: pointer;
+}
+/* Directory picker for a System Workspace process — opens the native picker
+   and shows the chosen absolute path (truncated). Reads like the other
+   `.input` fields but is a button. */
+.tproj-procs .proc-add-dir {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    text-align: left;
+    cursor: pointer;
+    color: var(--fg-2);
+}
+.tproj-procs .proc-add-dir:hover {
+    color: var(--fg-1);
+    border-color: var(--border-2, #3f3f46);
+}
+.tproj-procs .proc-add-dir .proc-add-dir-path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl; /* keep the trailing folder name visible when truncated */
+    text-align: left;
 }
 .tproj-procs .proc-add-actions {
     display: flex;

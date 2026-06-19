@@ -102,6 +102,18 @@ export const IconCpu = ({ size = 18, ...p }: Props) =>
         p.className,
         p.style,
     );
+/** Home / system glyph — roots the synthetic System Workspace (a house). */
+export const IconHome = ({ size = 18, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <path d="M3 10.5 12 3l9 7.5" />
+            <path d="M5 9.5V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.5" />
+            <path d="M9 21v-6h6v6" />
+        </>,
+        p.className,
+        p.style,
+    );
 export const IconTerminal = ({ size = 18, ...p }: Props) =>
     wrap(
         size,

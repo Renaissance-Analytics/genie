@@ -119,8 +119,8 @@ const api = {
         get: () => ipcRenderer.invoke('settings:get'),
         set: (patch: Record<string, unknown>) =>
             ipcRenderer.invoke('settings:set', patch),
-        chooseFolder: (label?: string) =>
-            ipcRenderer.invoke('settings:choose-folder', label),
+        chooseFolder: (label?: string, defaultPath?: string) =>
+            ipcRenderer.invoke('settings:choose-folder', label, defaultPath),
         chooseFile: (label?: string) =>
             ipcRenderer.invoke('settings:choose-file', label),
         detectEditors: () => ipcRenderer.invoke('settings:detect-editors'),
@@ -224,6 +224,8 @@ const api = {
     app: {
         hideCapture: () => ipcRenderer.invoke('app:hide-capture'),
         getCurrentProject: () => ipcRenderer.invoke('app:get-current-project'),
+        /** The user's home directory (for the synthetic System Workspace). */
+        homeDir: () => ipcRenderer.invoke('app:home-dir') as Promise<string>,
         showSettings: () => ipcRenderer.invoke('app:show-settings'),
         showDocs: () => ipcRenderer.invoke('app:show-docs'),
         showMain: () => ipcRenderer.invoke('app:show-main'),

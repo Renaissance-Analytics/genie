@@ -566,7 +566,7 @@ interface GenieApi {
     settings: {
         get: () => Promise<Settings>;
         set: (patch: Partial<Settings>) => Promise<Settings>;
-        chooseFolder: (label?: string) => Promise<string | null>;
+        chooseFolder: (label?: string, defaultPath?: string) => Promise<string | null>;
         chooseFile: (label?: string) => Promise<string | null>;
         detectEditors: () => Promise<EditorDetection[]>;
         detectShells: () => Promise<{
@@ -668,6 +668,8 @@ interface GenieApi {
     app: {
         hideCapture: () => Promise<{ ok: boolean }>;
         getCurrentProject: () => Promise<{ id: string; name: string } | null>;
+        /** The user's home directory (roots the synthetic System Workspace). */
+        homeDir: () => Promise<string>;
         showSettings: () => Promise<{ ok: boolean }>;
         showDocs: () => Promise<{ ok: boolean }>;
         showMain: () => Promise<{ ok: boolean }>;
@@ -1004,6 +1006,54 @@ export function api(): GenieApi {
 /** Returns true when the preload bridge is wired and callable. */
 export function hasGenieBridge(): boolean {
     return typeof window !== 'undefined' && !!window.genie;
+}
+
+/**
+ * Synthetic "System Workspace" — a hardcoded sidebar entry that is NOT a real
+ * workspace: it has no project.json and never enters the persisted workspace
+ * store. Its `path` is the user's home directory, so terminals/editors opened
+ * in it root there. It exists to host SYSTEM PROCESSES — background processes
+ * not tied to any project, whose cwd is an arbitrary directory the user picks.
+ *
+ * The id is a fixed sentinel so the renderer can recognise it everywhere a
+ * workspace id flows; it is never written to the DB. System Workspace
+ * terminal specs persist with `workspace_id: null` (FK-safe — `__system__`
+ * has no `workspaces` row) and a `meta.system === true` tag so the sidebar can
+ * group them under the System Workspace rather than the generic Unattached
+ * bucket.
+ */
+export const SYSTEM_WORKSPACE_ID = '__system__';
+
+/** True for the synthetic System Workspace row (see {@link SYSTEM_WORKSPACE_ID}). */
+export function isSystemWorkspace(ws: { id: string }): boolean {
+    return ws.id === SYSTEM_WORKSPACE_ID;
+}
+
+/**
+ * Build the in-memory System Workspace row. `homePath` is `os.homedir()` from
+ * main (see `api().app.homeDir()`). Shaped as a `WorkspaceRow` so it slots into
+ * the sidebar's workspace list without special-casing the renderer everywhere,
+ * but it is never persisted and has no repos.
+ */
+export function makeSystemWorkspace(homePath: string): WorkspaceRow {
+    return {
+        id: SYSTEM_WORKSPACE_ID,
+        backend: 'tynn',
+        project_id: SYSTEM_WORKSPACE_ID,
+        project_name: 'System',
+        tynn_project_id: SYSTEM_WORKSPACE_ID,
+        tynn_project_name: 'System',
+        shape: 'simple',
+        path: homePath,
+        editor: null,
+        editor_cmd: null,
+        start_cmd: null,
+        env_file: null,
+        last_opened_at: null,
+        created_by_genie: 0,
+        mcp_enabled: 0,
+        process_approval: 1,
+    };
 }
 
 export function ulid(): string {

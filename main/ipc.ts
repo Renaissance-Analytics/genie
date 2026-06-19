@@ -1,4 +1,5 @@
 import { app, dialog, ipcMain, shell, BrowserWindow } from 'electron';
+import os from 'node:os';
 import {
     addWorkspace,
     getAllSettings,
@@ -143,13 +144,19 @@ export function registerIpcHandlers(): void {
         if ('global_hotkey' in patch) registerShortcuts();
         return next;
     });
-    ipcMain.handle('settings:choose-folder', async (_e, label?: string) => {
-        const r = await dialog.showOpenDialog({
-            title: label ?? 'Choose folder',
-            properties: ['openDirectory', 'createDirectory'],
-        });
-        return r.canceled ? null : r.filePaths[0];
-    });
+    ipcMain.handle(
+        'settings:choose-folder',
+        async (_e, label?: string, defaultPath?: string) => {
+            const r = await dialog.showOpenDialog({
+                title: label ?? 'Choose folder',
+                // Seed the picker at a starting directory when one is given
+                // (e.g. ~/ for a System Workspace process). Ignored when absent.
+                ...(defaultPath ? { defaultPath } : {}),
+                properties: ['openDirectory', 'createDirectory'],
+            });
+            return r.canceled ? null : r.filePaths[0];
+        },
+    );
     ipcMain.handle('settings:choose-file', async (_e, label?: string) => {
         const r = await dialog.showOpenDialog({
             title: label ?? 'Choose file',
@@ -424,6 +431,10 @@ export function registerIpcHandlers(): void {
         hideCaptureWindow();
         return { ok: true };
     });
+    // The user's home directory — the synthetic "System Workspace" roots its
+    // terminals/editors here, and the directory picker for system processes
+    // defaults to it. Surfaced from main (renderer has no `os` access).
+    ipcMain.handle('app:home-dir', () => os.homedir());
     ipcMain.handle('app:show-settings', () => {
         showSettingsWindow();
         return { ok: true };

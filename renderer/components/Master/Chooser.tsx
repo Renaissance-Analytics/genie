@@ -9,6 +9,7 @@ import {
     IconEyeOff,
     IconCpu,
     IconGlobe,
+    IconHome,
     IconPanelLeftOpen,
     IconPause,
     IconPin,
@@ -24,6 +25,7 @@ import { showPrompt } from './Prompt';
 import {
     api,
     detectedShells,
+    isSystemWorkspace,
     type McpStatus,
     type ProcessStatus,
     type WatchTypeCounts,
@@ -44,6 +46,10 @@ interface Props {
     activeWorkspaceId: string | null;
     pinned: boolean;
     onTogglePin: () => void;
+    /** Whether the synthetic System Workspace is currently shown in the list. */
+    systemRevealed: boolean;
+    /** Toggle the System Workspace's visibility (the sidebar chip button). */
+    onToggleSystemWorkspace: () => void;
     onActivateWorkspace: (workspaceId: string) => void;
     onToggleSpec: (id: string) => void;
     onAddSpec: (workspaceId: string, type: ViewType) => void;
@@ -94,6 +100,8 @@ export default function Chooser({
     activeWorkspaceId,
     pinned,
     onTogglePin,
+    systemRevealed,
+    onToggleSystemWorkspace,
     onActivateWorkspace,
     onToggleSpec,
     onAddSpec,
@@ -126,13 +134,20 @@ export default function Chooser({
     const [procShell, setProcShell] = useState(''); // '' = default shell
     const [procRepos, setProcRepos] = useState<string[]>([]);
     const [procShells, setProcShells] = useState<ShellDetection[]>([]);
+    // System processes aren't tied to a repo — `procDir` holds the absolute
+    // directory the user picked (via the native picker). Only used when the
+    // open form belongs to the System Workspace; '' = not yet chosen.
+    const [procDir, setProcDir] = useState('');
 
     const loadProcFormMeta = (ws: WorkspaceRow) => {
         setProcRepos([]);
-        void api()
-            .workspaces.repos(ws.id)
-            .then(setProcRepos)
-            .catch(() => setProcRepos([]));
+        // The System Workspace has no repos — skip the (meaningless) repo fetch.
+        if (!isSystemWorkspace(ws)) {
+            void api()
+                .workspaces.repos(ws.id)
+                .then(setProcRepos)
+                .catch(() => setProcRepos([]));
+        }
         void detectedShells()
             .then(({ shells }) => setProcShells(shells))
             .catch(() => setProcShells([]));
@@ -144,6 +159,8 @@ export default function Chooser({
         setProcLabel('');
         setProcCommand('');
         setProcCwd('');
+        // Default the picked dir to the System Workspace's home path.
+        setProcDir(isSystemWorkspace(ws) ? ws.path : '');
         setProcShell('');
         loadProcFormMeta(ws);
     };
@@ -153,18 +170,44 @@ export default function Chooser({
         setAddProcFor(ws.id);
         setProcLabel(s.label);
         setProcCommand(s.meta?.command ?? '');
-        // Reverse-map the absolute cwd back to a repo name (or '' = root).
-        const prefix = `${ws.path}/repos/`;
-        setProcCwd(s.cwd?.startsWith(prefix) ? s.cwd.slice(prefix.length) : '');
+        if (isSystemWorkspace(ws)) {
+            // System process: the cwd IS the absolute picked directory.
+            setProcCwd('');
+            setProcDir(s.cwd || ws.path);
+        } else {
+            // Reverse-map the absolute cwd back to a repo name (or '' = root).
+            const prefix = `${ws.path}/repos/`;
+            setProcCwd(s.cwd?.startsWith(prefix) ? s.cwd.slice(prefix.length) : '');
+            setProcDir('');
+        }
         setProcShell(s.shell ?? '');
         loadProcFormMeta(ws);
+    };
+
+    // Open the native directory picker for a System Workspace process, seeded at
+    // the System Workspace's home path. Keeps the current pick on cancel.
+    const pickProcDir = (ws: WorkspaceRow) => {
+        void api()
+            .settings.chooseFolder('Choose a directory for this process', procDir || ws.path)
+            .then((dir) => {
+                if (dir) setProcDir(dir);
+            })
+            .catch(() => {});
     };
 
     const submitAddProcess = (ws: WorkspaceRow) => {
         const cmd = procCommand.trim();
         if (!cmd) return;
-        // procCwd holds a repo name; resolve to <root>/repos/<name>, or root.
-        const cwd = procCwd ? `${ws.path}/repos/${procCwd}` : undefined;
+        const system = isSystemWorkspace(ws);
+        // System process: cwd is the picked absolute directory (required).
+        // Workspace process: procCwd holds a repo name → <root>/repos/<name>,
+        // or '' = envelope root (undefined lets the handler default to root).
+        if (system && !procDir) return;
+        const cwd = system
+            ? procDir
+            : procCwd
+              ? `${ws.path}/repos/${procCwd}`
+              : undefined;
         if (editProcId) {
             const wasRunning = ['running', 'restarting'].includes(
                 processStatus.get(editProcId) ?? 'stopped',
@@ -402,7 +445,17 @@ export default function Chooser({
     const byWorkspace = new Map<string, TerminalSpec[]>();
     for (const ws of workspaces) byWorkspace.set(ws.id, []);
     const orphaned: TerminalSpec[] = [];
+    // System Workspace specs persist UNATTACHED (workspace_id: null) but carry a
+    // `meta.system` tag — route them to the System Workspace bucket when that
+    // row is present (revealed). They are NEVER orphaned, so they don't leak
+    // into the Unattached group when the System Workspace is hidden.
+    const systemWs = workspaces.find(isSystemWorkspace);
     for (const s of specs) {
+        const isSystemSpec = s.workspace_id === null && s.meta?.system === true;
+        if (isSystemSpec) {
+            if (systemWs) byWorkspace.get(systemWs.id)!.push(s);
+            continue;
+        }
         if (s.workspace_id && byWorkspace.has(s.workspace_id)) {
             byWorkspace.get(s.workspace_id)!.push(s);
         } else {
@@ -410,7 +463,19 @@ export default function Chooser({
         }
     }
 
-    const matches = (s: TerminalSpec): boolean => {
+    // The search box now filters the WORKSPACE list (the sidebar is more than
+    // terminals). Match on the project name or path; empty query shows all.
+    const workspaceMatches = (ws: WorkspaceRow): boolean => {
+        if (!search) return true;
+        const q = search.toLowerCase();
+        return (
+            ws.project_name.toLowerCase().includes(q) ||
+            ws.path.toLowerCase().includes(q)
+        );
+    };
+    // Orphaned (unattached) terminals are still filtered by the query so the
+    // box stays useful for that bucket; matches on label or cwd.
+    const orphanMatches = (s: TerminalSpec): boolean => {
         if (!search) return true;
         const q = search.toLowerCase();
         return s.label.toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q);
@@ -471,30 +536,41 @@ export default function Chooser({
             </aside>
 
             <aside className="chooser-flyout">
+                {/* Top row: the System Workspace toggle (its chip icon mirrors
+                    how regular workspaces render in the sidebar) + the search
+                    box, on a single line. The old "Terminals" title + subtext +
+                    pin lived here; the side rail already owns the pin, so this
+                    reclaims the space. */}
                 <div className="rail-head">
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <span className="rt">Terminals</span>
-                        <span className="rsub">Pick from any project</span>
-                    </div>
-                    <span className="grow" />
                     <button
                         type="button"
-                        className="gicon flyout-pin"
-                        onClick={onTogglePin}
-                        title={pinned ? 'Unpin panel' : 'Pin open'}
+                        className={`gicon rail-system-toggle${
+                            systemRevealed ? ' on' : ''
+                        }`}
+                        onClick={onToggleSystemWorkspace}
+                        title={
+                            systemRevealed
+                                ? 'Hide System Workspace'
+                                : 'Show System Workspace'
+                        }
+                        aria-label={
+                            systemRevealed
+                                ? 'Hide System Workspace'
+                                : 'Show System Workspace'
+                        }
+                        aria-pressed={systemRevealed}
                     >
-                        <IconPin />
+                        <IconBox size={16} />
                     </button>
-                </div>
-
-                <div className="rail-search">
-                    <IconSearch />
-                    <input
-                        type="text"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        placeholder="Search terminals…"
-                    />
+                    <div className="rail-search">
+                        <IconSearch />
+                        <input
+                            type="text"
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            placeholder="Search workspaces…"
+                        />
+                    </div>
                 </div>
 
                 <div className="rail-scroll">
@@ -521,8 +597,9 @@ export default function Chooser({
                         </div>
                     )}
 
-                    {orderedWorkspaces.map((ws) => {
-                        const wsAll = (byWorkspace.get(ws.id) ?? []).filter(matches);
+                    {orderedWorkspaces.filter(workspaceMatches).map((ws) => {
+                        const system = isSystemWorkspace(ws);
+                        const wsAll = byWorkspace.get(ws.id) ?? [];
                         const wsSpecs = wsAll.filter((s) => s.type !== 'process');
                         const wsProcs = wsAll.filter((s) => s.type === 'process');
                         const collapsed = collapsedWorkspaces.has(ws.id);
@@ -557,10 +634,17 @@ export default function Chooser({
                                 <button
                                     type="button"
                                     className="tproj-head"
-                                    title="Click to activate · drag to reorder"
+                                    title={
+                                        system
+                                            ? 'System Workspace — click to activate'
+                                            : 'Click to activate · drag to reorder'
+                                    }
                                     onClick={() => onActivateWorkspace(ws.id)}
                                     onContextMenu={(e) => {
                                         e.preventDefault();
+                                        // The System Workspace has no project
+                                        // menu (no settings / remove / browser).
+                                        if (system) return;
                                         onOpenProjectMenu(ws.id, {
                                             x: e.clientX,
                                             y: e.clientY,
@@ -569,9 +653,11 @@ export default function Chooser({
                                     // The whole row is the drag handle (a plain click
                                     // still activates; a drag reorders). No leading
                                     // grip element — that pushed the header content in
-                                    // past the view rows.
-                                    draggable
+                                    // past the view rows. The System Workspace is
+                                    // never reordered (always last), so it's fixed.
+                                    draggable={!system}
                                     onDragStart={(e) => {
+                                        if (system) return;
                                         draggingId.current = ws.id;
                                         setDragOrder(workspaces.map((w) => w.id));
                                         e.dataTransfer.effectAllowed = 'move';
@@ -607,41 +693,45 @@ export default function Chooser({
                                     </span>
                                     <span className="pname">{ws.project_name}</span>
                                     {ws.shape === 'agi' && <AgiHealth ws={ws} />}
-                                    <span
-                                        className="iw-pill"
-                                        role="button"
-                                        tabIndex={-1}
-                                        title="Issue Watch — Issues · PRs · Dependabot (click to open)"
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            onShowIssueWatch(ws.id);
-                                        }}
-                                    >
-                                        <i
-                                            className={`iw-dot iw-dot-issue${
-                                                (issueWatchCounts[ws.id]?.issue ?? 0) > 0
-                                                    ? ' on'
-                                                    : ''
-                                            }`}
-                                            title="Issues"
-                                        />
-                                        <i
-                                            className={`iw-dot iw-dot-pr${
-                                                (issueWatchCounts[ws.id]?.pr ?? 0) > 0
-                                                    ? ' on'
-                                                    : ''
-                                            }`}
-                                            title="PRs"
-                                        />
-                                        <i
-                                            className={`iw-dot iw-dot-dependabot${
-                                                (issueWatchCounts[ws.id]?.dependabot ?? 0) > 0
-                                                    ? ' on'
-                                                    : ''
-                                            }`}
-                                            title="Dependabot alerts"
-                                        />
-                                    </span>
+                                    {/* Issue Watch is GitHub-scoped — not for the
+                                        synthetic System Workspace. */}
+                                    {!system && (
+                                        <span
+                                            className="iw-pill"
+                                            role="button"
+                                            tabIndex={-1}
+                                            title="Issue Watch — Issues · PRs · Dependabot (click to open)"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onShowIssueWatch(ws.id);
+                                            }}
+                                        >
+                                            <i
+                                                className={`iw-dot iw-dot-issue${
+                                                    (issueWatchCounts[ws.id]?.issue ?? 0) > 0
+                                                        ? ' on'
+                                                        : ''
+                                                }`}
+                                                title="Issues"
+                                            />
+                                            <i
+                                                className={`iw-dot iw-dot-pr${
+                                                    (issueWatchCounts[ws.id]?.pr ?? 0) > 0
+                                                        ? ' on'
+                                                        : ''
+                                                }`}
+                                                title="PRs"
+                                            />
+                                            <i
+                                                className={`iw-dot iw-dot-dependabot${
+                                                    (issueWatchCounts[ws.id]?.dependabot ?? 0) > 0
+                                                        ? ' on'
+                                                        : ''
+                                                }`}
+                                                title="Dependabot alerts"
+                                            />
+                                        </span>
+                                    )}
                                     <span
                                         className={`proc-ind proc-${wsProcStatus(
                                             wsProcs,
@@ -829,23 +919,44 @@ export default function Chooser({
                                                         }}
                                                         placeholder="Label (optional)"
                                                     />
-                                                    <select
-                                                        className="input proc-add-cwd"
-                                                        value={procCwd}
-                                                        onChange={(e) =>
-                                                            setProcCwd(e.target.value)
-                                                        }
-                                                        title="Where the process runs"
-                                                    >
-                                                        <option value="">
-                                                            Workspace root
-                                                        </option>
-                                                        {procRepos.map((r) => (
-                                                            <option key={r} value={r}>
-                                                                repos/{r}
+                                                    {system ? (
+                                                        // System process: no repo —
+                                                        // pick an arbitrary directory
+                                                        // (native picker, seeded at ~/).
+                                                        <button
+                                                            type="button"
+                                                            className="input proc-add-dir"
+                                                            onClick={() => pickProcDir(ws)}
+                                                            title={
+                                                                procDir ||
+                                                                'Choose a directory for this process'
+                                                            }
+                                                        >
+                                                            <IconBox size={12} />
+                                                            <span className="proc-add-dir-path">
+                                                                {procDir ||
+                                                                    'Choose directory…'}
+                                                            </span>
+                                                        </button>
+                                                    ) : (
+                                                        <select
+                                                            className="input proc-add-cwd"
+                                                            value={procCwd}
+                                                            onChange={(e) =>
+                                                                setProcCwd(e.target.value)
+                                                            }
+                                                            title="Where the process runs"
+                                                        >
+                                                            <option value="">
+                                                                Workspace root
                                                             </option>
-                                                        ))}
-                                                    </select>
+                                                            {procRepos.map((r) => (
+                                                                <option key={r} value={r}>
+                                                                    repos/{r}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                    )}
                                                     <select
                                                         className="input proc-add-cwd"
                                                         value={procShell}
@@ -880,7 +991,10 @@ export default function Chooser({
                                                         <button
                                                             type="button"
                                                             className="proc-add-btn proc-add-go"
-                                                            disabled={!procCommand.trim()}
+                                                            disabled={
+                                                                !procCommand.trim() ||
+                                                                (system && !procDir)
+                                                            }
                                                             onClick={() =>
                                                                 submitAddProcess(ws)
                                                             }
@@ -922,7 +1036,7 @@ export default function Chooser({
                                 <span className="pcount">{orphaned.length}</span>
                             </div>
                             <div className="tproj-body">
-                                {orphaned.filter(matches).map((s) => (
+                                {orphaned.filter(orphanMatches).map((s) => (
                                     <SpecRow
                                         key={s.id}
                                         spec={s}
@@ -1042,6 +1156,8 @@ export default function Chooser({
 }
 
 function workspaceIcon(ws: WorkspaceRow, size = 18) {
+    // The synthetic System Workspace gets a distinct home glyph.
+    if (isSystemWorkspace(ws)) return <IconHome size={size} />;
     if (ws.backend === 'aionima') return <IconCpu size={size} />;
     if (ws.shape === 'agi') return <IconBox size={size} />;
     return <IconGlobe size={size} />;

@@ -33,6 +33,9 @@ import {
 import {
     api,
     hasGenieBridge,
+    isSystemWorkspace,
+    makeSystemWorkspace,
+    SYSTEM_WORKSPACE_ID,
     ulid,
     type Changelog,
     type WatchTypeCounts,
@@ -93,6 +96,20 @@ export default function MasterPage() {
     );
 }
 
+/**
+ * The EFFECTIVE workspace id a spec belongs to. System Workspace specs persist
+ * with `workspace_id: null` + `meta.system` (the synthetic `__system__`
+ * workspace has no DB row to FK against), so map those onto SYSTEM_WORKSPACE_ID
+ * everywhere grouping/selection keys off a workspace id. All other specs use
+ * their stored `workspace_id`.
+ */
+function specWorkspaceId(s: TerminalSpec): string | null {
+    if (s.workspace_id === null && s.meta?.system === true) {
+        return SYSTEM_WORKSPACE_ID;
+    }
+    return s.workspace_id;
+}
+
 function MasterInner() {
     const [authChecked, setAuthChecked] = useState(false);
     const [signedIn, setSignedIn] = useState(false);
@@ -117,6 +134,18 @@ function MasterInner() {
     const [focusId, setFocusId] = useState<string | null>(null);
     const [maximizedId, setMaximizedId] = useState<string | null>(null);
     const [chooserPinned, setChooserPinned] = useState(true);
+    // System Workspace — a synthetic, never-persisted sidebar entry rooted at
+    // the user's home dir, hosting system (non-workspace) processes. Hidden by
+    // default; the sidebar's chip button toggles `systemRevealed`. `homeDir`
+    // comes from main on mount.
+    const [homeDir, setHomeDir] = useState<string | null>(null);
+    const [systemRevealed, setSystemRevealed] = useState(false);
+    useEffect(() => {
+        void api()
+            .app.homeDir()
+            .then(setHomeDir)
+            .catch(() => {});
+    }, []);
     const [layoutMode, setLayoutMode] = useState<LayoutMode>('auto');
     const [contextMenu, setContextMenu] = useState<{
         specId: string;
@@ -275,11 +304,33 @@ function MasterInner() {
         [],
     );
 
+    // The synthetic System Workspace row (null until the home dir resolves).
+    // Built in-memory — never persisted, never in `workspaces`/the DB.
+    const systemWorkspace = useMemo(
+        () => (homeDir ? makeSystemWorkspace(homeDir) : null),
+        [homeDir],
+    );
+
+    // Workspaces shown in the sidebar: the persisted list, plus the System
+    // Workspace appended when the user has revealed it. The System Workspace
+    // is always the last row so it doesn't shuffle the user's ordering.
+    const displayWorkspaces = useMemo(() => {
+        if (systemRevealed && systemWorkspace) {
+            return [...workspaces, systemWorkspace];
+        }
+        return workspaces;
+    }, [workspaces, systemRevealed, systemWorkspace]);
+
+    // id → workspace resolver. ALWAYS includes the System Workspace (even when
+    // hidden) so handlers can resolve its id for terminals/editors/processes
+    // that already exist in it; visibility is a sidebar concern, not a lookup
+    // concern.
     const workspacesById = useMemo(() => {
         const m = new Map<string, WorkspaceRow>();
         for (const w of workspaces) m.set(w.id, w);
+        if (systemWorkspace) m.set(systemWorkspace.id, systemWorkspace);
         return m;
-    }, [workspaces]);
+    }, [workspaces, systemWorkspace]);
 
     // Auto-provision the Tynn agent token + Agent MCP config when a workspace
     // becomes active. Silent + best-effort + once per workspace per session:
@@ -289,6 +340,8 @@ function MasterInner() {
     const tynnProvisionedRef = useRef<Set<string>>(new Set());
     useEffect(() => {
         if (!activeWorkspaceId || tynnProvisionedRef.current.has(activeWorkspaceId)) return;
+        // The System Workspace is not a real project — never provision it.
+        if (activeWorkspaceId === SYSTEM_WORKSPACE_ID) return;
         const ws = workspacesById.get(activeWorkspaceId);
         if (!ws?.path) return;
         tynnProvisionedRef.current.add(activeWorkspaceId);
@@ -310,16 +363,18 @@ function MasterInner() {
      * update instantly, then persist; main re-sorts on the next list().
      */
     const reorderWorkspaces = useCallback((ids: string[]) => {
+        // The synthetic System Workspace is never part of the persisted order.
+        const realIds = ids.filter((id) => id !== SYSTEM_WORKSPACE_ID);
         setWorkspaces((prev) => {
             const byId = new Map(prev.map((w) => [w.id, w]));
-            const next = ids
+            const next = realIds
                 .map((id) => byId.get(id))
                 .filter((w): w is WorkspaceRow => !!w);
             // Append any workspaces not present in the id list (defensive).
-            for (const w of prev) if (!ids.includes(w.id)) next.push(w);
+            for (const w of prev) if (!realIds.includes(w.id)) next.push(w);
             return next;
         });
-        void api().workspaces.reorder(ids).catch(() => {});
+        void api().workspaces.reorder(realIds).catch(() => {});
     }, []);
 
     // Stage windows arrive with ?stage=<workspaceId>. Read it once on mount
@@ -403,7 +458,7 @@ function MasterInner() {
     useEffect(() => {
         if (!stageSeedWorkspace || specs.length === 0 || selected.size > 0) return;
         const ids = specs
-            .filter((s) => s.workspace_id === stageSeedWorkspace && s.enabled !== false)
+            .filter((s) => specWorkspaceId(s) === stageSeedWorkspace && s.enabled !== false)
             .map((s) => s.id);
         if (ids.length > 0) setSelected(new Set(ids));
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -439,7 +494,7 @@ function MasterInner() {
                 if (prev.size > 0) return prev;
                 return new Set(
                     specs
-                        .filter((s) => s.workspace_id === target && s.enabled !== false)
+                        .filter((s) => specWorkspaceId(s) === target && s.enabled !== false)
                         .map((s) => s.id),
                 );
             });
@@ -454,7 +509,7 @@ function MasterInner() {
             specs.filter(
                 (s) =>
                     s.type !== 'process' &&
-                    s.workspace_id === activeWorkspaceId &&
+                    specWorkspaceId(s) === activeWorkspaceId &&
                     selected.has(s.id),
             ),
         [specs, selected, activeWorkspaceId],
@@ -467,7 +522,7 @@ function MasterInner() {
             specs.filter(
                 (s) =>
                     s.type !== 'process' &&
-                    s.workspace_id !== activeWorkspaceId &&
+                    specWorkspaceId(s) !== activeWorkspaceId &&
                     selected.has(s.id),
             ),
         [specs, selected, activeWorkspaceId],
@@ -486,7 +541,17 @@ function MasterInner() {
         async (workspaceId: string, type: ViewType = 'terminal') => {
             const ws = workspacesById.get(workspaceId);
             if (!ws) return;
-            const existing = specs.filter((s) => s.workspace_id === workspaceId);
+            // The System Workspace is synthetic: its specs persist UNATTACHED
+            // (workspace_id: null — `__system__` has no DB row) and carry a
+            // `meta.system` tag so the sidebar groups them under it. Real
+            // workspaces persist their own id.
+            const system = isSystemWorkspace(ws);
+            const persistedWsId = system ? null : workspaceId;
+            const existing = specs.filter((s) =>
+                system
+                    ? s.workspace_id === null && s.meta?.system === true
+                    : s.workspace_id === workspaceId,
+            );
             const baseLabel = ws.project_name.toLowerCase().replace(/\s+/g, '-');
             // Editor views get an `-editor` label so they read distinctly in
             // the tree alongside terminals.
@@ -495,10 +560,11 @@ function MasterInner() {
             const label = sameType.length === 0 ? root : `${root}-${sameType.length + 1}`;
             const created = await api().terminalSpec.create({
                 id: ulid(),
-                workspace_id: workspaceId,
+                workspace_id: persistedWsId,
                 label,
                 cwd: ws.path,
                 type,
+                ...(system ? { meta: { system: true } } : {}),
             });
             // Append the new spec in place rather than re-fetching the full
             // list — refresh() would replace the array reference, which makes
@@ -512,10 +578,15 @@ function MasterInner() {
     );
 
     /**
-     * Create a Process (background service runner) for a workspace. Headless —
-     * it does NOT surface in the main grid; it's managed from the workspace's
-     * inline process panel in the nav. Autostart is OFF by default (starts
-     * idle); auto-restart-on-crash is on.
+     * Create a Process (background service runner). Headless — it does NOT
+     * surface in the main grid; it's managed from the workspace's inline
+     * process panel in the nav. Autostart is OFF by default (starts idle);
+     * auto-restart-on-crash is on.
+     *
+     * For a real workspace the `cwd` targets the envelope root or a repo. For
+     * the System Workspace it's a SYSTEM PROCESS: not tied to any project, so
+     * the cwd is an arbitrary directory the user picked (required) and the spec
+     * persists unattached (workspace_id: null + meta.system).
      */
     const addProcess = useCallback(
         async (
@@ -527,21 +598,32 @@ function MasterInner() {
         ) => {
             const ws = workspacesById.get(workspaceId);
             if (!ws || !command.trim()) return;
+            const system = isSystemWorkspace(ws);
+            // A system process MUST have a picked directory — there's no
+            // workspace root to fall back to. Bail rather than silently run in
+            // the home dir.
+            if (system && !cwd?.trim()) return;
             const cmd = command.trim();
             const fallback = cmd.split(/\s+/).slice(0, 3).join(' ');
             const created = await api().terminalSpec.create({
                 id: ulid(),
-                workspace_id: workspaceId,
+                workspace_id: system ? null : workspaceId,
                 label: (label?.trim() || fallback).slice(0, 60),
                 // cwd defaults to the envelope root; the Add Process UX can point
-                // it at a specific repo (e.g. <root>/repos/tynn).
+                // it at a specific repo (e.g. <root>/repos/tynn). A system
+                // process always carries an explicit picked directory.
                 cwd: cwd?.trim() || ws.path,
                 // shell lets the user pick the interpreter the command runs in —
                 // e.g. pwsh, where `php` is on PATH, vs Git Bash where it isn't.
                 // Empty → the supervisor falls back to the default shell.
                 shell: shell?.trim() || null,
                 type: 'process',
-                meta: { command: cmd, autostart: false, restart_on_exit: true },
+                meta: {
+                    command: cmd,
+                    autostart: false,
+                    restart_on_exit: true,
+                    ...(system ? { system: true } : {}),
+                },
             });
             // Not added to `selected` — processes aren't grid panels.
             setSpecs((prev) => [...prev, created]);
@@ -689,12 +771,13 @@ function MasterInner() {
             const spec = specs.find((s) => s.id === id);
             if (!spec) return;
             // Activate the spec's workspace if it isn't already active, so the
-            // re-enabled panel lands in the visible grid.
-            const wsId = spec.workspace_id;
+            // re-enabled panel lands in the visible grid. Use the EFFECTIVE id
+            // so a System Workspace spec (workspace_id null) resolves correctly.
+            const wsId = specWorkspaceId(spec);
             const targetActive = wsId ?? activeWorkspaceId;
             // Count what's already visible in the workspace we're enabling into.
             const visibleInWs = specs.filter(
-                (s) => s.workspace_id === targetActive && selected.has(s.id),
+                (s) => specWorkspaceId(s) === targetActive && selected.has(s.id),
             ).length;
             if (visibleInWs >= maxViews) {
                 setToast(maxViewsReason);
@@ -738,7 +821,7 @@ function MasterInner() {
                     // Disabled (suspended) terminals stay out of the grid until
                     // explicitly re-enabled — activating a workspace doesn't
                     // resurrect them.
-                    if (s.workspace_id === workspaceId && s.enabled !== false) {
+                    if (specWorkspaceId(s) === workspaceId && s.enabled !== false) {
                         next.add(s.id);
                     }
                 }
@@ -746,9 +829,13 @@ function MasterInner() {
             });
             setFocusId(null);
             setMaximizedId(null);
-            void api()
-                .settings.set({ active_workspace: workspaceId })
-                .catch(() => {});
+            // Don't persist the synthetic System Workspace as the active one —
+            // it isn't a real workspace and shouldn't be reopened on launch.
+            if (workspaceId !== SYSTEM_WORKSPACE_ID) {
+                void api()
+                    .settings.set({ active_workspace: workspaceId })
+                    .catch(() => {});
+            }
         },
         [specs],
     );
@@ -758,7 +845,7 @@ function MasterInner() {
         setSelected((prev) => {
             const next = new Set(prev);
             for (const s of specs) {
-                if (s.workspace_id === activeWorkspaceId) next.delete(s.id);
+                if (specWorkspaceId(s) === activeWorkspaceId) next.delete(s.id);
             }
             return next;
         });
@@ -1027,7 +1114,7 @@ function MasterInner() {
                 />
                 <div className="gbody">
                     <Chooser
-                        workspaces={workspaces}
+                        workspaces={displayWorkspaces}
                         specs={specs}
                         selected={selected}
                         activeIds={activeIds}
@@ -1037,6 +1124,27 @@ function MasterInner() {
                         activeWorkspaceId={activeWorkspaceId}
                         pinned={chooserPinned}
                         onTogglePin={() => setChooserPinned((p) => !p)}
+                        systemRevealed={systemRevealed}
+                        onToggleSystemWorkspace={() => {
+                            setSystemRevealed((on) => {
+                                const next = !on;
+                                if (next && systemWorkspace) {
+                                    // Revealing → jump straight to it.
+                                    activateWorkspace(SYSTEM_WORKSPACE_ID);
+                                } else if (
+                                    !next &&
+                                    activeWorkspaceId === SYSTEM_WORKSPACE_ID
+                                ) {
+                                    // Hiding while it's active → fall back to the
+                                    // first real workspace so the toolbar/grid
+                                    // don't keep pointing at a now-hidden row.
+                                    const fallback = workspaces[0]?.id ?? null;
+                                    if (fallback) activateWorkspace(fallback);
+                                    else setActiveWorkspaceId(null);
+                                }
+                                return next;
+                            });
+                        }}
                         onActivateWorkspace={activateWorkspace}
                         onToggleSpec={toggleSpec}
                         onAddSpec={(wsId, type) => void addSpec(wsId, type)}
