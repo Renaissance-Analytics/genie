@@ -201,7 +201,18 @@ export default function FileTree({
                         )}
                     </span>
                 );
-                return { ...n, label: labelNode as unknown as string };
+                // CRITICAL: once we replace the string label with a ReactNode,
+                // react-fancy's TreeNav can no longer derive a file's extension
+                // from `node.label.split('.')` — it throws "split is not a
+                // function" on the ReactNode and the crash bubbles to the app
+                // root. Pin `ext` from the original string label so TreeNav uses
+                // it (for the FileIcon) and never splits the decorated label.
+                const ext =
+                    n.ext ??
+                    (typeof n.label === 'string'
+                        ? (n.label.split('.').pop() ?? '').toLowerCase()
+                        : undefined);
+                return { ...n, ext, label: labelNode as unknown as string };
             });
         return decorate(nodes);
     }, [nodes, gitMap, dirtyPaths]);

@@ -8,6 +8,7 @@ import {
 } from 'react';
 import TerminalPanel from './TerminalPanel';
 import CodePanel from '../Code/CodePanel';
+import ErrorBoundary from '../ErrorBoundary';
 import { IconCode, IconPlus } from './icons';
 import { api, type TerminalSpec, type WorkspaceRow } from '../../lib/genie';
 import {
@@ -377,28 +378,37 @@ const ResizableGrid = ({
         <div className="grid-wrap">
             <div ref={wrapRef} className="pgrid resizable" style={gridStyle}>
                 {panels.map((p) => (
-                    <PanelFor
+                    // Per-panel boundary: a crash in one view (e.g. the code
+                    // tree) shows a compact card in THAT panel instead of taking
+                    // down the whole app. Keyed on spec.id so it stays mounted.
+                    <ErrorBoundary
                         key={p.spec.id}
-                        spec={p.spec}
-                        workspacesById={workspacesById}
-                        focused={p.visible && focusId === p.spec.id}
-                        attention={attentionIds.has(p.spec.id)}
-                        onAttentionClear={
-                            onAttentionClear
-                                ? () => onAttentionClear(p.spec.id)
-                                : undefined
-                        }
-                        maximized={p.isMaximized}
-                        style={p.style}
-                        onClose={() => onClose(p.spec.id)}
-                        onMaximize={() => onToggleMaximize(p.spec.id)}
-                        onMinimize={
-                            p.isMainInStack ? () => onFocus(p.spec.id) : undefined
-                        }
-                        onDisable={onDisable ? () => onDisable(p.spec.id) : undefined}
-                        onMarkActive={() => onMarkActive(p.spec.id)}
-                        onMarkInactive={() => onMarkInactive(p.spec.id)}
-                    />
+                        compact
+                        name={String(p.spec.label ?? 'Panel')}
+                        resetKeys={[p.spec.id]}
+                    >
+                        <PanelFor
+                            spec={p.spec}
+                            workspacesById={workspacesById}
+                            focused={p.visible && focusId === p.spec.id}
+                            attention={attentionIds.has(p.spec.id)}
+                            onAttentionClear={
+                                onAttentionClear
+                                    ? () => onAttentionClear(p.spec.id)
+                                    : undefined
+                            }
+                            maximized={p.isMaximized}
+                            style={p.style}
+                            onClose={() => onClose(p.spec.id)}
+                            onMaximize={() => onToggleMaximize(p.spec.id)}
+                            onMinimize={
+                                p.isMainInStack ? () => onFocus(p.spec.id) : undefined
+                            }
+                            onDisable={onDisable ? () => onDisable(p.spec.id) : undefined}
+                            onMarkActive={() => onMarkActive(p.spec.id)}
+                            onMarkInactive={() => onMarkInactive(p.spec.id)}
+                        />
+                    </ErrorBoundary>
                 ))}
                 {/* 2×2 add-tile: a non-panel child, AFTER the single panel map so
                     it never re-splits the panel array. */}

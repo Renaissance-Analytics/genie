@@ -857,6 +857,20 @@ async function hostRestart(): Promise<string> {
     return `${stopped}\nhost restart → backend: ${sel.kind}`;
 }
 
+// Last-resort process-level guards. Without them, a single unhandled exception
+// or promise rejection anywhere in main (an IPC handler, a stray async tick)
+// tears the whole app down — the "selecting a workspace crashes everything"
+// class of failure. Log loudly and keep running: one bad operation must not
+// kill Genie. (Renderer-side crashes are caught by ErrorBoundary instead.)
+process.on('uncaughtException', (err) => {
+    // eslint-disable-next-line no-console
+    console.error('[Genie main] uncaughtException — kept alive:', err);
+});
+process.on('unhandledRejection', (reason) => {
+    // eslint-disable-next-line no-console
+    console.error('[Genie main] unhandledRejection — kept alive:', reason);
+});
+
 app.whenReady().then(async () => {
     // Persistent session under "persist:tynn" so cookies survive restarts.
     // tynn-api.ts uses this session for all outbound calls.
