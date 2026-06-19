@@ -267,11 +267,21 @@ export default function Chooser({
     const [dragOrder, setDragOrder] = useState<string[] | null>(null);
     const draggingId = useRef<string | null>(null);
 
-    const orderedWorkspaces = dragOrder
+    const baseOrder = dragOrder
         ? (dragOrder
               .map((id) => workspaces.find((w) => w.id === id))
               .filter((w): w is WorkspaceRow => !!w))
         : workspaces;
+    // Pin the System Workspace to the top — it's fixed (non-draggable) and must
+    // never be shuffled down by a reorder of the real workspaces.
+    const orderedWorkspaces = (() => {
+        const i = baseOrder.findIndex(isSystemWorkspace);
+        if (i <= 0) return baseOrder;
+        const next = [...baseOrder];
+        const [sys] = next.splice(i, 1);
+        next.unshift(sys);
+        return next;
+    })();
 
     const reorderPreview = (overId: string) => {
         const id = draggingId.current;

@@ -311,12 +311,12 @@ function MasterInner() {
         [homeDir],
     );
 
-    // Workspaces shown in the sidebar: the persisted list, plus the System
-    // Workspace appended when the user has revealed it. The System Workspace
-    // is always the last row so it doesn't shuffle the user's ordering.
+    // Workspaces shown in the sidebar: the persisted list, with the System
+    // Workspace pinned to the TOP when revealed. It's fixed (never draggable /
+    // reorderable) so it always sits first and doesn't shuffle the user's order.
     const displayWorkspaces = useMemo(() => {
         if (systemRevealed && systemWorkspace) {
-            return [...workspaces, systemWorkspace];
+            return [systemWorkspace, ...workspaces];
         }
         return workspaces;
     }, [workspaces, systemRevealed, systemWorkspace]);
