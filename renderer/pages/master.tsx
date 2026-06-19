@@ -438,6 +438,19 @@ function MasterInner() {
         return off;
     }, []);
 
+    // Workspaces provisioned outside this renderer (e.g. via the MCP
+    // provisionWorkspaces tool, or the per-workspace Ops panel in another
+    // window) — re-fetch the workspace list so the rail shows them live.
+    useEffect(() => {
+        const off = api().on.workspacesChanged(() => {
+            void api()
+                .workspaces.list()
+                .then(setWorkspaces)
+                .catch(() => {});
+        });
+        return off;
+    }, []);
+
     // Load the max_views setting and keep it fresh — the Settings screen is
     // a separate window, so re-read whenever this window regains focus.
     useEffect(() => {

@@ -60,6 +60,21 @@ Actions (\`action\` arg):
 Returns the resulting process list. Pass \`terminalId\` (your
 \`GENIE_TERMINAL_ID\`) for exact workspace resolution; optional.
 
+### provisionWorkspaces
+**Only for an Ops project's workspace.** An Ops project governs other (child)
+projects, each with its own \`*.agi\` envelope repo. This tool stands up a local
+Genie workspace for any governed child that doesn't have one yet. Actions
+(\`action\` arg):
+- \`status\` — read-only: every governed child + whether it's \`present\` (a local
+  workspace exists) or \`missing\` (none yet), plus the \`*.agi\` URL that would be
+  cloned for each missing one.
+- \`provision\` — clone + register a workspace for every missing child, then
+  surface it in Genie's rail. Provision-only — never removes anything.
+Approval honours the \`ops_auto_provision_workspaces\` setting: OFF (default)
+blocks \`provision\` on your approval modal; ON provisions directly. Called from a
+non-Ops workspace it returns a clear "not an ops project" message. Pass
+\`terminalId\` (your \`GENIE_TERMINAL_ID\`) for exact workspace resolution; optional.
+
 ### imDone
 Call this the moment you **finish your work / hand back to the user** in THIS
 terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row,

@@ -138,6 +138,18 @@ export interface McpContext {
         terminalId: string,
         req: ManageProcessRequest,
     ) => Promise<ManageProcessResult>;
+    /**
+     * Provision Genie workspaces for an Ops project's governed children (the
+     * provisionWorkspaces tool): a read-only `status` view, or a `provision`
+     * action that clones + registers the missing child workspaces. Honours the
+     * ops_auto_provision_workspaces toggle — when OFF it blocks on the user's
+     * approval (like manageProcess's gate), when ON it provisions directly.
+     * Gated to Ops workspaces. Does the Tynn + git + db I/O (kept out here).
+     */
+    provisionWorkspaces: (
+        terminalId: string,
+        req: ProvisionWorkspacesRequest,
+    ) => Promise<ProvisionWorkspacesResult>;
 }
 
 /** A managed background process as the manageProcess tool reports it. */
@@ -174,6 +186,37 @@ export interface ManageProcessResult {
     processes: ManagedProcessInfo[];
     /** The process the action targeted/created, when applicable. */
     affectedId?: string;
+}
+
+/** One governed child + its local workspace status (provisionWorkspaces). */
+export interface OpsChildInfo {
+    /** The child's Tynn project id. */
+    projectId: string;
+    /** The child's Tynn project name. */
+    name: string;
+    /** present = a local workspace already exists; missing = none yet. */
+    status: 'present' | 'missing';
+    /** For a missing child: the `*.agi` URL Genie would clone (null if unresolvable). */
+    cloneUrl: string | null;
+}
+
+export interface ProvisionWorkspacesRequest {
+    /** `status` = read-only list of children; `provision` = create the missing ones. */
+    action: 'status' | 'provision';
+}
+
+export interface ProvisionWorkspacesResult {
+    ok: boolean;
+    /** Set when ok is false (not an ops project, signed out, user denied, …). */
+    error?: string;
+    /** True only when the caller's workspace is an Ops project. */
+    isOps: boolean;
+    /** Every governed child + its local status (status + provision both return it). */
+    children: OpsChildInfo[];
+    /** provision: the children whose workspace was cloned + registered (by name). */
+    provisioned?: string[];
+    /** provision: per-child failures (best-effort — one bad child doesn't abort). */
+    errors?: string[];
 }
 
 const TERMINAL_ID_PROP = {
@@ -251,6 +294,26 @@ const MANAGE_PROCESS_TOOL = {
             processId: {
                 type: 'string',
                 description: 'start | stop | restart: the target process id (from a `list`).',
+            },
+        },
+        required: ['action'],
+        additionalProperties: false,
+    },
+};
+
+const PROVISION_WORKSPACES_TOOL = {
+    name: 'provisionWorkspaces',
+    description:
+        "Provision Genie workspaces for the child projects this Ops project governs. ONLY usable from an Ops project's workspace (returns an error elsewhere). An Ops project governs other (child) projects, each with its own `*.agi` envelope repo; this tool stands up a local Genie workspace for any governed child that doesn't have one yet. Actions: `status` (read-only — list every governed child with status `present` (a local workspace exists) or `missing` (none yet), plus the `*.agi` URL that would be cloned for each missing one); `provision` (clone + register a workspace for every missing child, then surface it in Genie). It's provision-only — it never removes extra or un-governed workspaces. Approval depends on the `ops_auto_provision_workspaces` setting (Settings → per-workspace): when OFF (default) `provision` blocks until you approve the plan in Genie; when ON it provisions directly. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; omit to use the most-recently-active terminal.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            ...TERMINAL_ID_PROP,
+            action: {
+                type: 'string',
+                enum: ['status', 'provision'],
+                description:
+                    'status: list governed children + each one\'s workspace status. provision: create the missing child workspaces (honouring the approval toggle).',
             },
         },
         required: ['action'],
@@ -496,6 +559,7 @@ export async function handleMcpMessage(
                     IMDONE_TOOL,
                     FORCE_QUESTION_TOOL,
                     MANAGE_PROCESS_TOOL,
+                    PROVISION_WORKSPACES_TOOL,
                     GUIDE_TOOL,
                 ],
             });
@@ -567,6 +631,48 @@ export async function handleMcpMessage(
                           result.affectedId ? ` (acted on ${result.affectedId})` : ''
                       }.`
                     : `manageProcess failed: ${result.error ?? 'unknown error'}`;
+                return ok(msg.id, {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `${summary}\n\n${JSON.stringify(result, null, 2)}`,
+                        },
+                    ],
+                });
+            }
+            if (params.name === 'provisionWorkspaces') {
+                const a = params.arguments ?? {};
+                const action = (a as Partial<ProvisionWorkspacesRequest>).action;
+                if (action !== 'status' && action !== 'provision') {
+                    return err(
+                        msg.id,
+                        -32602,
+                        'provisionWorkspaces requires `action`: status | provision.',
+                    );
+                }
+                const result = await ctx.provisionWorkspaces(ctx.terminalId, {
+                    action,
+                });
+                let summary: string;
+                if (!result.ok) {
+                    summary = `provisionWorkspaces failed: ${result.error ?? 'unknown error'}`;
+                } else if (!result.isOps) {
+                    summary =
+                        'This workspace is not an Ops project — provisionWorkspaces only works from an Ops project that governs child projects.';
+                } else {
+                    const missing = result.children.filter((c) => c.status === 'missing').length;
+                    const present = result.children.length - missing;
+                    const head = `${result.children.length} governed child project${
+                        result.children.length === 1 ? '' : 'ren'
+                    } — ${present} present, ${missing} missing.`;
+                    const tail =
+                        action === 'provision'
+                            ? ` Provisioned ${result.provisioned?.length ?? 0}${
+                                  result.errors?.length ? `, ${result.errors.length} error(s)` : ''
+                              }.`
+                            : '';
+                    summary = head + tail;
+                }
                 return ok(msg.id, {
                     content: [
                         {

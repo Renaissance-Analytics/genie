@@ -675,6 +675,49 @@ export async function convertToAgiPlan(opts: ConvertPlanOpts): Promise<CreateAgi
     return base;
 }
 
+export interface CloneAgiOpts {
+    /** The `*.agi` repo URL to clone (https / ssh / git@). */
+    url: string;
+    /** Destination parent folder; the envelope lands at `<parent>/<folder>`. */
+    parent_path: string;
+    /** Envelope folder name override; defaults to the repo basename. */
+    folder?: string;
+}
+
+export interface CloneAgiResult {
+    /** Absolute path to the cloned envelope on disk. */
+    path: string;
+}
+
+/**
+ * Clone an EXISTING `*.agi` envelope (and its submodules) into a parent folder.
+ * Sibling of createAgiEnvelope/convertToAgi: those build a NEW envelope, this
+ * pulls down one that already lives on a remote — the path the ops-provision
+ * flow needs for a governed child whose envelope is already published. The
+ * destination must not exist or be empty (we never clobber). `--recurse-
+ * submodules` brings the repos down so the workspace is usable immediately.
+ */
+export async function cloneAgiEnvelope(
+    opts: CloneAgiOpts,
+): Promise<CloneAgiResult> {
+    const folder = opts.folder
+        ? envelopeFolderName(opts.folder)
+        : envelopeFolderName(deriveRepoName(opts.url));
+    const dest = path.join(opts.parent_path, folder);
+    if (fs.existsSync(dest) && fs.readdirSync(dest).length > 0) {
+        throw new Error(
+            `Target folder "${dest}" is not empty. Choose an empty location.`,
+        );
+    }
+    fs.mkdirSync(opts.parent_path, { recursive: true });
+    // Clone INTO the parent with an explicit dir name so git creates the
+    // envelope folder for us. simple-git's clone takes (repo, localPath, opts).
+    await simpleGit({ baseDir: opts.parent_path }).clone(opts.url, dest, [
+        '--recurse-submodules',
+    ]);
+    return { path: dest };
+}
+
 /**
  * Push the envelope's initial commit to its configured `origin` remote.
  * Used by the wizard after the GitHub auto-create flow: the empty repo

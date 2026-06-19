@@ -108,6 +108,11 @@ const deps = (
         ok: true,
         processes: [],
     }),
+    provisionWorkspaces: () => Promise<{
+        ok: boolean;
+        isOps: boolean;
+        children: any[];
+    }> = async () => ({ ok: true, isOps: true, children: [] }),
 ) => ({
     serverVersion: '0.0.0-test',
     userDataDir,
@@ -117,6 +122,7 @@ const deps = (
     onForceQuestion,
     describeWorkspace: async () => null,
     manageProcess,
+    provisionWorkspaces,
 });
 
 afterEach(() => stopMcpServer());

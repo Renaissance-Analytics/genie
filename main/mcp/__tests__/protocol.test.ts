@@ -14,6 +14,9 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
         onForceQuestion: vi.fn().mockResolvedValue({ cancelled: true, answers: [] }),
         describeWorkspace: vi.fn().mockResolvedValue(null),
         manageProcess: vi.fn().mockResolvedValue({ ok: true, processes: [] }),
+        provisionWorkspaces: vi
+            .fn()
+            .mockResolvedValue({ ok: true, isOps: true, children: [] }),
         ...overrides,
     };
 }
@@ -42,7 +45,7 @@ describe('handleMcpMessage', () => {
         ).toBeNull();
     });
 
-    it('lists imDone + ForceTheQuestion + manageProcess + genieGuide tools (NOT initializeWorkspace — it is a prompt)', async () => {
+    it('lists imDone + ForceTheQuestion + manageProcess + provisionWorkspaces + genieGuide tools (NOT initializeWorkspace — it is a prompt)', async () => {
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 2, method: 'tools/list' },
             ctx(),
@@ -52,6 +55,7 @@ describe('handleMcpMessage', () => {
             'imDone',
             'ForceTheQuestion',
             'manageProcess',
+            'provisionWorkspaces',
             'genieGuide',
         ]);
         expect(tools.map((t) => t.name)).not.toContain('initializeWorkspace');
@@ -166,6 +170,72 @@ describe('handleMcpMessage', () => {
     it('manageProcess rejects a bad/missing action', async () => {
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 26, method: 'tools/call', params: { name: 'manageProcess', arguments: {} } },
+            ctx(),
+        );
+        expect(res?.error?.code).toBe(-32602);
+    });
+
+    it('provisionWorkspaces routes to the dep and summarizes children', async () => {
+        const provisionWorkspaces = vi.fn().mockResolvedValue({
+            ok: true,
+            isOps: true,
+            children: [
+                { projectId: 'c1', name: 'Child One', status: 'present', cloneUrl: null },
+                {
+                    projectId: 'c2',
+                    name: 'Child Two',
+                    status: 'missing',
+                    cloneUrl: 'https://github.com/o/child-two.agi.git',
+                },
+            ],
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 30,
+                method: 'tools/call',
+                params: {
+                    name: 'provisionWorkspaces',
+                    arguments: { action: 'status', terminalId: 'term-Y' },
+                },
+            },
+            ctx({ terminalId: 'term-Y', provisionWorkspaces }),
+        );
+        expect(provisionWorkspaces).toHaveBeenCalledWith('term-Y', { action: 'status' });
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('1 present, 1 missing');
+        expect(text).toContain('child-two.agi.git'); // the JSON block
+    });
+
+    it('provisionWorkspaces surfaces a clear not-an-ops message', async () => {
+        const provisionWorkspaces = vi.fn().mockResolvedValue({
+            ok: false,
+            isOps: false,
+            children: [],
+            error: 'This workspace is not an Ops project, so it has no governed child projects to provision.',
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 31,
+                method: 'tools/call',
+                params: { name: 'provisionWorkspaces', arguments: { action: 'status' } },
+            },
+            ctx({ provisionWorkspaces }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('failed');
+        expect(text).toContain('not an Ops project');
+    });
+
+    it('provisionWorkspaces rejects a bad/missing action', async () => {
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 32,
+                method: 'tools/call',
+                params: { name: 'provisionWorkspaces', arguments: {} },
+            },
             ctx(),
         );
         expect(res?.error?.code).toBe(-32602);

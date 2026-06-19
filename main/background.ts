@@ -8,7 +8,7 @@ import {
 } from 'electron';
 import fs from 'fs';
 import path from 'path';
-import { createTray } from './tray';
+import { createTray, rebuildMenu } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { registerIpcHandlers } from './ipc';
 import crypto from 'node:crypto';
@@ -58,7 +58,17 @@ import type {
     ManageProcessRequest,
     ManageProcessResult,
     ManagedProcessInfo,
+    ProvisionWorkspacesRequest,
+    ProvisionWorkspacesResult,
+    OpsChildInfo,
 } from './mcp/protocol';
+import {
+    computeOpsProvisionPlan,
+    applyOpsProvision,
+    provisionTargets,
+    opsAutoProvisionEnabled,
+} from './tynn/ops-provision';
+import { broadcastWorkspacesChanged } from './ipc';
 import {
     initTerminalBackend,
     isHostBacked,
@@ -423,6 +433,148 @@ async function manageProcessForMcp(
         };
     }
     return { ok: true, processes: listFor(), affectedId };
+}
+
+/**
+ * When the ops-auto-provision toggle is OFF, raise the OS-level ForceTheQuestion
+ * modal showing exactly which child workspaces would be cloned (name + repo URL)
+ * and BLOCK until the user decides. Reuses forceQuestion(), so it inherits the
+ * wait-indefinitely SSE heartbeat at the MCP layer. Returns true to proceed,
+ * false on deny or a dismissed modal (treated as deny — never auto-provision on
+ * dismissal). When the toggle is ON this isn't called and provisioning runs.
+ */
+async function approveOpsProvision(
+    ws: { project_name: string },
+    targets: Array<{ name: string; cloneUrl: string }>,
+): Promise<boolean> {
+    const list = targets
+        .map((t) => `• ${t.name}\n  ${t.cloneUrl}`)
+        .join('\n');
+    const result = await forceQuestion(
+        [
+            {
+                header: 'Provision?',
+                question:
+                    `An Ops agent wants to provision Genie workspaces for ${targets.length} governed ` +
+                    `child project${targets.length === 1 ? '' : 's'} (clone each one's *.agi repo):\n\n` +
+                    `${list}\n\n` +
+                    `Approve to clone + open them, or deny to skip.`,
+                options: [
+                    { label: 'Approve', description: 'Clone + register these child workspaces.' },
+                    { label: 'Deny', description: 'Skip — nothing is cloned.' },
+                ],
+            },
+        ],
+        ws.project_name,
+    );
+    if (result.cancelled) return false; // dismissed = deny
+    return (result.answers[0]?.selected ?? []).includes('Approve');
+}
+
+/**
+ * Back the provisionWorkspaces MCP tool. Resolves the Ops workspace from the
+ * (already terminal-resolved) caller, computes the governed-children plan, and
+ * for `provision` clones + registers the missing child workspaces — honouring
+ * the ops_auto_provision_workspaces toggle: OFF blocks on the approval modal
+ * (like manageProcess), ON provisions directly. Gated to Ops workspaces.
+ */
+async function provisionWorkspacesForMcp(
+    terminalId: string,
+    req: ProvisionWorkspacesRequest,
+): Promise<ProvisionWorkspacesResult> {
+    const wsId = terminalId ? getTerminalSpec(terminalId)?.workspace_id ?? null : null;
+    const ws = wsId ? getWorkspace(wsId) : null;
+    if (!ws) {
+        return {
+            ok: false,
+            error: 'No Genie workspace resolved for this terminal.',
+            isOps: false,
+            children: [],
+        };
+    }
+
+    let plan;
+    try {
+        plan = await computeOpsProvisionPlan(ws.path);
+    } catch (e) {
+        return {
+            ok: false,
+            error: e instanceof Error ? e.message : String(e),
+            isOps: false,
+            children: [],
+        };
+    }
+
+    if (!plan.signedIn) {
+        return {
+            ok: false,
+            error: 'Not signed in to Tynn — sign in so Genie can read this Ops project\'s governed children.',
+            isOps: false,
+            children: [],
+        };
+    }
+    if (!plan.isOps) {
+        return {
+            ok: false,
+            error: 'This workspace is not an Ops project, so it has no governed child projects to provision.',
+            isOps: false,
+            children: [],
+        };
+    }
+
+    const children: OpsChildInfo[] = plan.children.map((c) => ({
+        projectId: c.projectId,
+        name: c.name,
+        status: c.status,
+        cloneUrl: c.cloneUrl,
+    }));
+
+    if (req.action === 'status') {
+        return { ok: true, isOps: true, children };
+    }
+
+    // action === 'provision'
+    const targets = provisionTargets(plan);
+    if (targets.length === 0) {
+        // Nothing to do — every governed child already has a workspace (or the
+        // missing ones can't be resolved to a clone URL, surfaced in children).
+        return { ok: true, isOps: true, children, provisioned: [], errors: [] };
+    }
+
+    // Approval gate: OFF (default) → block on the modal; ON → straight through.
+    if (!opsAutoProvisionEnabled()) {
+        const approved = await approveOpsProvision(ws, targets);
+        if (!approved) {
+            return {
+                ok: false,
+                error: 'Denied by user — no workspaces were provisioned.',
+                isOps: true,
+                children,
+            };
+        }
+    }
+
+    const result = await applyOpsProvision(ws.path, targets);
+    if (result.provisioned.length > 0) {
+        // The rail mirrors its own workspace edits but can't see this MCP-side
+        // clone — tell it the set changed so the new workspaces appear live.
+        broadcastWorkspacesChanged();
+        rebuildMenu();
+    }
+    // Re-derive child statuses post-provision so the caller sees what changed.
+    const provisionedIds = new Set(result.provisioned.map((p) => p.workspaceId));
+    const childrenAfter: OpsChildInfo[] = children.map((c) =>
+        provisionedIds.has(c.projectId)
+            ? { ...c, status: 'present', cloneUrl: null }
+            : c,
+    );
+    return {
+        ok: true,
+        isOps: true,
+        children: childrenAfter,
+        provisioned: result.provisioned.map((p) => p.name),
+        errors: result.errors,
+    };
 }
 
 // Single-instance lock. If a second copy of Genie is launched (e.g. clicking
@@ -1025,6 +1177,8 @@ app.whenReady().then(async () => {
         },
         describeWorkspace: (terminalId) => describeWorkspaceForMcp(terminalId),
         manageProcess: (terminalId, req) => manageProcessForMcp(terminalId, req),
+        provisionWorkspaces: (terminalId, req) =>
+            provisionWorkspacesForMcp(terminalId, req),
     }).catch((e) => console.error('[mcp] failed to start', e));
     // Backfill the genie MCP entry into the Claude/Cursor config of any
     // workspace already opted in — now with the stable workspace endpoint URL,

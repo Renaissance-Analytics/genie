@@ -664,6 +664,39 @@ interface GenieApi {
                 remove?: string[];
             },
         ) => Promise<{ added: string[]; removed: string[]; errors: string[] }>;
+        /** Ops-project WORKSPACE provisioning plan (read-only). For each governed
+         *  child project: whether a local workspace exists, and the `*.agi` URL
+         *  Genie would clone for a missing one. */
+        opsProvisionPlan: (workspacePath: string) => Promise<{
+            isOps: boolean;
+            signedIn: boolean;
+            parentPath: string;
+            autoProvision: boolean;
+            children: Array<{
+                projectId: string;
+                name: string;
+                slug: string;
+                status: 'present' | 'missing';
+                cloneUrl: string | null;
+                workspacePath?: string;
+            }>;
+        }>;
+        /** Clone + register the approved child workspaces (mutates disk + db). */
+        opsProvisionApply: (
+            workspacePath: string,
+            targets: Array<{
+                projectId: string;
+                name: string;
+                slug: string;
+                cloneUrl: string;
+            }>,
+        ) => Promise<{
+            provisioned: Array<{ name: string; workspaceId: string; path: string }>;
+            errors: string[];
+        }>;
+        /** The ops-auto-provision-workspaces toggle (default off). */
+        opsAutoProvisionGet: () => Promise<{ on: boolean }>;
+        opsAutoProvisionSet: (on: boolean) => Promise<{ on: boolean }>;
     };
     tynnHost: {
         get: () => Promise<string>;
@@ -972,6 +1005,9 @@ interface GenieApi {
         /** The set of terminal specs changed outside the renderer's own edits
          *  (e.g. an MCP-created process) — re-fetch the spec list to stay live. */
         terminalSpecsChanged: (cb: () => void) => () => void;
+        /** The set of workspaces changed outside the renderer's own edits (e.g.
+         *  MCP-provisioned child workspaces) — re-fetch the workspace list. */
+        workspacesChanged: (cb: () => void) => () => void;
         /** Tier 3 detached-host status — fired on fallback to in-process. */
         terminalHostStatus: (
             cb: (payload: { message: string; level: 'info' | 'warn' }) => void,

@@ -61,6 +61,8 @@ export default function WorkspaceSettingsModal({
 
                 {workspace.path && <OpsReposPanel workspacePath={workspace.path} />}
 
+                {workspace.path && <OpsWorkspacesPanel workspacePath={workspace.path} />}
+
                 <div
                     style={{
                         paddingTop: 12,
@@ -189,6 +191,162 @@ function OpsReposPanel({ workspacePath }: { workspacePath: string }) {
                     {plan.missingLocally.length} governed project(s) aren&apos;t open in Genie
                     ({plan.missingLocally.map((m) => m.name).join(', ')}) — open them so Genie
                     can resolve their repos.
+                </Text>
+            )}
+
+            {msg && (
+                <Text size="xs" className="text-zinc-500">
+                    {msg}
+                </Text>
+            )}
+        </div>
+    );
+}
+
+type OpsProvisionPlan = Awaited<
+    ReturnType<ReturnType<typeof api>['tynn']['opsProvisionPlan']>
+>;
+
+/**
+ * Ops-project WORKSPACE provisioning. For an Ops workspace, lists every governed
+ * child project + whether it already has a local Genie workspace, and lets the
+ * user provision the missing ones (clone each child's `*.agi` repo). Mirrors the
+ * Ops-managed repos panel above; renders nothing for non-Ops workspaces. Also
+ * surfaces the auto-provision TOGGLE: when on, the MCP `provisionWorkspaces`
+ * tool provisions directly; when off, the agent's request blocks for approval.
+ */
+function OpsWorkspacesPanel({ workspacePath }: { workspacePath: string }) {
+    const [plan, setPlan] = useState<OpsProvisionPlan | null>(null);
+    const [autoProvision, setAutoProvision] = useState<boolean | null>(null);
+    const [busy, setBusy] = useState(false);
+    const [msg, setMsg] = useState<string | null>(null);
+
+    const load = async () => {
+        try {
+            setPlan(await api().tynn.opsProvisionPlan(workspacePath));
+        } catch {
+            setPlan(null);
+        }
+        try {
+            const { on } = await api().tynn.opsAutoProvisionGet();
+            setAutoProvision(on);
+        } catch {
+            setAutoProvision(false);
+        }
+    };
+
+    useEffect(() => {
+        void load();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [workspacePath]);
+
+    if (!plan || !plan.isOps) return null; // only meaningful for Ops projects
+
+    const missing = plan.children.filter((c) => c.status === 'missing');
+    const provisionable = missing.filter((c) => c.cloneUrl);
+    const unresolved = missing.filter((c) => !c.cloneUrl);
+
+    const toggleAuto = async (on: boolean) => {
+        setAutoProvision(on); // optimistic
+        try {
+            await api().tynn.opsAutoProvisionSet(on);
+        } catch {
+            setAutoProvision((prev) => !prev); // revert
+        }
+    };
+
+    const provision = async () => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            const r = await api().tynn.opsProvisionApply(
+                workspacePath,
+                provisionable.map((c) => ({
+                    projectId: c.projectId,
+                    name: c.name,
+                    slug: c.slug,
+                    cloneUrl: c.cloneUrl as string,
+                })),
+            );
+            const parts = [];
+            if (r.provisioned.length) parts.push(`provisioned ${r.provisioned.length}`);
+            if (r.errors.length) parts.push(`${r.errors.length} error(s)`);
+            setMsg(parts.length ? parts.join(', ') + '.' : 'No workspaces provisioned.');
+            await load();
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <div
+            style={{
+                paddingTop: 12,
+                borderTop: '1px solid var(--border-1)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+            }}
+        >
+            <Heading as="h3" size="xs" style={{ margin: 0 }}>
+                Ops-managed workspaces
+            </Heading>
+            <Text size="xs" className="text-zinc-500">
+                This Ops project governs other projects. Genie can stand up a local
+                workspace for each governed child by cloning its <code>*.agi</code>{' '}
+                repo — you approve each batch (or turn on auto-provision below).
+            </Text>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                    type="checkbox"
+                    checked={autoProvision ?? false}
+                    disabled={autoProvision === null}
+                    onChange={(e) => void toggleAuto(e.target.checked)}
+                />
+                <Text size="sm">
+                    Auto-provision child workspaces (skip my approval)
+                </Text>
+            </label>
+
+            {provisionable.length === 0 && unresolved.length === 0 ? (
+                <Text size="xs" style={{ color: 'var(--emerald-600)' }}>
+                    <Icon name="check" size="xs" /> Every governed child has a workspace.
+                </Text>
+            ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {provisionable.map((c) => (
+                        <Text key={c.projectId} size="xs">
+                            <span style={{ color: 'var(--emerald-600)' }}>+ provision</span>{' '}
+                            {c.name}
+                            <span className="text-zinc-500"> · {c.cloneUrl}</span>
+                        </Text>
+                    ))}
+                    {provisionable.length > 0 && (
+                        <div style={{ marginTop: 4 }}>
+                            <Action
+                                size="sm"
+                                color="blue"
+                                icon="download"
+                                disabled={busy}
+                                onClick={provision}
+                            >
+                                {busy
+                                    ? 'Provisioning…'
+                                    : `Provision ${provisionable.length} workspace${
+                                          provisionable.length === 1 ? '' : 's'
+                                      }`}
+                            </Action>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {unresolved.length > 0 && (
+                <Text size="xs" style={{ color: 'var(--amber-600)' }}>
+                    {unresolved.length} governed project(s) have no resolvable{' '}
+                    <code>*.agi</code> repo URL
+                    ({unresolved.map((m) => m.name).join(', ')}) — can&apos;t auto-clone these.
                 </Text>
             )}
 

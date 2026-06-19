@@ -215,6 +215,22 @@ const api = {
                 remove?: string[];
             },
         ) => ipcRenderer.invoke('tynn:ops-apply', workspacePath, approved),
+        // Ops-project WORKSPACE provisioning.
+        opsProvisionPlan: (workspacePath: string) =>
+            ipcRenderer.invoke('tynn:ops-provision-plan', workspacePath),
+        opsProvisionApply: (
+            workspacePath: string,
+            targets: Array<{
+                projectId: string;
+                name: string;
+                slug: string;
+                cloneUrl: string;
+            }>,
+        ) => ipcRenderer.invoke('tynn:ops-provision-apply', workspacePath, targets),
+        opsAutoProvisionGet: () =>
+            ipcRenderer.invoke('tynn:ops-auto-provision:get'),
+        opsAutoProvisionSet: (on: boolean) =>
+            ipcRenderer.invoke('tynn:ops-auto-provision:set', on),
     },
 
     tynnHost: {
@@ -546,6 +562,14 @@ const api = {
             const handler = () => cb();
             ipcRenderer.on('terminal-spec:changed', handler);
             return () => ipcRenderer.off('terminal-spec:changed', handler);
+        },
+        /** The set of workspaces changed outside the renderer's own edits (e.g.
+         *  workspaces provisioned via the MCP provisionWorkspaces tool) —
+         *  re-fetch workspaces:list so the rail stays live. */
+        workspacesChanged: (cb: () => void) => {
+            const handler = () => cb();
+            ipcRenderer.on('workspaces:changed', handler);
+            return () => ipcRenderer.off('workspaces:changed', handler);
         },
         /** Tier 3 detached-host status — fired when the host is unavailable and
          *  Genie falls back to in-process. The renderer surfaces a non-fatal toast. */

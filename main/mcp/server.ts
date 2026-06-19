@@ -10,6 +10,8 @@ import {
     type JsonRpcResponse,
     type ManageProcessRequest,
     type ManageProcessResult,
+    type ProvisionWorkspacesRequest,
+    type ProvisionWorkspacesResult,
     type WorkspaceMap,
 } from './protocol';
 
@@ -67,6 +69,11 @@ interface ServerDeps {
         terminalId: string,
         req: ManageProcessRequest,
     ) => Promise<ManageProcessResult>;
+    /** Provision child-project workspaces for an Ops project (provisionWorkspaces tool). */
+    provisionWorkspaces: (
+        terminalId: string,
+        req: ProvisionWorkspacesRequest,
+    ) => Promise<ProvisionWorkspacesResult>;
 }
 
 let server: http.Server | null = null;
@@ -176,6 +183,8 @@ function heartbeatMs(): number {
  *  - manageProcess create/start can block on the per-workspace process-approval
  *    gate (when OFF the handler resolves immediately, so the SSE path just sends
  *    the response at once — harmless). stop/restart/list never block.
+ *  - provisionWorkspaces `provision` can block on the ops-auto-provision gate
+ *    (same harmless fast-path when the toggle is ON). `status` never blocks.
  */
 function isBlockingCall(msg: JsonRpcRequest): boolean {
     if (msg.method !== 'tools/call') return false;
@@ -187,6 +196,9 @@ function isBlockingCall(msg: JsonRpcRequest): boolean {
     if (name === 'manageProcess') {
         const action = params?.arguments?.action;
         return action === 'create' || action === 'start';
+    }
+    if (name === 'provisionWorkspaces') {
+        return params?.arguments?.action === 'provision';
     }
     return false;
 }
@@ -349,6 +361,7 @@ async function handle(
         onForceQuestion: deps.onForceQuestion,
         describeWorkspace: deps.describeWorkspace,
         manageProcess: deps.manageProcess,
+        provisionWorkspaces: deps.provisionWorkspaces,
     };
 
     // A blocking call (ForceTheQuestion) can sit pending indefinitely while the

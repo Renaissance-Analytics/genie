@@ -51,6 +51,12 @@ import {
     applyOpsRepoPlan,
     type OpsRepoDesired,
 } from './tynn/ops-repos';
+import {
+    computeOpsProvisionPlan,
+    applyOpsProvision,
+    provisionTargets,
+    type OpsProvisionTarget,
+} from './tynn/ops-provision';
 import type { ProjectJsonTynn } from './workspace/project-json';
 import {
     workspaceEndpointUrl,
@@ -400,6 +406,35 @@ export function registerIpcHandlers(): void {
         ) => applyOpsRepoPlan(workspacePath, approved),
     );
 
+    // Ops-project WORKSPACE provisioning: compute which governed child projects
+    // lack a local Genie workspace (read-only), and provision the approved ones
+    // (clone their *.agi repo + register the workspace). Sibling of the repo
+    // reconcile above — the renderer Ops-managed-workspaces panel drives these.
+    ipcMain.handle('tynn:ops-provision-plan', async (_e, workspacePath: string) =>
+        computeOpsProvisionPlan(workspacePath),
+    );
+    ipcMain.handle(
+        'tynn:ops-provision-apply',
+        async (_e, workspacePath: string, targets: OpsProvisionTarget[]) => {
+            const result = await applyOpsProvision(workspacePath, targets);
+            if (result.provisioned.length > 0) {
+                broadcastWorkspacesChanged();
+                rebuildMenu();
+            }
+            return result;
+        },
+    );
+
+    // The ops-auto-provision-workspaces toggle (Settings → workspace settings).
+    // Reads/writes the global k/v setting; the per-workspace panel surfaces it.
+    ipcMain.handle('tynn:ops-auto-provision:get', () => ({
+        on: getAllSettings().ops_auto_provision_workspaces === 'on',
+    }));
+    ipcMain.handle('tynn:ops-auto-provision:set', (_e, on: boolean) => {
+        setSettings({ ops_auto_provision_workspaces: on ? 'on' : 'off' });
+        return { on };
+    });
+
     // --- Open external URLs --------------------------------------------
     // Generic external-open used by terminal web links (and anything else in
     // the renderer that needs the OS browser). The renderer can't reach
@@ -480,5 +515,19 @@ export function registerIpcHandlers(): void {
 function broadcast(channel: string, payload: unknown): void {
     for (const w of BrowserWindow.getAllWindows()) {
         w.webContents.send(channel, payload);
+    }
+}
+
+/**
+ * Push a `workspaces:changed` event to every window so the rail re-fetches
+ * `workspaces:list`. The renderer mirrors its OWN workspace edits locally, so
+ * this is for changes it can't see — notably workspaces provisioned via the MCP
+ * `provisionWorkspaces` tool, which must appear in the rail immediately.
+ */
+export function broadcastWorkspacesChanged(): void {
+    for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.webContents.isDestroyed()) {
+            w.webContents.send('workspaces:changed');
+        }
     }
 }

@@ -402,6 +402,11 @@ export interface Settings {
     /** Keep the Genie brief synced into a workspace's AGENTS.md. Default 'on';
      *  'off' leaves it alone. */
     mcp_sync_agents?: 'on' | 'off';
+    /** Auto-provision Genie workspaces for an Ops project's governed children
+     *  (the provisionWorkspaces MCP tool). 'off' (default): the agent proposes a
+     *  plan and the user approves each clone via the OS modal. 'on': the agent
+     *  provisions the missing child workspaces directly, no prompt. */
+    ops_auto_provision_workspaces?: 'on' | 'off';
     /** Terminal copy/paste behaviour:
      *  - 'contextmenu' (default): right-click Copy/Paste menu + Ctrl+Shift+C/V.
      *  - 'linux': highlight-to-copy, right-click (and middle-click) to paste.
@@ -459,6 +464,8 @@ export function getAllSettings(): Settings {
         mcp_sync_claude: (out['mcp_sync_claude'] as 'on' | 'off') ?? 'on',
         mcp_sync_cursor: (out['mcp_sync_cursor'] as 'on' | 'off') ?? 'on',
         mcp_sync_agents: (out['mcp_sync_agents'] as 'on' | 'off') ?? 'on',
+        ops_auto_provision_workspaces:
+            (out['ops_auto_provision_workspaces'] as 'on' | 'off') ?? 'off',
         terminal_copy_paste:
             (out['terminal_copy_paste'] as 'contextmenu' | 'linux' | 'winmac') ?? 'contextmenu',
         collapsed_workspaces: out['collapsed_workspaces'] ?? '[]',
