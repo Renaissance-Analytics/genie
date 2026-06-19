@@ -239,6 +239,27 @@ export default function Chooser({
     const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(
         () => new Set(),
     );
+    // Persisted sidebar expand/collapse: seed from the `collapsed_workspaces`
+    // setting (a JSON string[] of workspace ids) on mount so the state survives
+    // restarts. Toggling a row writes it back (see toggleCollapse below).
+    useEffect(() => {
+        let alive = true;
+        void api()
+            .settings.get()
+            .then((s) => {
+                if (!alive) return;
+                try {
+                    const ids = JSON.parse(s?.collapsed_workspaces ?? '[]');
+                    if (Array.isArray(ids)) setCollapsedWorkspaces(new Set(ids));
+                } catch {
+                    /* ignore malformed value */
+                }
+            })
+            .catch(() => {});
+        return () => {
+            alive = false;
+        };
+    }, []);
 
     // Drag-to-reorder (flyout only). `dragOrder` is a live preview of the id
     // order while a drag is in flight; the rail + flyout both render from it
@@ -610,6 +631,13 @@ export default function Chooser({
                                 const next = new Set(prev);
                                 if (collapsed) next.delete(ws.id);
                                 else next.add(ws.id);
+                                // Persist so the expand/collapse state survives a
+                                // restart (JSON string[], k/v values are text).
+                                void api()
+                                    .settings.set({
+                                        collapsed_workspaces: JSON.stringify([...next]),
+                                    })
+                                    .catch(() => {});
                                 return next;
                             });
                         return (

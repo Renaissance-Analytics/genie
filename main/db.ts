@@ -407,6 +407,10 @@ export interface Settings {
      *  - 'linux': highlight-to-copy, right-click (and middle-click) to paste.
      *  - 'winmac': Ctrl/Cmd+C copies the selection, Ctrl/Cmd+V pastes. */
     terminal_copy_paste?: 'contextmenu' | 'linux' | 'winmac';
+    /** Collapsed workspace sidebar rows — JSON-encoded string[] of workspace
+     *  ids (k/v values are text, like notifications_muted). Persists the
+     *  sidebar expand/collapse state across restarts. Default '[]'. */
+    collapsed_workspaces?: string;
 }
 
 export function getAllSettings(): Settings {
@@ -457,6 +461,7 @@ export function getAllSettings(): Settings {
         mcp_sync_agents: (out['mcp_sync_agents'] as 'on' | 'off') ?? 'on',
         terminal_copy_paste:
             (out['terminal_copy_paste'] as 'contextmenu' | 'linux' | 'winmac') ?? 'contextmenu',
+        collapsed_workspaces: out['collapsed_workspaces'] ?? '[]',
     };
 }
 

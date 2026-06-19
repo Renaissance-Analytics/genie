@@ -108,6 +108,9 @@ export interface Settings {
     primary_workspace?: string;
     /** Last-activated workspace id in the master view. */
     active_workspace?: string;
+    /** Collapsed sidebar workspace rows — JSON-encoded string[] of workspace
+     *  ids. Persists the expand/collapse state across restarts. */
+    collapsed_workspaces?: string;
     default_editor?: string;
     default_editor_cmd?: string;
     default_start_cmd?: string;
