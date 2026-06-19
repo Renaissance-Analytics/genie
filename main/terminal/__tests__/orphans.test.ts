@@ -14,8 +14,22 @@ describe('computeOrphans', () => {
         expect(computeOrphans(live, ['a', 'b', 'c'])).toEqual([]);
     });
 
-    it('reaps everything when there are no specs at all', () => {
-        expect(computeOrphans(['x', 'y'], [])).toEqual(['x', 'y']);
+    it('SAFETY: refuses to reap when there are no specs at all (load race)', () => {
+        // Empty spec set + live terminals → the DB likely hasn't loaded; never
+        // treat that as "everything is orphaned".
+        expect(computeOrphans(['x', 'y'], [])).toEqual([]);
+    });
+
+    it('SAFETY: refuses to reap when EVERY live terminal looks orphaned (id mismatch)', () => {
+        // None of the live ids match a spec → the id namespaces don't line up
+        // (the bug that wiped real terminals on reopen). Bail, don't nuke them.
+        expect(computeOrphans(['x', 'y'], ['a', 'b', 'c'])).toEqual([]);
+    });
+
+    it('still reaps a partial orphan set (some live ids DO match specs)', () => {
+        // Overlap proves the matching + spec load work, so the unmatched id is a
+        // genuine orphan.
+        expect(computeOrphans(['a', 'b', 'gone'], ['a', 'b'])).toEqual(['gone']);
     });
 
     it('returns nothing when the host has no live terminals', () => {
