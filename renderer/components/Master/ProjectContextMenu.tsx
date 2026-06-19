@@ -5,6 +5,7 @@ import {
     IconGlobe,
     IconMaximize,
     IconPlus,
+    IconSettings,
     IconTerminal,
     IconTrash,
 } from './icons';
@@ -22,6 +23,7 @@ interface Props {
     onAddTerminal: () => void;
     onOpenStage: () => void;
     onOpenInBrowser: () => void;
+    onSettings: () => void;
     onRemove: () => void;
 }
 
@@ -38,6 +40,7 @@ export default function ProjectContextMenu({
     onAddTerminal,
     onOpenStage,
     onOpenInBrowser,
+    onSettings,
     onRemove,
 }: Props) {
     const menuRef = useRef<HTMLDivElement>(null);
@@ -114,6 +117,14 @@ export default function ProjectContextMenu({
                     label="Open project in browser"
                     onClick={() => {
                         onOpenInBrowser();
+                        onClose();
+                    }}
+                />
+                <CtxItem
+                    icon={<IconSettings size={14} />}
+                    label="Workspace settings…"
+                    onClick={() => {
+                        onSettings();
                         onClose();
                     }}
                 />

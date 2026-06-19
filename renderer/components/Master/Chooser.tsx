@@ -672,8 +672,6 @@ export default function Chooser({
                                             live={activeIds.has(s.id)}
                                             attention={attentionIds.has(s.id)}
                                             suspended={s.enabled === false}
-                                            hostKind={hostBadgeKind(ws.backend)}
-                                            hostLabel={ws.backend}
                                             hasTynnMcp={tynnMcpWs.has(ws.id)}
                                             onToggle={() => onToggleSpec(s.id)}
                                             onDestroy={() => onDestroySpec(s.id)}
@@ -932,8 +930,6 @@ export default function Chooser({
                                         live={activeIds.has(s.id)}
                                         attention={attentionIds.has(s.id)}
                                         suspended={s.enabled === false}
-                                        hostKind="desktop"
-                                        hostLabel="local"
                                         onToggle={() => onToggleSpec(s.id)}
                                         onDestroy={() => onDestroySpec(s.id)}
                                         onDisable={() => onDisableSpec(s.id)}
@@ -1285,12 +1281,6 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
     );
 }
 
-function hostBadgeKind(backend: WorkspaceRow['backend']): string {
-    if (backend === 'aionima') return 'aionima';
-    if (backend === 'tynn') return 'tynn';
-    return 'desktop';
-}
-
 interface SpecRowProps {
     spec: TerminalSpec;
     checked: boolean;
@@ -1299,8 +1289,6 @@ interface SpecRowProps {
     attention?: boolean;
     /** Tier 2: this spec is disabled-but-retained (suspended). */
     suspended: boolean;
-    hostKind: string;
-    hostLabel: string;
     /** The workspace's `.agi` envelope declares a Tynn MCP server (a `tynn`
      *  server in its .mcp.json) — gates the Tynn brand glyph. Reflects real
      *  Tynn-MCP presence, not the product backend. */
@@ -1332,8 +1320,6 @@ function SpecRow({
     live,
     attention,
     suspended,
-    hostKind,
-    hostLabel,
     hasTynnMcp,
     onToggle,
     onDestroy,
@@ -1404,17 +1390,9 @@ function SpecRow({
                 <span className={`sdot ${suspended ? 'idle' : live ? 'run' : 'idle'}`} />
             )}
             <span className="tname">{spec.label}</span>
-            {suspended ? (
+            {suspended && (
                 <span className="susp-badge" title="Suspended — pty still running">
                     Suspended
-                </span>
-            ) : (
-                <span
-                    className={`host ${hostKind}`}
-                    title={hostLabel}
-                    aria-label={hostLabel}
-                >
-                    {hostLabel}
                 </span>
             )}
             {suspended ? (

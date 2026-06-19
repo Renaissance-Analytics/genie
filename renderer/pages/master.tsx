@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Chooser from '../components/Master/Chooser';
 import ProjectContextMenu from '../components/Master/ProjectContextMenu';
+import WorkspaceSettingsModal from '../components/Master/WorkspaceSettingsModal';
 import SpecContextMenu from '../components/Master/SpecContextMenu';
 import { PromptHost, showPrompt } from '../components/Master/Prompt';
 import QuitTerminalsModal, {
@@ -128,6 +129,7 @@ function MasterInner() {
         y: number;
     } | null>(null);
     const [addingWorkspace, setAddingWorkspace] = useState(false);
+    const [settingsWorkspaceId, setSettingsWorkspaceId] = useState<string | null>(null);
     // Docs flyout (the ? titlebar button toggles this in-window panel rather
     // than opening a separate BrowserWindow).
     const [docsOpen, setDocsOpen] = useState(false);
@@ -1139,7 +1141,19 @@ function MasterInner() {
                         onAddTerminal={() => void addSpec(ws.id)}
                         onOpenStage={() => openProjectInStage(ws.id)}
                         onOpenInBrowser={() => openProjectInBrowser(ws.id)}
+                        onSettings={() => setSettingsWorkspaceId(ws.id)}
                         onRemove={() => void removeWorkspaceRow(ws.id)}
+                    />
+                );
+            })()}
+
+            {settingsWorkspaceId && (() => {
+                const ws = workspacesById.get(settingsWorkspaceId);
+                if (!ws) return null;
+                return (
+                    <WorkspaceSettingsModal
+                        workspace={ws}
+                        onClose={() => setSettingsWorkspaceId(null)}
                     />
                 );
             })()}
