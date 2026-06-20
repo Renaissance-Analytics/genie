@@ -12,6 +12,12 @@ import {
     type ManageProcessResult,
     type ProvisionWorkspacesRequest,
     type ProvisionWorkspacesResult,
+    type ManageTerminalsRequest,
+    type ManageTerminalsResult,
+    type RunAgentRequest,
+    type RunAgentResult,
+    type ManageWorkspacesRequest,
+    type ManageWorkspacesResult,
     type WorkspaceMap,
 } from './protocol';
 
@@ -74,6 +80,21 @@ interface ServerDeps {
         terminalId: string,
         req: ProvisionWorkspacesRequest,
     ) => Promise<ProvisionWorkspacesResult>;
+    /** Spawn/drive terminals in the caller's or a governed workspace (manageTerminals tool). */
+    manageTerminals: (
+        terminalId: string,
+        req: ManageTerminalsRequest,
+    ) => Promise<ManageTerminalsResult>;
+    /** Launch + control a coding agent inside a terminal (runAgent tool). */
+    runAgent: (
+        terminalId: string,
+        req: RunAgentRequest,
+    ) => Promise<RunAgentResult>;
+    /** Open/activate/remove + status the caller's or a governed workspace (manageWorkspaces tool). */
+    manageWorkspaces: (
+        terminalId: string,
+        req: ManageWorkspacesRequest,
+    ) => Promise<ManageWorkspacesResult>;
 }
 
 let server: http.Server | null = null;
@@ -185,6 +206,9 @@ function heartbeatMs(): number {
  *    the response at once — harmless). stop/restart/list never block.
  *  - provisionWorkspaces `provision` can block on the ops-auto-provision gate
  *    (same harmless fast-path when the toggle is ON). `status` never blocks.
+ *  - manageTerminals create/write can block on the per-workspace terminal-
+ *    approval gate (OFF resolves immediately). read/list/kill never block.
+ *  - runAgent start/send can block on the same gate. read/stop never block.
  */
 function isBlockingCall(msg: JsonRpcRequest): boolean {
     if (msg.method !== 'tools/call') return false;
@@ -199,6 +223,14 @@ function isBlockingCall(msg: JsonRpcRequest): boolean {
     }
     if (name === 'provisionWorkspaces') {
         return params?.arguments?.action === 'provision';
+    }
+    if (name === 'manageTerminals') {
+        const action = params?.arguments?.action;
+        return action === 'create' || action === 'write';
+    }
+    if (name === 'runAgent') {
+        const action = params?.arguments?.action;
+        return action === 'start' || action === 'send';
     }
     return false;
 }
@@ -362,6 +394,9 @@ async function handle(
         describeWorkspace: deps.describeWorkspace,
         manageProcess: deps.manageProcess,
         provisionWorkspaces: deps.provisionWorkspaces,
+        manageTerminals: deps.manageTerminals,
+        runAgent: deps.runAgent,
+        manageWorkspaces: deps.manageWorkspaces,
     };
 
     // A blocking call (ForceTheQuestion) can sit pending indefinitely while the

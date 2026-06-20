@@ -113,6 +113,15 @@ const deps = (
         isOps: boolean;
         children: any[];
     }> = async () => ({ ok: true, isOps: true, children: [] }),
+    manageTerminals: () => Promise<{ ok: boolean; terminals: any[] }> = async () => ({
+        ok: true,
+        terminals: [],
+    }),
+    runAgent: () => Promise<{ ok: boolean; id?: string }> = async () => ({ ok: true }),
+    manageWorkspaces: () => Promise<{ ok: boolean; workspaces: any[] }> = async () => ({
+        ok: true,
+        workspaces: [],
+    }),
 ) => ({
     serverVersion: '0.0.0-test',
     userDataDir,
@@ -123,6 +132,9 @@ const deps = (
     describeWorkspace: async () => null,
     manageProcess,
     provisionWorkspaces,
+    manageTerminals,
+    runAgent,
+    manageWorkspaces,
 });
 
 afterEach(() => stopMcpServer());
@@ -298,6 +310,109 @@ describe('mcp server', () => {
         // Plain JSON-RPC, not an SSE stream.
         const body = JSON.parse(res.body);
         expect(body.id).toBe(12);
+    });
+
+    it('serves a manageTerminals CREATE over SSE so the approval gate never times out', async () => {
+        const prev = process.env.GENIE_MCP_HEARTBEAT_MS;
+        process.env.GENIE_MCP_HEARTBEAT_MS = '20';
+        try {
+            const dir = tmpUserDir();
+            await startMcpServer(
+                deps(
+                    dir,
+                    0,
+                    { ids: ['t-a'], lastActive: 't-a' },
+                    () => {},
+                    undefined,
+                    undefined,
+                    undefined,
+                    // manageTerminals dep resolves after a delay (simulating the gate).
+                    () =>
+                        new Promise((r) =>
+                            setTimeout(() => r({ ok: true, terminals: [] }), 120),
+                        ),
+                ),
+            );
+            const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+            const res = await rpcStream(mcpServerPort()!, token, {
+                jsonrpc: '2.0',
+                id: 50,
+                method: 'tools/call',
+                params: {
+                    name: 'manageTerminals',
+                    arguments: { action: 'create', label: 'agent' },
+                },
+            });
+            expect(res.contentType).toContain('text/event-stream');
+            expect(res.raw).toContain(': heartbeat');
+            expect(res.events.some((e) => e.id === 50)).toBe(true);
+        } finally {
+            if (prev === undefined) delete process.env.GENIE_MCP_HEARTBEAT_MS;
+            else process.env.GENIE_MCP_HEARTBEAT_MS = prev;
+        }
+    });
+
+    it('serves a manageTerminals READ as a single JSON response (no blocking path)', async () => {
+        const dir = tmpUserDir();
+        await startMcpServer(
+            deps(
+                dir,
+                0,
+                { ids: ['t-a'], lastActive: 't-a' },
+                () => {},
+                undefined,
+                undefined,
+                undefined,
+                async () => ({ ok: true, terminals: [], data: 'out', cursor: 3 }),
+            ),
+        );
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+        const res = await rpc(mcpServerPort()!, token, {
+            jsonrpc: '2.0',
+            id: 51,
+            method: 'tools/call',
+            params: { name: 'manageTerminals', arguments: { action: 'read', id: 't-a' } },
+        });
+        expect(res.status).toBe(200);
+        const body = JSON.parse(res.body);
+        expect(body.id).toBe(51);
+    });
+
+    it('serves a runAgent START over SSE so the approval gate never times out', async () => {
+        const prev = process.env.GENIE_MCP_HEARTBEAT_MS;
+        process.env.GENIE_MCP_HEARTBEAT_MS = '20';
+        try {
+            const dir = tmpUserDir();
+            await startMcpServer(
+                deps(
+                    dir,
+                    0,
+                    { ids: ['t-a'], lastActive: 't-a' },
+                    () => {},
+                    undefined,
+                    undefined,
+                    undefined,
+                    undefined,
+                    () =>
+                        new Promise((r) =>
+                            setTimeout(() => r({ ok: true, id: 'a-1' }), 120),
+                        ),
+                ),
+            );
+            const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+            const res = await rpcStream(mcpServerPort()!, token, {
+                jsonrpc: '2.0',
+                id: 52,
+                method: 'tools/call',
+                params: { name: 'runAgent', arguments: { action: 'start', agent: 'claude' } },
+            });
+            expect(res.contentType).toContain('text/event-stream');
+            expect(res.raw).toContain(': heartbeat');
+            expect(res.events.some((e) => e.id === 52)).toBe(true);
+        } finally {
+            if (prev === undefined) delete process.env.GENIE_MCP_HEARTBEAT_MS;
+            else process.env.GENIE_MCP_HEARTBEAT_MS = prev;
+        }
     });
 
     it('answers ForceTheQuestion over an SSE stream (never a timed-out single response)', async () => {

@@ -21,6 +21,8 @@ import {
     getWorkspace,
     createTerminalSpec,
     workspaceProcessApproval,
+    workspaceTerminalApproval,
+    removeWorkspace,
 } from './db';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import { workspaceDocHealth, repairWorkspaceDocs } from './workspace/create-agi';
@@ -40,6 +42,9 @@ import {
     killTerminalById,
     lastActiveTerminalForWorkspace,
     reapOrphanTerminals,
+    createAgentTerminal,
+    writeToTerminal,
+    readTerminalOutput,
 } from './terminal/ipc';
 import {
     startMcpServer,
@@ -61,7 +66,20 @@ import type {
     ProvisionWorkspacesRequest,
     ProvisionWorkspacesResult,
     OpsChildInfo,
+    ManageTerminalsRequest,
+    ManageTerminalsResult,
+    ManagedTerminalInfo,
+    RunAgentRequest,
+    RunAgentResult,
+    ManageWorkspacesRequest,
+    ManageWorkspacesResult,
+    ManagedWorkspaceInfo,
+    AgentType,
 } from './mcp/protocol';
+import { resolveTargetWorkspace, type TargetDecision } from './mcp/target-workspace';
+import { TynnBackend } from './backend/tynn';
+import { readTynnLink } from './tynn/provision';
+import { openWorkspace } from './workspace/open';
 import {
     computeOpsProvisionPlan,
     applyOpsProvision,
@@ -574,6 +592,489 @@ async function provisionWorkspacesForMcp(
         children: childrenAfter,
         provisioned: result.provisioned.map((p) => p.name),
         errors: result.errors,
+    };
+}
+
+// --- Agent terminal / agent / workspace control (manageTerminals · runAgent ·
+//     manageWorkspaces) ------------------------------------------------------
+//
+// These give an agent in a workspace the power to spawn terminals, run code in
+// them, and launch + drive coding agents — in its OWN workspace AND in any
+// workspace it governs (Ops → child). Two safety layers, both mandatory:
+//
+//   1. CROSS-WORKSPACE AUTHORIZATION (resolveAgentTarget) — the action's target
+//      must be the caller's own workspace OR one it governs. Anything else is
+//      rejected before any side effect. The governed set is resolved via the
+//      SAME Ops-slaves path provisionWorkspaces uses, mapped to local workspace
+//      ids (a child's local workspace id == its Tynn project id).
+//   2. APPROVAL GATE (approveTerminalAction) — every code-executing / agent-
+//      driving action (create / write / runAgent start / send) blocks on the
+//      OS modal until the user approves, UNLESS the TARGET workspace has its
+//      terminal-approval toggle OFF. read / list / kill / status are not gated.
+
+/**
+ * The set of LOCAL workspace ids the given Ops workspace governs. Reads the
+ * workspace's Tynn link → ops-slaves, and keeps only those slaves that have a
+ * local workspace registered (a child's local id == its Tynn project id). Empty
+ * for a non-Ops / signed-out / unlinked caller, or on any failure — fail CLOSED.
+ */
+async function governedWorkspaceIdsFor(
+    callerWorkspacePath: string,
+): Promise<Set<string>> {
+    const out = new Set<string>();
+    const link = readTynnLink(callerWorkspacePath);
+    if (!link?.projectId) return out;
+    const backend = new TynnBackend();
+    if (!(await backend.whoami())) return out;
+    const { isOpsProject, slaves } = await backend.opsSlaves(link.projectId);
+    if (!isOpsProject) return out;
+    const localIds = new Set(listWorkspaces().map((w) => w.id));
+    for (const s of slaves) {
+        // A governed child is actionable only if it has a local workspace.
+        if (localIds.has(s.id)) out.add(s.id);
+    }
+    return out;
+}
+
+/**
+ * Resolve + authorize the workspace a tool call should act on. The caller's
+ * terminal → its workspace is the default; a different `workspaceId` is allowed
+ * only when the caller governs it. Returns the decision (with the resolved
+ * workspace row when allowed) so handlers share one chokepoint.
+ */
+async function resolveAgentTarget(
+    callerTerminalId: string,
+    requestedWorkspaceId: string | undefined,
+): Promise<{ decision: TargetDecision; ws: ReturnType<typeof getWorkspace> | null }> {
+    const callerWorkspaceId = callerTerminalId
+        ? getTerminalSpec(callerTerminalId)?.workspace_id ?? null
+        : null;
+    const callerWs = callerWorkspaceId ? getWorkspace(callerWorkspaceId) : null;
+    const decision = await resolveTargetWorkspace(requestedWorkspaceId, {
+        callerWorkspaceId,
+        governedWorkspaceIds: () =>
+            callerWs
+                ? governedWorkspaceIdsFor(callerWs.path)
+                : Promise.resolve(new Set<string>()),
+    });
+    const ws = decision.allowed ? getWorkspace(decision.workspaceId) ?? null : null;
+    return { decision, ws };
+}
+
+/**
+ * Block on the OS modal until the user approves a code-executing / agent-driving
+ * action in `ws`, UNLESS the workspace has terminal-approval turned OFF. Mirrors
+ * approveProcessRun: dismiss = deny, never auto-run on dismissal. Returns true to
+ * proceed.
+ */
+async function approveTerminalAction(
+    ws: { id: string; project_name: string },
+    what: { title: string; lines: string[] },
+): Promise<boolean> {
+    if (!workspaceTerminalApproval(ws.id)) return true; // gate OFF → straight through
+    const result = await forceQuestion(
+        [
+            {
+                header: 'Allow?',
+                question:
+                    `${what.title}\n\n` +
+                    `${what.lines.map((l) => `• ${l}`).join('\n')}\n\n` +
+                    'Approve to allow it, or deny to block it.',
+                options: [
+                    { label: 'Approve', description: 'Allow this action.' },
+                    { label: 'Deny', description: 'Block it — nothing runs.' },
+                ],
+            },
+        ],
+        ws.project_name,
+    );
+    if (result.cancelled) return false; // dismissed = deny
+    return (result.answers[0]?.selected ?? []).includes('Approve');
+}
+
+/**
+ * Resolve a create/launch cwd from an optional repo subfolder or an explicit
+ * cwd, validated against the workspace. Returns { cwd } or { error }.
+ */
+function resolveAgentCwd(
+    ws: { path: string },
+    opts: { repo?: string; cwd?: string },
+): { cwd: string } | { error: string } {
+    if (opts.cwd) {
+        // Absolute → use as-is; relative → resolve under the workspace root.
+        const abs = path.isAbsolute(opts.cwd)
+            ? path.normalize(opts.cwd)
+            : path.join(ws.path, opts.cwd);
+        // Containment: a relative cwd must stay inside the workspace. An absolute
+        // cwd is allowed (the agent may legitimately target a sibling path it
+        // owns), but a relative one escaping via .. is rejected.
+        if (!path.isAbsolute(opts.cwd)) {
+            const rel = path.relative(ws.path, abs);
+            if (rel.startsWith('..')) {
+                return { error: `cwd "${opts.cwd}" escapes the workspace.` };
+            }
+        }
+        return { cwd: abs };
+    }
+    if (opts.repo) {
+        let repos: string[] = [];
+        try {
+            repos = detectFolder(ws.path).repos ?? [];
+        } catch {
+            repos = [];
+        }
+        if (!repos.includes(opts.repo)) {
+            return {
+                error: `Unknown repo "${opts.repo}". Available: ${repos.join(', ') || '(none)'}.`,
+            };
+        }
+        return { cwd: path.join(ws.path, 'repos', opts.repo) };
+    }
+    return { cwd: ws.path };
+}
+
+/** List a workspace's (non-process) terminals for the manageTerminals result. */
+function listAgentTerminals(ws: { id: string; path: string }): ManagedTerminalInfo[] {
+    return listTerminalSpecs()
+        .filter((s) => s.workspace_id === ws.id && s.type !== 'process')
+        .map((s) => {
+            let rel = '';
+            try {
+                rel = path.relative(ws.path, s.cwd ?? ws.path).replace(/\\/g, '/');
+            } catch {
+                rel = '';
+            }
+            const agent = (s.meta?.agent as ManagedTerminalInfo['agent']) ?? null;
+            return { id: s.id, label: s.label, cwd: rel, agent };
+        });
+}
+
+/** Back the manageTerminals MCP tool (spawn/drive terminals; gated). */
+async function manageTerminalsForMcp(
+    callerTerminalId: string,
+    req: ManageTerminalsRequest,
+): Promise<ManageTerminalsResult> {
+    const { decision, ws } = await resolveAgentTarget(callerTerminalId, req.workspaceId);
+    if (!decision.allowed || !ws) {
+        return { ok: false, error: decision.reason, terminals: [] };
+    }
+
+    // A target terminal (write/read/kill) must belong to the resolved workspace —
+    // never let an agent reach a terminal in a workspace it can't act on.
+    const ownTerminal = (id: string | undefined) =>
+        !!id &&
+        !!listTerminalSpecs().find(
+            (s) => s.id === id && s.workspace_id === ws.id && s.type !== 'process',
+        );
+
+    try {
+        switch (req.action) {
+            case 'list':
+                return { ok: true, terminals: listAgentTerminals(ws) };
+            case 'read': {
+                if (!ownTerminal(req.id)) {
+                    return {
+                        ok: false,
+                        error: `No terminal "${req.id ?? ''}" in this workspace.`,
+                        terminals: listAgentTerminals(ws),
+                    };
+                }
+                const r = readTerminalOutput(req.id!, {
+                    cursor: req.cursor,
+                    bytes: req.bytes,
+                });
+                return {
+                    ok: true,
+                    terminals: listAgentTerminals(ws),
+                    affectedId: req.id,
+                    data: r.data,
+                    cursor: r.cursor,
+                    dropped: r.dropped,
+                };
+            }
+            case 'kill': {
+                if (!ownTerminal(req.id)) {
+                    return {
+                        ok: false,
+                        error: `No terminal "${req.id ?? ''}" in this workspace.`,
+                        terminals: listAgentTerminals(ws),
+                    };
+                }
+                killTerminalById(req.id!);
+                return { ok: true, terminals: listAgentTerminals(ws), affectedId: req.id };
+            }
+            case 'create': {
+                const cwdR = resolveAgentCwd(ws, { repo: req.repo, cwd: req.cwd });
+                if ('error' in cwdR) {
+                    return { ok: false, error: cwdR.error, terminals: listAgentTerminals(ws) };
+                }
+                const label = req.label?.trim() || 'Agent terminal';
+                const approved = await approveTerminalAction(ws, {
+                    title: 'An agent wants to open a terminal (it can run any command):',
+                    lines: [label, `in: ${cwdR.cwd}`],
+                });
+                if (!approved) {
+                    return {
+                        ok: false,
+                        error: 'Denied by user — no terminal was created.',
+                        terminals: listAgentTerminals(ws),
+                    };
+                }
+                const { id } = createAgentTerminal({
+                    workspaceId: ws.id,
+                    cwd: cwdR.cwd,
+                    label,
+                });
+                // Give the shell a moment, then return its initial scrollback.
+                const r = readTerminalOutput(id, {});
+                return {
+                    ok: true,
+                    terminals: listAgentTerminals(ws),
+                    affectedId: id,
+                    data: r.data,
+                    cursor: r.cursor,
+                };
+            }
+            case 'write': {
+                if (!ownTerminal(req.id)) {
+                    return {
+                        ok: false,
+                        error: `No terminal "${req.id ?? ''}" in this workspace.`,
+                        terminals: listAgentTerminals(ws),
+                    };
+                }
+                if (typeof req.data !== 'string' || req.data.length === 0) {
+                    return {
+                        ok: false,
+                        error: 'write requires non-empty `data`.',
+                        terminals: listAgentTerminals(ws),
+                    };
+                }
+                const preview =
+                    req.data.length > 200 ? req.data.slice(0, 200) + '…' : req.data;
+                const approved = await approveTerminalAction(ws, {
+                    title: 'An agent wants to send input to a terminal:',
+                    lines: [`terminal: ${req.id}`, `input: ${JSON.stringify(preview)}`],
+                });
+                if (!approved) {
+                    return {
+                        ok: false,
+                        error: 'Denied by user — nothing was sent.',
+                        terminals: listAgentTerminals(ws),
+                    };
+                }
+                writeToTerminal(req.id!, req.data);
+                return { ok: true, terminals: listAgentTerminals(ws), affectedId: req.id };
+            }
+        }
+    } catch (e) {
+        return {
+            ok: false,
+            error: e instanceof Error ? e.message : String(e),
+            terminals: listAgentTerminals(ws),
+        };
+    }
+    // Unreachable (every action returns), but TS needs a terminal value.
+    return { ok: false, error: 'Unhandled action.', terminals: listAgentTerminals(ws) };
+}
+
+/**
+ * Resolve the CLI command for an agent type from the configurable settings, or
+ * an explicit override. `custom` has no default — it needs an explicit command
+ * (here or in Settings). Returns null when nothing resolves.
+ */
+function resolveAgentCommand(agent: AgentType, override?: string): string | null {
+    const o = override?.trim();
+    if (o) return o;
+    const s = getAllSettings();
+    if (agent === 'claude') return (s.agent_command_claude || 'claude').trim() || 'claude';
+    if (agent === 'codex') return (s.agent_command_codex || 'codex').trim() || 'codex';
+    // custom: only the configured custom command (no built-in default).
+    const c = (s.agent_command_custom || '').trim();
+    return c || null;
+}
+
+/** Back the runAgent MCP tool (launch + drive a coding agent; gated). */
+async function runAgentForMcp(
+    callerTerminalId: string,
+    req: RunAgentRequest,
+): Promise<RunAgentResult> {
+    const { decision, ws } = await resolveAgentTarget(callerTerminalId, req.workspaceId);
+    if (!decision.allowed || !ws) {
+        return { ok: false, error: decision.reason };
+    }
+
+    const ownTerminal = (id: string | undefined) =>
+        !!id &&
+        !!listTerminalSpecs().find(
+            (s) => s.id === id && s.workspace_id === ws.id && s.type !== 'process',
+        );
+
+    try {
+        switch (req.action) {
+            case 'start': {
+                const agent: AgentType = req.agent ?? 'claude';
+                const command = resolveAgentCommand(agent, req.command);
+                if (!command) {
+                    return {
+                        ok: false,
+                        error:
+                            agent === 'custom'
+                                ? 'runAgent custom needs a `command` (or set agent_command_custom in Settings).'
+                                : `No command configured for agent "${agent}".`,
+                    };
+                }
+                const cwdR = resolveAgentCwd(ws, { repo: req.repo, cwd: req.cwd });
+                if ('error' in cwdR) return { ok: false, error: cwdR.error };
+
+                const approved = await approveTerminalAction(ws, {
+                    title: `An agent wants to LAUNCH a ${agent} coding agent (it can read, write, and run code on its own):`,
+                    lines: [`command: ${command}`, `in: ${cwdR.cwd}`],
+                });
+                if (!approved) {
+                    return { ok: false, error: 'Denied by user — no agent was launched.' };
+                }
+                const { id } = createAgentTerminal({
+                    workspaceId: ws.id,
+                    cwd: cwdR.cwd,
+                    label: `${agent} agent`,
+                    agentMeta: { agent, command },
+                });
+                // Launch the agent CLI in the fresh shell.
+                writeToTerminal(id, command + '\n');
+                return { ok: true, id, agent, command };
+            }
+            case 'send': {
+                if (!ownTerminal(req.id)) {
+                    return { ok: false, error: `No agent terminal "${req.id ?? ''}" in this workspace.` };
+                }
+                if (typeof req.prompt !== 'string' || req.prompt.length === 0) {
+                    return { ok: false, error: 'send requires a non-empty `prompt`.' };
+                }
+                const preview =
+                    req.prompt.length > 200 ? req.prompt.slice(0, 200) + '…' : req.prompt;
+                const approved = await approveTerminalAction(ws, {
+                    title: 'An agent wants to send a prompt to a running coding agent:',
+                    lines: [`terminal: ${req.id}`, `prompt: ${JSON.stringify(preview)}`],
+                });
+                if (!approved) {
+                    return { ok: false, error: 'Denied by user — nothing was sent.' };
+                }
+                writeToTerminal(req.id!, req.prompt + '\n');
+                return { ok: true, id: req.id };
+            }
+            case 'read': {
+                if (!ownTerminal(req.id)) {
+                    return { ok: false, error: `No agent terminal "${req.id ?? ''}" in this workspace.` };
+                }
+                const r = readTerminalOutput(req.id!, { cursor: req.cursor, bytes: req.bytes });
+                return { ok: true, id: req.id, data: r.data, cursor: r.cursor, dropped: r.dropped };
+            }
+            case 'stop': {
+                if (!ownTerminal(req.id)) {
+                    return { ok: false, error: `No agent terminal "${req.id ?? ''}" in this workspace.` };
+                }
+                killTerminalById(req.id!);
+                return { ok: true, id: req.id };
+            }
+        }
+    } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+    return { ok: false, error: 'Unhandled action.' };
+}
+
+/** The caller's own workspace + every workspace it governs (manageWorkspaces). */
+async function actionableWorkspaces(
+    callerTerminalId: string,
+): Promise<ManagedWorkspaceInfo[]> {
+    const callerWorkspaceId = callerTerminalId
+        ? getTerminalSpec(callerTerminalId)?.workspace_id ?? null
+        : null;
+    const callerWs = callerWorkspaceId ? getWorkspace(callerWorkspaceId) : null;
+    const out: ManagedWorkspaceInfo[] = [];
+    if (callerWs) {
+        out.push({
+            id: callerWs.id,
+            name: callerWs.project_name,
+            path: callerWs.path,
+            relation: 'self',
+        });
+        let governed = new Set<string>();
+        try {
+            governed = await governedWorkspaceIdsFor(callerWs.path);
+        } catch {
+            governed = new Set();
+        }
+        for (const w of listWorkspaces()) {
+            if (governed.has(w.id) && w.id !== callerWs.id) {
+                out.push({
+                    id: w.id,
+                    name: w.project_name,
+                    path: w.path,
+                    relation: 'governed',
+                });
+            }
+        }
+    }
+    return out;
+}
+
+/** Back the manageWorkspaces MCP tool (status + open/activate/remove; authorized). */
+async function manageWorkspacesForMcp(
+    callerTerminalId: string,
+    req: ManageWorkspacesRequest,
+): Promise<ManageWorkspacesResult> {
+    const workspaces = await actionableWorkspaces(callerTerminalId);
+
+    if (req.action === 'list' || req.action === 'status') {
+        return { ok: true, workspaces };
+    }
+
+    // open / activate / remove all target a specific workspace (own or governed).
+    const { decision, ws } = await resolveAgentTarget(callerTerminalId, req.workspaceId);
+    if (!decision.allowed || !ws) {
+        return { ok: false, error: decision.reason, workspaces };
+    }
+    try {
+        switch (req.action) {
+            case 'open':
+                await openWorkspace(ws.id);
+                break;
+            case 'activate':
+                // Activating = focus its window (open() already brings it forward)
+                // and surface it. openWorkspace is the existing "make it the
+                // active workspace" path.
+                await openWorkspace(ws.id);
+                showMasterWindow();
+                break;
+            case 'remove':
+                // UNREGISTER only — never touch disk. Mirrors the workspaces:remove
+                // IPC. The caller can't remove its own workspace out from under
+                // itself; guard that to avoid orphaning this very terminal.
+                if (ws.id === workspaces.find((w) => w.relation === 'self')?.id) {
+                    return {
+                        ok: false,
+                        error: "Refusing to unregister the caller's own workspace.",
+                        workspaces,
+                    };
+                }
+                removeWorkspace(ws.id);
+                broadcastWorkspacesChanged();
+                rebuildMenu();
+                break;
+        }
+    } catch (e) {
+        return {
+            ok: false,
+            error: e instanceof Error ? e.message : String(e),
+            workspaces,
+        };
+    }
+    return {
+        ok: true,
+        workspaces: await actionableWorkspaces(callerTerminalId),
+        affectedId: ws.id,
     };
 }
 
@@ -1179,6 +1680,10 @@ app.whenReady().then(async () => {
         manageProcess: (terminalId, req) => manageProcessForMcp(terminalId, req),
         provisionWorkspaces: (terminalId, req) =>
             provisionWorkspacesForMcp(terminalId, req),
+        manageTerminals: (terminalId, req) => manageTerminalsForMcp(terminalId, req),
+        runAgent: (terminalId, req) => runAgentForMcp(terminalId, req),
+        manageWorkspaces: (terminalId, req) =>
+            manageWorkspacesForMcp(terminalId, req),
     }).catch((e) => console.error('[mcp] failed to start', e));
     // Backfill the genie MCP entry into the Claude/Cursor config of any
     // workspace already opted in — now with the stable workspace endpoint URL,

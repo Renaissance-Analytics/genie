@@ -14,10 +14,12 @@ import {
     listTerminalSpecs,
     updateTerminalSpec,
     workspaceMcpEnabled,
+    createTerminalSpec,
 } from '../db';
 import { buildTynnCliEnv } from '../cli/tynn-cli';
 import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
+import { TerminalReadBuffer, type ReadResult } from './read-buffer';
 import {
     startProcess,
     stopProcess,
@@ -31,8 +33,10 @@ import {
 import {
     registerTerminalEndpoint,
     unregisterTerminalEndpoint,
+    workspaceEndpointUrl,
 } from '../mcp/server';
 import { getSnapshotStore, dbSettingsProvider } from './genie-adapter';
+import crypto from 'node:crypto';
 
 /**
  * Tier 2 resource cap. The number of terminals that may be RETAINED (kept
@@ -100,6 +104,89 @@ function noteTerminalActivity(terminalId: string): void {
 /** The most-recently-active terminal id for a workspace (or null). */
 export function lastActiveTerminalForWorkspace(workspaceId: string): string | null {
     return lastActiveByWorkspace.get(workspaceId) ?? null;
+}
+
+/**
+ * Bounded per-terminal output ring buffer for the agent-control MCP READ
+ * actions (manageTerminals.read / runAgent.read). Fed from the SAME onData
+ * fan-out the renderer windows get (below), so an agent can poll a terminal's
+ * recent output without owning a window. Module-scoped so killTerminalById +
+ * the exit handler can drop a dead terminal's buffer, and the agent helpers can
+ * read it. Capacity-capped (see read-buffer.ts) so it can't grow unboundedly.
+ */
+const agentReadBuffer = new TerminalReadBuffer();
+
+/** Read recent output for a terminal (agent-control MCP). */
+export function readTerminalOutput(
+    id: string,
+    opts: { cursor?: number; bytes?: number },
+): ReadResult {
+    if (opts.bytes !== undefined) return agentReadBuffer.readTail(id, opts.bytes);
+    return agentReadBuffer.readSince(id, opts.cursor);
+}
+
+/**
+ * Spawn a HEADLESS terminal for an agent (manageTerminals.create / runAgent.start)
+ * — a real pty with NO window owner, like the Process runners. It gets a persisted
+ * terminal spec (so it shows up in the workspace's terminal list and survives like
+ * any other), the bundled tynn-cli env, and — when the workspace has the agent MCP
+ * enabled — the GENIE_MCP_URL / GENIE_TERMINAL_ID env so a launched coding agent can
+ * itself reach Genie. Returns the new terminal id + its initial scrollback. The
+ * APPROVAL GATE is enforced by the caller (background.ts) BEFORE this runs.
+ */
+export function createAgentTerminal(opts: {
+    workspaceId: string;
+    cwd: string;
+    label: string;
+    /** Marks this terminal as running an agent (surfaced in the list). */
+    agentMeta?: { agent: 'claude' | 'codex' | 'custom'; command: string };
+}): { id: string; scrollback: string } {
+    const id = crypto.randomUUID();
+    const resolved = resolveDefaultShell(dbSettingsProvider());
+
+    // Persist a spec so the terminal is a first-class member of the workspace
+    // (appears in lists, can be reattached by a window, killed by the user).
+    createTerminalSpec({
+        id,
+        workspace_id: opts.workspaceId,
+        label: opts.label,
+        cwd: opts.cwd,
+        type: 'terminal',
+        meta: opts.agentMeta
+            ? { agent: opts.agentMeta.agent, agent_command: opts.agentMeta.command }
+            : {},
+    });
+
+    // Env: bundled tynn-cli (behind its setting) + the workspace's agent MCP
+    // endpoint when enabled, so a coding agent launched here can call imDone etc.
+    let env: Record<string, string> = {};
+    const cliEnabled = getAllSettings().cli_tools_in_terminals !== 'off';
+    env = { ...buildTynnCliEnv(opts.cwd, cliEnabled) };
+    if (workspaceMcpEnabled(opts.workspaceId)) {
+        const mcpUrl = registerTerminalEndpoint(id);
+        if (mcpUrl) {
+            env = { ...env, GENIE_MCP_URL: mcpUrl, GENIE_TERMINAL_ID: id };
+        }
+    }
+
+    const createOpts: CreateTerminalOpts = {
+        id,
+        cwd: opts.cwd,
+        shell: resolved.command,
+        args: resolved.args,
+        env,
+    };
+    const result = terminalManager().create(createOpts);
+    noteTerminalActivity(id);
+    // Tell every window the spec set changed so the new terminal appears live.
+    broadcastTerminalSpecsChanged();
+    return { id, scrollback: result.scrollback };
+}
+
+/** Send input to a terminal (manageTerminals.write / runAgent.send). */
+export function writeToTerminal(id: string, data: string): boolean {
+    noteTerminalActivity(id);
+    return terminalManager().write(id, data);
 }
 
 export function registerTerminalIpc(): void {
@@ -330,6 +417,9 @@ export function registerTerminalIpc(): void {
             // Buffer output for headless Process runners (the hover log popover).
             // No-ops for non-process ids.
             recordProcessOutput(id, data);
+            // Mirror into the agent-control read buffer so manageTerminals.read /
+            // runAgent.read can return recent output even with no window attached.
+            agentReadBuffer.append(id, data);
             const entry = ownersByTerminal.get(id);
             if (!entry) return;
             for (const target of entry.owners) {
@@ -341,6 +431,8 @@ export function registerTerminalIpc(): void {
             // Headless Process runners have no window owner — let the supervisor
             // decide their fate (restart/crash/stop). No-ops for other ids.
             onProcessPtyExit(id, payload);
+            // The pty is gone — drop its agent read buffer so it can't leak.
+            agentReadBuffer.forget(id);
             const entry = ownersByTerminal.get(id);
             ownersByTerminal.delete(id);
             if (!entry) return;
@@ -417,6 +509,8 @@ export function killTerminalById(id: string): boolean {
         return true;
     }
     ownersByTerminal.delete(id);
+    // Drop the agent read buffer for this terminal.
+    agentReadBuffer.forget(id);
     // Drop the per-terminal MCP endpoint so its token stops resolving.
     unregisterTerminalEndpoint(id);
     // kill() also clears the retained flag in the manager.

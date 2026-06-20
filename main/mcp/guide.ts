@@ -75,6 +75,46 @@ blocks \`provision\` on your approval modal; ON provisions directly. Called from
 non-Ops workspace it returns a clear "not an ops project" message. Pass
 \`terminalId\` (your \`GENIE_TERMINAL_ID\`) for exact workspace resolution; optional.
 
+### manageTerminals
+**Spawn and drive real shell TERMINALS** — in your own workspace, or (for an Ops
+agent) a workspace you govern. This EXECUTES ARBITRARY CODE. Actions (\`action\`):
+- \`create\` — open a terminal (optional \`repo\` (repos/<repo>) or \`cwd\`, optional
+  \`label\`); returns its id + initial output.
+- \`write\` — send \`data\` to terminal \`id\`. End with \`"\\n"\` to RUN it as a
+  command; omit the newline to type without submitting.
+- \`read\` — recent output of \`id\`: pass a \`cursor\` from a prior read for just
+  what's new, or \`bytes\` for the last N bytes. (Output comes from a bounded
+  buffer; a read after lots of output may report \`dropped: true\`.)
+- \`list\` — the workspace's terminals. \`kill\` — terminate \`id\`.
+Target a governed workspace with \`workspaceId\`; omit it for your own.
+**Approval:** \`create\` and \`write\` are GATED — when the target workspace
+requires approval (the default) each blocks on an OS modal until the user
+approves; when the user turned approval OFF they run immediately. \`read\` /
+\`list\` never prompt.
+
+### runAgent
+**Launch and control a coding agent** (claude / codex / a custom CLI) inside a
+terminal — your own workspace or one you govern. A thin layer over
+manageTerminals; it SPAWNS AN AUTONOMOUS AGENT. Actions (\`action\`):
+- \`start\` — open a terminal + launch the agent. \`agent\` is \`claude\` | \`codex\`
+  | \`custom\` (default \`claude\`); the real CLI is configurable in Genie Settings,
+  or pass an explicit \`command\` (required for \`custom\` unless one is configured).
+  Optional \`repo\`/\`cwd\`. Returns the agent terminal's \`id\` + the launched command.
+- \`send\` — deliver a \`prompt\` to the running agent \`id\`.
+- \`read\` — its output (\`cursor\` for new, or \`bytes\` for the last N).
+- \`stop\` — terminate the agent \`id\`.
+**Approval:** \`start\` and \`send\` are GATED the same way (OFF runs immediately);
+\`read\` never prompts.
+
+### manageWorkspaces
+**Manage the Genie workspaces you can act on** — your own + (for an Ops agent)
+the ones you govern. Actions (\`action\`): \`list\`/\`status\` (read-only — each
+workspace's id, name, path, and whether it's yours or a governed child);
+\`open\` / \`activate\` (focus / surface a workspace); \`remove\` (UNREGISTER a
+workspace from Genie — never deletes anything on disk). Targets are limited to
+your own or a governed workspace. To CREATE missing child workspaces, use
+\`provisionWorkspaces\`.
+
 ### imDone
 Call this the moment you **finish your work / hand back to the user** in THIS
 terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row,
@@ -155,6 +195,7 @@ export const GENIE_AGENTS_BRIEF = `This workspace runs inside **Genie** — a de
 - **\`imDone\`** — **ALWAYS call \`imDone\` the moment you finish or hand back.** Genie glows this terminal across the whole UI until the user looks. Pass \`terminalId\` (your \`GENIE_TERMINAL_ID\`) for exact targeting.
 - **\`ForceTheQuestion\`** — when you need a decision or are blocked, you **MUST call \`ForceTheQuestion\`** — do NOT ask in plaintext and wait. It pops an OS-level, always-on-top modal (above every app) with your question(s) (options + a free-text note) and blocks for the answer. Batch all questions into one call.
 - **\`manageProcess\`** — the way to set up and control this workspace's background processes (dev servers, workers, SSR) — \`list\` / \`create\` (label + command, optional repo + autostart) / \`start\` / \`stop\` / \`restart\`.
+- **\`manageTerminals\`** / **\`runAgent\`** — spawn + drive real terminals (run commands, read output) and launch + control coding agents (claude / codex / custom) — in this workspace or one this Ops project governs. High-power (arbitrary code + autonomous agents): \`create\`/\`write\`/agent \`start\`/\`send\` are approval-gated by default. **\`manageWorkspaces\`** lists/opens/activates/removes the workspaces you can act on.
 
 **Automate \`imDone\`:** if your harness supports an on-finish hook (Claude Code's \`Stop\` hook in \`.claude/settings.json\`; Codex's \`notify\`), wire it ONCE to POST a \`tools/call\` for \`imDone\` to \`$GENIE_MCP_URL\` (passing \`$GENIE_TERMINAL_ID\`) so the glow fires automatically every finish. Set this up in YOUR harness config yourself — Genie won't touch it. Call \`genieGuide\` for the exact hook snippet.
 

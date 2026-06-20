@@ -322,6 +322,26 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v14: per-workspace "Terminal & agent approval" gate. Higher-power
+            // sibling of process_approval (v13). When ON (the safe default), an
+            // agent that spawns a terminal / writes to one / launches or drives a
+            // coding agent via the manageTerminals + runAgent MCP tools must be
+            // approved by the user first; OFF runs it immediately. Default 1 so an
+            // agent can't silently execute arbitrary commands or start sub-agents
+            // out of the box. Distinct from process_approval because this is
+            // strictly higher-power (arbitrary code execution + autonomous agent
+            // spawning), so it gets its own toggle.
+            version: 14,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('terminal_approval')) {
+                    db.exec(
+                        `ALTER TABLE workspaces ADD COLUMN terminal_approval INTEGER NOT NULL DEFAULT 1`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -416,6 +436,17 @@ export interface Settings {
      *  ids (k/v values are text, like notifications_muted). Persists the
      *  sidebar expand/collapse state across restarts. Default '[]'. */
     collapsed_workspaces?: string;
+    /** The CLI invocation the runAgent MCP tool launches for a `claude` agent.
+     *  Default 'claude'. The user can set the real command (e.g. a wrapper or a
+     *  full path with flags). */
+    agent_command_claude?: string;
+    /** The CLI invocation the runAgent MCP tool launches for a `codex` agent.
+     *  Default 'codex'. */
+    agent_command_codex?: string;
+    /** The CLI invocation the runAgent MCP tool launches for a `custom` agent.
+     *  No default — the agent must pass an explicit `command`, or this is used
+     *  when set. Empty means "no preset; require an explicit command". */
+    agent_command_custom?: string;
 }
 
 export function getAllSettings(): Settings {
@@ -469,6 +500,9 @@ export function getAllSettings(): Settings {
         terminal_copy_paste:
             (out['terminal_copy_paste'] as 'contextmenu' | 'linux' | 'winmac') ?? 'contextmenu',
         collapsed_workspaces: out['collapsed_workspaces'] ?? '[]',
+        agent_command_claude: out['agent_command_claude'] ?? 'claude',
+        agent_command_codex: out['agent_command_codex'] ?? 'codex',
+        agent_command_custom: out['agent_command_custom'] ?? '',
     };
 }
 
@@ -513,6 +547,11 @@ export interface WorkspaceRow {
     /** Require user approval before an agent (manageProcess MCP tool) creates or
      *  starts a background process. 1=require approval (default), 0=auto-run. */
     process_approval: number;
+    /** Require user approval before an agent (manageTerminals / runAgent MCP
+     *  tools) spawns a terminal, writes to one, or launches/drives a coding
+     *  agent. 1=require approval (default), 0=auto-run. Higher-power sibling of
+     *  process_approval. */
+    terminal_approval: number;
 }
 
 export function listWorkspaces(): WorkspaceRow[] {
@@ -557,10 +596,14 @@ export function getWorkspace(id: string): WorkspaceRow | undefined {
 }
 
 export function addWorkspace(
-    row: Omit<WorkspaceRow, 'sort_order' | 'mcp_enabled' | 'process_approval'> & {
+    row: Omit<
+        WorkspaceRow,
+        'sort_order' | 'mcp_enabled' | 'process_approval' | 'terminal_approval'
+    > & {
         sort_order?: number;
         mcp_enabled?: number;
         process_approval?: number;
+        terminal_approval?: number;
     },
 ): WorkspaceRow {
     // Mirror project_id / project_name into the legacy tynn_* columns
@@ -670,6 +713,31 @@ export function workspaceProcessApproval(id: string): boolean {
         )
         .get(id);
     return !row || row.process_approval !== 0;
+}
+
+/**
+ * Toggle the "require approval before an agent spawns a terminal / launches an
+ * agent" gate (the manageTerminals + runAgent MCP tools).
+ */
+export function setWorkspaceTerminalApproval(id: string, require: boolean): void {
+    getDb()
+        .prepare('UPDATE workspaces SET terminal_approval = ? WHERE id = ?')
+        .run(require ? 1 : 0, id);
+}
+
+/**
+ * Whether an agent spawning a terminal / writing to one / launching or driving
+ * a coding agent needs user approval in this workspace. Defaults to TRUE
+ * (require approval) — for an unknown id too, so the safe gate is the fallback,
+ * never a silent auto-run of arbitrary code.
+ */
+export function workspaceTerminalApproval(id: string): boolean {
+    const row = getDb()
+        .prepare<[string], { terminal_approval: number } | undefined>(
+            'SELECT terminal_approval FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    return !row || row.terminal_approval !== 0;
 }
 
 // Backend connection helpers --------------------------------------------

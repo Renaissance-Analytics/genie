@@ -48,6 +48,10 @@ export interface WorkspaceRow {
     /** Require user approval before an agent (manageProcess) starts a background
      *  process. 1=require approval (default), 0=auto-run. */
     process_approval?: number;
+    /** Require user approval before an agent (manageTerminals / runAgent) spawns
+     *  a terminal, writes to one, or launches/drives a coding agent. 1=require
+     *  approval (default), 0=auto-run. */
+    terminal_approval?: number;
 }
 
 export interface DetectResult {
@@ -595,6 +599,12 @@ interface GenieApi {
             id: string,
             require: boolean,
         ) => Promise<{ ok: boolean }>;
+        /** Toggle "require approval before an agent spawns a terminal / launches
+         *  a coding agent" (manageTerminals / runAgent). */
+        setTerminalApproval: (
+            id: string,
+            require: boolean,
+        ) => Promise<{ ok: boolean }>;
         /** Repo subfolder names under the workspace envelope (for Add Process cwd). */
         repos: (id: string) => Promise<string[]>;
         open: (id: string) => Promise<{ ok: boolean }>;
@@ -1092,6 +1102,7 @@ export function makeSystemWorkspace(homePath: string): WorkspaceRow {
         created_by_genie: 0,
         mcp_enabled: 0,
         process_approval: 1,
+        terminal_approval: 1,
     };
 }
 

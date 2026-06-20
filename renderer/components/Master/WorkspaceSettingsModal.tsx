@@ -19,15 +19,24 @@ export default function WorkspaceSettingsModal({
 }) {
     // Per-workspace "require approval before an agent starts a process".
     const [processApproval, setProcessApproval] = useState<boolean | null>(null);
+    // Per-workspace "require approval before an agent spawns a terminal /
+    // launches a coding agent" (the higher-power manageTerminals / runAgent gate).
+    const [terminalApproval, setTerminalApproval] = useState<boolean | null>(null);
 
     useEffect(() => {
         let alive = true;
         void (async () => {
             try {
                 const ws = (await api().workspaces.list()).find((w) => w.id === workspace.id);
-                if (alive) setProcessApproval(ws ? ws.process_approval !== 0 : true);
+                if (alive) {
+                    setProcessApproval(ws ? ws.process_approval !== 0 : true);
+                    setTerminalApproval(ws ? ws.terminal_approval !== 0 : true);
+                }
             } catch {
-                if (alive) setProcessApproval(true);
+                if (alive) {
+                    setProcessApproval(true);
+                    setTerminalApproval(true);
+                }
             }
         })();
         return () => {
@@ -41,6 +50,15 @@ export default function WorkspaceSettingsModal({
             await api().workspaces.setProcessApproval(workspace.id, require);
         } catch {
             setProcessApproval((prev) => !prev); // revert
+        }
+    };
+
+    const toggleTerminalApproval = async (require: boolean) => {
+        setTerminalApproval(require); // optimistic
+        try {
+            await api().workspaces.setTerminalApproval(workspace.id, require);
+        } catch {
+            setTerminalApproval((prev) => !prev); // revert
         }
     };
 
@@ -88,6 +106,39 @@ export default function WorkspaceSettingsModal({
                             onChange={(e) => void toggleProcessApproval(e.target.checked)}
                         />
                         <Text size="sm">Require my approval before an agent starts a process</Text>
+                    </label>
+                </div>
+
+                <div
+                    style={{
+                        paddingTop: 12,
+                        borderTop: '1px solid var(--border-1)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                    }}
+                >
+                    <Heading as="h3" size="xs" style={{ margin: 0 }}>
+                        Terminal &amp; agent approval
+                    </Heading>
+                    <Text size="xs" className="text-zinc-500">
+                        When ON, an agent that tries to open a terminal, run a
+                        command, or launch/drive a coding agent (via{' '}
+                        <code>manageTerminals</code> / <code>runAgent</code>) must be
+                        approved by you first. This is higher-power than process
+                        approval — it can execute arbitrary code and spawn other
+                        agents — so leave it on unless you trust the agent fully.
+                    </Text>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                        <input
+                            type="checkbox"
+                            checked={terminalApproval ?? true}
+                            disabled={terminalApproval === null}
+                            onChange={(e) => void toggleTerminalApproval(e.target.checked)}
+                        />
+                        <Text size="sm">
+                            Require my approval before an agent runs a terminal or launches an agent
+                        </Text>
                     </label>
                 </div>
             </div>

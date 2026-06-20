@@ -149,6 +149,8 @@ const api = {
             ipcRenderer.invoke('workspaces:set-mcp', id, enabled),
         setProcessApproval: (id: string, require: boolean) =>
             ipcRenderer.invoke('workspaces:set-process-approval', id, require),
+        setTerminalApproval: (id: string, require: boolean) =>
+            ipcRenderer.invoke('workspaces:set-terminal-approval', id, require),
         repos: (id: string) =>
             ipcRenderer.invoke('workspaces:repos', id) as Promise<string[]>,
         open: (id: string) => ipcRenderer.invoke('workspaces:open', id),

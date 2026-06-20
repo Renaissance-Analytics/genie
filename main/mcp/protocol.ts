@@ -150,6 +150,40 @@ export interface McpContext {
         terminalId: string,
         req: ProvisionWorkspacesRequest,
     ) => Promise<ProvisionWorkspacesResult>;
+    /**
+     * Drive terminals in the caller's workspace OR a workspace it governs (the
+     * manageTerminals tool): spawn a pty, write input/keystrokes, read recent
+     * output (from a bounded ring buffer), list, kill. create/write are
+     * approval-gated per the target workspace's terminal-approval toggle; read/
+     * list are read-only. Does the pty + db + gate + cross-workspace
+     * authorization I/O (kept out of this pure module).
+     */
+    manageTerminals: (
+        terminalId: string,
+        req: ManageTerminalsRequest,
+    ) => Promise<ManageTerminalsResult>;
+    /**
+     * Launch + control a coding agent inside a terminal (the runAgent tool),
+     * layered on manageTerminals: start (spawn a terminal + launch claude/codex/
+     * custom by its configurable command), send (write a prompt), read (its
+     * output), stop. start/send are approval-gated; read is read-only. Does the
+     * same pty + gate + authorization I/O.
+     */
+    runAgent: (
+        terminalId: string,
+        req: RunAgentRequest,
+    ) => Promise<RunAgentResult>;
+    /**
+     * Full workspace management for an agent (the manageWorkspaces tool): a
+     * read-only `status`/`list`, plus `open` / `activate` / `remove` for the
+     * caller's own workspace or a governed child. `remove` only UNREGISTERS a
+     * workspace from Genie — it never deletes anything on disk. Honours the
+     * same cross-workspace authorization.
+     */
+    manageWorkspaces: (
+        terminalId: string,
+        req: ManageWorkspacesRequest,
+    ) => Promise<ManageWorkspacesResult>;
 }
 
 /** A managed background process as the manageProcess tool reports it. */
@@ -217,6 +251,140 @@ export interface ProvisionWorkspacesResult {
     provisioned?: string[];
     /** provision: per-child failures (best-effort — one bad child doesn't abort). */
     errors?: string[];
+}
+
+// --- manageTerminals ---------------------------------------------------------
+
+/** One terminal as the manageTerminals tool reports it. */
+export interface ManagedTerminalInfo {
+    id: string;
+    /** Spec label, or '' for an ad-hoc terminal with no spec. */
+    label: string;
+    /** cwd relative to the workspace root, or '' for the root. */
+    cwd: string;
+    /** True when this terminal is currently running an agent (via runAgent). */
+    agent?: 'claude' | 'codex' | 'custom' | null;
+}
+
+export interface ManageTerminalsRequest {
+    action: 'create' | 'write' | 'read' | 'list' | 'kill';
+    /**
+     * Target workspace. Omit to act on the caller's own workspace; pass a
+     * workspace id the caller GOVERNS (Ops → child) to act there. Any other id
+     * is rejected.
+     */
+    workspaceId?: string;
+    /** create (optional): a repo subfolder name (repos/<repo>) to spawn in. */
+    repo?: string;
+    /** create (optional): an absolute or workspace-relative cwd (overrides repo). */
+    cwd?: string;
+    /** create (optional): a human label for the new terminal. */
+    label?: string;
+    /** write | read | kill: the target terminal id (from a prior create/list). */
+    id?: string;
+    /** write: the text to send to the terminal. A trailing "\n" runs it as a
+     *  command; omit the newline to type without submitting. */
+    data?: string;
+    /** read (optional): continue from this cursor (from a prior read) for "what's
+     *  new". Omit for the most recent output. */
+    cursor?: number;
+    /** read (optional): instead of a cursor, return the last N bytes. */
+    bytes?: number;
+}
+
+export interface ManageTerminalsResult {
+    ok: boolean;
+    /** Set when ok is false (denied, bad workspace, unknown id, missing args, …). */
+    error?: string;
+    /** The target workspace's terminals after the action (always on ok). */
+    terminals: ManagedTerminalInfo[];
+    /** The terminal the action targeted/created, when applicable. */
+    affectedId?: string;
+    /** read: the output bytes for this read. */
+    data?: string;
+    /** read: the cursor to pass to the NEXT read to continue from here. */
+    cursor?: number;
+    /** read: true when some output was evicted by the buffer cap before this read. */
+    dropped?: boolean;
+}
+
+// --- runAgent ----------------------------------------------------------------
+
+export type AgentType = 'claude' | 'codex' | 'custom';
+
+export interface RunAgentRequest {
+    action: 'start' | 'send' | 'read' | 'stop';
+    /** Target workspace (own, or a governed child). Same rules as manageTerminals. */
+    workspaceId?: string;
+    /** start: which agent CLI to launch. Default 'claude'. */
+    agent?: AgentType;
+    /** start (custom, or to override): the exact command line to run. Required
+     *  for `custom` unless a custom command is configured in Settings. */
+    command?: string;
+    /** start (optional): a repo subfolder (repos/<repo>) to launch in. */
+    repo?: string;
+    /** start (optional): an absolute or workspace-relative cwd (overrides repo). */
+    cwd?: string;
+    /** send | read | stop: the agent terminal id (returned by a prior start). */
+    id?: string;
+    /** send: the prompt/text to deliver to the running agent (a newline is added). */
+    prompt?: string;
+    /** read (optional): continue from this cursor (from a prior read). */
+    cursor?: number;
+    /** read (optional): instead of a cursor, return the last N bytes. */
+    bytes?: number;
+}
+
+export interface RunAgentResult {
+    ok: boolean;
+    /** Set when ok is false (denied, no command configured, unknown id, …). */
+    error?: string;
+    /** start: the new agent terminal's id. */
+    id?: string;
+    /** start: the agent type launched. */
+    agent?: AgentType;
+    /** start: the resolved command line that was launched. */
+    command?: string;
+    /** read: the output bytes for this read. */
+    data?: string;
+    /** read: the cursor to continue from. */
+    cursor?: number;
+    /** read: true when buffered output was evicted before this read. */
+    dropped?: boolean;
+}
+
+// --- manageWorkspaces --------------------------------------------------------
+
+/** One workspace as the manageWorkspaces tool reports it. */
+export interface ManagedWorkspaceInfo {
+    id: string;
+    name: string;
+    path: string;
+    /** Relationship to the caller: its own workspace, or a governed child. */
+    relation: 'self' | 'governed';
+}
+
+export interface ManageWorkspacesRequest {
+    /**
+     * - `list` / `status`: read-only — the caller's workspace + every workspace
+     *   it governs.
+     * - `open`: open (focus) a workspace window.
+     * - `activate`: make a workspace the active one in Genie.
+     * - `remove`: UNREGISTER a workspace from Genie (never deletes disk).
+     */
+    action: 'list' | 'status' | 'open' | 'activate' | 'remove';
+    /** Target workspace for open/activate/remove (own or governed). */
+    workspaceId?: string;
+}
+
+export interface ManageWorkspacesResult {
+    ok: boolean;
+    /** Set when ok is false (denied, unknown id, …). */
+    error?: string;
+    /** The caller's workspace + governed children (always on ok). */
+    workspaces: ManagedWorkspaceInfo[];
+    /** The workspace the action targeted, when applicable. */
+    affectedId?: string;
 }
 
 const TERMINAL_ID_PROP = {
@@ -314,6 +482,136 @@ const PROVISION_WORKSPACES_TOOL = {
                 enum: ['status', 'provision'],
                 description:
                     'status: list governed children + each one\'s workspace status. provision: create the missing child workspaces (honouring the approval toggle).',
+            },
+        },
+        required: ['action'],
+        additionalProperties: false,
+    },
+};
+
+const TARGET_WORKSPACE_PROP = {
+    workspaceId: {
+        type: 'string',
+        description:
+            "The workspace to act in. Omit to act in YOUR OWN workspace. An Ops agent may pass the id of a workspace it GOVERNS (a child project) to act there; any other workspace is rejected.",
+    },
+} as const;
+
+const MANAGE_TERMINALS_TOOL = {
+    name: 'manageTerminals',
+    description:
+        "Spawn and drive TERMINALS — real shell sessions — in your own workspace, or (for an Ops agent) a workspace you govern. This EXECUTES ARBITRARY CODE: `create` opens a pty, `write` sends input (a command + \"\\n\" runs it; without the newline it just types), and the shell does whatever you tell it. Use it to run builds/tests/scripts and to operate interactive tools. Actions: `create` (spawn a terminal — optional `repo` (repos/<repo>) or `cwd`, optional `label`; returns its id + recent output); `write` (send `data` to terminal `id`); `read` (recent output of `id` — pass a `cursor` from a prior read for just-what's-new, or `bytes` for the last N bytes); `list` (terminals in the workspace); `kill` (terminate `id`). SAFETY: `create` and `write` are APPROVAL-GATED — when the target workspace requires approval (the default), each blocks on an OS modal until the user approves; when the user has turned approval OFF they run immediately. `read` and `list` never prompt. Output is read from a bounded buffer (oldest bytes age out), so a `read` after a long-running command may report `dropped:true`.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            ...TARGET_WORKSPACE_PROP,
+            action: {
+                type: 'string',
+                enum: ['create', 'write', 'read', 'list', 'kill'],
+                description: 'What to do.',
+            },
+            repo: {
+                type: 'string',
+                description:
+                    'create (optional): a repo subfolder to spawn inside (repos/<repo>); omit for the workspace root.',
+            },
+            cwd: {
+                type: 'string',
+                description:
+                    'create (optional): an absolute or workspace-relative working directory (overrides `repo`).',
+            },
+            label: {
+                type: 'string',
+                description: 'create (optional): a human label for the new terminal.',
+            },
+            id: {
+                type: 'string',
+                description: 'write | read | kill: the target terminal id (from a create/list).',
+            },
+            data: {
+                type: 'string',
+                description:
+                    'write: text to send. End with "\\n" to run it as a command; omit the newline to type without submitting.',
+            },
+            cursor: {
+                type: 'number',
+                description: 'read (optional): continue from this cursor (from a prior read) for new output.',
+            },
+            bytes: {
+                type: 'number',
+                description: 'read (optional): return the last N bytes instead of using a cursor.',
+            },
+        },
+        required: ['action'],
+        additionalProperties: false,
+    },
+};
+
+const RUN_AGENT_TOOL = {
+    name: 'runAgent',
+    description:
+        "Launch and control a CODING AGENT (claude / codex / a custom CLI) inside a terminal — in your own workspace or one you govern. This SPAWNS AN AUTONOMOUS AGENT that can itself read, write, and run code, so it is high-power. A thin layer over manageTerminals. Actions: `start` (open a terminal and launch the agent — `agent` is 'claude' | 'codex' | 'custom', default 'claude'; the actual CLI command is configurable in Genie Settings, or pass an explicit `command` (required for 'custom' unless a custom command is configured); optional `repo`/`cwd`; returns the agent terminal's `id` + the launched command); `send` (deliver a `prompt` to the running agent `id`); `read` (its output — `cursor` for new output, or `bytes` for the last N); `stop` (terminate the agent `id`). SAFETY: `start` and `send` are APPROVAL-GATED — when the target workspace requires approval (the default) each blocks on an OS modal showing exactly what will launch/run until the user approves; OFF runs immediately. `read` never prompts.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            ...TARGET_WORKSPACE_PROP,
+            action: {
+                type: 'string',
+                enum: ['start', 'send', 'read', 'stop'],
+                description: 'What to do.',
+            },
+            agent: {
+                type: 'string',
+                enum: ['claude', 'codex', 'custom'],
+                description: "start: which agent CLI to launch. Default 'claude'.",
+            },
+            command: {
+                type: 'string',
+                description:
+                    "start: the exact command line to launch. Required for 'custom' unless a custom command is configured in Settings; overrides the configured command for claude/codex.",
+            },
+            repo: {
+                type: 'string',
+                description: 'start (optional): a repo subfolder (repos/<repo>) to launch in.',
+            },
+            cwd: {
+                type: 'string',
+                description: 'start (optional): an absolute or workspace-relative cwd (overrides `repo`).',
+            },
+            id: {
+                type: 'string',
+                description: 'send | read | stop: the agent terminal id (from a prior start).',
+            },
+            prompt: {
+                type: 'string',
+                description: 'send: the prompt/text to deliver to the running agent (a newline is appended).',
+            },
+            cursor: {
+                type: 'number',
+                description: 'read (optional): continue from this cursor (from a prior read).',
+            },
+            bytes: {
+                type: 'number',
+                description: 'read (optional): return the last N bytes instead of a cursor.',
+            },
+        },
+        required: ['action'],
+        additionalProperties: false,
+    },
+};
+
+const MANAGE_WORKSPACES_TOOL = {
+    name: 'manageWorkspaces',
+    description:
+        "Manage Genie WORKSPACES you can act on — your own and (for an Ops agent) the ones you govern. Actions: `list` / `status` (read-only — every workspace you may act on, with its id, name, path, and whether it's your own or a governed child); `open` (open/focus a workspace's window); `activate` (make a workspace the active one in Genie); `remove` (UNREGISTER a workspace from Genie — this only removes it from Genie's list, it NEVER deletes anything on disk). Targets are limited to your own workspace or one you govern; any other is rejected. To CREATE/clone missing child workspaces for an Ops project, use `provisionWorkspaces` instead.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            ...TARGET_WORKSPACE_PROP,
+            action: {
+                type: 'string',
+                enum: ['list', 'status', 'open', 'activate', 'remove'],
+                description: 'What to do.',
             },
         },
         required: ['action'],
@@ -560,6 +858,9 @@ export async function handleMcpMessage(
                     FORCE_QUESTION_TOOL,
                     MANAGE_PROCESS_TOOL,
                     PROVISION_WORKSPACES_TOOL,
+                    MANAGE_TERMINALS_TOOL,
+                    RUN_AGENT_TOOL,
+                    MANAGE_WORKSPACES_TOOL,
                     GUIDE_TOOL,
                 ],
             });
@@ -673,6 +974,129 @@ export async function handleMcpMessage(
                             : '';
                     summary = head + tail;
                 }
+                return ok(msg.id, {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `${summary}\n\n${JSON.stringify(result, null, 2)}`,
+                        },
+                    ],
+                });
+            }
+            if (params.name === 'manageTerminals') {
+                const a = (params.arguments ?? {}) as Partial<ManageTerminalsRequest>;
+                const action = a.action;
+                if (
+                    action !== 'create' &&
+                    action !== 'write' &&
+                    action !== 'read' &&
+                    action !== 'list' &&
+                    action !== 'kill'
+                ) {
+                    return err(
+                        msg.id,
+                        -32602,
+                        'manageTerminals requires `action`: create | write | read | list | kill.',
+                    );
+                }
+                const result = await ctx.manageTerminals(ctx.terminalId, {
+                    action,
+                    workspaceId: a.workspaceId,
+                    repo: a.repo,
+                    cwd: a.cwd,
+                    label: a.label,
+                    id: a.id,
+                    data: a.data,
+                    cursor: a.cursor,
+                    bytes: a.bytes,
+                });
+                const summary = result.ok
+                    ? action === 'read'
+                        ? `Read ${result.data?.length ?? 0} byte(s)${result.dropped ? ' (some earlier output was dropped)' : ''}.`
+                        : `${result.terminals.length} terminal${result.terminals.length === 1 ? '' : 's'} in the workspace${
+                              result.affectedId ? ` (acted on ${result.affectedId})` : ''
+                          }.`
+                    : `manageTerminals failed: ${result.error ?? 'unknown error'}`;
+                return ok(msg.id, {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `${summary}\n\n${JSON.stringify(result, null, 2)}`,
+                        },
+                    ],
+                });
+            }
+            if (params.name === 'runAgent') {
+                const a = (params.arguments ?? {}) as Partial<RunAgentRequest>;
+                const action = a.action;
+                if (
+                    action !== 'start' &&
+                    action !== 'send' &&
+                    action !== 'read' &&
+                    action !== 'stop'
+                ) {
+                    return err(
+                        msg.id,
+                        -32602,
+                        'runAgent requires `action`: start | send | read | stop.',
+                    );
+                }
+                const result = await ctx.runAgent(ctx.terminalId, {
+                    action,
+                    workspaceId: a.workspaceId,
+                    agent: a.agent,
+                    command: a.command,
+                    repo: a.repo,
+                    cwd: a.cwd,
+                    id: a.id,
+                    prompt: a.prompt,
+                    cursor: a.cursor,
+                    bytes: a.bytes,
+                });
+                let summary: string;
+                if (!result.ok) {
+                    summary = `runAgent failed: ${result.error ?? 'unknown error'}`;
+                } else if (action === 'start') {
+                    summary = `Launched ${result.agent ?? 'agent'} (${result.command ?? ''}) as terminal ${result.id ?? '?'}.`;
+                } else if (action === 'read') {
+                    summary = `Read ${result.data?.length ?? 0} byte(s)${result.dropped ? ' (some earlier output was dropped)' : ''}.`;
+                } else {
+                    summary = `runAgent ${action} ok${result.id ? ` (${result.id})` : ''}.`;
+                }
+                return ok(msg.id, {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `${summary}\n\n${JSON.stringify(result, null, 2)}`,
+                        },
+                    ],
+                });
+            }
+            if (params.name === 'manageWorkspaces') {
+                const a = (params.arguments ?? {}) as Partial<ManageWorkspacesRequest>;
+                const action = a.action;
+                if (
+                    action !== 'list' &&
+                    action !== 'status' &&
+                    action !== 'open' &&
+                    action !== 'activate' &&
+                    action !== 'remove'
+                ) {
+                    return err(
+                        msg.id,
+                        -32602,
+                        'manageWorkspaces requires `action`: list | status | open | activate | remove.',
+                    );
+                }
+                const result = await ctx.manageWorkspaces(ctx.terminalId, {
+                    action,
+                    workspaceId: a.workspaceId,
+                });
+                const summary = result.ok
+                    ? `${result.workspaces.length} workspace${result.workspaces.length === 1 ? '' : 's'} you can act on${
+                          result.affectedId ? ` (acted on ${result.affectedId})` : ''
+                      }.`
+                    : `manageWorkspaces failed: ${result.error ?? 'unknown error'}`;
                 return ok(msg.id, {
                     content: [
                         {

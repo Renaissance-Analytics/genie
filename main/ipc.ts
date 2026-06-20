@@ -9,6 +9,7 @@ import {
     reorderWorkspaces,
     setWorkspaceMcp,
     setWorkspaceProcessApproval,
+    setWorkspaceTerminalApproval,
     setSettings,
     touchWorkspace,
     updateWorkspace,
@@ -225,6 +226,13 @@ export function registerIpcHandlers(): void {
         'workspaces:set-process-approval',
         (_e, id: string, require: boolean) => {
             setWorkspaceProcessApproval(id, require);
+            return { ok: true };
+        },
+    );
+    ipcMain.handle(
+        'workspaces:set-terminal-approval',
+        (_e, id: string, require: boolean) => {
+            setWorkspaceTerminalApproval(id, require);
             return { ok: true };
         },
     );

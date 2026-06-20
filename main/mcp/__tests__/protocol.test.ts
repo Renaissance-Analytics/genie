@@ -17,6 +17,13 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
         provisionWorkspaces: vi
             .fn()
             .mockResolvedValue({ ok: true, isOps: true, children: [] }),
+        manageTerminals: vi
+            .fn()
+            .mockResolvedValue({ ok: true, terminals: [] }),
+        runAgent: vi.fn().mockResolvedValue({ ok: true }),
+        manageWorkspaces: vi
+            .fn()
+            .mockResolvedValue({ ok: true, workspaces: [] }),
         ...overrides,
     };
 }
@@ -56,6 +63,9 @@ describe('handleMcpMessage', () => {
             'ForceTheQuestion',
             'manageProcess',
             'provisionWorkspaces',
+            'manageTerminals',
+            'runAgent',
+            'manageWorkspaces',
             'genieGuide',
         ]);
         expect(tools.map((t) => t.name)).not.toContain('initializeWorkspace');
@@ -241,6 +251,165 @@ describe('handleMcpMessage', () => {
         expect(res?.error?.code).toBe(-32602);
     });
 
+    it('manageTerminals routes to the dep and summarizes a create', async () => {
+        const manageTerminals = vi.fn().mockResolvedValue({
+            ok: true,
+            affectedId: 't-new',
+            terminals: [{ id: 't-new', label: 'Agent terminal', cwd: '', agent: null }],
+            data: 'hello',
+            cursor: 5,
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 40,
+                method: 'tools/call',
+                params: {
+                    name: 'manageTerminals',
+                    arguments: { action: 'create', label: 'Agent terminal', terminalId: 'term-X' },
+                },
+            },
+            ctx({ terminalId: 'term-X', manageTerminals }),
+        );
+        expect(manageTerminals).toHaveBeenCalledWith('term-X', {
+            action: 'create',
+            workspaceId: undefined,
+            repo: undefined,
+            cwd: undefined,
+            label: 'Agent terminal',
+            id: undefined,
+            data: undefined,
+            cursor: undefined,
+            bytes: undefined,
+        });
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('terminal'); // summary line
+        expect(text).toContain('t-new'); // JSON block
+    });
+
+    it('manageTerminals summarizes a read with its byte count', async () => {
+        const manageTerminals = vi.fn().mockResolvedValue({
+            ok: true,
+            terminals: [],
+            data: 'abcdef',
+            cursor: 6,
+            dropped: true,
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 41,
+                method: 'tools/call',
+                params: { name: 'manageTerminals', arguments: { action: 'read', id: 't-1' } },
+            },
+            ctx({ manageTerminals }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('Read 6 byte');
+        expect(text).toContain('dropped');
+    });
+
+    it('manageTerminals rejects a bad/missing action', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 42, method: 'tools/call', params: { name: 'manageTerminals', arguments: {} } },
+            ctx(),
+        );
+        expect(res?.error?.code).toBe(-32602);
+    });
+
+    it('runAgent routes to the dep and summarizes a start', async () => {
+        const runAgent = vi.fn().mockResolvedValue({
+            ok: true,
+            id: 'a-1',
+            agent: 'claude',
+            command: 'claude',
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 43,
+                method: 'tools/call',
+                params: {
+                    name: 'runAgent',
+                    arguments: { action: 'start', agent: 'claude', terminalId: 'term-Z' },
+                },
+            },
+            ctx({ terminalId: 'term-Z', runAgent }),
+        );
+        expect(runAgent).toHaveBeenCalledWith('term-Z', {
+            action: 'start',
+            workspaceId: undefined,
+            agent: 'claude',
+            command: undefined,
+            repo: undefined,
+            cwd: undefined,
+            id: undefined,
+            prompt: undefined,
+            cursor: undefined,
+            bytes: undefined,
+        });
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('Launched claude');
+        expect(text).toContain('a-1');
+    });
+
+    it('runAgent surfaces a failure (no command configured)', async () => {
+        const runAgent = vi.fn().mockResolvedValue({
+            ok: false,
+            error: 'No command configured for agent "custom".',
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 44,
+                method: 'tools/call',
+                params: { name: 'runAgent', arguments: { action: 'start', agent: 'custom' } },
+            },
+            ctx({ runAgent }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('failed');
+    });
+
+    it('runAgent rejects a bad/missing action', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 45, method: 'tools/call', params: { name: 'runAgent', arguments: {} } },
+            ctx(),
+        );
+        expect(res?.error?.code).toBe(-32602);
+    });
+
+    it('manageWorkspaces routes to the dep and lists actionable workspaces', async () => {
+        const manageWorkspaces = vi.fn().mockResolvedValue({
+            ok: true,
+            workspaces: [
+                { id: 'ws-self', name: 'Mine', path: '/a', relation: 'self' },
+                { id: 'ws-child', name: 'Child', path: '/b', relation: 'governed' },
+            ],
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 46,
+                method: 'tools/call',
+                params: { name: 'manageWorkspaces', arguments: { action: 'list', terminalId: 'term-W' } },
+            },
+            ctx({ terminalId: 'term-W', manageWorkspaces }),
+        );
+        expect(manageWorkspaces).toHaveBeenCalledWith('term-W', { action: 'list' });
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('2 workspaces');
+        expect(text).toContain('ws-child'); // JSON block
+    });
+
+    it('manageWorkspaces rejects a bad/missing action', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 47, method: 'tools/call', params: { name: 'manageWorkspaces', arguments: {} } },
+            ctx(),
+        );
+        expect(res?.error?.code).toBe(-32602);
+    });
+
     it('serves the guide via initialize instructions and genieGuide', async () => {
         const init = await handleMcpMessage(
             { jsonrpc: '2.0', id: 8, method: 'initialize' },
@@ -269,6 +438,10 @@ describe('handleMcpMessage', () => {
         // Documents the process tool + frames initializeWorkspace as a user-run prompt.
         expect(text).toContain('manageProcess');
         expect(text).toMatch(/initializeWorkspace[\s\S]*prompt/);
+        // Documents the agent-control tools.
+        expect(text).toContain('manageTerminals');
+        expect(text).toContain('runAgent');
+        expect(text).toContain('manageWorkspaces');
     });
 
     it('invokes onImDone with the bound terminal id on tools/call', async () => {

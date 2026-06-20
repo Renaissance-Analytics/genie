@@ -402,6 +402,39 @@ describe('db migration v13 (per-workspace process-approval gate)', () => {
     });
 });
 
+describe('db migration v14 (per-workspace terminal/agent-approval gate)', () => {
+    it('adds the terminal_approval column to workspaces', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(cols(db, 'workspaces').has('terminal_approval')).toBe(true);
+    });
+
+    // The safe default is require-approval (1): an agent must NOT be able to
+    // silently spawn a terminal / run code / launch a sub-agent.
+    it('a raw workspace row defaults to terminal_approval=1 (require approval)', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces
+               (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, last_opened_at, created_by_genie)
+             VALUES ('w-ta', 'tynn', 'p', 'P', 'p', 'P', 'simple', '/tmp/ta', NULL, 0)`,
+        ).run();
+        const row = db
+            .prepare<[string], { terminal_approval: number }>(
+                'SELECT terminal_approval FROM workspaces WHERE id = ?',
+            )
+            .get('w-ta');
+        expect(row?.terminal_approval).toBe(1);
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'workspaces').has('terminal_approval')).toBe(true);
+    });
+});
+
 describe('db migration v10 (reclassify mis-stored process specs)', () => {
     const insertSpec = (
         db: Database.Database,
