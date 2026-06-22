@@ -113,10 +113,15 @@
 .titlebar input {
     -webkit-app-region: no-drag;
 }
-/* macOS: the REAL traffic lights overlay the top-left corner. */
+/* macOS: the REAL traffic lights overlay the top-left corner. The pad reserves
+   their space — and MUST be no-drag: the titlebar is a -webkit-app-region:drag
+   surface, and a drag region laid over the native traffic lights swallows their
+   clicks (close/minimize/zoom stop responding). no-drag lets the buttons
+   beneath receive the click. */
 .traffic-pad {
     width: 58px;
     flex: 0 0 auto;
+    -webkit-app-region: no-drag;
 }
 
 /* ===== Update pill (title bar) ========================================= */
