@@ -322,6 +322,8 @@ export type ProcessStatus =
  */
 export interface ProcessListItem {
     id: string;
+    /** Discriminates a background process from an interactive terminal/pty. */
+    kind: 'process' | 'terminal';
     label: string;
     command: string;
     workspace: string;

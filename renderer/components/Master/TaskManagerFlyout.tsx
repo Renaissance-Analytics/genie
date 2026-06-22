@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { IconX, IconPlay, IconPause, IconRefresh } from './icons';
+import { IconX, IconPlay, IconPause, IconRefresh, IconTerminal, IconCpu, IconTrash } from './icons';
 import {
     api,
     hasGenieBridge,
@@ -56,8 +56,14 @@ export default function TaskManagerFlyout({
     useEffect(() => {
         if (!open) return;
         void refresh();
+        // Processes broadcast status changes; terminals don't, so also poll
+        // while the panel is open to keep pty liveness (exited / spawned) current.
         const off = api().on.processStatus(() => void refresh());
-        return off;
+        const poll = window.setInterval(() => void refresh(), 3000);
+        return () => {
+            off?.();
+            window.clearInterval(poll);
+        };
     }, [open, refresh]);
 
     useEffect(() => {
@@ -82,6 +88,10 @@ export default function TaskManagerFlyout({
     };
     const restart = async (id: string) => {
         await api().process.restart(id).catch(() => {});
+        await refresh();
+    };
+    const killTerminal = async (id: string) => {
+        await api().terminal.kill(id).catch(() => {});
         await refresh();
     };
 
@@ -123,13 +133,13 @@ export default function TaskManagerFlyout({
                     ) : (
                         <>
                             <div className="iw-section-head">
-                                Processes
+                                Processes &amp; terminals
                                 {loading && <span className="iw-muted"> · refreshing…</span>}
                             </div>
                             {procs.length === 0 ? (
                                 <div className="iw-muted">
-                                    No background processes anywhere. Add one from a
-                                    workspace's Processes panel.
+                                    Nothing running — no processes or terminals across
+                                    any workspace.
                                 </div>
                             ) : (
                                 <ul className="tm-list">
@@ -141,6 +151,17 @@ export default function TaskManagerFlyout({
                                                     className={`tm-dot tm-${p.status}`}
                                                     title={STATUS_LABEL[p.status]}
                                                 />
+                                                <span
+                                                    className="tm-kind"
+                                                    title={p.kind === 'terminal' ? 'Terminal' : 'Process'}
+                                                    style={{ display: 'inline-flex', color: 'var(--fg-4)' }}
+                                                >
+                                                    {p.kind === 'terminal' ? (
+                                                        <IconTerminal size={14} />
+                                                    ) : (
+                                                        <IconCpu size={14} />
+                                                    )}
+                                                </span>
                                                 <div className="tm-main">
                                                     <div className="tm-label">
                                                         {p.label || p.command || p.id}
@@ -164,33 +185,50 @@ export default function TaskManagerFlyout({
                                                     {STATUS_LABEL[p.status]}
                                                 </span>
                                                 <span className="tm-actions">
-                                                    {live ? (
-                                                        <button
-                                                            type="button"
-                                                            className="gicon"
-                                                            title="Stop"
-                                                            onClick={() => void stop(p.id)}
-                                                        >
-                                                            <IconPause />
-                                                        </button>
+                                                    {p.kind === 'process' ? (
+                                                        <>
+                                                            {live ? (
+                                                                <button
+                                                                    type="button"
+                                                                    className="gicon"
+                                                                    title="Stop"
+                                                                    onClick={() => void stop(p.id)}
+                                                                >
+                                                                    <IconPause />
+                                                                </button>
+                                                            ) : (
+                                                                <button
+                                                                    type="button"
+                                                                    className="gicon"
+                                                                    title="Start"
+                                                                    onClick={() => void start(p.id)}
+                                                                >
+                                                                    <IconPlay />
+                                                                </button>
+                                                            )}
+                                                            <button
+                                                                type="button"
+                                                                className="gicon"
+                                                                title="Restart"
+                                                                onClick={() => void restart(p.id)}
+                                                            >
+                                                                <IconRefresh />
+                                                            </button>
+                                                        </>
                                                     ) : (
-                                                        <button
-                                                            type="button"
-                                                            className="gicon"
-                                                            title="Start"
-                                                            onClick={() => void start(p.id)}
-                                                        >
-                                                            <IconPlay />
-                                                        </button>
+                                                        // A terminal/pty: kill is the only action (it can't be
+                                                        // "restarted" headlessly the way a process can).
+                                                        live && (
+                                                            <button
+                                                                type="button"
+                                                                className="gicon"
+                                                                title="Kill terminal"
+                                                                onClick={() => void killTerminal(p.id)}
+                                                            >
+                                                                <IconTrash />
+                                                            </button>
+                                                        )
                                                     )}
-                                                    <button
-                                                        type="button"
-                                                        className="gicon"
-                                                        title="Restart"
-                                                        onClick={() => void restart(p.id)}
-                                                    >
-                                                        <IconRefresh />
-                                                    </button>
                                                 </span>
                                             </li>
                                         );

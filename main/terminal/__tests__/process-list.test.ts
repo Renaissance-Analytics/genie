@@ -8,6 +8,11 @@ vi.mock('../../db', () => ({
     listWorkspaces: () => [],
 }));
 vi.mock('../process-supervisor', () => ({ getProcessStatuses: () => ({}) }));
+// process-list now imports terminalManager (for live pty ids); stub it so the
+// pure helper test doesn't pull in node-pty / the host backend.
+vi.mock('@particle-academy/fancy-term-host', () => ({
+    terminalManager: () => ({ list: () => [] }),
+}));
 
 import { buildProcessList, SYSTEM_WORKSPACE_LABEL } from '../process-list';
 import type { TerminalSpecRow } from '../../db';
@@ -53,10 +58,11 @@ describe('buildProcessList', () => {
             spec('p1', 'ws-1', 'dev server', 'npm run dev'),
             spec('p2', 'ws-2', 'worker', 'npm run worker'),
         ];
-        const rows = buildProcessList(specs, names, { p1: 'running' });
+        const rows = buildProcessList(specs, names, { p1: 'running' }, new Set());
         expect(rows).toEqual([
             {
                 id: 'p1',
+                kind: 'process',
                 label: 'dev server',
                 command: 'npm run dev',
                 workspace: 'Tynn',
@@ -66,6 +72,7 @@ describe('buildProcessList', () => {
             },
             {
                 id: 'p2',
+                kind: 'process',
                 label: 'worker',
                 command: 'npm run worker',
                 workspace: 'Genie',
@@ -77,25 +84,39 @@ describe('buildProcessList', () => {
     });
 
     it('labels a workspace_id-less process as System', () => {
-        const rows = buildProcessList([spec('p3', null, 'tunnel', 'ssh -N host')], names, {});
+        const rows = buildProcessList([spec('p3', null, 'tunnel', 'ssh -N host')], names, {}, new Set());
         expect(rows[0].workspace).toBe(SYSTEM_WORKSPACE_LABEL);
         expect(rows[0].workspaceId).toBeNull();
     });
 
     it('labels a process whose workspace was removed as System (no dangling id)', () => {
-        const rows = buildProcessList([spec('p4', 'ws-gone', 'orphan', 'cmd')], names, {});
+        const rows = buildProcessList([spec('p4', 'ws-gone', 'orphan', 'cmd')], names, {}, new Set());
         expect(rows[0].workspace).toBe(SYSTEM_WORKSPACE_LABEL);
         expect(rows[0].workspaceId).toBe('ws-gone');
     });
 
-    it('excludes terminals and code views — only processes', () => {
+    it('includes processes AND terminals, but excludes code views', () => {
         const specs = [
             spec('t1', 'ws-1', 'a terminal', '', 'terminal'),
             spec('c1', 'ws-1', 'a code view', '', 'code'),
             spec('p1', 'ws-1', 'a process', 'run', 'process'),
         ];
-        const rows = buildProcessList(specs, names, {});
-        expect(rows.map((r) => r.id)).toEqual(['p1']);
+        const rows = buildProcessList(specs, names, {}, new Set(['t1']));
+        expect(rows.map((r) => r.id)).toEqual(['t1', 'p1']);
+        const t1 = rows.find((r) => r.id === 't1')!;
+        expect(t1.kind).toBe('terminal');
+        expect(t1.status).toBe('running'); // its pty is live (in liveTerminalIds)
+    });
+
+    it('marks a terminal whose pty is not live as stopped', () => {
+        const rows = buildProcessList(
+            [spec('t2', 'ws-1', 'cold terminal', '', 'terminal')],
+            names,
+            {},
+            new Set(), // no live pty
+        );
+        expect(rows[0].kind).toBe('terminal');
+        expect(rows[0].status).toBe('stopped');
     });
 
     it('carries the autostart flag', () => {
@@ -103,6 +124,7 @@ describe('buildProcessList', () => {
             [spec('p5', 'ws-1', 'svc', 'run', 'process', true)],
             names,
             {},
+            new Set(),
         );
         expect(rows[0].autostart).toBe(true);
     });

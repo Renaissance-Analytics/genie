@@ -10,6 +10,7 @@ import {
     IconCpu,
     IconGlobe,
     IconHome,
+    IconMonitorCog,
     IconPanelLeftOpen,
     IconPause,
     IconPin,
@@ -591,7 +592,7 @@ export default function Chooser({
                         }
                         aria-pressed={systemRevealed}
                     >
-                        <IconBox size={16} />
+                        <IconMonitorCog size={16} />
                     </button>
                     <div className="rail-search">
                         <IconSearch />
