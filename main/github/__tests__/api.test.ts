@@ -43,13 +43,17 @@ vi.mock('../device-flow', () => ({
 }));
 
 import {
+    GitHubApiError,
     GitHubAuthError,
     GitHubNotInstalledError,
+    classifyFetchError,
     createRepo,
+    fetchRepoWatchItemsResult,
     forkRepo,
     getRepoOwner,
     listInstallations,
     listOrgs,
+    worseError,
 } from '../api';
 
 /** Build a Response-like object the gh() client understands. */
@@ -299,5 +303,103 @@ describe('token refresh (expiring user-to-server tokens)', () => {
 
         await expect(listInstallations()).rejects.toBeInstanceOf(GitHubAuthError);
         expect(store.reauthFlagged).toBe(true);
+    });
+});
+
+describe('classifyFetchError', () => {
+    it('maps GitHubAuthError to unauthenticated', () => {
+        expect(classifyFetchError(new GitHubAuthError())).toBe('unauthenticated');
+    });
+    it('maps a 403 permission denial to forbidden', () => {
+        expect(classifyFetchError(new GitHubApiError(403, 'Resource not accessible'))).toBe(
+            'forbidden',
+        );
+    });
+    it('maps a 403 carrying a rate-limit message to rate_limited', () => {
+        expect(
+            classifyFetchError(new GitHubApiError(403, 'API rate limit exceeded')),
+        ).toBe('rate_limited');
+    });
+    it('maps 429 to rate_limited and 404 to not_found', () => {
+        expect(classifyFetchError(new GitHubApiError(429, 'Too Many Requests'))).toBe(
+            'rate_limited',
+        );
+        expect(classifyFetchError(new GitHubApiError(404, 'Not Found'))).toBe('not_found');
+    });
+    it('maps anything else to unknown', () => {
+        expect(classifyFetchError(new GitHubApiError(500, 'boom'))).toBe('unknown');
+        expect(classifyFetchError(new Error('network'))).toBe('unknown');
+    });
+});
+
+describe('worseError (severity ordering)', () => {
+    it('treats null (success) as never worse', () => {
+        expect(worseError(null, null)).toBeNull();
+        expect(worseError(null, 'forbidden')).toBe('forbidden');
+        expect(worseError('forbidden', null)).toBe('forbidden');
+    });
+    it('ranks unauthenticated worst and unknown least', () => {
+        expect(worseError('unauthenticated', 'forbidden')).toBe('unauthenticated');
+        expect(worseError('unknown', 'not_found')).toBe('not_found');
+        expect(worseError('rate_limited', 'unknown')).toBe('rate_limited');
+    });
+});
+
+describe('fetchRepoWatchItemsResult (surfaced read outcome)', () => {
+    it('returns items + null error when every read succeeds', async () => {
+        fetchMock
+            .mockResolvedValueOnce(
+                res(200, [
+                    {
+                        number: 1,
+                        title: 'an issue',
+                        html_url: 'https://github.com/o/r/issues/1',
+                        updated_at: '2026-06-16T10:00:00.000Z',
+                        user: { login: 'me' },
+                    },
+                ]),
+            )
+            .mockResolvedValueOnce(res(200, [])) // pulls
+            .mockResolvedValueOnce(res(200, [])); // dependabot
+
+        const out = await fetchRepoWatchItemsResult('o', 'r');
+        expect(out.error).toBeNull();
+        expect(out.items).toHaveLength(1);
+        expect(out.items[0]).toMatchObject({ kind: 'issue', number: 1 });
+    });
+
+    it('surfaces a forbidden ISSUES read (the read users care about)', async () => {
+        fetchMock
+            .mockResolvedValueOnce(res(403, { message: 'Resource not accessible by integration' }))
+            .mockResolvedValueOnce(res(200, []))
+            .mockResolvedValueOnce(res(200, []));
+
+        const out = await fetchRepoWatchItemsResult('o', 'r');
+        expect(out.error).toBe('forbidden');
+        expect(out.items).toEqual([]);
+    });
+
+    it('does NOT let a Dependabot 403 mask a working issues read', async () => {
+        fetchMock
+            .mockResolvedValueOnce(res(200, [])) // issues OK (empty)
+            .mockResolvedValueOnce(res(200, [])) // pulls OK
+            .mockResolvedValueOnce(res(403, { message: 'Dependabot alerts are disabled' }));
+
+        const out = await fetchRepoWatchItemsResult('o', 'r');
+        // The issues read succeeded → a genuine success, no surfaced error.
+        expect(out.error).toBeNull();
+        expect(out.items).toEqual([]);
+    });
+
+    it('escalates an unauthenticated secondary read (affects every read)', async () => {
+        // Issues OK, but PRs come back unauthenticated (token died mid-poll) —
+        // that's not feature-specific, so it escalates over a clean issues read.
+        fetchMock
+            .mockResolvedValueOnce(res(200, []))
+            .mockResolvedValueOnce(res(401, { message: 'Bad credentials' }))
+            .mockResolvedValueOnce(res(200, []));
+
+        const out = await fetchRepoWatchItemsResult('o', 'r');
+        expect(out.error).toBe('unauthenticated');
     });
 });

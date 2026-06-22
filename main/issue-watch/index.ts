@@ -9,7 +9,13 @@ import {
     markIssueWatchSeen,
 } from '../db';
 import { detectFolder } from '../workspace/detect';
-import { fetchRepoWatchItems, parseGitHubRemote, type WatchItem } from '../github/api';
+import {
+    fetchRepoWatchItemsResult,
+    parseGitHubRemote,
+    worseError,
+    type WatchItem,
+    type WatchFetchError,
+} from '../github/api';
 import { getToken } from '../github/storage';
 
 /**
@@ -29,6 +35,13 @@ const POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 /** Cached feed per `<owner>/<repo>` (the last poll's open items). */
 const feedCache = new Map<string, WatchItem[]>();
+/**
+ * Cached per-`<owner>/<repo>` fetch error from the last poll (null/absent =
+ * the last read succeeded). This is what lets the flyout explain a silent-empty
+ * repo — a 403/404/unauthenticated read leaves [] in feedCache but its REASON
+ * here, so the UI says "can't read issues" instead of "no issues".
+ */
+const errorCache = new Map<string, WatchFetchError | null>();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 export interface ResolvedRepo {
@@ -117,11 +130,16 @@ export interface WatchRepoView {
     repo: string;
     enabled: boolean;
     unread: number;
+    /** Why this repo's last read came back empty (null = read succeeded, or it
+     *  was never polled). The flyout keys off this to explain a silent-empty
+     *  repo instead of implying it has no items. */
+    error: WatchFetchError | null;
 }
 
 /**
  * The watch rows for a workspace: every auto-detected repo joined with its
- * persisted enabled flag (default ON) + current unread count from the cache.
+ * persisted enabled flag (default ON) + current unread count from the cache +
+ * its last-read error (so the flyout can explain a silent-empty repo).
  */
 export async function getWorkspaceRepoViews(
     workspaceId: string,
@@ -138,14 +156,42 @@ export async function getWorkspaceRepoViews(
             repo: r.repo,
             enabled,
             unread: enabled ? unreadCount(items, w?.seen_at ?? '1970-01-01T00:00:00.000Z') : 0,
+            error: enabled ? errorCache.get(cacheKey(r.owner, r.repo)) ?? null : null,
         };
     });
 }
 
-/** Poll one repo and cache its open items. Best-effort (errors → []). */
+/**
+ * The per-workspace surfaced Issue Watch status: WHY the feed is what it is.
+ *   - `connected: false` ⇒ no GitHub token (the flyout routes to Settings).
+ *   - `error` ⇒ the worst read failure across the workspace's enabled repos
+ *     (forbidden / not_found / rate_limited / unknown), so an empty feed
+ *     explains itself instead of implying "nothing open".
+ *   - both falsy with items ⇒ a genuine success; the flyout shows the feed or
+ *     an honest "nothing open".
+ */
+export interface WorkspaceWatchStatus {
+    connected: boolean;
+    /** Worst read error across enabled repos, or null when all reads were ok. */
+    error: WatchFetchError | null;
+}
+
+/** Pure: the worst read error across a set of repo views (null = all ok). */
+export function worstViewError(views: WatchRepoView[]): WatchFetchError | null {
+    let worst: WatchFetchError | null = null;
+    for (const v of views) if (v.enabled) worst = worseError(worst, v.error);
+    return worst;
+}
+
+/**
+ * Poll one repo and cache its open items AND its fetch outcome. Best-effort —
+ * a failed read caches [] items + the failure class (so the flyout can explain
+ * the empty feed) rather than throwing.
+ */
 async function pollRepo(owner: string, repo: string): Promise<WatchItem[]> {
-    const items = await fetchRepoWatchItems(owner, repo);
+    const { items, error } = await fetchRepoWatchItemsResult(owner, repo);
     feedCache.set(cacheKey(owner, repo), items);
+    errorCache.set(cacheKey(owner, repo), error);
     return items;
 }
 
@@ -239,10 +285,43 @@ export async function getOpenCounts(): Promise<Record<string, TypeCounts>> {
     return out;
 }
 
+/**
+ * The surfaced status for one workspace: connected + worst read error across
+ * its enabled repos. Drives the flyout's empty-state copy so a silent-empty
+ * feed explains WHY (not connected / can't read / 404 / rate limited) rather
+ * than implying "nothing open".
+ */
+export async function getWorkspaceStatus(
+    workspaceId: string,
+): Promise<WorkspaceWatchStatus> {
+    if (!getToken()) return { connected: false, error: null };
+    const views = await getWorkspaceRepoViews(workspaceId).catch(() => []);
+    return { connected: true, error: worstViewError(views) };
+}
+
+/**
+ * Worst read error per workspace across all workspaces (null entries omitted) —
+ * piggybacks on the broadcast so the renderer knows WHY a workspace pill is
+ * empty without a round-trip. Skips the token check intentionally: an
+ * unconnected GitHub surfaces via the per-workspace `connected` flag the flyout
+ * fetches on open, not here.
+ */
+async function getWorkspaceErrors(): Promise<Record<string, WatchFetchError>> {
+    const out: Record<string, WatchFetchError> = {};
+    for (const ws of listWorkspaces()) {
+        const views = await getWorkspaceRepoViews(ws.id).catch(() => []);
+        const worst = worstViewError(views);
+        if (worst) out[ws.id] = worst;
+    }
+    return out;
+}
+
 async function broadcastUpdate(): Promise<void> {
     const counts = await getOpenCounts();
+    const errors = await getWorkspaceErrors();
     for (const win of BrowserWindow.getAllWindows()) {
-        if (!win.isDestroyed()) win.webContents.send('issue-watch:update', { counts });
+        if (!win.isDestroyed())
+            win.webContents.send('issue-watch:update', { counts, errors });
     }
 }
 
@@ -280,6 +359,9 @@ export function registerIssueWatchIpc(): void {
         return { ok: true };
     });
     ipcMain.handle('issue-watch:counts', () => getOpenCounts());
+    ipcMain.handle('issue-watch:status', async (_e, workspaceId: string) =>
+        getWorkspaceStatus(workspaceId),
+    );
 
     if (!pollTimer) {
         pollTimer = setInterval(() => void pollAll(), POLL_INTERVAL_MS);

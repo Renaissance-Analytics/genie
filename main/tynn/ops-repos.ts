@@ -100,11 +100,14 @@ export async function computeOpsRepoPlan(opsWorkspacePath: string): Promise<OpsR
     const { isOpsProject, slaves } = await backend.opsSlaves(link.projectId);
     if (!isOpsProject) return { ...base, signedIn: true };
 
-    // slave Tynn project id → local workspace path (by that workspace's link).
+    // slave Tynn project id → local workspace path. Keyed off the workspace
+    // ROW's tynn_project_id (set when Genie provisions/registers a workspace);
+    // provisioned envelopes often have no `tynn.projectId` in project.json, so
+    // the link alone misses them. Fall back to the link for rows without it.
     const localByProjectId = new Map<string, string>();
     for (const ws of listWorkspaces()) {
-        const wl = readTynnLink(ws.path);
-        if (wl?.projectId) localByProjectId.set(wl.projectId, ws.path);
+        const projectId = ws.tynn_project_id || readTynnLink(ws.path)?.projectId;
+        if (projectId) localByProjectId.set(projectId, ws.path);
     }
 
     const desired: OpsRepoDesired[] = [];

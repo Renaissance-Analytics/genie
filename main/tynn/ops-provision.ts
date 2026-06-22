@@ -22,9 +22,10 @@ import { readTynnLink } from './provision';
  * Tynn does NOT store a child's `*.agi` repo URL — Genie resolves it. For a
  * child that already has a local workspace we read that workspace's `origin`;
  * for a missing one we build the conventional `github.com/<owner>/<slug>.agi`
- * URL (the same shape createAgiEnvelope uses for its auto-remote). The resolved
- * URL rides in the plan so the user sees exactly what will be cloned before
- * approving.
+ * URL (the same shape createAgiEnvelope uses for its auto-remote), where
+ * `<owner>` is the owner *slug* (NOT the display name, which has spaces). The
+ * resolved URL rides in the plan so the user sees exactly what will be cloned
+ * before approving.
  */
 
 /** A governed child and where it stands locally. */
@@ -78,17 +79,20 @@ export function opsAutoProvisionEnabled(): boolean {
 }
 
 /**
- * Build the conventional `*.agi` clone URL for a child from its owner + slug.
- * Mirrors createAgiEnvelope's auto-remote shape
- * (`https://github.com/<owner>/<slug>.agi.git`). Returns null without an owner —
- * we never guess a URL we can't form. The GitHub owner *login* may differ from
- * the Tynn display name, which is why the URL is surfaced for approval.
+ * Build the conventional `*.agi` clone URL for a child from its owner SLUG +
+ * project slug. Mirrors createAgiEnvelope's auto-remote shape
+ * (`https://github.com/<owner-slug>/<slug>.agi.git`). Pass the owner *slug*
+ * (the org/user slug, e.g. `civicognita`), never the display name — the display
+ * name has spaces and yields an invalid URL. Returns null without an owner slug —
+ * we never guess a URL we can't form. The GitHub owner *login* may still differ
+ * from the Tynn slug, which is why the URL is surfaced for approval; the slug at
+ * least yields a valid URL to approve.
  */
 export function childAgiCloneUrl(
-    owner: string | null | undefined,
+    ownerSlug: string | null | undefined,
     slug: string,
 ): string | null {
-    const o = owner?.trim();
+    const o = ownerSlug?.trim();
     if (!o || !slug.trim()) return null;
     return `https://github.com/${o}/${slug}.agi.git`;
 }
@@ -129,11 +133,15 @@ export async function computeOpsProvisionPlan(
     const { isOpsProject, slaves } = await backend.opsSlaves(link.projectId);
     if (!isOpsProject) return { ...base, signedIn: true };
 
-    // child Tynn project id → local workspace (by that workspace's tynn link).
+    // child Tynn project id → local workspace. Presence is keyed off the
+    // workspace ROW's tynn_project_id (set when Genie provisions/registers a
+    // workspace) — provisioned envelopes often have no `tynn.projectId` in their
+    // project.json, so reading the link alone reports every child as 'missing'.
+    // Fall back to the project.json link for rows lacking the field.
     const localByProjectId = new Map<string, { path: string }>();
     for (const ws of listWorkspaces()) {
-        const wl = readTynnLink(ws.path);
-        if (wl?.projectId) localByProjectId.set(wl.projectId, { path: ws.path });
+        const projectId = ws.tynn_project_id || readTynnLink(ws.path)?.projectId;
+        if (projectId) localByProjectId.set(projectId, { path: ws.path });
     }
 
     const children: OpsChildStatus[] = slaves.map((s) => {
@@ -153,7 +161,7 @@ export async function computeOpsProvisionPlan(
             name: s.name,
             slug: s.slug,
             status: 'missing',
-            cloneUrl: childAgiCloneUrl(s.owner_name, s.slug),
+            cloneUrl: childAgiCloneUrl(s.owner_slug, s.slug),
         };
     });
 

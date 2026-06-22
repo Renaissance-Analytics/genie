@@ -11,9 +11,8 @@ import {
     showCaptureWindow,
     showTerminalWindow,
     showMasterWindow,
+    openTaskManagerWindow,
 } from './background';
-import { listWorkspaces } from './db';
-import { openWorkspace } from './workspace/open';
 
 let tray: Tray | null = null;
 let normalImg: NativeImage | null = null;
@@ -80,7 +79,6 @@ export function setInboxBadge(_count: number): void {
 export function rebuildMenu(): void {
     if (!tray) return;
 
-    const workspaces = listWorkspaces();
     const items: Array<MenuItem | Electron.MenuItemConstructorOptions> = [];
 
     if (updateVersion) {
@@ -91,32 +89,6 @@ export function rebuildMenu(): void {
         items.push({ type: 'separator' });
     }
 
-    if (workspaces.length === 0) {
-        items.push({ label: 'No workspaces yet', enabled: false });
-    } else {
-        items.push({ label: 'Workspaces', enabled: false });
-        for (const w of workspaces.slice(0, 12)) {
-            items.push({
-                label: `  ${w.tynn_project_name}`,
-                sublabel: w.shape === 'agi' ? '.agi envelope' : 'simple',
-                click: async () => {
-                    try {
-                        await openWorkspace(w.id);
-                    } catch (e) {
-                        console.error('Failed to open workspace', e);
-                    }
-                },
-            });
-        }
-        if (workspaces.length > 12) {
-            items.push({
-                label: `…and ${workspaces.length - 12} more`,
-                click: () => showMasterWindow(),
-            });
-        }
-    }
-
-    items.push({ type: 'separator' });
     items.push({
         label: 'Quick capture…',
         accelerator:
@@ -133,6 +105,10 @@ export function rebuildMenu(): void {
     items.push({
         label: 'New scratch terminal',
         click: () => showTerminalWindow(),
+    });
+    items.push({
+        label: 'Task Manager…',
+        click: () => openTaskManagerWindow(),
     });
     items.push({
         label: 'Check for updates…',

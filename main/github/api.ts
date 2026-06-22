@@ -454,31 +454,136 @@ type GhAlert = {
     dependency?: { package?: { name?: string } };
 };
 
-/** Best-effort GET that returns [] on any error (e.g. feature disabled, 404). */
-async function ghListSafe<T>(path: string): Promise<T[]> {
+/**
+ * Why a repo's watch fetch came back empty. `null` (in {@link FetchOutcome})
+ * means the fetch genuinely SUCCEEDED — distinct from a swallowed failure, so
+ * the flyout can say "no open issues" only when it's true and otherwise explain
+ * why it can't see them. Ordered worst-first by {@link worseError} so the
+ * issues read's failure dominates a secondary (PR / Dependabot) failure.
+ */
+export type WatchFetchError =
+    | 'unauthenticated' // no / expired GitHub token (GitHubAuthError)
+    | 'forbidden' // 403 — App lacks Issues access on the repo
+    | 'not_found' // 404 — no access to the repo (private / not installed)
+    | 'rate_limited' // 403/429 with a rate-limit signal
+    | 'unknown'; // any other failure
+
+/** Classify a thrown gh() error into a {@link WatchFetchError}. */
+export function classifyFetchError(e: unknown): WatchFetchError {
+    if (e instanceof GitHubAuthError) return 'unauthenticated';
+    if (e instanceof GitHubApiError) {
+        // A 401 response = rejected/expired credentials (gh() already flagged
+        // reauth). Treat it the same as "not connected" so the flyout routes to
+        // Settings rather than reporting a generic error.
+        if (e.status === 401) return 'unauthenticated';
+        if (e.status === 429) return 'rate_limited';
+        if (e.status === 403) {
+            // GitHub returns 403 for BOTH a missing permission and a spent rate
+            // limit; the message carries "rate limit" only in the latter.
+            return /rate limit/i.test(e.message) ? 'rate_limited' : 'forbidden';
+        }
+        if (e.status === 404) return 'not_found';
+    }
+    return 'unknown';
+}
+
+/** Severity ranking — a lower index is a worse (more actionable) failure. The
+ *  issues read drives the surfaced status, so its outcome wins over a secondary
+ *  PR / Dependabot failure of equal-or-lesser severity. */
+const ERROR_RANK: WatchFetchError[] = [
+    'unauthenticated',
+    'forbidden',
+    'not_found',
+    'rate_limited',
+    'unknown',
+];
+
+/** The worse of two fetch errors (null = success, always loses). */
+export function worseError(
+    a: WatchFetchError | null,
+    b: WatchFetchError | null,
+): WatchFetchError | null {
+    if (a === null) return b;
+    if (b === null) return a;
+    return ERROR_RANK.indexOf(a) <= ERROR_RANK.indexOf(b) ? a : b;
+}
+
+/** A best-effort GET's outcome: the rows, plus the failure class (null = ok). */
+interface ListOutcome<T> {
+    items: T[];
+    error: WatchFetchError | null;
+}
+
+/**
+ * Best-effort GET that returns [] on any error (e.g. feature disabled, 404),
+ * but PRESERVES why it failed so callers can distinguish "no items" from
+ * "couldn't read". The error is `null` only on a genuine success.
+ */
+async function ghListOutcome<T>(path: string): Promise<ListOutcome<T>> {
     try {
         const r = await gh<T[]>('GET', path);
-        return Array.isArray(r) ? r : [];
-    } catch {
-        return [];
+        return { items: Array.isArray(r) ? r : [], error: null };
+    } catch (e) {
+        return { items: [], error: classifyFetchError(e) };
     }
+}
+
+/** The normalized items for a repo plus why the read was empty (null = ok). */
+export interface FetchOutcome {
+    items: WatchItem[];
+    /** Worst failure across the three reads, weighted to the issues read; null
+     *  when the issues read succeeded (PR / Dependabot failures are secondary
+     *  and never surface a status on their own). */
+    error: WatchFetchError | null;
 }
 
 /**
  * Fetch a repo's open Issues, PRs, and Dependabot alerts as normalized
- * WatchItems. Each category is fetched independently and degrades to [] on
- * error so one disabled feature (e.g. Dependabot off) doesn't sink the rest.
+ * WatchItems WITH the read's outcome. Each category is fetched independently
+ * and degrades to [] on error so one disabled feature (e.g. Dependabot off)
+ * doesn't sink the rest — but the failure CLASS is preserved so a silent-empty
+ * feed can explain itself.
+ *
+ * The surfaced `error` is the ISSUES read's failure when it failed (that's the
+ * one users care about: "why don't I see my issues?"). A PR or Dependabot
+ * failure on its own is secondary and does NOT surface a status — a Dependabot
+ * 403 (alerts feature off / no security access) must never mask a working
+ * issues read.
  */
-export async function fetchRepoWatchItems(
+export async function fetchRepoWatchItemsResult(
     owner: string,
     repo: string,
-): Promise<WatchItem[]> {
+): Promise<FetchOutcome> {
     const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-    const [issuesRaw, pullsRaw, alertsRaw] = await Promise.all([
-        ghListSafe<GhIssue>(`${base}/issues?state=open&per_page=50&sort=updated`),
-        ghListSafe<GhPull>(`${base}/pulls?state=open&per_page=50&sort=updated`),
-        ghListSafe<GhAlert>(`${base}/dependabot/alerts?state=open&per_page=50`),
+    const [issues, pulls, alerts] = await Promise.all([
+        ghListOutcome<GhIssue>(`${base}/issues?state=open&per_page=50&sort=updated`),
+        ghListOutcome<GhPull>(`${base}/pulls?state=open&per_page=50&sort=updated`),
+        ghListOutcome<GhAlert>(`${base}/dependabot/alerts?state=open&per_page=50`),
     ]);
+    // The issues read is the important one. When IT fails, surface that. A
+    // secondary PR failure of unauthenticated/rate-limited severity (which
+    // affects every read, not just one feature) can still escalate, but a
+    // lone forbidden/not_found on PRs or a Dependabot failure stays quiet.
+    let error = issues.error;
+    if (error === null) {
+        for (const sec of [pulls.error, alerts.error]) {
+            if (sec === 'unauthenticated' || sec === 'rate_limited') {
+                error = worseError(error, sec);
+            }
+        }
+    }
+    const items = buildWatchItems(owner, repo, issues.items, pulls.items, alerts.items);
+    return { items, error };
+}
+
+/** Normalize the three raw GitHub lists into WatchItems (newest-agnostic). */
+function buildWatchItems(
+    owner: string,
+    repo: string,
+    issuesRaw: GhIssue[],
+    pullsRaw: GhPull[],
+    alertsRaw: GhAlert[],
+): WatchItem[] {
     const slug = `${owner}/${repo}`;
     const items: WatchItem[] = [];
     for (const i of issuesRaw) {

@@ -85,12 +85,33 @@ export interface WatchTypeCounts {
     dependabot: number;
 }
 
+/**
+ * Why an Issue Watch read came back empty. `null` means the read SUCCEEDED
+ * (genuinely no items) — distinct from a swallowed failure, so the flyout can
+ * say "no open issues" only when true and otherwise explain why it can't see
+ * them. Mirrors `WatchFetchError` in main/github/api.ts.
+ */
+export type WatchFetchError =
+    | 'unauthenticated'
+    | 'forbidden'
+    | 'not_found'
+    | 'rate_limited'
+    | 'unknown';
+
 /** Issue Watch: a detected repo + its watch state for the flyout. */
 export interface WatchRepoView {
     owner: string;
     repo: string;
     enabled: boolean;
     unread: number;
+    /** Why this repo's last read was empty (null = read ok / never polled). */
+    error: WatchFetchError | null;
+}
+
+/** Issue Watch: the surfaced per-workspace status (why the feed is what it is). */
+export interface WorkspaceWatchStatus {
+    connected: boolean;
+    error: WatchFetchError | null;
 }
 
 /** Issue Watch: one feed item (issue / PR / Dependabot alert). */
@@ -293,6 +314,21 @@ export type ProcessStatus =
     | 'crashed'
     | 'restarting'
     | 'failed';
+
+/**
+ * One Task Manager row: a background process plus the workspace that spawned
+ * it. `workspace` is the spawning workspace's display name, or "System" for a
+ * System-Workspace process (and `workspaceId` is null for those).
+ */
+export interface ProcessListItem {
+    id: string;
+    label: string;
+    command: string;
+    workspace: string;
+    workspaceId: string | null;
+    status: ProcessStatus;
+    autostart: boolean;
+}
 
 /** Per-type spec metadata. Code views persist the open file's relative path. */
 export interface ViewMeta {
@@ -553,6 +589,8 @@ interface GenieApi {
         feed: (workspaceId: string) => Promise<WatchFeedItem[]>;
         markSeen: (workspaceId: string) => Promise<{ ok: boolean }>;
         counts: () => Promise<Record<string, WatchTypeCounts>>;
+        /** Why this workspace's feed is what it is (connected + worst read error). */
+        status: (workspaceId: string) => Promise<WorkspaceWatchStatus>;
     };
     mcp: {
         status: () => Promise<McpServerState>;
@@ -755,6 +793,8 @@ interface GenieApi {
         statuses: () => Promise<Record<string, ProcessStatus>>;
         /** Recent output tail for a Process (ANSI-stripped) — the hover log. */
         log: (id: string) => Promise<string>;
+        /** Every process across every workspace (+ System) for the Task Manager. */
+        list: () => Promise<ProcessListItem[]>;
     };
     cli: {
         /** Whether the tynn-cli toolkit is shipped with this build + its home dir. */
@@ -990,9 +1030,15 @@ interface GenieApi {
         inboxUpdated: (cb: (payload: { count: number }) => void) => () => void;
         /** Customization: play a notification chime (agent imDone). */
         notifySound: (cb: (payload: { kind: string }) => void) => () => void;
-        /** Issue Watch: per-workspace unread counts (by type) changed. */
+        /** The tray "Task Manager…" item asks the master window to open it. */
+        openTaskManager: (cb: () => void) => () => void;
+        /** Issue Watch: per-workspace unread counts (by type) + per-workspace
+         *  worst read error (so the flyout can explain a silent-empty pill). */
         issueWatchUpdate: (
-            cb: (payload: { counts: Record<string, WatchTypeCounts> }) => void,
+            cb: (payload: {
+                counts: Record<string, WatchTypeCounts>;
+                errors?: Record<string, WatchFetchError>;
+            }) => void,
         ) => () => void;
         terminalData: (
             cb: (payload: { id: string; data: string }) => void,

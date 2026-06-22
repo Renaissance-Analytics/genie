@@ -134,12 +134,26 @@ export class TynnBackend implements Backend {
      */
     async opsSlaves(projectId: string): Promise<{
         isOpsProject: boolean;
-        slaves: Array<{ id: string; name: string; slug: string; owner_name: string | null; base_url?: string }>;
+        slaves: Array<{
+            id: string;
+            name: string;
+            slug: string;
+            owner_name: string | null;
+            owner_slug: string | null;
+            base_url?: string;
+        }>;
     }> {
         try {
             const data = await this.fetch<{
                 is_ops_project: boolean;
-                slaves: Array<{ id: string; name: string; slug: string; owner_name: string | null; base_url?: string }>;
+                slaves: Array<{
+                    id: string;
+                    name: string;
+                    slug: string;
+                    owner_name: string | null;
+                    owner_slug: string | null;
+                    base_url?: string;
+                }>;
             }>('/api/v1/projects/ops-slaves', {
                 method: 'POST',
                 body: { project_id: projectId },

@@ -41,7 +41,11 @@ vi.mock('../../db', () => ({
 vi.mock('../../workspace/detect', () => ({ detectFolder: () => ({ repos: [] }) }));
 vi.mock('../../github/api', () => ({
     fetchRepoWatchItems: async () => ITEMS,
+    // pollRepo now reads the OUTCOME shape (items + read error) so a
+    // silent-empty feed can explain itself; a clean read = null error.
+    fetchRepoWatchItemsResult: async () => ({ items: ITEMS, error: null }),
     parseGitHubRemote: () => ({ owner: 'o', repo: 'r' }),
+    worseError: (a: string | null, b: string | null) => a ?? b,
 }));
 // A truthy token so the poller actually fetches + fills the feed cache.
 vi.mock('../../github/storage', () => ({ getToken: () => 'tok' }));

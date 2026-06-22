@@ -14,6 +14,7 @@ import AddWorkspaceModal from '../components/AddWorkspaceModal';
 import BootScreen from '../components/Master/BootScreen';
 import DocsFlyout from '../components/Master/DocsFlyout';
 import IssueWatchFlyout from '../components/Master/IssueWatchFlyout';
+import TaskManagerFlyout from '../components/Master/TaskManagerFlyout';
 import SignInPrompt from '../components/SignInPrompt';
 import type { BackendUser, ViewType } from '../lib/genie';
 import { resolveShortcut } from '../lib/master-shortcuts';
@@ -28,6 +29,7 @@ import {
     IconPlus,
     IconHelp,
     IconEye,
+    IconCpu,
     IconSettings,
 } from '../components/Master/icons';
 import {
@@ -181,6 +183,12 @@ function MasterInner() {
     const openIssueWatch = useCallback((wsId: string) => {
         setIssueWatchWsId(wsId);
         setIssueWatchOpen(true);
+    }, []);
+    // Task Manager: cross-workspace view of every spawned background process.
+    const [taskManagerOpen, setTaskManagerOpen] = useState(false);
+    // Opening from the tray sends a one-shot event; mirror it into the flyout.
+    useEffect(() => {
+        return api().on.openTaskManager?.(() => setTaskManagerOpen(true));
     }, []);
     // Max panels visible per workspace (Settings → max_views, default 4).
     const [maxViews, setMaxViews] = useState(4);
@@ -1101,6 +1109,7 @@ function MasterInner() {
                             : undefined
                     }
                     onShowDocs={() => setDocsOpen((o) => !o)}
+                    onShowTaskManager={() => setTaskManagerOpen((o) => !o)}
                     onShowIssueWatch={() =>
                         activeWorkspaceId && openIssueWatch(activeWorkspaceId)
                     }
@@ -1217,6 +1226,10 @@ function MasterInner() {
                 open={issueWatchOpen}
                 workspaceId={issueWatchWsId}
                 onClose={() => setIssueWatchOpen(false)}
+            />
+            <TaskManagerFlyout
+                open={taskManagerOpen}
+                onClose={() => setTaskManagerOpen(false)}
             />
 
             <PromptHost />
@@ -1474,12 +1487,14 @@ function TitleBar({
     isStage,
     stageWorkspaceName,
     onShowDocs,
+    onShowTaskManager,
     onShowIssueWatch,
     issueWatchUnread = 0,
 }: {
     isStage: boolean;
     stageWorkspaceName?: string;
     onShowDocs?: () => void;
+    onShowTaskManager?: () => void;
     onShowIssueWatch?: () => void;
     issueWatchUnread?: number;
 }) {
@@ -1507,6 +1522,14 @@ function TitleBar({
             )}
             <span className="spacer" />
             <UpdatePill />
+            <button
+                type="button"
+                className="gicon"
+                title="Task Manager — every background process"
+                onClick={() => onShowTaskManager?.()}
+            >
+                <IconCpu size={16} />
+            </button>
             <button
                 type="button"
                 className="gicon iw-btn"

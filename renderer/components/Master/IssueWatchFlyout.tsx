@@ -4,6 +4,7 @@ import {
     api,
     hasGenieBridge,
     type WatchFeedItem,
+    type WatchFetchError,
     type WatchRepoView,
 } from '../../lib/genie';
 
@@ -23,6 +24,40 @@ const KIND_LABEL: Record<WatchFeedItem['kind'], string> = {
     dependabot: 'Dependabot',
 };
 
+/**
+ * Workspace-level reason copy for an empty feed. `unauthenticated` is handled
+ * separately (the whole flyout routes to Settings), so it's not here. `slug` is
+ * an owner/repo when a single repo is the culprit, else a generic phrase.
+ */
+function workspaceReason(error: WatchFetchError, slug: string): string {
+    switch (error) {
+        case 'forbidden':
+            return `Genie can't read issues on ${slug} — the GitHub App needs Issues access (403).`;
+        case 'not_found':
+            return `No access to ${slug} (404) — the GitHub App isn't installed there, or the repo is private/renamed.`;
+        case 'rate_limited':
+            return `GitHub rate limit hit — issues will reappear once it resets.`;
+        default:
+            return `Couldn't read issues on ${slug} — GitHub returned an unexpected error.`;
+    }
+}
+
+/** Short per-repo reason badge text for a repo whose read failed. */
+function repoReason(error: WatchFetchError): string {
+    switch (error) {
+        case 'forbidden':
+            return 'no Issues access (403)';
+        case 'not_found':
+            return 'no access (404)';
+        case 'rate_limited':
+            return 'rate limited';
+        case 'unauthenticated':
+            return 'not connected';
+        default:
+            return "couldn't read";
+    }
+}
+
 export default function IssueWatchFlyout({
     open,
     workspaceId,
@@ -35,14 +70,23 @@ export default function IssueWatchFlyout({
     const [repos, setRepos] = useState<WatchRepoView[]>([]);
     const [feed, setFeed] = useState<WatchFeedItem[]>([]);
     const [connected, setConnected] = useState(true);
+    /** Worst read error across the workspace's enabled repos (null = all ok). */
+    const [error, setError] = useState<WatchFetchError | null>(null);
     const [loading, setLoading] = useState(false);
 
     const refresh = async () => {
         if (!workspaceId || !hasGenieBridge()) return;
         setLoading(true);
         try {
-            const st = await api().github.status().catch(() => ({ connected: false }));
+            // The per-workspace status is the source of truth for WHY the feed
+            // is what it is: not connected vs a read failure (403/404/…) vs a
+            // genuine success. `issue-watch:status` reuses the GitHub token
+            // check so a single call covers both "connected" and the error.
+            const st = await api()
+                .issueWatch.status(workspaceId)
+                .catch(() => ({ connected: false, error: null }));
             setConnected(!!st.connected);
+            setError(st.error ?? null);
             const [r, f] = await Promise.all([
                 api().issueWatch.repos(workspaceId),
                 api().issueWatch.feed(workspaceId),
@@ -146,7 +190,18 @@ export default function IssueWatchFlyout({
                                             <span className="iw-repo-name">
                                                 {r.owner}/{r.repo}
                                             </span>
-                                            {r.enabled && r.unread > 0 && (
+                                            {r.enabled && r.error && (
+                                                <span
+                                                    className="iw-repo-error"
+                                                    title={workspaceReason(
+                                                        r.error,
+                                                        `${r.owner}/${r.repo}`,
+                                                    )}
+                                                >
+                                                    {repoReason(r.error)}
+                                                </span>
+                                            )}
+                                            {r.enabled && !r.error && r.unread > 0 && (
                                                 <span className="iw-count">{r.unread}</span>
                                             )}
                                         </label>
@@ -156,9 +211,22 @@ export default function IssueWatchFlyout({
 
                             <div className="iw-section-head">Activity</div>
                             {feed.length === 0 ? (
-                                <div className="iw-muted">
-                                    Nothing open on the watched repos.
-                                </div>
+                                error ? (
+                                    // The feed is empty because a read FAILED, not
+                                    // because the repos are quiet — say why.
+                                    <div className="iw-warn">
+                                        {workspaceReason(
+                                            error,
+                                            repos.length === 1
+                                                ? `${repos[0].owner}/${repos[0].repo}`
+                                                : 'the watched repos',
+                                        )}
+                                    </div>
+                                ) : (
+                                    <div className="iw-muted">
+                                        Nothing open on the watched repos.
+                                    </div>
+                                )
                             ) : (
                                 <ul className="iw-feed">
                                     {feed.map((it) => (

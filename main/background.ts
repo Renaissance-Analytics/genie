@@ -1098,6 +1098,25 @@ export function getMainWindow(): BrowserWindow | null {
 }
 
 /**
+ * Open the master window and tell its renderer to surface the Task Manager
+ * (the cross-workspace process panel). Used by the tray's "Task Manager…"
+ * item. Sends after the webContents finishes loading so a freshly-created
+ * window receives the event once its renderer is ready.
+ */
+export function openTaskManagerWindow(): void {
+    showMasterWindow();
+    const win = masterWindow;
+    if (!win || win.isDestroyed()) return;
+    const send = () => {
+        if (!win.isDestroyed()) win.webContents.send('open-task-manager');
+    };
+    // A pre-existing window is already loaded → send now; a fresh one needs to
+    // finish loading first (did-finish-load fires once the renderer mounts).
+    if (win.webContents.isLoading()) win.webContents.once('did-finish-load', send);
+    else send();
+}
+
+/**
  * Open TheFloor — the unified workspace + terminal management window.
  * Hosts the cross-project terminal tree, the workspace CRUD sidebar,
  * the layout grid, and the project context menu. Single instance —

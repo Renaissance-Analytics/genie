@@ -36,6 +36,7 @@ import {
     workspaceEndpointUrl,
 } from '../mcp/server';
 import { getSnapshotStore, dbSettingsProvider } from './genie-adapter';
+import { listAllProcesses } from './process-list';
 import crypto from 'node:crypto';
 
 /**
@@ -458,6 +459,9 @@ export function registerTerminalIpc(): void {
     });
     ipcMain.handle('process:statuses', () => getProcessStatuses());
     ipcMain.handle('process:log', (_e, id: string) => getProcessLog(id));
+    // Task Manager: every process across every workspace (+ System), each row
+    // tagged with the workspace that spawned it.
+    ipcMain.handle('process:list', () => listAllProcesses());
 }
 
 /** Tear down every pty on app quit so dangling shell processes don't survive. */

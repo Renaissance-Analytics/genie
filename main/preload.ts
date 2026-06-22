@@ -36,6 +36,8 @@ const api = {
             ipcRenderer.invoke('issue-watch:counts') as Promise<
                 Record<string, { issue: number; pr: number; dependabot: number }>
             >,
+        status: (workspaceId: string) =>
+            ipcRenderer.invoke('issue-watch:status', workspaceId),
     },
 
     mcp: {
@@ -304,6 +306,7 @@ const api = {
             >,
         log: (id: string) =>
             ipcRenderer.invoke('process:log', id) as Promise<string>,
+        list: () => ipcRenderer.invoke('process:list'),
     },
 
     cli: {
@@ -497,6 +500,13 @@ const api = {
             const handler = (_e: unknown, payload: { kind: string }) => cb(payload);
             ipcRenderer.on('notify:sound', handler);
             return () => ipcRenderer.off('notify:sound', handler);
+        },
+        // The tray's "Task Manager…" item asks the master window to open the
+        // cross-workspace process panel.
+        openTaskManager: (cb: () => void) => {
+            const handler = () => cb();
+            ipcRenderer.on('open-task-manager', handler);
+            return () => ipcRenderer.off('open-task-manager', handler);
         },
         // Issue Watch: per-workspace unread counts (by type) changed.
         issueWatchUpdate: (

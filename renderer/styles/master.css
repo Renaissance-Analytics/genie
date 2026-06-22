@@ -600,6 +600,117 @@
     padding: 0 6px;
     line-height: 16px;
 }
+/* Per-repo "couldn't read" badge — an amber pill that replaces the unread
+   count when a repo's last read failed (403/404/…), so a silent-empty repo
+   reads as a problem, not as "no items". */
+.iw-repo-error {
+    background: var(--amber-500, #f59e0b);
+    color: #1a1205;
+    font-size: 9.5px;
+    font-weight: 700;
+    border-radius: 8px;
+    padding: 0 6px;
+    line-height: 16px;
+    white-space: nowrap;
+}
+/* Workspace-level reason for an empty feed (read failed, not "nothing open"). */
+.iw-warn {
+    color: var(--amber-400, #fbbf24);
+    font-size: 12px;
+    padding: 6px 2px;
+    line-height: 1.4;
+}
+
+/* --- Task Manager flyout ------------------------------------------------- */
+/* Reuses .docs-flyout chrome; a touch narrower since it's a process list. */
+.tm-flyout {
+    width: min(560px, 74vw);
+}
+.tm-flyout .tm-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.tm-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.tm-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto auto;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 8px;
+    border-radius: 8px;
+}
+.tm-row:hover {
+    background: var(--bg-2, rgba(255, 255, 255, 0.04));
+}
+/* Status dot — colour-codes the process state at a glance. */
+.tm-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--fg-5, #555);
+    flex: none;
+}
+.tm-running {
+    background: var(--green-500, #22c55e);
+}
+.tm-restarting {
+    background: var(--amber-500, #f59e0b);
+}
+.tm-crashed,
+.tm-failed {
+    background: var(--red-500, #ef4444);
+}
+.tm-stopped {
+    background: var(--fg-5, #555);
+}
+.tm-main {
+    min-width: 0;
+}
+.tm-label {
+    font-size: 12.5px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.tm-cmd {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-4);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* The spawning workspace ("System" for system-workspace processes). */
+.tm-ws {
+    font-size: 10.5px;
+    color: var(--fg-3, #aaa);
+    background: var(--bg-2, rgba(255, 255, 255, 0.06));
+    border-radius: 8px;
+    padding: 1px 8px;
+    white-space: nowrap;
+}
+.tm-status {
+    font-size: 10.5px;
+    color: var(--fg-4);
+    text-transform: capitalize;
+    white-space: nowrap;
+}
+.tm-actions {
+    display: flex;
+    gap: 2px;
+}
 .iw-feed {
     list-style: none;
     margin: 0;
