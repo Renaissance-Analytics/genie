@@ -115,16 +115,28 @@ describe('listInstallations (every installed account)', () => {
         fetchMock.mockResolvedValueOnce(
             res(200, {
                 installations: [
-                    { account: { login: 'me', id: 1, type: 'User', avatar_url: 'a' } },
-                    { account: { login: 'acme-co', id: 2, type: 'Organization', avatar_url: 'b' } },
+                    {
+                        account: { login: 'me', id: 1, type: 'User', avatar_url: 'a' },
+                        permissions: { metadata: 'read', issues: 'read' },
+                    },
+                    {
+                        account: { login: 'acme-co', id: 2, type: 'Organization', avatar_url: 'b' },
+                    },
                 ],
             }),
         );
 
         const installs = await listInstallations();
         expect(installs).toEqual([
-            { login: 'me', avatar_url: 'a', id: 1, isOrg: false },
-            { login: 'acme-co', avatar_url: 'b', id: 2, isOrg: true },
+            {
+                login: 'me',
+                avatar_url: 'a',
+                id: 1,
+                isOrg: false,
+                permissions: { metadata: 'read', issues: 'read' },
+            },
+            // No permissions map in the response → defaults to {}.
+            { login: 'acme-co', avatar_url: 'b', id: 2, isOrg: true, permissions: {} },
         ]);
     });
 

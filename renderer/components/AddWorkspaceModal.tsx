@@ -24,6 +24,7 @@ import {
     OwnerSelect,
     GitHubErrorNotice,
 } from './GitHubConnect';
+import { useGithubCapabilities } from '../lib/githubCapabilities';
 
 type Stage =
     | 'shape'
@@ -807,6 +808,12 @@ function AgiCreateWizard({
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const account = useGitHubAccount();
+    // Proactive gate: auto-creating a remote needs the App's `contents` write
+    // permission. When it's missing, warn here rather than letting the create
+    // 403 mid-flow.
+    const { caps: githubCaps } = useGithubCapabilities();
+    const provisionGated =
+        githubCaps.connected && githubCaps.missing.includes('github.provision');
 
     useEffect(() => {
         api()
@@ -966,6 +973,22 @@ function AgiCreateWizard({
                 {remoteMode === 'auto' && (
                     <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
                         <GitHubConnect account={account} />
+                        {provisionGated && (
+                            <Text
+                                size="xs"
+                                style={{
+                                    display: 'block',
+                                    color: 'var(--amber-600)',
+                                    lineHeight: 1.4,
+                                }}
+                            >
+                                Genie's GitHub App can't create repos yet — it's
+                                missing <strong>repository contents</strong> write
+                                access. Approve the permission on GitHub and
+                                reconnect (see the warning in the title bar), or
+                                use a pasted remote / no remote for now.
+                            </Text>
+                        )}
                         {account.connected && (
                             <OwnerSelect
                                 account={account}

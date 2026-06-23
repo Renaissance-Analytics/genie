@@ -140,6 +140,40 @@ export interface WatchFeedItem {
     unread: boolean;
 }
 
+/**
+ * A GitHub-dependent Genie capability key (mirrors `CapabilityKey` in
+ * main/github/capabilities.ts). The renderer gates features off these keys.
+ */
+export type GithubCapabilityKey =
+    | 'issue-watch.issues'
+    | 'issue-watch.pulls'
+    | 'issue-watch.dependabot'
+    | 'github.provision';
+
+/** A GitHub App permission name Genie depends on (mirrors `GhPermission`). */
+export type GithubPermission =
+    | 'metadata'
+    | 'issues'
+    | 'pull_requests'
+    | 'vulnerability_alerts'
+    | 'contents'
+    | 'administration';
+
+/**
+ * The GitHub capability status (mirrors `GithubCapabilities` in
+ * main/github/capability-service.ts). `connected:false` ⇒ no token; the gate is
+ * inert and features use their normal not-connected handling. `missing` is the
+ * set of capabilities the installed App's granted permissions don't cover —
+ * those are gated OFF and surfaced via the resolve modal + header warning.
+ */
+export interface GithubCapabilities {
+    connected: boolean;
+    satisfiedFeatures: GithubCapabilityKey[];
+    missing: GithubCapabilityKey[];
+    missingPermissions: GithubPermission[];
+    checked: boolean;
+}
+
 export interface Settings {
     primary_workspace?: string;
     /** Last-activated workspace id in the master view. */
@@ -987,6 +1021,20 @@ interface GenieApi {
         parseRemote: (
             url: string,
         ) => Promise<{ owner: string; repo: string } | null>;
+        /**
+         * Current GitHub capability status: which GitHub-dependent features the
+         * installed App's granted permissions allow, and which are gated off
+         * for want of a permission. Drives the resolve modal + header warning.
+         */
+        capabilities: () => Promise<GithubCapabilities>;
+        /** Whether a single GitHub-dependent capability is usable right now. */
+        canAccess: (key: GithubCapabilityKey) => Promise<boolean>;
+        /**
+         * Force a re-detection (after a reconnect / the owner approving a
+         * permission update on GitHub). Returns + broadcasts the fresh status,
+         * so a resolved warning clears across every window.
+         */
+        recheckCapabilities: () => Promise<GithubCapabilities>;
     };
 
     terminal: {
@@ -1109,6 +1157,12 @@ interface GenieApi {
         ) => () => void;
         updaterStatus: (cb: (status: UpdaterStatus) => void) => () => void;
         updaterLog: (cb: (payload: { line: string }) => void) => () => void;
+        /** GitHub capability status changed (boot check, connect, reconnect,
+         *  disconnect, or an explicit recheck). The renderer raises/clears the
+         *  resolve modal + header warning and re-gates features from this. */
+        githubCapabilities: (
+            cb: (payload: GithubCapabilities) => void,
+        ) => () => void;
     };
 }
 

@@ -35,6 +35,10 @@ import {
     type ParsedRepoRef,
     type RepoOwner,
 } from './api';
+import {
+    broadcastCapabilities,
+    recheckCapabilities,
+} from './capability-service';
 
 /**
  * IPC layer for GitHub. The Device Flow has two phases:
@@ -145,6 +149,10 @@ export function registerGithubIpc(): void {
                         user.login,
                     );
                     status = { kind: 'success', user };
+                    // A fresh token may carry newly-approved permissions —
+                    // re-detect capabilities and broadcast so any header
+                    // warning / boot modal clears (or appears) immediately.
+                    void recheckCapabilities().then(() => broadcastCapabilities());
                 } catch (e) {
                     status = {
                         kind: 'error',
@@ -179,6 +187,9 @@ export function registerGithubIpc(): void {
         abortCtl = null;
         clearToken();
         status = { kind: 'idle' };
+        // No token → capabilities go inert (connected:false); broadcast so the
+        // header warning disappears rather than lingering on a stale snapshot.
+        void recheckCapabilities().then(() => broadcastCapabilities());
         return { ok: true };
     });
 

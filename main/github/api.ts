@@ -234,6 +234,15 @@ interface GhInstallation {
          *  personal-account install. */
         type?: string;
     };
+    /**
+     * The permissions GitHub GRANTED this installation, as a map of permission
+     * name → access level (`read` | `write` | `admin`). This is what the
+     * installation owner approved for the App — narrower than (or equal to) the
+     * App's declared permissions, and it's what capability detection reads to
+     * decide which GitHub-dependent features Genie can use. (See
+     * `main/github/capabilities.ts`.)
+     */
+    permissions?: Record<string, string>;
 }
 
 /**
@@ -247,6 +256,12 @@ export interface GitHubInstallation {
     avatar_url: string;
     id: number | null;
     isOrg: boolean;
+    /**
+     * The permissions GitHub granted this installation (permission name →
+     * access level). Drives capability detection — see `capabilities.ts`. Empty
+     * object when GitHub didn't include a permissions map for the installation.
+     */
+    permissions: Record<string, string>;
 }
 
 /**
@@ -277,9 +292,24 @@ export async function listInstallations(): Promise<GitHubInstallation[]> {
             avatar_url: inst.account?.avatar_url ?? '',
             id: inst.account?.id ?? null,
             isOrg: inst.account?.type === 'Organization',
+            permissions: inst.permissions ?? {},
         });
     }
     return out;
+}
+
+/**
+ * Read every installation's GRANTED permission map (permission name → access
+ * level). This is the raw input to capability detection: aggregate these (see
+ * `capabilities.aggregatePermissions`) to learn the widest access Genie has,
+ * then compute which capabilities that does/doesn't satisfy.
+ *
+ * Reuses {@link listInstallations} (one `/user/installations` read) so the
+ * permissions ride along with the install list already fetched everywhere.
+ */
+export async function readGrantedPermissions(): Promise<Record<string, string>[]> {
+    const installs = await listInstallations();
+    return installs.map((i) => i.permissions);
 }
 
 /**

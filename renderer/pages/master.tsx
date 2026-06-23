@@ -15,6 +15,8 @@ import BootScreen from '../components/Master/BootScreen';
 import DocsFlyout from '../components/Master/DocsFlyout';
 import IssueWatchFlyout from '../components/Master/IssueWatchFlyout';
 import TaskManagerFlyout from '../components/Master/TaskManagerFlyout';
+import GithubCapabilitiesFlyout from '../components/Master/GithubCapabilitiesFlyout';
+import { useGithubCapabilities } from '../lib/githubCapabilities';
 import SignInPrompt from '../components/SignInPrompt';
 import type { BackendUser, ViewType } from '../lib/genie';
 import { resolveShortcut } from '../lib/master-shortcuts';
@@ -31,6 +33,7 @@ import {
     IconEye,
     IconCpu,
     IconSettings,
+    IconAlert,
 } from '../components/Master/icons';
 import {
     api,
@@ -190,6 +193,30 @@ function MasterInner() {
     useEffect(() => {
         return api().on.openTaskManager?.(() => setTaskManagerOpen(true));
     }, []);
+    // GitHub capability gate: which GitHub-powered features are unavailable
+    // because the App is missing permissions on the user's installation. Drives
+    // a persistent header warning + a resolve flyout (also auto-shown once on
+    // boot when something's missing).
+    const { caps: githubCaps, hasMissing: githubNeedsResolve } =
+        useGithubCapabilities();
+    const [githubCapsOpen, setGithubCapsOpen] = useState(false);
+    // Auto-raise the resolve flyout ONCE per session the first time the boot
+    // check reports a missing permission. Dismissible — the header warning
+    // stays for resolving later. The ref guards against re-raising on every
+    // capability push (reconnect, recheck) after the user has seen it once.
+    const bootCapModalShown = useRef(false);
+    useEffect(() => {
+        if (!githubNeedsResolve || bootCapModalShown.current) return;
+        // Only the master window auto-raises the boot modal; a Stage window
+        // would otherwise double-surface it. (The header warning still shows on
+        // both — it's a useful resolve affordance everywhere.)
+        const onStage =
+            typeof window !== 'undefined' &&
+            new URLSearchParams(window.location.search).has('stage');
+        if (onStage) return;
+        bootCapModalShown.current = true;
+        setGithubCapsOpen(true);
+    }, [githubNeedsResolve]);
     // Max panels visible per workspace (Settings → max_views, default 4).
     const [maxViews, setMaxViews] = useState(4);
     // Transient notice (Tier 2 cap warnings, max-views blocks). Auto-clears.
@@ -1119,6 +1146,8 @@ function MasterInner() {
                             : undefined;
                         return c ? c.issue + c.pr + c.dependabot : 0;
                     })()}
+                    githubNeedsResolve={githubNeedsResolve}
+                    onShowGithubCaps={() => setGithubCapsOpen((o) => !o)}
                 />
                 <Toolbar
                     activeWorkspace={
@@ -1226,10 +1255,19 @@ function MasterInner() {
                 open={issueWatchOpen}
                 workspaceId={issueWatchWsId}
                 onClose={() => setIssueWatchOpen(false)}
+                onResolveGithub={() => {
+                    setIssueWatchOpen(false);
+                    setGithubCapsOpen(true);
+                }}
             />
             <TaskManagerFlyout
                 open={taskManagerOpen}
                 onClose={() => setTaskManagerOpen(false)}
+            />
+            <GithubCapabilitiesFlyout
+                open={githubCapsOpen}
+                caps={githubCaps}
+                onClose={() => setGithubCapsOpen(false)}
             />
 
             <PromptHost />
@@ -1490,6 +1528,8 @@ function TitleBar({
     onShowTaskManager,
     onShowIssueWatch,
     issueWatchUnread = 0,
+    githubNeedsResolve = false,
+    onShowGithubCaps,
 }: {
     isStage: boolean;
     stageWorkspaceName?: string;
@@ -1497,6 +1537,9 @@ function TitleBar({
     onShowTaskManager?: () => void;
     onShowIssueWatch?: () => void;
     issueWatchUnread?: number;
+    /** True when GitHub permissions are missing — shows a persistent warning. */
+    githubNeedsResolve?: boolean;
+    onShowGithubCaps?: () => void;
 }) {
     const isMac =
         typeof navigator !== 'undefined' &&
@@ -1522,6 +1565,17 @@ function TitleBar({
             )}
             <span className="spacer" />
             <UpdatePill />
+            {githubNeedsResolve && (
+                <button
+                    type="button"
+                    className="gicon gh-warn-btn"
+                    title="GitHub permissions needed — some features are disabled. Click to resolve."
+                    aria-label="Resolve GitHub permissions"
+                    onClick={() => onShowGithubCaps?.()}
+                >
+                    <IconAlert size={16} />
+                </button>
+            )}
             <button
                 type="button"
                 className="gicon"

@@ -117,6 +117,10 @@ import { workspaceIdOfTerminal } from './terminal/workspace-of-terminal';
 import { isQuittingForUpdate } from './updater/quit-state';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
+import {
+    registerCapabilityIpc,
+    runBootCapabilityCheck,
+} from './github/capability-service';
 import { registerUpdaterIpc, checkForUpdatesNow } from './updater/ipc';
 import { registerDocsIpc } from './docs/ipc';
 import { installAppMenu } from './app-menu';
@@ -1639,9 +1643,17 @@ app.whenReady().then(async () => {
     }, 8000).unref?.();
     registerFilesIpc();
     registerGithubIpc();
+    // GitHub capability gating: detect which features the App's granted
+    // permissions allow + expose the gate to the renderer.
+    registerCapabilityIpc();
     registerUpdaterIpc();
     // Issue Watch: per-workspace GitHub issue/PR/Dependabot watching + poller.
     registerIssueWatchIpc();
+    // Boot-time capability check: once GitHub is known-connected, detect any
+    // missing required permission and broadcast `github:capabilities` so the
+    // renderer can raise the resolve modal + persistent header warning. Deferred
+    // + best-effort so it never blocks startup (the token may settle first).
+    setTimeout(() => void runBootCapabilityCheck(), 4000).unref?.();
     // Start background Process service runners flagged autostart. Headless —
     // they run in the pty backend with no panel; the supervisor broadcasts
     // status to the workspace-row indicator + inline manager.

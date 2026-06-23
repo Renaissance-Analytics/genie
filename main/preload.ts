@@ -97,6 +97,11 @@ const api = {
         }) => ipcRenderer.invoke('github:fork-repo', opts),
         parseRemote: (url: string) =>
             ipcRenderer.invoke('github:parse-remote', url),
+        capabilities: () => ipcRenderer.invoke('github:capabilities'),
+        canAccess: (key: string) =>
+            ipcRenderer.invoke('github:can-access', key) as Promise<boolean>,
+        recheckCapabilities: () =>
+            ipcRenderer.invoke('github:recheck-capabilities'),
     },
 
     updater: {
@@ -638,6 +643,14 @@ const api = {
             const handler = (_e: unknown, payload: unknown) => cb(payload);
             ipcRenderer.on('updater:status', handler);
             return () => ipcRenderer.off('updater:status', handler);
+        },
+        // GitHub capability status changed (boot check, connect/reconnect,
+        // disconnect, explicit recheck). The renderer re-renders the resolve
+        // modal + header warning and re-gates features from the payload.
+        githubCapabilities: (cb: (payload: any) => void) => {
+            const handler = (_e: unknown, payload: any) => cb(payload);
+            ipcRenderer.on('github:capabilities-changed', handler);
+            return () => ipcRenderer.off('github:capabilities-changed', handler);
         },
         updaterLog: (cb: (payload: { line: string }) => void) => {
             const handler = (_e: unknown, payload: { line: string }) =>

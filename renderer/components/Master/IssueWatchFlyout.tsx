@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { IconX } from './icons';
+import { IconX, IconAlert } from './icons';
 import {
     api,
     hasGenieBridge,
@@ -7,6 +7,10 @@ import {
     type WatchFetchError,
     type WatchRepoView,
 } from '../../lib/genie';
+import {
+    useGithubCapabilities,
+    CAPABILITY_LABEL,
+} from '../../lib/githubCapabilities';
 
 /**
  * Issue Watch flyout. Right-side slide-in (reuses the Docs flyout chrome, so it
@@ -58,15 +62,32 @@ function repoReason(error: WatchFetchError): string {
     }
 }
 
+/** The Issue Watch capabilities, in the order shown in the gate banner. */
+const IW_CAPABILITIES = [
+    'issue-watch.issues',
+    'issue-watch.pulls',
+    'issue-watch.dependabot',
+] as const;
+
 export default function IssueWatchFlyout({
     open,
     workspaceId,
     onClose,
+    onResolveGithub,
 }: {
     open: boolean;
     workspaceId: string | null;
     onClose: () => void;
+    /** Open the GitHub permissions resolve flyout (from the gate banner). */
+    onResolveGithub?: () => void;
 }) {
+    // Proactive gate: when the GitHub App is missing Issues/PR/Dependabot
+    // permissions, those reads are guaranteed to fail — surface a needs-
+    // permission banner with a Resolve affordance instead of polling blind.
+    const { caps } = useGithubCapabilities();
+    const gatedIw = caps.connected
+        ? IW_CAPABILITIES.filter((k) => caps.missing.includes(k))
+        : [];
     const [repos, setRepos] = useState<WatchRepoView[]>([]);
     const [feed, setFeed] = useState<WatchFeedItem[]>([]);
     const [connected, setConnected] = useState(true);
@@ -167,6 +188,32 @@ export default function IssueWatchFlyout({
                         </div>
                     ) : (
                         <>
+                            {gatedIw.length > 0 && (
+                                <div className="iw-gate" role="status">
+                                    <div className="iw-gate-head">
+                                        <IconAlert size={13} />
+                                        <span>
+                                            Genie's GitHub App is missing
+                                            permissions, so some watching is
+                                            disabled:
+                                        </span>
+                                    </div>
+                                    <ul className="iw-gate-list">
+                                        {gatedIw.map((k) => (
+                                            <li key={k}>{CAPABILITY_LABEL[k] ?? k}</li>
+                                        ))}
+                                    </ul>
+                                    {onResolveGithub && (
+                                        <button
+                                            type="button"
+                                            className="ghcap-btn ghcap-btn-primary"
+                                            onClick={onResolveGithub}
+                                        >
+                                            Resolve…
+                                        </button>
+                                    )}
+                                </div>
+                            )}
                             <div className="iw-section-head">
                                 Repos {loading && <span className="iw-muted">· refreshing…</span>}
                             </div>
