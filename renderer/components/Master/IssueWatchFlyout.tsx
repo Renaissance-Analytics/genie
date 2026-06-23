@@ -240,16 +240,21 @@ export default function IssueWatchFlyout({
         const t = setInterval(async () => {
             const st = await api().github.status().catch(() => null);
             if (!st) return;
-            if (st.connected || st.flow.kind === 'error') {
+            // Complete on the DEVICE FLOW's own outcome, NOT st.connected: the
+            // dead/stale token is still stored, so `connected` stays true and
+            // would fire on the FIRST tick — clearing the user code before the
+            // user can enter it at github.com. flow.kind flips to 'success' only
+            // once a FRESH token lands.
+            if (st.flow.kind === 'success' || st.flow.kind === 'error') {
                 clearInterval(t);
-                if (st.connected) {
+                if (st.flow.kind === 'success') {
                     setReconnect({ kind: 'idle' });
                     // Re-check capabilities (clears the header warning if the
                     // fresh grant resolved everything) AND re-poll Issue Watch so
                     // the feed updates without a restart.
                     await api().github.recheckCapabilities().catch(() => {});
                     await refresh();
-                } else if (st.flow.kind === 'error') {
+                } else {
                     setReconnect({ kind: 'error', message: st.flow.message });
                 }
             }

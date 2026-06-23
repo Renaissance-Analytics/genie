@@ -171,10 +171,15 @@ export function useGitHubAccount(): GitHubAccount {
         polling.current = true;
         const t = setInterval(async () => {
             const st = await refresh();
-            if (st.connected || st.flow.kind === 'error') {
+            // Complete on the device flow's own outcome, not st.connected: a
+            // stale token (reconnect without disconnecting first) keeps
+            // connected=true and would clear the user code on the first tick.
+            // flow.kind reaches 'success' only when a FRESH token lands (matches
+            // the success handling in refresh() above).
+            if (st.flow.kind === 'success' || st.flow.kind === 'error') {
                 clearInterval(t);
                 polling.current = false;
-                if (st.connected) setFlow({ kind: 'idle' });
+                if (st.flow.kind === 'success') setFlow({ kind: 'idle' });
             }
         }, 1500);
         return () => {

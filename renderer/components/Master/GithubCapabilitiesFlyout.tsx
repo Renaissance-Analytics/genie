@@ -74,12 +74,16 @@ export default function GithubCapabilitiesFlyout({
         const t = setInterval(async () => {
             const st = await api().github.status().catch(() => null);
             if (!st) return;
-            if (st.connected || st.flow.kind === 'error') {
+            // Key off the DEVICE FLOW's outcome, not st.connected: a stale/dead
+            // token still reads connected=true, which would complete on the
+            // first tick and clear the user code prematurely. flow.kind reaches
+            // 'success' only when a FRESH token lands.
+            if (st.flow.kind === 'success' || st.flow.kind === 'error') {
                 clearInterval(t);
-                if (st.connected) {
+                if (st.flow.kind === 'success') {
                     setReconnect({ kind: 'idle' });
                     await api().github.recheckCapabilities().catch(() => {});
-                } else if (st.flow.kind === 'error') {
+                } else {
                     setReconnect({ kind: 'error', message: st.flow.message });
                 }
             }
