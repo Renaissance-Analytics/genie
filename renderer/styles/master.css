@@ -644,11 +644,16 @@
 }
 .tm-row {
     display: grid;
-    grid-template-columns: auto 1fr auto auto auto;
+    /* dot · kind-icon · main · workspace · status · actions */
+    grid-template-columns: auto auto 1fr auto auto auto;
     align-items: center;
     gap: 10px;
     padding: 7px 8px;
     border-radius: 8px;
+}
+/* Process/terminal kind glyph — fixed width, never grows. */
+.tm-kind {
+    flex: none;
 }
 .tm-row:hover {
     background: var(--bg-2, rgba(255, 255, 255, 0.04));
