@@ -18,6 +18,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "build:e2e": "nextron build --no-pack",
+    "test:e2e": "npm run build:e2e && playwright test",
     "build:icons": "node resources/build-icons.cjs"
   },
   "overrides": {
@@ -38,6 +40,7 @@
   },
   "devDependencies": {
     "@particle-academy/react-fancy": "^4.7.0",
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4.0.0",
     "@tailwindcss/typography": "^0.5.19",
     "@types/better-sqlite3": "^7.6.12",

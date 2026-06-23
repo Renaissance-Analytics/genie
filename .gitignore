@@ -35,5 +35,10 @@ Thumbs.db
 coverage/
 .vitest-cache/
 
+# Playwright E2E output (reports + per-test artifacts)
+test-results/
+playwright-report/
+.playwright/
+
 # TypeScript incremental build state
 *.tsbuildinfo

@@ -124,6 +124,7 @@ import {
 import { registerUpdaterIpc, checkForUpdatesNow } from './updater/ipc';
 import { registerDocsIpc } from './docs/ipc';
 import { installAppMenu } from './app-menu';
+import { isE2E, registerE2EMocks } from './e2e/mock';
 
 /**
  * Genie — Tynn desktop companion.
@@ -1649,11 +1650,28 @@ app.whenReady().then(async () => {
     registerUpdaterIpc();
     // Issue Watch: per-workspace GitHub issue/PR/Dependabot watching + poller.
     registerIssueWatchIpc();
+    // E2E test mode (GENIE_E2E=1): OVERRIDE the GitHub + Issue Watch channels
+    // with scriptable mocks so a Playwright test can drive the device-flow /
+    // reconnect UI deterministically (no GitHub, no OAuth, no keychain, no DB
+    // seed). Runs AFTER the real registrations and removeHandler's each channel
+    // first, so it wins. Inert (never called) in a normal run.
+    if (isE2E()) {
+        registerE2EMocks();
+        // eslint-disable-next-line no-console
+        console.log('[e2e] GENIE_E2E=1 — GitHub + Issue Watch IPC mocked.');
+        // Open the harness window NOW — not at the end of whenReady. The later
+        // startup steps (terminal backend selection, MCP/control servers) touch
+        // native modules (node-pty) that may be unbuildable in a test sandbox; if
+        // one of those awaits hangs or throws, the end-of-whenReady window would
+        // never open. The flyout only needs IPC + the renderer, both ready here.
+        showE2EWindow();
+    }
     // Boot-time capability check: once GitHub is known-connected, detect any
     // missing required permission and broadcast `github:capabilities` so the
     // renderer can raise the resolve modal + persistent header warning. Deferred
     // + best-effort so it never blocks startup (the token may settle first).
-    setTimeout(() => void runBootCapabilityCheck(), 4000).unref?.();
+    // Skipped under E2E — the mock owns the capability channels + state.
+    if (!isE2E()) setTimeout(() => void runBootCapabilityCheck(), 4000).unref?.();
     // Start background Process service runners flagged autostart. Headless —
     // they run in the pty backend with no panel; the supervisor broadcasts
     // status to the workspace-row indicator + inline manager.
@@ -1943,6 +1961,33 @@ app.whenReady().then(async () => {
         showMainWindow();
     });
 });
+
+/**
+ * Open the E2E harness window (GENIE_E2E only). Loads the `/e2e-issuewatch`
+ * route, which mounts the real IssueWatchFlyout open against the scriptable mock
+ * (main/e2e/mock.ts). Plain BrowserWindow, shown immediately so Playwright can
+ * attach to its first window.
+ */
+function showE2EWindow(): void {
+    const win = new BrowserWindow({
+        width: 900,
+        height: 760,
+        show: true,
+        title: 'Genie E2E',
+        backgroundColor: '#0a0a0c',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false,
+        },
+    });
+    if (isDev) {
+        win.loadURL('http://localhost:8888/e2e-issuewatch');
+    } else {
+        win.loadFile(path.join(__dirname, 'e2e-issuewatch.html'));
+    }
+}
 
 app.on('window-all-closed', () => {
     // Genie stays alive in the tray. Do nothing.
