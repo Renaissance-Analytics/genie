@@ -517,6 +517,41 @@ export function classifyFetchError(e: unknown): WatchFetchError {
     return 'unknown';
 }
 
+/**
+ * A classified fetch failure PLUS the raw HTTP status + GitHub message behind
+ * it. The bucket ({@link WatchFetchError}) drives the flyout's routing
+ * (reconnect / install / rate-limit copy); the `status` + `message` let it show
+ * the EXACT cause — "GitHub returned 401: Bad credentials" — instead of a vague
+ * "unexpected error", which matters most for the `unknown` bucket where the
+ * bucket itself says nothing actionable. `null` everywhere means success.
+ */
+export interface WatchErrorDetail {
+    error: WatchFetchError;
+    /** Underlying HTTP status when the failure was a {@link GitHubApiError}. */
+    status?: number;
+    /** GitHub's message (or our auth-error message) for the failure. */
+    message?: string;
+}
+
+/**
+ * Classify a thrown gh() error AND capture its raw HTTP status + message. Pairs
+ * with {@link classifyFetchError} (same bucketing) but preserves the precise
+ * detail so the renderer can render the actual error rather than a generic one.
+ */
+export function classifyFetchDetail(e: unknown): WatchErrorDetail {
+    const error = classifyFetchError(e);
+    if (e instanceof GitHubApiError) {
+        return { error, status: e.status, message: e.message };
+    }
+    if (e instanceof GitHubAuthError) {
+        return { error, message: e.message };
+    }
+    if (e instanceof Error) {
+        return { error, message: e.message };
+    }
+    return { error };
+}
+
 /** Severity ranking — a lower index is a worse (more actionable) failure. The
  *  issues read drives the surfaced status, so its outcome wins over a secondary
  *  PR / Dependabot failure of equal-or-lesser severity. */
@@ -538,33 +573,42 @@ export function worseError(
     return ERROR_RANK.indexOf(a) <= ERROR_RANK.indexOf(b) ? a : b;
 }
 
-/** A best-effort GET's outcome: the rows, plus the failure class (null = ok). */
+/** A best-effort GET's outcome: the rows, plus the failure detail (null = ok). */
 interface ListOutcome<T> {
     items: T[];
-    error: WatchFetchError | null;
+    /** Full failure detail (bucket + raw status/message), null on success. */
+    detail: WatchErrorDetail | null;
 }
 
 /**
  * Best-effort GET that returns [] on any error (e.g. feature disabled, 404),
- * but PRESERVES why it failed so callers can distinguish "no items" from
- * "couldn't read". The error is `null` only on a genuine success.
+ * but PRESERVES why it failed (bucket + raw HTTP status/message) so callers can
+ * distinguish "no items" from "couldn't read" AND show the exact cause. The
+ * detail is `null` only on a genuine success.
  */
 async function ghListOutcome<T>(path: string): Promise<ListOutcome<T>> {
     try {
         const r = await gh<T[]>('GET', path);
-        return { items: Array.isArray(r) ? r : [], error: null };
+        return { items: Array.isArray(r) ? r : [], detail: null };
     } catch (e) {
-        return { items: [], error: classifyFetchError(e) };
+        return { items: [], detail: classifyFetchDetail(e) };
     }
 }
 
-/** The normalized items for a repo plus why the read was empty (null = ok). */
+/**
+ * The normalized items for a repo plus why the read was empty. `error` is the
+ * surfaced bucket (null = ok); `detail` carries the raw HTTP status + GitHub
+ * message for that same failure so the flyout can show the precise cause. Both
+ * are null on a genuine success.
+ */
 export interface FetchOutcome {
     items: WatchItem[];
     /** Worst failure across the three reads, weighted to the issues read; null
      *  when the issues read succeeded (PR / Dependabot failures are secondary
      *  and never surface a status on their own). */
     error: WatchFetchError | null;
+    /** The raw detail (HTTP status + message) behind {@link error}, or null. */
+    detail: WatchErrorDetail | null;
 }
 
 /**
@@ -590,20 +634,22 @@ export async function fetchRepoWatchItemsResult(
         ghListOutcome<GhPull>(`${base}/pulls?state=open&per_page=50&sort=updated`),
         ghListOutcome<GhAlert>(`${base}/dependabot/alerts?state=open&per_page=50`),
     ]);
-    // The issues read is the important one. When IT fails, surface that. A
-    // secondary PR failure of unauthenticated/rate-limited severity (which
-    // affects every read, not just one feature) can still escalate, but a
-    // lone forbidden/not_found on PRs or a Dependabot failure stays quiet.
-    let error = issues.error;
-    if (error === null) {
-        for (const sec of [pulls.error, alerts.error]) {
-            if (sec === 'unauthenticated' || sec === 'rate_limited') {
-                error = worseError(error, sec);
+    // The issues read is the important one. When IT fails, surface that (and the
+    // detail behind it). A secondary PR/Dependabot failure of unauthenticated/
+    // rate-limited severity (which affects every read, not just one feature) can
+    // still escalate — and bring its OWN detail along, since it's now the
+    // surfaced failure — but a lone forbidden/not_found on PRs or a Dependabot
+    // failure stays quiet.
+    let detail = issues.detail;
+    if (detail === null) {
+        for (const sec of [pulls.detail, alerts.detail]) {
+            if (sec && (sec.error === 'unauthenticated' || sec.error === 'rate_limited')) {
+                detail = sec;
             }
         }
     }
     const items = buildWatchItems(owner, repo, issues.items, pulls.items, alerts.items);
-    return { items, error };
+    return { items, error: detail?.error ?? null, detail };
 }
 
 /** Normalize the three raw GitHub lists into WatchItems (newest-agnostic). */

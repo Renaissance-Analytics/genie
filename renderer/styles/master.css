@@ -656,6 +656,41 @@
     gap: 1px;
 }
 
+/* Issue Watch "session expired — Reconnect" banner — shown when the stored
+   GitHub token is rejected (dead session). Rose, not amber: it's a hard stop
+   (every read fails) the user must act on, unlike the softer permission gate. */
+.iw-reauth {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 11px 12px;
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, #f43f5e 12%, transparent);
+    border: 1px solid color-mix(in srgb, #f43f5e 38%, var(--border-1));
+    margin-bottom: 4px;
+}
+.iw-reauth-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--fg-1);
+}
+.iw-reauth-head svg {
+    color: var(--rose-400, #fb7185);
+    flex: 0 0 auto;
+    margin-top: 1px;
+}
+.iw-reauth-detail {
+    font-size: 11.5px;
+    line-height: 1.4;
+    color: var(--fg-2);
+    font-family: var(--mono, ui-monospace, monospace);
+    word-break: break-word;
+}
+
 /* ===== GitHub permissions (capability gate) ============================= */
 /* Persistent titlebar warning — amber so it reads as "needs attention", with
    a soft pulse to draw the eye without being a hard alarm. */

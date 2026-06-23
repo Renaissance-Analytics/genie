@@ -15,8 +15,9 @@ import {
     worseError,
     type WatchItem,
     type WatchFetchError,
+    type WatchErrorDetail,
 } from '../github/api';
-import { getToken } from '../github/storage';
+import { getToken, needsReauth } from '../github/storage';
 
 /**
  * Issue Watch — per-workspace watching of GitHub Issues, PRs, and Dependabot
@@ -36,12 +37,13 @@ const POLL_INTERVAL_MS = 5 * 60 * 1000;
 /** Cached feed per `<owner>/<repo>` (the last poll's open items). */
 const feedCache = new Map<string, WatchItem[]>();
 /**
- * Cached per-`<owner>/<repo>` fetch error from the last poll (null/absent =
+ * Cached per-`<owner>/<repo>` fetch detail from the last poll (null/absent =
  * the last read succeeded). This is what lets the flyout explain a silent-empty
  * repo — a 403/404/unauthenticated read leaves [] in feedCache but its REASON
- * here, so the UI says "can't read issues" instead of "no issues".
+ * here (bucket + raw HTTP status + GitHub message), so the UI can show the
+ * EXACT error ("GitHub returned 401: Bad credentials") instead of "no issues".
  */
-const errorCache = new Map<string, WatchFetchError | null>();
+const errorCache = new Map<string, WatchErrorDetail | null>();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 export interface ResolvedRepo {
@@ -134,6 +136,9 @@ export interface WatchRepoView {
      *  was never polled). The flyout keys off this to explain a silent-empty
      *  repo instead of implying it has no items. */
     error: WatchFetchError | null;
+    /** The raw detail (HTTP status + GitHub message) behind {@link error}, so
+     *  the flyout can show the precise cause; null when the read succeeded. */
+    detail: WatchErrorDetail | null;
 }
 
 /**
@@ -151,12 +156,14 @@ export async function getWorkspaceRepoViews(
         const w = byKey.get(cacheKey(r.owner, r.repo));
         const enabled = w ? w.enabled === 1 : true; // default ON
         const items = feedCache.get(cacheKey(r.owner, r.repo)) ?? [];
+        const detail = enabled ? errorCache.get(cacheKey(r.owner, r.repo)) ?? null : null;
         return {
             owner: r.owner,
             repo: r.repo,
             enabled,
             unread: enabled ? unreadCount(items, w?.seen_at ?? '1970-01-01T00:00:00.000Z') : 0,
-            error: enabled ? errorCache.get(cacheKey(r.owner, r.repo)) ?? null : null,
+            error: detail?.error ?? null,
+            detail,
         };
     });
 }
@@ -167,13 +174,22 @@ export async function getWorkspaceRepoViews(
  *   - `error` ⇒ the worst read failure across the workspace's enabled repos
  *     (forbidden / not_found / rate_limited / unknown), so an empty feed
  *     explains itself instead of implying "nothing open".
- *   - both falsy with items ⇒ a genuine success; the flyout shows the feed or
+ *   - `detail` ⇒ the raw HTTP status + GitHub message behind `error`, so the
+ *     flyout shows the EXACT cause ("GitHub returned 401: Bad credentials").
+ *   - `needsReauth` ⇒ the stored GitHub session is dead (an auth failure /
+ *     second-401 flagged it). The flyout shows a one-click Reconnect CTA.
+ *   - all falsy with items ⇒ a genuine success; the flyout shows the feed or
  *     an honest "nothing open".
  */
 export interface WorkspaceWatchStatus {
     connected: boolean;
     /** Worst read error across enabled repos, or null when all reads were ok. */
     error: WatchFetchError | null;
+    /** Raw detail (HTTP status + message) behind {@link error}, or null. */
+    detail: WatchErrorDetail | null;
+    /** True when the stored GitHub session is dead and must be reconnected.
+     *  Drives the flyout's "GitHub session expired — Reconnect" banner. */
+    needsReauth: boolean;
 }
 
 /** Pure: the worst read error across a set of repo views (null = all ok). */
@@ -184,14 +200,31 @@ export function worstViewError(views: WatchRepoView[]): WatchFetchError | null {
 }
 
 /**
+ * Pure: the full detail (bucket + raw HTTP status/message) of the WORST read
+ * across a set of repo views, or null when every enabled read succeeded. Picks
+ * the detail whose bucket {@link worstViewError} chose, so the surfaced status's
+ * `error` and `detail` always describe the same failure.
+ */
+export function worstViewDetail(views: WatchRepoView[]): WatchErrorDetail | null {
+    let worst: WatchErrorDetail | null = null;
+    for (const v of views) {
+        if (!v.enabled || !v.detail) continue;
+        if (worst === null || worseError(v.detail.error, worst.error) === v.detail.error) {
+            worst = v.detail;
+        }
+    }
+    return worst;
+}
+
+/**
  * Poll one repo and cache its open items AND its fetch outcome. Best-effort —
  * a failed read caches [] items + the failure class (so the flyout can explain
  * the empty feed) rather than throwing.
  */
 async function pollRepo(owner: string, repo: string): Promise<WatchItem[]> {
-    const { items, error } = await fetchRepoWatchItemsResult(owner, repo);
+    const { items, detail } = await fetchRepoWatchItemsResult(owner, repo);
     feedCache.set(cacheKey(owner, repo), items);
-    errorCache.set(cacheKey(owner, repo), error);
+    errorCache.set(cacheKey(owner, repo), detail);
     return items;
 }
 
@@ -294,23 +327,39 @@ export async function getOpenCounts(): Promise<Record<string, TypeCounts>> {
 export async function getWorkspaceStatus(
     workspaceId: string,
 ): Promise<WorkspaceWatchStatus> {
-    if (!getToken()) return { connected: false, error: null };
+    if (!getToken()) {
+        // No token at all. A dead session (revoked / refresh exhausted) still
+        // leaves the reauth flag set, so report it: the flyout shows Reconnect
+        // rather than the plain "connect in Settings" copy.
+        return { connected: false, error: null, detail: null, needsReauth: needsReauth() };
+    }
     const views = await getWorkspaceRepoViews(workspaceId).catch(() => []);
-    return { connected: true, error: worstViewError(views) };
+    const detail = worstViewDetail(views);
+    // An auth failure surfaces a Reconnect CTA: either a read came back
+    // unauthenticated (a live 401), or gh() already flagged the stored session
+    // dead on an earlier call.
+    const reauth = needsReauth() || detail?.error === 'unauthenticated';
+    return {
+        connected: true,
+        error: detail?.error ?? null,
+        detail,
+        needsReauth: reauth,
+    };
 }
 
 /**
- * Worst read error per workspace across all workspaces (null entries omitted) —
+ * Worst read DETAIL per workspace across all workspaces (null entries omitted) —
  * piggybacks on the broadcast so the renderer knows WHY a workspace pill is
- * empty without a round-trip. Skips the token check intentionally: an
- * unconnected GitHub surfaces via the per-workspace `connected` flag the flyout
- * fetches on open, not here.
+ * empty (bucket + raw HTTP status/message), and whether it's an auth failure,
+ * without a round-trip. Skips the token check intentionally: an unconnected
+ * GitHub surfaces via the per-workspace `connected` flag the flyout fetches on
+ * open, not here.
  */
-async function getWorkspaceErrors(): Promise<Record<string, WatchFetchError>> {
-    const out: Record<string, WatchFetchError> = {};
+async function getWorkspaceErrors(): Promise<Record<string, WatchErrorDetail>> {
+    const out: Record<string, WatchErrorDetail> = {};
     for (const ws of listWorkspaces()) {
         const views = await getWorkspaceRepoViews(ws.id).catch(() => []);
-        const worst = worstViewError(views);
+        const worst = worstViewDetail(views);
         if (worst) out[ws.id] = worst;
     }
     return out;
@@ -319,9 +368,15 @@ async function getWorkspaceErrors(): Promise<Record<string, WatchFetchError>> {
 async function broadcastUpdate(): Promise<void> {
     const counts = await getOpenCounts();
     const errors = await getWorkspaceErrors();
+    // A dead session (an auth-failure read, or a flag gh() set on an earlier
+    // call) drives the flyout's Reconnect CTA the moment the next poll lands —
+    // no need to reopen the flyout. Carry the flag on the broadcast.
+    const reauth =
+        needsReauth() ||
+        Object.values(errors).some((d) => d.error === 'unauthenticated');
     for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed())
-            win.webContents.send('issue-watch:update', { counts, errors });
+            win.webContents.send('issue-watch:update', { counts, errors, needsReauth: reauth });
     }
 }
 

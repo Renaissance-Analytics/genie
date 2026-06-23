@@ -46,6 +46,7 @@ import {
     GitHubApiError,
     GitHubAuthError,
     GitHubNotInstalledError,
+    classifyFetchDetail,
     classifyFetchError,
     createRepo,
     fetchRepoWatchItemsResult,
@@ -344,6 +345,37 @@ describe('classifyFetchError', () => {
     });
 });
 
+describe('classifyFetchDetail (precise status + message)', () => {
+    it('captures the raw HTTP status + GitHub message off a GitHubApiError', () => {
+        expect(classifyFetchDetail(new GitHubApiError(401, 'Bad credentials'))).toEqual({
+            error: 'unauthenticated',
+            status: 401,
+            message: 'Bad credentials',
+        });
+        // The `unknown` bucket says nothing on its own — the precise detail is
+        // what lets the flyout explain a 500.
+        expect(classifyFetchDetail(new GitHubApiError(500, 'Internal Server Error'))).toEqual({
+            error: 'unknown',
+            status: 500,
+            message: 'Internal Server Error',
+        });
+    });
+
+    it('carries the auth-error message (no status) for a GitHubAuthError', () => {
+        const d = classifyFetchDetail(new GitHubAuthError());
+        expect(d.error).toBe('unauthenticated');
+        expect(d.status).toBeUndefined();
+        expect(d.message).toContain('No GitHub token');
+    });
+
+    it('keeps a generic Error message under the unknown bucket', () => {
+        expect(classifyFetchDetail(new Error('network down'))).toEqual({
+            error: 'unknown',
+            message: 'network down',
+        });
+    });
+});
+
 describe('worseError (severity ordering)', () => {
     it('treats null (success) as never worse', () => {
         expect(worseError(null, null)).toBeNull();
@@ -380,7 +412,7 @@ describe('fetchRepoWatchItemsResult (surfaced read outcome)', () => {
         expect(out.items[0]).toMatchObject({ kind: 'issue', number: 1 });
     });
 
-    it('surfaces a forbidden ISSUES read (the read users care about)', async () => {
+    it('surfaces a forbidden ISSUES read (the read users care about) WITH detail', async () => {
         fetchMock
             .mockResolvedValueOnce(res(403, { message: 'Resource not accessible by integration' }))
             .mockResolvedValueOnce(res(200, []))
@@ -388,7 +420,24 @@ describe('fetchRepoWatchItemsResult (surfaced read outcome)', () => {
 
         const out = await fetchRepoWatchItemsResult('o', 'r');
         expect(out.error).toBe('forbidden');
+        // The raw HTTP status + GitHub message ride along so the flyout can show
+        // the exact cause, not just the bucket.
+        expect(out.detail).toEqual({
+            error: 'forbidden',
+            status: 403,
+            message: 'Resource not accessible by integration',
+        });
         expect(out.items).toEqual([]);
+    });
+
+    it('returns a null detail when every read succeeds', async () => {
+        fetchMock
+            .mockResolvedValueOnce(res(200, []))
+            .mockResolvedValueOnce(res(200, []))
+            .mockResolvedValueOnce(res(200, []));
+        const out = await fetchRepoWatchItemsResult('o', 'r');
+        expect(out.error).toBeNull();
+        expect(out.detail).toBeNull();
     });
 
     it('does NOT let a Dependabot 403 mask a working issues read', async () => {
@@ -413,5 +462,12 @@ describe('fetchRepoWatchItemsResult (surfaced read outcome)', () => {
 
         const out = await fetchRepoWatchItemsResult('o', 'r');
         expect(out.error).toBe('unauthenticated');
+        // The escalated secondary failure brings its OWN detail along (it's now
+        // the surfaced failure), so the precise 401 message reaches the flyout.
+        expect(out.detail).toEqual({
+            error: 'unauthenticated',
+            status: 401,
+            message: 'Bad credentials',
+        });
     });
 });

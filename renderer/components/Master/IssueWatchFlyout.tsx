@@ -3,6 +3,7 @@ import { IconX, IconAlert } from './icons';
 import {
     api,
     hasGenieBridge,
+    type WatchErrorDetail,
     type WatchFeedItem,
     type WatchFetchError,
     type WatchRepoView,
@@ -29,20 +30,45 @@ const KIND_LABEL: Record<WatchFeedItem['kind'], string> = {
 };
 
 /**
- * Workspace-level reason copy for an empty feed. `unauthenticated` is handled
- * separately (the whole flyout routes to Settings), so it's not here. `slug` is
- * an owner/repo when a single repo is the culprit, else a generic phrase.
+ * "GitHub returned <status>: <message>" from a fetch detail — the EXACT cause,
+ * not a vague "unexpected error". Returns null when there's no usable
+ * status/message to show (so callers can fall back to bucket copy).
  */
-function workspaceReason(error: WatchFetchError, slug: string): string {
+function preciseError(detail: WatchErrorDetail | null | undefined): string | null {
+    if (!detail) return null;
+    const { status, message } = detail;
+    if (status && message) return `GitHub returned ${status}: ${message}`;
+    if (status) return `GitHub returned ${status}.`;
+    if (message) return message;
+    return null;
+}
+
+/**
+ * Workspace-level reason copy for an empty feed. `unauthenticated` is handled
+ * separately (the whole flyout shows the Reconnect banner), so it's not here.
+ * `slug` is an owner/repo when a single repo is the culprit, else a generic
+ * phrase. When `detail` carries a precise status/message we append it (and it's
+ * the WHOLE message for the `unknown` bucket, where the bucket says nothing).
+ */
+function workspaceReason(
+    error: WatchFetchError,
+    slug: string,
+    detail?: WatchErrorDetail | null,
+): string {
+    const precise = preciseError(detail);
     switch (error) {
         case 'forbidden':
-            return `Genie can't read issues on ${slug} — the GitHub App needs Issues access (403).`;
+            return `Genie can't read issues on ${slug} — the GitHub App needs Issues access${precise ? ` (${precise})` : ' (403)'}.`;
         case 'not_found':
             return `No access to ${slug} (404) — the GitHub App isn't installed there, or the repo is private/renamed.`;
         case 'rate_limited':
             return `GitHub rate limit hit — issues will reappear once it resets.`;
         default:
-            return `Couldn't read issues on ${slug} — GitHub returned an unexpected error.`;
+            // The `unknown` bucket carries no actionable label of its own, so the
+            // precise status/message IS the explanation when we have it.
+            return precise
+                ? `Couldn't read issues on ${slug} — ${precise}.`
+                : `Couldn't read issues on ${slug} — GitHub returned an unexpected error.`;
     }
 }
 
@@ -69,6 +95,17 @@ const IW_CAPABILITIES = [
     'issue-watch.dependabot',
 ] as const;
 
+/**
+ * The Reconnect device-flow state. Mirrors GithubCapabilitiesFlyout's
+ * ReconnectState exactly — same shape, so the device flow is reused, not
+ * reinvented (start → pending while the user enters the code → idle/error).
+ */
+type ReconnectState =
+    | { kind: 'idle' }
+    | { kind: 'starting' }
+    | { kind: 'pending'; userCode: string; verificationUri: string }
+    | { kind: 'error'; message: string };
+
 export default function IssueWatchFlyout({
     open,
     workspaceId,
@@ -93,27 +130,50 @@ export default function IssueWatchFlyout({
     const [connected, setConnected] = useState(true);
     /** Worst read error across the workspace's enabled repos (null = all ok). */
     const [error, setError] = useState<WatchFetchError | null>(null);
+    /** Raw detail (HTTP status + message) behind `error`, for the precise copy. */
+    const [detail, setDetail] = useState<WatchErrorDetail | null>(null);
+    /** The stored GitHub session is dead — show the Reconnect banner + CTA. */
+    const [needsReauth, setNeedsReauth] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [reconnect, setReconnect] = useState<ReconnectState>({ kind: 'idle' });
+
+    // An auth failure (dead session / a 401 read) is its own state: the App
+    // permissions are fine, so the fix is a reconnect, not Settings. It takes
+    // priority over both the not-connected copy and the per-repo error copy.
+    const authFailed = needsReauth || error === 'unauthenticated';
 
     const refresh = async () => {
         if (!workspaceId || !hasGenieBridge()) return;
         setLoading(true);
         try {
-            // The per-workspace status is the source of truth for WHY the feed
-            // is what it is: not connected vs a read failure (403/404/…) vs a
-            // genuine success. `issue-watch:status` reuses the GitHub token
-            // check so a single call covers both "connected" and the error.
-            const st = await api()
-                .issueWatch.status(workspaceId)
-                .catch(() => ({ connected: false, error: null }));
-            setConnected(!!st.connected);
-            setError(st.error ?? null);
+            // Re-poll FIRST (issue-watch:repos refreshes the cache on view), then
+            // read status — so the surfaced status/error/needsReauth reflect the
+            // FRESH read, not the stale cache. This is what makes the feed recover
+            // live after a reconnect: a fresh successful poll clears the dead
+            // session, and the status we read next sees it.
             const [r, f] = await Promise.all([
                 api().issueWatch.repos(workspaceId),
                 api().issueWatch.feed(workspaceId),
             ]);
             setRepos(r);
             setFeed(f);
+            // The per-workspace status is the source of truth for WHY the feed
+            // is what it is: not connected vs a dead session (reconnect) vs a
+            // read failure (403/404/…) vs a genuine success. `issue-watch:status`
+            // reuses the GitHub token + reauth check so a single call covers
+            // "connected", the precise error, and whether to offer Reconnect.
+            const st = await api()
+                .issueWatch.status(workspaceId)
+                .catch(() => ({
+                    connected: false,
+                    error: null,
+                    detail: null,
+                    needsReauth: false,
+                }));
+            setConnected(!!st.connected);
+            setError(st.error ?? null);
+            setDetail(st.detail ?? null);
+            setNeedsReauth(!!st.needsReauth);
         } finally {
             setLoading(false);
         }
@@ -141,6 +201,81 @@ export default function IssueWatchFlyout({
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
     }, [open, onClose]);
+
+    // Live: when a background poll lands a fresh status (e.g. the token died
+    // mid-session), pick up the new needs-reconnect flag without reopening the
+    // flyout. Only react while open and for this workspace.
+    useEffect(() => {
+        if (!open || !hasGenieBridge()) return;
+        return api().on.issueWatchUpdate?.(({ errors, needsReauth: reauth }) => {
+            if (workspaceId && errors?.[workspaceId]) {
+                const d = errors[workspaceId];
+                setError(d.error);
+                setDetail(d);
+            }
+            if (reauth) setNeedsReauth(true);
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open, workspaceId]);
+
+    // Cancel any in-flight device flow when the flyout closes, so a half-started
+    // reconnect doesn't keep polling in the background. Mirrors the
+    // GithubCapabilitiesFlyout cleanup.
+    useEffect(() => {
+        if (open) return;
+        if (reconnect.kind === 'pending' || reconnect.kind === 'starting') {
+            api().github.cancelDevice().catch(() => {});
+            setReconnect({ kind: 'idle' });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open]);
+
+    // While a reconnect device flow is pending, poll github:status until the
+    // token lands, then refresh Issue Watch — a fresh grant re-polls the repos
+    // (issue-watch:repos refreshes on view) so the feed recovers live, no app
+    // restart. Reuses the EXISTING github device methods + status poll, same as
+    // the capabilities flyout.
+    useEffect(() => {
+        if (reconnect.kind !== 'pending') return;
+        const t = setInterval(async () => {
+            const st = await api().github.status().catch(() => null);
+            if (!st) return;
+            if (st.connected || st.flow.kind === 'error') {
+                clearInterval(t);
+                if (st.connected) {
+                    setReconnect({ kind: 'idle' });
+                    // Re-check capabilities (clears the header warning if the
+                    // fresh grant resolved everything) AND re-poll Issue Watch so
+                    // the feed updates without a restart.
+                    await api().github.recheckCapabilities().catch(() => {});
+                    await refresh();
+                } else if (st.flow.kind === 'error') {
+                    setReconnect({ kind: 'error', message: st.flow.message });
+                }
+            }
+        }, 1500);
+        return () => clearInterval(t);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [reconnect.kind]);
+
+    /** Kick off the existing GitHub reconnect (device) flow. */
+    const startReconnect = async () => {
+        try {
+            setReconnect({ kind: 'starting' });
+            const code = await api().github.startDevice();
+            setReconnect({
+                kind: 'pending',
+                userCode: code.user_code,
+                verificationUri: code.verification_uri,
+            });
+            api().tynn.openInBrowser(code.verification_uri).catch(() => {});
+        } catch (e) {
+            setReconnect({
+                kind: 'error',
+                message: e instanceof Error ? e.message : String(e),
+            });
+        }
+    };
 
     const toggleRepo = async (r: WatchRepoView) => {
         if (!workspaceId) return;
@@ -181,6 +316,22 @@ export default function IssueWatchFlyout({
                 <div className="iw-body">
                     {!hasGenieBridge() ? (
                         <div className="iw-muted">Issue Watch runs inside Genie.</div>
+                    ) : authFailed ? (
+                        // The stored session is dead (expired/revoked token) —
+                        // the App permissions are FINE; the fix is a one-click
+                        // reconnect. Show the precise error + a Reconnect CTA
+                        // instead of the generic "connect in Settings" copy.
+                        <ReconnectBanner
+                            detail={detail}
+                            reconnect={reconnect}
+                            onReconnect={() => void startReconnect()}
+                            onCancel={() =>
+                                api()
+                                    .github.cancelDevice()
+                                    .catch(() => {})
+                                    .finally(() => setReconnect({ kind: 'idle' }))
+                            }
+                        />
                     ) : !connected ? (
                         <div className="iw-muted">
                             Connect GitHub in Settings → Connections to watch issues,
@@ -243,6 +394,7 @@ export default function IssueWatchFlyout({
                                                     title={workspaceReason(
                                                         r.error,
                                                         `${r.owner}/${r.repo}`,
+                                                        r.detail,
                                                     )}
                                                 >
                                                     {repoReason(r.error)}
@@ -260,13 +412,15 @@ export default function IssueWatchFlyout({
                             {feed.length === 0 ? (
                                 error ? (
                                     // The feed is empty because a read FAILED, not
-                                    // because the repos are quiet — say why.
+                                    // because the repos are quiet — say why, with
+                                    // the precise GitHub status/message.
                                     <div className="iw-warn">
                                         {workspaceReason(
                                             error,
                                             repos.length === 1
                                                 ? `${repos[0].owner}/${repos[0].repo}`
                                                 : 'the watched repos',
+                                            detail,
                                         )}
                                     </div>
                                 ) : (
@@ -309,5 +463,80 @@ export default function IssueWatchFlyout({
                 </div>
             </aside>
         </div>
+    );
+}
+
+/**
+ * "GitHub session expired — Reconnect" banner. Shown when the stored token is
+ * rejected (an auth failure / dead session): the App permissions are fine, so
+ * the only fix is to re-mint the token via the EXISTING device flow. Carries the
+ * precise GitHub error so the user sees the real cause, and a Reconnect button
+ * that drives `startReconnect` (device flow), then the parent re-polls on
+ * success. Same device-flow UX as GithubCapabilitiesFlyout's reconnect step.
+ */
+function ReconnectBanner({
+    detail,
+    reconnect,
+    onReconnect,
+    onCancel,
+}: {
+    detail: WatchErrorDetail | null;
+    reconnect: ReconnectState;
+    onReconnect: () => void;
+    onCancel: () => void;
+}) {
+    const precise = preciseError(detail);
+    return (
+        <div className="iw-reauth" role="alert">
+            <div className="iw-reauth-head">
+                <IconAlert size={14} />
+                <span>GitHub session expired — reconnect to restore Issue Watch.</span>
+            </div>
+            {precise && <div className="iw-reauth-detail">{precise}</div>}
+            {reconnect.kind === 'pending' ? (
+                <div className="ghcap-device">
+                    <span className="iw-muted">
+                        A browser opened at{' '}
+                        <code>{reconnect.verificationUri}</code>. Enter this code:
+                    </span>
+                    <CodeChip code={reconnect.userCode} />
+                    <button type="button" className="ghcap-btn" onClick={onCancel}>
+                        Cancel
+                    </button>
+                </div>
+            ) : (
+                <button
+                    type="button"
+                    className="ghcap-btn ghcap-btn-primary"
+                    disabled={reconnect.kind === 'starting'}
+                    onClick={onReconnect}
+                >
+                    {reconnect.kind === 'starting' ? 'Requesting code…' : 'Reconnect'}
+                </button>
+            )}
+            {reconnect.kind === 'error' && (
+                <span className="ghcap-error">{reconnect.message}</span>
+            )}
+        </div>
+    );
+}
+
+/** Click-to-copy device code (mirrors GithubCapabilitiesFlyout's CodeChip). */
+function CodeChip({ code }: { code: string }) {
+    const [copied, setCopied] = useState(false);
+    const copy = () => {
+        navigator.clipboard.writeText(code).then(
+            () => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+            },
+            () => {},
+        );
+    };
+    return (
+        <button type="button" className="gh-code" onClick={copy} title="Click to copy">
+            {code}
+            <span className="gh-code-hint">{copied ? '✓ Copied' : 'Click to copy'}</span>
+        </button>
     );
 }

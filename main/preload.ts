@@ -522,10 +522,13 @@ const api = {
             ipcRenderer.on('open-task-manager', handler);
             return () => ipcRenderer.off('open-task-manager', handler);
         },
-        // Issue Watch: per-workspace unread counts (by type) changed.
+        // Issue Watch: per-workspace unread counts (by type) + per-workspace
+        // worst read detail + whether the GitHub session is dead, changed.
         issueWatchUpdate: (
             cb: (payload: {
                 counts: Record<string, { issue: number; pr: number; dependabot: number }>;
+                errors?: Record<string, unknown>;
+                needsReauth?: boolean;
             }) => void,
         ) => {
             const handler = (_e: unknown, payload: any) => cb(payload);

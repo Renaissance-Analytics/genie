@@ -109,6 +109,20 @@ export type WatchFetchError =
     | 'rate_limited'
     | 'unknown';
 
+/**
+ * Issue Watch: a classified read failure PLUS the raw HTTP status + GitHub
+ * message behind it, so the flyout can show the EXACT cause ("GitHub returned
+ * 401: Bad credentials") rather than a vague "unexpected error". Mirrors
+ * `WatchErrorDetail` in main/github/api.ts.
+ */
+export interface WatchErrorDetail {
+    error: WatchFetchError;
+    /** Underlying HTTP status when the failure came from GitHub's API. */
+    status?: number;
+    /** GitHub's message (or the auth-error message) for the failure. */
+    message?: string;
+}
+
 /** Issue Watch: a detected repo + its watch state for the flyout. */
 export interface WatchRepoView {
     owner: string;
@@ -117,12 +131,18 @@ export interface WatchRepoView {
     unread: number;
     /** Why this repo's last read was empty (null = read ok / never polled). */
     error: WatchFetchError | null;
+    /** Raw detail (HTTP status + message) behind `error`, or null. */
+    detail: WatchErrorDetail | null;
 }
 
 /** Issue Watch: the surfaced per-workspace status (why the feed is what it is). */
 export interface WorkspaceWatchStatus {
     connected: boolean;
     error: WatchFetchError | null;
+    /** Raw detail (HTTP status + message) behind `error`, or null. */
+    detail: WatchErrorDetail | null;
+    /** True when the stored GitHub session is dead — show a Reconnect CTA. */
+    needsReauth: boolean;
 }
 
 /** Issue Watch: one feed item (issue / PR / Dependabot alert). */
@@ -1104,11 +1124,14 @@ interface GenieApi {
         /** The tray "Task Manager…" item asks the master window to open it. */
         openTaskManager: (cb: () => void) => () => void;
         /** Issue Watch: per-workspace unread counts (by type) + per-workspace
-         *  worst read error (so the flyout can explain a silent-empty pill). */
+         *  worst read detail (bucket + raw HTTP status/message, so the flyout
+         *  can explain a silent-empty pill precisely) + whether the GitHub
+         *  session is dead (drives the Reconnect CTA live, no reopen needed). */
         issueWatchUpdate: (
             cb: (payload: {
                 counts: Record<string, WatchTypeCounts>;
-                errors?: Record<string, WatchFetchError>;
+                errors?: Record<string, WatchErrorDetail>;
+                needsReauth?: boolean;
             }) => void,
         ) => () => void;
         terminalData: (
