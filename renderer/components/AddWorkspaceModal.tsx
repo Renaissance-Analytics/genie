@@ -11,7 +11,12 @@ import {
     Text,
 } from '@particle-academy/react-fancy';
 import { api, ulid } from '../lib/genie';
-import type { DetectResult, TynnProject, WorkspaceRow } from '../lib/genie';
+import type {
+    DetectResult,
+    OwnerOption,
+    TynnProject,
+    WorkspaceRow,
+} from '../lib/genie';
 import InteractiveUpgradeWizard from './InteractiveUpgradeWizard';
 import {
     useGitHubAccount,
@@ -47,6 +52,12 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
             .finally(() => setLoadingProjects(false));
     }, []);
 
+    // A project created inline from the "Create new project" affordance gets
+    // appended to the shared list (so the picker can select it) and floated to
+    // the top so it's the obvious pick.
+    const onProjectCreated = (p: TynnProject) =>
+        setProjects((prev) => [p, ...prev.filter((x) => x.id !== p.id)]);
+
     return (
         // The interactive upgrade wizard carries step tables — give it the
         // widest modal so nothing clips; the simpler flows stay at lg.
@@ -62,6 +73,7 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                     <SimpleWizard
                         projects={projects}
                         loadingProjects={loadingProjects}
+                        onProjectCreated={onProjectCreated}
                         onCancel={() => setStage('shape')}
                         onCreated={(row) => {
                             onAdded(row);
@@ -95,6 +107,7 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                     <AgiConvertWizard
                         projects={projects}
                         loadingProjects={loadingProjects}
+                        onProjectCreated={onProjectCreated}
                         onCancel={() => setStage('agi-pick')}
                         onCreated={(row) => {
                             onAdded(row);
@@ -107,6 +120,7 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                     <AgiCreateWizard
                         projects={projects}
                         loadingProjects={loadingProjects}
+                        onProjectCreated={onProjectCreated}
                         onCancel={() => setStage('agi-pick')}
                         onCreated={(row) => {
                             onAdded(row);
@@ -119,6 +133,7 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                     <AgiImportWizard
                         projects={projects}
                         loadingProjects={loadingProjects}
+                        onProjectCreated={onProjectCreated}
                         onCancel={() => setStage('agi-pick')}
                         onCreated={(row) => {
                             onAdded(row);
@@ -183,11 +198,13 @@ function ShapePicker({ onPick }: { onPick: (s: Stage) => void }) {
 function SimpleWizard({
     projects,
     loadingProjects,
+    onProjectCreated,
     onCancel,
     onCreated,
 }: {
     projects: TynnProject[];
     loadingProjects: boolean;
+    onProjectCreated: (p: TynnProject) => void;
     onCancel: () => void;
     onCreated: (row: WorkspaceRow) => void;
 }) {
@@ -304,6 +321,10 @@ function SimpleWizard({
                 onChange={setProjectId}
                 projects={projects}
                 loading={loadingProjects}
+                onProjectCreated={(p) => {
+                    onProjectCreated(p);
+                    setProjectId(p.id);
+                }}
             />
             <EditorPicker value={editor} onChange={setEditor} />
 
@@ -513,11 +534,13 @@ function AgiPicker({
 function AgiConvertWizard({
     projects,
     loadingProjects,
+    onProjectCreated,
     onCancel,
     onCreated,
 }: {
     projects: TynnProject[];
     loadingProjects: boolean;
+    onProjectCreated: (p: TynnProject) => void;
     onCancel: () => void;
     onCreated: (row: WorkspaceRow) => void;
 }) {
@@ -649,6 +672,10 @@ function AgiConvertWizard({
                 onChange={setProjectId}
                 projects={projects}
                 loading={loadingProjects}
+                onProjectCreated={(p) => {
+                    onProjectCreated(p);
+                    setProjectId(p.id);
+                }}
             />
 
             <div>
@@ -760,11 +787,13 @@ function AgiConvertWizard({
 function AgiCreateWizard({
     projects,
     loadingProjects,
+    onProjectCreated,
     onCancel,
     onCreated,
 }: {
     projects: TynnProject[];
     loadingProjects: boolean;
+    onProjectCreated: (p: TynnProject) => void;
     onCancel: () => void;
     onCreated: (row: WorkspaceRow) => void;
 }) {
@@ -891,6 +920,10 @@ function AgiCreateWizard({
                 onChange={setProjectId}
                 projects={projects}
                 loading={loadingProjects}
+                onProjectCreated={(p) => {
+                    onProjectCreated(p);
+                    setProjectId(p.id);
+                }}
             />
             <Input
                 label="Slug"
@@ -969,11 +1002,13 @@ function AgiCreateWizard({
 function AgiImportWizard({
     projects,
     loadingProjects,
+    onProjectCreated,
     onCancel,
     onCreated,
 }: {
     projects: TynnProject[];
     loadingProjects: boolean;
+    onProjectCreated: (p: TynnProject) => void;
     onCancel: () => void;
     onCreated: (row: WorkspaceRow) => void;
 }) {
@@ -1055,6 +1090,10 @@ function AgiImportWizard({
                 onChange={setProjectId}
                 projects={projects}
                 loading={loadingProjects}
+                onProjectCreated={(p) => {
+                    onProjectCreated(p);
+                    setProjectId(p.id);
+                }}
             />
             {error && <Text size="xs" style={{ color: 'var(--rose-500)' }}>{error}</Text>}
             <Footer
@@ -1104,12 +1143,17 @@ function ProjectPicker({
     onChange,
     projects,
     loading,
+    onProjectCreated,
 }: {
     value: string;
     onChange: (v: string) => void;
     projects: TynnProject[];
     loading: boolean;
+    /** When provided, the picker offers a "+ New project" mode that creates a
+     *  Tynn project inline and hands it back so the caller can select it. */
+    onProjectCreated?: (p: TynnProject) => void;
 }) {
+    const [mode, setMode] = useState<'select' | 'create'>('select');
     const options = useMemo(
         () =>
             projects.map((p) => {
@@ -1122,16 +1166,176 @@ function ProjectPicker({
             }),
         [projects],
     );
+
+    if (onProjectCreated && mode === 'create') {
+        return (
+            <CreateProjectForm
+                onCancel={() => setMode('select')}
+                onCreated={(p) => {
+                    onProjectCreated(p);
+                    setMode('select');
+                }}
+            />
+        );
+    }
+
     return (
-        <Select
-            label="Project"
-            description={loading ? 'Loading projects…' : 'Workspace associates with this project (Tynn or Aionima).'}
-            value={value}
-            onValueChange={onChange}
-            list={options}
-            placeholder="Choose a project…"
-            required
-        />
+        <div>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+                <Text size="xs" style={{ fontWeight: 600 }}>
+                    Project
+                </Text>
+                {onProjectCreated && (
+                    <Action
+                        variant="ghost"
+                        size="sm"
+                        icon="plus"
+                        onClick={() => setMode('create')}
+                    >
+                        New project
+                    </Action>
+                )}
+            </div>
+            <Select
+                description={loading ? 'Loading projects…' : 'Workspace associates with this project (Tynn or Aionima).'}
+                value={value}
+                onValueChange={onChange}
+                list={options}
+                placeholder="Choose a project…"
+                required
+            />
+        </div>
+    );
+}
+
+/**
+ * Inline "Create new project" form for the Add-workspace picker. Creates a
+ * Tynn project (POST /api/v1/projects) and hands the result back so the picker
+ * selects it. Owner defaults to the personal account; orgs/teams the user can
+ * create under are offered when available (from /api/v1/projects/owner-options).
+ * The slug is auto-derived from the name and stays editable. The created
+ * project doesn't fork workspace creation — it just becomes the selected
+ * project the existing flow already consumes.
+ */
+function CreateProjectForm({
+    onCancel,
+    onCreated,
+}: {
+    onCancel: () => void;
+    onCreated: (p: TynnProject) => void;
+}) {
+    const [name, setName] = useState('');
+    const [slug, setSlug] = useState('');
+    const [slugTouched, setSlugTouched] = useState(false);
+    const [owners, setOwners] = useState<OwnerOption[]>([]);
+    const [ownerKey, setOwnerKey] = useState(''); // `${kind}:${id}`
+    const [submitting, setSubmitting] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        api()
+            .tynn.ownerOptions()
+            .then((opts) => {
+                setOwners(opts);
+                // Default to the personal (user) entry when present.
+                const personal = opts.find((o) => o.kind === 'user') ?? opts[0];
+                if (personal) setOwnerKey(`${personal.kind}:${personal.id}`);
+            });
+    }, []);
+
+    // Auto-derive the slug from the name until the user edits it themselves.
+    const onNameChange = (v: string) => {
+        setName(v);
+        if (!slugTouched) {
+            setSlug(
+                v
+                    .toLowerCase()
+                    .trim()
+                    .replace(/[^a-z0-9]+/g, '-')
+                    .replace(/^-+|-+$/g, ''),
+            );
+        }
+    };
+
+    const submit = async () => {
+        setSubmitting(true);
+        setError(null);
+        try {
+            if (!name.trim()) throw new Error('Project name is required.');
+            const owner = owners.find((o) => `${o.kind}:${o.id}` === ownerKey);
+            const created = await api().tynn.createProject({
+                name: name.trim(),
+                owner_type: owner?.kind,
+                owner_id: owner?.id,
+                slug: slug.trim() || undefined,
+            });
+            onCreated(created);
+        } catch (e: unknown) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    return (
+        <Card style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+                <Text size="sm" style={{ fontWeight: 600 }}>
+                    Create new project
+                </Text>
+                <Action variant="ghost" size="sm" icon="arrow-left" onClick={onCancel}>
+                    Select existing
+                </Action>
+            </div>
+            <Input
+                label="Name"
+                value={name}
+                onValueChange={onNameChange}
+                placeholder="My New Project"
+                required
+            />
+            {owners.length > 1 && (
+                <Select
+                    label="Owner"
+                    description="Who owns the project. Defaults to your personal account."
+                    value={ownerKey}
+                    onValueChange={setOwnerKey}
+                    list={owners.map((o) => ({
+                        value: `${o.kind}:${o.id}`,
+                        label: o.label,
+                    }))}
+                />
+            )}
+            <Input
+                label="Slug"
+                description="URL slug, auto-derived from the name. Editable."
+                value={slug}
+                onValueChange={(v) => {
+                    setSlugTouched(true);
+                    setSlug(v);
+                }}
+                placeholder="my-new-project"
+            />
+            {error && (
+                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                    {error}
+                </Text>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <Action variant="ghost" size="sm" onClick={onCancel} disabled={submitting}>
+                    Cancel
+                </Action>
+                <Action
+                    color="blue"
+                    size="sm"
+                    icon="check"
+                    onClick={submit}
+                    disabled={submitting || !name.trim()}
+                >
+                    {submitting ? 'Creating…' : 'Create project'}
+                </Action>
+            </div>
+        </Card>
     );
 }
 

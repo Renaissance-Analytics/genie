@@ -802,6 +802,12 @@ export interface TerminalSpecMeta {
      * user opts into); this tracks live state.
      */
     was_running?: boolean;
+    /**
+     * System Workspace tag: the spec belongs to the synthetic System Workspace
+     * (which has no `workspaces` row), so it persists with `workspace_id: null`
+     * + `system: true` and is grouped under the System Workspace in the UI.
+     */
+    system?: boolean;
     [key: string]: unknown;
 }
 

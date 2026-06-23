@@ -358,6 +358,24 @@ export function registerIpcHandlers(): void {
 
     // --- Backend projects (fans out across signed-in backends) ----------
     ipcMain.handle('tynn:projects', async () => listAllProjects());
+    // Project CREATION is Tynn-specific (the Aionima backend has no create
+    // API), so these route straight to the Tynn backend rather than fanning
+    // out. Used by the Add-workspace "Create new project" form.
+    ipcMain.handle('tynn:owner-options', async () =>
+        getTynnBackend().ownerOptions(),
+    );
+    ipcMain.handle(
+        'tynn:create-project',
+        async (
+            _e,
+            input: {
+                name: string;
+                owner_type?: 'user' | 'organization' | 'team';
+                owner_id?: string;
+                slug?: string;
+            },
+        ) => getTynnBackend().createProject(input),
+    );
     ipcMain.handle(
         'tynn:capture-wish',
         async (

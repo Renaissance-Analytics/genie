@@ -38,6 +38,7 @@ import {
     snapshotRetainedWindowless,
     terminalHasWindow,
     broadcastTerminalAttention,
+    broadcastWorkspacePulse,
     broadcastTerminalSpecsChanged,
     killTerminalById,
     lastActiveTerminalForWorkspace,
@@ -112,6 +113,7 @@ import {
     confirmQuitTerminals,
     pickDialogWindow,
 } from './terminal/quit-confirm';
+import { workspaceIdOfTerminal } from './terminal/workspace-of-terminal';
 import { isQuittingForUpdate } from './updater/quit-state';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
@@ -1674,6 +1676,11 @@ app.whenReady().then(async () => {
         onImDone: (terminalId) => {
             if (!terminalId) return;
             broadcastTerminalAttention(terminalId, true);
+            // Also pulse the workspace ROW so the user gets a sidebar-level cue
+            // ("something finished in workspace X"), not just the terminal glow.
+            // A System-Workspace terminal resolves to the synthetic system id.
+            const wsId = workspaceIdOfTerminal(terminalId);
+            if (wsId) broadcastWorkspacePulse(wsId);
             notifyImDone(terminalId);
         },
         onForceQuestion: (terminalId, questions) => {

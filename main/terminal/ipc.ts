@@ -577,6 +577,22 @@ export function broadcastTerminalAttention(id: string, on: boolean): void {
 }
 
 /**
+ * Pulse a workspace ROW in the chooser (agent-integration MCP). Fired alongside
+ * the per-terminal attention glow when an agent calls imDone, so the user gets a
+ * sidebar-level "something finished in workspace X" cue even when the terminal
+ * itself isn't visible. The renderer adds a transient `pulsing` class to that
+ * workspace's rail button + flyout row, then clears it. `workspaceId` is the
+ * synthetic System Workspace id for a System-Workspace terminal.
+ */
+export function broadcastWorkspacePulse(workspaceId: string): void {
+    for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.webContents.isDestroyed()) {
+            w.webContents.send('workspace:pulse', { workspaceId });
+        }
+    }
+}
+
+/**
  * Tell every window the set of terminal specs changed (a spec was created,
  * deleted, or otherwise mutated outside the renderer's own local edits) so the
  * UI re-fetches `terminal-spec:list` and stays live. The renderer mirrors its

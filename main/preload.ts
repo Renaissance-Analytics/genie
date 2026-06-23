@@ -183,6 +183,15 @@ const api = {
 
     tynn: {
         projects: () => ipcRenderer.invoke('tynn:projects'),
+        // "Create new project" form in the Add-workspace flow: the owners the
+        // user may create under, and the create itself (Tynn-only).
+        ownerOptions: () => ipcRenderer.invoke('tynn:owner-options'),
+        createProject: (input: {
+            name: string;
+            owner_type?: 'user' | 'organization' | 'team';
+            owner_id?: string;
+            slug?: string;
+        }) => ipcRenderer.invoke('tynn:create-project', input),
         captureWish: (
             projectId: string,
             content: string,
@@ -555,6 +564,15 @@ const api = {
                 cb(payload);
             ipcRenderer.on('terminal:attention', handler);
             return () => ipcRenderer.off('terminal:attention', handler);
+        },
+        /** Agent-integration MCP: pulse a workspace ROW (a terminal in it called
+         *  imDone) — a sidebar-level "something finished here" cue, fired
+         *  alongside the per-terminal attention glow. */
+        workspacePulse: (cb: (payload: { workspaceId: string }) => void) => {
+            const handler = (_e: unknown, payload: { workspaceId: string }) =>
+                cb(payload);
+            ipcRenderer.on('workspace:pulse', handler);
+            return () => ipcRenderer.off('workspace:pulse', handler);
         },
         /** A background Process changed status (running/stopped/crashed/…). */
         processStatus: (

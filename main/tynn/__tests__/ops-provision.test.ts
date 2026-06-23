@@ -12,6 +12,8 @@ let slaves: Array<{
     slug: string;
     owner_name: string | null;
     owner_slug: string | null;
+    repo_owner?: string | null;
+    repo_name?: string | null;
 }> = [];
 let isOpsProject = true;
 let signedIn = true;
@@ -62,27 +64,68 @@ beforeEach(() => {
 });
 
 describe('childAgiCloneUrl', () => {
-    it('builds a valid github *.agi url from the owner SLUG + project slug', () => {
-        expect(childAgiCloneUrl('civicognita', 'civi-web')).toBe(
-            'https://github.com/civicognita/civi-web.agi.git',
-        );
+    it('builds the *.agi url from the PRIMARY repo owner + name when present', () => {
+        // Reporter's case: project slug is `wishswonderscom` but the primary
+        // repo is Renaissance-Analytics/wondermill — the envelope lives beside
+        // the repo, so the URL uses the repo owner + name, not the slug.
+        expect(
+            childAgiCloneUrl({
+                ownerSlug: 'renaissance-analytics',
+                slug: 'wishswonderscom',
+                repoOwner: 'Renaissance-Analytics',
+                repoName: 'wondermill',
+            }),
+        ).toBe('https://github.com/Renaissance-Analytics/wondermill.agi.git');
+    });
+
+    it('falls back to the owner SLUG + project slug when there is no primary repo', () => {
+        expect(
+            childAgiCloneUrl({ ownerSlug: 'civicognita', slug: 'civi-web' }),
+        ).toBe('https://github.com/civicognita/civi-web.agi.git');
+        // Null repo fields are treated the same as absent (no primary repo).
+        expect(
+            childAgiCloneUrl({
+                ownerSlug: 'civicognita',
+                slug: 'civi-web',
+                repoOwner: null,
+                repoName: null,
+            }),
+        ).toBe('https://github.com/civicognita/civi-web.agi.git');
+    });
+
+    it('falls back when only ONE of repo owner / name is present', () => {
+        expect(
+            childAgiCloneUrl({
+                ownerSlug: 'civicognita',
+                slug: 'civi-web',
+                repoOwner: 'Renaissance-Analytics',
+                repoName: null,
+            }),
+        ).toBe('https://github.com/civicognita/civi-web.agi.git');
+        expect(
+            childAgiCloneUrl({
+                ownerSlug: 'civicognita',
+                slug: 'civi-web',
+                repoName: 'wondermill',
+            }),
+        ).toBe('https://github.com/civicognita/civi-web.agi.git');
     });
 
     it('yields a URL with no spaces even when slugs are clean (regression: display name had spaces)', () => {
-        const url = childAgiCloneUrl('civicognita', 'civi-web');
+        const url = childAgiCloneUrl({ ownerSlug: 'civicognita', slug: 'civi-web' });
         expect(url).not.toContain(' ');
         expect(url).toMatch(/^https:\/\/github\.com\/[^/]+\/[^/]+\.agi\.git$/);
     });
 
-    it('returns null without a usable owner (cannot guess a URL)', () => {
-        expect(childAgiCloneUrl(null, 'civi-web')).toBeNull();
-        expect(childAgiCloneUrl(undefined, 'civi-web')).toBeNull();
-        expect(childAgiCloneUrl('', 'civi-web')).toBeNull();
-        expect(childAgiCloneUrl('   ', 'civi-web')).toBeNull();
+    it('returns null without a usable owner OR a primary repo (cannot guess a URL)', () => {
+        expect(childAgiCloneUrl({ ownerSlug: null, slug: 'civi-web' })).toBeNull();
+        expect(childAgiCloneUrl({ ownerSlug: undefined, slug: 'civi-web' })).toBeNull();
+        expect(childAgiCloneUrl({ ownerSlug: '', slug: 'civi-web' })).toBeNull();
+        expect(childAgiCloneUrl({ ownerSlug: '   ', slug: 'civi-web' })).toBeNull();
     });
 
-    it('returns null without a slug', () => {
-        expect(childAgiCloneUrl('civicognita', '')).toBeNull();
+    it('returns null without a slug and without a primary repo', () => {
+        expect(childAgiCloneUrl({ ownerSlug: 'civicognita', slug: '' })).toBeNull();
     });
 });
 
@@ -188,6 +231,29 @@ describe('computeOpsProvisionPlan — presence + clone URL', () => {
         // Built from the owner SLUG, not the display name → valid, no spaces.
         expect(child?.cloneUrl).toBe('https://github.com/civicognita/child-two.agi.git');
         expect(child?.cloneUrl).not.toContain(' ');
+    });
+
+    it('builds a MISSING child clone URL from its PRIMARY repo owner + name', async () => {
+        // Reporter's case: slug ≠ repo name. The envelope lives beside the repo.
+        slaves = [
+            {
+                id: 's4',
+                name: "Wish's Wonders",
+                slug: 'wishswonderscom',
+                owner_name: 'Renaissance Analytics',
+                owner_slug: 'renaissance-analytics',
+                repo_owner: 'Renaissance-Analytics',
+                repo_name: 'wondermill',
+            },
+        ];
+        workspaceRows = [];
+
+        const plan = await computeOpsProvisionPlan(OPS_WS);
+        const child = plan.children.find((c) => c.projectId === 's4');
+        expect(child?.status).toBe('missing');
+        expect(child?.cloneUrl).toBe(
+            'https://github.com/Renaissance-Analytics/wondermill.agi.git',
+        );
     });
 
     it('marks a child MISSING with a null clone URL when the owner slug is absent', async () => {

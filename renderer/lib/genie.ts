@@ -25,6 +25,17 @@ export interface TynnProject {
     base_url?: string;
 }
 
+/**
+ * An owner the signed-in user may create a Tynn project under, for the
+ * "Create new project" form. "Personal" is always offered first (kind=user);
+ * the user's orgs/teams follow.
+ */
+export interface OwnerOption {
+    kind: 'user' | 'organization' | 'team';
+    id: string;
+    label: string;
+}
+
 export interface WorkspaceRow {
     id: string;
     backend: BackendKind;
@@ -668,6 +679,16 @@ interface GenieApi {
     };
     tynn: {
         projects: () => Promise<TynnProject[]>;
+        /** Owners the user may create a project under (personal first). */
+        ownerOptions: () => Promise<OwnerOption[]>;
+        /** Create a Tynn project (defaults to the personal account). Returns it
+         *  in the same shape as `projects()` so it can back a new workspace. */
+        createProject: (input: {
+            name: string;
+            owner_type?: 'user' | 'organization' | 'team';
+            owner_id?: string;
+            slug?: string;
+        }) => Promise<TynnProject>;
         captureWish: (
             projectId: string,
             content: string,
@@ -1055,6 +1076,12 @@ interface GenieApi {
         /** Agent-integration MCP: a terminal asked for attention (imDone) or cleared. */
         terminalAttention: (
             cb: (payload: { id: string; on: boolean }) => void,
+        ) => () => void;
+        /** Agent-integration MCP: pulse a workspace row — a terminal in it called
+         *  imDone (workspaceId is the synthetic System Workspace id for a
+         *  System-Workspace terminal). A transient sidebar-level cue. */
+        workspacePulse: (
+            cb: (payload: { workspaceId: string }) => void,
         ) => () => void;
         /** A background Process changed status. */
         processStatus: (

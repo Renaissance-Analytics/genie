@@ -21,11 +21,13 @@ import { readTynnLink } from './provision';
  *
  * Tynn does NOT store a child's `*.agi` repo URL — Genie resolves it. For a
  * child that already has a local workspace we read that workspace's `origin`;
- * for a missing one we build the conventional `github.com/<owner>/<slug>.agi`
- * URL (the same shape createAgiEnvelope uses for its auto-remote), where
- * `<owner>` is the owner *slug* (NOT the display name, which has spaces). The
- * resolved URL rides in the plan so the user sees exactly what will be cloned
- * before approving.
+ * for a missing one we build the conventional `github.com/<owner>/<name>.agi`
+ * URL. When the child has a registered PRIMARY repo we derive both the owner
+ * and the name from THAT repo (the envelope lives beside the code repo, e.g.
+ * `Renaissance-Analytics/wondermill.agi`, NOT at the project slug); otherwise we
+ * fall back to the owner *slug* + project *slug* (NOT the display name, which
+ * has spaces). The resolved URL rides in the plan so the user sees exactly what
+ * will be cloned before approving.
  */
 
 /** A governed child and where it stands locally. */
@@ -78,23 +80,48 @@ export function opsAutoProvisionEnabled(): boolean {
     }
 }
 
+/** The slave fields that drive `*.agi` clone-URL derivation. */
+export interface ChildAgiUrlSource {
+    /** Owner *slug* (org/user slug, e.g. `civicognita`). Fallback owner. */
+    ownerSlug: string | null | undefined;
+    /** Project slug. Fallback repo name. */
+    slug: string;
+    /** GitHub owner of the child's PRIMARY repo, when registered. */
+    repoOwner?: string | null;
+    /** GitHub name of the child's PRIMARY repo, when registered. */
+    repoName?: string | null;
+}
+
 /**
- * Build the conventional `*.agi` clone URL for a child from its owner SLUG +
- * project slug. Mirrors createAgiEnvelope's auto-remote shape
- * (`https://github.com/<owner-slug>/<slug>.agi.git`). Pass the owner *slug*
- * (the org/user slug, e.g. `civicognita`), never the display name — the display
- * name has spaces and yields an invalid URL. Returns null without an owner slug —
- * we never guess a URL we can't form. The GitHub owner *login* may still differ
- * from the Tynn slug, which is why the URL is surfaced for approval; the slug at
- * least yields a valid URL to approve.
+ * Build the conventional `*.agi` clone URL for a child.
+ *
+ * PREFERRED: when the child has a registered primary repo we use ITS GitHub
+ * owner + name → `github.com/<repoOwner>/<repoName>.agi.git`. The envelope lives
+ * beside the code repo (e.g. `Renaissance-Analytics/wondermill.agi`), which is
+ * NOT necessarily the project slug (`wishswonderscom`).
+ *
+ * FALLBACK (no primary repo): the owner *slug* + project *slug* →
+ * `github.com/<ownerSlug>/<slug>.agi.git`, mirroring createAgiEnvelope's
+ * auto-remote shape. Pass the owner *slug* (never the display name — it has
+ * spaces and yields an invalid URL).
+ *
+ * Returns null when neither form can be built — we never guess a URL we can't
+ * form. The resolved URL is surfaced for approval, since a GitHub login may
+ * still differ from the Tynn slug.
  */
-export function childAgiCloneUrl(
-    ownerSlug: string | null | undefined,
-    slug: string,
-): string | null {
-    const o = ownerSlug?.trim();
-    if (!o || !slug.trim()) return null;
-    return `https://github.com/${o}/${slug}.agi.git`;
+export function childAgiCloneUrl(src: ChildAgiUrlSource): string | null {
+    const repoOwner = src.repoOwner?.trim();
+    const repoName = src.repoName?.trim();
+    if (repoOwner && repoName) {
+        return `https://github.com/${repoOwner}/${repoName}.agi.git`;
+    }
+
+    const owner = src.ownerSlug?.trim();
+    if (owner && src.slug.trim()) {
+        return `https://github.com/${owner}/${src.slug}.agi.git`;
+    }
+
+    return null;
 }
 
 /**
@@ -161,7 +188,12 @@ export async function computeOpsProvisionPlan(
             name: s.name,
             slug: s.slug,
             status: 'missing',
-            cloneUrl: childAgiCloneUrl(s.owner_slug, s.slug),
+            cloneUrl: childAgiCloneUrl({
+                ownerSlug: s.owner_slug,
+                slug: s.slug,
+                repoOwner: s.repo_owner,
+                repoName: s.repo_name,
+            }),
         };
     });
 

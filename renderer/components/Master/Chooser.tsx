@@ -340,6 +340,48 @@ export default function Chooser({
         };
     }, []);
 
+    // Agent-integration MCP: a terminal called imDone → briefly pulse its
+    // WORKSPACE row (rail button + flyout row) as a sidebar-level "something
+    // finished here" cue. Distinct from the persistent terminal attention glow.
+    // Each pulse adds the id to `pulsingWs` for PULSE_MS, then clears it; a fresh
+    // pulse for the same workspace resets its timer so re-pulses don't truncate.
+    const PULSE_MS = 1500;
+    const [pulsingWs, setPulsingWs] = useState<Set<string>>(() => new Set());
+    const pulseTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+        new Map(),
+    );
+    useEffect(() => {
+        const timers = pulseTimers.current;
+        const off = api().on.workspacePulse(({ workspaceId }) => {
+            if (!workspaceId) return;
+            setPulsingWs((prev) => {
+                if (prev.has(workspaceId)) return prev;
+                const next = new Set(prev);
+                next.add(workspaceId);
+                return next;
+            });
+            const existing = timers.get(workspaceId);
+            if (existing) clearTimeout(existing);
+            timers.set(
+                workspaceId,
+                setTimeout(() => {
+                    timers.delete(workspaceId);
+                    setPulsingWs((prev) => {
+                        if (!prev.has(workspaceId)) return prev;
+                        const next = new Set(prev);
+                        next.delete(workspaceId);
+                        return next;
+                    });
+                }, PULSE_MS),
+            );
+        });
+        return () => {
+            off();
+            for (const t of timers.values()) clearTimeout(t);
+            timers.clear();
+        };
+    }, []);
+
     // Which workspaces' `.agi` envelopes declare a Tynn MCP server. The Tynn
     // glyph on a spec reflects REAL Tynn-MCP presence (a server named `tynn` in
     // the envelope's .mcp.json / .cursor/mcp.json), not the product backend
@@ -537,7 +579,9 @@ export default function Chooser({
                             type="button"
                             className={`crail-btn${live > 0 ? ' active' : ''}${
                                 isActive ? ' is-active' : ''
-                            }${wsAttention ? ' attention' : ''}`}
+                            }${wsAttention ? ' attention' : ''}${
+                                pulsingWs.has(ws.id) ? ' pulsing' : ''
+                            }`}
                             onClick={() => onActivateWorkspace(ws.id)}
                             title={`${ws.project_name}${live > 0 ? ` · ${live} live` : ''}`}
                         >
@@ -658,7 +702,7 @@ export default function Chooser({
                                     isActive ? ' is-active' : ''
                                 }${dragging ? ' dragging' : ''}${
                                     ws.shape === 'agi' ? ' agi' : ''
-                                }`}
+                                }${pulsingWs.has(ws.id) ? ' pulsing' : ''}`}
                                 onDragOver={(e) => {
                                     if (!draggingId.current) return;
                                     e.preventDefault();

@@ -1920,6 +1920,45 @@ body.gutter-dragging .grid-gutter {
         box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.8);
     }
 }
+
+/* Agent-integration MCP: a workspace-level "something finished here" pulse,
+   fired when a terminal in the workspace calls imDone. Unlike the persistent
+   .attention glow above, this is a brief one-shot (a single soft violet swell
+   that fades) on the workspace ROW — the rail button + the flyout row header.
+   The renderer drops the .pulsing class after the animation, so it runs once. */
+.chooser-rail .crail-btn.pulsing {
+    animation: ws-pulse-rail 1.5s ease-out 1;
+}
+@keyframes ws-pulse-rail {
+    0% {
+        box-shadow: 0 0 0 0 rgba(167, 139, 250, 0.7);
+    }
+    40% {
+        box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.55);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(139, 92, 246, 0);
+    }
+}
+.chooser-flyout .tproj.pulsing > .tproj-head {
+    animation: ws-pulse-row 1.5s ease-out 1;
+}
+@keyframes ws-pulse-row {
+    0% {
+        box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0);
+        background: color-mix(in srgb, var(--violet-500) 22%, transparent);
+    }
+    35% {
+        box-shadow:
+            inset 0 0 0 1px rgba(167, 139, 250, 0.85),
+            0 0 12px rgba(139, 92, 246, 0.3);
+        background: color-mix(in srgb, var(--violet-500) 14%, transparent);
+    }
+    100% {
+        box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0);
+        background: transparent;
+    }
+}
 .tpanel .pa {
     opacity: 0;
     transition: opacity var(--dur-fast) var(--ease-out);

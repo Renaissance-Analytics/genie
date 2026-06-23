@@ -95,6 +95,73 @@ export class TynnBackend implements Backend {
     }
 
     /**
+     * Owners the signed-in user may create a project under, for Genie's
+     * "Create new project" form (GET /api/v1/projects/owner-options). Always
+     * "Personal" first, then the user's orgs/teams. Returns [] when the session
+     * is dead or the call fails — the form falls back to personal-only.
+     */
+    async ownerOptions(): Promise<
+        Array<{ kind: 'user' | 'organization' | 'team'; id: string; label: string }>
+    > {
+        try {
+            const data = await this.fetch<{
+                data: Array<{
+                    kind: 'user' | 'organization' | 'team';
+                    id: string;
+                    label: string;
+                }>;
+            }>('/api/v1/projects/owner-options');
+            return data.data ?? [];
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * Create a Tynn project from Genie's "Create new project" form
+     * (POST /api/v1/projects). Rides the web session cookie. Defaults to the
+     * user's personal account when no owner is given. Returns the new project
+     * in the same shape listProjects() yields so Genie can use it directly as a
+     * workspace's associated project. Throws TynnAuthError on a dead session
+     * and a plain Error on 403 (owner not permitted) / 422 (validation).
+     */
+    async createProject(input: {
+        name: string;
+        owner_type?: 'user' | 'organization' | 'team';
+        owner_id?: string;
+        slug?: string;
+    }): Promise<BackendProject> {
+        const data = await this.fetch<{
+            data: {
+                id: string;
+                name: string;
+                slug: string;
+                owner_type?: string;
+                owner_name?: string;
+                base_url?: string;
+            };
+        }>('/api/v1/projects', {
+            method: 'POST',
+            body: {
+                name: input.name,
+                owner_type: input.owner_type,
+                owner_id: input.owner_id,
+                slug: input.slug,
+            },
+        });
+        const p = data.data;
+        return {
+            backend: 'tynn',
+            id: p.id,
+            name: p.name,
+            slug: p.slug,
+            owner_type: p.owner_type,
+            owner_name: p.owner_name,
+            base_url: p.base_url,
+        };
+    }
+
+    /**
      * Mint an MCP agent token for a project the signed-in user maintains
      * (POST /api/v1/projects/agent-token). Rides the web session cookie like
      * every other call here. Returns the one-time token + the MCP endpoint URL
@@ -140,6 +207,11 @@ export class TynnBackend implements Backend {
             slug: string;
             owner_name: string | null;
             owner_slug: string | null;
+            // GitHub owner + name of the slave's PRIMARY repo, when registered.
+            // Genie prefers these for the `*.agi` clone URL (the envelope lives at
+            // github.com/<repo_owner>/<repo_name>.agi, not owner_slug + slug).
+            repo_owner: string | null;
+            repo_name: string | null;
             base_url?: string;
         }>;
     }> {
@@ -152,6 +224,8 @@ export class TynnBackend implements Backend {
                     slug: string;
                     owner_name: string | null;
                     owner_slug: string | null;
+                    repo_owner: string | null;
+                    repo_name: string | null;
                     base_url?: string;
                 }>;
             }>('/api/v1/projects/ops-slaves', {
