@@ -179,6 +179,31 @@ export type GithubPermission =
     | 'contents'
     | 'administration';
 
+/** The access level a permission is granted/required at (mirrors `GhAccess`). */
+export type GithubAccess = 'read' | 'write' | 'admin';
+
+/**
+ * One installation missing a permission, with the deep-link to ITS own review
+ * page (mirrors `MissingInstallation` in capability-service.ts). GitHub has no
+ * bulk-approve, so the resolve flow lists each one with its own link.
+ */
+export interface GithubMissingInstallation {
+    login: string;
+    installationId: number | null;
+    isOrg: boolean;
+    reviewUrl: string;
+}
+
+/**
+ * Per missing permission, the installations not granting it (mirrors
+ * `MissingPermissionGroup`). Drives the resolve flow's per-install list.
+ */
+export interface GithubMissingPermissionGroup {
+    permission: GithubPermission;
+    access: GithubAccess;
+    installations: GithubMissingInstallation[];
+}
+
 /**
  * The GitHub capability status (mirrors `GithubCapabilities` in
  * main/github/capability-service.ts). `connected:false` ⇒ no token; the gate is
@@ -191,6 +216,19 @@ export interface GithubCapabilities {
     satisfiedFeatures: GithubCapabilityKey[];
     missing: GithubCapabilityKey[];
     missingPermissions: GithubPermission[];
+    /**
+     * Per missing permission, the SPECIFIC installations not granting it (each
+     * with a deep-link to its own review page). The resolve flow lists these so
+     * the user knows which installs to approve (no GitHub bulk-approve). Empty
+     * while disconnected / before the first check.
+     */
+    missingByPermission: GithubMissingPermissionGroup[];
+    /**
+     * Deep-link to the App's permission-settings page, where the App OWNER adds
+     * a missing permission (the real first step — until they do, there's nothing
+     * pending for any install to approve).
+     */
+    appPermissionsUrl: string;
     checked: boolean;
 }
 

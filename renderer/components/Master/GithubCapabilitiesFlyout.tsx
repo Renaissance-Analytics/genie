@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react';
 import { IconX, IconAlert, IconRefresh } from './icons';
-import { api, hasGenieBridge, type GithubCapabilities } from '../../lib/genie';
+import {
+    api,
+    hasGenieBridge,
+    type GithubCapabilities,
+    type GithubMissingPermissionGroup,
+} from '../../lib/genie';
 import {
     CAPABILITY_LABEL,
     PERMISSION_LABEL,
@@ -13,14 +18,19 @@ import {
  *   - from the persistent header warning icon, any time.
  *
  * It explains which capabilities are unavailable + WHY (the missing GitHub App
- * permissions), then offers the only two real resolutions for a GitHub App
- * whose declared permissions a token can't self-widen:
+ * permissions), then walks the user through the REAL resolution sequence for a
+ * GitHub App whose DECLARED permissions a token can't self-widen:
  *
- *   (a) Review on GitHub — deep-link to the App installation's permission page
- *       so the installation OWNER can approve the pending permission update.
- *   (b) Reconnect GitHub — re-run the device flow to re-mint the token with the
- *       currently-granted permissions; then re-check and clear the warning if
- *       resolved.
+ *   1. App owner adds the missing permission in the APP'S settings. This is the
+ *      true first step — if the App doesn't declare the permission, there's
+ *      nothing pending for any installation to approve (the dead end the old
+ *      "Review on GitHub" link hit). Button → the App permission-settings page.
+ *   2. Each affected INSTALLATION approves the resulting permission request.
+ *      There's no GitHub "approve for all", so we list the specific installs
+ *      missing each permission, each with a deep-link to its own review page —
+ *      the user clicks through the listed ones.
+ *   3. Reconnect — re-run the device flow to re-mint the token with the
+ *      now-wider grant; then re-check and clear the warning if resolved.
  *
  * Reuses the Docs flyout chrome (right-side slide-in) like IssueWatchFlyout.
  */
@@ -91,14 +101,12 @@ export default function GithubCapabilitiesFlyout({
         return () => clearInterval(t);
     }, [reconnect.kind]);
 
-    const reviewOnGitHub = () => {
-        // The App's install/permission page — where the installation owner
-        // approves the pending permission update. No targetId: the chooser /
-        // installation settings list every account the user can act on.
-        void (async () => {
-            const url = await api().github.installUrl().catch(() => null);
-            if (url) await api().tynn.openInBrowser(url).catch(() => {});
-        })();
+    // Open any GitHub deep-link in the OS browser (App settings, a specific
+    // installation's review page). The URLs are built main-side and ride along
+    // in the capabilities payload, so the renderer just opens them.
+    const openUrl = (url: string) => {
+        if (!url) return;
+        void api().tynn.openInBrowser(url).catch(() => {});
     };
 
     const startReconnect = async () => {
@@ -171,9 +179,9 @@ export default function GithubCapabilitiesFlyout({
                         <>
                             <div className="ghcap-intro">
                                 Some GitHub-powered features are unavailable
-                                because the Genie GitHub App is missing
-                                permissions on your installation. These features
-                                are disabled until the permissions are granted.
+                                because the Genie GitHub App doesn't grant the
+                                permissions they need. These features are disabled
+                                until the permissions are added and approved.
                             </div>
 
                             <div className="iw-section-head">Unavailable features</div>
@@ -200,21 +208,36 @@ export default function GithubCapabilitiesFlyout({
                             <div className="iw-section-head">Resolve</div>
                             <div className="ghcap-resolve">
                                 <p className="ghcap-step">
-                                    <strong>1. Review on GitHub.</strong> Open the
-                                    Genie App's installation settings and approve
-                                    the pending permission request. (Only the
-                                    account/org owner can approve.)
+                                    <strong>1. App owner adds the permission.</strong>{' '}
+                                    The missing permission has to be added to the
+                                    Genie GitHub App itself first — until the App's
+                                    OWNER does that, there's nothing pending for an
+                                    installation to approve. Open the App's
+                                    permission settings (App owner only):
                                 </p>
                                 <button
                                     type="button"
                                     className="ghcap-btn ghcap-btn-primary"
-                                    onClick={reviewOnGitHub}
+                                    onClick={() => openUrl(caps.appPermissionsUrl)}
+                                    disabled={!caps.appPermissionsUrl}
                                 >
-                                    Review on GitHub…
+                                    Open App permission settings…
                                 </button>
 
                                 <p className="ghcap-step">
-                                    <strong>2. Reconnect.</strong> After approving,
+                                    <strong>2. Each installation approves.</strong>{' '}
+                                    Once the App declares the permission, every
+                                    installation gets a pending request to approve.
+                                    GitHub has no "approve for all", so open each
+                                    listed installation and approve it:
+                                </p>
+                                <MissingInstallsList
+                                    groups={caps.missingByPermission}
+                                    onOpen={openUrl}
+                                />
+
+                                <p className="ghcap-step">
+                                    <strong>3. Reconnect.</strong> After approving,
                                     reconnect so Genie picks up the new
                                     permissions.
                                 </p>
@@ -277,6 +300,69 @@ export default function GithubCapabilitiesFlyout({
                     )}
                 </div>
             </aside>
+        </div>
+    );
+}
+
+/**
+ * The per-permission, per-installation approval list. For each missing
+ * permission it shows which specific installations don't grant it, each linking
+ * to ITS own GitHub review page (there's no bulk-approve — the user clicks
+ * through the listed ones). Renders nothing until detection has attributed the
+ * gap to installs (e.g. before the first check), so the step copy stands alone.
+ */
+function MissingInstallsList({
+    groups,
+    onOpen,
+}: {
+    groups: GithubMissingPermissionGroup[];
+    onOpen: (url: string) => void;
+}) {
+    const withInstalls = groups.filter((g) => g.installations.length > 0);
+    if (withInstalls.length === 0) {
+        return (
+            <div className="iw-muted ghcap-installs-empty">
+                The specific installations to approve will appear here once the
+                App declares the permission and Genie re-checks.
+            </div>
+        );
+    }
+    return (
+        <div className="ghcap-installs">
+            {withInstalls.map((g) => (
+                <div key={g.permission} className="ghcap-install-group">
+                    <div className="ghcap-install-perm">
+                        {PERMISSION_LABEL[g.permission] ?? g.permission} — missing
+                        on {g.installations.length}{' '}
+                        {g.installations.length === 1
+                            ? 'installation'
+                            : 'installations'}
+                        :
+                    </div>
+                    <ul className="ghcap-install-list">
+                        {g.installations.map((inst) => (
+                            <li
+                                key={`${g.permission}:${inst.login}`}
+                                className="ghcap-install-row"
+                            >
+                                <span className="ghcap-install-name">
+                                    {inst.login}
+                                    <span className="ghcap-install-kind">
+                                        {inst.isOrg ? 'org' : 'personal'}
+                                    </span>
+                                </span>
+                                <button
+                                    type="button"
+                                    className="ghcap-btn ghcap-install-btn"
+                                    onClick={() => onOpen(inst.reviewUrl)}
+                                >
+                                    Review…
+                                </button>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            ))}
         </div>
     );
 }

@@ -226,6 +226,13 @@ export async function getViewer(): Promise<GitHubUser> {
 
 /** One installation of the GitHub App, as returned by /user/installations. */
 interface GhInstallation {
+    /**
+     * The INSTALLATION's own id — distinct from `account.id`. This is the id in
+     * the per-installation review URL (`settings/installations/<id>`), where the
+     * owner approves a pending permission update. (account.id is the ACCOUNT id,
+     * used for the install chooser's `suggested_target_id`.)
+     */
+    id?: number;
     account?: {
         id?: number;
         login?: string;
@@ -256,6 +263,12 @@ export interface GitHubInstallation {
     avatar_url: string;
     id: number | null;
     isOrg: boolean;
+    /**
+     * The INSTALLATION's own id (NOT the account id in `id`). Keys the
+     * per-installation review URL where the owner approves a pending permission
+     * update — see `genieInstallationReviewUrl`. Null when GitHub omitted it.
+     */
+    installationId: number | null;
     /**
      * The permissions GitHub granted this installation (permission name →
      * access level). Drives capability detection — see `capabilities.ts`. Empty
@@ -292,6 +305,7 @@ export async function listInstallations(): Promise<GitHubInstallation[]> {
             avatar_url: inst.account?.avatar_url ?? '',
             id: inst.account?.id ?? null,
             isOrg: inst.account?.type === 'Organization',
+            installationId: inst.id ?? null,
             permissions: inst.permissions ?? {},
         });
     }
@@ -310,6 +324,17 @@ export async function listInstallations(): Promise<GitHubInstallation[]> {
 export async function readGrantedPermissions(): Promise<Record<string, string>[]> {
     const installs = await listInstallations();
     return installs.map((i) => i.permissions);
+}
+
+/**
+ * Read every installation WITH its identity (login/id/isOrg) AND its granted
+ * permission map. The capability detection needs the identity — not just the
+ * permission maps — to tell the user WHICH specific installations are missing a
+ * permission (there's no GitHub "approve for all", so each install that lacks
+ * the permission must be approved individually). Reuses {@link listInstallations}.
+ */
+export async function readInstallationGrants(): Promise<GitHubInstallation[]> {
+    return listInstallations();
 }
 
 /**

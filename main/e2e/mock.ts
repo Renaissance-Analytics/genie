@@ -79,11 +79,28 @@ interface WatchFeedItem {
     severity?: string;
 }
 
+interface MissingInstallation {
+    login: string;
+    installationId: number | null;
+    isOrg: boolean;
+    reviewUrl: string;
+}
+
+interface MissingPermissionGroup {
+    permission: string;
+    access: string;
+    installations: MissingInstallation[];
+}
+
 interface GithubCapabilities {
     connected: boolean;
     satisfiedFeatures: string[];
     missing: string[];
     missingPermissions: string[];
+    /** Per missing permission, the installs not granting it (each w/ review URL). */
+    missingByPermission: MissingPermissionGroup[];
+    /** Deep-link to the App's permission settings (where the owner adds a perm). */
+    appPermissionsUrl: string;
     checked: boolean;
 }
 
@@ -138,6 +155,9 @@ export function defaultE2EState(): E2EState {
                 ],
                 missing: [],
                 missingPermissions: [],
+                missingByPermission: [],
+                appPermissionsUrl:
+                    'https://github.com/settings/apps/genie-ide/permissions',
                 checked: true,
             },
         },
@@ -165,6 +185,46 @@ export function defaultE2EState(): E2EState {
     };
 }
 
+/**
+ * Capability state for the per-install RESOLVE scenario: `contents` (→
+ * provisioning) missing, with TWO installs — a personal one that GRANTS it and
+ * an org one that does NOT. Only the org install is listed for `contents`, each
+ * with its own review URL, alongside the App-permission-settings deep-link. The
+ * ghcaps E2E spec installs this, then reloads the harness so the flyout re-reads
+ * it. (A pure data fixture — mirrors what capability-service.ts produces.)
+ */
+export function missingContentsCapabilities(): GithubCapabilities {
+    return {
+        connected: true,
+        satisfiedFeatures: [
+            'issue-watch.issues',
+            'issue-watch.pulls',
+            'issue-watch.dependabot',
+        ],
+        missing: ['github.provision'],
+        missingPermissions: ['contents'],
+        missingByPermission: [
+            {
+                permission: 'contents',
+                access: 'write',
+                installations: [
+                    // The org install is the one MISSING contents → it's listed.
+                    {
+                        login: 'Renaissance-Analytics',
+                        installationId: 2002,
+                        isOrg: true,
+                        reviewUrl:
+                            'https://github.com/organizations/Renaissance-Analytics/settings/installations/2002',
+                    },
+                ],
+            },
+        ],
+        appPermissionsUrl:
+            'https://github.com/settings/apps/genie-ide/permissions',
+        checked: true,
+    };
+}
+
 /** The live scriptable state (only meaningful in E2E mode). */
 export let e2eState: E2EState = defaultE2EState();
 
@@ -174,13 +234,16 @@ export function resetE2EState(): void {
     publishHandle();
 }
 
-/** Expose the state on a global so `electronApp.evaluate` can reach it. */
+/** Expose the state on a global so `electronApp.evaluate` can reach it. The
+ *  scenario builders ride along so a spec can script a known capability shape
+ *  (e.g. the per-install missing-`contents` resolve flow) without re-deriving it. */
 function publishHandle(): void {
     (globalThis as Record<string, unknown>).__GENIE_E2E__ = {
         get state() {
             return e2eState;
         },
         reset: resetE2EState,
+        missingContentsCapabilities,
     };
 }
 

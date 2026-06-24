@@ -38,6 +38,8 @@ const EMPTY: GithubCapabilities = {
     satisfiedFeatures: [],
     missing: [],
     missingPermissions: [],
+    missingByPermission: [],
+    appPermissionsUrl: '',
     checked: false,
 };
 

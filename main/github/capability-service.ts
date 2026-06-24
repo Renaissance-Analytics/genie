@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain } from 'electron';
-import { readGrantedPermissions } from './api';
+import { readInstallationGrants } from './api';
 import { getToken } from './storage';
+import { genieAppPermissionsUrl, genieInstallationReviewUrl } from '../config';
 import {
     aggregatePermissions,
     buildFeatureManager,
@@ -8,7 +9,9 @@ import {
     CAPABILITY_KEYS,
     type CapabilityKey,
     type CapabilityStatus,
+    type GhAccess,
     type GhPermission,
+    type InstallationGrant,
 } from './capabilities';
 
 /**
@@ -25,6 +28,31 @@ import {
  * what this service reports.
  */
 
+/**
+ * One installation that's missing a permission, PLUS the deep-link to ITS own
+ * review page. The renderer just renders the link — the URL (incl. the org vs
+ * personal variant) is built here in main.
+ */
+export interface MissingInstallation {
+    login: string;
+    /** The installation id (keys the review URL); null when GitHub omitted it. */
+    installationId: number | null;
+    isOrg: boolean;
+    /** Deep-link to this installation's permission-review page on GitHub. */
+    reviewUrl: string;
+}
+
+/**
+ * Per missing permission, the installations not granting it (each with its own
+ * review link). The renderer-facing analogue of `MissingPermissionInstalls`
+ * with URLs attached.
+ */
+export interface MissingPermissionGroup {
+    permission: GhPermission;
+    access: GhAccess;
+    installations: MissingInstallation[];
+}
+
 /** The renderer-facing capability status (mirrors the IPC payload shape). */
 export interface GithubCapabilities {
     /** Whether a GitHub token is present at all. When false the gate is inert
@@ -36,6 +64,19 @@ export interface GithubCapabilities {
     missing: CapabilityKey[];
     /** Distinct missing GitHub permission names (the resolve set). */
     missingPermissions: GhPermission[];
+    /**
+     * Per missing permission, the installations that don't grant it (each with
+     * a deep-link to ITS review page) — so the resolve flow can list the EXACT
+     * installs the user must approve (GitHub has no bulk-approve). Empty while
+     * disconnected / before the first check.
+     */
+    missingByPermission: MissingPermissionGroup[];
+    /**
+     * Deep-link to the App's permission-settings page, where the App OWNER adds
+     * a missing permission (the real first step before any install can approve
+     * it). Always present so the resolve flow can render the button.
+     */
+    appPermissionsUrl: string;
     /** True once a detection pass has completed at least once this session. */
     checked: boolean;
 }
@@ -46,6 +87,7 @@ let lastStatus: CapabilityStatus = {
     satisfied: [],
     missing: [],
     missingPermissions: [],
+    missingByPermission: [],
 };
 let connected = false;
 let checked = false;
@@ -61,6 +103,22 @@ export function getCapabilities(): GithubCapabilities {
         satisfiedFeatures: lastStatus.satisfied,
         missing: lastStatus.missing,
         missingPermissions: lastStatus.missingPermissions,
+        // Attach a per-install review deep-link (org vs personal variant) — the
+        // renderer just renders it.
+        missingByPermission: lastStatus.missingByPermission.map((g) => ({
+            permission: g.permission,
+            access: g.access,
+            installations: g.installations.map((inst) => ({
+                login: inst.login,
+                installationId: inst.installationId,
+                isOrg: inst.isOrg,
+                reviewUrl: genieInstallationReviewUrl(
+                    inst.installationId,
+                    inst.isOrg ? inst.login : null,
+                ),
+            })),
+        })),
+        appPermissionsUrl: genieAppPermissionsUrl(),
         checked,
     };
 }
@@ -86,13 +144,22 @@ export async function recheckCapabilities(): Promise<GithubCapabilities> {
         checked = true;
         // Treat all as satisfied while disconnected (gate inert).
         satisfied = new Set(CAPABILITY_KEYS);
-        lastStatus = { satisfied: [...CAPABILITY_KEYS], missing: [], missingPermissions: [] };
+        lastStatus = {
+            satisfied: [...CAPABILITY_KEYS],
+            missing: [],
+            missingPermissions: [],
+            missingByPermission: [],
+        };
         return getCapabilities();
     }
     try {
-        const perInstallation = await readGrantedPermissions();
-        const granted = aggregatePermissions(perInstallation);
-        const status = computeCapabilityStatus(granted);
+        const installations: InstallationGrant[] = await readInstallationGrants();
+        const granted = aggregatePermissions(
+            installations.map((i) => i.permissions),
+        );
+        // Pass the installs (identity + own permission map) so the status also
+        // carries which SPECIFIC installs are missing each permission.
+        const status = computeCapabilityStatus(granted, installations);
         connected = true;
         checked = true;
         lastStatus = status;

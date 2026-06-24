@@ -47,3 +47,42 @@ export function genieInstallUrl(targetId?: number | null): string {
     const base = `https://github.com/apps/${GENIE_GITHUB_APP_SLUG}/installations/new`;
     return targetId ? `${base}?suggested_target_id=${targetId}` : base;
 }
+
+/**
+ * Where the App OWNER adds a missing permission to the App itself. This is the
+ * REAL first step when a feature is gated on a permission the App doesn't
+ * DECLARE (e.g. `contents`): there's nothing pending to approve on any
+ * installation until the owner adds the permission here. GitHub serves the
+ * App's permission-settings page at `settings/apps/<slug>/permissions` and
+ * redirects to the org-owned variant automatically for an org-owned App.
+ *
+ * Only the App's owner can open this; for a non-owner it 404s, which is why the
+ * resolve flow frames it as "ask the App owner" rather than a self-serve fix.
+ */
+export function genieAppPermissionsUrl(): string {
+    return `https://github.com/settings/apps/${GENIE_GITHUB_APP_SLUG}/permissions`;
+}
+
+/**
+ * The GitHub page where ONE installation's owner reviews + approves a pending
+ * permission update for the App. Each installation has its own page keyed by the
+ * INSTALLATION id; GitHub has no "approve for all", so the resolve flow links
+ * each missing install to its own page.
+ *
+ *   - Personal install → `github.com/settings/installations/<id>`
+ *   - Org install      → `github.com/organizations/<org>/settings/installations/<id>`
+ *     (the org-owned variant; the owner manages org installs there).
+ *
+ * Falls back to the generic installations list when the installation id is
+ * unknown (so the link is never dead).
+ */
+export function genieInstallationReviewUrl(
+    installationId?: number | null,
+    orgLogin?: string | null,
+): string {
+    if (!installationId) return 'https://github.com/settings/installations';
+    if (orgLogin) {
+        return `https://github.com/organizations/${orgLogin}/settings/installations/${installationId}`;
+    }
+    return `https://github.com/settings/installations/${installationId}`;
+}

@@ -6,6 +6,7 @@ import {
     satisfies,
     type CapabilityKey,
     type GrantedPermissions,
+    type InstallationGrant,
 } from '../capabilities';
 
 /**
@@ -123,6 +124,123 @@ describe('computeCapabilityStatus', () => {
         });
         expect(status.missing).toEqual([]);
         expect(status.missingPermissions).toEqual([]);
+    });
+
+    it('missingByPermission is empty when no installations are supplied', () => {
+        // The aggregate alone can't attribute a gap to a specific install.
+        const status = computeCapabilityStatus({
+            metadata: 'read',
+            issues: 'read',
+            pull_requests: 'read',
+            vulnerability_alerts: 'read',
+            // contents missing — but with no installs we can't say WHICH.
+        });
+        expect(status.missingPermissions).toEqual(['contents']);
+        expect(status.missingByPermission).toEqual([]);
+    });
+});
+
+describe('computeCapabilityStatus — per-installation attribution', () => {
+    const personal: InstallationGrant = {
+        login: 'wishborn',
+        id: 1,
+        installationId: 1001,
+        isOrg: false,
+        // Grants everything EXCEPT contents.
+        permissions: {
+            metadata: 'read',
+            issues: 'read',
+            pull_requests: 'read',
+            vulnerability_alerts: 'read',
+        },
+    };
+    const orgGrants: InstallationGrant = {
+        login: 'Renaissance-Analytics',
+        id: 2,
+        installationId: 2002,
+        isOrg: true,
+        // This org install DOES grant contents:write — the aggregate is satisfied.
+        permissions: {
+            metadata: 'read',
+            issues: 'read',
+            pull_requests: 'read',
+            vulnerability_alerts: 'read',
+            contents: 'write',
+        },
+    };
+
+    it('lists only the installs NOT granting a missing permission', () => {
+        // Aggregate across both: org grants contents:write, so the aggregate
+        // SATISFIES github.provision → contents isn't missing in aggregate.
+        const granted = aggregatePermissions([
+            personal.permissions,
+            orgGrants.permissions,
+        ]);
+        const status = computeCapabilityStatus(granted, [personal, orgGrants]);
+        // contents satisfied in aggregate → nothing missing at all.
+        expect(status.missing).toEqual([]);
+        expect(status.missingByPermission).toEqual([]);
+    });
+
+    it('attributes a genuinely-missing permission to the non-granting installs', () => {
+        // NEITHER install grants contents → provisioning is missing, and BOTH
+        // installs are listed for `contents` (each needs its own approval).
+        const personalNoContents = personal;
+        const orgNoContents: InstallationGrant = {
+            ...orgGrants,
+            permissions: {
+                metadata: 'read',
+                issues: 'read',
+                pull_requests: 'read',
+                vulnerability_alerts: 'read',
+                // contents NOT granted here either.
+            },
+        };
+        const installs = [personalNoContents, orgNoContents];
+        const granted = aggregatePermissions(installs.map((i) => i.permissions));
+        const status = computeCapabilityStatus(granted, installs);
+
+        expect(status.missing).toEqual(['github.provision']);
+        expect(status.missingPermissions).toEqual(['contents']);
+        expect(status.missingByPermission).toHaveLength(1);
+        const group = status.missingByPermission[0];
+        expect(group.permission).toBe('contents');
+        expect(group.access).toBe('write');
+        expect(group.installations.map((i) => i.login)).toEqual([
+            'wishborn',
+            'Renaissance-Analytics',
+        ]);
+        // Identity (incl. installationId, used for the review URL) rides through.
+        expect(group.installations[1]).toMatchObject({
+            login: 'Renaissance-Analytics',
+            installationId: 2002,
+            isOrg: true,
+        });
+    });
+
+    it('an install granting only READ is still missing a WRITE requirement', () => {
+        // contents:read does NOT satisfy contents:write (provisioning needs write).
+        const readOnly: InstallationGrant = {
+            login: 'wishborn',
+            id: 1,
+            installationId: 1001,
+            isOrg: false,
+            permissions: {
+                metadata: 'read',
+                issues: 'read',
+                pull_requests: 'read',
+                vulnerability_alerts: 'read',
+                contents: 'read',
+            },
+        };
+        const granted = aggregatePermissions([readOnly.permissions]);
+        const status = computeCapabilityStatus(granted, [readOnly]);
+        expect(status.missing).toEqual(['github.provision']);
+        const group = status.missingByPermission.find(
+            (g) => g.permission === 'contents',
+        );
+        expect(group?.access).toBe('write');
+        expect(group?.installations.map((i) => i.login)).toEqual(['wishborn']);
     });
 });
 

@@ -23,7 +23,17 @@ import path from 'node:path';
 export const REPO_ROOT = path.resolve(__dirname, '..', '..');
 export const MAIN_ENTRY = path.join(REPO_ROOT, 'app', 'background.js');
 
-export async function launchGenieE2E(): Promise<{
+/**
+ * Which harness window to open. `issuewatch` mounts the IssueWatchFlyout (the
+ * default — back-compat with the existing spec); `ghcaps` mounts the
+ * GithubCapabilitiesFlyout (per-install resolve flow). Maps to `GENIE_E2E_PAGE`,
+ * which `showE2EWindow` (background.ts) reads to pick the route.
+ */
+export type E2EHarnessPage = 'issuewatch' | 'ghcaps';
+
+export async function launchGenieE2E(
+    harness: E2EHarnessPage = 'issuewatch',
+): Promise<{
     app: ElectronApplication;
     page: Page;
 }> {
@@ -33,6 +43,8 @@ export async function launchGenieE2E(): Promise<{
             ...process.env,
             NODE_ENV: 'production',
             GENIE_E2E: '1',
+            GENIE_E2E_PAGE:
+                harness === 'ghcaps' ? 'e2e-ghcaps' : 'e2e-issuewatch',
         },
     });
     // The harness window is opened on app.whenReady(); wait for it.

@@ -117,10 +117,14 @@ describe('listInstallations (every installed account)', () => {
             res(200, {
                 installations: [
                     {
+                        // Top-level installation id is distinct from account.id —
+                        // it's what keys the per-install review URL.
+                        id: 1001,
                         account: { login: 'me', id: 1, type: 'User', avatar_url: 'a' },
                         permissions: { metadata: 'read', issues: 'read' },
                     },
                     {
+                        id: 2002,
                         account: { login: 'acme-co', id: 2, type: 'Organization', avatar_url: 'b' },
                     },
                 ],
@@ -134,10 +138,18 @@ describe('listInstallations (every installed account)', () => {
                 avatar_url: 'a',
                 id: 1,
                 isOrg: false,
+                installationId: 1001,
                 permissions: { metadata: 'read', issues: 'read' },
             },
             // No permissions map in the response → defaults to {}.
-            { login: 'acme-co', avatar_url: 'b', id: 2, isOrg: true, permissions: {} },
+            {
+                login: 'acme-co',
+                avatar_url: 'b',
+                id: 2,
+                isOrg: true,
+                installationId: 2002,
+                permissions: {},
+            },
         ]);
     });
 

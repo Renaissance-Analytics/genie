@@ -815,6 +815,68 @@
     line-height: 1.4;
 }
 
+/* Per-permission, per-installation approval list (resolve step 2). */
+.ghcap-installs {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 2px;
+}
+.ghcap-installs-empty {
+    font-size: 12px;
+    line-height: 1.45;
+    padding: 2px;
+}
+.ghcap-install-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.ghcap-install-perm {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--fg-2);
+}
+.ghcap-install-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.ghcap-install-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-1);
+    background: var(--bg-1);
+}
+.ghcap-install-name {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--fg-1);
+}
+.ghcap-install-kind {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--fg-3);
+    border: 1px solid var(--border-1);
+    border-radius: 999px;
+    padding: 1px 6px;
+}
+.ghcap-install-btn {
+    padding: 3px 10px;
+    font-size: 11.5px;
+}
+
 /* --- Task Manager flyout ------------------------------------------------- */
 /* Reuses .docs-flyout chrome; a touch narrower since it's a process list. */
 .tm-flyout {

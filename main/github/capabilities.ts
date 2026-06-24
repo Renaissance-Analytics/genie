@@ -118,6 +118,46 @@ export function aggregatePermissions(
     return out;
 }
 
+/**
+ * One installation's identity PLUS the permissions GitHub granted it. The
+ * identity (login/id/isOrg) is what lets the resolve flow point the user at the
+ * EXACT installation that's missing a permission — GitHub has no "approve for
+ * all", so each non-granting install must be reviewed on its own page.
+ */
+export interface InstallationGrant {
+    login: string;
+    /** The ACCOUNT id (pre-targets the install chooser). */
+    id: number | null;
+    /** The INSTALLATION id (keys the per-install review URL). */
+    installationId: number | null;
+    isOrg: boolean;
+    permissions: InstallationPermissions;
+}
+
+/** An installation's identity alone (no permission map) — the renderer-facing
+ *  shape of "which install is missing this permission". */
+export interface InstallationRef {
+    login: string;
+    /** The ACCOUNT id. */
+    id: number | null;
+    /** The INSTALLATION id — keys the review URL the service attaches. */
+    installationId: number | null;
+    isOrg: boolean;
+}
+
+/**
+ * For ONE missing permission, the installations that don't grant it at the
+ * required level — the precise list the resolve flow renders so the user knows
+ * which install pages to visit (each gets its own review link).
+ */
+export interface MissingPermissionInstalls {
+    permission: GhPermission;
+    /** Highest access level any capability requires this permission at. */
+    access: GhAccess;
+    /** The installations NOT granting `permission` at `access` (or higher). */
+    installations: InstallationRef[];
+}
+
 function isModelledPermission(name: string): name is GhPermission {
     return (
         name === 'metadata' ||
@@ -156,33 +196,97 @@ export interface CapabilityStatus {
     missing: CapabilityKey[];
     /** Distinct missing permission names (e.g. `['contents']`) — the resolve set. */
     missingPermissions: GhPermission[];
+    /**
+     * Per missing permission, the installations that don't grant it (at the
+     * level it's needed) — what the resolve flow lists so the user knows which
+     * specific installs to approve. Empty when the installation identities
+     * weren't supplied (the aggregate-only path can't attribute a gap to an
+     * install). Same order as {@link missingPermissions}.
+     */
+    missingByPermission: MissingPermissionInstalls[];
 }
 
 /**
  * Compute which capabilities the granted permissions satisfy. Pure — feed it
  * the aggregate from {@link aggregatePermissions}. This is the heart of the
  * detection: it turns "what the App granted" into "what Genie can/can't do".
+ *
+ * Pass `installations` (each install's identity + its own permission map) to
+ * ALSO get `missingByPermission` — the per-install attribution the resolve flow
+ * needs ("which installs are missing `contents`"). Omit it and that field is
+ * empty (the aggregate alone can't say which install caused a gap).
  */
 export function computeCapabilityStatus(
     granted: GrantedPermissions,
+    installations?: readonly InstallationGrant[],
 ): CapabilityStatus {
     const satisfied: CapabilityKey[] = [];
     const missing: CapabilityKey[] = [];
-    const missingPerms = new Set<GhPermission>();
+    // Track each missing permission at the HIGHEST access any missing
+    // capability needs it — an install that grants `read` but a capability
+    // needs `write` is still "missing" it for that capability.
+    const neededAccess = new Map<GhPermission, GhAccess>();
     for (const key of CAPABILITY_KEYS) {
         const req = REQUIRED[key];
         if (satisfies(granted, req)) {
             satisfied.push(key);
         } else {
             missing.push(key);
-            missingPerms.add(req.permission);
+            const prev = neededAccess.get(req.permission);
+            if (!prev || ACCESS_RANK[req.access] > ACCESS_RANK[prev]) {
+                neededAccess.set(req.permission, req.access);
+            }
         }
     }
+    const missingPermissions = [...neededAccess.keys()];
     return {
         satisfied,
         missing,
-        missingPermissions: [...missingPerms],
+        missingPermissions,
+        missingByPermission: missingInstallsByPermission(
+            neededAccess,
+            installations,
+        ),
     };
+}
+
+/**
+ * For each missing permission (→ the access it's needed at), the installations
+ * that don't grant it at that level. Pure helper for {@link computeCapabilityStatus};
+ * returns [] when no installations were supplied.
+ */
+function missingInstallsByPermission(
+    neededAccess: ReadonlyMap<GhPermission, GhAccess>,
+    installations?: readonly InstallationGrant[],
+): MissingPermissionInstalls[] {
+    if (!installations || installations.length === 0) return [];
+    const out: MissingPermissionInstalls[] = [];
+    for (const [permission, access] of neededAccess) {
+        const req: RequiredPermission = { permission, access };
+        const lacking = installations
+            .filter((inst) => !installGrants(inst.permissions, req))
+            .map(
+                ({ login, id, installationId, isOrg }): InstallationRef => ({
+                    login,
+                    id,
+                    installationId,
+                    isOrg,
+                }),
+            );
+        out.push({ permission, access, installations: lacking });
+    }
+    return out;
+}
+
+/** Whether ONE installation's own permission map covers `req`. (The per-install
+ *  analogue of {@link satisfies}, which works on the cross-install aggregate.) */
+function installGrants(
+    perms: InstallationPermissions,
+    req: RequiredPermission,
+): boolean {
+    const have = perms[req.permission];
+    if (!have || !isAccess(have)) return false;
+    return ACCESS_RANK[have] >= ACCESS_RANK[req.access];
 }
 
 /**

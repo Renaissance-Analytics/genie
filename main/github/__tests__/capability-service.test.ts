@@ -8,11 +8,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * disconnected behaviour.
  */
 
+interface MockInstall {
+    login: string;
+    id: number | null;
+    installationId: number | null;
+    isOrg: boolean;
+    permissions: Record<string, string>;
+}
+
 const store = {
     token: 'tok' as string | null,
-    perInstallation: [] as Record<string, string>[],
+    /** Installations the mocked api returns; each carries identity + grants. */
+    installations: [] as MockInstall[],
     readThrows: false,
 };
+
+/** Convenience: build the install list from bare permission maps (one personal
+ *  install per map) for the tests that only care about the aggregate. */
+function installsFromPerms(perms: Record<string, string>[]): MockInstall[] {
+    return perms.map((p, i) => ({
+        login: `acct-${i}`,
+        id: i + 1,
+        installationId: 1000 + i,
+        isOrg: false,
+        permissions: p,
+    }));
+}
 
 vi.mock('electron', () => ({
     // BrowserWindow.getAllWindows() is only used by broadcast; an empty list
@@ -24,9 +45,9 @@ vi.mock('../storage', () => ({
     getToken: () => store.token,
 }));
 vi.mock('../api', () => ({
-    readGrantedPermissions: async () => {
+    readInstallationGrants: async () => {
         if (store.readThrows) throw new Error('network');
-        return store.perInstallation;
+        return store.installations;
     },
 }));
 
@@ -38,7 +59,7 @@ import {
 
 beforeEach(() => {
     store.token = 'tok';
-    store.perInstallation = [];
+    store.installations = [];
     store.readThrows = false;
 });
 
@@ -53,6 +74,7 @@ describe('recheckCapabilities — disconnected', () => {
         expect(caps.connected).toBe(false);
         expect(caps.checked).toBe(true);
         expect(caps.missing).toEqual([]);
+        expect(caps.missingByPermission).toEqual([]);
         // Inert gate: a gated capability still resolves accessible so the
         // feature's own not-connected handling runs instead of a permission
         // warning.
@@ -62,7 +84,7 @@ describe('recheckCapabilities — disconnected', () => {
 
 describe('recheckCapabilities — connected', () => {
     it('computes missing=contents for the genie-ide-style grant set', async () => {
-        store.perInstallation = [
+        store.installations = installsFromPerms([
             {
                 metadata: 'read',
                 issues: 'read',
@@ -70,7 +92,7 @@ describe('recheckCapabilities — connected', () => {
                 vulnerability_alerts: 'read',
                 administration: 'write',
             },
-        ];
+        ]);
         const caps = await recheckCapabilities();
         expect(caps.connected).toBe(true);
         expect(caps.missing).toEqual(['github.provision']);
@@ -80,8 +102,88 @@ describe('recheckCapabilities — connected', () => {
         expect(await canAccessCapability('issue-watch.issues')).toBe(true);
     });
 
+    it('attributes the missing permission to the specific installs + a review URL', async () => {
+        // Two installs: a personal one that DOESN'T grant contents and an org
+        // one that also doesn't — both must be listed for `contents`, each with
+        // its own review deep-link (org variant for the org install).
+        // Both installs grant the issue-watch perms but NOT contents, so the
+        // only missing permission is `contents` — isolating the attribution.
+        const issueWatchPerms = {
+            metadata: 'read',
+            issues: 'read',
+            pull_requests: 'read',
+            vulnerability_alerts: 'read',
+        };
+        store.installations = [
+            {
+                login: 'wishborn',
+                id: 1,
+                installationId: 1001,
+                isOrg: false,
+                permissions: { ...issueWatchPerms },
+            },
+            {
+                login: 'Renaissance-Analytics',
+                id: 2,
+                installationId: 2002,
+                isOrg: true,
+                permissions: { ...issueWatchPerms },
+            },
+        ];
+        const caps = await recheckCapabilities();
+        expect(caps.missingPermissions).toEqual(['contents']);
+        // App-permission-settings deep-link (where the OWNER adds the perm).
+        expect(caps.appPermissionsUrl).toBe(
+            'https://github.com/settings/apps/genie-ide/permissions',
+        );
+        const group = caps.missingByPermission.find(
+            (g) => g.permission === 'contents',
+        );
+        expect(group?.installations.map((i) => i.login)).toEqual([
+            'wishborn',
+            'Renaissance-Analytics',
+        ]);
+        // Personal install → settings/installations/<installationId>.
+        expect(group?.installations[0].reviewUrl).toBe(
+            'https://github.com/settings/installations/1001',
+        );
+        // Org install → org-owned variant keyed by the installation id.
+        expect(group?.installations[1].reviewUrl).toBe(
+            'https://github.com/organizations/Renaissance-Analytics/settings/installations/2002',
+        );
+    });
+
+    it('lists only the NON-granting install when another install satisfies the aggregate', async () => {
+        // Org grants contents:write → aggregate satisfied → nothing missing.
+        store.installations = [
+            {
+                login: 'wishborn',
+                id: 1,
+                installationId: 1001,
+                isOrg: false,
+                permissions: { metadata: 'read', issues: 'read' },
+            },
+            {
+                login: 'Renaissance-Analytics',
+                id: 2,
+                installationId: 2002,
+                isOrg: true,
+                permissions: {
+                    metadata: 'read',
+                    issues: 'read',
+                    pull_requests: 'read',
+                    vulnerability_alerts: 'read',
+                    contents: 'write',
+                },
+            },
+        ];
+        const caps = await recheckCapabilities();
+        expect(caps.missing).toEqual([]);
+        expect(caps.missingByPermission).toEqual([]);
+    });
+
     it('marks everything satisfied when contents:write is also granted', async () => {
-        store.perInstallation = [
+        store.installations = installsFromPerms([
             {
                 metadata: 'read',
                 issues: 'read',
@@ -89,7 +191,7 @@ describe('recheckCapabilities — connected', () => {
                 vulnerability_alerts: 'read',
                 contents: 'write',
             },
-        ];
+        ]);
         const caps = await recheckCapabilities();
         expect(caps.missing).toEqual([]);
         expect(await canAccessCapability('github.provision')).toBe(true);
@@ -97,9 +199,9 @@ describe('recheckCapabilities — connected', () => {
 
     it('keeps the prior snapshot on a transient read failure', async () => {
         // First, a good read establishes a known-good snapshot.
-        store.perInstallation = [
+        store.installations = installsFromPerms([
             { metadata: 'read', issues: 'read', pull_requests: 'read', vulnerability_alerts: 'read', contents: 'write' },
-        ];
+        ]);
         await recheckCapabilities();
         expect(getCapabilities().missing).toEqual([]);
 

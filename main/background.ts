@@ -1963,12 +1963,19 @@ app.whenReady().then(async () => {
 });
 
 /**
- * Open the E2E harness window (GENIE_E2E only). Loads the `/e2e-issuewatch`
- * route, which mounts the real IssueWatchFlyout open against the scriptable mock
- * (main/e2e/mock.ts). Plain BrowserWindow, shown immediately so Playwright can
- * attach to its first window.
+ * Open the E2E harness window (GENIE_E2E only). Loads the harness route named by
+ * `GENIE_E2E_PAGE` (default `e2e-issuewatch`), which mounts a real flyout open
+ * against the scriptable mock (main/e2e/mock.ts). Each spec picks its page:
+ *   - `e2e-issuewatch` → IssueWatchFlyout (device-flow reconnect),
+ *   - `e2e-ghcaps`     → GithubCapabilitiesFlyout (per-install resolve flow).
+ * Plain BrowserWindow, shown immediately so Playwright can attach to its first
+ * window.
  */
 function showE2EWindow(): void {
+    // Allowlist the harness routes so a stray env value can't load an arbitrary
+    // page; default to the issue-watch harness for back-compat.
+    const requested = process.env.GENIE_E2E_PAGE ?? 'e2e-issuewatch';
+    const page = requested === 'e2e-ghcaps' ? 'e2e-ghcaps' : 'e2e-issuewatch';
     const win = new BrowserWindow({
         width: 900,
         height: 760,
@@ -1983,9 +1990,9 @@ function showE2EWindow(): void {
         },
     });
     if (isDev) {
-        win.loadURL('http://localhost:8888/e2e-issuewatch');
+        win.loadURL(`http://localhost:8888/${page}`);
     } else {
-        win.loadFile(path.join(__dirname, 'e2e-issuewatch.html'));
+        win.loadFile(path.join(__dirname, `${page}.html`));
     }
 }
 
