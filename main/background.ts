@@ -48,6 +48,11 @@ import {
     readTerminalOutput,
 } from './terminal/ipc';
 import {
+    buildSubmitBytes,
+    resolveTerminalInput,
+    stripAnsi,
+} from './terminal/keystrokes';
+import {
     startMcpServer,
     workspaceEndpointUrl,
     DEFAULT_MCP_PORT,
@@ -794,7 +799,7 @@ async function manageTerminalsForMcp(
                     ok: true,
                     terminals: listAgentTerminals(ws),
                     affectedId: req.id,
-                    data: r.data,
+                    data: req.strip ? stripAnsi(r.data) : r.data,
                     cursor: r.cursor,
                     dropped: r.dropped,
                 };
@@ -850,18 +855,20 @@ async function manageTerminalsForMcp(
                         terminals: listAgentTerminals(ws),
                     };
                 }
-                if (typeof req.data !== 'string' || req.data.length === 0) {
+                const built = resolveTerminalInput(req.data, {
+                    submit: req.submit,
+                    key: req.key,
+                });
+                if ('error' in built) {
                     return {
                         ok: false,
-                        error: 'write requires non-empty `data`.',
+                        error: `write ${built.error}`,
                         terminals: listAgentTerminals(ws),
                     };
                 }
-                const preview =
-                    req.data.length > 200 ? req.data.slice(0, 200) + '…' : req.data;
                 const approved = await approveTerminalAction(ws, {
                     title: 'An agent wants to send input to a terminal:',
-                    lines: [`terminal: ${req.id}`, `input: ${JSON.stringify(preview)}`],
+                    lines: [`terminal: ${req.id}`, `input: ${JSON.stringify(built.preview)}`],
                 });
                 if (!approved) {
                     return {
@@ -870,7 +877,7 @@ async function manageTerminalsForMcp(
                         terminals: listAgentTerminals(ws),
                     };
                 }
-                writeToTerminal(req.id!, req.data);
+                writeToTerminal(req.id!, built.bytes);
                 return { ok: true, terminals: listAgentTerminals(ws), affectedId: req.id };
             }
         }
@@ -947,27 +954,30 @@ async function runAgentForMcp(
                     label: `${agent} agent`,
                     agentMeta: { agent, command },
                 });
-                // Launch the agent CLI in the fresh shell.
-                writeToTerminal(id, command + '\n');
+                // Launch the agent CLI in the fresh shell. A single-line command
+                // submits on the trailing CR, same as a shell Enter.
+                writeToTerminal(id, buildSubmitBytes(command, true));
                 return { ok: true, id, agent, command };
             }
             case 'send': {
                 if (!ownTerminal(req.id)) {
                     return { ok: false, error: `No agent terminal "${req.id ?? ''}" in this workspace.` };
                 }
-                if (typeof req.prompt !== 'string' || req.prompt.length === 0) {
-                    return { ok: false, error: 'send requires a non-empty `prompt`.' };
+                const built = resolveTerminalInput(req.prompt, {
+                    submit: req.submit,
+                    key: req.key,
+                });
+                if ('error' in built) {
+                    return { ok: false, error: `send ${built.error}` };
                 }
-                const preview =
-                    req.prompt.length > 200 ? req.prompt.slice(0, 200) + '…' : req.prompt;
                 const approved = await approveTerminalAction(ws, {
                     title: 'An agent wants to send a prompt to a running coding agent:',
-                    lines: [`terminal: ${req.id}`, `prompt: ${JSON.stringify(preview)}`],
+                    lines: [`terminal: ${req.id}`, `prompt: ${JSON.stringify(built.preview)}`],
                 });
                 if (!approved) {
                     return { ok: false, error: 'Denied by user — nothing was sent.' };
                 }
-                writeToTerminal(req.id!, req.prompt + '\n');
+                writeToTerminal(req.id!, built.bytes);
                 return { ok: true, id: req.id };
             }
             case 'read': {
@@ -975,7 +985,13 @@ async function runAgentForMcp(
                     return { ok: false, error: `No agent terminal "${req.id ?? ''}" in this workspace.` };
                 }
                 const r = readTerminalOutput(req.id!, { cursor: req.cursor, bytes: req.bytes });
-                return { ok: true, id: req.id, data: r.data, cursor: r.cursor, dropped: r.dropped };
+                return {
+                    ok: true,
+                    id: req.id,
+                    data: req.strip ? stripAnsi(r.data) : r.data,
+                    cursor: r.cursor,
+                    dropped: r.dropped,
+                };
             }
             case 'stop': {
                 if (!ownTerminal(req.id)) {

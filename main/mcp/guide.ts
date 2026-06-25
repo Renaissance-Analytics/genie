@@ -80,10 +80,15 @@ non-Ops workspace it returns a clear "not an ops project" message. Pass
 agent) a workspace you govern. This EXECUTES ARBITRARY CODE. Actions (\`action\`):
 - \`create\` — open a terminal (optional \`repo\` (repos/<repo>) or \`cwd\`, optional
   \`label\`); returns its id + initial output.
-- \`write\` — send \`data\` to terminal \`id\`. End with \`"\\n"\` to RUN it as a
-  command; omit the newline to type without submitting.
+- \`write\` — send \`data\` to terminal \`id\`. By DEFAULT it is SUBMITTED (an Enter
+  is appended). Pass \`submit: false\` to type without running. Multi-line \`data\`
+  is wrapped in bracketed paste with the Enter delivered separately, so it
+  submits cleanly even to a TUI. Or pass \`key\` (\`enter\` | \`escape\` | \`ctrl-c\`)
+  to deliver a bare keypress on its own — e.g. a lone \`enter\` to submit or clear
+  a stuck buffer.
 - \`read\` — recent output of \`id\`: pass a \`cursor\` from a prior read for just
-  what's new, or \`bytes\` for the last N bytes. (Output comes from a bounded
+  what's new, or \`bytes\` for the last N bytes; add \`strip: true\` for readable
+  plain text with ANSI/escape codes removed. (Output comes from a bounded
   buffer; a read after lots of output may report \`dropped: true\`.)
 - \`list\` — the workspace's terminals. \`kill\` — terminate \`id\`.
 Target a governed workspace with \`workspaceId\`; omit it for your own.
@@ -100,8 +105,15 @@ manageTerminals; it SPAWNS AN AUTONOMOUS AGENT. Actions (\`action\`):
   | \`custom\` (default \`claude\`); the real CLI is configurable in Genie Settings,
   or pass an explicit \`command\` (required for \`custom\` unless one is configured).
   Optional \`repo\`/\`cwd\`. Returns the agent terminal's \`id\` + the launched command.
-- \`send\` — deliver a \`prompt\` to the running agent \`id\`.
-- \`read\` — its output (\`cursor\` for new, or \`bytes\` for the last N).
+- \`send\` — deliver a \`prompt\` to the running agent \`id\`. SUBMITTED by default,
+  even multi-line: the prompt is wrapped in bracketed paste and the Enter is
+  delivered separately (outside the paste) so the agent's TUI submits it instead
+  of leaving it parked as a "[Pasted text +N lines]" buffer. Pass \`submit: false\`
+  to load the prompt without sending, or \`key\` (\`enter\` | \`escape\` | \`ctrl-c\`)
+  to deliver a bare keypress — e.g. a lone \`enter\` to submit or clear a stuck
+  multi-line buffer.
+- \`read\` — its output (\`cursor\` for new, or \`bytes\` for the last N; add
+  \`strip: true\` for plain text with escape codes removed).
 - \`stop\` — terminate the agent \`id\`.
 **Approval:** \`start\` and \`send\` are GATED the same way (OFF runs immediately);
 \`read\` never prompts.

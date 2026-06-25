@@ -282,14 +282,27 @@ export interface ManageTerminalsRequest {
     label?: string;
     /** write | read | kill: the target terminal id (from a prior create/list). */
     id?: string;
-    /** write: the text to send to the terminal. A trailing "\n" runs it as a
-     *  command; omit the newline to type without submitting. */
+    /** write: the text to send to the terminal. By default it is SUBMITTED (a
+     *  carriage return is appended; a multi-line body is wrapped in bracketed-
+     *  paste markers with the Enter delivered separately so a TUI submits it).
+     *  Set `submit:false` to type without submitting. Any trailing newline you
+     *  include is ignored — the submit is the appended Enter, never an in-band
+     *  newline. */
     data?: string;
+    /** write (optional, default true): append an Enter to submit `data`. When
+     *  false, the text is delivered with no trailing Enter (type, don't run). */
+    submit?: boolean;
+    /** write (optional): deliver a single named keypress on its own (no text
+     *  needed) — `enter` (submit/clear a stuck buffer), `escape`, or `ctrl-c`. */
+    key?: string;
     /** read (optional): continue from this cursor (from a prior read) for "what's
      *  new". Omit for the most recent output. */
     cursor?: number;
     /** read (optional): instead of a cursor, return the last N bytes. */
     bytes?: number;
+    /** read (optional): strip ANSI/escape sequences and return readable plain
+     *  text instead of raw redraw frames. */
+    strip?: boolean;
 }
 
 export interface ManageTerminalsResult {
@@ -327,12 +340,27 @@ export interface RunAgentRequest {
     cwd?: string;
     /** send | read | stop: the agent terminal id (returned by a prior start). */
     id?: string;
-    /** send: the prompt/text to deliver to the running agent (a newline is added). */
+    /** send: the prompt/text to deliver to the running agent. By default it is
+     *  SUBMITTED — a multi-line prompt is wrapped in bracketed-paste markers and
+     *  the Enter is delivered separately (outside the paste) so the agent's TUI
+     *  receives a distinct Enter and submits, instead of leaving it parked as a
+     *  "[Pasted text]" buffer. Set `submit:false` to load the prompt without
+     *  sending. Empty is allowed when `submit` or `key` is requested (to submit
+     *  or clear a stuck buffer). */
     prompt?: string;
+    /** send (optional, default true): append an Enter to submit `prompt`. When
+     *  false, the prompt is loaded into the agent's input without submitting. */
+    submit?: boolean;
+    /** send (optional): deliver a single named keypress on its own (no prompt
+     *  needed) — `enter` (submit/clear a stuck buffer), `escape`, or `ctrl-c`. */
+    key?: string;
     /** read (optional): continue from this cursor (from a prior read). */
     cursor?: number;
     /** read (optional): instead of a cursor, return the last N bytes. */
     bytes?: number;
+    /** read (optional): strip ANSI/escape sequences and return readable plain
+     *  text instead of raw redraw frames. */
+    strip?: boolean;
 }
 
 export interface RunAgentResult {
@@ -500,7 +528,7 @@ const TARGET_WORKSPACE_PROP = {
 const MANAGE_TERMINALS_TOOL = {
     name: 'manageTerminals',
     description:
-        "Spawn and drive TERMINALS — real shell sessions — in your own workspace, or (for an Ops agent) a workspace you govern. This EXECUTES ARBITRARY CODE: `create` opens a pty, `write` sends input (a command + \"\\n\" runs it; without the newline it just types), and the shell does whatever you tell it. Use it to run builds/tests/scripts and to operate interactive tools. Actions: `create` (spawn a terminal — optional `repo` (repos/<repo>) or `cwd`, optional `label`; returns its id + recent output); `write` (send `data` to terminal `id`); `read` (recent output of `id` — pass a `cursor` from a prior read for just-what's-new, or `bytes` for the last N bytes); `list` (terminals in the workspace); `kill` (terminate `id`). SAFETY: `create` and `write` are APPROVAL-GATED — when the target workspace requires approval (the default), each blocks on an OS modal until the user approves; when the user has turned approval OFF they run immediately. `read` and `list` never prompt. Output is read from a bounded buffer (oldest bytes age out), so a `read` after a long-running command may report `dropped:true`.",
+        "Spawn and drive TERMINALS — real shell sessions — in your own workspace, or (for an Ops agent) a workspace you govern. This EXECUTES ARBITRARY CODE: `create` opens a pty, `write` sends input (by default it SUBMITS — an Enter is appended; pass `submit:false` to type without running), and the shell does whatever you tell it. Use it to run builds/tests/scripts and to operate interactive tools. Actions: `create` (spawn a terminal — optional `repo` (repos/<repo>) or `cwd`, optional `label`; returns its id + recent output); `write` (send `data` to terminal `id` — submitted by default; or deliver a single `key` (`enter`/`escape`/`ctrl-c`) on its own, e.g. a bare Enter to submit/clear a stuck buffer); `read` (recent output of `id` — pass a `cursor` from a prior read for just-what's-new, or `bytes` for the last N bytes; add `strip:true` for plain text with ANSI/escape codes removed); `list` (terminals in the workspace); `kill` (terminate `id`). Multi-line input is wrapped in bracketed paste with the Enter delivered separately, so it submits cleanly to a TUI. SAFETY: `create` and `write` are APPROVAL-GATED — when the target workspace requires approval (the default), each blocks on an OS modal until the user approves; when the user has turned approval OFF they run immediately. `read` and `list` never prompt. Output is read from a bounded buffer (oldest bytes age out), so a `read` after a long-running command may report `dropped:true`.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -531,7 +559,18 @@ const MANAGE_TERMINALS_TOOL = {
             data: {
                 type: 'string',
                 description:
-                    'write: text to send. End with "\\n" to run it as a command; omit the newline to type without submitting.',
+                    'write: text to send. By default it is SUBMITTED (an Enter is appended; multi-line is wrapped in bracketed paste with the Enter outside it). Set `submit:false` to type without running. May be empty when `submit` or `key` is given.',
+            },
+            submit: {
+                type: 'boolean',
+                description:
+                    'write (optional, default true): append an Enter to submit `data`. false = type without running.',
+            },
+            key: {
+                type: 'string',
+                enum: ['enter', 'escape', 'ctrl-c'],
+                description:
+                    'write (optional): deliver a single keypress on its own (no `data` needed) — `enter` to submit/clear a stuck buffer, `escape`, or `ctrl-c`.',
             },
             cursor: {
                 type: 'number',
@@ -540,6 +579,11 @@ const MANAGE_TERMINALS_TOOL = {
             bytes: {
                 type: 'number',
                 description: 'read (optional): return the last N bytes instead of using a cursor.',
+            },
+            strip: {
+                type: 'boolean',
+                description:
+                    'read (optional): strip ANSI/escape sequences and return readable plain text instead of raw redraw frames.',
             },
         },
         required: ['action'],
@@ -550,7 +594,7 @@ const MANAGE_TERMINALS_TOOL = {
 const RUN_AGENT_TOOL = {
     name: 'runAgent',
     description:
-        "Launch and control a CODING AGENT (claude / codex / a custom CLI) inside a terminal — in your own workspace or one you govern. This SPAWNS AN AUTONOMOUS AGENT that can itself read, write, and run code, so it is high-power. A thin layer over manageTerminals. Actions: `start` (open a terminal and launch the agent — `agent` is 'claude' | 'codex' | 'custom', default 'claude'; the actual CLI command is configurable in Genie Settings, or pass an explicit `command` (required for 'custom' unless a custom command is configured); optional `repo`/`cwd`; returns the agent terminal's `id` + the launched command); `send` (deliver a `prompt` to the running agent `id`); `read` (its output — `cursor` for new output, or `bytes` for the last N); `stop` (terminate the agent `id`). SAFETY: `start` and `send` are APPROVAL-GATED — when the target workspace requires approval (the default) each blocks on an OS modal showing exactly what will launch/run until the user approves; OFF runs immediately. `read` never prompts.",
+        "Launch and control a CODING AGENT (claude / codex / a custom CLI) inside a terminal — in your own workspace or one you govern. This SPAWNS AN AUTONOMOUS AGENT that can itself read, write, and run code, so it is high-power. A thin layer over manageTerminals. Actions: `start` (open a terminal and launch the agent — `agent` is 'claude' | 'codex' | 'custom', default 'claude'; the actual CLI command is configurable in Genie Settings, or pass an explicit `command` (required for 'custom' unless a custom command is configured); optional `repo`/`cwd`; returns the agent terminal's `id` + the launched command); `send` (deliver a `prompt` to the running agent `id` — SUBMITTED by default, even multi-line: the prompt is wrapped in bracketed paste with the Enter delivered separately so the agent's TUI submits it instead of leaving it parked as a pasted buffer; pass `submit:false` to load without sending, or `key` (`enter`/`escape`/`ctrl-c`) to deliver a bare keypress — e.g. a lone `enter` to submit or clear a stuck multi-line buffer); `read` (its output — `cursor` for new output, or `bytes` for the last N; add `strip:true` for plain text with escape codes removed); `stop` (terminate the agent `id`). SAFETY: `start` and `send` are APPROVAL-GATED — when the target workspace requires approval (the default) each blocks on an OS modal showing exactly what will launch/run until the user approves; OFF runs immediately. `read` never prompts.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -584,7 +628,19 @@ const RUN_AGENT_TOOL = {
             },
             prompt: {
                 type: 'string',
-                description: 'send: the prompt/text to deliver to the running agent (a newline is appended).',
+                description:
+                    'send: the prompt/text to deliver to the running agent. SUBMITTED by default (multi-line is wrapped in bracketed paste with the Enter delivered separately so a TUI submits it). Set `submit:false` to load without sending. May be empty when `submit` or `key` is given.',
+            },
+            submit: {
+                type: 'boolean',
+                description:
+                    'send (optional, default true): append an Enter to submit `prompt`. false = load it into the input without sending.',
+            },
+            key: {
+                type: 'string',
+                enum: ['enter', 'escape', 'ctrl-c'],
+                description:
+                    'send (optional): deliver a single keypress on its own (no `prompt` needed) — `enter` to submit/clear a stuck buffer, `escape`, or `ctrl-c`.',
             },
             cursor: {
                 type: 'number',
@@ -593,6 +649,11 @@ const RUN_AGENT_TOOL = {
             bytes: {
                 type: 'number',
                 description: 'read (optional): return the last N bytes instead of a cursor.',
+            },
+            strip: {
+                type: 'boolean',
+                description:
+                    'read (optional): strip ANSI/escape sequences and return readable plain text instead of raw redraw frames.',
             },
         },
         required: ['action'],
@@ -1007,8 +1068,11 @@ export async function handleMcpMessage(
                     label: a.label,
                     id: a.id,
                     data: a.data,
+                    submit: a.submit,
+                    key: a.key,
                     cursor: a.cursor,
                     bytes: a.bytes,
+                    strip: a.strip,
                 });
                 const summary = result.ok
                     ? action === 'read'
@@ -1050,8 +1114,11 @@ export async function handleMcpMessage(
                     cwd: a.cwd,
                     id: a.id,
                     prompt: a.prompt,
+                    submit: a.submit,
+                    key: a.key,
                     cursor: a.cursor,
                     bytes: a.bytes,
+                    strip: a.strip,
                 });
                 let summary: string;
                 if (!result.ok) {

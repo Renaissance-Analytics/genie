@@ -279,8 +279,11 @@ describe('handleMcpMessage', () => {
             label: 'Agent terminal',
             id: undefined,
             data: undefined,
+            submit: undefined,
+            key: undefined,
             cursor: undefined,
             bytes: undefined,
+            strip: undefined,
         });
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
         expect(text).toContain('terminal'); // summary line
@@ -345,8 +348,11 @@ describe('handleMcpMessage', () => {
             cwd: undefined,
             id: undefined,
             prompt: undefined,
+            submit: undefined,
+            key: undefined,
             cursor: undefined,
             bytes: undefined,
+            strip: undefined,
         });
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
         expect(text).toContain('Launched claude');
@@ -377,6 +383,75 @@ describe('handleMcpMessage', () => {
             ctx(),
         );
         expect(res?.error?.code).toBe(-32602);
+    });
+
+    it('runAgent send plumbs submit/key/strip through to the dep', async () => {
+        const runAgent = vi.fn().mockResolvedValue({ ok: true, id: 'a-1' });
+        await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 46,
+                method: 'tools/call',
+                params: {
+                    name: 'runAgent',
+                    arguments: { action: 'send', id: 'a-1', prompt: 'hi', submit: false, key: 'enter' },
+                },
+            },
+            ctx({ runAgent }),
+        );
+        expect(runAgent).toHaveBeenCalledWith(
+            'term-1',
+            expect.objectContaining({ action: 'send', prompt: 'hi', submit: false, key: 'enter' }),
+        );
+    });
+
+    it('manageTerminals write plumbs submit/key, read plumbs strip', async () => {
+        const manageTerminals = vi.fn().mockResolvedValue({ ok: true, terminals: [] });
+        await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 47,
+                method: 'tools/call',
+                params: {
+                    name: 'manageTerminals',
+                    arguments: { action: 'write', id: 't-1', key: 'ctrl-c', submit: false },
+                },
+            },
+            ctx({ manageTerminals }),
+        );
+        expect(manageTerminals).toHaveBeenCalledWith(
+            'term-1',
+            expect.objectContaining({ action: 'write', key: 'ctrl-c', submit: false }),
+        );
+        await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 48,
+                method: 'tools/call',
+                params: { name: 'manageTerminals', arguments: { action: 'read', id: 't-1', strip: true } },
+            },
+            ctx({ manageTerminals }),
+        );
+        expect(manageTerminals).toHaveBeenLastCalledWith(
+            'term-1',
+            expect.objectContaining({ action: 'read', strip: true }),
+        );
+    });
+
+    it('the runAgent + manageTerminals schemas expose submit/key/strip', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 49, method: 'tools/list' },
+            ctx(),
+        );
+        const tools = (res?.result as {
+            tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }>;
+        }).tools;
+        for (const name of ['runAgent', 'manageTerminals']) {
+            const props = tools.find((t) => t.name === name)!.inputSchema.properties;
+            expect(props).toHaveProperty('submit');
+            expect(props).toHaveProperty('key');
+            expect(props).toHaveProperty('strip');
+        }
     });
 
     it('manageWorkspaces routes to the dep and lists actionable workspaces', async () => {
