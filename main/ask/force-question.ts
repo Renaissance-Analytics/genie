@@ -62,6 +62,93 @@ let win: BrowserWindow | null = null;
 /** FIFO queue. The head (index 0) is the request currently shown in the window. */
 const queue: QueueItem[] = [];
 
+/**
+ * Subscribers notified whenever the pending-question set changes (a question is
+ * enqueued in forceQuestion, or removed in finish). The mobile server registers
+ * one of these so it can push question:new / question:resolved to `/ws/events`.
+ * Module-private; fired AFTER the queue mutation so a listener that reads
+ * listPendingQuestions() sees the new state.
+ */
+const questionChangeListeners = new Set<() => void>();
+
+function notifyQuestionsChanged(): void {
+    for (const cb of questionChangeListeners) {
+        try {
+            cb();
+        } catch {
+            /* a listener throwing must never disturb the modal path */
+        }
+    }
+}
+
+/**
+ * One pending ForceTheQuestion as the mobile server / API exposes it — the same
+ * id + questions + workspaceLabel the desktop modal renders, plus a `queued`
+ * timestamp so the phone can order them. Mirrors payloadFor() minus the live
+ * "N behind" badge (the phone shows the whole list).
+ */
+export interface PendingQuestion {
+    id: string;
+    questions: ForceQuestion[];
+    workspaceLabel?: string;
+    /** Position in the FIFO queue (0 = currently shown on the desktop). */
+    index: number;
+}
+
+/**
+ * Snapshot the pending questions for the mobile `/api/questions` + bootstrap.
+ * Read-only — does not touch the modal. Returns them in FIFO order (head first).
+ */
+export function listPendingQuestions(): PendingQuestion[] {
+    return queue.map((item, index) => ({
+        id: item.id,
+        questions: item.questions,
+        workspaceLabel: item.workspaceLabel,
+        index,
+    }));
+}
+
+/**
+ * Answer a pending question from the mobile phone. Routes through the SAME
+ * private finish(id, …) the desktop's `ask:answer` uses, so the blocked agent
+ * unblocks AND the desktop modal advances/closes exactly as if answered locally.
+ * Returns false when `id` is unknown — the benign phone-after-desktop race (the
+ * desktop already answered it), surfaced to the phone as "already answered".
+ */
+export function answerPendingQuestion(
+    id: string,
+    answers: ForceAnswer[],
+): boolean {
+    if (!queue.some((q) => q.id === id)) return false;
+    finish(id, { cancelled: false, answers: answers ?? [] });
+    return true;
+}
+
+/** Subscribe to pending-question changes (mobile push). Returns an unsubscribe. */
+export function onQuestionsChanged(cb: () => void): () => void {
+    questionChangeListeners.add(cb);
+    return () => questionChangeListeners.delete(cb);
+}
+
+/**
+ * Seed a pending question WITHOUT opening the desktop modal (test-only). Enqueues
+ * an item exactly as `forceQuestion` would (same id format, fires
+ * notifyQuestionsChanged), so it appears in `listPendingQuestions()` and unblocks
+ * through the normal `answerPendingQuestion` → `finish` path — but never creates a
+ * BrowserWindow, so the mobile E2E harness can exercise the Questions flow with no
+ * stray window. Returns the new question id. Used only by main/e2e/mock.ts (gated
+ * on GENIE_E2E).
+ */
+export function _seedPendingQuestionForTest(
+    questions: ForceQuestion[],
+    workspaceLabel?: string,
+): string {
+    const id = crypto.randomBytes(9).toString('hex');
+    queue.push({ id, resolve: () => {}, questions, workspaceLabel });
+    notifyQuestionsChanged();
+    return id;
+}
+
 /** Build the payload the renderer renders, including how many requests follow. */
 function payloadFor(item: QueueItem): {
     id: string;
@@ -97,6 +184,9 @@ function finish(id: string, result: ForceQuestionResult): void {
     if (idx === -1) return;
     const [item] = queue.splice(idx, 1);
     item.resolve(result);
+    // A pending question was removed — tell the mobile push channel so it can
+    // emit question:resolved. Fires for BOTH head and queued removals.
+    notifyQuestionsChanged();
 
     // Only the head drives the window. If a queued (not-yet-shown) item was
     // resolved, leave the current view alone.
@@ -188,6 +278,9 @@ function createAskWindow(): BrowserWindow {
         if (win === w) win = null;
         const dropped = queue.splice(0, queue.length);
         for (const item of dropped) item.resolve({ cancelled: true, answers: [] });
+        // The whole queue was cancelled — push the cleared state to the mobile
+        // channel too (one notify covers the batch).
+        if (dropped.length) notifyQuestionsChanged();
     });
     return w;
 }
@@ -209,6 +302,8 @@ export function forceQuestion(
         // wait their turn (the window is reused as each is answered).
         const startsQueue = queue.length === 0;
         queue.push(item);
+        // A new pending question — tell the mobile push channel (question:new).
+        notifyQuestionsChanged();
 
         if (!startsQueue) {
             // A modal is already up. Refresh its "N more queued" badge so the

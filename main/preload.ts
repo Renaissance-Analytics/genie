@@ -10,6 +10,21 @@ import { contextBridge, ipcRenderer } from 'electron';
  *     backends are signed in (Tynn + Aionima). Aionima-specific config
  *     lives under `aionima.*`.
  */
+
+/** The `mobile:status` payload (mirrors MobileStatus in renderer/lib/genie.ts). */
+interface MobileStatus {
+    running: boolean;
+    enabled: boolean;
+    ip: string | null;
+    port: number | null;
+    configuredPort: number;
+    url: string | null;
+    conflict: boolean;
+    tailnetNotDetected: boolean;
+    locked: boolean;
+    pin: string;
+    qrDataUrl: string | null;
+}
 const api = {
     auth: {
         startSignIn: (kind?: 'tynn' | 'aionima') =>
@@ -59,6 +74,22 @@ const api = {
             ipcRenderer.invoke('mcp:doc-health', workspaceId),
         repairDocs: (workspaceId: string) =>
             ipcRenderer.invoke('mcp:repair-docs', workspaceId),
+    },
+
+    // Mobile remote-control server (Settings → Mobile). Desktop-only — the phone
+    // talks to the tailnet HTTP/WS server directly, never through this bridge.
+    mobile: {
+        status: () => ipcRenderer.invoke('mobile:status') as Promise<MobileStatus>,
+        restart: (enabled?: boolean) =>
+            ipcRenderer.invoke('mobile:restart', enabled) as Promise<MobileStatus>,
+        regeneratePin: () =>
+            ipcRenderer.invoke('mobile:regenerate-pin') as Promise<MobileStatus>,
+        revokeSessions: () =>
+            ipcRenderer.invoke('mobile:revoke-sessions') as Promise<
+                MobileStatus & { revoked: number }
+            >,
+        lock: (locked: boolean) =>
+            ipcRenderer.invoke('mobile:lock', locked) as Promise<MobileStatus>,
     },
 
     aionima: {

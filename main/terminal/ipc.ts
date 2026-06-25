@@ -35,6 +35,7 @@ import {
     unregisterTerminalEndpoint,
     workspaceEndpointUrl,
 } from '../mcp/server';
+import { mobileEmit, mobileTermFanout, mobileTermClose } from '../mobile/server';
 import { getSnapshotStore, dbSettingsProvider } from './genie-adapter';
 import { listAllProcesses } from './process-list';
 import crypto from 'node:crypto';
@@ -421,6 +422,9 @@ export function registerTerminalIpc(): void {
             // Mirror into the agent-control read buffer so manageTerminals.read /
             // runAgent.read can return recent output even with no window attached.
             agentReadBuffer.append(id, data);
+            // Fan the same bytes to any attached mobile /ws/term socket (no-op
+            // when the mobile server is off / nothing is watching this id).
+            mobileTermFanout(id, data);
             const entry = ownersByTerminal.get(id);
             if (!entry) return;
             for (const target of entry.owners) {
@@ -434,6 +438,8 @@ export function registerTerminalIpc(): void {
             onProcessPtyExit(id, payload);
             // The pty is gone — drop its agent read buffer so it can't leak.
             agentReadBuffer.forget(id);
+            // Tell any attached mobile /ws/term socket the pty exited + drop it.
+            mobileTermClose(id, payload);
             const entry = ownersByTerminal.get(id);
             ownersByTerminal.delete(id);
             if (!entry) return;
@@ -574,6 +580,8 @@ export function broadcastTerminalAttention(id: string, on: boolean): void {
     for (const w of BrowserWindow.getAllWindows()) {
         w.webContents.send('terminal:attention', { id, on });
     }
+    // Mirror to the mobile dashboard push channel (no-op when the server is off).
+    mobileEmit('terminal:attention', { id, on });
 }
 
 /**
@@ -590,6 +598,7 @@ export function broadcastWorkspacePulse(workspaceId: string): void {
             w.webContents.send('workspace:pulse', { workspaceId });
         }
     }
+    mobileEmit('workspace:pulse', { workspaceId });
 }
 
 /**
@@ -606,6 +615,7 @@ export function broadcastTerminalSpecsChanged(): void {
             w.webContents.send('terminal-spec:changed');
         }
     }
+    mobileEmit('terminal-spec:changed');
 }
 
 /**

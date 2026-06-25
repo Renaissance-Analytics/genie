@@ -497,3 +497,496 @@ textarea.input {
     letter-spacing: 0.02em;
     color: var(--fg-3);
 }
+
+/* =====================================================================
+   Genie Mobile (pages/mobile.tsx) — the phone-facing remote-control UI,
+   served under /m/ over Tailscale. Standalone in a plain browser (no
+   Electron chrome), so it owns its full-viewport shell + safe-area
+   insets + touch-sized controls. All `m-` prefixed.
+   ===================================================================== */
+
+/* Mobile is dark by default regardless of OS pref — it reads as a console
+   companion, and a dark terminal is the centrepiece. Scope tokens to the app
+   root so we don't fight _app.tsx's .dark toggling on <html>. */
+.m-app,
+.m-pair {
+    --bg-0: #09090b;
+    --bg-1: #18181b;
+    --bg-2: #27272a;
+    --bg-3: #3f3f46;
+    --card: #18181b;
+    --fg-1: #fafafa;
+    --fg-2: #e4e4e7;
+    --fg-3: #a1a1aa;
+    --fg-4: #71717a;
+    --border-1: rgba(255, 255, 255, 0.08);
+    --border-2: rgba(255, 255, 255, 0.16);
+    background: var(--bg-0);
+    color: var(--fg-1);
+}
+
+.m-app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    /* dvh tracks the visual viewport as the mobile URL bar shows/hides */
+    height: 100dvh;
+    overflow: hidden;
+}
+
+.m-center {
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 24px;
+    text-align: center;
+}
+.m-center-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+/* ---- Pair screen ---- */
+.m-pair {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: 24px;
+}
+.m-pair-card {
+    width: 100%;
+    max-width: 360px;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+    padding: 28px 22px;
+    background: var(--card);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-2xl);
+    box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.6);
+}
+.m-pair-logo {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 2px;
+}
+.m-pin-input {
+    width: 100%;
+    height: 60px;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 32px;
+    font-weight: 600;
+    letter-spacing: 0.32em;
+    /* nudge left so the tracking doesn't visually shift the digits right */
+    text-indent: 0.32em;
+    background: var(--bg-0);
+    color: var(--fg-1);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-lg);
+    outline: none;
+}
+.m-pin-input:focus {
+    border-color: var(--blue-500);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue-500) 25%, transparent);
+}
+.m-pair-waiting {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 8px;
+}
+.m-pair-error {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--rose-500) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--rose-500) 30%, var(--border-1));
+    color: var(--rose-500);
+}
+
+/* ---- App banners ---- */
+.m-banner {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    font-size: 12px;
+}
+.m-banner-warn {
+    background: color-mix(in srgb, var(--amber-500) 18%, var(--bg-1));
+    color: var(--amber-500);
+}
+.m-banner-lock {
+    background: color-mix(in srgb, var(--rose-500) 18%, var(--bg-1));
+    color: var(--rose-500);
+}
+
+/* ---- Body + scroll region ---- */
+.m-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.m-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+/* ---- Sections ---- */
+.m-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.m-section-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--fg-3);
+}
+.m-section-title {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+}
+.m-empty {
+    padding: 4px 2px;
+}
+.m-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* ---- Cards ---- */
+.m-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    background: var(--card);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-lg);
+    width: 100%;
+    text-align: left;
+    color: inherit;
+}
+button.m-card {
+    cursor: pointer;
+    font: inherit;
+}
+button.m-card:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+.m-mono {
+    font-family: var(--font-mono);
+}
+.m-truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Workspace cards + activity pulse */
+.m-ws {
+    justify-content: space-between;
+}
+.m-ws-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.m-pulse {
+    border-color: var(--violet-500);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--violet-500) 30%, transparent);
+    transition: box-shadow 0.2s, border-color 0.2s;
+}
+.m-attn {
+    flex: 0 0 auto;
+    color: var(--violet-500);
+    display: inline-flex;
+}
+
+/* Process rows */
+.m-proc {
+    justify-content: space-between;
+}
+.m-proc-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.m-proc-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+}
+.m-proc-actions {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 4px;
+}
+.m-dot {
+    flex: 0 0 auto;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+}
+
+/* ---- Questions ---- */
+.m-questions-empty {
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+}
+.m-question {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+}
+.m-question-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+.m-badge-live {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--emerald-500);
+    background: color-mix(in srgb, var(--emerald-500) 16%, transparent);
+    border-radius: 999px;
+    padding: 2px 8px;
+}
+.m-q {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.m-q-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.m-chip {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #a78bfa;
+    background: color-mix(in srgb, #a78bfa 14%, transparent);
+    border: 1px solid color-mix(in srgb, #a78bfa 30%, var(--border-1));
+    border-radius: 6px;
+    padding: 2px 7px;
+}
+.m-options {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.m-opt {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    text-align: left;
+    padding: 11px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border-1);
+    background: var(--bg-1);
+    color: var(--fg-1);
+    cursor: pointer;
+}
+.m-opt.on {
+    border-color: var(--blue-500);
+    background: color-mix(in srgb, var(--blue-500) 16%, var(--bg-1));
+}
+.m-opt-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    font-weight: 600;
+}
+.m-opt-desc {
+    font-size: 12px;
+    color: var(--fg-3);
+}
+.m-note {
+    width: 100%;
+    resize: none;
+    font-size: 13px;
+}
+.m-question-foot {
+    display: flex;
+    justify-content: flex-end;
+}
+
+/* ---- Terminal tab ---- */
+.m-term-wrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+.m-term-head {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border-1);
+}
+.m-term-row {
+    gap: 10px;
+}
+.m-term-row-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+/* The xterm viewer */
+.m-term {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: #09090b;
+}
+.m-term-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border-1);
+    color: var(--fg-3);
+}
+.m-term-exited {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--amber-500);
+}
+.m-term-host {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding: 4px 6px;
+}
+.m-term-host .xterm {
+    height: 100%;
+}
+
+/* On-screen key row */
+.m-keyrow {
+    display: flex;
+    gap: 6px;
+    padding: 8px;
+    border-top: 1px solid var(--border-1);
+    background: var(--bg-1);
+    overflow-x: auto;
+    /* keep the keys above the iOS home indicator */
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+}
+.m-key {
+    flex: 0 0 auto;
+    min-width: 44px;
+    height: 40px;
+    padding: 0 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-1);
+    background: var(--bg-2);
+    color: var(--fg-1);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.m-key:active {
+    background: var(--bg-3);
+}
+.m-key-wide {
+    flex: 1;
+    min-width: 64px;
+}
+
+/* ---- Bottom nav ---- */
+.m-nav {
+    flex: 0 0 auto;
+    display: flex;
+    border-top: 1px solid var(--border-1);
+    background: var(--bg-1);
+    padding-bottom: env(safe-area-inset-bottom);
+}
+.m-nav-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 9px 4px;
+    background: none;
+    border: none;
+    color: var(--fg-4);
+    cursor: pointer;
+    font: inherit;
+}
+.m-nav-btn.active {
+    color: var(--blue-500);
+}
+.m-nav-icon {
+    position: relative;
+    display: inline-flex;
+}
+.m-nav-badge {
+    position: absolute;
+    top: -6px;
+    right: -10px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--rose-500);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+}
+.m-nav-label {
+    font-size: 11px;
+    font-weight: 500;
+}
+
+/* Shared spinner for loader icons. */
+.m-spin {
+    animation: m-spin 0.9s linear infinite;
+}
+@keyframes m-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

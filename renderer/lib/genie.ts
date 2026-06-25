@@ -269,6 +269,11 @@ export interface Settings {
     /** Fixed loopback port for the agent-integration MCP server. String-encoded;
      *  default '51717'. Changing it requires restarting the MCP server. */
     mcp_port?: string;
+    /** Mobile remote-control server. Opt-in: 'off' (default) | 'on'. */
+    mobile_enabled?: 'on' | 'off';
+    /** Fixed port for the mobile server (bound on the Tailscale IP). String-
+     *  encoded; default '51718'. Changing it requires restarting the server. */
+    mobile_port?: string;
     /** Keep the Genie endpoint synced into each workspace's Claude `.mcp.json`.
      *  Default 'on'; 'off' leaves that file alone. */
     mcp_sync_claude?: 'on' | 'off';
@@ -308,6 +313,38 @@ export interface McpServerState {
     configuredPort: number;
     /** True when the configured port was taken and the server fell back. */
     conflict: boolean;
+}
+
+/**
+ * Live state of the mobile remote-control server (Settings → Mobile), bundled
+ * with the pairing PIN + a QR data-URL of the pairing link. The phone NEVER sees
+ * this — it's the desktop Settings view's status. `url` is the tailnet phone URL
+ * `http://<ip>:<port>/m/` (null when not bound); `tailnetNotDetected` is true
+ * when the server is enabled but no Tailscale interface was found (fail closed);
+ * `conflict` is true when the configured port was taken (no silent fallback);
+ * `locked` reflects the global kill-switch.
+ */
+export interface MobileStatus {
+    running: boolean;
+    enabled: boolean;
+    /** The bound Tailscale IPv4 (null when not running). */
+    ip: string | null;
+    /** The bound port (null when not running). */
+    port: number | null;
+    /** The port the user configured. */
+    configuredPort: number;
+    /** The phone URL `http://<ip>:<port>/m/`, or null when not running. */
+    url: string | null;
+    /** True when the configured port was taken (restart on a free port to fix). */
+    conflict: boolean;
+    /** True when enabled but no Tailscale interface was detected (fail closed). */
+    tailnetNotDetected: boolean;
+    /** True when the global kill-switch ("Lock") is engaged. */
+    locked: boolean;
+    /** The 6-digit pairing PIN (shown big + in the QR). */
+    pin: string;
+    /** A data-URL PNG QR of `<url>?pair=<pin>`, or null when not bound. */
+    qrDataUrl: string | null;
 }
 
 export interface DocEntry {
@@ -702,6 +739,23 @@ interface GenieApi {
         restart: () => Promise<McpServerState>;
         docHealth: (workspaceId: string) => Promise<WorkspaceDocHealth | null>;
         repairDocs: (workspaceId: string) => Promise<RepairDocsResult | null>;
+    };
+    /**
+     * Mobile remote-control server (Settings → Mobile). Desktop-only namespace —
+     * the phone talks to the tailnet server directly, never via this bridge.
+     *   - `status()` — live state + PIN + QR data-URL.
+     *   - `restart(enabled?)` — persist the toggle (caller sets `mobile_enabled`
+     *     first), then (re)bind/unbind; returns the fresh status.
+     *   - `regeneratePin()` — roll the PIN (sessions kept).
+     *   - `revokeSessions()` — drop every paired session (returns the count).
+     *   - `lock(locked)` — engage/release the global kill-switch.
+     */
+    mobile: {
+        status: () => Promise<MobileStatus>;
+        restart: (enabled?: boolean) => Promise<MobileStatus>;
+        regeneratePin: () => Promise<MobileStatus>;
+        revokeSessions: () => Promise<MobileStatus & { revoked: number }>;
+        lock: (locked: boolean) => Promise<MobileStatus>;
     };
     aionima: {
         getConfig: () => Promise<AionimaConfig>;

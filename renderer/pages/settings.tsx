@@ -14,6 +14,7 @@ import {
     api,
     type EditorDetection,
     type McpServerState,
+    type MobileStatus,
     type Settings,
     type ShellDetection,
     type UpdaterConfig,
@@ -95,6 +96,7 @@ export default function SettingsPage() {
                     <Tabs.Tab value="workspaces">Workspaces</Tabs.Tab>
                     <Tabs.Tab value="customization">Customization</Tabs.Tab>
                     <Tabs.Tab value="agent-mcp">Agent MCP</Tabs.Tab>
+                    <Tabs.Tab value="mobile">Mobile</Tabs.Tab>
                     <Tabs.Tab value="connections">Connections</Tabs.Tab>
                     <Tabs.Tab value="updates">Updates</Tabs.Tab>
                 </Tabs.List>
@@ -417,6 +419,17 @@ export default function SettingsPage() {
                     patch({ [`mcp_sync_${target}`]: on ? 'on' : 'off' })
                 }
                 activeWorkspace={s.active_workspace}
+            />
+
+                    </Tabs.Panel>
+                    <Tabs.Panel value="mobile" className="settings-tab">
+
+            <MobileSection
+                enabled={s.mobile_enabled === 'on'}
+                onEnabledChange={(on) => patch({ mobile_enabled: on ? 'on' : 'off' })}
+                port={s.mobile_port ?? '51718'}
+                onPortChange={(v) => patch({ mobile_port: v })}
+                persistSettings={save}
             />
 
                     </Tabs.Panel>
@@ -1913,6 +1926,343 @@ function AgentMcpSection({
                 )}
             </div>
         </Card>
+    );
+}
+
+/**
+ * Settings → Mobile. Drives the tailnet remote-control server: the enable
+ * toggle + fixed `mobile_port`, plus a live status block (tailnet URL when
+ * running, a "Tailscale not detected" notice when fail-closed, a port-conflict
+ * banner), the pairing PIN + QR, and the control buttons (Restart / Regenerate
+ * PIN / Disconnect all / Lock kill-switch).
+ *
+ * The page-level Save persists `mobile_enabled` / `mobile_port`; the toggle and
+ * port both persist FIRST (via `persistSettings`) and then call
+ * `mobile.restart(enabled)` so the server rebinds on the new setting without
+ * waiting for the user to hit Save. `status()` is loaded on mount and after
+ * every action so the block always reflects the live server.
+ */
+function MobileSection({
+    enabled,
+    onEnabledChange,
+    port,
+    onPortChange,
+    persistSettings,
+}: {
+    enabled: boolean;
+    onEnabledChange: (on: boolean) => void;
+    port: string;
+    onPortChange: (v: string) => void;
+    persistSettings: () => Promise<void>;
+}) {
+    const [status, setStatus] = useState<MobileStatus | null>(null);
+    const [busy, setBusy] = useState(false);
+    const [msg, setMsg] = useState<string | null>(null);
+
+    const refresh = async () => {
+        try {
+            setStatus(await api().mobile.status());
+        } catch {
+            setStatus(null);
+        }
+    };
+
+    useEffect(() => {
+        void refresh();
+    }, []);
+
+    // Persist the settings the server reads (mobile_enabled / mobile_port) BEFORE
+    // restarting, so the rebind picks up the new values. Used by the toggle and
+    // the port input so a change takes effect without a separate Save.
+    const persistThenRestart = async (on: boolean) => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            await persistSettings();
+            setStatus(await api().mobile.restart(on));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const restart = async () => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            setStatus(await api().mobile.restart(enabled));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const regeneratePin = async () => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            setStatus(await api().mobile.regeneratePin());
+            setMsg('New PIN generated — re-pair your phone with it.');
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const revokeSessions = async () => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            const r = await api().mobile.revokeSessions();
+            setStatus(r);
+            setMsg(
+                `Disconnected ${r.revoked} device${r.revoked === 1 ? '' : 's'}.`,
+            );
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const toggleLock = async () => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            setStatus(await api().mobile.lock(!(status?.locked ?? false)));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const statusLabel = !status
+        ? '—'
+        : status.tailnetNotDetected
+            ? 'Tailscale not detected'
+            : status.conflict
+                ? `Port ${status.configuredPort} in use`
+                : status.running
+                    ? `Running on ${status.ip}:${status.port}`
+                    : status.enabled
+                        ? 'Starting…'
+                        : 'Off';
+    const statusColor = !status
+        ? 'var(--fg-3)'
+        : status.tailnetNotDetected || status.conflict
+            ? 'var(--rose-500)'
+            : status.running
+                ? 'var(--emerald-600)'
+                : 'var(--fg-3)';
+
+    return (
+        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Heading as="h2" size="sm" style={{ margin: 0 }}>
+                    Mobile remote control
+                </Heading>
+                <Text size="xs" className="text-zinc-500">
+                    Drive Genie from your phone over Tailscale
+                </Text>
+                <span style={{ flex: 1 }} />
+                <Text size="xs" style={{ color: statusColor }}>
+                    <Icon
+                        name={
+                            status?.tailnetNotDetected || status?.conflict
+                                ? 'alert-triangle'
+                                : status?.running
+                                    ? 'check'
+                                    : 'circle'
+                        }
+                        size="xs"
+                    />{' '}
+                    {statusLabel}
+                </Text>
+            </div>
+
+            <Text size="xs" className="text-zinc-500">
+                Remote control works only over your Tailscale network — the server
+                binds to your tailnet IP and nothing else. Pairing a phone must be
+                confirmed on this desktop; once paired, the phone can drive
+                terminals freely until you Disconnect or Lock.
+            </Text>
+
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                <Switch
+                    checked={enabled}
+                    disabled={busy}
+                    onCheckedChange={(on: boolean) => {
+                        onEnabledChange(on);
+                        void persistThenRestart(on);
+                    }}
+                />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <Text size="sm">Enable mobile remote control</Text>
+                    <Text size="xs" className="text-zinc-500">
+                        Off by default. When on, Genie starts a small web server on
+                        your Tailscale interface so a paired phone can reach this
+                        desktop.
+                    </Text>
+                </div>
+            </div>
+
+            {status?.tailnetNotDetected && (
+                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                    Tailscale not detected — start Tailscale and click Restart. The
+                    server binds only to the tailnet and won&apos;t start without it.
+                </Text>
+            )}
+
+            {status?.conflict && (
+                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                    Port {status.configuredPort} is in use — pick another port and
+                    Restart. Genie won&apos;t silently fall back to a random port so
+                    the phone URL stays stable.
+                </Text>
+            )}
+
+            <Input
+                label="Server port"
+                type="number"
+                min={1024}
+                max={65535}
+                description="A fixed port bound on your Tailscale IP (default 51718). The phone URL embeds it, so changing it requires a restart of the server below."
+                value={port}
+                onValueChange={(v) => {
+                    const n = parseInt(v, 10);
+                    if (v === '') onPortChange('');
+                    else if (Number.isFinite(n)) onPortChange(String(Math.min(65535, Math.max(1, n))));
+                }}
+                placeholder="51718"
+            />
+
+            {status?.running && status.url && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <Text size="xs" className="text-zinc-500">
+                        Open this on your phone (must be on the same tailnet):
+                    </Text>
+                    <MobileCodeChip code={status.url} />
+                </div>
+            )}
+
+            {status?.running && (status.pin || status.qrDataUrl) && (
+                <div
+                    style={{
+                        display: 'flex',
+                        gap: 16,
+                        alignItems: 'center',
+                        padding: 12,
+                        borderRadius: 8,
+                        border: '1px solid var(--border-1)',
+                        background: 'var(--bg-2)',
+                    }}
+                >
+                    {status.qrDataUrl && (
+                        <img
+                            src={status.qrDataUrl}
+                            alt="Pairing QR code"
+                            width={140}
+                            height={140}
+                            style={{
+                                borderRadius: 8,
+                                background: '#fff',
+                                padding: 6,
+                            }}
+                        />
+                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1 }}>
+                        <Text size="xs" className="text-zinc-500">
+                            Scan to pair, or enter the PIN on your phone.
+                        </Text>
+                        {status.pin && (
+                            <button
+                                type="button"
+                                title="Click to copy"
+                                onClick={() => {
+                                    navigator.clipboard.writeText(status.pin).catch(() => {});
+                                }}
+                                style={{
+                                    fontFamily: 'var(--font-mono)',
+                                    fontSize: 28,
+                                    fontWeight: 600,
+                                    letterSpacing: '0.18em',
+                                    background: 'var(--card)',
+                                    border: '1px solid var(--border-1)',
+                                    borderRadius: 8,
+                                    padding: '10px 14px',
+                                    textAlign: 'center',
+                                    cursor: 'pointer',
+                                    color: 'var(--fg-1)',
+                                }}
+                            >
+                                {status.pin}
+                            </button>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Action
+                    color="blue"
+                    icon="refresh-cw"
+                    onClick={restart}
+                    disabled={busy}
+                >
+                    {busy ? 'Working…' : 'Restart'}
+                </Action>
+                <Action
+                    variant="ghost"
+                    icon="key-round"
+                    onClick={regeneratePin}
+                    disabled={busy || !status?.running}
+                >
+                    Regenerate PIN
+                </Action>
+                <Action
+                    variant="ghost"
+                    icon="unplug"
+                    onClick={revokeSessions}
+                    disabled={busy || !status?.running}
+                >
+                    Disconnect all devices
+                </Action>
+                <Action
+                    color={status?.locked ? 'red' : undefined}
+                    variant={status?.locked ? 'default' : 'ghost'}
+                    icon={status?.locked ? 'lock' : 'lock-open'}
+                    onClick={toggleLock}
+                    disabled={busy || !status?.running}
+                    title="Freeze remote control without disconnecting paired devices"
+                >
+                    {status?.locked ? 'Unlock' : 'Lock (freeze remote control)'}
+                </Action>
+                {msg && (
+                    <Text size="xs" className="text-zinc-500">
+                        {msg}
+                    </Text>
+                )}
+            </div>
+        </Card>
+    );
+}
+
+/** Click-to-copy chip for the mobile URL (mirrors GitHubConnect's CodeChip). */
+function MobileCodeChip({ code }: { code: string }) {
+    const [copied, setCopied] = useState(false);
+    const copy = () => {
+        navigator.clipboard.writeText(code).then(
+            () => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+            },
+            () => {},
+        );
+    };
+    return (
+        <button
+            type="button"
+            className="gh-code"
+            onClick={copy}
+            title="Click to copy"
+        >
+            {code}
+            <span className="gh-code-hint">{copied ? '✓ Copied' : 'Click to copy'}</span>
+        </button>
     );
 }
 

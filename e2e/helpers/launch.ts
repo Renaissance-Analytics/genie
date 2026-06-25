@@ -54,6 +54,61 @@ export async function launchGenieE2E(
 }
 
 /**
+ * Boot Genie in MOBILE-server E2E mode (GENIE_E2E + GENIE_E2E_MOBILE). The main
+ * process brings up the REAL mobile server on 127.0.0.1 at a fixed port + PIN
+ * with mock data deps (see main/e2e/mock.ts `startMobileE2EServer`). The desktop
+ * harness window is irrelevant here — the spec drives the SERVED `/m/` page over
+ * a plain chromium browser — but a window still opens so `firstWindow()` resolves
+ * and we know main is ready. `GENIE_E2E_USERDATA` isolates the auth/audit files.
+ *
+ * Returns the app handle plus the bound port + PIN read back from the main
+ * process's global handle, so the spec hits the exact running instance.
+ */
+export async function launchGenieMobileE2E(): Promise<{
+    app: ElectronApplication;
+    page: Page;
+    port: number;
+    pin: string;
+    scrollback: string;
+    terminalId: string;
+}> {
+    const app = await electron.launch({
+        args: [MAIN_ENTRY],
+        env: {
+            ...process.env,
+            NODE_ENV: 'production',
+            GENIE_E2E: '1',
+            GENIE_E2E_MOBILE: '1',
+            GENIE_E2E_USERDATA: '',
+        },
+    });
+    const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
+
+    // Read the bound port/PIN the main process exposed once the server bound.
+    const handle = await app.evaluate(async () => {
+        const g = globalThis as Record<string, any>;
+        // The server starts inside whenReady; poll briefly for the handle.
+        for (let i = 0; i < 100 && !g.__GENIE_E2E_MOBILE__; i++) {
+            await new Promise((r) => setTimeout(r, 50));
+        }
+        return g.__GENIE_E2E_MOBILE__ ?? null;
+    });
+    if (!handle) {
+        await app.close();
+        throw new Error('mobile E2E server never published its handle');
+    }
+    return {
+        app,
+        page,
+        port: handle.port,
+        pin: handle.pin,
+        scrollback: handle.scrollback,
+        terminalId: handle.terminalId,
+    };
+}
+
+/**
  * Mutate the scriptable mock state from the MAIN process. The callback runs in
  * the Electron main context where `globalThis.__GENIE_E2E__` (set by
  * registerE2EMocks) exposes the live state object. Pass a plain function body;

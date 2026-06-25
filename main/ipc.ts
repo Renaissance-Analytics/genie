@@ -64,6 +64,18 @@ import {
     mcpServerState,
     restartMcpServer,
 } from './mcp/server';
+import {
+    mobileEmit,
+    mobileServerState,
+    restartMobileServer,
+    setMobileEnabled,
+    setLocked,
+    regeneratePin,
+    currentPin,
+    revokeAllSessions,
+    type MobileServerState,
+} from './mobile/server';
+import QRCode from 'qrcode';
 import { tynnCliInfo, installTynnCliSystemWide } from './cli/tynn-cli';
 import { registerShortcuts } from './shortcuts';
 import { startSignIn, redeemCode } from './auth';
@@ -261,6 +273,50 @@ export function registerIpcHandlers(): void {
         const ws = getWorkspace(id);
         if (!ws) return null;
         return repairWorkspaceDocs(ws.path, ws.project_name, ws.project_name);
+    });
+
+    // --- Mobile remote-control server (Settings → Mobile) ---------------
+    // The desktop-only namespace. The phone NEVER touches these — it talks to
+    // the tailnet HTTP/WS server directly. `status` bundles the live server
+    // state + the current PIN + a QR data-URL (of the phone URL with the PIN
+    // pre-filled) so Settings can show the big PIN + a scannable code.
+    const mobileStatus = async (): Promise<
+        MobileServerState & { pin: string; qrDataUrl: string | null }
+    > => {
+        const state = mobileServerState();
+        const pin = currentPin();
+        // Encode the pairing URL (host + ?pair=<pin>) into a QR data-URL, but
+        // only when the server is actually reachable (running with a URL).
+        let qrDataUrl: string | null = null;
+        if (state.url) {
+            try {
+                const pairUrl = `${state.url}?pair=${pin}`;
+                qrDataUrl = await QRCode.toDataURL(pairUrl, { margin: 1, width: 240 });
+            } catch {
+                qrDataUrl = null;
+            }
+        }
+        return { ...state, pin, qrDataUrl };
+    };
+    ipcMain.handle('mobile:status', () => mobileStatus());
+    ipcMain.handle('mobile:restart', async (_e, enabled?: boolean) => {
+        // The Settings toggle persists `mobile_enabled` then calls restart; pass
+        // the live flag through so the server reflects the new state.
+        if (typeof enabled === 'boolean') setMobileEnabled(enabled);
+        await restartMobileServer();
+        return mobileStatus();
+    });
+    ipcMain.handle('mobile:regenerate-pin', async () => {
+        regeneratePin();
+        return mobileStatus();
+    });
+    ipcMain.handle('mobile:revoke-sessions', async () => {
+        const n = revokeAllSessions();
+        return { revoked: n, ...(await mobileStatus()) };
+    });
+    ipcMain.handle('mobile:lock', async (_e, locked: boolean) => {
+        setLocked(!!locked);
+        return mobileStatus();
     });
 
     ipcMain.handle('workspaces:open', async (_e, id: string) => {
@@ -556,4 +612,6 @@ export function broadcastWorkspacesChanged(): void {
             w.webContents.send('workspaces:changed');
         }
     }
+    // Mirror to the mobile dashboard push channel (no-op when the server is off).
+    mobileEmit('workspaces:changed');
 }

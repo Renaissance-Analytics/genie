@@ -39,10 +39,24 @@
  */
 
 import { ipcMain } from 'electron';
+import os from 'node:os';
+import { startMobileServer } from '../mobile/server';
+import { currentPin, _setPinForTest } from '../mobile/auth';
+import {
+    _seedPendingQuestionForTest,
+    listPendingQuestions,
+    answerPendingQuestion,
+} from '../ask/force-question';
+import type { MobileDataDeps } from '../mobile/api';
 
 /** True only in E2E test mode. Everything in this module no-ops otherwise. */
 export function isE2E(): boolean {
     return process.env.GENIE_E2E === '1';
+}
+
+/** True when the mobile-server E2E harness is requested (GENIE_E2E_MOBILE=1). */
+export function isE2EMobile(): boolean {
+    return isE2E() && process.env.GENIE_E2E_MOBILE === '1';
 }
 
 type FlowStatus =
@@ -331,4 +345,176 @@ export function registerE2EMocks(): void {
         e2eState.openedUrls.push(pathOrUrl);
         return { ok: true };
     });
+}
+
+// ===========================================================================
+// Mobile remote-control E2E harness (GENIE_E2E_MOBILE=1)
+// ---------------------------------------------------------------------------
+// Brings the REAL mobile server up on loopback (bindIpOverride) at a FIXED port
+// with a KNOWN pin and an auto-confirming pairing hook, fed by an in-memory
+// MobileDataDeps (one workspace, one process, one terminal). This lets a plain
+// chromium browser drive the actually-served `/m/` page + REST + WS end-to-end
+// without a tailnet, a real desktop modal, the DB, or node-pty. Inert unless the
+// flag is set; the production startMobileServer call in background.ts is skipped
+// in E2E (we own the singleton here).
+// ===========================================================================
+
+/** The fixed loopback port + PIN the mobile E2E spec drives. Deterministic. */
+export const E2E_MOBILE_PORT = 51999;
+export const E2E_MOBILE_PIN = '424242';
+
+/** A seeded workspace / process / terminal for the mobile dashboard + terminal. */
+const E2E_MOBILE_WORKSPACE = {
+    id: 'ws-e2e-mobile',
+    project_name: 'Mobile E2E',
+    path: 'C:/e2e/mobile-workspace',
+};
+const E2E_MOBILE_TERMINAL_ID = 'term-e2e-mobile';
+const E2E_MOBILE_PROCESS_ID = 'proc-e2e-mobile';
+/** The catch-up banner getScrollback returns when the phone attaches /ws/term. */
+export const E2E_MOBILE_SCROLLBACK = '*** genie mobile e2e terminal ***\r\n';
+
+/**
+ * In-memory state the mock deps mutate so process start/stop + terminal writes
+ * have observable effects (status flips, byte echo) without touching real
+ * supervisor / pty machinery.
+ */
+const mobileE2E = {
+    processStatus: 'stopped' as
+        | 'running'
+        | 'stopped'
+        | 'restarting'
+        | 'crashed'
+        | 'failed',
+    terminalLive: true,
+};
+
+/**
+ * Build the scriptable MobileDataDeps. Lazy-imports the bus + terminal-bridge
+ * (mobileEmit / mobileTermFanout) so a process start can push `process:status`
+ * to /ws/events and a terminal write can echo back down /ws/term — exercising
+ * the real fan-out paths the phone UI consumes.
+ */
+function buildMobileE2EDeps(): MobileDataDeps {
+    // Resolved from the SAME module the server uses, so the fan-out reaches the
+    // live socket sets server.ts registered.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { mobileEmit } = require('../mobile/bus') as typeof import('../mobile/bus');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { mobileTermFanout } =
+        require('../mobile/terminal-bridge') as typeof import('../mobile/terminal-bridge');
+
+    const processRow = () => ({
+        id: E2E_MOBILE_PROCESS_ID,
+        kind: 'process' as const,
+        label: 'E2E dev server',
+        command: 'npm run dev',
+        workspace: E2E_MOBILE_WORKSPACE.project_name,
+        workspaceId: E2E_MOBILE_WORKSPACE.id,
+        status: mobileE2E.processStatus,
+        autostart: false,
+    });
+    const setProc = (status: typeof mobileE2E.processStatus) => {
+        mobileE2E.processStatus = status;
+        mobileEmit('process:status', { id: E2E_MOBILE_PROCESS_ID, status });
+    };
+
+    return {
+        listWorkspaces: () => [E2E_MOBILE_WORKSPACE],
+        listTerminalSpecs: () => [
+            {
+                id: E2E_MOBILE_TERMINAL_ID,
+                workspace_id: E2E_MOBILE_WORKSPACE.id,
+                label: 'E2E terminal',
+                type: 'terminal',
+                cwd: E2E_MOBILE_WORKSPACE.path,
+                live_cwd: null,
+            },
+        ],
+        listAllProcesses: () => [processRow()],
+        liveTerminalIds: () =>
+            mobileE2E.terminalLive ? [E2E_MOBILE_TERMINAL_ID] : [],
+
+        startProcess: () => setProc('running'),
+        stopProcess: () => setProc('stopped'),
+        restartProcess: () => setProc('running'),
+
+        createAgentTerminal: (opts) => ({
+            id: `term-e2e-${Date.now()}`,
+            scrollback: `*** new terminal in ${opts.label} ***\r\n`,
+        }),
+        killTerminalById: (id) => id === E2E_MOBILE_TERMINAL_ID,
+        // Echo the phone's input straight back down the byte stream, so the
+        // terminal view shows what it sent (a cheap stand-in for a real pty).
+        writeToTerminal: (id, data) => {
+            mobileTermFanout(id, data);
+            return true;
+        },
+        readTerminalOutput: () => ({
+            data: E2E_MOBILE_SCROLLBACK,
+            cursor: E2E_MOBILE_SCROLLBACK.length,
+            dropped: false,
+        }),
+        getScrollback: () => E2E_MOBILE_SCROLLBACK,
+        resize: () => true,
+
+        listPendingQuestions: () => listPendingQuestions(),
+        answerPendingQuestion: (id, answers) => answerPendingQuestion(id, answers),
+    };
+}
+
+/**
+ * Start the mobile server for the E2E harness (idempotent per process). Called
+ * from background.ts inside the isE2E() block when GENIE_E2E_MOBILE=1, BEFORE
+ * the native-module startup steps so a node-pty/sqlite hiccup in the sandbox
+ * can't stop it. Binds 127.0.0.1:E2E_MOBILE_PORT with a fixed PIN and an
+ * auto-confirming pairing hook, exposes the port/pin on the global handle.
+ */
+export async function startMobileE2EServer(): Promise<void> {
+    // The desktop confirm modal is bypassed: every pairing auto-confirms, so the
+    // test pairs without a human at the desktop.
+    await startMobileServer({
+        serverVersion: 'e2e',
+        userDataDir: process.env.GENIE_E2E_USERDATA || os.tmpdir(),
+        // __dirname is the compiled app/ dir (mock.ts is bundled into
+        // background.js) — same value background.ts passes — so mobile.html +
+        // _next/* sit beside it.
+        appDir: __dirname,
+        enabled: true,
+        configuredPort: () => E2E_MOBILE_PORT,
+        confirmPair: async () => true,
+        bindIpOverride: '127.0.0.1',
+        data: buildMobileE2EDeps(),
+    });
+    // Force the PIN to the known value so `?pair=` is deterministic (initAuth ran
+    // inside startMobileServer above, so state now exists).
+    _setPinForTest(E2E_MOBILE_PIN);
+
+    // Seed ONE pending ForceTheQuestion so the Questions flow has something to
+    // answer. Enqueued WITHOUT a desktop modal window (test seam); the phone
+    // resolves it through the normal answerPendingQuestion → finish path.
+    _seedPendingQuestionForTest(
+        [
+            {
+                header: 'Deploy?',
+                question: 'Ship the mobile build to production?',
+                options: [
+                    { label: 'Ship it', description: 'Deploy now.' },
+                    { label: 'Hold', description: 'Wait for review.' },
+                ],
+            },
+        ],
+        E2E_MOBILE_WORKSPACE.project_name,
+    );
+
+    // Expose the bound port + pin so the spec can read them deterministically
+    // (it also just hard-codes the constants; this is a belt-and-braces handle).
+    (globalThis as Record<string, unknown>).__GENIE_E2E_MOBILE__ = {
+        port: E2E_MOBILE_PORT,
+        pin: currentPin(),
+        scrollback: E2E_MOBILE_SCROLLBACK,
+        terminalId: E2E_MOBILE_TERMINAL_ID,
+        processId: E2E_MOBILE_PROCESS_ID,
+        workspaceId: E2E_MOBILE_WORKSPACE.id,
+    };
 }

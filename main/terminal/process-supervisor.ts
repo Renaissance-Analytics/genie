@@ -14,6 +14,7 @@ import { dbSettingsProvider } from './genie-adapter';
 import { buildProcessArgs } from './process-spawn';
 import { buildTynnCliEnv } from '../cli/tynn-cli';
 import { decideOnExit, type ProcessStatus } from './process-lifecycle';
+import { mobileEmit } from '../mobile/server';
 
 /**
  * Headless supervisor for Process service runners.
@@ -112,6 +113,8 @@ function setStatus(id: string, status: ProcessStatus): void {
             w.webContents.send('process:status', { id, status });
         }
     }
+    // Mirror to the mobile dashboard push channel (no-op when the server is off).
+    mobileEmit('process:status', { id, status });
 }
 
 /**

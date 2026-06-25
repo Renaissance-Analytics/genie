@@ -58,6 +58,12 @@ import {
     DEFAULT_MCP_PORT,
 } from './mcp/server';
 import { startControlServer } from './control';
+import { startMobileServer, DEFAULT_MOBILE_PORT } from './mobile/server';
+import {
+    listPendingQuestions,
+    answerPendingQuestion,
+} from './ask/force-question';
+import { listAllProcesses } from './terminal/process-list';
 import {
     startAutostartProcesses,
     startProcess,
@@ -97,6 +103,7 @@ import {
     initTerminalBackend,
     isHostBacked,
     disconnectHostLeaveRunning,
+    terminalManager,
 } from '@particle-academy/fancy-term-host';
 import {
     wireTerminalAdapter,
@@ -129,7 +136,12 @@ import {
 import { registerUpdaterIpc, checkForUpdatesNow } from './updater/ipc';
 import { registerDocsIpc } from './docs/ipc';
 import { installAppMenu } from './app-menu';
-import { isE2E, registerE2EMocks } from './e2e/mock';
+import {
+    isE2E,
+    isE2EMobile,
+    registerE2EMocks,
+    startMobileE2EServer,
+} from './e2e/mock';
 
 /**
  * Genie — Tynn desktop companion.
@@ -1681,6 +1693,16 @@ app.whenReady().then(async () => {
         // one of those awaits hangs or throws, the end-of-whenReady window would
         // never open. The flyout only needs IPC + the renderer, both ready here.
         showE2EWindow();
+        // Mobile-server E2E harness (GENIE_E2E_MOBILE=1): bring the REAL mobile
+        // server up on 127.0.0.1 at a fixed port/PIN with mock data deps, BEFORE
+        // the native-module startup steps below (node-pty / sqlite) that may hang
+        // or throw in a test sandbox. The desktop window above is irrelevant for
+        // this spec — the served `/m/` page + REST + WS are what it drives.
+        if (isE2EMobile()) {
+            await startMobileE2EServer().catch((e) =>
+                console.error('[e2e] mobile server failed to start', e),
+            );
+        }
     }
     // Boot-time capability check: once GitHub is known-connected, detect any
     // missing required permission and broadcast `github:capabilities` so the
@@ -1775,6 +1797,96 @@ app.whenReady().then(async () => {
         hostStart,
         hostRestart,
     }).catch((e) => console.error('[control] failed to start', e));
+    // Mobile remote-control server (Settings → Mobile, opt-in). Bound ONLY to the
+    // Tailscale IP — fail closed if no tailnet. Reuses the SAME terminal/process/
+    // workspace/question functions the desktop + MCP use (built as MobileDataDeps
+    // here so DB/terminal access stays in main, like startMcpServer's deps).
+    // Non-fatal: a failed bind just means no mobile endpoint.
+    // Skipped under the mobile E2E harness, which already started the singleton
+    // above with mock deps — this production call would overwrite `deps`.
+    if (!isE2EMobile()) await startMobileServer({
+        serverVersion: app.getVersion(),
+        userDataDir: app.getPath('userData'),
+        // The compiled app dir holding mobile.html + the static export.
+        appDir: __dirname,
+        // Opt-in: mobile_enabled defaults 'off'. Only bind when the user turned it on.
+        enabled: (getAllSettings() as Record<string, string>)['mobile_enabled'] === 'on',
+        configuredPort: () => {
+            const raw = (getAllSettings() as Record<string, string>)['mobile_port'];
+            const n = raw ? parseInt(raw, 10) : NaN;
+            return Number.isInteger(n) && n > 0 && n < 65536 ? n : DEFAULT_MOBILE_PORT;
+        },
+        // One-time DESKTOP confirm before minting a session token, so a tailnet
+        // peer who learns the PIN still can't pair silently. Reuses the same
+        // OS-level ForceTheQuestion modal as the MCP approval gates.
+        confirmPair: async ({ ip, ua }) => {
+            const result = await forceQuestion([
+                {
+                    header: 'Pair phone?',
+                    question:
+                        `A device wants to pair for mobile remote control:\n\n` +
+                        `• from: ${ip}\n` +
+                        `• ${ua || 'unknown device'}\n\n` +
+                        `Once paired it can drive terminals on this machine. ` +
+                        `Approve only if this is YOUR device.`,
+                    options: [
+                        { label: 'Pair', description: 'Allow this device to connect.' },
+                        { label: 'Deny', description: 'Reject — nothing is paired.' },
+                    ],
+                },
+            ]);
+            if (result.cancelled) return false; // dismissed = deny
+            return (result.answers[0]?.selected ?? []).includes('Pair');
+        },
+        data: {
+            listWorkspaces: () =>
+                listWorkspaces().map((w) => ({
+                    id: w.id,
+                    project_name: w.project_name,
+                    path: w.path,
+                })),
+            listTerminalSpecs: () =>
+                listTerminalSpecs().map((s) => ({
+                    id: s.id,
+                    workspace_id: s.workspace_id,
+                    label: s.label,
+                    type: s.type,
+                    cwd: s.cwd,
+                    live_cwd: s.live_cwd,
+                })),
+            listAllProcesses: () => listAllProcesses(),
+            liveTerminalIds: () => {
+                try {
+                    return terminalManager().list().map((t) => t.id);
+                } catch {
+                    return [];
+                }
+            },
+            startProcess: (id) => startProcess(id),
+            stopProcess: (id) => stopProcess(id),
+            restartProcess: (id) => restartProcess(id),
+            createAgentTerminal: (opts) => createAgentTerminal(opts),
+            killTerminalById: (id) => killTerminalById(id),
+            writeToTerminal: (id, data) => writeToTerminal(id, data),
+            readTerminalOutput: (id, o) => readTerminalOutput(id, o),
+            getScrollback: (id) => {
+                try {
+                    return terminalManager().getScrollback(id) ?? '';
+                } catch {
+                    return '';
+                }
+            },
+            resize: (id, cols, rows) => {
+                try {
+                    return terminalManager().resize(id, cols, rows);
+                } catch {
+                    return false;
+                }
+            },
+            listPendingQuestions: () => listPendingQuestions(),
+            answerPendingQuestion: (id, answers) => answerPendingQuestion(id, answers),
+        },
+    }).catch((e) => console.error('[mobile] failed to start', e));
     // Docs viewer IPC (docs:list / docs:read). __dirname is the compiled main
     // bundle dir; resolveDocsDir uses it to find the bundled docs/ in both dev
     // and the packaged asar.

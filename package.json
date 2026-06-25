@@ -30,13 +30,16 @@
     "@particle-academy/fancy-features": "^0.1.0",
     "@particle-academy/fancy-term": "^0.3.0",
     "@particle-academy/fancy-term-host": "^0.2.0",
+    "@types/ws": "^8.18.1",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/xterm": "^6.0.0",
     "better-sqlite3": "^11.7.0",
     "electron-updater": "^6.3.9",
     "node-pty": "^1.1.0",
-    "simple-git": "^3.27.0"
+    "qrcode": "^1.5.4",
+    "simple-git": "^3.27.0",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@particle-academy/react-fancy": "^4.7.0",
@@ -45,6 +48,7 @@
     "@tailwindcss/typography": "^0.5.19",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.7",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
     "@vitest/coverage-v8": "^2.1.9",
