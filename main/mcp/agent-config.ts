@@ -165,7 +165,7 @@ export function hasGenieAgentsSection(content: string): boolean {
  * Returns the next string, or the input unchanged when there's nothing to do.
  */
 export function applyAgentsSection(existing: string, enabled: boolean): string {
-    const block = `${AGENTS_BEGIN}\n## Genie MCP\n\n${GENIE_AGENTS_BRIEF}\n${AGENTS_END}`;
+    const block = `${AGENTS_BEGIN}\n## GENIE PROTOCOL\n\n${GENIE_AGENTS_BRIEF}\n${AGENTS_END}`;
     const begin = existing.indexOf(AGENTS_BEGIN);
     const end = existing.indexOf(AGENTS_END);
     const hasBlock = begin !== -1 && end !== -1 && end > begin;
