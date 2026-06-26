@@ -1,5 +1,6 @@
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import path from 'node:path';
+import os from 'node:os';
 
 /**
  * Boot the compiled Genie Electron app in E2E mode and return the app handle +
@@ -24,6 +25,17 @@ export const REPO_ROOT = path.resolve(__dirname, '..', '..');
 export const MAIN_ENTRY = path.join(REPO_ROOT, 'app', 'background.js');
 
 /**
+ * A throwaway userData profile for E2E runs. Electron honours `--user-data-dir`,
+ * so passing this isolates the test app's ENTIRE profile (settings DB, GitHub
+ * token, everything) from the developer's REAL Genie install. Without it, the
+ * harness booted the real app against the real GitHub token — and the real
+ * issue-watch poller (registered unconditionally at boot) could mutate the real
+ * auth state (e.g. flag a reauth on a transient hiccup). Never reuse the real
+ * profile in tests.
+ */
+export const E2E_USERDATA = path.join(os.tmpdir(), 'genie-e2e-profile');
+
+/**
  * Which harness window to open. `issuewatch` mounts the IssueWatchFlyout (the
  * default — back-compat with the existing spec); `ghcaps` mounts the
  * GithubCapabilitiesFlyout (per-install resolve flow). Maps to `GENIE_E2E_PAGE`,
@@ -38,7 +50,7 @@ export async function launchGenieE2E(
     page: Page;
 }> {
     const app = await electron.launch({
-        args: [MAIN_ENTRY],
+        args: [MAIN_ENTRY, `--user-data-dir=${E2E_USERDATA}`],
         env: {
             ...process.env,
             NODE_ENV: 'production',
@@ -73,7 +85,7 @@ export async function launchGenieMobileE2E(): Promise<{
     terminalId: string;
 }> {
     const app = await electron.launch({
-        args: [MAIN_ENTRY],
+        args: [MAIN_ENTRY, `--user-data-dir=${E2E_USERDATA}`],
         env: {
             ...process.env,
             NODE_ENV: 'production',

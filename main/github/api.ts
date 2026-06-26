@@ -7,6 +7,7 @@ import {
     getToken,
     getUsername,
     markReauthNeeded,
+    clearReauthNeeded,
     saveTokenSet,
 } from './storage';
 import { refreshUserToken } from './device-flow';
@@ -109,6 +110,12 @@ async function gh<T = unknown>(
         await refreshOrFail();
         return gh<T>(method, path, body, true);
     }
+    // A successful authenticated response proves the session is alive — clear any
+    // stale reauth flag so the "GitHub session expired" banner self-heals once
+    // reads work again (the reported bug: counter shows live issues, yet the
+    // flyout was stuck on Reconnect). Guarded internally, so this only writes
+    // when the flag was actually set.
+    if (res.ok) clearReauthNeeded();
     if (res.status === 204) return null as T;
     const text = await res.text();
     let json: unknown = null;

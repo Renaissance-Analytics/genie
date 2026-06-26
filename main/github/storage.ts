@@ -131,6 +131,15 @@ export function needsReauth(): boolean {
     return settings[REAUTH_KEY] === '1';
 }
 
+/** Clear the reauth flag. Call after a SUCCESSFUL authenticated request: a 2xx
+ *  proves the stored session is alive, so a stale flag — left by a transient or
+ *  preemptive refresh failure, or a one-off 401 on some other endpoint — must
+ *  self-heal instead of pinning the "GitHub session expired" banner while reads
+ *  actually work. No-op (no write) when the flag isn't set. */
+export function clearReauthNeeded(): void {
+    if (needsReauth()) setSettings({ [REAUTH_KEY]: '' } as Record<string, string>);
+}
+
 export function clearToken(): void {
     setSettings({
         [TOKEN_KEY]: '',

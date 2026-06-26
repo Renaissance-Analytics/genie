@@ -34,6 +34,9 @@ vi.mock('../storage', () => ({
     markReauthNeeded: () => {
         store.reauthFlagged = true;
     },
+    clearReauthNeeded: () => {
+        store.reauthFlagged = false;
+    },
     saveTokenSet: (set: unknown) => {
         store.saved = set;
     },
@@ -156,6 +159,31 @@ describe('listInstallations (every installed account)', () => {
     it('returns [] when the App is installed nowhere', async () => {
         fetchMock.mockResolvedValueOnce(res(200, { total_count: 0, installations: [] }));
         expect(await listInstallations()).toEqual([]);
+    });
+});
+
+describe('reauth flag self-heal', () => {
+    it('clears a stale reauth flag on a successful authenticated read', async () => {
+        // The reported bug: a transient/preemptive refresh blip or a one-off 401
+        // on some other endpoint flagged the session dead, but the token actually
+        // works — a clean 2xx read must self-heal the flag so the "session
+        // expired" banner clears while the issue counter shows live issues.
+        store.reauthFlagged = true;
+        fetchMock.mockResolvedValueOnce(res(200, { total_count: 0, installations: [] }));
+
+        await listOrgs();
+
+        expect(store.reauthFlagged).toBe(false);
+    });
+
+    it('leaves the flag set when the read is a genuine 401', async () => {
+        // A real auth failure (no refresh token to retry) must NOT be cleared —
+        // res.ok is false, so the self-heal never fires.
+        store.reauthFlagged = true;
+        fetchMock.mockResolvedValueOnce(res(401, { message: 'Bad credentials' }));
+
+        await expect(listOrgs()).rejects.toThrow();
+        expect(store.reauthFlagged).toBe(true);
     });
 });
 
