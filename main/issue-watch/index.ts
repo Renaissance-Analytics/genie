@@ -11,6 +11,7 @@ import {
 import { detectFolder } from '../workspace/detect';
 import {
     fetchRepoWatchItemsResult,
+    isSecurityKind,
     parseGitHubRemote,
     worseError,
     type WatchItem,
@@ -53,11 +54,23 @@ export interface ResolvedRepo {
     path: string;
 }
 
-/** Per-watch-type unread tallies (for the workspace 3-dot pill). */
+/**
+ * Per-bucket tallies for the workspace 3-dot pill. The three security-alert
+ * kinds (dependabot / code-scanning / secret-scanning) collapse into one
+ * `security` bucket — the pill shows one security dot, not three — while the
+ * per-kind detail lives on each WatchItem in the feed.
+ */
 export interface TypeCounts {
     issue: number;
     pr: number;
-    dependabot: number;
+    /** dependabot + code-scanning + secret-scanning (the security dot). */
+    security: number;
+}
+
+/** The bucket a WatchItem kind tallies into (security kinds → `security`). */
+function bucketOf(kind: WatchItem['kind']): keyof TypeCounts {
+    if (isSecurityKind(kind)) return 'security';
+    return kind; // 'issue' | 'pr'
 }
 
 /** Pure: count items updated strictly after the seen-at high-water mark. */
@@ -65,24 +78,24 @@ export function unreadCount(items: WatchItem[], seenAt: string): number {
     return items.filter((i) => i.updatedAt > seenAt).length;
 }
 
-/** Pure: bucket unread (updated after seenAt) by kind. */
+/** Pure: bucket unread (updated after seenAt) by bucket (security aggregated). */
 export function unreadByKind(items: WatchItem[], seenAt: string): TypeCounts {
-    const out: TypeCounts = { issue: 0, pr: 0, dependabot: 0 };
-    for (const i of items) if (i.updatedAt > seenAt) out[i.kind] += 1;
+    const out: TypeCounts = { issue: 0, pr: 0, security: 0 };
+    for (const i of items) if (i.updatedAt > seenAt) out[bucketOf(i.kind)] += 1;
     return out;
 }
 
 /**
- * Pure: bucket ALL items by kind (no seen_at filter). This drives the
- * workspace 3-dot pill / rail dot, which signal PRESENCE — "is there anything
- * to act on?" — not unread-since-last-seen. A repo with ≥1 open issue keeps a
- * green issue-dot until that issue closes; opening the flyout (which marks
- * seen) must NOT grey the dot. The seen-based `unreadByKind` still drives the
- * feed's per-item "new since you looked" highlight.
+ * Pure: bucket ALL items (no seen_at filter), security kinds aggregated. This
+ * drives the workspace 3-dot pill / rail dot, which signal PRESENCE — "is there
+ * anything to act on?" — not unread-since-last-seen. A repo with ≥1 open issue
+ * keeps a green issue-dot until that issue closes; opening the flyout (which
+ * marks seen) must NOT grey the dot. The seen-based `unreadByKind` still drives
+ * the feed's per-item "new since you looked" highlight.
  */
 export function countByKind(items: WatchItem[]): TypeCounts {
-    const out: TypeCounts = { issue: 0, pr: 0, dependabot: 0 };
-    for (const i of items) out[i.kind] += 1;
+    const out: TypeCounts = { issue: 0, pr: 0, security: 0 };
+    for (const i of items) out[bucketOf(i.kind)] += 1;
     return out;
 }
 
@@ -303,7 +316,7 @@ export async function getOpenCounts(): Promise<Record<string, TypeCounts>> {
         if (repos.length === 0) continue;
         const watches = listIssueWatches(ws.id);
         const byKey = new Map(watches.map((w) => [cacheKey(w.owner, w.repo), w]));
-        const acc: TypeCounts = { issue: 0, pr: 0, dependabot: 0 };
+        const acc: TypeCounts = { issue: 0, pr: 0, security: 0 };
         for (const r of repos) {
             const w = byKey.get(cacheKey(r.owner, r.repo));
             const enabled = w ? w.enabled === 1 : true; // default ON
@@ -311,9 +324,9 @@ export async function getOpenCounts(): Promise<Record<string, TypeCounts>> {
             const k = countByKind(feedCache.get(cacheKey(r.owner, r.repo)) ?? []);
             acc.issue += k.issue;
             acc.pr += k.pr;
-            acc.dependabot += k.dependabot;
+            acc.security += k.security;
         }
-        if (acc.issue || acc.pr || acc.dependabot) out[ws.id] = acc;
+        if (acc.issue || acc.pr || acc.security) out[ws.id] = acc;
     }
     return out;
 }

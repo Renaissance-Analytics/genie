@@ -1,4 +1,6 @@
 import type http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { ForceAnswer } from '../mcp/protocol';
 import type { PendingQuestion } from '../ask/force-question';
 import { sessionFromAuthHeader, attemptPair } from './auth';
@@ -17,6 +19,93 @@ import { audit, isLocked } from './audit';
  * when locked they return 423 and run nothing. Every state-changing action is
  * appended to the audit log.
  */
+
+/** Hard cap on an uploaded file's decoded size (25 MiB). */
+export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Resolve where an uploaded file lands inside a workspace's `.ai/` directory,
+ * with a HARD path-traversal guard. Pure (no fs) so the guard + sanitisation
+ * are unit-tested directly.
+ *
+ * The phone sends only a bare filename, but a hostile client could send
+ * `../../etc/passwd`, an absolute path, a `C:\…` drive escape, or NUL bytes.
+ * We:
+ *   1. take only the basename (strips any directory components, both `/` and
+ *      `\`, and any leading drive letter),
+ *   2. reject empty / dot-only / NUL-bearing names,
+ *   3. resolve against `<workspacePath>/.ai` and assert the result stays
+ *      strictly inside that dir.
+ *
+ * Returns `{ aiDir, filePath, safeName }` on success, or `{ error }` describing
+ * why the name was rejected. NEVER returns a path outside `<workspacePath>/.ai`.
+ */
+export function resolveAiUploadPath(
+    workspacePath: string,
+    rawName: string,
+): { aiDir: string; filePath: string; safeName: string } | { error: string } {
+    if (typeof rawName !== 'string' || rawName.length === 0) {
+        return { error: 'missing filename' };
+    }
+    if (rawName.includes('\0')) return { error: 'invalid filename' };
+    // Strip any path the client tried to smuggle in — both separators and a
+    // Windows drive prefix — leaving only the final component.
+    const stripped = rawName.replace(/^[A-Za-z]:/, '').replace(/[\\/]+$/, '');
+    const safeName = stripped.split(/[\\/]/).pop() ?? '';
+    if (!safeName || safeName === '.' || safeName === '..') {
+        return { error: 'invalid filename' };
+    }
+    // Defence in depth: even after basename-ing, refuse a name that still
+    // carries a separator or a leading dot-dot.
+    if (/[\\/]/.test(safeName) || safeName.startsWith('..')) {
+        return { error: 'invalid filename' };
+    }
+
+    const aiDir = path.resolve(workspacePath, '.ai');
+    const filePath = path.resolve(aiDir, safeName);
+    // The resolved file MUST stay strictly inside <workspacePath>/.ai.
+    const rel = path.relative(aiDir, filePath);
+    if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+        return { error: 'invalid filename' };
+    }
+    return { aiDir, filePath, safeName };
+}
+
+/**
+ * The list of non-colliding candidate paths inside `.ai/` for `safeName`, in
+ * order: the bare name first, then ` (1)`, ` (2)`, … before the extension.
+ * Bounded so a pathological directory can't spin forever. Pure (no fs) — the
+ * caller writes each candidate with the `wx` flag and steps to the next on
+ * EEXIST, so the dedupe is atomic against a concurrent upload (no TOCTOU).
+ */
+export function uploadPathCandidates(aiDir: string, safeName: string): string[] {
+    const ext = path.extname(safeName);
+    const stem = safeName.slice(0, safeName.length - ext.length);
+    const out = [path.join(aiDir, safeName)];
+    for (let i = 1; i < 1000; i++) out.push(path.join(aiDir, `${stem} (${i})${ext}`));
+    return out;
+}
+
+/**
+ * Write `buf` to the first free candidate under `.ai/` using the `wx` flag, so
+ * a name that races with another upload simply rolls to the next suffix instead
+ * of overwriting. Returns the path written, or null when every candidate was
+ * taken (effectively never) — the caller maps that to a 500.
+ */
+function writeFirstFree(aiDir: string, safeName: string, buf: Buffer): string | null {
+    for (const candidate of uploadPathCandidates(aiDir, safeName)) {
+        try {
+            fs.writeFileSync(candidate, buf, { flag: 'wx' });
+            return candidate;
+        } catch (e) {
+            // Name taken between our attempts → try the next suffix. Any other
+            // error (permission, disk) is fatal — rethrow for the 500.
+            if ((e as NodeJS.ErrnoException).code === 'EEXIST') continue;
+            throw e;
+        }
+    }
+    return null;
+}
 
 /** The terminal/process/workspace/question data the REST + WS layers reuse. */
 export interface MobileDataDeps {
@@ -97,6 +186,37 @@ function readJsonBody<T>(req: http.IncomingMessage): Promise<T> {
             if (!data) return resolve({} as T);
             try {
                 resolve(JSON.parse(data) as T);
+            } catch {
+                reject(new Error('invalid JSON'));
+            }
+        });
+        req.on('error', reject);
+    });
+}
+
+/**
+ * Read a JSON request body with a CUSTOM size guard (in bytes). The upload route
+ * carries a base64 payload that inflates the JSON well past the 1 MB default in
+ * `readJsonBody`, so it passes a cap sized for `MAX_UPLOAD_BYTES` base64-encoded
+ * plus envelope overhead.
+ */
+function readJsonBodyCapped<T>(req: http.IncomingMessage, maxBytes: number): Promise<T> {
+    return new Promise((resolve, reject) => {
+        let size = 0;
+        const chunks: Buffer[] = [];
+        req.on('data', (c: Buffer) => {
+            size += c.length;
+            if (size > maxBytes) {
+                reject(new Error('payload too large'));
+                req.destroy();
+                return;
+            }
+            chunks.push(c);
+        });
+        req.on('end', () => {
+            if (size === 0) return resolve({} as T);
+            try {
+                resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')) as T);
             } catch {
                 reject(new Error('invalid JSON'));
             }
@@ -270,6 +390,69 @@ export async function handleApi(
         const ok = deps.killTerminalById(id);
         audit('terminal.kill', id, actor);
         sendJson(res, ok ? 200 : 404, { ok });
+        return true;
+    }
+
+    // --- upload into a workspace's .ai/: POST /api/workspace/:id/upload --
+    const upload = /^\/api\/workspace\/([^/]+)\/upload$/.exec(pathname);
+    if (upload) {
+        if (method !== 'POST') {
+            sendJson(res, 405, { error: 'method not allowed' });
+            return true;
+        }
+        if (guardLocked()) return true;
+        const workspaceId = decodeURIComponent(upload[1]);
+        const ws = deps.listWorkspaces().find((w) => w.id === workspaceId);
+        if (!ws) {
+            sendJson(res, 404, { error: 'unknown workspace' });
+            return true;
+        }
+        // Cap the wire body at the base64-inflated max (4/3) plus envelope slack.
+        let body: { name?: string; dataBase64?: string };
+        try {
+            body = await readJsonBodyCapped(req, Math.ceil(MAX_UPLOAD_BYTES * 1.4) + 1024);
+        } catch (e) {
+            const tooLarge = e instanceof Error && e.message === 'payload too large';
+            sendJson(res, tooLarge ? 413 : 400, {
+                error: tooLarge ? 'file too large' : 'invalid body',
+            });
+            return true;
+        }
+        const resolved = resolveAiUploadPath(ws.path, String(body.name ?? ''));
+        if ('error' in resolved) {
+            sendJson(res, 400, { error: resolved.error });
+            return true;
+        }
+        // Decode + enforce the real (decoded) size cap.
+        let buf: Buffer;
+        try {
+            buf = Buffer.from(String(body.dataBase64 ?? ''), 'base64');
+        } catch {
+            sendJson(res, 400, { error: 'invalid file data' });
+            return true;
+        }
+        if (buf.length === 0) {
+            sendJson(res, 400, { error: 'empty file' });
+            return true;
+        }
+        if (buf.length > MAX_UPLOAD_BYTES) {
+            sendJson(res, 413, { error: 'file too large' });
+            return true;
+        }
+        // Write into <workspace>/.ai, creating it if absent. Never overwrite —
+        // `writeFirstFree` rolls a colliding name to a ` (n)` suffix atomically.
+        try {
+            fs.mkdirSync(resolved.aiDir, { recursive: true });
+            const target = writeFirstFree(resolved.aiDir, resolved.safeName, buf);
+            if (!target) {
+                sendJson(res, 409, { error: 'too many name collisions' });
+                return true;
+            }
+            audit('upload', `${path.basename(target)} (${buf.length}b) → ${ws.project_name}`, actor);
+            sendJson(res, 200, { ok: true, path: target });
+        } catch {
+            sendJson(res, 500, { error: 'write failed' });
+        }
         return true;
     }
 

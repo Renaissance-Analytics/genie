@@ -127,6 +127,18 @@ workspace from Genie — never deletes anything on disk). Targets are limited to
 your own or a governed workspace. To CREATE missing child workspaces, use
 \`provisionWorkspaces\`.
 
+### checkIssues
+Get a detailed, grouped list of the open GitHub **Issues, Pull Requests, and
+SECURITY ALERTS** (Dependabot + Code-scanning + Secret-scanning) that Genie's
+IssueWatch tracks for THIS terminal's workspace — across every repo in it. Each
+item shows its repo, number, title, severity (for security alerts), an unread
+flag, and URL, grouped by kind so it's easy to scan. Read-only. Use it to see
+what needs attention (e.g. before you finish). Pass \`terminalId\` (your
+\`GENIE_TERMINAL_ID\`) for exact workspace resolution; omit to use the
+most-recently-active terminal. It explains clearly when GitHub isn't connected,
+the terminal maps to no workspace, or nothing is open. (The same per-bucket
+counts are also appended to every \`imDone\` response — see below.)
+
 ### imDone
 Call this the moment you **finish your work / hand back to the user** in THIS
 terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row,
@@ -136,7 +148,10 @@ that needs them even from another project. Pass \`terminalId\` (your
 workspace's most-recently-active one. Prefer this over silently ending: a
 finished task the user never notices isn't really done. **Better yet, automate
 it** — see "Automate imDone" below to fire this on every finish via a harness
-hook.
+hook. The response also reports your workspace's open IssueWatch counts (e.g.
+\`IssueWatch — issues:3, PR:1, sec:3\`, where \`sec\` is the security-alert
+aggregate), so you see what's still open the moment you hand back; call
+\`checkIssues\` for the full list.
 
 ### ForceTheQuestion
 Call this whenever you are **blocked on a decision, clarification, or approval

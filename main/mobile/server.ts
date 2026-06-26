@@ -9,6 +9,7 @@ import {
     attachTerminalSocket,
     mobileTermFanout,
     mobileTermClose,
+    nextPtyGrid,
 } from './terminal-bridge';
 import { initAuth, validateSession, type ConfirmPairHook } from './auth';
 import { initAudit, setLocked, isLocked, audit } from './audit';
@@ -333,11 +334,13 @@ function attachTerminalSocketAndDrive(
             deps.data.writeToTerminal(terminalId, msg.data);
             audit('terminal.write', `${terminalId} (${msg.data.length}b)`, actor);
         } else if (msg.type === 'resize') {
-            const cols = Number(msg.cols);
-            const rows = Number(msg.rows);
-            if (Number.isFinite(cols) && Number.isFinite(rows)) {
-                deps.data.resize(terminalId, cols, rows);
-            }
+            // The pty is SHARED with the desktop window. A phone in a narrow
+            // viewport must NOT shrink it (that reflows the desktop terminal
+            // down). nextPtyGrid enforces grow-only: it returns the size to
+            // apply ONLY when the phone would enlarge the pty, else null and we
+            // leave the shared pty alone (the phone scrolls horizontally).
+            const grid = nextPtyGrid(terminalId, Number(msg.cols), Number(msg.rows));
+            if (grid) deps.data.resize(terminalId, grid.cols, grid.rows);
         }
     });
 

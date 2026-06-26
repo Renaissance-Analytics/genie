@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Action, Icon, Text } from '@particle-academy/react-fancy';
+import UploadToAi from './Upload';
 import type { ProcessListItem, ProcessStatus } from '../../lib/genie';
 import {
     listProcesses,
@@ -147,19 +148,22 @@ export default function Dashboard({
                                 key={ws.id}
                                 className={`m-card m-ws${pulsing.has(ws.id) ? ' m-pulse' : ''}`}
                             >
-                                <div className="m-ws-main">
-                                    <Text size="sm" style={{ fontWeight: 600 }}>
-                                        {ws.name}
-                                    </Text>
-                                    <Text size="xs" className="text-zinc-500 m-mono m-truncate">
-                                        {ws.path}
-                                    </Text>
+                                <div className="m-ws-top">
+                                    <div className="m-ws-main">
+                                        <Text size="sm" style={{ fontWeight: 600 }}>
+                                            {ws.name}
+                                        </Text>
+                                        <Text size="xs" className="text-zinc-500 m-mono m-truncate">
+                                            {ws.path}
+                                        </Text>
+                                    </div>
+                                    {pulsing.has(ws.id) && (
+                                        <span className="m-attn" title="Active">
+                                            <Icon name="sparkles" size="xs" />
+                                        </span>
+                                    )}
                                 </div>
-                                {pulsing.has(ws.id) && (
-                                    <span className="m-attn" title="Active">
-                                        <Icon name="sparkles" size="xs" />
-                                    </span>
-                                )}
+                                <UploadToAi workspaceId={ws.id} onLocked={onLocked} />
                             </div>
                         ))}
                     </div>

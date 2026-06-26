@@ -23,7 +23,54 @@ import {
  * On-screen key row gives touch users the keys a soft keyboard can't: Esc,
  * Ctrl-C, Enter, and the four arrows. Detaching (unmount / picking another
  * terminal) only closes the socket — the pty keeps running (viewer-only).
+ *
+ * LANDSCAPE ONLY: the pty is shared with the desktop. The xterm + its FitAddon
+ * are mounted ONLY in landscape; in portrait we show a "rotate your phone"
+ * overlay and mount nothing. This keeps the phone's grid wide enough that the
+ * grow-only pty guard (server side) never has to clamp, and avoids fitting to a
+ * tall-skinny portrait grid the desktop would otherwise inherit. Mobile-web
+ * can't hard-lock orientation (iOS Safari ignores the Screen Orientation API
+ * outside fullscreen), so we DETECT portrait via matchMedia and gate the mount;
+ * a best-effort `screen.orientation.lock('landscape')` is attempted but never
+ * depended on.
  */
+
+/**
+ * Track portrait vs landscape via matchMedia, and make a best-effort (never
+ * relied-on) attempt to lock landscape. Returns true while the viewport is
+ * portrait. We default to landscape (false) on the server / when matchMedia is
+ * unavailable so SSR + odd browsers don't flash the overlay.
+ */
+function usePortrait(): boolean {
+    const [portrait, setPortrait] = useState(false);
+    useEffect(() => {
+        if (typeof window === 'undefined' || !window.matchMedia) return;
+        const mq = window.matchMedia('(orientation: portrait)');
+        const apply = () => setPortrait(mq.matches);
+        apply();
+        // Best-effort landscape lock — works only in fullscreen on some
+        // browsers and is a hard no-op on iOS Safari; we never depend on it.
+        try {
+            const orientation = (
+                window.screen as unknown as {
+                    orientation?: { lock?: (o: string) => Promise<void> };
+                }
+            ).orientation;
+            void orientation?.lock?.('landscape').catch(() => {});
+        } catch {
+            /* unsupported — matchMedia gating is the real guard */
+        }
+        // addEventListener('change') is the modern API; older Safari only has
+        // the deprecated addListener — support both.
+        if (mq.addEventListener) mq.addEventListener('change', apply);
+        else mq.addListener(apply);
+        return () => {
+            if (mq.removeEventListener) mq.removeEventListener('change', apply);
+            else mq.removeListener(apply);
+        };
+    }, []);
+    return portrait;
+}
 
 // Raw byte sequences for the on-screen keys (xterm-style).
 const KEYS: Array<{ label: string; seq: string; aria: string; wide?: boolean }> = [
@@ -46,10 +93,15 @@ export default function MobileTerminalView({
     const fitRef = useRef<FitAddon | null>(null);
     const connRef = useRef<TerminalConnection | null>(null);
     const [exited, setExited] = useState<{ exitCode?: number } | null>(null);
+    const portrait = usePortrait();
 
     // One effect owns the whole xterm + WS lifecycle, keyed on the terminal id
-    // so switching terminals tears down cleanly and rebuilds.
+    // AND orientation: portrait tears the xterm down (we mount nothing behind
+    // the rotate overlay), landscape (re)builds + fits it. Gating the mount on
+    // landscape is what keeps the phone from ever fitting the shared pty to a
+    // narrow portrait grid.
     useEffect(() => {
+        if (portrait) return; // overlay is shown; don't mount/fit the xterm
         const host = hostRef.current;
         if (!host) return;
 
@@ -121,7 +173,7 @@ export default function MobileTerminalView({
             connRef.current = null;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [terminal.id]);
+    }, [terminal.id, portrait]);
 
     const sendKey = (seq: string) => {
         connRef.current?.sendInput(seq);
@@ -142,21 +194,40 @@ export default function MobileTerminalView({
                 )}
             </div>
 
-            <div ref={hostRef} className="m-term-host" />
-
-            <div className="m-keyrow">
-                {KEYS.map((k) => (
-                    <button
-                        key={k.label}
-                        type="button"
-                        className={`m-key${k.wide ? ' m-key-wide' : ''}`}
-                        aria-label={k.aria}
-                        onClick={() => sendKey(k.seq)}
-                    >
-                        {k.label}
-                    </button>
-                ))}
+            <div className="m-term-stage">
+                {/* The xterm host stays mounted so the effect's ref is stable;
+                    in portrait the effect early-returns (nothing painted here)
+                    and the overlay covers it. */}
+                <div ref={hostRef} className="m-term-host" />
+                {portrait && (
+                    <div className="m-term-rotate" role="status">
+                        <Icon name="rotate-cw" size="lg" />
+                        <Text size="sm" style={{ fontWeight: 600 }}>
+                            Rotate your phone to landscape
+                        </Text>
+                        <Text size="xs" className="text-zinc-500" style={{ textAlign: 'center' }}>
+                            The terminal needs the full width so it doesn&apos;t
+                            shrink the desktop view.
+                        </Text>
+                    </div>
+                )}
             </div>
+
+            {!portrait && (
+                <div className="m-keyrow">
+                    {KEYS.map((k) => (
+                        <button
+                            key={k.label}
+                            type="button"
+                            className={`m-key${k.wide ? ' m-key-wide' : ''}`}
+                            aria-label={k.aria}
+                            onClick={() => sendKey(k.seq)}
+                        >
+                            {k.label}
+                        </button>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }

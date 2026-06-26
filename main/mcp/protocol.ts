@@ -105,6 +105,47 @@ export interface WorkspaceMap {
     };
 }
 
+/**
+ * One IssueWatch feed item as the `checkIssues` tool reports it — a flattened
+ * WatchItem joined with its repo. `kind` spans the five watched streams; the
+ * three security kinds (`dependabot`/`code-scanning`/`secret-scanning`) are
+ * aggregated into the {@link IssueWatchCounts.security} bucket but keep their
+ * own kind here so the list can group/label them precisely.
+ */
+export interface IssueWatchItem {
+    kind: 'issue' | 'pr' | 'dependabot' | 'code-scanning' | 'secret-scanning';
+    owner: string;
+    repo: string;
+    number: number | null;
+    title: string;
+    url: string;
+    /** Security severity (low|medium|high|critical), where the alert carries one. */
+    severity?: string;
+    /** True when updated since the workspace was last marked seen. */
+    unread: boolean;
+}
+
+/** Per-bucket open-item tallies for a workspace (security = the three alert kinds). */
+export interface IssueWatchCounts {
+    issue: number;
+    pr: number;
+    /** dependabot + code-scanning + secret-scanning. */
+    security: number;
+}
+
+/**
+ * The IssueWatch snapshot for the caller's workspace, returned by `checkIssues`
+ * and folded into the `imDone` response. `connected: false` means no GitHub
+ * token is stored; `workspaceResolved: false` means the terminal couldn't be
+ * mapped to a workspace.
+ */
+export interface IssueWatchSnapshot {
+    connected: boolean;
+    workspaceResolved: boolean;
+    counts: IssueWatchCounts;
+    items: IssueWatchItem[];
+}
+
 export interface McpContext {
     /** The terminal id this endpoint is bound to (from the URL token). */
     terminalId: string;
@@ -112,6 +153,13 @@ export interface McpContext {
     serverVersion: string;
     /** Side effect for the imDone tool — pulse the caller's terminal. */
     onImDone: (terminalId: string) => void;
+    /**
+     * Resolve the caller's workspace and return its IssueWatch snapshot (open
+     * Issues / PRs / security alerts + per-bucket counts) for the `checkIssues`
+     * tool AND the counts appended to the `imDone` response. Does the terminal→
+     * workspace + db/cache I/O (kept out of this pure module).
+     */
+    checkIssues: (terminalId: string) => Promise<IssueWatchSnapshot>;
     /**
      * Raise an OS-level always-on-top modal asking the user one or more
      * questions; resolves with their answers (or cancelled). Powers
@@ -427,6 +475,17 @@ const IMDONE_TOOL = {
     name: 'imDone',
     description:
         "Signal that the agent has finished its work in THIS terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row, and the panel border until you focus it. Pass `terminalId` (from your GENIE_TERMINAL_ID env) to target this exact terminal; omit it to use the workspace's most-recently-active terminal.",
+    inputSchema: {
+        type: 'object',
+        properties: { ...TERMINAL_ID_PROP },
+        additionalProperties: false,
+    },
+};
+
+const CHECK_ISSUES_TOOL = {
+    name: 'checkIssues',
+    description:
+        "Get a detailed list of the open GitHub Issues, Pull Requests, and SECURITY ALERTS (Dependabot, Code-scanning, Secret-scanning) that Genie's IssueWatch is tracking for THIS terminal's workspace — across every repo in the workspace. Use it to see what needs attention before you finish, or whenever you want the current open items with their numbers, titles, severities, and URLs. Read-only. (The same per-bucket counts are also appended to every `imDone` response.) Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; omit to use the most-recently-active terminal.",
     inputSchema: {
         type: 'object',
         properties: { ...TERMINAL_ID_PROP },
@@ -781,6 +840,75 @@ export function formatWorkspaceMap(map: WorkspaceMap): string {
     return lines.join('\n');
 }
 
+/**
+ * The concise IssueWatch counts line appended to an `imDone` response (and
+ * usable standalone), e.g. `IssueWatch — issues:3, PR:1, sec:3`. Returns null
+ * when there's nothing to report (not connected, no workspace, or zero items),
+ * so callers can omit the line entirely rather than print a noisy "none".
+ */
+export function formatIssueCountsLine(snap: IssueWatchSnapshot): string | null {
+    if (!snap.connected || !snap.workspaceResolved) return null;
+    const { issue, pr, security } = snap.counts;
+    if (!issue && !pr && !security) return null;
+    return `IssueWatch — issues:${issue}, PR:${pr}, sec:${security}`;
+}
+
+/** Human label for a feed item kind (used in the grouped checkIssues list). */
+const ISSUE_KIND_GROUP: Record<IssueWatchItem['kind'], string> = {
+    issue: 'Issues',
+    pr: 'Pull Requests',
+    dependabot: 'Dependabot alerts',
+    'code-scanning': 'Code scanning alerts',
+    'secret-scanning': 'Secret scanning alerts',
+};
+
+/** Stable display order for the grouped sections. */
+const ISSUE_KIND_ORDER: IssueWatchItem['kind'][] = [
+    'issue',
+    'pr',
+    'dependabot',
+    'code-scanning',
+    'secret-scanning',
+];
+
+/**
+ * Format an IssueWatch snapshot into a scannable, agent-facing list grouped by
+ * kind (Issues / PRs / Dependabot / Code scanning / Secret scanning), each item
+ * showing its repo, number, title, severity (for security alerts), unread flag,
+ * and URL. Explains clearly when GitHub isn't connected, the terminal maps to
+ * no workspace, or there's simply nothing open.
+ */
+export function formatIssueWatchFeed(snap: IssueWatchSnapshot): string {
+    if (!snap.workspaceResolved) {
+        return "IssueWatch — couldn't resolve this terminal to a Genie workspace. Pass your GENIE_TERMINAL_ID as `terminalId`, or run this from a terminal inside a workspace.";
+    }
+    if (!snap.connected) {
+        return 'IssueWatch — GitHub is not connected, so there are no items to show. Connect GitHub in Genie → Settings to enable issue/PR/security-alert watching.';
+    }
+    if (snap.items.length === 0) {
+        return 'IssueWatch — nothing open across this workspace\'s repos (no Issues, PRs, or security alerts).';
+    }
+    const { issue, pr, security } = snap.counts;
+    const lines: string[] = [
+        `IssueWatch — ${issue} issue(s), ${pr} PR(s), ${security} security alert(s) across this workspace's repos:`,
+    ];
+    for (const kind of ISSUE_KIND_ORDER) {
+        const group = snap.items.filter((i) => i.kind === kind);
+        if (group.length === 0) continue;
+        lines.push('');
+        lines.push(`## ${ISSUE_KIND_GROUP[kind]} (${group.length})`);
+        for (const it of group) {
+            const num = it.number !== null ? `#${it.number}` : '';
+            const sev = it.severity ? ` [${it.severity}]` : '';
+            const slug = `${it.owner}/${it.repo}`;
+            const unread = it.unread ? ' (new)' : '';
+            lines.push(`- ${slug} ${num}${sev} ${it.title}${unread}`);
+            lines.push(`  ${it.url}`);
+        }
+    }
+    return lines.join('\n');
+}
+
 /** One MCP prompt message (the subset we emit: a single text content part). */
 export interface PromptMessage {
     role: 'user' | 'assistant';
@@ -916,6 +1044,7 @@ export async function handleMcpMessage(
             return ok(msg.id, {
                 tools: [
                     IMDONE_TOOL,
+                    CHECK_ISSUES_TOOL,
                     FORCE_QUESTION_TOOL,
                     MANAGE_PROCESS_TOOL,
                     PROVISION_WORKSPACES_TOOL,
@@ -950,13 +1079,33 @@ export async function handleMcpMessage(
             };
             if (params.name === 'imDone') {
                 ctx.onImDone(ctx.terminalId);
+                // Fold the caller's workspace IssueWatch counts into the response
+                // so every "done" surfaces what's still open (issues/PRs/security
+                // alerts) without a second call. Best-effort: a snapshot failure
+                // never sinks the imDone ack.
+                let countsLine: string | null = null;
+                try {
+                    countsLine = formatIssueCountsLine(
+                        await ctx.checkIssues(ctx.terminalId),
+                    );
+                } catch {
+                    /* best-effort — the glow is the point, counts are a bonus */
+                }
+                const base =
+                    'Done — this terminal is now glowing in Genie until you focus it.';
                 return ok(msg.id, {
                     content: [
                         {
                             type: 'text',
-                            text: 'Done — this terminal is now glowing in Genie until you focus it.',
+                            text: countsLine ? `${base}\n\n${countsLine}` : base,
                         },
                     ],
+                });
+            }
+            if (params.name === 'checkIssues') {
+                const snap = await ctx.checkIssues(ctx.terminalId);
+                return ok(msg.id, {
+                    content: [{ type: 'text', text: formatIssueWatchFeed(snap) }],
                 });
             }
             if (params.name === 'genieGuide') {

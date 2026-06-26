@@ -28,9 +28,20 @@ import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import { resolveAlertSound } from './notify-sound';
 import { workspaceDocHealth, repairWorkspaceDocs } from './workspace/create-agi';
 import { registerForceQuestionIpc, forceQuestion } from './ask/force-question';
-import { registerIssueWatchIpc, resolveWorkspaceRepos } from './issue-watch';
+import {
+    registerIssueWatchIpc,
+    resolveWorkspaceRepos,
+    getWorkspaceFeed,
+    getOpenCounts,
+} from './issue-watch';
+import { getToken } from './github/storage';
 import { detectFolder } from './workspace/detect';
-import type { WorkspaceMap, WorkspaceRepoInfo } from './mcp/protocol';
+import type {
+    WorkspaceMap,
+    WorkspaceRepoInfo,
+    IssueWatchSnapshot,
+    IssueWatchItem,
+} from './mcp/protocol';
 import { registerProtocolHandler, handleGenieUrl } from './auth';
 import {
     registerTerminalIpc,
@@ -285,6 +296,42 @@ async function describeWorkspaceForMcp(
             };
         })(),
     };
+}
+
+/**
+ * Back the checkIssues MCP tool AND the IssueWatch counts folded into imDone.
+ * Resolves the workspace from the (already terminal-resolved) caller, then
+ * returns its open Issues / PRs / security alerts from the IssueWatch feed cache
+ * plus the per-bucket counts. Reports `connected: false` when GitHub has no
+ * token (nothing is polled) and `workspaceResolved: false` when the terminal
+ * maps to no workspace — so the formatter can explain an empty result honestly
+ * instead of implying "nothing open".
+ */
+async function checkIssuesForMcp(terminalId: string): Promise<IssueWatchSnapshot> {
+    const empty = { issue: 0, pr: 0, security: 0 };
+    const wsId = terminalId ? getTerminalSpec(terminalId)?.workspace_id ?? null : null;
+    if (!wsId || !getWorkspace(wsId)) {
+        return { connected: !!getToken(), workspaceResolved: false, counts: empty, items: [] };
+    }
+    if (!getToken()) {
+        return { connected: false, workspaceResolved: true, counts: empty, items: [] };
+    }
+    const feed = await getWorkspaceFeed(wsId).catch(() => []);
+    const allCounts = await getOpenCounts().catch(
+        () => ({}) as Awaited<ReturnType<typeof getOpenCounts>>,
+    );
+    const counts = allCounts[wsId] ?? empty;
+    const items: IssueWatchItem[] = feed.map((it) => ({
+        kind: it.kind,
+        owner: it.owner,
+        repo: it.repo,
+        number: it.number,
+        title: it.title,
+        url: it.url,
+        severity: it.severity,
+        unread: it.unread,
+    }));
+    return { connected: true, workspaceResolved: true, counts, items };
 }
 
 /** A process spec's human command (meta.command), for the manageProcess result. */
@@ -1759,6 +1806,7 @@ app.whenReady().then(async () => {
             if (wsId) broadcastWorkspacePulse(wsId);
             notifyImDone(terminalId);
         },
+        checkIssues: (terminalId) => checkIssuesForMcp(terminalId),
         onForceQuestion: (terminalId, questions) => {
             // Resolve the requesting terminal → its workspace name, so the modal
             // title says WHICH project needs the user (a multi-project Genie

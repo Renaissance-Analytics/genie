@@ -1021,6 +1021,14 @@
     color: #f59e0b;
     background: color-mix(in srgb, #f59e0b 16%, transparent);
 }
+.iw-kind-code-scanning {
+    color: #f87171;
+    background: color-mix(in srgb, #f87171 16%, transparent);
+}
+.iw-kind-secret-scanning {
+    color: #fb7185;
+    background: color-mix(in srgb, #fb7185 16%, transparent);
+}
 .iw-item-title {
     grid-area: title;
     font-size: 12.5px;

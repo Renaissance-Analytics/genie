@@ -707,13 +707,53 @@ button.m-card:disabled {
 
 /* Workspace cards + activity pulse */
 .m-ws {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+}
+.m-ws-top {
+    display: flex;
+    align-items: center;
     justify-content: space-between;
+    gap: 10px;
 }
 .m-ws-main {
     min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 2px;
+}
+
+/* Per-workspace "Upload to .ai" control */
+.m-upload {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.m-upload-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 36px;
+    padding: 0 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-1);
+    background: var(--bg-2);
+    color: var(--fg-2);
+    cursor: pointer;
+    font: inherit;
+}
+.m-upload-btn:active {
+    background: var(--bg-3);
+}
+.m-upload-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+.m-upload-input {
+    display: none;
 }
 .m-pulse {
     border-color: var(--violet-500);
@@ -890,6 +930,14 @@ button.m-card:disabled {
     font-size: 11px;
     color: var(--amber-500);
 }
+/* The terminal stage holds the xterm host and the portrait rotate overlay. */
+.m-term-stage {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
 .m-term-host {
     flex: 1;
     min-height: 0;
@@ -898,6 +946,20 @@ button.m-card:disabled {
 }
 .m-term-host .xterm {
     height: 100%;
+}
+/* Shown only in portrait — covers the (unmounted) host with a rotate prompt. */
+.m-term-rotate {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 24px;
+    background: #09090b;
+    color: var(--fg-2);
+    text-align: center;
 }
 
 /* On-screen key row */

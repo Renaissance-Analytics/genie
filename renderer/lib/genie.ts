@@ -89,11 +89,17 @@ export interface ForceAnswerSpec {
     note: string;
 }
 
-/** Issue Watch: per-workspace unread tallies by type (the 3-dot pill). */
+/**
+ * Issue Watch: per-workspace tallies by bucket (the 3-dot pill). The three
+ * security-alert kinds (dependabot / code-scanning / secret-scanning) collapse
+ * into one `security` bucket — the pill shows one security dot, not three.
+ * Mirrors `TypeCounts` in main/issue-watch/index.ts.
+ */
 export interface WatchTypeCounts {
     issue: number;
     pr: number;
-    dependabot: number;
+    /** dependabot + code-scanning + secret-scanning. */
+    security: number;
 }
 
 /**
@@ -145,9 +151,9 @@ export interface WorkspaceWatchStatus {
     needsReauth: boolean;
 }
 
-/** Issue Watch: one feed item (issue / PR / Dependabot alert). */
+/** Issue Watch: one feed item (issue / PR / security alert). */
 export interface WatchFeedItem {
-    kind: 'issue' | 'pr' | 'dependabot';
+    kind: 'issue' | 'pr' | 'dependabot' | 'code-scanning' | 'secret-scanning';
     key: string;
     number: number | null;
     title: string;
@@ -168,6 +174,8 @@ export type GithubCapabilityKey =
     | 'issue-watch.issues'
     | 'issue-watch.pulls'
     | 'issue-watch.dependabot'
+    | 'issue-watch.code-scanning'
+    | 'issue-watch.secret-scanning'
     | 'github.provision';
 
 /** A GitHub App permission name Genie depends on (mirrors `GhPermission`). */
@@ -176,6 +184,8 @@ export type GithubPermission =
     | 'issues'
     | 'pull_requests'
     | 'vulnerability_alerts'
+    | 'code_scanning_alerts'
+    | 'secret_scanning_alerts'
     | 'contents'
     | 'administration';
 
@@ -269,12 +279,12 @@ export interface Settings {
     /** Which sound the imDone alert plays (gated by notify_sound): 'synth' (the
      *  built-in chime, default), a bundled wav ('3tootpipe' | 'dingdongdoink'),
      *  'custom' (sound_imdone_custom file), or 'off'. */
-    sound_imdone?: 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'custom';
+    sound_imdone?: 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'sparkle' | 'triumphant' | 'winddown' | 'custom';
     /** Absolute path to the custom imDone sound (used when sound_imdone === 'custom'). */
     sound_imdone_custom?: string;
     /** Which sound the ForceTheQuestion alert plays. Same value set as
      *  sound_imdone; default 'synth'. */
-    sound_forcequestion?: 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'custom';
+    sound_forcequestion?: 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'sparkle' | 'triumphant' | 'winddown' | 'custom';
     /** Absolute path to the custom ForceTheQuestion sound (used when
      *  sound_forcequestion === 'custom'). */
     sound_forcequestion_custom?: string;

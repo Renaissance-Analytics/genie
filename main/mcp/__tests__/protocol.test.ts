@@ -11,6 +11,12 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
         serverName: 'genie',
         serverVersion: '0.7.0',
         onImDone: vi.fn(),
+        checkIssues: vi.fn().mockResolvedValue({
+            connected: true,
+            workspaceResolved: true,
+            counts: { issue: 0, pr: 0, security: 0 },
+            items: [],
+        }),
         onForceQuestion: vi.fn().mockResolvedValue({ cancelled: true, answers: [] }),
         describeWorkspace: vi.fn().mockResolvedValue(null),
         manageProcess: vi.fn().mockResolvedValue({ ok: true, processes: [] }),
@@ -52,7 +58,7 @@ describe('handleMcpMessage', () => {
         ).toBeNull();
     });
 
-    it('lists imDone + ForceTheQuestion + manageProcess + provisionWorkspaces + genieGuide tools (NOT initializeWorkspace — it is a prompt)', async () => {
+    it('lists imDone + checkIssues + ForceTheQuestion + manageProcess + provisionWorkspaces + genieGuide tools (NOT initializeWorkspace — it is a prompt)', async () => {
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 2, method: 'tools/list' },
             ctx(),
@@ -60,6 +66,7 @@ describe('handleMcpMessage', () => {
         const tools = (res?.result as { tools: Array<{ name: string }> }).tools;
         expect(tools.map((t) => t.name)).toEqual([
             'imDone',
+            'checkIssues',
             'ForceTheQuestion',
             'manageProcess',
             'provisionWorkspaces',
@@ -517,6 +524,9 @@ describe('handleMcpMessage', () => {
         expect(text).toContain('manageTerminals');
         expect(text).toContain('runAgent');
         expect(text).toContain('manageWorkspaces');
+        // Documents the IssueWatch tool + that imDone reports counts.
+        expect(text).toContain('checkIssues');
+        expect(text).toMatch(/imDone[\s\S]*IssueWatch/);
     });
 
     it('invokes onImDone with the bound terminal id on tools/call', async () => {
@@ -532,6 +542,113 @@ describe('handleMcpMessage', () => {
         );
         expect(onImDone).toHaveBeenCalledWith('term-XYZ');
         expect((res?.result as { content: unknown[] }).content).toBeInstanceOf(Array);
+    });
+
+    it('imDone appends the IssueWatch counts line (resolved from the terminal)', async () => {
+        const checkIssues = vi.fn().mockResolvedValue({
+            connected: true,
+            workspaceResolved: true,
+            counts: { issue: 3, pr: 1, security: 2 },
+            items: [],
+        });
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 50, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
+            ctx({ terminalId: 'term-IW', checkIssues }),
+        );
+        expect(checkIssues).toHaveBeenCalledWith('term-IW');
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('glowing'); // the base ack
+        expect(text).toContain('IssueWatch — issues:3, PR:1, sec:2');
+    });
+
+    it('imDone omits the counts line when there is nothing open', async () => {
+        const checkIssues = vi.fn().mockResolvedValue({
+            connected: true,
+            workspaceResolved: true,
+            counts: { issue: 0, pr: 0, security: 0 },
+            items: [],
+        });
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 51, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
+            ctx({ checkIssues }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).not.toContain('IssueWatch');
+    });
+
+    it('imDone still acks if the IssueWatch snapshot throws (best-effort)', async () => {
+        const checkIssues = vi.fn().mockRejectedValue(new Error('db down'));
+        const onImDone = vi.fn();
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 52, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
+            ctx({ onImDone, checkIssues }),
+        );
+        expect(onImDone).toHaveBeenCalled();
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('glowing');
+        expect(text).not.toContain('IssueWatch');
+    });
+
+    it('checkIssues routes to the dep and formats a grouped, scannable feed', async () => {
+        const checkIssues = vi.fn().mockResolvedValue({
+            connected: true,
+            workspaceResolved: true,
+            counts: { issue: 1, pr: 1, security: 2 },
+            items: [
+                { kind: 'issue', owner: 'o', repo: 'r', number: 1, title: 'A bug', url: 'https://gh/o/r/issues/1', unread: true },
+                { kind: 'pr', owner: 'o', repo: 'r', number: 2, title: 'A fix', url: 'https://gh/o/r/pull/2', unread: false },
+                { kind: 'dependabot', owner: 'o', repo: 'r', number: 3, title: 'Vuln', url: 'https://gh/dep/3', severity: 'high', unread: false },
+                { kind: 'secret-scanning', owner: 'o', repo: 'r', number: 4, title: 'Exposed secret: AWS', url: 'https://gh/ss/4', unread: false },
+            ],
+        });
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 53, method: 'tools/call', params: { name: 'checkIssues', arguments: { terminalId: 'term-IW' } } },
+            ctx({ terminalId: 'term-IW', checkIssues }),
+        );
+        expect(checkIssues).toHaveBeenCalledWith('term-IW');
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        // Grouped section headers + per-item detail (number, title, severity, url, unread).
+        expect(text).toContain('## Issues (1)');
+        expect(text).toContain('## Pull Requests (1)');
+        expect(text).toContain('## Dependabot alerts (1)');
+        expect(text).toContain('## Secret scanning alerts (1)');
+        expect(text).toContain('#1');
+        expect(text).toContain('A bug');
+        expect(text).toContain('(new)'); // the unread flag
+        expect(text).toContain('[high]'); // the severity
+        expect(text).toContain('https://gh/o/r/issues/1');
+    });
+
+    it('checkIssues explains a not-connected / unresolved workspace clearly', async () => {
+        const notConnected = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 54, method: 'tools/call', params: { name: 'checkIssues', arguments: {} } },
+            ctx({
+                checkIssues: vi.fn().mockResolvedValue({
+                    connected: false,
+                    workspaceResolved: true,
+                    counts: { issue: 0, pr: 0, security: 0 },
+                    items: [],
+                }),
+            }),
+        );
+        expect((notConnected?.result as { content: Array<{ text: string }> }).content[0].text).toContain(
+            'GitHub is not connected',
+        );
+
+        const noWorkspace = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 55, method: 'tools/call', params: { name: 'checkIssues', arguments: {} } },
+            ctx({
+                checkIssues: vi.fn().mockResolvedValue({
+                    connected: true,
+                    workspaceResolved: false,
+                    counts: { issue: 0, pr: 0, security: 0 },
+                    items: [],
+                }),
+            }),
+        );
+        expect((noWorkspace?.result as { content: Array<{ text: string }> }).content[0].text).toContain(
+            "couldn't resolve this terminal",
+        );
     });
 
     it('routes ForceTheQuestion to onForceQuestion and returns the answers', async () => {

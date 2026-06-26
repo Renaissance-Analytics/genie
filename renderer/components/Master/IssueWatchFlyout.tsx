@@ -27,6 +27,8 @@ const KIND_LABEL: Record<WatchFeedItem['kind'], string> = {
     issue: 'Issue',
     pr: 'PR',
     dependabot: 'Dependabot',
+    'code-scanning': 'Code scan',
+    'secret-scanning': 'Secret',
 };
 
 /**
@@ -93,6 +95,8 @@ const IW_CAPABILITIES = [
     'issue-watch.issues',
     'issue-watch.pulls',
     'issue-watch.dependabot',
+    'issue-watch.code-scanning',
+    'issue-watch.secret-scanning',
 ] as const;
 
 /**

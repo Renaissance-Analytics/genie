@@ -19,6 +19,8 @@ export const CAPABILITY_LABEL: Record<GithubCapabilityKey, string> = {
     'issue-watch.issues': 'Issue Watch — Issues',
     'issue-watch.pulls': 'Issue Watch — Pull Requests',
     'issue-watch.dependabot': 'Issue Watch — Dependabot alerts',
+    'issue-watch.code-scanning': 'Issue Watch — Code scanning alerts',
+    'issue-watch.secret-scanning': 'Issue Watch — Secret scanning alerts',
     'github.provision': 'Repo provisioning, clone & fork',
 };
 
@@ -28,6 +30,8 @@ export const PERMISSION_LABEL: Record<GithubPermission, string> = {
     issues: 'Issues',
     pull_requests: 'Pull requests',
     vulnerability_alerts: 'Dependabot alerts',
+    code_scanning_alerts: 'Code scanning alerts',
+    secret_scanning_alerts: 'Secret scanning alerts',
     contents: 'Repository contents',
     administration: 'Administration',
 };

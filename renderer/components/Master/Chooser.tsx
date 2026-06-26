@@ -589,7 +589,7 @@ export default function Chooser({
                             {live > 0 && <span className="cnt">{live}</span>}
                             {(() => {
                                 const c = issueWatchCounts[ws.id];
-                                const n = c ? c.issue + c.pr + c.dependabot : 0;
+                                const n = c ? c.issue + c.pr + c.security : 0;
                                 return n > 0 ? (
                                     <span
                                         className="iw-rail-dot"
@@ -783,7 +783,7 @@ export default function Chooser({
                                             className="iw-pill"
                                             role="button"
                                             tabIndex={-1}
-                                            title="Issue Watch — Issues · PRs · Dependabot (click to open)"
+                                            title="Issue Watch — Issues · PRs · Security alerts (click to open)"
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 onShowIssueWatch(ws.id);
@@ -806,12 +806,12 @@ export default function Chooser({
                                                 title="PRs"
                                             />
                                             <i
-                                                className={`iw-dot iw-dot-dependabot${
-                                                    (issueWatchCounts[ws.id]?.dependabot ?? 0) > 0
+                                                className={`iw-dot iw-dot-security${
+                                                    (issueWatchCounts[ws.id]?.security ?? 0) > 0
                                                         ? ' on'
                                                         : ''
                                                 }`}
-                                                title="Dependabot alerts"
+                                                title="Security alerts (Dependabot · Code scanning · Secret scanning)"
                                             />
                                         </span>
                                     )}

@@ -502,12 +502,23 @@ export default function SettingsPage() {
 }
 
 /** The selectable alert-sound choices, shared by both alert rows. */
-type SoundChoice = 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'custom';
+type SoundChoice =
+    | 'off'
+    | 'synth'
+    | '3tootpipe'
+    | 'dingdongdoink'
+    | 'sparkle'
+    | 'triumphant'
+    | 'winddown'
+    | 'custom';
 
 const SOUND_OPTIONS: Array<{ value: SoundChoice; label: string }> = [
     { value: 'synth', label: 'Default chime' },
     { value: '3tootpipe', label: '3 Toot Pipe' },
     { value: 'dingdongdoink', label: 'Ding Dong Doink' },
+    { value: 'sparkle', label: 'Sparkle' },
+    { value: 'triumphant', label: 'Triumphant' },
+    { value: 'winddown', label: 'Wind Down' },
     { value: 'custom', label: 'Custom file…' },
     { value: 'off', label: 'None' },
 ];
@@ -531,7 +542,9 @@ async function previewSound(
             if (dataUrl) await new Audio(dataUrl).play().catch(() => {});
             return;
         }
-        if (choice === '3tootpipe' || choice === 'dingdongdoink') {
+        if (choice !== 'synth') {
+            // Any bundled wav (3tootpipe / dingdongdoink / sparkle / triumphant /
+            // winddown) → ./sounds/<name>.wav. 'off'/'custom' handled above.
             await new Audio(`./sounds/${choice}.wav`).play().catch(() => {});
             return;
         }

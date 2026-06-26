@@ -476,9 +476,14 @@ export function parseGitHubRemote(url: string): ParsedRepoRef | null {
 
 // --- Issue Watch ------------------------------------------------------------
 
-/** A normalized watched item (issue / PR / Dependabot alert) for the feed. */
+/**
+ * A normalized watched item for the feed. `kind` spans GitHub's three security
+ * alert streams (`dependabot` / `code-scanning` / `secret-scanning`) alongside
+ * issues + PRs; the per-kind detail is preserved here, while the workspace
+ * pill/counts aggregate the three security kinds into one `security` bucket.
+ */
 export interface WatchItem {
-    kind: 'issue' | 'pr' | 'dependabot';
+    kind: 'issue' | 'pr' | 'dependabot' | 'code-scanning' | 'secret-scanning';
     /** Stable key across polls: `<owner>/<repo>:<kind>:<number|ghsa>`. */
     key: string;
     number: number | null;
@@ -487,8 +492,17 @@ export interface WatchItem {
     /** ISO timestamp used for unread (updated since last seen). */
     updatedAt: string;
     author?: string;
-    /** Dependabot severity (low|medium|high|critical). */
+    /** Security severity (low|medium|high|critical), where the alert carries one. */
     severity?: string;
+}
+
+/** The three security-alert kinds, aggregated into the `security` pill bucket. */
+export const SECURITY_KINDS = ['dependabot', 'code-scanning', 'secret-scanning'] as const;
+export type SecurityKind = (typeof SECURITY_KINDS)[number];
+
+/** True for a WatchItem kind that's one of the security-alert streams. */
+export function isSecurityKind(kind: WatchItem['kind']): kind is SecurityKind {
+    return kind === 'dependabot' || kind === 'code-scanning' || kind === 'secret-scanning';
 }
 
 type GhIssue = {
@@ -514,6 +528,24 @@ type GhAlert = {
     security_advisory?: { summary?: string; ghsa_id?: string };
     security_vulnerability?: { severity?: string };
     dependency?: { package?: { name?: string } };
+};
+/** A Code-scanning alert (GET …/code-scanning/alerts). */
+type GhCodeScanningAlert = {
+    number: number;
+    html_url?: string;
+    updated_at?: string;
+    created_at?: string;
+    rule?: { id?: string; description?: string; severity?: string; security_severity_level?: string };
+    most_recent_instance?: { message?: { text?: string } };
+};
+/** A Secret-scanning alert (GET …/secret-scanning/alerts). */
+type GhSecretScanningAlert = {
+    number: number;
+    html_url?: string;
+    updated_at?: string;
+    created_at?: string;
+    secret_type?: string;
+    secret_type_display_name?: string;
 };
 
 /**
@@ -635,66 +667,83 @@ async function ghListOutcome<T>(path: string): Promise<ListOutcome<T>> {
  */
 export interface FetchOutcome {
     items: WatchItem[];
-    /** Worst failure across the three reads, weighted to the issues read; null
-     *  when the issues read succeeded (PR / Dependabot failures are secondary
-     *  and never surface a status on their own). */
+    /** Worst failure across every read, weighted to the issues read; null when
+     *  the issues read succeeded (PR / security-alert failures are secondary and
+     *  never surface a status on their own). */
     error: WatchFetchError | null;
     /** The raw detail (HTTP status + message) behind {@link error}, or null. */
     detail: WatchErrorDetail | null;
 }
 
 /**
- * Fetch a repo's open Issues, PRs, and Dependabot alerts as normalized
- * WatchItems WITH the read's outcome. Each category is fetched independently
- * and degrades to [] on error so one disabled feature (e.g. Dependabot off)
- * doesn't sink the rest — but the failure CLASS is preserved so a silent-empty
- * feed can explain itself.
+ * Fetch a repo's open Issues, PRs, and security alerts (Dependabot +
+ * Code-scanning + Secret-scanning) as normalized WatchItems WITH the read's
+ * outcome. Each category is fetched independently and degrades to [] on error
+ * so one disabled feature (e.g. Dependabot off, or code/secret scanning not
+ * granted) doesn't sink the rest — but the failure CLASS is preserved so a
+ * silent-empty feed can explain itself.
  *
  * The surfaced `error` is the ISSUES read's failure when it failed (that's the
- * one users care about: "why don't I see my issues?"). A PR or Dependabot
- * failure on its own is secondary and does NOT surface a status — a Dependabot
- * 403 (alerts feature off / no security access) must never mask a working
- * issues read.
+ * one users care about: "why don't I see my issues?"). A PR or security-alert
+ * failure on its own is secondary and does NOT surface a status — a Dependabot/
+ * Code-scanning/Secret-scanning 403 (feature off / no security access) must
+ * never mask a working issues read. Only a secondary failure that affects EVERY
+ * read (unauthenticated / rate-limited) escalates over a clean issues read.
  */
 export async function fetchRepoWatchItemsResult(
     owner: string,
     repo: string,
 ): Promise<FetchOutcome> {
     const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-    const [issues, pulls, alerts] = await Promise.all([
+    const [issues, pulls, alerts, codeScanning, secretScanning] = await Promise.all([
         ghListOutcome<GhIssue>(`${base}/issues?state=open&per_page=50&sort=updated`),
         ghListOutcome<GhPull>(`${base}/pulls?state=open&per_page=50&sort=updated`),
         ghListOutcome<GhAlert>(`${base}/dependabot/alerts?state=open&per_page=50`),
+        ghListOutcome<GhCodeScanningAlert>(`${base}/code-scanning/alerts?state=open&per_page=50`),
+        ghListOutcome<GhSecretScanningAlert>(`${base}/secret-scanning/alerts?state=open&per_page=50`),
     ]);
     // The issues read is the important one. When IT fails, surface that (and the
-    // detail behind it). A secondary PR/Dependabot failure of unauthenticated/
-    // rate-limited severity (which affects every read, not just one feature) can
-    // still escalate — and bring its OWN detail along, since it's now the
-    // surfaced failure — but a lone forbidden/not_found on PRs or a Dependabot
-    // failure stays quiet.
+    // detail behind it). A secondary PR / security-alert failure of
+    // unauthenticated/rate-limited severity (which affects every read, not just
+    // one feature) can still escalate — and bring its OWN detail along, since
+    // it's now the surfaced failure — but a lone forbidden/not_found on PRs or
+    // any security-alert failure (feature off / no security access) stays quiet.
     let detail = issues.detail;
     if (detail === null) {
-        for (const sec of [pulls.detail, alerts.detail]) {
+        for (const sec of [pulls.detail, alerts.detail, codeScanning.detail, secretScanning.detail]) {
             if (sec && (sec.error === 'unauthenticated' || sec.error === 'rate_limited')) {
                 detail = sec;
             }
         }
     }
-    const items = buildWatchItems(owner, repo, issues.items, pulls.items, alerts.items);
+    const items = buildWatchItems(owner, repo, {
+        issues: issues.items,
+        pulls: pulls.items,
+        dependabot: alerts.items,
+        codeScanning: codeScanning.items,
+        secretScanning: secretScanning.items,
+    });
     return { items, error: detail?.error ?? null, detail };
 }
 
-/** Normalize the three raw GitHub lists into WatchItems (newest-agnostic). */
+/** The raw GitHub lists `buildWatchItems` normalizes (one per fetched stream). */
+interface RawWatchLists {
+    issues: GhIssue[];
+    pulls: GhPull[];
+    dependabot: GhAlert[];
+    codeScanning: GhCodeScanningAlert[];
+    secretScanning: GhSecretScanningAlert[];
+}
+
+/** Normalize the raw GitHub lists into WatchItems (newest-agnostic). */
 function buildWatchItems(
     owner: string,
     repo: string,
-    issuesRaw: GhIssue[],
-    pullsRaw: GhPull[],
-    alertsRaw: GhAlert[],
+    raw: RawWatchLists,
 ): WatchItem[] {
     const slug = `${owner}/${repo}`;
     const items: WatchItem[] = [];
-    for (const i of issuesRaw) {
+    for (const i of raw.issues) {
         if (i.pull_request) continue; // the issues endpoint also returns PRs
         items.push({
             kind: 'issue',
@@ -706,7 +755,7 @@ function buildWatchItems(
             author: i.user?.login,
         });
     }
-    for (const p of pullsRaw) {
+    for (const p of raw.pulls) {
         items.push({
             kind: 'pr',
             key: `${slug}:pr:${p.number}`,
@@ -717,7 +766,7 @@ function buildWatchItems(
             author: p.user?.login,
         });
     }
-    for (const a of alertsRaw) {
+    for (const a of raw.dependabot) {
         const ghsa = a.security_advisory?.ghsa_id ?? String(a.number);
         items.push({
             kind: 'dependabot',
@@ -731,6 +780,42 @@ function buildWatchItems(
                 `https://github.com/${slug}/security/dependabot/${a.number}`,
             updatedAt: a.updated_at ?? a.created_at ?? new Date(0).toISOString(),
             severity: a.security_vulnerability?.severity,
+        });
+    }
+    for (const a of raw.codeScanning) {
+        items.push({
+            kind: 'code-scanning',
+            key: `${slug}:code-scanning:${a.number}`,
+            number: a.number ?? null,
+            title:
+                a.rule?.description ??
+                a.most_recent_instance?.message?.text ??
+                a.rule?.id ??
+                'Code scanning alert',
+            url:
+                a.html_url ??
+                `https://github.com/${slug}/security/code-scanning/${a.number}`,
+            updatedAt: a.updated_at ?? a.created_at ?? new Date(0).toISOString(),
+            // Code-scanning carries a CodeQL severity (note/warning/error) plus a
+            // separate security_severity_level (low|medium|high|critical) — prefer
+            // the security one, which matches Dependabot's scale.
+            severity: a.rule?.security_severity_level ?? a.rule?.severity,
+        });
+    }
+    for (const a of raw.secretScanning) {
+        items.push({
+            kind: 'secret-scanning',
+            key: `${slug}:secret-scanning:${a.number}`,
+            number: a.number ?? null,
+            title: `Exposed secret: ${
+                a.secret_type_display_name ?? a.secret_type ?? 'unknown type'
+            }`,
+            url:
+                a.html_url ??
+                `https://github.com/${slug}/security/secret-scanning/${a.number}`,
+            updatedAt: a.updated_at ?? a.created_at ?? new Date(0).toISOString(),
+            // Secret-scanning alerts carry no severity — an exposed secret is
+            // uniformly critical; leave it unset rather than invent a level.
         });
     }
     return items;

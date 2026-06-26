@@ -39,8 +39,10 @@ function buildAppDir(): string {
     return dir;
 }
 
+let wsRoot: string;
+
 const deps = (): MobileDataDeps => ({
-    listWorkspaces: () => [{ id: 'ws-1', project_name: 'Demo', path: '/tmp/demo' }],
+    listWorkspaces: () => [{ id: 'ws-1', project_name: 'Demo', path: wsRoot }],
     listTerminalSpecs: () => [
         {
             id: 't-1',
@@ -71,6 +73,7 @@ const deps = (): MobileDataDeps => ({
 
 async function start(autoConfirm = true): Promise<number> {
     appDir = buildAppDir();
+    wsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mobile-ws-'));
     await startMobileServer({
         serverVersion: '0.0.0-test',
         userDataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mobile-ud-')),
@@ -153,6 +156,10 @@ beforeEach(() => {
 afterEach(() => {
     stopMobileServer();
     if (appDir) fs.rmSync(appDir, { recursive: true, force: true });
+    if (wsRoot) {
+        fs.rmSync(wsRoot, { recursive: true, force: true });
+        wsRoot = '';
+    }
 });
 
 describe('mobile server (integration, 127.0.0.1)', () => {
@@ -253,6 +260,86 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         await new Promise((r) => setTimeout(r, 60));
         expect(frames.some((f) => f.type === 'data' && f.data === 'hello from pty')).toBe(true);
         ws.close();
+    });
+
+    it('uploads a file into the workspace .ai/ dir (happy path)', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const payload = Buffer.from('hello .ai').toString('base64');
+        const r = await req(port, 'POST', '/api/workspace/ws-1/upload', {
+            token,
+            body: { name: 'note.txt', dataBase64: payload },
+        });
+        expect(r.status).toBe(200);
+        expect(r.json.ok).toBe(true);
+        const written = fs.readFileSync(path.join(wsRoot, '.ai', 'note.txt'), 'utf8');
+        expect(written).toBe('hello .ai');
+        // The reported path stays inside <ws>/.ai.
+        expect(r.json.path).toBe(path.join(wsRoot, '.ai', 'note.txt'));
+    });
+
+    it('dedupes a colliding name instead of overwriting', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const body = (data: string) => ({
+            name: 'dup.txt',
+            dataBase64: Buffer.from(data).toString('base64'),
+        });
+        const first = await req(port, 'POST', '/api/workspace/ws-1/upload', {
+            token,
+            body: body('one'),
+        });
+        const second = await req(port, 'POST', '/api/workspace/ws-1/upload', {
+            token,
+            body: body('two'),
+        });
+        expect(first.json.path).toBe(path.join(wsRoot, '.ai', 'dup.txt'));
+        expect(second.json.path).toBe(path.join(wsRoot, '.ai', 'dup (1).txt'));
+        // Original is untouched.
+        expect(fs.readFileSync(first.json.path, 'utf8')).toBe('one');
+        expect(fs.readFileSync(second.json.path, 'utf8')).toBe('two');
+    });
+
+    it('rejects a traversal filename without escaping .ai', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/workspace/ws-1/upload', {
+            token,
+            body: {
+                name: '../escape.txt',
+                dataBase64: Buffer.from('x').toString('base64'),
+            },
+        });
+        // basename `escape.txt` lands inside .ai (never the parent).
+        expect([200]).toContain(r.status);
+        expect(r.json.path).toBe(path.join(wsRoot, '.ai', 'escape.txt'));
+        expect(fs.existsSync(path.join(wsRoot, 'escape.txt'))).toBe(false);
+    });
+
+    it('401s an upload without a token and 423s while locked', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const noTok = await req(port, 'POST', '/api/workspace/ws-1/upload', {
+            body: { name: 'x.txt', dataBase64: 'eA==' },
+        });
+        expect(noTok.status).toBe(401);
+        setLocked(true);
+        const locked = await req(port, 'POST', '/api/workspace/ws-1/upload', {
+            token,
+            body: { name: 'x.txt', dataBase64: 'eA==' },
+        });
+        expect(locked.status).toBe(423);
+        setLocked(false);
+    });
+
+    it('404s an upload to an unknown workspace', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/workspace/nope/upload', {
+            token,
+            body: { name: 'x.txt', dataBase64: 'eA==' },
+        });
+        expect(r.status).toBe(404);
     });
 
     it('does not bind when disabled (opt-in)', async () => {

@@ -64,7 +64,7 @@ describe('computeCapabilityStatus', () => {
             issues: 'read',
             pull_requests: 'read',
             vulnerability_alerts: 'read',
-            // contents NOT granted — github.provision should be missing.
+            // contents / code+secret scanning NOT granted — those should be missing.
         };
         const status = computeCapabilityStatus(granted);
         expect(status.satisfied).toEqual(
@@ -74,14 +74,24 @@ describe('computeCapabilityStatus', () => {
                 'issue-watch.dependabot',
             ]),
         );
-        expect(status.missing).toEqual(['github.provision']);
-        expect(status.missingPermissions).toEqual(['contents']);
+        // The genie-ide App declares neither code/secret scanning nor contents,
+        // so those three capabilities resolve as missing.
+        expect(status.missing).toEqual([
+            'issue-watch.code-scanning',
+            'issue-watch.secret-scanning',
+            'github.provision',
+        ]);
+        expect(status.missingPermissions).toEqual([
+            'code_scanning_alerts',
+            'secret_scanning_alerts',
+            'contents',
+        ]);
     });
 
-    it('mirrors the genie-ide reality: issues/pulls/dependabot granted, contents missing', () => {
+    it('mirrors the genie-ide reality: issues/pulls/dependabot granted, scanning + contents missing', () => {
         // The genie-ide App grants issues/pull_requests/metadata/
-        // vulnerability_alerts/administration but NOT contents — so the only
-        // missing capability is provisioning.
+        // vulnerability_alerts/administration but NOT code/secret scanning or
+        // contents — so those three capabilities are the missing ones.
         const granted = aggregatePermissions([
             {
                 metadata: 'read',
@@ -92,7 +102,12 @@ describe('computeCapabilityStatus', () => {
             },
         ]);
         const status = computeCapabilityStatus(granted);
-        expect(status.missing).toEqual(['github.provision']);
+        expect(status.missing).toEqual([
+            'issue-watch.code-scanning',
+            'issue-watch.secret-scanning',
+            'github.provision',
+        ]);
+        // issues + pulls + dependabot satisfied.
         expect(status.satisfied).toHaveLength(3);
     });
 
@@ -103,6 +118,8 @@ describe('computeCapabilityStatus', () => {
             'issue-watch.issues',
             'issue-watch.pulls',
             'issue-watch.dependabot',
+            'issue-watch.code-scanning',
+            'issue-watch.secret-scanning',
             'github.provision',
         ]);
         // missingPermissions is the DISTINCT set (no duplicates).
@@ -110,6 +127,8 @@ describe('computeCapabilityStatus', () => {
             'issues',
             'pull_requests',
             'vulnerability_alerts',
+            'code_scanning_alerts',
+            'secret_scanning_alerts',
             'contents',
         ]);
     });
@@ -120,6 +139,8 @@ describe('computeCapabilityStatus', () => {
             issues: 'read',
             pull_requests: 'read',
             vulnerability_alerts: 'read',
+            code_scanning_alerts: 'read',
+            secret_scanning_alerts: 'read',
             contents: 'write',
         });
         expect(status.missing).toEqual([]);
@@ -133,6 +154,8 @@ describe('computeCapabilityStatus', () => {
             issues: 'read',
             pull_requests: 'read',
             vulnerability_alerts: 'read',
+            code_scanning_alerts: 'read',
+            secret_scanning_alerts: 'read',
             // contents missing — but with no installs we can't say WHICH.
         });
         expect(status.missingPermissions).toEqual(['contents']);
@@ -152,6 +175,8 @@ describe('computeCapabilityStatus — per-installation attribution', () => {
             issues: 'read',
             pull_requests: 'read',
             vulnerability_alerts: 'read',
+            code_scanning_alerts: 'read',
+            secret_scanning_alerts: 'read',
         },
     };
     const orgGrants: InstallationGrant = {
@@ -165,6 +190,8 @@ describe('computeCapabilityStatus — per-installation attribution', () => {
             issues: 'read',
             pull_requests: 'read',
             vulnerability_alerts: 'read',
+            code_scanning_alerts: 'read',
+            secret_scanning_alerts: 'read',
             contents: 'write',
         },
     };
@@ -230,6 +257,8 @@ describe('computeCapabilityStatus — per-installation attribution', () => {
                 issues: 'read',
                 pull_requests: 'read',
                 vulnerability_alerts: 'read',
+                code_scanning_alerts: 'read',
+                secret_scanning_alerts: 'read',
                 contents: 'read',
             },
         };

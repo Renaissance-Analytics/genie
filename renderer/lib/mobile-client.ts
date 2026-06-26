@@ -351,6 +351,38 @@ export function answer(
     );
 }
 
+/**
+ * Upload a file into a workspace's `.ai/` directory. Reads the File to base64
+ * in the browser and POSTs `{name, dataBase64}` to the workspace upload route.
+ * The server path-traversal-guards the name, caps the size, and never
+ * overwrites (a colliding name rolls to ` (n)`), returning the path it wrote.
+ */
+export async function uploadToAi(
+    workspaceId: string,
+    file: File,
+): Promise<{ ok: true; path: string }> {
+    const dataBase64 = await fileToBase64(file);
+    return request<{ ok: true; path: string }>(
+        `/api/workspace/${encodeURIComponent(workspaceId)}/upload`,
+        { method: 'POST', json: { name: file.name, dataBase64 } },
+    );
+}
+
+/** Read a File's bytes to a base64 string (no data: URL prefix). */
+function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(reader.error ?? new Error('read failed'));
+        reader.onload = () => {
+            const result = String(reader.result ?? '');
+            // FileReader.readAsDataURL yields `data:<mime>;base64,<payload>`.
+            const comma = result.indexOf(',');
+            resolve(comma >= 0 ? result.slice(comma + 1) : result);
+        };
+        reader.readAsDataURL(file);
+    });
+}
+
 // ---- WebSocket: dashboard events -----------------------------------------
 
 /** Build a same-origin ws:// (or wss://) URL with the session token attached. */

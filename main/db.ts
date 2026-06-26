@@ -412,13 +412,13 @@ export interface Settings {
      *  built-in Web Audio chime, default), a bundled wav name ('3tootpipe' |
      *  'dingdongdoink'), 'custom' (sound_imdone_custom file), or 'off' (silent
      *  even with notify_sound on). */
-    sound_imdone?: 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'custom';
+    sound_imdone?: 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'sparkle' | 'triumphant' | 'winddown' | 'custom';
     /** Absolute path to the user's custom imDone sound (used when
      *  sound_imdone === 'custom'). Empty = none chosen. */
     sound_imdone_custom?: string;
     /** Which sound the ForceTheQuestion alert plays. Same value set as
      *  sound_imdone; default 'synth'. */
-    sound_forcequestion?: 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'custom';
+    sound_forcequestion?: 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'sparkle' | 'triumphant' | 'winddown' | 'custom';
     /** Absolute path to the user's custom ForceTheQuestion sound (used when
      *  sound_forcequestion === 'custom'). Empty = none chosen. */
     sound_forcequestion_custom?: string;

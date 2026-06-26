@@ -83,7 +83,7 @@ describe('recheckCapabilities — disconnected', () => {
 });
 
 describe('recheckCapabilities — connected', () => {
-    it('computes missing=contents for the genie-ide-style grant set', async () => {
+    it('computes missing=scanning+contents for the genie-ide-style grant set', async () => {
         store.installations = installsFromPerms([
             {
                 metadata: 'read',
@@ -95,11 +95,22 @@ describe('recheckCapabilities — connected', () => {
         ]);
         const caps = await recheckCapabilities();
         expect(caps.connected).toBe(true);
-        expect(caps.missing).toEqual(['github.provision']);
-        expect(caps.missingPermissions).toEqual(['contents']);
-        // The gate now denies provisioning but allows the issue-watch reads.
+        // The genie-ide App declares neither code/secret scanning nor contents.
+        expect(caps.missing).toEqual([
+            'issue-watch.code-scanning',
+            'issue-watch.secret-scanning',
+            'github.provision',
+        ]);
+        expect(caps.missingPermissions).toEqual([
+            'code_scanning_alerts',
+            'secret_scanning_alerts',
+            'contents',
+        ]);
+        // The gate now denies provisioning + scanning but allows issues/PRs/dependabot.
         expect(await canAccessCapability('github.provision')).toBe(false);
+        expect(await canAccessCapability('issue-watch.code-scanning')).toBe(false);
         expect(await canAccessCapability('issue-watch.issues')).toBe(true);
+        expect(await canAccessCapability('issue-watch.dependabot')).toBe(true);
     });
 
     it('attributes the missing permission to the specific installs + a review URL', async () => {
@@ -113,6 +124,8 @@ describe('recheckCapabilities — connected', () => {
             issues: 'read',
             pull_requests: 'read',
             vulnerability_alerts: 'read',
+            code_scanning_alerts: 'read',
+            secret_scanning_alerts: 'read',
         };
         store.installations = [
             {
@@ -173,6 +186,8 @@ describe('recheckCapabilities — connected', () => {
                     issues: 'read',
                     pull_requests: 'read',
                     vulnerability_alerts: 'read',
+                    code_scanning_alerts: 'read',
+                    secret_scanning_alerts: 'read',
                     contents: 'write',
                 },
             },
@@ -182,13 +197,15 @@ describe('recheckCapabilities — connected', () => {
         expect(caps.missingByPermission).toEqual([]);
     });
 
-    it('marks everything satisfied when contents:write is also granted', async () => {
+    it('marks everything satisfied when contents:write + scanning are also granted', async () => {
         store.installations = installsFromPerms([
             {
                 metadata: 'read',
                 issues: 'read',
                 pull_requests: 'read',
                 vulnerability_alerts: 'read',
+                code_scanning_alerts: 'read',
+                secret_scanning_alerts: 'read',
                 contents: 'write',
             },
         ]);
@@ -200,7 +217,15 @@ describe('recheckCapabilities — connected', () => {
     it('keeps the prior snapshot on a transient read failure', async () => {
         // First, a good read establishes a known-good snapshot.
         store.installations = installsFromPerms([
-            { metadata: 'read', issues: 'read', pull_requests: 'read', vulnerability_alerts: 'read', contents: 'write' },
+            {
+                metadata: 'read',
+                issues: 'read',
+                pull_requests: 'read',
+                vulnerability_alerts: 'read',
+                code_scanning_alerts: 'read',
+                secret_scanning_alerts: 'read',
+                contents: 'write',
+            },
         ]);
         await recheckCapabilities();
         expect(getCapabilities().missing).toEqual([]);

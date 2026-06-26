@@ -495,9 +495,12 @@ describe('fetchRepoWatchItemsResult (surfaced read outcome)', () => {
     it('escalates an unauthenticated secondary read (affects every read)', async () => {
         // Issues OK, but PRs come back unauthenticated (token died mid-poll) —
         // that's not feature-specific, so it escalates over a clean issues read.
+        // Order of reads: issues, pulls, dependabot, code-scanning, secret-scanning.
         fetchMock
             .mockResolvedValueOnce(res(200, []))
             .mockResolvedValueOnce(res(401, { message: 'Bad credentials' }))
+            .mockResolvedValueOnce(res(200, []))
+            .mockResolvedValueOnce(res(200, []))
             .mockResolvedValueOnce(res(200, []));
 
         const out = await fetchRepoWatchItemsResult('o', 'r');
@@ -509,5 +512,127 @@ describe('fetchRepoWatchItemsResult (surfaced read outcome)', () => {
             status: 401,
             message: 'Bad credentials',
         });
+    });
+});
+
+describe('fetchRepoWatchItemsResult — security alerts (Dependabot + Code + Secret scanning)', () => {
+    it('maps Code-scanning and Secret-scanning alerts into normalized WatchItems', async () => {
+        // Reads, in order: issues, pulls, dependabot, code-scanning, secret-scanning.
+        fetchMock
+            .mockResolvedValueOnce(res(200, [])) // issues
+            .mockResolvedValueOnce(res(200, [])) // pulls
+            .mockResolvedValueOnce(
+                res(200, [
+                    {
+                        number: 7,
+                        html_url: 'https://github.com/o/r/security/dependabot/7',
+                        updated_at: '2026-06-16T10:00:00.000Z',
+                        security_advisory: { summary: 'Prototype pollution', ghsa_id: 'GHSA-xxxx' },
+                        security_vulnerability: { severity: 'high' },
+                    },
+                ]),
+            )
+            .mockResolvedValueOnce(
+                res(200, [
+                    {
+                        number: 12,
+                        html_url: 'https://github.com/o/r/security/code-scanning/12',
+                        updated_at: '2026-06-17T10:00:00.000Z',
+                        rule: { id: 'js/sql-injection', description: 'SQL injection', security_severity_level: 'critical' },
+                    },
+                ]),
+            )
+            .mockResolvedValueOnce(
+                res(200, [
+                    {
+                        number: 3,
+                        html_url: 'https://github.com/o/r/security/secret-scanning/3',
+                        updated_at: '2026-06-18T10:00:00.000Z',
+                        secret_type: 'aws_access_key',
+                        secret_type_display_name: 'Amazon AWS Access Key',
+                    },
+                ]),
+            );
+
+        const out = await fetchRepoWatchItemsResult('o', 'r');
+        expect(out.error).toBeNull();
+
+        const dep = out.items.find((i) => i.kind === 'dependabot');
+        expect(dep).toMatchObject({
+            kind: 'dependabot',
+            title: 'Prototype pollution',
+            severity: 'high',
+            url: 'https://github.com/o/r/security/dependabot/7',
+        });
+
+        const code = out.items.find((i) => i.kind === 'code-scanning');
+        expect(code).toMatchObject({
+            kind: 'code-scanning',
+            number: 12,
+            title: 'SQL injection',
+            severity: 'critical', // prefers security_severity_level
+            url: 'https://github.com/o/r/security/code-scanning/12',
+            key: 'o/r:code-scanning:12',
+        });
+
+        const secret = out.items.find((i) => i.kind === 'secret-scanning');
+        expect(secret).toMatchObject({
+            kind: 'secret-scanning',
+            number: 3,
+            title: 'Exposed secret: Amazon AWS Access Key',
+            url: 'https://github.com/o/r/security/secret-scanning/3',
+            key: 'o/r:secret-scanning:3',
+        });
+        // Secret-scanning alerts carry no severity (uniformly critical → unset).
+        expect(secret?.severity).toBeUndefined();
+    });
+
+    it('keeps a Code-scanning 403 quiet — it must NOT mask a working issues read', async () => {
+        // Issues + PRs OK, dependabot OK, but code-scanning is forbidden (the App
+        // doesn't grant code_scanning_alerts yet). That's feature-specific, so it
+        // stays quiet exactly like a Dependabot 403.
+        fetchMock
+            .mockResolvedValueOnce(res(200, [
+                { number: 1, title: 'an issue', html_url: 'u', updated_at: '2026-06-16T10:00:00.000Z' },
+            ]))
+            .mockResolvedValueOnce(res(200, []))
+            .mockResolvedValueOnce(res(200, []))
+            .mockResolvedValueOnce(res(403, { message: 'Code scanning is not enabled' }))
+            .mockResolvedValueOnce(res(200, []));
+
+        const out = await fetchRepoWatchItemsResult('o', 'r');
+        // The issues read succeeded → a genuine success, no surfaced error.
+        expect(out.error).toBeNull();
+        expect(out.detail).toBeNull();
+        expect(out.items).toHaveLength(1);
+        expect(out.items[0]).toMatchObject({ kind: 'issue', number: 1 });
+    });
+
+    it('keeps a Secret-scanning 403 quiet too (feature off / no access)', async () => {
+        fetchMock
+            .mockResolvedValueOnce(res(200, []))
+            .mockResolvedValueOnce(res(200, []))
+            .mockResolvedValueOnce(res(200, []))
+            .mockResolvedValueOnce(res(200, []))
+            .mockResolvedValueOnce(res(403, { message: 'Secret scanning is not available' }));
+
+        const out = await fetchRepoWatchItemsResult('o', 'r');
+        expect(out.error).toBeNull();
+        expect(out.detail).toBeNull();
+    });
+
+    it('STILL escalates an unauthenticated security read (affects every read)', async () => {
+        // A 401 from secret-scanning isn't feature-specific — the token died, so
+        // it escalates over a clean issues read, bringing its own detail.
+        fetchMock
+            .mockResolvedValueOnce(res(200, []))
+            .mockResolvedValueOnce(res(200, []))
+            .mockResolvedValueOnce(res(200, []))
+            .mockResolvedValueOnce(res(200, []))
+            .mockResolvedValueOnce(res(401, { message: 'Bad credentials' }));
+
+        const out = await fetchRepoWatchItemsResult('o', 'r');
+        expect(out.error).toBe('unauthenticated');
+        expect(out.detail).toMatchObject({ error: 'unauthenticated', status: 401 });
     });
 });

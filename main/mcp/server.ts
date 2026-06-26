@@ -19,6 +19,7 @@ import {
     type ManageWorkspacesRequest,
     type ManageWorkspacesResult,
     type WorkspaceMap,
+    type IssueWatchSnapshot,
 } from './protocol';
 
 /**
@@ -63,6 +64,8 @@ interface ServerDeps {
     };
     /** Pulse the given terminal's attention glow (imDone). */
     onImDone: (terminalId: string) => void;
+    /** Resolve the caller's workspace IssueWatch snapshot (checkIssues + imDone counts). */
+    checkIssues: (terminalId: string) => Promise<IssueWatchSnapshot>;
     /** Raise the OS-level question modal (ForceTheQuestion). */
     onForceQuestion: (
         terminalId: string,
@@ -390,6 +393,7 @@ async function handle(
         serverName: SERVER_NAME,
         serverVersion: deps.serverVersion,
         onImDone: deps.onImDone,
+        checkIssues: deps.checkIssues,
         onForceQuestion: deps.onForceQuestion,
         describeWorkspace: deps.describeWorkspace,
         manageProcess: deps.manageProcess,

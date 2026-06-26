@@ -89,6 +89,24 @@ const byTerminal = new Map<string, Set<SocketEntry>>();
 /** ws → its entry, for O(1) detach + per-socket buffer access. */
 const bySocket = new WeakMap<WebSocket, SocketEntry>();
 
+/**
+ * terminalId → the largest grid the bridge has ever driven the pty to. The
+ * pty is SHARED with the desktop window, which fits to its OWN (usually much
+ * wider) viewport and resizes the pty directly via `terminalManager().resize`
+ * — a path the bridge never sees. So a phone in a narrow viewport must NOT be
+ * allowed to shrink that shared pty, or the desktop terminal reflows down to
+ * the phone's width (the reported bug).
+ *
+ * The rule (see `mobileTermResize`): the bridge only ever GROWS the pty. It
+ * forwards a phone resize only when it would make the grid bigger than
+ * anything the bridge has driven so far; a request that's the same or smaller
+ * is dropped. Because the bridge can't observe the desktop's own resizes, the
+ * floor only reflects bridge-driven sizes — but "never shrink" means the worst
+ * a phone can do is leave the pty at the desktop's size (the phone scrolls
+ * horizontally for the slack), which is exactly the viewer-only contract.
+ */
+const ptyGrowFloor = new Map<string, { cols: number; rows: number }>();
+
 /** ~20 ms batching window — coalesces a burst of tiny pty writes into one frame. */
 const BATCH_MS = 20;
 
@@ -166,6 +184,35 @@ export function mobileTermFanout(terminalId: string, data: string): void {
 }
 
 /**
+ * Decide whether a phone's requested grid should be pushed to the SHARED pty.
+ * Pure (no pty, no ws) so the grow-only rule is unit-tested directly.
+ *
+ * Returns the cols/rows to actually apply when the request would grow the pty
+ * beyond every size the bridge has driven for this terminal so far, or null
+ * when it would shrink (or merely match) it — in which case the caller must
+ * NOT resize, leaving the shared pty at the desktop's size.
+ *
+ * "Grow" is per-axis-aware: we keep the max of each axis independently and
+ * apply when EITHER axis would increase, so a phone that's taller-but-narrower
+ * still gets more rows without ever clipping the desktop's columns.
+ */
+export function nextPtyGrid(
+    terminalId: string,
+    cols: number,
+    rows: number,
+): { cols: number; rows: number } | null {
+    if (!Number.isFinite(cols) || !Number.isFinite(rows)) return null;
+    if (cols <= 0 || rows <= 0) return null;
+    const floor = ptyGrowFloor.get(terminalId);
+    const nextCols = floor ? Math.max(floor.cols, cols) : cols;
+    const nextRows = floor ? Math.max(floor.rows, rows) : rows;
+    // No growth on either axis → don't touch the shared pty.
+    if (floor && nextCols === floor.cols && nextRows === floor.rows) return null;
+    ptyGrowFloor.set(terminalId, { cols: nextCols, rows: nextRows });
+    return { cols: nextCols, rows: nextRows };
+}
+
+/**
  * The pty exited — push a final `exit` frame to every attached phone socket and
  * drop the terminal's set. Wired from ipc.ts's existing onExit (one added line).
  * VIEWER-ONLY: we never kill the pty here; we only tear down the phone view.
@@ -185,6 +232,8 @@ export function mobileTermClose(
         sendDown(entry.ws, { type: 'exit', ...payload });
     }
     byTerminal.delete(terminalId);
+    // The pty is gone — a future pty reusing this id starts from a clean floor.
+    ptyGrowFloor.delete(terminalId);
 }
 
 /** Number of terminals with at least one attached phone socket (diagnostics). */
@@ -198,4 +247,5 @@ export function _resetBridgeForTest(): void {
         for (const entry of set) if (entry.timer) clearTimeout(entry.timer);
     }
     byTerminal.clear();
+    ptyGrowFloor.clear();
 }

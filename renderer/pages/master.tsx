@@ -1161,7 +1161,7 @@ function MasterInner() {
                         const c = activeWorkspaceId
                             ? issueWatchCounts[activeWorkspaceId]
                             : undefined;
-                        return c ? c.issue + c.pr + c.dependabot : 0;
+                        return c ? c.issue + c.pr + c.security : 0;
                     })()}
                     githubNeedsResolve={githubNeedsResolve}
                     onShowGithubCaps={() => setGithubCapsOpen((o) => !o)}

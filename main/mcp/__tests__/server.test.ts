@@ -128,6 +128,12 @@ const deps = (
     configuredPort: () => configuredPort,
     workspaceTerminals: () => terminals,
     onImDone,
+    checkIssues: async () => ({
+        connected: true,
+        workspaceResolved: true,
+        counts: { issue: 0, pr: 0, security: 0 },
+        items: [],
+    }),
     onForceQuestion,
     describeWorkspace: async () => null,
     manageProcess,

@@ -23,8 +23,8 @@ export type SoundDescriptor =
     | { mode: 'asset'; name: string }
     | { mode: 'data'; dataUrl: string };
 
-/** The two bundled wavs available as a choice (must match files in renderer/public/sounds). */
-const BUNDLED = new Set(['3tootpipe', 'dingdongdoink']);
+/** The bundled wavs available as a choice (must match files in renderer/public/sounds). */
+const BUNDLED = new Set(['3tootpipe', 'dingdongdoink', 'sparkle', 'triumphant', 'winddown']);
 
 /** Map a custom file extension → audio MIME for the data-URL. */
 function mimeForExt(p: string): string {

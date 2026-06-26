@@ -34,6 +34,8 @@ export type GhPermission =
     | 'issues'
     | 'pull_requests'
     | 'vulnerability_alerts'
+    | 'code_scanning_alerts'
+    | 'secret_scanning_alerts'
     | 'contents'
     | 'administration';
 
@@ -48,6 +50,8 @@ export type CapabilityKey =
     | 'issue-watch.issues'
     | 'issue-watch.pulls'
     | 'issue-watch.dependabot'
+    | 'issue-watch.code-scanning'
+    | 'issue-watch.secret-scanning'
     | 'github.provision';
 
 /** What ONE capability needs from the GitHub App to function. */
@@ -62,20 +66,27 @@ export interface RequiredPermission {
  * permission (+ minimum access) it needs. Derived from the App-token API
  * calls Genie makes (grep `gh(` in api.ts + its callers):
  *
- *   - Issue Watch issues read  → GET …/issues            → `issues:read`
- *   - Issue Watch PRs read     → GET …/pulls             → `pull_requests:read`
- *   - Issue Watch Dependabot   → GET …/dependabot/alerts → `vulnerability_alerts:read`
+ *   - Issue Watch issues read   → GET …/issues                 → `issues:read`
+ *   - Issue Watch PRs read      → GET …/pulls                  → `pull_requests:read`
+ *   - Issue Watch Dependabot    → GET …/dependabot/alerts      → `vulnerability_alerts:read`
+ *   - Issue Watch Code scanning → GET …/code-scanning/alerts   → `code_scanning_alerts:read`
+ *   - Issue Watch Secret scanning → GET …/secret-scanning/alerts → `secret_scanning_alerts:read`
  *   - Provisioning / clone / fork / create → push to repos, read repo contents
  *     → `contents:write` (the genie-ide App historically does NOT declare
  *       `contents`, so this is the live "missing" candidate — but we COMPUTE
  *       it from the granted set rather than hardcoding the conclusion).
  *
  * `metadata:read` is the GitHub App baseline (always granted) and isn't gated.
+ * The code/secret-scanning permissions are NOT yet declared on the genie-ide
+ * App, so those capabilities resolve as missing until the App grants them — the
+ * proactive gate then disables their fetch, exactly like the contents case.
  */
 export const REQUIRED: Record<CapabilityKey, RequiredPermission> = {
     'issue-watch.issues': { permission: 'issues', access: 'read' },
     'issue-watch.pulls': { permission: 'pull_requests', access: 'read' },
     'issue-watch.dependabot': { permission: 'vulnerability_alerts', access: 'read' },
+    'issue-watch.code-scanning': { permission: 'code_scanning_alerts', access: 'read' },
+    'issue-watch.secret-scanning': { permission: 'secret_scanning_alerts', access: 'read' },
     'github.provision': { permission: 'contents', access: 'write' },
 };
 
@@ -164,6 +175,8 @@ function isModelledPermission(name: string): name is GhPermission {
         name === 'issues' ||
         name === 'pull_requests' ||
         name === 'vulnerability_alerts' ||
+        name === 'code_scanning_alerts' ||
+        name === 'secret_scanning_alerts' ||
         name === 'contents' ||
         name === 'administration'
     );
