@@ -13,7 +13,8 @@ import {
  */
 
 const WS = process.platform === 'win32' ? 'C:\\work\\proj' : '/work/proj';
-const AI = path.resolve(WS, '.ai');
+// Uploads land in the unorganized inbox <ws>/.ai/_dirty.
+const AI = path.resolve(WS, '.ai', '_dirty');
 
 function ok(r: ReturnType<typeof resolveAiUploadPath>) {
     if ('error' in r) throw new Error(`expected ok, got error: ${r.error}`);

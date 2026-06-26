@@ -61,9 +61,11 @@ export function resolveAiUploadPath(
         return { error: 'invalid filename' };
     }
 
-    const aiDir = path.resolve(workspacePath, '.ai');
+    // Uploads land in <workspace>/.ai/_dirty — an inbox for unorganized files
+    // dropped from the phone, kept out of the curated .ai/ root.
+    const aiDir = path.resolve(workspacePath, '.ai', '_dirty');
     const filePath = path.resolve(aiDir, safeName);
-    // The resolved file MUST stay strictly inside <workspacePath>/.ai.
+    // The resolved file MUST stay strictly inside <workspacePath>/.ai/_dirty.
     const rel = path.relative(aiDir, filePath);
     if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
         return { error: 'invalid filename' };

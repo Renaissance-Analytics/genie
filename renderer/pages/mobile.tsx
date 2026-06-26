@@ -11,12 +11,14 @@ import {
     getState,
     getToken,
     killTerminal,
+    listQuestions,
     listTerminals,
     MobileApiError,
     onNeedsPair,
     type MobileEvent,
     type MobileState,
     type MobileTerminal,
+    type PendingQuestion,
 } from '../lib/mobile-client';
 
 /**
@@ -44,6 +46,7 @@ export default function MobilePage() {
     const [bootError, setBootError] = useState<string | null>(null);
     const [tab, setTab] = useState<Tab>('dashboard');
     const [questionCount, setQuestionCount] = useState(0);
+    const [questions, setQuestions] = useState<PendingQuestion[]>([]);
     const [locked, setLocked] = useState(false);
     const [connected, setConnected] = useState(false);
 
@@ -84,6 +87,7 @@ export default function MobilePage() {
                 const snapshot = await getState();
                 if (cancelled) return;
                 setState(snapshot);
+                setQuestions(snapshot.questions);
                 setQuestionCount(snapshot.questions.length);
                 setBootError(null);
                 setBooted(true);
@@ -126,6 +130,35 @@ export default function MobilePage() {
             setConnected(false);
         };
     }, [token, booted]);
+
+    // The questions tab UNMOUNTS when you leave it, so the shell owns the
+    // authoritative list — otherwise a question arriving while you're on another
+    // tab is missed (badge never updates, the list stays at the stale bootstrap)
+    // until a manual reload. Refresh on every `question:changed` push AND whenever
+    // the Questions tab is opened (covers a push missed during a WS reconnect).
+    useEffect(() => {
+        if (!token || !booted) return;
+        const off = subscribe((e) => {
+            if (e.type !== 'question:changed') return;
+            void listQuestions()
+                .then((qs) => {
+                    setQuestions(qs);
+                    setQuestionCount(qs.length);
+                })
+                .catch(() => {});
+        });
+        return off;
+    }, [token, booted, subscribe]);
+
+    useEffect(() => {
+        if (tab !== 'questions' || !booted) return;
+        void listQuestions()
+            .then((qs) => {
+                setQuestions(qs);
+                setQuestionCount(qs.length);
+            })
+            .catch(() => {});
+    }, [tab, booted]);
 
     const onPaired = () => {
         setTokenState(getToken());
@@ -203,7 +236,7 @@ export default function MobilePage() {
                 )}
                 {tab === 'questions' && (
                     <Questions
-                        initial={state.questions}
+                        initial={questions}
                         subscribe={subscribe}
                         onCountChange={setQuestionCount}
                     />

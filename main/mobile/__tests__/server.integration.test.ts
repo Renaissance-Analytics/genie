@@ -272,10 +272,10 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         });
         expect(r.status).toBe(200);
         expect(r.json.ok).toBe(true);
-        const written = fs.readFileSync(path.join(wsRoot, '.ai', 'note.txt'), 'utf8');
+        const written = fs.readFileSync(path.join(wsRoot, '.ai', '_dirty','note.txt'), 'utf8');
         expect(written).toBe('hello .ai');
         // The reported path stays inside <ws>/.ai.
-        expect(r.json.path).toBe(path.join(wsRoot, '.ai', 'note.txt'));
+        expect(r.json.path).toBe(path.join(wsRoot, '.ai', '_dirty','note.txt'));
     });
 
     it('dedupes a colliding name instead of overwriting', async () => {
@@ -293,8 +293,8 @@ describe('mobile server (integration, 127.0.0.1)', () => {
             token,
             body: body('two'),
         });
-        expect(first.json.path).toBe(path.join(wsRoot, '.ai', 'dup.txt'));
-        expect(second.json.path).toBe(path.join(wsRoot, '.ai', 'dup (1).txt'));
+        expect(first.json.path).toBe(path.join(wsRoot, '.ai', '_dirty','dup.txt'));
+        expect(second.json.path).toBe(path.join(wsRoot, '.ai', '_dirty','dup (1).txt'));
         // Original is untouched.
         expect(fs.readFileSync(first.json.path, 'utf8')).toBe('one');
         expect(fs.readFileSync(second.json.path, 'utf8')).toBe('two');
@@ -312,7 +312,7 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         });
         // basename `escape.txt` lands inside .ai (never the parent).
         expect([200]).toContain(r.status);
-        expect(r.json.path).toBe(path.join(wsRoot, '.ai', 'escape.txt'));
+        expect(r.json.path).toBe(path.join(wsRoot, '.ai', '_dirty','escape.txt'));
         expect(fs.existsSync(path.join(wsRoot, 'escape.txt'))).toBe(false);
     });
 
