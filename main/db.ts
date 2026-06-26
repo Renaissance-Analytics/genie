@@ -408,6 +408,20 @@ export interface Settings {
     /** Show an OS notification (tray popup) when an agent calls imDone.
      *  Defaults 'off'. */
     notify_toast?: 'on' | 'off';
+    /** Which sound the imDone alert plays (gated by notify_sound). 'synth' (the
+     *  built-in Web Audio chime, default), a bundled wav name ('3tootpipe' |
+     *  'dingdongdoink'), 'custom' (sound_imdone_custom file), or 'off' (silent
+     *  even with notify_sound on). */
+    sound_imdone?: 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'custom';
+    /** Absolute path to the user's custom imDone sound (used when
+     *  sound_imdone === 'custom'). Empty = none chosen. */
+    sound_imdone_custom?: string;
+    /** Which sound the ForceTheQuestion alert plays. Same value set as
+     *  sound_imdone; default 'synth'. */
+    sound_forcequestion?: 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'custom';
+    /** Absolute path to the user's custom ForceTheQuestion sound (used when
+     *  sound_forcequestion === 'custom'). Empty = none chosen. */
+    sound_forcequestion_custom?: string;
     /** Fixed loopback port for the agent-integration MCP server. String-encoded
      *  (settings are k/v text). Default '51717' (obscure, outside the OS
      *  ephemeral range). Changing it requires restarting the MCP server. */
@@ -498,6 +512,13 @@ export function getAllSettings(): Settings {
         detached_terminals: (out['detached_terminals'] as 'on' | 'off') ?? 'off',
         notify_sound: (out['notify_sound'] as 'on' | 'off') ?? 'off',
         notify_toast: (out['notify_toast'] as 'on' | 'off') ?? 'off',
+        sound_imdone:
+            (out['sound_imdone'] as Settings['sound_imdone']) ?? 'synth',
+        sound_imdone_custom: out['sound_imdone_custom'] ?? '',
+        sound_forcequestion:
+            (out['sound_forcequestion'] as Settings['sound_forcequestion']) ??
+            'synth',
+        sound_forcequestion_custom: out['sound_forcequestion_custom'] ?? '',
         mcp_port: out['mcp_port'] ?? '51717',
         mobile_enabled: (out['mobile_enabled'] as 'on' | 'off') ?? 'off',
         mobile_port: out['mobile_port'] ?? '51718',

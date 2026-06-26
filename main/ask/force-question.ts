@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain } from 'electron';
 import crypto from 'crypto';
 import path from 'path';
 import { getAllSettings } from '../db';
+import { resolveAlertSound } from '../notify-sound';
 import type {
     ForceAnswer,
     ForceQuestion,
@@ -50,8 +51,12 @@ function notifyForceQuestion(): void {
     } catch {
         return; // settings unreadable — skip the chime, never block the modal
     }
+    // Resolve the per-alert sound (synth / bundled wav / custom data-URL / off).
+    // A null descriptor means this alert is set to "off" — skip the chime.
+    const sound = resolveAlertSound('forceQuestion');
+    if (!sound) return;
     const target = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
-    target?.webContents.send('notify:sound', { kind: 'force-question' });
+    target?.webContents.send('notify:sound', { kind: 'force-question', sound });
 }
 
 let config: Config | null = null;

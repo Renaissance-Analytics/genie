@@ -26,6 +26,7 @@ import {
     TerminalSpecRow,
 } from './db';
 import { rebuildMenu } from './tray';
+import { readSoundDataUrl } from './notify-sound';
 import { detectFolder } from './workspace/detect';
 import {
     createAgiEnvelope,
@@ -184,6 +185,13 @@ export function registerIpcHandlers(): void {
         return r.canceled ? null : r.filePaths[0];
     });
     ipcMain.handle('settings:detect-editors', () => detectEditors());
+    // Read a sound file (custom alert sound) into a base64 data-URL so the
+    // sandboxed renderer can play it via new Audio(...). Used by the Settings
+    // sound Preview and the per-alert "Custom file…" choice. Null when the path
+    // is empty/missing/unreadable/too large (see readSoundDataUrl's guards).
+    ipcMain.handle('settings:sound-data-url', (_e, p: string) =>
+        readSoundDataUrl(typeof p === 'string' ? p : ''),
+    );
 
     // --- Workspaces -----------------------------------------------------
     ipcMain.handle('workspaces:list', () => listWorkspaces());

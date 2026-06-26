@@ -161,6 +161,12 @@ const api = {
             ipcRenderer.invoke('settings:choose-folder', label, defaultPath),
         chooseFile: (label?: string) =>
             ipcRenderer.invoke('settings:choose-file', label),
+        /** Read a sound file into a base64 data-URL (null if unreadable). Used
+         *  by the per-alert "Custom file…" sound + the Settings Preview. */
+        soundDataUrl: (path: string) =>
+            ipcRenderer.invoke('settings:sound-data-url', path) as Promise<
+                string | null
+            >,
         detectEditors: () => ipcRenderer.invoke('settings:detect-editors'),
         detectShells: () =>
             ipcRenderer.invoke('terminal:shells') as Promise<{
@@ -539,10 +545,21 @@ const api = {
             ipcRenderer.on('inbox:updated', handler);
             return () => ipcRenderer.off('inbox:updated', handler);
         },
-        // Customization: play a notification chime (agent imDone). The renderer
-        // synthesizes the tone — no audio asset is shipped.
-        notifySound: (cb: (payload: { kind: string }) => void) => {
-            const handler = (_e: unknown, payload: { kind: string }) => cb(payload);
+        // Customization: play a notification chime. The payload carries a
+        // `sound` descriptor resolved main-side from the per-alert setting:
+        // synth (renderer synthesizes the tone), asset (a bundled wav), or data
+        // (a custom file as a data-URL). A legacy payload with no descriptor
+        // falls back to synth.
+        notifySound: (
+            cb: (payload: {
+                kind: string;
+                sound?:
+                    | { mode: 'synth' }
+                    | { mode: 'asset'; name: string }
+                    | { mode: 'data'; dataUrl: string };
+            }) => void,
+        ) => {
+            const handler = (_e: unknown, payload: any) => cb(payload);
             ipcRenderer.on('notify:sound', handler);
             return () => ipcRenderer.off('notify:sound', handler);
         },

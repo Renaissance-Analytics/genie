@@ -266,6 +266,18 @@ export interface Settings {
     /** Show an OS notification (tray popup) when an agent calls imDone.
      *  Defaults 'off'. */
     notify_toast?: 'on' | 'off';
+    /** Which sound the imDone alert plays (gated by notify_sound): 'synth' (the
+     *  built-in chime, default), a bundled wav ('3tootpipe' | 'dingdongdoink'),
+     *  'custom' (sound_imdone_custom file), or 'off'. */
+    sound_imdone?: 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'custom';
+    /** Absolute path to the custom imDone sound (used when sound_imdone === 'custom'). */
+    sound_imdone_custom?: string;
+    /** Which sound the ForceTheQuestion alert plays. Same value set as
+     *  sound_imdone; default 'synth'. */
+    sound_forcequestion?: 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'custom';
+    /** Absolute path to the custom ForceTheQuestion sound (used when
+     *  sound_forcequestion === 'custom'). */
+    sound_forcequestion_custom?: string;
     /** Fixed loopback port for the agent-integration MCP server. String-encoded;
      *  default '51717'. Changing it requires restarting the MCP server. */
     mcp_port?: string;
@@ -772,6 +784,9 @@ interface GenieApi {
         set: (patch: Partial<Settings>) => Promise<Settings>;
         chooseFolder: (label?: string, defaultPath?: string) => Promise<string | null>;
         chooseFile: (label?: string) => Promise<string | null>;
+        /** Read a sound file into a base64 data-URL (null when unreadable).
+         *  Backs the per-alert "Custom file…" choice + the Settings Preview. */
+        soundDataUrl: (path: string) => Promise<string | null>;
         detectEditors: () => Promise<EditorDetection[]>;
         detectShells: () => Promise<{
             shells: ShellDetection[];
@@ -1211,8 +1226,18 @@ interface GenieApi {
             }) => void,
         ) => () => void;
         inboxUpdated: (cb: (payload: { count: number }) => void) => () => void;
-        /** Customization: play a notification chime (agent imDone). */
-        notifySound: (cb: (payload: { kind: string }) => void) => () => void;
+        /** Customization: play a notification chime. The `sound` descriptor is
+         *  resolved main-side from the per-alert setting (synth / bundled asset /
+         *  custom data-URL); a legacy payload without it falls back to synth. */
+        notifySound: (
+            cb: (payload: {
+                kind: string;
+                sound?:
+                    | { mode: 'synth' }
+                    | { mode: 'asset'; name: string }
+                    | { mode: 'data'; dataUrl: string };
+            }) => void,
+        ) => () => void;
         /** The tray "Task Manager…" item asks the master window to open it. */
         openTaskManager: (cb: () => void) => () => void;
         /** Issue Watch: per-workspace unread counts (by type) + per-workspace

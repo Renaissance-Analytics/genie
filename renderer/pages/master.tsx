@@ -233,12 +233,29 @@ function MasterInner() {
         return api().on.terminalHostStatus((p) => setToast(p.message));
     }, []);
 
-    // Customization: play a short two-note chime when an agent calls imDone
-    // (gated by Settings → Customization → notify_sound on the main side).
-    // Synthesized via Web Audio so no audio asset has to ship.
+    // Customization: play the notification sound when an agent calls imDone or
+    // ForceTheQuestion (gated by Settings → Customization on the main side). The
+    // payload carries a `sound` descriptor resolved per-alert: 'synth' keeps the
+    // built-in Web Audio chime (distinct per kind), 'asset' plays a bundled wav
+    // from ./sounds/<name>.wav (relative to the page, resolves under file://),
+    // 'data' plays a custom file the main side read into a data-URL. A legacy
+    // payload with no descriptor falls back to synth. All best-effort.
     useEffect(() => {
         return api().on.notifySound((payload) => {
             try {
+                const mode = payload?.sound?.mode ?? 'synth';
+                if (mode === 'asset' && payload.sound?.mode === 'asset') {
+                    void new Audio(`./sounds/${payload.sound.name}.wav`)
+                        .play()
+                        .catch(() => {});
+                    return;
+                }
+                if (mode === 'data' && payload.sound?.mode === 'data') {
+                    void new Audio(payload.sound.dataUrl).play().catch(() => {});
+                    return;
+                }
+                // 'synth' (or a legacy descriptor-less payload): synthesize a
+                // distinct per-kind chime via Web Audio so no asset is needed.
                 const Ctx =
                     window.AudioContext ||
                     (window as unknown as { webkitAudioContext?: typeof AudioContext })

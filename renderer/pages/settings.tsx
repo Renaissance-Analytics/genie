@@ -338,12 +338,15 @@ export default function SettingsPage() {
                     </Tabs.Panel>
                     <Tabs.Panel value="customization" className="settings-tab">
 
+            <AppearanceCard />
+
             <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Heading as="h2" size="sm">Notifications</Heading>
                 <Text size="xs" className="text-zinc-500">
                     How Genie alerts you when an agent in a terminal calls{' '}
-                    <code>imDone</code>. The terminal always glows in the sidebar;
-                    these add an audible and/or system-tray alert on top.
+                    <code>imDone</code> or asks you a question. The terminal always
+                    glows in the sidebar; these add an audible and/or system-tray
+                    alert on top.
                 </Text>
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                     <Switch
@@ -355,10 +358,39 @@ export default function SettingsPage() {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                         <Text size="sm">Play a sound</Text>
                         <Text size="xs" className="text-zinc-500">
-                            A short chime when an agent finishes.
+                            Master switch for the alert sounds below.
                         </Text>
                     </div>
                 </div>
+                {s.notify_sound === 'on' && (
+                    <div
+                        style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 14,
+                            paddingLeft: 8,
+                            borderLeft: '2px solid var(--border-1)',
+                            marginLeft: 8,
+                        }}
+                    >
+                        <AlertSoundRow
+                            label="Agent finishes — imDone"
+                            choice={s.sound_imdone ?? 'synth'}
+                            customPath={s.sound_imdone_custom ?? ''}
+                            kind="imDone"
+                            onChoice={(v) => patch({ sound_imdone: v })}
+                            onCustom={(p) => patch({ sound_imdone_custom: p })}
+                        />
+                        <AlertSoundRow
+                            label="Agent asks a question"
+                            choice={s.sound_forcequestion ?? 'synth'}
+                            customPath={s.sound_forcequestion_custom ?? ''}
+                            kind="force-question"
+                            onChoice={(v) => patch({ sound_forcequestion: v })}
+                            onCustom={(p) => patch({ sound_forcequestion_custom: p })}
+                        />
+                    </div>
+                )}
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                     <Switch
                         checked={s.notify_toast === 'on'}
@@ -466,6 +498,192 @@ export default function SettingsPage() {
                 </Action>
             </div>
         </div>
+    );
+}
+
+/** The selectable alert-sound choices, shared by both alert rows. */
+type SoundChoice = 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'custom';
+
+const SOUND_OPTIONS: Array<{ value: SoundChoice; label: string }> = [
+    { value: 'synth', label: 'Default chime' },
+    { value: '3tootpipe', label: '3 Toot Pipe' },
+    { value: 'dingdongdoink', label: 'Ding Dong Doink' },
+    { value: 'custom', label: 'Custom file…' },
+    { value: 'off', label: 'None' },
+];
+
+/**
+ * Play the sound a choice resolves to, locally, for the Settings Preview button.
+ * Mirrors the master-window playback: a bundled name plays ./sounds/<name>.wav,
+ * 'custom' reads the file to a data-URL via the IPC bridge, 'synth' fires the
+ * built-in per-kind Web Audio chime, 'off' is silent. Best-effort.
+ */
+async function previewSound(
+    choice: SoundChoice,
+    customPath: string,
+    kind: 'imDone' | 'force-question',
+): Promise<void> {
+    try {
+        if (choice === 'off') return;
+        if (choice === 'custom') {
+            if (!customPath) return;
+            const dataUrl = await api().settings.soundDataUrl(customPath);
+            if (dataUrl) await new Audio(dataUrl).play().catch(() => {});
+            return;
+        }
+        if (choice === '3tootpipe' || choice === 'dingdongdoink') {
+            await new Audio(`./sounds/${choice}.wav`).play().catch(() => {});
+            return;
+        }
+        // 'synth' — reuse the master window's per-kind motif.
+        const Ctx =
+            window.AudioContext ||
+            (window as unknown as { webkitAudioContext?: typeof AudioContext })
+                .webkitAudioContext;
+        if (!Ctx) return;
+        const ctx = new Ctx();
+        const now = ctx.currentTime;
+        const tone = (freq: number, start: number, dur: number, type: OscillatorType = 'sine') => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = type;
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0.0001, now + start);
+            gain.gain.exponentialRampToValueAtTime(0.18, now + start + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.0001, now + start + dur);
+            osc.connect(gain).connect(ctx.destination);
+            osc.start(now + start);
+            osc.stop(now + start + dur);
+        };
+        if (kind === 'force-question') {
+            tone(880, 0, 0.1, 'triangle');
+            tone(880, 0.14, 0.1, 'triangle');
+            tone(1175, 0.28, 0.26, 'triangle');
+            setTimeout(() => void ctx.close().catch(() => {}), 900);
+        } else {
+            tone(660, 0, 0.18);
+            tone(880, 0.16, 0.24);
+            setTimeout(() => void ctx.close().catch(() => {}), 700);
+        }
+    } catch {
+        /* preview is best-effort */
+    }
+}
+
+/** Basename of a path for the chosen-file label (handles \ and /). */
+function baseName(p: string): string {
+    return p.split(/[\\/]/).pop() || p;
+}
+
+/**
+ * One per-alert sound row: the alert's label, a Select of the sound choices, a
+ * Preview button, and — when 'Custom file…' is selected — a file picker showing
+ * the chosen filename. Bound to a `sound_*` / `sound_*_custom` settings pair via
+ * the onChoice / onCustom callbacks (which call the page's `patch`).
+ */
+function AlertSoundRow({
+    label,
+    choice,
+    customPath,
+    kind,
+    onChoice,
+    onCustom,
+}: {
+    label: string;
+    choice: SoundChoice;
+    customPath: string;
+    kind: 'imDone' | 'force-question';
+    onChoice: (v: SoundChoice) => void;
+    onCustom: (path: string) => void;
+}) {
+    const pickCustom = async () => {
+        const p = await api().settings.chooseFile('Choose a sound file');
+        if (p) onCustom(p);
+    };
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Text size="sm">{label}</Text>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                    <Select
+                        value={choice}
+                        onValueChange={(v) => onChoice(v as SoundChoice)}
+                        list={SOUND_OPTIONS}
+                    />
+                </div>
+                <Action
+                    variant="ghost"
+                    icon="play"
+                    onClick={() => void previewSound(choice, customPath, kind)}
+                    disabled={choice === 'off' || (choice === 'custom' && !customPath)}
+                >
+                    Preview
+                </Action>
+            </div>
+            {choice === 'custom' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Action variant="ghost" icon="folder" onClick={pickCustom}>
+                        Choose file…
+                    </Action>
+                    <Text size="xs" className="text-zinc-500">
+                        {customPath ? baseName(customPath) : 'No file chosen'}
+                    </Text>
+                </div>
+            )}
+        </div>
+    );
+}
+
+/**
+ * Appearance — light/dark/system theme. The theme is renderer-local (it toggles
+ * the `.dark` class on <html> and is read on boot by _app.tsx), NOT a persisted
+ * Genie setting, so it lives in localStorage under 'genie.theme'. Default
+ * 'system', which tracks the OS preference live. Applies immediately on change.
+ */
+function AppearanceCard() {
+    const [theme, setTheme] = useState<'system' | 'light' | 'dark'>('system');
+
+    useEffect(() => {
+        try {
+            const saved = window.localStorage.getItem('genie.theme');
+            if (saved === 'light' || saved === 'dark') setTheme(saved);
+            else setTheme('system');
+        } catch {
+            /* private mode */
+        }
+    }, []);
+
+    const applyTheme = (next: 'system' | 'light' | 'dark') => {
+        setTheme(next);
+        try {
+            window.localStorage.setItem('genie.theme', next);
+        } catch {
+            /* private mode — still apply for this session */
+        }
+        const dark =
+            next === 'dark' ||
+            (next === 'system' &&
+                window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.classList.toggle('dark', dark);
+    };
+
+    return (
+        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Heading as="h2" size="sm">Appearance</Heading>
+            <Text size="xs" className="text-zinc-500">
+                The colour theme for Genie. “System” follows your operating
+                system and updates live when you switch it.
+            </Text>
+            <Select
+                value={theme}
+                onValueChange={(v) => applyTheme(v as 'system' | 'light' | 'dark')}
+                list={[
+                    { value: 'system', label: 'System' },
+                    { value: 'light', label: 'Light' },
+                    { value: 'dark', label: 'Dark' },
+                ]}
+            />
+        </Card>
     );
 }
 

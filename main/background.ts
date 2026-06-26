@@ -25,6 +25,7 @@ import {
     removeWorkspace,
 } from './db';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
+import { resolveAlertSound } from './notify-sound';
 import { workspaceDocHealth, repairWorkspaceDocs } from './workspace/create-agi';
 import { registerForceQuestionIpc, forceQuestion } from './ask/force-question';
 import { registerIssueWatchIpc, resolveWorkspaceRepos } from './issue-watch';
@@ -173,20 +174,27 @@ function notifyImDone(terminalId: string): void {
     } catch {
         return;
     }
-    if (settings.notify_sound === 'on') {
+    // Resolve the per-alert sound choice (synth / bundled wav / custom file →
+    // data-URL / off). A null descriptor means "off" for this alert — skip the
+    // chime entirely. Only resolved when the master sound gate is on.
+    const sound =
+        settings.notify_sound === 'on' ? resolveAlertSound('imDone') : null;
+    if (sound) {
         // Send to exactly one live renderer so the chime plays once. A hidden
         // window still runs its renderer, so this works tray-resident too.
         const target =
             (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null) ??
             BrowserWindow.getAllWindows()[0];
-        target?.webContents.send('notify:sound', { kind: 'imDone' });
+        target?.webContents.send('notify:sound', { kind: 'imDone', sound });
     }
     if (settings.notify_toast === 'on' && Notification.isSupported()) {
         const label = getTerminalSpec(terminalId)?.label ?? 'A terminal';
         const n = new Notification({
             title: 'Genie — agent finished',
             body: `${label} is done and waiting for you.`,
-            silent: settings.notify_sound === 'on', // don't double up with our chime
+            // Silence the OS chime only when OUR chime actually plays, so we
+            // don't double up — but if the alert sound is off, let the OS sound.
+            silent: !!sound,
         });
         n.on('click', () => {
             const win = mainWindow ?? BrowserWindow.getAllWindows()[0];
