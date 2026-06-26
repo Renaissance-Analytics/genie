@@ -718,6 +718,7 @@ button.m-card:disabled {
     gap: 10px;
 }
 .m-ws-main {
+    flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
@@ -764,6 +765,107 @@ button.m-card:disabled {
     flex: 0 0 auto;
     color: var(--violet-500);
     display: inline-flex;
+}
+
+/* ---- Dashboard density + tools strip ----
+   The dashboard is the most data-heavy tab, so it runs tighter than the shared
+   .m-scroll defaults: smaller outer padding + gaps and slimmer cards, to fit
+   more workspaces / processes on a phone without scrolling. Scoped to .m-dash so
+   the other tabs keep the roomier spacing. */
+.m-dash {
+    gap: 12px;
+    padding: 12px;
+}
+.m-dash .m-section {
+    gap: 6px;
+}
+.m-dash .m-list {
+    gap: 6px;
+}
+.m-dash .m-card {
+    padding: 10px 12px;
+}
+.m-dash .m-ws {
+    gap: 8px;
+}
+
+/* A muted per-section count chip (e.g. "3" workspaces, "2/4" processes). */
+.m-count {
+    margin-left: auto;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: var(--fg-3);
+    background: var(--bg-2);
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-family: var(--font-mono);
+}
+
+/* The live-activity dot on a workspace pulses while it's flashing. */
+.m-dot-live {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--violet-500) 60%, transparent);
+    animation: m-dot-pulse 1.4s ease-out infinite;
+}
+@keyframes m-dot-pulse {
+    0% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--violet-500) 55%, transparent);
+    }
+    70% {
+        box-shadow: 0 0 0 6px transparent;
+    }
+    100% {
+        box-shadow: 0 0 0 0 transparent;
+    }
+}
+
+/* "Upgrade Genie" tool tile — slim when idle/up-to-date, a solid amber CTA when
+   a build is staged. Reuses the dashboard card chrome with its own accent. */
+.m-tool {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: var(--card);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-lg);
+}
+.m-tool-ready {
+    border-color: color-mix(in srgb, var(--amber-500) 45%, var(--border-1));
+    background: color-mix(in srgb, var(--amber-500) 12%, var(--card));
+}
+.m-tool-icon {
+    flex: 0 0 auto;
+    display: inline-flex;
+    color: var(--violet-500);
+}
+.m-tool-ready .m-tool-icon {
+    color: var(--amber-500);
+}
+.m-tool-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+.m-tool-cta {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 36px;
+    padding: 0 14px;
+    border-radius: 8px;
+    border: none;
+    background: var(--amber-500);
+    color: #09090b;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+}
+.m-tool-cta:active {
+    background: color-mix(in srgb, var(--amber-500) 85%, #000);
 }
 
 /* Process rows */

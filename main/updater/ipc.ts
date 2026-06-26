@@ -10,6 +10,7 @@ import { setUpdateAvailable } from '../tray';
 import { showSettingsWindow } from '../background';
 import { getChangelog, type Changelog } from './changelog';
 import { hostBackendKind, detachedHostPinsBinary } from '../terminal/host-service';
+import { mobileEmit } from '../mobile/bus';
 
 /**
  * Unified IPC for the updater. The renderer doesn't know whether it's
@@ -124,17 +125,93 @@ export function registerUpdaterIpc(): void {
         },
     );
 
-    // Status + log fanout. Both backends emit the same events.
+    // Status + log fanout. Both backends emit the same events. The mobileEmit
+    // mirrors the compact update state to a paired phone's /ws/events so the
+    // "Upgrade Genie" tool tracks the same state machine live (no-op when the
+    // mobile server is off).
     u.on('status', (status) => {
         broadcastStatus(withHostFlag(status));
         reflectUpdateState(status as UpdaterStatus);
+        mobileEmit('update:changed', compactUpdate(status as UpdaterStatus));
     });
     u.on('log', (line: string) => broadcastLog(line));
     a.on('status', (status) => {
         broadcastStatus(withHostFlag(status));
         reflectUpdateState(status as AutoUpdaterStatus);
+        mobileEmit('update:changed', compactUpdate(status as AutoUpdaterStatus));
     });
     a.on('log', (line: string) => broadcastLog(line));
+}
+
+/**
+ * The compact update snapshot the mobile "Upgrade Genie" tool reads — just the
+ * fields a phone needs to render "up to date" vs "update ready → tap to restart".
+ * `state` rides the wire as a plain string (the renderer + phone treat it loosely).
+ */
+export interface MobileUpdateStatus {
+    state: string;
+    currentVersion: string;
+    latestVersion: string | null;
+    /** True only when a build has finished downloading and a restart will apply it. */
+    readyToInstall: boolean;
+}
+
+function compactUpdate(status: UpdaterStatus | AutoUpdaterStatus): MobileUpdateStatus {
+    return {
+        state: status.state,
+        currentVersion: status.currentVersion,
+        latestVersion: status.latestVersion,
+        readyToInstall: status.state === 'ready-to-restart',
+    };
+}
+
+/** Snapshot of the ACTIVE updater backend for the mobile dashboard. */
+export function mobileUpdateStatus(): MobileUpdateStatus {
+    const status =
+        updaterMode() === 'phase1'
+            ? updater().getStatus()
+            : autoUpdaterInstance().getStatus();
+    return compactUpdate(status);
+}
+
+/**
+ * Apply a downloaded update from the phone — the SAME path the desktop pill uses
+ * (restartAndApply → markQuittingForUpdate → two-phase teardown → quitAndInstall).
+ * Only valid once a build is staged ('ready-to-restart'); otherwise reports
+ * `not-ready` so the REST layer answers 409. Phase-1 (git checkout) has no
+ * installer, so it's reported `unsupported`. The quit is deferred a tick by the
+ * caller so the REST response flushes to the phone before teardown begins.
+ */
+export function mobileInstallUpdate(): {
+    ok: boolean;
+    error?: string;
+    reason?: 'not-ready' | 'unsupported';
+} {
+    if (updaterMode() === 'phase1') {
+        return {
+            ok: false,
+            reason: 'unsupported',
+            error: 'Update install is only available in packaged builds.',
+        };
+    }
+    const a = autoUpdaterInstance();
+    if (a.getStatus().state !== 'ready-to-restart') {
+        return {
+            ok: false,
+            reason: 'not-ready',
+            error: 'No update has finished downloading yet.',
+        };
+    }
+    // Defer the quit so the caller's HTTP 200 reaches the phone before the app
+    // tears down for the installer. restartAndApply is synchronous + irreversible.
+    setTimeout(() => {
+        try {
+            a.restartAndApply();
+        } catch {
+            /* surfaced via the status stream if it ever throws here */
+        }
+    }, 200);
+    return { ok: true };
 }
 
 /**

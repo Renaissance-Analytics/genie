@@ -460,6 +460,16 @@ function buildMobileE2EDeps(): MobileDataDeps {
 
         listPendingQuestions: () => listPendingQuestions(),
         answerPendingQuestion: (id, answers) => answerPendingQuestion(id, answers),
+
+        // Self-update: the E2E build is never packaged, so report a stable
+        // "up to date" snapshot and refuse installs (nothing is ever staged).
+        updateStatus: () => ({
+            state: 'up-to-date',
+            currentVersion: '0.0.0-e2e',
+            latestVersion: '0.0.0-e2e',
+            readyToInstall: false,
+        }),
+        installUpdate: () => ({ ok: false, reason: 'not-ready' as const }),
     };
 }
 

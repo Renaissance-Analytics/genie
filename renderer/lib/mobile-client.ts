@@ -61,6 +61,19 @@ export interface MobileState {
     questions: PendingQuestion[];
 }
 
+/**
+ * Compact updater state for the "Upgrade Genie" tool (`GET /api/update/status`),
+ * mirrored live on `/ws/events` as `update:changed`. `state` is the desktop
+ * updater's state-machine value (checking / available / downloading /
+ * ready-to-restart / up-to-date / error / …) carried as a plain string.
+ */
+export interface MobileUpdateStatus {
+    state: string;
+    currentVersion: string;
+    latestVersion: string | null;
+    readyToInstall: boolean;
+}
+
 /** A `/ws/events` dashboard push. `payload` shape depends on `type`. */
 export interface MobileEvent {
     type: string;
@@ -303,6 +316,20 @@ export function listQuestions(): Promise<PendingQuestion[]> {
     return request<{ questions: PendingQuestion[] }>('/api/questions').then(
         (r) => r.questions,
     );
+}
+
+/** Current self-update state for the "Upgrade Genie" tool. */
+export function getUpdateStatus(): Promise<MobileUpdateStatus> {
+    return request<MobileUpdateStatus>('/api/update/status');
+}
+
+/**
+ * Ask the desktop to restart + apply a downloaded update — the same one-click
+ * path the desktop pill uses. The server answers 409 (→ MobileApiError) when
+ * nothing is staged yet, so the caller only enables this when `readyToInstall`.
+ */
+export function installUpdate(): Promise<{ ok: true }> {
+    return request<{ ok: true }>('/api/update/install', { method: 'POST' });
 }
 
 // ---- REST writes ----------------------------------------------------------

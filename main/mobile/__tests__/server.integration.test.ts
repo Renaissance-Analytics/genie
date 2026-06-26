@@ -29,6 +29,9 @@ import type { MobileDataDeps } from '../api';
 
 let appDir: string;
 const written: Array<{ id: string; data: string }> = [];
+// Drives the mock updater deps: flip to true to simulate a staged build so the
+// install endpoint returns 200; left false it reports not-ready (→ 409).
+let updateReady = false;
 
 function buildAppDir(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mobile-it-'));
@@ -69,6 +72,14 @@ const deps = (): MobileDataDeps => ({
     resize: () => true,
     listPendingQuestions: () => [],
     answerPendingQuestion: () => true,
+    updateStatus: () => ({
+        state: updateReady ? 'ready-to-restart' : 'up-to-date',
+        currentVersion: '0.0.0-test',
+        latestVersion: updateReady ? '0.0.1-test' : null,
+        readyToInstall: updateReady,
+    }),
+    installUpdate: () =>
+        updateReady ? { ok: true } : { ok: false, reason: 'not-ready' as const },
 });
 
 async function start(autoConfirm = true): Promise<number> {
@@ -151,6 +162,7 @@ beforeEach(() => {
     _resetAuditForTest();
     _resetBridgeForTest();
     written.length = 0;
+    updateReady = false;
 });
 
 afterEach(() => {
@@ -216,6 +228,47 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         setLocked(false);
         const ok = await req(port, 'POST', '/api/terminal/t-1/kill', { token });
         expect(ok.status).toBe(200);
+    });
+
+    it('GET /api/update/status: 401 without a token, 200 with one', async () => {
+        const port = await start();
+        const noTok = await req(port, 'GET', '/api/update/status');
+        expect(noTok.status).toBe(401);
+
+        const token = await pair(port);
+        const ok = await req(port, 'GET', '/api/update/status', { token });
+        expect(ok.status).toBe(200);
+        expect(ok.json.state).toBe('up-to-date');
+        expect(ok.json.readyToInstall).toBe(false);
+        expect(ok.json.currentVersion).toBe('0.0.0-test');
+    });
+
+    it('POST /api/update/install: 409 when nothing is staged', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/update/install', { token });
+        expect(r.status).toBe(409);
+    });
+
+    it('POST /api/update/install: 200 once a build is staged', async () => {
+        const port = await start();
+        const token = await pair(port);
+        updateReady = true;
+        const ready = await req(port, 'GET', '/api/update/status', { token });
+        expect(ready.json.readyToInstall).toBe(true);
+        const r = await req(port, 'POST', '/api/update/install', { token });
+        expect(r.status).toBe(200);
+        expect(r.json.ok).toBe(true);
+    });
+
+    it('POST /api/update/install: 423 while the desktop is locked', async () => {
+        const port = await start();
+        const token = await pair(port);
+        updateReady = true;
+        setLocked(true);
+        const locked = await req(port, 'POST', '/api/update/install', { token });
+        expect(locked.status).toBe(423);
+        setLocked(false);
     });
 
     it('rejects a WS upgrade without a valid token', async () => {

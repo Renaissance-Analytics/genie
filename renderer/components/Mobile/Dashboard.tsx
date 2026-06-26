@@ -3,29 +3,36 @@ import { Action, Icon, Text } from '@particle-academy/react-fancy';
 import UploadToAi from './Upload';
 import type { ProcessListItem, ProcessStatus } from '../../lib/genie';
 import {
+    getUpdateStatus,
+    installUpdate,
     listProcesses,
     MobileApiError,
     processAction,
     type MobileEvent,
     type MobileState,
+    type MobileUpdateStatus,
     type MobileWorkspace,
     type ProcessAction,
 } from '../../lib/mobile-client';
 
 /**
- * The phone's home view: every workspace with its live agent state, and every
- * background process with start/stop/restart controls. Bootstraps from the
- * `GET /api/state` snapshot passed in by the shell, then patches itself live
- * from `/ws/events`:
- *   - `terminal:attention {id,on}` — an agent called imDone (the glow). We can't
- *     map a terminal id → workspace from this alone, so the glow is surfaced as
- *     a transient "needs attention" pulse on the workspace via `workspace:pulse`.
+ * The phone's home view — data-first. It leads with the LIVE state of the rig:
+ * every workspace with its agent-activity pulse (imDone glow / `workspace:pulse`)
+ * and the Upload-to-`.ai/_dirty` control, then every background process with its
+ * status + start/stop/restart. The two critical TOOLS sit up top in a tight
+ * strip: "Upgrade Genie" (mirrors the desktop updater — tap to restart & apply a
+ * downloaded build) and Upload (surfaced per workspace, where the file lands).
+ *
+ * Bootstraps from the `GET /api/state` snapshot the shell passes in, then patches
+ * itself live from `/ws/events`:
  *   - `workspace:pulse {workspaceId}` — activity in a workspace; we flash it.
  *   - `process:status {id,status}` — patch the process row's status in place.
+ *   - `update:changed {…}` — the desktop updater advanced; the Upgrade tool tracks it.
  *   - `workspaces:changed` / `terminal-spec:changed` — refetch the relevant list.
  *
- * `events` is the live event stream owned by the shell; we subscribe via the
- * `subscribe` prop so a single WS feeds every tab.
+ * `events` is the live stream owned by the shell; we subscribe via `subscribe`
+ * so a single WS feeds every tab. Layout is deliberately DENSE — tight cards,
+ * minimal chrome — to fit a phone without wasting vertical space.
  */
 
 const PROCESS_STATUS_COLOR: Record<ProcessStatus, string> = {
@@ -128,14 +135,24 @@ export default function Dashboard({
         }
     };
 
+    const runningCount = processes.filter(
+        (p) => p.status === 'running' || p.status === 'restarting',
+    ).length;
+
     return (
-        <div className="m-scroll">
+        <div className="m-scroll m-dash">
+            {/* Tools strip — the one global tool (Upgrade); Upload is per-workspace. */}
+            <UpgradeGenie subscribe={subscribe} onLocked={onLocked} />
+
             <section className="m-section">
                 <div className="m-section-head">
                     <Icon name="layout-grid" size="xs" />
                     <Text size="xs" className="m-section-title">
                         Workspaces
                     </Text>
+                    {workspaces.length > 0 && (
+                        <span className="m-count">{workspaces.length}</span>
+                    )}
                 </div>
                 {workspaces.length === 0 ? (
                     <Text size="sm" className="text-zinc-500 m-empty">
@@ -143,29 +160,41 @@ export default function Dashboard({
                     </Text>
                 ) : (
                     <div className="m-list">
-                        {workspaces.map((ws) => (
-                            <div
-                                key={ws.id}
-                                className={`m-card m-ws${pulsing.has(ws.id) ? ' m-pulse' : ''}`}
-                            >
-                                <div className="m-ws-top">
-                                    <div className="m-ws-main">
-                                        <Text size="sm" style={{ fontWeight: 600 }}>
-                                            {ws.name}
-                                        </Text>
-                                        <Text size="xs" className="text-zinc-500 m-mono m-truncate">
-                                            {ws.path}
-                                        </Text>
+                        {workspaces.map((ws) => {
+                            const active = pulsing.has(ws.id);
+                            return (
+                                <div
+                                    key={ws.id}
+                                    className={`m-card m-ws${active ? ' m-pulse' : ''}`}
+                                >
+                                    <div className="m-ws-top">
+                                        <span
+                                            className={`m-dot${active ? ' m-dot-live' : ''}`}
+                                            style={{
+                                                background: active
+                                                    ? 'var(--violet-500)'
+                                                    : 'var(--fg-4)',
+                                            }}
+                                            title={active ? 'Active' : 'Idle'}
+                                        />
+                                        <div className="m-ws-main">
+                                            <Text size="sm" style={{ fontWeight: 600 }} className="m-truncate">
+                                                {ws.name}
+                                            </Text>
+                                            <Text size="xs" className="text-zinc-500 m-mono m-truncate">
+                                                {ws.path}
+                                            </Text>
+                                        </div>
+                                        {active && (
+                                            <span className="m-attn" title="Active">
+                                                <Icon name="sparkles" size="xs" />
+                                            </span>
+                                        )}
                                     </div>
-                                    {pulsing.has(ws.id) && (
-                                        <span className="m-attn" title="Active">
-                                            <Icon name="sparkles" size="xs" />
-                                        </span>
-                                    )}
+                                    <UploadToAi workspaceId={ws.id} onLocked={onLocked} />
                                 </div>
-                                <UploadToAi workspaceId={ws.id} onLocked={onLocked} />
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 )}
             </section>
@@ -176,6 +205,11 @@ export default function Dashboard({
                     <Text size="xs" className="m-section-title">
                         Processes
                     </Text>
+                    {processes.length > 0 && (
+                        <span className="m-count">
+                            {runningCount}/{processes.length}
+                        </span>
+                    )}
                 </div>
                 {processes.length === 0 ? (
                     <Text size="sm" className="text-zinc-500 m-empty">
@@ -199,7 +233,7 @@ export default function Dashboard({
                                                         'var(--fg-4)',
                                                 }}
                                             />
-                                            <Text size="sm" style={{ fontWeight: 600 }}>
+                                            <Text size="sm" style={{ fontWeight: 600 }} className="m-truncate">
                                                 {p.label}
                                             </Text>
                                         </div>
@@ -254,6 +288,154 @@ export default function Dashboard({
                     </div>
                 )}
             </section>
+        </div>
+    );
+}
+
+/**
+ * "Upgrade Genie" — the phone's view of the desktop self-updater. It reads the
+ * current state from `GET /api/update/status` on mount and tracks it live via the
+ * `update:changed` push, so the desktop's hands-off background download surfaces
+ * here without a refresh. When a build is staged (`readyToInstall`) it becomes a
+ * single amber CTA: tap → `POST /api/update/install` runs the SAME desktop
+ * quitAndInstall, then Genie restarts into the new version. Up-to-date is a slim,
+ * unobtrusive line so the tool never wastes space until it has something to say.
+ */
+function UpgradeGenie({
+    subscribe,
+    onLocked,
+}: {
+    subscribe: (cb: (e: MobileEvent) => void) => () => void;
+    onLocked: () => void;
+}) {
+    const [status, setStatus] = useState<MobileUpdateStatus | null>(null);
+    const [installing, setInstalling] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const refetch = () =>
+        getUpdateStatus()
+            .then(setStatus)
+            .catch(() => {});
+
+    useEffect(() => {
+        void refetch();
+    }, []);
+
+    // Live updater state — the desktop advances available → downloading →
+    // ready-to-restart on its own; mirror each tick here.
+    useEffect(() => {
+        const off = subscribe((e: MobileEvent) => {
+            if (e.type === 'update:changed' && e.payload) {
+                setStatus(e.payload as MobileUpdateStatus);
+            }
+        });
+        return off;
+    }, [subscribe]);
+
+    const onInstall = async () => {
+        if (installing) return;
+        setInstalling(true);
+        setError(null);
+        try {
+            await installUpdate();
+            // The desktop quits ~200ms later to apply; hold the "restarting" copy.
+        } catch (e) {
+            setInstalling(false);
+            if (e instanceof MobileApiError && e.isLocked) {
+                onLocked();
+                return;
+            }
+            // 409 ⇒ nothing staged (raced the state); re-sync and show the latest.
+            if (e instanceof MobileApiError && e.status === 409) {
+                void refetch();
+                return;
+            }
+            setError(e instanceof Error ? e.message : 'Update failed');
+        }
+    };
+
+    if (!status) return null;
+
+    const ready = status.readyToInstall;
+    const busyState =
+        status.state === 'downloading' ||
+        status.state === 'available' ||
+        status.state === 'applying';
+    const checking = status.state === 'checking';
+    const version = status.latestVersion ?? status.currentVersion;
+
+    // Installing → restarting copy; ready → CTA; downloading/checking → progress;
+    // else a slim "up to date" line.
+    let body: React.ReactNode;
+    if (installing) {
+        body = (
+            <div className="m-tool-main">
+                <Icon name="loader" size="xs" className="m-spin" />
+                <Text size="sm" style={{ fontWeight: 600 }}>
+                    Restarting to update…
+                </Text>
+            </div>
+        );
+    } else if (ready) {
+        body = (
+            <>
+                <div className="m-tool-main">
+                    <Text size="sm" style={{ fontWeight: 600 }}>
+                        Update ready
+                    </Text>
+                    <Text size="xs" className="m-mono" style={{ color: 'inherit', opacity: 0.85 }}>
+                        v{version}
+                    </Text>
+                </div>
+                <button type="button" className="m-tool-cta" onClick={() => void onInstall()}>
+                    <Icon name="rotate-cw" size="xs" />
+                    Restart &amp; update
+                </button>
+            </>
+        );
+    } else if (busyState) {
+        body = (
+            <div className="m-tool-main">
+                <Icon name="download" size="xs" />
+                <Text size="sm" style={{ fontWeight: 600 }}>
+                    Downloading v{version}…
+                </Text>
+            </div>
+        );
+    } else if (checking) {
+        body = (
+            <div className="m-tool-main">
+                <Icon name="loader" size="xs" className="m-spin" />
+                <Text size="sm" className="text-zinc-500">
+                    Checking for updates…
+                </Text>
+            </div>
+        );
+    } else {
+        body = (
+            <div className="m-tool-main">
+                <Icon name="check" size="xs" className="text-emerald-500" />
+                <Text size="sm" className="text-zinc-500">
+                    Up to date
+                </Text>
+                <Text size="xs" className="m-mono text-zinc-500">
+                    v{status.currentVersion}
+                </Text>
+            </div>
+        );
+    }
+
+    return (
+        <div className={`m-tool${ready ? ' m-tool-ready' : ''}`}>
+            <span className="m-tool-icon">
+                <Icon name="sparkles" size="sm" />
+            </span>
+            {body}
+            {error && (
+                <Text size="xs" className="text-rose-500 m-truncate">
+                    {error}
+                </Text>
+            )}
         </div>
     );
 }

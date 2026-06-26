@@ -35,6 +35,7 @@ import {
     IconCpu,
     IconSettings,
     IconAlert,
+    IconX,
 } from '../components/Master/icons';
 import {
     api,
@@ -1155,6 +1156,7 @@ function MasterInner() {
                     githubNeedsResolve={githubNeedsResolve}
                     onShowGithubCaps={() => setGithubCapsOpen((o) => !o)}
                 />
+                <UpdateReadyBanner />
                 <Toolbar
                     activeWorkspace={
                         activeWorkspaceId
@@ -1472,6 +1474,86 @@ function UpdatePill() {
                     willRestartPtyHost={!!status.willRestartPtyHost}
                 />
             )}
+        </div>
+    );
+}
+
+/**
+ * Slim, dismissible "Restart & update" banner shown ONCE a downloaded build is
+ * staged (state 'ready-to-restart'). With auto-download on, the update arrives
+ * hands-off, so this is the single explicit affordance to apply it — one click
+ * runs the SAME quitAndInstall path as the header pill (isQuittingForUpdate →
+ * two-phase teardown → installer). It complements the title-bar pill (which also
+ * covers the available/downloading states + changelog hover); the banner is the
+ * harder-to-miss prompt the instant the build is ready. Dismiss leaves the pill
+ * in place, so nothing is lost.
+ */
+function UpdateReadyBanner() {
+    const [status, setStatus] = useState<UpdaterStatus | null>(null);
+    // The version the user dismissed. A LATER staged build (different version)
+    // re-shows the banner; re-broadcasts of the same version stay muted.
+    const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
+    const [busy, setBusy] = useState(false);
+
+    useEffect(() => {
+        let alive = true;
+        void api()
+            .updater.status()
+            .then((s) => alive && setStatus(s))
+            .catch(() => {});
+        const off = api().on.updaterStatus((s) => setStatus(s));
+        return () => {
+            alive = false;
+            off();
+        };
+    }, []);
+
+    if (
+        !status ||
+        status.state !== 'ready-to-restart' ||
+        (status.latestVersion != null && dismissedVersion === status.latestVersion)
+    )
+        return null;
+
+    const restart = async () => {
+        if (busy) return;
+        setBusy(true);
+        try {
+            const r = await api().updater.restart();
+            // Phase-1 (git checkout) has no installer; quitting is the honest
+            // fallback so a manual relaunch picks up the new code.
+            if (!r.ok) await api().app.quit();
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <div className="update-banner" role="status">
+            <span className="ub-dot" />
+            <span className="ub-text">
+                Genie v{status.latestVersion} is ready.
+                {status.willRestartPtyHost
+                    ? ' Applying it restarts your background terminals (restored from a snapshot).'
+                    : ''}
+            </span>
+            <button
+                type="button"
+                className="ub-action"
+                onClick={() => void restart()}
+                disabled={busy}
+            >
+                Restart &amp; update
+            </button>
+            <button
+                type="button"
+                className="ub-dismiss"
+                onClick={() => setDismissedVersion(status.latestVersion)}
+                aria-label="Dismiss"
+                title="Dismiss (the update stays ready in the title bar)"
+            >
+                <IconX size={14} />
+            </button>
         </div>
     );
 }

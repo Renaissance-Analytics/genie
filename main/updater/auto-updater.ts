@@ -61,6 +61,14 @@ const LOG_MAX = 2000;
 class AutoUpdater extends EventEmitter {
     private status: AutoUpdaterStatus;
     private timer: NodeJS.Timeout | null = null;
+    /**
+     * Hands-off mode: when set, a freshly-discovered update downloads in the
+     * BACKGROUND immediately (so the user only ever clicks "Restart to update"
+     * once, never a separate "Install"). Distinct from electron-updater's own
+     * `autoDownload` (kept off — see bind()); this drives our explicit
+     * downloadAndStage() so the download still carries our log/progress/error UX.
+     */
+    private autoDownload = true;
 
     constructor() {
         super();
@@ -109,8 +117,22 @@ class AutoUpdater extends EventEmitter {
         this.timer = null;
     }
 
+    /** Toggle hands-off background download of a discovered update (default on). */
+    setAutoDownload(on: boolean): void {
+        this.autoDownload = on;
+    }
+
     async checkForUpdate(): Promise<void> {
-        if (this.status.state === 'downloading') return;
+        // A download in flight — or a build already staged and waiting to apply —
+        // must not be disturbed by a routine re-check (the poll fires every few
+        // hours). Bail so we don't re-enter 'checking' and kick a SECOND download
+        // of the same release on top of the one we're already holding.
+        if (
+            this.status.state === 'downloading' ||
+            this.status.state === 'ready-to-restart'
+        ) {
+            return;
+        }
         this.setStatus({ state: 'checking', error: null, manualDownloadUrl: null });
         try {
             const res = await autoUpdater.checkForUpdates();
@@ -131,6 +153,14 @@ class AutoUpdater extends EventEmitter {
                     publishedAt: res.updateInfo.releaseDate ?? null,
                     releaseUrl: pickReleaseUrl(res.updateInfo),
                 });
+                // Single-click / hands-off update: start fetching the new build in
+                // the background the instant we find it, so by the time the user
+                // notices it's already staged and one click ("Restart to update")
+                // applies it. downloadAndStage() flips us to 'downloading', which
+                // makes the guard above no-op the next poll.
+                if (this.autoDownload) {
+                    void this.downloadAndStage().catch(() => {});
+                }
             }
         } catch (e) {
             this.setStatus({
@@ -177,7 +207,11 @@ class AutoUpdater extends EventEmitter {
     }
 
     private bind(): void {
-        // We do everything explicitly — no auto-download, no auto-install.
+        // electron-updater's OWN auto-download stays OFF — we drive the download
+        // explicitly via downloadAndStage() so it carries our log/progress/error
+        // handling. Hands-off behaviour lives one level up (checkForUpdate() kicks
+        // downloadAndStage when `this.autoDownload` is set). Install is never
+        // automatic — it always goes through restartAndApply() / quitAndInstall.
         autoUpdater.autoDownload = false;
         autoUpdater.autoInstallOnAppQuit = false;
 

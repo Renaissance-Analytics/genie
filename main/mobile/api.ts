@@ -161,6 +161,25 @@ export interface MobileDataDeps {
     // --- force-question ---
     listPendingQuestions: () => PendingQuestion[];
     answerPendingQuestion: (id: string, answers: ForceAnswer[]) => boolean;
+
+    // --- self-update ("Upgrade Genie" tool) ---
+    /** Compact state of the active updater backend for the phone. */
+    updateStatus: () => {
+        state: string;
+        currentVersion: string;
+        latestVersion: string | null;
+        readyToInstall: boolean;
+    };
+    /**
+     * Apply a downloaded update (the SAME desktop quitAndInstall path). Returns
+     * `ok:false` with `reason:'not-ready'` when nothing is staged yet (→ 409) or
+     * `reason:'unsupported'` on a non-packaged build.
+     */
+    installUpdate: () => {
+        ok: boolean;
+        error?: string;
+        reason?: 'not-ready' | 'unsupported';
+    };
 }
 
 /** A small JSON response helper (CORS-free — same-origin from the served app). */
@@ -334,6 +353,34 @@ export async function handleApi(
     }
     if (pathname === '/api/questions' && method === 'GET') {
         sendJson(res, 200, { questions: deps.listPendingQuestions() });
+        return true;
+    }
+    // Update state for the "Upgrade Genie" tool — a read, so no kill-switch gate.
+    if (pathname === '/api/update/status' && method === 'GET') {
+        sendJson(res, 200, deps.updateStatus());
+        return true;
+    }
+
+    // --- self-update apply: POST /api/update/install ----------------------
+    if (pathname === '/api/update/install') {
+        if (method !== 'POST') {
+            sendJson(res, 405, { error: 'method not allowed' });
+            return true;
+        }
+        if (guardLocked()) return true;
+        const result = deps.installUpdate();
+        if (!result.ok) {
+            // not-ready (nothing downloaded yet) and unsupported (non-packaged
+            // build) are both "can't act right now" → 409 Conflict, so the phone
+            // shows "up to date" / disables the button rather than erroring out.
+            audit('update.install', `refused (${result.reason ?? 'error'})`, actor);
+            sendJson(res, result.reason ? 409 : 500, {
+                error: result.error ?? 'cannot install update',
+            });
+            return true;
+        }
+        audit('update.install', 'restart+apply triggered', actor);
+        sendJson(res, 200, { ok: true });
         return true;
     }
 

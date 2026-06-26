@@ -145,7 +145,12 @@ import {
     registerCapabilityIpc,
     runBootCapabilityCheck,
 } from './github/capability-service';
-import { registerUpdaterIpc, checkForUpdatesNow } from './updater/ipc';
+import {
+    registerUpdaterIpc,
+    checkForUpdatesNow,
+    mobileUpdateStatus,
+    mobileInstallUpdate,
+} from './updater/ipc';
 import { registerDocsIpc } from './docs/ipc';
 import { installAppMenu } from './app-menu';
 import {
@@ -1941,6 +1946,11 @@ app.whenReady().then(async () => {
             },
             listPendingQuestions: () => listPendingQuestions(),
             answerPendingQuestion: (id, answers) => answerPendingQuestion(id, answers),
+            // Self-update ("Upgrade Genie" tool) — backed by the SAME updater
+            // module the desktop pill drives, so a phone-triggered install walks
+            // the identical quitAndInstall / two-phase teardown path.
+            updateStatus: () => mobileUpdateStatus(),
+            installUpdate: () => mobileInstallUpdate(),
         },
     }).catch((e) => console.error('[mobile] failed to start', e));
     // Docs viewer IPC (docs:list / docs:read). __dirname is the compiled main
