@@ -398,7 +398,10 @@ export interface Settings {
      *  right cwd. 'off' disables it; anything else (incl. unset) is ON. */
     track_cwd?: 'on' | 'off';
     /** Tier 3: keep terminals running in a detached pty-host so they survive a
-     *  full quit of the app. Defaults OFF (in-process T1/T2). 'on' opts in. */
+     *  full quit of the app. Defaults ON — an unset value resolves to 'on' so
+     *  terminals AND the agents running in them survive a Genie restart
+     *  everywhere; an explicit 'off' opts back into the in-process T1/T2 backend
+     *  (which restores panels from a snapshot but cold-spawns a fresh shell). */
     detached_terminals?: 'on' | 'off';
     /** Prepend the bundled tynn-cli bin to terminal PATH + inject GENIE_* env.
      *  'off' disables it; anything else (incl. unset) is ON. */
@@ -509,7 +512,7 @@ export function getAllSettings(): Settings {
         max_views: out['max_views'] ?? '4',
         layout_json: out['layout_json'] ?? '{}',
         track_cwd: (out['track_cwd'] as 'on' | 'off') ?? 'on',
-        detached_terminals: (out['detached_terminals'] as 'on' | 'off') ?? 'off',
+        detached_terminals: (out['detached_terminals'] as 'on' | 'off') ?? 'on',
         notify_sound: (out['notify_sound'] as 'on' | 'off') ?? 'off',
         notify_toast: (out['notify_toast'] as 'on' | 'off') ?? 'off',
         sound_imdone:

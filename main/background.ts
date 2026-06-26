@@ -1566,7 +1566,12 @@ app.on('open-url', (event, url) => {
  */
 async function runBackendSelection() {
     return selectTerminalBackend({
-        detachedEnabled: detachedTerminalsEnabled(),
+        // Never attempt the detached host under E2E: the --no-pack test build
+        // ships no standalone runtime, and a detached + unref'd host child would
+        // outlive the test by design (an orphan process on the dev machine).
+        // The E2E specs don't exercise terminals, so in-process keeps boot
+        // deterministic + side-effect-free. The production default is ON.
+        detachedEnabled: detachedTerminalsEnabled() && !isE2E(),
         activateService: () =>
             activateHostService({
                 snapshots: getSnapshotStore(),
@@ -1668,14 +1673,16 @@ app.whenReady().then(async () => {
     wireTerminalAdapter(__dirname);
     // Tier 3: choose the terminal backend BEFORE registering the terminal IPC.
     // initTerminalBackend connects-or-spawns the detached pty-host when the
-    // `detached_terminals` setting is ON (default OFF → in-process). It NEVER
+    // `detached_terminals` setting is ON — now the DEFAULT (explicit 'off' →
+    // in-process). It NEVER
     // throws — any failure degrades to the in-process backend with a non-fatal
     // toast. Doing this first means registerTerminalIpc binds its data/exit
     // fan-out to whichever backend won (subscribeBackendEvents also re-binds on
     // any later swap, so a mid-session fallback still routes correctly).
     // BACKEND SELECTION (fallback chain: service → detached-spawn → in-process).
     //
-    //   1. detached_terminals OFF → in-process only. Skip the whole host path.
+    //   1. detached_terminals OFF (an explicit opt-out now) → in-process only.
+    //      Skip the whole host path.
     //   2. ON → FIRST try the per-user OS service (fancy-term-host@0.2.0
     //      /service): install-if-missing/stale → start → connect a HostClient to
     //      the SAME socket. A service-backed host runs on its OWN standalone Node

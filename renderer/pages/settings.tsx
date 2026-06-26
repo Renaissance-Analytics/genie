@@ -219,12 +219,12 @@ export default function SettingsPage() {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                         <Text size="sm">Keep terminals running after quit</Text>
                         <Text size="xs" className="text-zinc-500">
-                            Runs terminals in a detached background process so dev
-                            servers and shells survive a full quit of Genie and
-                            reattach on next launch. Experimental — if the background
-                            process can't start, Genie falls back to in-process
-                            terminals (which still restore from a snapshot, but don't
-                            survive a full quit).
+                            On by default. Runs terminals in a detached background
+                            process so dev servers, shells, and the agents running in
+                            them survive a full quit of Genie and reattach on next
+                            launch. If the background process can't start, Genie falls
+                            back to in-process terminals (which still restore from a
+                            snapshot, but don't survive a full quit).
                         </Text>
                     </div>
                 </div>

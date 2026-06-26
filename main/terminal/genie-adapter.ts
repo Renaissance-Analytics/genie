@@ -77,9 +77,11 @@ export function electronEncryptor(): Encryptor {
  *  composition root (background.ts) can decide whether to even ATTEMPT the
  *  per-user OS service / detached host before calling initTerminalBackend.
  *
- *  Defaults OFF (matching the package default): only 'on'/'true'/'1' enable it,
- *  and any db error degrades to OFF so a settings read can't force the heavy
- *  detached path on. */
+ *  Defaults ON: getAllSettings() resolves an unset value to 'on', so an
+ *  unconfigured install opts INTO the detached host (terminals + their agents
+ *  survive a restart). An explicit 'on'/'true'/'1' also enables it; only an
+ *  explicit 'off' — or a db error, which fails SAFE to in-process so a read
+ *  failure can't force the heavy detached path on — returns false. */
 export function detachedTerminalsEnabled(): boolean {
     try {
         const v = (getAllSettings() as Record<string, string | undefined>)[
@@ -92,7 +94,7 @@ export function detachedTerminalsEnabled(): boolean {
 }
 
 /** SettingsProvider over the SQLite settings table (typed defaults applied by
- *  getAllSettings — e.g. track_cwd defaults 'on', detached_terminals 'off'). */
+ *  getAllSettings — e.g. track_cwd defaults 'on', detached_terminals 'on'). */
 export function dbSettingsProvider(): SettingsProvider {
     return {
         get: (key: string) => {
