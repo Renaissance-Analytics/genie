@@ -20,6 +20,7 @@ import { useGithubCapabilities } from '../lib/githubCapabilities';
 import SignInPrompt from '../components/SignInPrompt';
 import type { BackendUser, ViewType } from '../lib/genie';
 import { resolveShortcut } from '../lib/master-shortcuts';
+import { computeLaunchSelection } from '../lib/launch-restore';
 import {
     IconBox,
     IconChevronDown,
@@ -400,14 +401,56 @@ function MasterInner() {
         void api().tynn.provision(ws.path).catch(() => {});
     }, [activeWorkspaceId, workspacesById]);
 
+    // Stage windows arrive with ?stage=<workspaceId>. Read it once on mount so
+    // the launch restore below can pin the grid to that workspace's terminals.
+    const isStage = useMemo(() => {
+        if (typeof window === 'undefined') return false;
+        const p = new URLSearchParams(window.location.search);
+        return p.has('stage');
+    }, []);
+    const stageSeedWorkspace = useMemo(() => {
+        if (typeof window === 'undefined') return null;
+        const p = new URLSearchParams(window.location.search);
+        const v = p.get('stage');
+        return v && v !== '1' ? v : null;
+    }, []);
+
     const refresh = useCallback(async () => {
-        const [ws, sp] = await Promise.all([
+        const [ws, sp, settings] = await Promise.all([
             api().workspaces.list(),
             api().terminalSpec.list(),
+            // active_workspace drives the launch restore below; load it here so
+            // the seed is computed from data in hand, never a later async read.
+            api()
+                .settings.get()
+                .catch(() => null),
         ]);
         setWorkspaces(ws);
         setSpecs(sp);
-    }, []);
+        // Restore the launch grid ONCE, computed from the FRESHLY-FETCHED arrays
+        // (not React state read through an effect closure). The previous seed
+        // effect fired on `[workspaces.length]` but read `specs` via closure and
+        // latched a one-shot guard; if it ever ran before the target's specs
+        // landed in state it seeded an empty selection and never retried, so the
+        // grid came up empty across a quit+relaunch. Seeding from `sp`/`ws`
+        // directly removes that race — the specs are always in hand here.
+        if (!seededActiveRef.current && ws.length > 0) {
+            seededActiveRef.current = true;
+            const { activeWorkspaceId: target, selectedIds } = computeLaunchSelection({
+                specs: sp,
+                workspaces: ws,
+                savedActiveWorkspace: settings?.active_workspace ?? null,
+                stageSeedWorkspace,
+                systemWorkspaceId: SYSTEM_WORKSPACE_ID,
+            });
+            if (target) {
+                setActiveWorkspaceId(target);
+                // A Stage window's `?stage=` seed may already have populated the
+                // selection — don't clobber it.
+                setSelected((prev) => (prev.size > 0 ? prev : new Set(selectedIds)));
+            }
+        }
+    }, [stageSeedWorkspace]);
 
     /**
      * Persist a user-defined sidebar order (full ordered list of workspace
@@ -427,21 +470,6 @@ function MasterInner() {
             return next;
         });
         void api().workspaces.reorder(realIds).catch(() => {});
-    }, []);
-
-    // Stage windows arrive with ?stage=<workspaceId>. Read it once on mount
-    // and seed the selection with that workspace's terminals so the user
-    // sees something useful immediately.
-    const isStage = useMemo(() => {
-        if (typeof window === 'undefined') return false;
-        const p = new URLSearchParams(window.location.search);
-        return p.has('stage');
-    }, []);
-    const stageSeedWorkspace = useMemo(() => {
-        if (typeof window === 'undefined') return null;
-        const p = new URLSearchParams(window.location.search);
-        const v = p.get('stage');
-        return v && v !== '1' ? v : null;
     }, []);
 
     const refreshAuth = useCallback(async () => {
@@ -520,52 +548,13 @@ function MasterInner() {
         return () => window.removeEventListener('focus', load);
     }, []);
 
-    useEffect(() => {
-        if (!stageSeedWorkspace || specs.length === 0 || selected.size > 0) return;
-        const ids = specs
-            .filter((s) => specWorkspaceId(s) === stageSeedWorkspace && s.enabled !== false)
-            .map((s) => s.id);
-        if (ids.length > 0) setSelected(new Set(ids));
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [specs.length, stageSeedWorkspace]);
-
-    // Seed the active workspace ONCE, after workspaces load. Stage windows
-    // pin to their `?stage=` workspace; otherwise read the persisted
-    // `active_workspace` setting, falling back to the most-recent workspace
-    // (workspaces already sort last_opened_at DESC). Selecting a workspace
-    // selects its views so the grid shows something immediately.
-    useEffect(() => {
-        if (seededActiveRef.current || workspaces.length === 0) return;
-        seededActiveRef.current = true;
-        (async () => {
-            let target: string | null = null;
-            if (stageSeedWorkspace && workspaces.some((w) => w.id === stageSeedWorkspace)) {
-                target = stageSeedWorkspace;
-            } else {
-                try {
-                    const s = await api().settings.get();
-                    const saved = s.active_workspace;
-                    if (saved && workspaces.some((w) => w.id === saved)) target = saved;
-                } catch {
-                    /* settings unavailable — fall through to most-recent */
-                }
-                if (!target) target = workspaces[0]?.id ?? null;
-            }
-            if (!target) return;
-            setActiveWorkspaceId(target);
-            // Seed selection with this workspace's views unless a stage seed
-            // already populated it.
-            setSelected((prev) => {
-                if (prev.size > 0) return prev;
-                return new Set(
-                    specs
-                        .filter((s) => specWorkspaceId(s) === target && s.enabled !== false)
-                        .map((s) => s.id),
-                );
-            });
-        })();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [workspaces.length]);
+    // NOTE: launch restore (which workspace is active + which of its terminals
+    // are selected) is seeded inside `refresh()` from the freshly-fetched
+    // arrays — including Stage windows, which pin to their `?stage=` workspace.
+    // It used to live in a `[workspaces.length]` effect that read `specs` via
+    // closure and latched a one-shot guard; that could seed an empty selection
+    // before specs loaded and never retry, leaving the grid blank after a
+    // quit+relaunch. See `computeLaunchSelection` + its tests.
 
     // Active-workspace views drive the grid layout + counts. Processes are
     // headless services — they never surface in the main grid.
