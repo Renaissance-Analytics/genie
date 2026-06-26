@@ -184,7 +184,7 @@ export type GithubPermission =
     | 'issues'
     | 'pull_requests'
     | 'vulnerability_alerts'
-    | 'code_scanning_alerts'
+    | 'security_events'
     | 'secret_scanning_alerts'
     | 'contents'
     | 'administration';

@@ -102,7 +102,7 @@ describe('recheckCapabilities — connected', () => {
             'github.provision',
         ]);
         expect(caps.missingPermissions).toEqual([
-            'code_scanning_alerts',
+            'security_events',
             'secret_scanning_alerts',
             'contents',
         ]);
@@ -124,7 +124,7 @@ describe('recheckCapabilities — connected', () => {
             issues: 'read',
             pull_requests: 'read',
             vulnerability_alerts: 'read',
-            code_scanning_alerts: 'read',
+            security_events: 'read',
             secret_scanning_alerts: 'read',
         };
         store.installations = [
@@ -186,7 +186,7 @@ describe('recheckCapabilities — connected', () => {
                     issues: 'read',
                     pull_requests: 'read',
                     vulnerability_alerts: 'read',
-                    code_scanning_alerts: 'read',
+                    security_events: 'read',
                     secret_scanning_alerts: 'read',
                     contents: 'write',
                 },
@@ -204,7 +204,7 @@ describe('recheckCapabilities — connected', () => {
                 issues: 'read',
                 pull_requests: 'read',
                 vulnerability_alerts: 'read',
-                code_scanning_alerts: 'read',
+                security_events: 'read',
                 secret_scanning_alerts: 'read',
                 contents: 'write',
             },
@@ -222,7 +222,7 @@ describe('recheckCapabilities — connected', () => {
                 issues: 'read',
                 pull_requests: 'read',
                 vulnerability_alerts: 'read',
-                code_scanning_alerts: 'read',
+                security_events: 'read',
                 secret_scanning_alerts: 'read',
                 contents: 'write',
             },

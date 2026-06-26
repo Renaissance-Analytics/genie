@@ -82,7 +82,7 @@ describe('computeCapabilityStatus', () => {
             'github.provision',
         ]);
         expect(status.missingPermissions).toEqual([
-            'code_scanning_alerts',
+            'security_events',
             'secret_scanning_alerts',
             'contents',
         ]);
@@ -127,7 +127,7 @@ describe('computeCapabilityStatus', () => {
             'issues',
             'pull_requests',
             'vulnerability_alerts',
-            'code_scanning_alerts',
+            'security_events',
             'secret_scanning_alerts',
             'contents',
         ]);
@@ -139,7 +139,7 @@ describe('computeCapabilityStatus', () => {
             issues: 'read',
             pull_requests: 'read',
             vulnerability_alerts: 'read',
-            code_scanning_alerts: 'read',
+            security_events: 'read',
             secret_scanning_alerts: 'read',
             contents: 'write',
         });
@@ -154,7 +154,7 @@ describe('computeCapabilityStatus', () => {
             issues: 'read',
             pull_requests: 'read',
             vulnerability_alerts: 'read',
-            code_scanning_alerts: 'read',
+            security_events: 'read',
             secret_scanning_alerts: 'read',
             // contents missing — but with no installs we can't say WHICH.
         });
@@ -175,7 +175,7 @@ describe('computeCapabilityStatus — per-installation attribution', () => {
             issues: 'read',
             pull_requests: 'read',
             vulnerability_alerts: 'read',
-            code_scanning_alerts: 'read',
+            security_events: 'read',
             secret_scanning_alerts: 'read',
         },
     };
@@ -190,7 +190,7 @@ describe('computeCapabilityStatus — per-installation attribution', () => {
             issues: 'read',
             pull_requests: 'read',
             vulnerability_alerts: 'read',
-            code_scanning_alerts: 'read',
+            security_events: 'read',
             secret_scanning_alerts: 'read',
             contents: 'write',
         },
@@ -257,7 +257,7 @@ describe('computeCapabilityStatus — per-installation attribution', () => {
                 issues: 'read',
                 pull_requests: 'read',
                 vulnerability_alerts: 'read',
-                code_scanning_alerts: 'read',
+                security_events: 'read',
                 secret_scanning_alerts: 'read',
                 contents: 'read',
             },

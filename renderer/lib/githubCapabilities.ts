@@ -30,7 +30,7 @@ export const PERMISSION_LABEL: Record<GithubPermission, string> = {
     issues: 'Issues',
     pull_requests: 'Pull requests',
     vulnerability_alerts: 'Dependabot alerts',
-    code_scanning_alerts: 'Code scanning alerts',
+    security_events: 'Code scanning alerts',
     secret_scanning_alerts: 'Secret scanning alerts',
     contents: 'Repository contents',
     administration: 'Administration',

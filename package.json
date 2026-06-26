@@ -1,6 +1,6 @@
 {
   "name": "genie",
-  "version": "0.7.0-beta.49",
+  "version": "0.7.0-beta.50",
   "description": "Tynn desktop companion — tray-resident workspace manager",
   "private": true,
   "main": "app/background.js",
@@ -23,7 +23,9 @@
     "build:icons": "node resources/build-icons.cjs"
   },
   "overrides": {
-    "esbuild": "^0.28.1"
+    "esbuild": "^0.28.1",
+    "form-data": "^4.0.6",
+    "tar": "^7.5.16"
   },
   "dependencies": {
     "@particle-academy/fancy-code": "^0.5.0",

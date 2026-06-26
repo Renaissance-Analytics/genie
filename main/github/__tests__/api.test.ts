@@ -589,7 +589,7 @@ describe('fetchRepoWatchItemsResult — security alerts (Dependabot + Code + Sec
 
     it('keeps a Code-scanning 403 quiet — it must NOT mask a working issues read', async () => {
         // Issues + PRs OK, dependabot OK, but code-scanning is forbidden (the App
-        // doesn't grant code_scanning_alerts yet). That's feature-specific, so it
+        // doesn't grant security_events yet). That's feature-specific, so it
         // stays quiet exactly like a Dependabot 403.
         fetchMock
             .mockResolvedValueOnce(res(200, [

@@ -34,7 +34,7 @@ export type GhPermission =
     | 'issues'
     | 'pull_requests'
     | 'vulnerability_alerts'
-    | 'code_scanning_alerts'
+    | 'security_events'
     | 'secret_scanning_alerts'
     | 'contents'
     | 'administration';
@@ -69,7 +69,7 @@ export interface RequiredPermission {
  *   - Issue Watch issues read   → GET …/issues                 → `issues:read`
  *   - Issue Watch PRs read      → GET …/pulls                  → `pull_requests:read`
  *   - Issue Watch Dependabot    → GET …/dependabot/alerts      → `vulnerability_alerts:read`
- *   - Issue Watch Code scanning → GET …/code-scanning/alerts   → `code_scanning_alerts:read`
+ *   - Issue Watch Code scanning → GET …/code-scanning/alerts   → `security_events:read`
  *   - Issue Watch Secret scanning → GET …/secret-scanning/alerts → `secret_scanning_alerts:read`
  *   - Provisioning / clone / fork / create → push to repos, read repo contents
  *     → `contents:write` (the genie-ide App historically does NOT declare
@@ -85,7 +85,7 @@ export const REQUIRED: Record<CapabilityKey, RequiredPermission> = {
     'issue-watch.issues': { permission: 'issues', access: 'read' },
     'issue-watch.pulls': { permission: 'pull_requests', access: 'read' },
     'issue-watch.dependabot': { permission: 'vulnerability_alerts', access: 'read' },
-    'issue-watch.code-scanning': { permission: 'code_scanning_alerts', access: 'read' },
+    'issue-watch.code-scanning': { permission: 'security_events', access: 'read' },
     'issue-watch.secret-scanning': { permission: 'secret_scanning_alerts', access: 'read' },
     'github.provision': { permission: 'contents', access: 'write' },
 };
@@ -175,7 +175,7 @@ function isModelledPermission(name: string): name is GhPermission {
         name === 'issues' ||
         name === 'pull_requests' ||
         name === 'vulnerability_alerts' ||
-        name === 'code_scanning_alerts' ||
+        name === 'security_events' ||
         name === 'secret_scanning_alerts' ||
         name === 'contents' ||
         name === 'administration'
