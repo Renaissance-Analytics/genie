@@ -23,7 +23,11 @@
     "build:icons": "node resources/build-icons.cjs"
   },
   "overrides": {
-    "esbuild": "^0.28.1"
+    "esbuild": "^0.28.1",
+    "@babel/core": "^7.29.6",
+    "serialize-javascript": "^7.0.6",
+    "webpack": "^5.105.0",
+    "postcss": "$postcss"
   },
   "dependencies": {
     "@particle-academy/fancy-code": "^0.5.0",
@@ -34,7 +38,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/xterm": "^6.0.0",
-    "better-sqlite3": "^11.7.0",
+    "better-sqlite3": "^12.0.0",
     "electron-updater": "^6.3.9",
     "node-pty": "^1.1.0",
     "qrcode": "^1.5.4",
@@ -51,9 +55,9 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
-    "@vitest/coverage-v8": "^2.1.9",
+    "@vitest/coverage-v8": "^3.2.0",
     "autoprefixer": "^10.4.21",
-    "electron": "^33.3.1",
+    "electron": "^42.5.0",
     "electron-builder": "^26.15.3",
     "next": "^15.1.6",
     "nextron": "^9.4.0",
@@ -62,6 +66,6 @@
     "react-dom": "^19.0.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.3",
-    "vitest": "^2.1.9"
+    "vitest": "^3.2.0"
   }
 }
