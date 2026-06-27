@@ -1479,14 +1479,14 @@ function UpdatePill() {
 }
 
 /**
- * Slim, dismissible "Restart & update" banner shown ONCE a downloaded build is
- * staged (state 'ready-to-restart'). With auto-download on, the update arrives
- * hands-off, so this is the single explicit affordance to apply it — one click
- * runs the SAME quitAndInstall path as the header pill (isQuittingForUpdate →
- * two-phase teardown → installer). It complements the title-bar pill (which also
- * covers the available/downloading states + changelog hover); the banner is the
- * harder-to-miss prompt the instant the build is ready. Dismiss leaves the pill
- * in place, so nothing is lost.
+ * Slim, dismissible "Restart & update" banner — a FALLBACK affordance for the
+ * rare case a build is downloaded but left staged (state 'ready-to-restart')
+ * without auto-applying. We don't download in the background: the one-click
+ * "Update" path (downloadAndInstall) applies the build hands-free the instant it
+ * lands, so it normally never rests here. If it does (e.g. a download we didn't
+ * initiate), one click runs the SAME quitAndInstall path as the header pill
+ * (isQuittingForUpdate → two-phase teardown → installer). Dismiss leaves the
+ * title-bar pill in place, so nothing is lost.
  */
 function UpdateReadyBanner() {
     const [status, setStatus] = useState<UpdaterStatus | null>(null);

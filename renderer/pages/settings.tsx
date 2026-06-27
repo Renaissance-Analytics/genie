@@ -1710,7 +1710,7 @@ function UpdaterSection() {
                     {status?.state === 'available' && (
                         <Action color="blue" size="sm" onClick={apply} disabled={busy}>
                             {mode === 'phase2'
-                                ? `Download v${status.latestVersion}`
+                                ? `Update to v${status.latestVersion}`
                                 : `Update now (v${status.latestVersion})`}
                         </Action>
                     )}
@@ -1721,6 +1721,7 @@ function UpdaterSection() {
                     )}
                     {status?.state === 'downloading' && status.progress != null && (
                         <Text size="xs" className="text-zinc-500">
+                            {mode === 'phase2' ? 'Updating… ' : ''}
                             {Math.round(status.progress * 100)}%
                         </Text>
                     )}

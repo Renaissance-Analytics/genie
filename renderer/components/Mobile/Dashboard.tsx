@@ -295,11 +295,12 @@ export default function Dashboard({
 /**
  * "Upgrade Genie" — the phone's view of the desktop self-updater. It reads the
  * current state from `GET /api/update/status` on mount and tracks it live via the
- * `update:changed` push, so the desktop's hands-off background download surfaces
- * here without a refresh. When a build is staged (`readyToInstall`) it becomes a
- * single amber CTA: tap → `POST /api/update/install` runs the SAME desktop
- * quitAndInstall, then Genie restarts into the new version. Up-to-date is a slim,
- * unobtrusive line so the tool never wastes space until it has something to say.
+ * `update:changed` push, so a newly-found update surfaces here without a refresh.
+ * When one is available (or already staged) it becomes a single CTA: tap →
+ * `POST /api/update/install` runs the SAME hands-free desktop flow (download if
+ * needed → quitAndInstall), then Genie restarts into the new version. Up-to-date
+ * is a slim, unobtrusive line so the tool never wastes space until it has
+ * something to say.
  */
 function UpgradeGenie({
     subscribe,
@@ -321,8 +322,8 @@ function UpgradeGenie({
         void refetch();
     }, []);
 
-    // Live updater state — the desktop advances available → downloading →
-    // ready-to-restart on its own; mirror each tick here.
+    // Live updater state — once the user taps Update the desktop advances
+    // available → downloading → ready-to-restart → restart; mirror each tick here.
     useEffect(() => {
         const off = subscribe((e: MobileEvent) => {
             if (e.type === 'update:changed' && e.payload) {
@@ -357,10 +358,12 @@ function UpgradeGenie({
     if (!status) return null;
 
     const ready = status.readyToInstall;
-    const busyState =
-        status.state === 'downloading' ||
-        status.state === 'available' ||
-        status.state === 'applying';
+    // A found-but-not-yet-downloaded update. We do NOT background-download, so
+    // 'available' is a CTA — tapping "Update" runs the hands-free
+    // download → install → restart (POST /api/update/install) — not a progress
+    // state.
+    const available = status.state === 'available';
+    const downloading = status.state === 'downloading' || status.state === 'applying';
     const checking = status.state === 'checking';
     const version = status.latestVersion ?? status.currentVersion;
 
@@ -372,7 +375,7 @@ function UpgradeGenie({
             <div className="m-tool-main">
                 <Icon name="loader" size="xs" className="m-spin" />
                 <Text size="sm" style={{ fontWeight: 600 }}>
-                    Restarting to update…
+                    Updating…
                 </Text>
             </div>
         );
@@ -393,7 +396,24 @@ function UpgradeGenie({
                 </button>
             </>
         );
-    } else if (busyState) {
+    } else if (available) {
+        body = (
+            <>
+                <div className="m-tool-main">
+                    <Text size="sm" style={{ fontWeight: 600 }}>
+                        Update available
+                    </Text>
+                    <Text size="xs" className="m-mono" style={{ color: 'inherit', opacity: 0.85 }}>
+                        v{version}
+                    </Text>
+                </div>
+                <button type="button" className="m-tool-cta" onClick={() => void onInstall()}>
+                    <Icon name="download" size="xs" />
+                    Update
+                </button>
+            </>
+        );
+    } else if (downloading) {
         body = (
             <div className="m-tool-main">
                 <Icon name="download" size="xs" />

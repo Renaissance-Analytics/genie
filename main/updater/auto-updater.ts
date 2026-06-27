@@ -62,13 +62,15 @@ class AutoUpdater extends EventEmitter {
     private status: AutoUpdaterStatus;
     private timer: NodeJS.Timeout | null = null;
     /**
-     * Hands-off mode: when set, a freshly-discovered update downloads in the
-     * BACKGROUND immediately (so the user only ever clicks "Restart to update"
-     * once, never a separate "Install"). Distinct from electron-updater's own
-     * `autoDownload` (kept off — see bind()); this drives our explicit
-     * downloadAndStage() so the download still carries our log/progress/error UX.
+     * Set the instant the user clicks "Update" (downloadAndInstall): tells the
+     * `update-downloaded` handler to apply the build hands-free the moment it
+     * lands — download → install → restart from that ONE click, with no second
+     * confirmation. We NEVER download on our own: a check only ever surfaces an
+     * update as 'available', and the download is always user-initiated. (This
+     * flag's download AND electron-updater's own `autoDownload` both stay off
+     * until that click — see bind().)
      */
-    private autoDownload = true;
+    private installWhenReady = false;
 
     constructor() {
         super();
@@ -117,52 +119,83 @@ class AutoUpdater extends EventEmitter {
         this.timer = null;
     }
 
-    /** Toggle hands-off background download of a discovered update (default on). */
-    setAutoDownload(on: boolean): void {
-        this.autoDownload = on;
-    }
-
     async checkForUpdate(): Promise<void> {
-        // A download in flight — or a build already staged and waiting to apply —
-        // must not be disturbed by a routine re-check (the poll fires every few
-        // hours). Bail so we don't re-enter 'checking' and kick a SECOND download
-        // of the same release on top of the one we're already holding.
+        // Only an ACTIVELY-busy state blocks a re-check: a check already in
+        // flight, or an installer mid-download. Re-entering either would fight
+        // the operation already running (a second concurrent download would race
+        // the first). A build that's merely STAGED ('ready-to-restart') is NOT
+        // busy — we deliberately re-check OVER it so a newer release can be found
+        // and supersede it. (Bailing on 'ready-to-restart' was the bug: once
+        // beta.58 was staged, every later check — manual button included — went
+        // dead, so beta.59 was never picked up.)
         if (
-            this.status.state === 'downloading' ||
-            this.status.state === 'ready-to-restart'
+            this.status.state === 'checking' ||
+            this.status.state === 'downloading'
         ) {
             return;
         }
+        // What (if anything) is already downloaded and waiting to apply. Lets us
+        // tell "the staged build is still the latest" (keep it) apart from "a
+        // newer build now exists" (supersede it).
+        const stagedVersion =
+            this.status.state === 'ready-to-restart'
+                ? this.status.latestVersion
+                : null;
+
         this.setStatus({ state: 'checking', error: null, manualDownloadUrl: null });
         try {
             const res = await autoUpdater.checkForUpdates();
             if (!res || !res.updateInfo) {
-                this.setStatus({ state: 'up-to-date' });
+                // No release metadata — don't drop a good staged build back to a
+                // bare "up to date"; keep it ready to apply.
+                this.setStatus(
+                    stagedVersion
+                        ? { state: 'ready-to-restart', latestVersion: stagedVersion, progress: 1 }
+                        : { state: 'up-to-date' },
+                );
                 return;
             }
             const latest = res.updateInfo.version;
             if (latest === app.getVersion()) {
+                this.setStatus({ state: 'up-to-date', latestVersion: latest });
+            } else if (stagedVersion && latest === stagedVersion) {
+                // The build we already downloaded IS still the latest — return to
+                // the ready-to-restart resting state without re-downloading it.
                 this.setStatus({
-                    state: 'up-to-date',
+                    state: 'ready-to-restart',
                     latestVersion: latest,
+                    progress: 1,
                 });
             } else {
+                // A version newer than the running app (and than anything already
+                // staged): surface it as 'available'. We do NOT download here —
+                // "auto-update" means hands-FREE once the user clicks "Update",
+                // not download-behind-their-back. The Update button drives
+                // downloadAndInstall(); because this check has just refreshed
+                // electron-updater's view to `latest`, that download fetches the
+                // newest build, never a stale staged one.
                 this.setStatus({
                     state: 'available',
                     latestVersion: latest,
                     publishedAt: res.updateInfo.releaseDate ?? null,
                     releaseUrl: pickReleaseUrl(res.updateInfo),
                 });
-                // Single-click / hands-off update: start fetching the new build in
-                // the background the instant we find it, so by the time the user
-                // notices it's already staged and one click ("Restart to update")
-                // applies it. downloadAndStage() flips us to 'downloading', which
-                // makes the guard above no-op the next poll.
-                if (this.autoDownload) {
-                    void this.downloadAndStage().catch(() => {});
-                }
             }
         } catch (e) {
+            // A flaky/offline re-check must not throw away a build we'd already
+            // downloaded and staged — restore it so the user can still apply it.
+            // The failure is still captured in the log stream.
+            if (stagedVersion) {
+                this.appendLog(
+                    `check failed: ${e instanceof Error ? e.message : String(e)}`,
+                );
+                this.setStatus({
+                    state: 'ready-to-restart',
+                    latestVersion: stagedVersion,
+                    progress: 1,
+                });
+                return;
+            }
             this.setStatus({
                 state: 'error',
                 error: e instanceof Error ? e.message : String(e),
@@ -171,16 +204,29 @@ class AutoUpdater extends EventEmitter {
         }
     }
 
-    async downloadAndStage(): Promise<void> {
+    /**
+     * The one-click "Update" action: download the available build and, the
+     * instant it lands, apply it hands-free (the `update-downloaded` handler
+     * sees `installWhenReady` and runs restartAndApply → quitAndInstall). One
+     * user click drives download → install → restart with no further prompts.
+     *
+     * Because checkForUpdate() always refreshes electron-updater's view to the
+     * LATEST release before we ever reach 'available', the build downloaded here
+     * is always the newest one — never a stale previously-staged version.
+     */
+    async downloadAndInstall(): Promise<void> {
         if (this.status.state !== 'available') {
-            throw new Error('No update available to download.');
+            throw new Error('No update available to install.');
         }
+        this.installWhenReady = true;
         this.setStatus({ state: 'downloading', progress: 0, error: null });
         try {
             await autoUpdater.downloadUpdate();
-            // Success transitions to 'ready-to-restart' via the
-            // `update-downloaded` event handler in bind().
+            // On success the `update-downloaded` handler in bind() flips us to
+            // 'ready-to-restart' and — because installWhenReady is set — applies
+            // immediately.
         } catch (e) {
+            this.installWhenReady = false;
             this.setStatus({
                 state: 'error',
                 error: e instanceof Error ? e.message : String(e),
@@ -201,17 +247,23 @@ class AutoUpdater extends EventEmitter {
         // BEFORE quitAndInstall so before-quit sees it. (See quit-state.ts.)
         markQuittingForUpdate();
         // `quitAndInstall(isSilent, isForceRunAfter)`:
-        //   isSilent=false  — show the installer UI (Windows NSIS)
-        //   isForceRunAfter=true — relaunch Genie after install
-        autoUpdater.quitAndInstall(false, true);
+        //   isSilent=true — run the oneClick NSIS installer with NO UI (our
+        //     installer is `oneClick: true`, `perMachine: false` → no wizard,
+        //     no UAC), so the whole update applies hands-free off the single
+        //     "Update" click that kicked the download.
+        //   isForceRunAfter=true — relaunch Genie once the install completes.
+        autoUpdater.quitAndInstall(true, true);
     }
 
     private bind(): void {
-        // electron-updater's OWN auto-download stays OFF — we drive the download
-        // explicitly via downloadAndStage() so it carries our log/progress/error
-        // handling. Hands-off behaviour lives one level up (checkForUpdate() kicks
-        // downloadAndStage when `this.autoDownload` is set). Install is never
-        // automatic — it always goes through restartAndApply() / quitAndInstall.
+        // electron-updater's OWN auto-download stays OFF, and so does any
+        // download of ours: a check only ever SURFACES an update ('available'),
+        // it never downloads behind the user's back. The download is always
+        // user-initiated via downloadAndInstall() (the "Update" button), which
+        // carries our log/progress/error UX and then applies hands-free.
+        // autoInstallOnAppQuit stays OFF too — we never want a silent install on
+        // a normal quit; install happens ONLY through the explicit
+        // downloadAndInstall → restartAndApply → quitAndInstall path.
         autoUpdater.autoDownload = false;
         autoUpdater.autoInstallOnAppQuit = false;
 
@@ -241,6 +293,23 @@ class AutoUpdater extends EventEmitter {
                 latestVersion: info.version,
                 progress: 1,
             });
+            // Hands-free finish: the user clicked "Update", so apply the moment
+            // the build lands — no separate "Restart" click. If the flag is NOT
+            // set (a download we didn't initiate — shouldn't happen with
+            // autoDownload off), we simply rest at 'ready-to-restart' and wait
+            // for an explicit restartAndApply, never force-quitting on our own.
+            if (this.installWhenReady) {
+                this.installWhenReady = false;
+                try {
+                    this.restartAndApply();
+                } catch (e) {
+                    this.setStatus({
+                        state: 'error',
+                        error: e instanceof Error ? e.message : String(e),
+                        manualDownloadUrl: this.manualUrlForPlatform(),
+                    });
+                }
+            }
         });
         autoUpdater.on('error', (err) => {
             // macOS Squirrel rejects an unsigned/ad-hoc build's signature on

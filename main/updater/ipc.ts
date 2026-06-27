@@ -22,11 +22,15 @@ import { mobileEmit } from '../mobile/bus';
  *   updater:mode           () → 'phase1' | 'phase2'
  *   updater:status         () → unified status payload
  *   updater:check          () → status after a fresh check
- *   updater:apply          () → { ok }; for phase2 this STAGES the
- *                              installer; restart is a separate call
+ *   updater:apply          () → { ok }; for phase2 this is the one-click
+ *                              "Update" — downloads the available build and,
+ *                              the moment it lands, applies it hands-free
+ *                              (download → install → restart, no 2nd click)
  *   updater:restart        () → relaunches Genie into the new installer
  *                              (phase2 only — noop on phase1, since
- *                              phase1 has its own "Restart" via app.quit)
+ *                              phase1 has its own "Restart" via app.quit).
+ *                              Mostly a fallback now: the one-click apply
+ *                              path already restarts on download-complete
  *   updater:config:get     () → UpdaterConfig (phase1 only meaningful)
  *   updater:config:set     (patch) → UpdaterConfig
  *
@@ -80,7 +84,7 @@ export function registerUpdaterIpc(): void {
         async (): Promise<{ ok: boolean; error?: string }> => {
             try {
                 if (mode === 'phase1') await u.applyUpdate();
-                else await a.downloadAndStage();
+                else await a.downloadAndInstall();
                 return { ok: true };
             } catch (e) {
                 return {
@@ -175,12 +179,15 @@ export function mobileUpdateStatus(): MobileUpdateStatus {
 }
 
 /**
- * Apply a downloaded update from the phone — the SAME path the desktop pill uses
- * (restartAndApply → markQuittingForUpdate → two-phase teardown → quitAndInstall).
- * Only valid once a build is staged ('ready-to-restart'); otherwise reports
- * `not-ready` so the REST layer answers 409. Phase-1 (git checkout) has no
- * installer, so it's reported `unsupported`. The quit is deferred a tick by the
- * caller so the REST response flushes to the phone before teardown begins.
+ * Apply an update from the phone — the SAME one-click hands-free path the
+ * desktop "Update" button uses. Two valid entry states (we never auto-download
+ * in the background, so a build is rarely pre-staged):
+ *   • 'available'        → downloadAndInstall(): download the build then apply
+ *     it the instant it lands (→ restartAndApply → quitAndInstall).
+ *   • 'ready-to-restart' → restartAndApply() directly (build already on disk).
+ * Anything else reports `not-ready` so the REST layer answers 409. Phase-1 (git
+ * checkout) has no installer → `unsupported`. The action is deferred a tick by
+ * the caller so the REST response flushes to the phone before teardown begins.
  */
 export function mobileInstallUpdate(): {
     ok: boolean;
@@ -195,18 +202,21 @@ export function mobileInstallUpdate(): {
         };
     }
     const a = autoUpdaterInstance();
-    if (a.getStatus().state !== 'ready-to-restart') {
+    const state = a.getStatus().state;
+    if (state !== 'available' && state !== 'ready-to-restart') {
         return {
             ok: false,
             reason: 'not-ready',
-            error: 'No update has finished downloading yet.',
+            error: 'No update is available to install yet.',
         };
     }
-    // Defer the quit so the caller's HTTP 200 reaches the phone before the app
-    // tears down for the installer. restartAndApply is synchronous + irreversible.
+    // Defer so the caller's HTTP 200 reaches the phone before the app starts the
+    // download / tears down for the installer. From 'available' we download then
+    // auto-apply (one hands-free flow); from 'ready-to-restart' we apply now.
     setTimeout(() => {
         try {
-            a.restartAndApply();
+            if (state === 'available') void a.downloadAndInstall().catch(() => {});
+            else a.restartAndApply();
         } catch {
             /* surfaced via the status stream if it ever throws here */
         }
