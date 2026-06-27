@@ -268,6 +268,8 @@ export interface Settings {
     /** Tier 3: keep terminals running in a detached host so they survive a full
      *  quit. Defaults 'off' (in-process). 'on' opts in. */
     detached_terminals?: 'on' | 'off';
+    /** Whether Genie launches minimized to the tray (default 'off' = start open). */
+    start_minimized?: 'on' | 'off';
     /** How agents act on IssueWatch pings (open Issues / PRs / security alerts).
      *  'surface' (default) reports only; 'fix' fixes the root cause when idle;
      *  'fix-and-ship' fixes + ships right away when idle. */

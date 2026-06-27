@@ -403,6 +403,10 @@ export interface Settings {
      *  everywhere; an explicit 'off' opts back into the in-process T1/T2 backend
      *  (which restores panels from a snapshot but cold-spawns a fresh shell). */
     detached_terminals?: 'on' | 'off';
+    /** Whether Genie launches minimized to the tray instead of opening its
+     *  window. Defaults 'off' — Genie starts OPEN. 'on' starts in the tray only
+     *  (the window opens on the first tray click / global hotkey). */
+    start_minimized?: 'on' | 'off';
     /** Prepend the bundled tynn-cli bin to terminal PATH + inject GENIE_* env.
      *  'off' disables it; anything else (incl. unset) is ON. */
     cli_tools_in_terminals?: 'on' | 'off';
@@ -523,6 +527,7 @@ export function getAllSettings(): Settings {
         layout_json: out['layout_json'] ?? '{}',
         track_cwd: (out['track_cwd'] as 'on' | 'off') ?? 'on',
         detached_terminals: (out['detached_terminals'] as 'on' | 'off') ?? 'on',
+        start_minimized: (out['start_minimized'] as 'on' | 'off') ?? 'off',
         notify_sound: (out['notify_sound'] as 'on' | 'off') ?? 'off',
         notify_toast: (out['notify_toast'] as 'on' | 'off') ?? 'off',
         sound_imdone:

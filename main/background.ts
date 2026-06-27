@@ -10,6 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import { createTray, rebuildMenu } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
+import { launchedFromAutostart } from './autostart';
 import { registerIpcHandlers } from './ipc';
 import crypto from 'node:crypto';
 import {
@@ -1778,6 +1779,21 @@ app.whenReady().then(async () => {
                 console.error('[e2e] mobile server failed to start', e),
             );
         }
+    }
+    // Start with the master window OPEN by default. Genie launches to the tray
+    // alone (no window) only when EITHER the user set `start_minimized`
+    // (Settings → General) OR the OS launched Genie at sign-in (autostart passes
+    // `--autostart` / macOS wasOpenedAtLogin) — an auto-start should never ambush
+    // the user with a window on every boot. In both cases the window opens on the
+    // first tray click / quick-capture hotkey. E2E opened its own harness window
+    // above. Shown here — right after IPC + the terminal backend are ready, before
+    // the MCP/mobile servers — so it appears promptly and no later async step hides it.
+    if (
+        !isE2E() &&
+        !launchedFromAutostart() &&
+        (getAllSettings() as Record<string, string>)['start_minimized'] !== 'on'
+    ) {
+        showMasterWindow();
     }
     // Boot-time capability check: once GitHub is known-connected, detect any
     // missing required permission and broadcast `github:capabilities` so the

@@ -409,6 +409,26 @@ export default function SettingsPage() {
             </Card>
 
             <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <Heading as="h2" size="sm">Startup</Heading>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                    <Switch
+                        checked={s.start_minimized === 'on'}
+                        onCheckedChange={(on: boolean) =>
+                            patch({ start_minimized: on ? 'on' : 'off' })
+                        }
+                    />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <Text size="sm">Start minimized to the tray</Text>
+                        <Text size="xs" className="text-zinc-500">
+                            Off by default — Genie opens its window on launch. Turn
+                            this on to start in the tray only; the window opens on the
+                            first tray click or the quick-capture hotkey.
+                        </Text>
+                    </div>
+                </div>
+            </Card>
+
+            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Heading as="h2" size="sm">Quick capture hotkey</Heading>
                 <Input
                     label="Accelerator"
