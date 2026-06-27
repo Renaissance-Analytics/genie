@@ -98,6 +98,9 @@ interface ServerDeps {
         terminalId: string,
         req: ManageWorkspacesRequest,
     ) => Promise<ManageWorkspacesResult>;
+    /** True when the caller's workspace is an Ops project. Gates the ops-only
+     *  `provisionWorkspaces` tool OUT of tools/list for non-Ops workspaces. */
+    isOpsProject: (terminalId: string) => Promise<boolean>;
 }
 
 let server: http.Server | null = null;
@@ -401,6 +404,7 @@ async function handle(
         manageTerminals: deps.manageTerminals,
         runAgent: deps.runAgent,
         manageWorkspaces: deps.manageWorkspaces,
+        isOpsProject: deps.isOpsProject,
     };
 
     // A blocking call (ForceTheQuestion) can sit pending indefinitely while the

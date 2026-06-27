@@ -141,6 +141,7 @@ const deps = (
     manageTerminals,
     runAgent,
     manageWorkspaces,
+    isOpsProject: async () => true,
 });
 
 afterEach(() => stopMcpServer());

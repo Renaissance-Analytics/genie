@@ -30,6 +30,7 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
         manageWorkspaces: vi
             .fn()
             .mockResolvedValue({ ok: true, workspaces: [] }),
+        isOpsProject: vi.fn().mockResolvedValue(false),
         ...overrides,
     };
 }
@@ -58,10 +59,10 @@ describe('handleMcpMessage', () => {
         ).toBeNull();
     });
 
-    it('lists imDone + checkIssues + ForceTheQuestion + manageProcess + provisionWorkspaces + genieGuide tools (NOT initializeWorkspace — it is a prompt)', async () => {
+    it('lists provisionWorkspaces for an Ops project (full set; NOT initializeWorkspace — it is a prompt)', async () => {
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 2, method: 'tools/list' },
-            ctx(),
+            ctx({ isOpsProject: vi.fn().mockResolvedValue(true) }),
         );
         const tools = (res?.result as { tools: Array<{ name: string }> }).tools;
         expect(tools.map((t) => t.name)).toEqual([
@@ -76,6 +77,33 @@ describe('handleMcpMessage', () => {
             'genieGuide',
         ]);
         expect(tools.map((t) => t.name)).not.toContain('initializeWorkspace');
+    });
+
+    it('OMITS the ops-only provisionWorkspaces tool for a non-Ops workspace', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+            ctx({ isOpsProject: vi.fn().mockResolvedValue(false) }),
+        );
+        const tools = (res?.result as { tools: Array<{ name: string }> }).tools;
+        expect(tools.map((t) => t.name)).toEqual([
+            'imDone',
+            'checkIssues',
+            'ForceTheQuestion',
+            'manageProcess',
+            'manageTerminals',
+            'runAgent',
+            'manageWorkspaces',
+            'genieGuide',
+        ]);
+    });
+
+    it('fails CLOSED — omits provisionWorkspaces when the ops check throws', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+            ctx({ isOpsProject: vi.fn().mockRejectedValue(new Error('backend down')) }),
+        );
+        const tools = (res?.result as { tools: Array<{ name: string }> }).tools;
+        expect(tools.map((t) => t.name)).not.toContain('provisionWorkspaces');
     });
 
     it('advertises the prompts capability on initialize', async () => {

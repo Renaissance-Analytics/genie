@@ -164,6 +164,9 @@ export interface McpContext {
      * workspace + db/cache I/O (kept out of this pure module).
      */
     checkIssues: (terminalId: string) => Promise<IssueWatchSnapshot>;
+    /** True when the caller's workspace is an Ops project. Gates the ops-only
+     *  `provisionWorkspaces` tool out of tools/list for non-Ops workspaces. */
+    isOpsProject: (terminalId: string) => Promise<boolean>;
     /**
      * Raise an OS-level always-on-top modal asking the user one or more
      * questions; resolves with their answers (or cancelled). Powers
@@ -1056,20 +1059,27 @@ export async function handleMcpMessage(
         case 'ping':
             return ok(msg.id, {});
 
-        case 'tools/list':
+        case 'tools/list': {
+            // `provisionWorkspaces` is meaningful ONLY for an Ops project's
+            // workspace (it stands up workspaces for the project's governed
+            // children); a non-Ops caller just gets a "not an ops project" error.
+            // List it ONLY for an Ops caller — fail CLOSED (omit it) on any error
+            // so a non-Ops / uncertain workspace never sees the ops tool.
+            const isOps = await ctx.isOpsProject(ctx.terminalId).catch(() => false);
             return ok(msg.id, {
                 tools: [
                     IMDONE_TOOL,
                     CHECK_ISSUES_TOOL,
                     FORCE_QUESTION_TOOL,
                     MANAGE_PROCESS_TOOL,
-                    PROVISION_WORKSPACES_TOOL,
+                    ...(isOps ? [PROVISION_WORKSPACES_TOOL] : []),
                     MANAGE_TERMINALS_TOOL,
                     RUN_AGENT_TOOL,
                     MANAGE_WORKSPACES_TOOL,
                     GUIDE_TOOL,
                 ],
             });
+        }
 
         case 'prompts/list':
             return ok(msg.id, { prompts: [INITIALIZE_WORKSPACE_PROMPT] });

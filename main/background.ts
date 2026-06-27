@@ -729,6 +729,23 @@ async function governedWorkspaceIdsFor(
     return out;
 }
 
+/** True when the caller's workspace is an Ops project (backend `is_ops_project`).
+ *  Backs the tools/list gate that hides the ops-only `provisionWorkspaces` tool
+ *  from non-Ops workspaces. Fails CLOSED (false) on any error so an uncertain
+ *  state never EXPOSES the ops tool. */
+async function isOpsProjectFor(callerWorkspacePath: string): Promise<boolean> {
+    const link = readTynnLink(callerWorkspacePath);
+    if (!link?.projectId) return false;
+    try {
+        const backend = new TynnBackend();
+        if (!(await backend.whoami())) return false;
+        const { isOpsProject } = await backend.opsSlaves(link.projectId);
+        return isOpsProject;
+    } catch {
+        return false;
+    }
+}
+
 /**
  * Resolve + authorize the workspace a tool call should act on. The caller's
  * terminal → its workspace is the default; a different `workspaceId` is allowed
@@ -1870,6 +1887,15 @@ app.whenReady().then(async () => {
         runAgent: (terminalId, req) => runAgentForMcp(terminalId, req),
         manageWorkspaces: (terminalId, req) =>
             manageWorkspacesForMcp(terminalId, req),
+        // Ops-tool gating: only an Ops project's workspace sees `provisionWorkspaces`
+        // in tools/list. Resolve the caller's workspace → its Ops status (fail closed).
+        isOpsProject: async (terminalId) => {
+            const wsId = terminalId
+                ? getTerminalSpec(terminalId)?.workspace_id ?? null
+                : null;
+            const ws = wsId ? getWorkspace(wsId) : null;
+            return ws ? isOpsProjectFor(ws.path) : false;
+        },
     }).catch((e) => console.error('[mcp] failed to start', e));
     // Backfill the genie MCP entry into the Claude/Cursor config of any
     // workspace already opted in — now with the stable workspace endpoint URL,
