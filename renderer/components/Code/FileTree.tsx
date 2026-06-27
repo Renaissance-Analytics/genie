@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type DragEvent } from 'react';
 import { TreeNav } from '@particle-academy/react-fancy';
 import FileTreeContextMenu from './FileTreeContextMenu';
 import { showPrompt } from '../Master/Prompt';
@@ -346,6 +346,93 @@ export default function FileTree({
             await navigator.clipboard.writeText(node.id);
         } catch {
             /* clipboard unavailable — silent */
+        }
+    };
+
+    /** The destination FOLDER for a drop: inside a folder target, else the
+     *  target's parent folder ('' = workspace root). */
+    const dropFolder = (
+        targetId: string,
+        position: 'before' | 'after' | 'inside',
+    ): string => {
+        const t = byId.get(targetId);
+        return t?.type === 'folder' && position === 'inside'
+            ? targetId
+            : parentOf(targetId);
+    };
+
+    // Internal drag → MOVE (with confirm). A move IS a rename into a new folder,
+    // so it routes through the path-guarded rename IPC.
+    const handleNodeMove = async (
+        sourceId: string,
+        targetId: string,
+        position: 'before' | 'after' | 'inside',
+    ) => {
+        const leaf = sourceId.split('/').pop() ?? sourceId;
+        const destFolder = dropFolder(targetId, position);
+        const newRel = joinRel(destFolder, leaf);
+        if (newRel === sourceId) return; // dropped in the same folder — no-op
+        if (`${newRel}/`.startsWith(`${sourceId}/`)) {
+            await showPrompt({
+                title: "Can't move there",
+                body: 'A folder cannot be moved inside itself.',
+                confirmLabel: 'OK',
+            });
+            return;
+        }
+        const ok = await showPrompt({
+            title: 'Move',
+            body: `Move "${leaf}" into ${destFolder ? `"${destFolder}"` : 'the workspace root'}?`,
+            confirmLabel: 'Move',
+        });
+        if (ok === null) return;
+        try {
+            await api().files.rename(workspacePath, sourceId, newRel);
+            if (destFolder && !expandedIds.includes(destFolder)) {
+                onExpandedChange([...expandedIds, destFolder]);
+            }
+            await onTreeChanged();
+            if (sourceId === selectedId) onOpenCreatedFile(newRel);
+        } catch (e) {
+            await showPrompt({
+                title: 'Could not move',
+                body: e instanceof Error ? e.message : String(e),
+                confirmLabel: 'OK',
+            });
+        }
+    };
+
+    // External drag (Windows Explorer / Finder) → COPY the dropped OS files into
+    // the folder. Copy is non-destructive, so no confirm; a name collision gets a
+    // `-copy` sibling (no clobber). The destination is path-guarded in main.
+    const handleExternalDrop = async (
+        event: DragEvent,
+        target: TreeNodeData,
+        position: 'before' | 'after' | 'inside',
+    ) => {
+        const osFiles = Array.from(event.dataTransfer?.files ?? []);
+        if (osFiles.length === 0) return; // a cross-component drag, not OS files
+        const destFolder = dropFolder(target.id, position);
+        const errors: string[] = [];
+        for (const file of osFiles) {
+            try {
+                const srcAbs = api().files.pathForFile(file);
+                if (!srcAbs) continue;
+                await api().files.importExternal(workspacePath, srcAbs, destFolder);
+            } catch (e) {
+                errors.push(`${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+            }
+        }
+        if (destFolder && !expandedIds.includes(destFolder)) {
+            onExpandedChange([...expandedIds, destFolder]);
+        }
+        await onTreeChanged();
+        if (errors.length) {
+            await showPrompt({
+                title: 'Some files could not be copied',
+                body: errors.join('\n'),
+                confirmLabel: 'OK',
+            });
         }
     };
 

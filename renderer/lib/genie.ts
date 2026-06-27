@@ -1069,6 +1069,14 @@ interface GenieApi {
             workspacePath: string,
             relPath: string,
         ) => Promise<{ ok: boolean; relPath: string }>;
+        /** Copy an external OS path into a workspace folder; returns the new rel path. */
+        importExternal: (
+            workspacePath: string,
+            srcAbs: string,
+            destFolderRel: string,
+        ) => Promise<{ ok: boolean; relPath: string }>;
+        /** OS path of a File from an external drag (webUtils.getPathForFile). */
+        pathForFile: (file: File) => string;
         delete: (
             workspacePath: string,
             relPath: string,

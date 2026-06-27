@@ -316,6 +316,58 @@ export async function duplicatePath(
 }
 
 /**
+ * Copy an EXTERNAL file/folder (an arbitrary OS path, e.g. dragged in from
+ * Windows Explorer / Finder) INTO a workspace folder. The SOURCE is an arbitrary
+ * disk path (must exist); the DESTINATION is guard-resolved against the workspace
+ * root, so a drop from outside can never write outside the workspace. On a name
+ * collision a `-copy` sibling is chosen rather than clobbering. Returns the new
+ * workspace-relative path. (Internal moves use renamePath — copy is for external
+ * sources only.)
+ */
+export async function importExternalPath(
+    workspacePath: string,
+    srcAbs: string,
+    destFolderRel: string,
+): Promise<{ ok: boolean; relPath: string }> {
+    if (!srcAbs) throw new Error('No source path');
+    const stat = await fsp.stat(srcAbs); // throws if the source is gone
+    const leaf = path.basename(srcAbs);
+    if (!leaf) throw new Error('Invalid source path');
+
+    const dir = (destFolderRel ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
+    const baseRel = dir ? `${dir}/${leaf}` : leaf;
+    const baseAbs = guardedResolve(workspacePath, baseRel);
+    if (!baseAbs) throw new Error('Destination escapes workspace');
+
+    // No-clobber: pick the first free `-copy` name in the destination folder.
+    let finalRel = baseRel;
+    let finalAbs = baseAbs;
+    const exists = await fsp.access(baseAbs).then(() => true).catch(() => false);
+    if (exists) {
+        finalRel = '';
+        for (let n = 1; n <= 1000; n++) {
+            const candRel = dir ? `${dir}/${copyName(leaf, n)}` : copyName(leaf, n);
+            const candAbs = guardedResolve(workspacePath, candRel);
+            if (!candAbs) continue;
+            const taken = await fsp.access(candAbs).then(() => true).catch(() => false);
+            if (taken) continue;
+            finalRel = candRel;
+            finalAbs = candAbs;
+            break;
+        }
+        if (!finalRel) throw new Error('Too many copies — clear some out first.');
+    }
+
+    await fsp.mkdir(path.dirname(finalAbs), { recursive: true });
+    if (stat.isDirectory()) {
+        await fsp.cp(srcAbs, finalAbs, { recursive: true });
+    } else {
+        await fsp.copyFile(srcAbs, finalAbs);
+    }
+    return { ok: true, relPath: finalRel };
+}
+
+/**
  * Delete the node at `relPath`. Recursive for folders. Path-guarded; the
  * workspace root itself can never be deleted.
  */
@@ -476,6 +528,12 @@ export function registerFilesIpc(): void {
         'files:duplicate',
         (_e, workspacePath: string, relPath: string) =>
             duplicatePath(workspacePath, relPath),
+    );
+    // Copy an external OS path (Explorer/Finder drag) into a workspace folder.
+    ipcMain.handle(
+        'files:import-external',
+        (_e, workspacePath: string, srcAbs: string, destFolderRel: string) =>
+            importExternalPath(workspacePath, srcAbs, destFolderRel ?? ''),
     );
     ipcMain.handle(
         'files:delete',

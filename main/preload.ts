@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 /**
  * Typed contextBridge exposed to the renderer. Every channel matches a
@@ -430,6 +430,16 @@ const api = {
                 ok: boolean;
                 relPath: string;
             }>,
+        /** Copy an external OS path (e.g. dragged from Explorer/Finder) into a
+         *  workspace folder ('' = root). Returns the new workspace-relative path. */
+        importExternal: (workspacePath: string, srcAbs: string, destFolderRel: string) =>
+            ipcRenderer.invoke('files:import-external', workspacePath, srcAbs, destFolderRel) as Promise<{
+                ok: boolean;
+                relPath: string;
+            }>,
+        /** Resolve the OS path of a File from an external drag. Electron 42 removed
+         *  File.path; webUtils.getPathForFile is the supported replacement. */
+        pathForFile: (file: File): string => webUtils.getPathForFile(file),
         delete: (workspacePath: string, relPath: string) =>
             ipcRenderer.invoke('files:delete', workspacePath, relPath) as Promise<{
                 ok: boolean;
