@@ -78,6 +78,7 @@ import {
     type MobileServerState,
 } from './mobile/server';
 import { getTailscaleStatus, tailscaleUp, installTailscale } from './tailscale';
+import { discoverHosts, openRemoteWindow } from './workmode';
 import QRCode from 'qrcode';
 import { tynnCliInfo, installTynnCliSystemWide } from './cli/tynn-cli';
 import { registerShortcuts } from './shortcuts';
@@ -353,6 +354,15 @@ export function registerIpcHandlers(): void {
         if (r.url) await shell.openExternal(r.url);
         return r;
     });
+
+    // Work Mode — remote: discover Genie hosts on the tailnet, and open a remote
+    // session window driving a chosen host's /m/ surface over Tailscale.
+    ipcMain.handle('workmode:discover-hosts', () => discoverHosts());
+    ipcMain.handle(
+        'workmode:open-remote',
+        (_e, host: { ip: string; port: number; hostname: string }) =>
+            openRemoteWindow(host),
+    );
 
     ipcMain.handle('workspaces:open', async (_e, id: string) => {
         await openWorkspace(id);

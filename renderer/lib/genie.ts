@@ -394,6 +394,14 @@ export interface TailscaleStatus {
     authUrl?: string | null;
 }
 
+/** A Genie host discovered on the tailnet (Work Mode remote). */
+export interface GenieHost {
+    hostname: string;
+    peerName: string;
+    ip: string;
+    port: number;
+}
+
 export interface DocEntry {
     slug: string;
     title: string;
@@ -809,6 +817,14 @@ interface GenieApi {
         up: () => Promise<{ ok: boolean; authUrl?: string | null; message?: string }>;
         openAuth: (url: string) => Promise<{ ok: boolean }>;
         install: () => Promise<{ started: boolean; url?: string; message?: string }>;
+    };
+    workmode: {
+        discoverHosts: () => Promise<GenieHost[]>;
+        openRemote: (host: {
+            ip: string;
+            port: number;
+            hostname: string;
+        }) => Promise<{ ok: boolean }>;
     };
     aionima: {
         getConfig: () => Promise<AionimaConfig>;

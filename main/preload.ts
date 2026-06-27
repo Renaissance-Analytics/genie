@@ -112,6 +112,17 @@ const api = {
             }>,
     },
 
+    // Work Mode — remote: discover Genie hosts on the tailnet + open a remote
+    // session window driving a host's /m/ surface.
+    workmode: {
+        discoverHosts: () =>
+            ipcRenderer.invoke('workmode:discover-hosts') as Promise<
+                Array<{ hostname: string; peerName: string; ip: string; port: number }>
+            >,
+        openRemote: (host: { ip: string; port: number; hostname: string }) =>
+            ipcRenderer.invoke('workmode:open-remote', host) as Promise<{ ok: boolean }>,
+    },
+
     aionima: {
         getConfig: () => ipcRenderer.invoke('auth:aionima-config'),
         setConfig: (patch: { host?: string; token?: string | null }) =>

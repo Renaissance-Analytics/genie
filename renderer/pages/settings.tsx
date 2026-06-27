@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
     Action,
-    Badge,
     Card,
     Heading,
     Icon,
@@ -15,6 +14,7 @@ import {
     api,
     type EditorDetection,
     type McpServerState,
+    type GenieHost,
     type MobileStatus,
     type Settings,
     type TailscaleStatus,
@@ -2425,55 +2425,154 @@ function TailscaleSection() {
 }
 
 /**
- * Settings → Work Mode → Remote host (shown in remote mode). Phase 1 surfaces the
- * reachable tailnet devices Genie can see; selecting a host Genie to drive lands
- * in Phase 2 (the native remote client).
+ * Settings → Work Mode → Remote host (shown in remote mode). Discovers Genie
+ * hosts on the tailnet (the unauthed /api/ping beacon) and connects to one:
+ * Connect opens a dedicated, clearly-marked Genie window driving that host's
+ * remote-control surface over Tailscale (the host must approve the pairing PIN).
+ * Manual host:port entry covers hosts on a non-default port.
  */
 function RemoteHostCard() {
-    const [status, setStatus] = useState<TailscaleStatus | null>(null);
+    const [hosts, setHosts] = useState<GenieHost[] | null>(null);
+    const [scanning, setScanning] = useState(false);
+    const [busy, setBusy] = useState<string | null>(null); // ip:port being opened
+    const [manualIp, setManualIp] = useState('');
+    const [manualPort, setManualPort] = useState('51718');
+    const [msg, setMsg] = useState<string | null>(null);
+
+    const scan = async () => {
+        setScanning(true);
+        setMsg(null);
+        try {
+            setHosts(await api().workmode.discoverHosts());
+        } catch {
+            setHosts([]);
+            setMsg('Discovery failed — make sure Tailscale is online.');
+        } finally {
+            setScanning(false);
+        }
+    };
     useEffect(() => {
-        api()
-            .tailscale.status()
-            .then(setStatus)
-            .catch(() => setStatus(null));
+        void scan();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
-    const peers = (status?.peers ?? []).filter((p) => p.online);
+
+    const connect = async (host: { ip: string; port: number; hostname: string }) => {
+        const key = `${host.ip}:${host.port}`;
+        setBusy(key);
+        setMsg(null);
+        try {
+            await api().workmode.openRemote(host);
+            setMsg(`Opened a remote session to ${host.hostname}. Approve the pairing PIN on ${host.hostname}.`);
+        } catch (e) {
+            setMsg(e instanceof Error ? e.message : 'Could not open the remote session.');
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    const connectManual = () => {
+        const ip = manualIp.trim();
+        if (!ip) return;
+        void connect({ ip, port: Number(manualPort) || 51718, hostname: ip });
+    };
+
     return (
         <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Heading as="h2" size="sm" style={{ margin: 0 }}>
                     Remote host
                 </Heading>
-                <Badge color="violet" variant="soft" size="sm">
-                    Phase 2
-                </Badge>
-            </div>
-            <Text size="xs" className="text-zinc-500">
-                In remote mode you&apos;ll pick a host Genie on your tailnet and
-                drive its workspaces and terminals from here. The connection client
-                is landing in Phase 2 — for now, these are the devices Genie can see
-                on your tailnet:
-            </Text>
-            {peers.length === 0 ? (
                 <Text size="xs" className="text-zinc-500">
-                    No online tailnet devices detected. Bring Tailscale online from
-                    the Tailscale card above.
+                    Connect to another Genie and control it
+                </Text>
+                <span style={{ flex: 1 }} />
+                <Action
+                    size="sm"
+                    variant="ghost"
+                    icon="refresh-cw"
+                    disabled={scanning}
+                    onClick={() => void scan()}
+                >
+                    {scanning ? 'Scanning…' : 'Rescan'}
+                </Action>
+            </div>
+
+            <Text size="xs" className="text-zinc-500">
+                Connecting opens a dedicated Genie window — clearly marked as a
+                remote session — driving that machine&apos;s workspaces, terminals
+                and questions over Tailscale. The host must approve the pairing PIN.
+            </Text>
+
+            {hosts === null ? (
+                <Text size="xs" className="text-zinc-500">Scanning the tailnet…</Text>
+            ) : hosts.length === 0 ? (
+                <Text size="xs" className="text-zinc-500">
+                    No Genie hosts found. A host needs Work Mode host (mobile remote
+                    control) enabled; use manual connect below for a non-default port.
                 </Text>
             ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {peers.slice(0, 12).map((p) => (
-                        <div
-                            key={p.ip ?? p.hostname}
-                            style={{ display: 'flex', gap: 8, alignItems: 'center' }}
-                        >
-                            <Icon name="monitor" size="xs" />
-                            <Text size="xs">{p.hostname || '(unnamed)'}</Text>
-                            <Text size="xs" className="text-zinc-500">
-                                {p.ip} · {p.os}
-                            </Text>
-                        </div>
-                    ))}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {hosts.map((h) => {
+                        const key = `${h.ip}:${h.port}`;
+                        return (
+                            <div key={key} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                <Icon name="monitor" size="xs" />
+                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                                    <Text size="sm" style={{ fontWeight: 600 }}>
+                                        {h.hostname}
+                                    </Text>
+                                    <Text size="xs" className="text-zinc-500">
+                                        {h.ip}:{h.port}
+                                    </Text>
+                                </div>
+                                <Action
+                                    size="sm"
+                                    color="blue"
+                                    icon="external-link"
+                                    disabled={busy === key}
+                                    onClick={() => void connect(h)}
+                                >
+                                    {busy === key ? 'Opening…' : 'Connect'}
+                                </Action>
+                            </div>
+                        );
+                    })}
                 </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 160 }}>
+                    <Input
+                        label="Manual connect"
+                        description="Host tailnet IP"
+                        value={manualIp}
+                        onValueChange={setManualIp}
+                        placeholder="100.x.y.z"
+                    />
+                </div>
+                <div style={{ width: 92 }}>
+                    <Input
+                        label="Port"
+                        value={manualPort}
+                        onValueChange={setManualPort}
+                        placeholder="51718"
+                    />
+                </div>
+                <Action
+                    size="sm"
+                    variant="ghost"
+                    icon="external-link"
+                    disabled={!manualIp.trim()}
+                    onClick={connectManual}
+                >
+                    Connect
+                </Action>
+            </div>
+
+            {msg && (
+                <Text size="xs" style={{ color: 'var(--fg-2)' }}>
+                    {msg}
+                </Text>
             )}
         </Card>
     );

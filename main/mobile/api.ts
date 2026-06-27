@@ -1,5 +1,6 @@
 import type http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type { ForceAnswer } from '../mcp/protocol';
 import type { PendingQuestion } from '../ask/force-question';
@@ -314,6 +315,14 @@ export async function handleApi(
         }
         audit('pair.ok', info.ip, actorOf(result.token));
         sendJson(res, 200, { token: result.token });
+        return true;
+    }
+
+    // --- /api/ping — unauthed Genie-host beacon, for tailnet discovery -----
+    // Lets another Genie probing the tailnet identify this node as a Genie host
+    // (and read its hostname) WITHOUT a token. Carries no sensitive data.
+    if (pathname === '/api/ping') {
+        sendJson(res, 200, { genie: true, hostname: os.hostname() });
         return true;
     }
 
