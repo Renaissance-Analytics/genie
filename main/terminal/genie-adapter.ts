@@ -151,6 +151,14 @@ export function electronHostSpawner(_dirname: string): HostSpawner {
                 delete standaloneEnv.ELECTRON_RUN_AS_NODE;
                 const child = spawn(rt.nodePath, [scriptPath], {
                     detached: true,
+                    // Hide the host's console window. node.exe is a console-
+                    // subsystem app, so without this a `detached` spawn pops a
+                    // visible console on Windows — and on Win11 (default terminal =
+                    // Windows Terminal) that surfaces as a stray WT window on every
+                    // host (re)spawn. The ptys themselves are windowless (ConPTY);
+                    // this is only the HOST process's own console. Matches the
+                    // package's service-spawn, which already sets windowsHide.
+                    windowsHide: true,
                     stdio: 'ignore',
                     env: standaloneEnv,
                 });
@@ -165,6 +173,10 @@ export function electronHostSpawner(_dirname: string): HostSpawner {
             // child (pins the binary; the update will kill + restart it).
             const child = spawn(process.execPath, [scriptPath], {
                 detached: true,
+                // Belt-and-suspenders: electron.exe is GUI-subsystem so it won't
+                // create a console anyway, but keep the flag consistent with the
+                // standalone-Node branch above.
+                windowsHide: true,
                 stdio: 'ignore',
                 env: {
                     ...process.env,
