@@ -453,6 +453,35 @@ export default function SettingsPage() {
                 activeWorkspace={s.active_workspace}
             />
 
+            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+                <Heading as="h2" size="sm" style={{ margin: 0 }}>
+                    IssueWatch remediation
+                </Heading>
+                <Text size="xs" className="text-zinc-500">
+                    How agents should act on IssueWatch pings — the open Issues, PRs,
+                    and security alerts surfaced by <code>checkIssues</code> and the{' '}
+                    <code>imDone</code> <code>sec:</code> count. The choice rides along
+                    on the imDone count line, so it actually steers what the agent
+                    does. Fixes are always at the root cause — never a bandaid.
+                </Text>
+                <Select
+                    value={s.agent_issuewatch_policy ?? 'surface'}
+                    onValueChange={(v) =>
+                        patch({
+                            agent_issuewatch_policy: v as
+                                | 'surface'
+                                | 'fix'
+                                | 'fix-and-ship',
+                        })
+                    }
+                    list={[
+                        { value: 'surface', label: 'Surface only — report the counts, wait for me (default)' },
+                        { value: 'fix', label: 'Fix when idle — fix the root cause, then report before shipping' },
+                        { value: 'fix-and-ship', label: 'Fix & ship when idle — remediate and ship right away' },
+                    ]}
+                />
+            </Card>
+
                     </Tabs.Panel>
                     <Tabs.Panel value="mobile" className="settings-tab">
 

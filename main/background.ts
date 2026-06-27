@@ -336,7 +336,15 @@ async function checkIssuesForMcp(terminalId: string): Promise<IssueWatchSnapshot
         severity: it.severity,
         unread: it.unread,
     }));
-    return { connected: true, workspaceResolved: true, counts, items };
+    return {
+        connected: true,
+        workspaceResolved: true,
+        counts,
+        items,
+        // The user's remediation preference rides along so the imDone count line
+        // (formatIssueCountsLine) can tell the agent how to act on these.
+        policy: getAllSettings().agent_issuewatch_policy,
+    };
 }
 
 /** A process spec's human command (meta.command), for the manageProcess result. */

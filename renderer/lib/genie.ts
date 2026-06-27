@@ -268,6 +268,10 @@ export interface Settings {
     /** Tier 3: keep terminals running in a detached host so they survive a full
      *  quit. Defaults 'off' (in-process). 'on' opts in. */
     detached_terminals?: 'on' | 'off';
+    /** How agents act on IssueWatch pings (open Issues / PRs / security alerts).
+     *  'surface' (default) reports only; 'fix' fixes the root cause when idle;
+     *  'fix-and-ship' fixes + ships right away when idle. */
+    agent_issuewatch_policy?: 'surface' | 'fix' | 'fix-and-ship';
     /** Prepend the bundled tynn-cli bin to terminal PATH + inject GENIE_* env.
      *  Defaults ON; 'off' disables. */
     cli_tools_in_terminals?: 'on' | 'off';

@@ -561,6 +561,42 @@ describe('handleMcpMessage', () => {
         expect(text).toContain('IssueWatch — issues:3, PR:1, sec:2');
     });
 
+    it('imDone folds the remediation policy into the counts line when set', async () => {
+        const checkIssues = vi.fn().mockResolvedValue({
+            connected: true,
+            workspaceResolved: true,
+            counts: { issue: 0, pr: 0, security: 2 },
+            items: [],
+            policy: 'fix-and-ship',
+        });
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 60, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
+            ctx({ checkIssues }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        // Base counts plus a root-cause / ship-now directive (no bandaids).
+        expect(text).toContain('IssueWatch — issues:0, PR:0, sec:2');
+        expect(text).toContain('ROOT CAUSE');
+        expect(text).toContain('ship right away');
+    });
+
+    it('imDone leaves the counts line bare when policy is surface/unset', async () => {
+        const checkIssues = vi.fn().mockResolvedValue({
+            connected: true,
+            workspaceResolved: true,
+            counts: { issue: 1, pr: 0, security: 0 },
+            items: [],
+            policy: 'surface',
+        });
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 61, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
+            ctx({ checkIssues }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('IssueWatch — issues:1, PR:0, sec:0');
+        expect(text).not.toContain('ROOT CAUSE');
+    });
+
     it('imDone omits the counts line when there is nothing open', async () => {
         const checkIssues = vi.fn().mockResolvedValue({
             connected: true,

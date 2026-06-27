@@ -471,6 +471,16 @@ export interface Settings {
      *  No default — the agent must pass an explicit `command`, or this is used
      *  when set. Empty means "no preset; require an explicit command". */
     agent_command_custom?: string;
+    /** How agents should act on IssueWatch pings — the open Issues / PRs /
+     *  security alerts surfaced via the `checkIssues` tool and the `imDone`
+     *  `sec:` count. Surfaced to agents on the imDone count line so it actually
+     *  steers behaviour:
+     *    - 'surface' (default): just report the counts; wait for direction.
+     *    - 'fix': fix the ROOT CAUSE when no other work is in progress, then
+     *      report before shipping.
+     *    - 'fix-and-ship': fix the root cause AND ship right away when no other
+     *      work is in progress. */
+    agent_issuewatch_policy?: 'surface' | 'fix' | 'fix-and-ship';
 }
 
 export function getAllSettings(): Settings {
@@ -536,6 +546,9 @@ export function getAllSettings(): Settings {
         agent_command_claude: out['agent_command_claude'] ?? 'claude',
         agent_command_codex: out['agent_command_codex'] ?? 'codex',
         agent_command_custom: out['agent_command_custom'] ?? '',
+        agent_issuewatch_policy:
+            (out['agent_issuewatch_policy'] as Settings['agent_issuewatch_policy']) ??
+            'surface',
     };
 }
 

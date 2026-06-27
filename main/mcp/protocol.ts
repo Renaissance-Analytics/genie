@@ -144,6 +144,10 @@ export interface IssueWatchSnapshot {
     workspaceResolved: boolean;
     counts: IssueWatchCounts;
     items: IssueWatchItem[];
+    /** The user's remediation preference (Settings → Agent MCP), folded into the
+     *  imDone count line so the agent knows how to act on these. Omitted/`surface`
+     *  reports only; `fix` / `fix-and-ship` ask the agent to remediate when idle. */
+    policy?: 'surface' | 'fix' | 'fix-and-ship';
 }
 
 export interface McpContext {
@@ -850,7 +854,19 @@ export function formatIssueCountsLine(snap: IssueWatchSnapshot): string | null {
     if (!snap.connected || !snap.workspaceResolved) return null;
     const { issue, pr, security } = snap.counts;
     if (!issue && !pr && !security) return null;
-    return `IssueWatch — issues:${issue}, PR:${pr}, sec:${security}`;
+    const base = `IssueWatch — issues:${issue}, PR:${pr}, sec:${security}`;
+    // Fold the user's remediation preference in so the count line actually
+    // steers the agent. `surface` (or unset) keeps the bare counts — backward
+    // compatible. `fix` / `fix-and-ship` append a directive (security first,
+    // root-cause only — NO bandaids).
+    if (snap.policy === 'fix' || snap.policy === 'fix-and-ship') {
+        const tail =
+            snap.policy === 'fix-and-ship'
+                ? 'and ship right away'
+                : 'then report before shipping';
+        return `${base} · the user wants these fixed at the ROOT CAUSE (security first, NO bandaids) ${tail} when no other work is in progress.`;
+    }
+    return base;
 }
 
 /** Human label for a feed item kind (used in the grouped checkIssues list). */
