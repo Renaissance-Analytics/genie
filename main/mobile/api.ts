@@ -6,6 +6,17 @@ import type { ForceAnswer } from '../mcp/protocol';
 import type { PendingQuestion } from '../ask/force-question';
 import { sessionFromAuthHeader, attemptPair } from './auth';
 import { audit, isLocked } from './audit';
+import {
+    listTree,
+    readFile,
+    writeFile,
+    createFile,
+    createFolder,
+    renamePath,
+    duplicatePath,
+    deletePath,
+    gitStatus,
+} from '../files/ipc';
 
 /**
  * REST surface for the mobile remote-control server. Pure routing over the
@@ -535,6 +546,91 @@ export async function handleApi(
         // answered:false is the benign phone-after-desktop race — still 200 so
         // the phone treats it as "already handled" rather than an error.
         sendJson(res, 200, { ok: true, answered });
+        return true;
+    }
+
+    // --- files (editor) — for the remote DESKTOP driving this host ----------
+    // The remote desktop's editor/file ops route here, keyed by workspace ID so
+    // host absolute paths NEVER cross the wire (the remote works only in
+    // workspace-relative paths). Reads are authed; mutations also honour the
+    // kill-switch. Every op is path-guarded against the workspace root inside
+    // files/ipc.ts, so a remote can't escape a workspace.
+    if (pathname.startsWith('/api/files/')) {
+        if (method !== 'POST') {
+            sendJson(res, 405, { error: 'method not allowed' });
+            return true;
+        }
+        let f: {
+            workspaceId?: string;
+            relPath?: string;
+            fromRel?: string;
+            toRel?: string;
+            content?: string;
+            root?: string;
+            ignored?: boolean;
+        };
+        try {
+            f = await readJsonBody(req);
+        } catch {
+            sendJson(res, 400, { error: 'invalid body' });
+            return true;
+        }
+        const wsRow = deps.listWorkspaces().find((w) => w.id === f.workspaceId);
+        if (!wsRow) {
+            sendJson(res, 404, { error: 'unknown workspace' });
+            return true;
+        }
+        const wp = wsRow.path;
+        try {
+            // Reads — auth only.
+            if (pathname === '/api/files/tree') {
+                sendJson(res, 200, { tree: await listTree(wp, { root: f.root }) });
+                return true;
+            }
+            if (pathname === '/api/files/read') {
+                sendJson(res, 200, await readFile(wp, String(f.relPath ?? '')));
+                return true;
+            }
+            if (pathname === '/api/files/git-status') {
+                sendJson(res, 200, { map: await gitStatus(wp, { ignored: !!f.ignored }) });
+                return true;
+            }
+            // Mutations — also gated by the kill-switch.
+            if (guardLocked()) return true;
+            if (pathname === '/api/files/write') {
+                const r = await writeFile(wp, String(f.relPath ?? ''), String(f.content ?? ''));
+                audit('files.write', `${f.relPath} → ${wsRow.project_name}`, actor);
+                sendJson(res, 200, r);
+                return true;
+            }
+            if (pathname === '/api/files/create-file') {
+                sendJson(res, 200, await createFile(wp, String(f.relPath ?? '')));
+                return true;
+            }
+            if (pathname === '/api/files/create-folder') {
+                sendJson(res, 200, await createFolder(wp, String(f.relPath ?? '')));
+                return true;
+            }
+            if (pathname === '/api/files/rename') {
+                const r = await renamePath(wp, String(f.fromRel ?? ''), String(f.toRel ?? ''));
+                audit('files.rename', `${f.fromRel} → ${f.toRel}`, actor);
+                sendJson(res, 200, r);
+                return true;
+            }
+            if (pathname === '/api/files/duplicate') {
+                sendJson(res, 200, await duplicatePath(wp, String(f.relPath ?? '')));
+                return true;
+            }
+            if (pathname === '/api/files/delete') {
+                audit('files.delete', `${f.relPath} ← ${wsRow.project_name}`, actor);
+                sendJson(res, 200, await deletePath(wp, String(f.relPath ?? '')));
+                return true;
+            }
+        } catch (e) {
+            sendJson(res, 400, { error: e instanceof Error ? e.message : 'file op failed' });
+            return true;
+        }
+        sendJson(res, 404, { error: 'unknown files route' });
         return true;
     }
 
