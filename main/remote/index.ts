@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron';
+import { WebSocket } from 'ws';
 
 /**
  * Work Mode — remote desktop (the local-main proxy).
@@ -51,10 +52,89 @@ export function remoteStatus(): { connected: boolean; host: RemoteHost | null } 
 }
 
 function broadcastStatus(): void {
-    const s = remoteStatus();
+    broadcast('remote:status', remoteStatus());
+}
+
+/** Send a payload onto a local IPC channel in every window. */
+function broadcast(channel: string, payload: unknown): void {
     for (const w of BrowserWindow.getAllWindows()) {
-        if (!w.isDestroyed()) w.webContents.send('remote:status', s);
+        if (!w.isDestroyed()) w.webContents.send(channel, payload);
     }
+}
+
+// Host /ws/events types that map 1:1 onto the local IPC channels the desktop
+// renderer ALREADY subscribes to — so re-emitting them makes the desktop's live
+// dashboard updates (agent-attention glow, workspace pulse, process status,
+// terminal-spec + workspace-list changes) work transparently in remote mode.
+const PASSTHROUGH_EVENTS = new Set([
+    'terminal:attention',
+    'workspace:pulse',
+    'process:status',
+    'terminal-spec:changed',
+    'workspaces:changed',
+]);
+
+let eventsWs: WebSocket | null = null;
+let eventsClosed = false;
+let eventsRetry: NodeJS.Timeout | null = null;
+
+/** Connect the host's /ws/events and re-emit onto the local channels; reconnect
+ *  on a fixed backoff while remote mode is active. */
+function startEventsBridge(): void {
+    eventsClosed = false;
+    const scheduleRetry = () => {
+        if (eventsClosed || eventsRetry) return;
+        eventsRetry = setTimeout(() => {
+            eventsRetry = null;
+            open();
+        }, 2000);
+    };
+    const open = () => {
+        if (eventsClosed || !state.host || !state.token) return;
+        const url = `ws://${state.host.ip}:${state.host.port}/ws/events?token=${encodeURIComponent(state.token)}`;
+        let ws: WebSocket;
+        try {
+            ws = new WebSocket(url);
+        } catch {
+            scheduleRetry();
+            return;
+        }
+        eventsWs = ws;
+        ws.on('message', (raw) => {
+            try {
+                const msg = JSON.parse(String(raw)) as { type?: string; payload?: unknown };
+                if (msg.type && PASSTHROUGH_EVENTS.has(msg.type)) broadcast(msg.type, msg.payload);
+            } catch {
+                /* ignore malformed frames */
+            }
+        });
+        ws.on('close', () => {
+            eventsWs = null;
+            if (!eventsClosed) scheduleRetry();
+        });
+        ws.on('error', () => {
+            try {
+                ws.close();
+            } catch {
+                /* already closing */
+            }
+        });
+    };
+    open();
+}
+
+function stopEventsBridge(): void {
+    eventsClosed = true;
+    if (eventsRetry) {
+        clearTimeout(eventsRetry);
+        eventsRetry = null;
+    }
+    try {
+        eventsWs?.close();
+    } catch {
+        /* already closing */
+    }
+    eventsWs = null;
 }
 
 /**
@@ -94,11 +174,13 @@ export async function connectRemote(
     state.token = data.token;
     state.connected = true;
     broadcastStatus();
+    startEventsBridge();
     return { ok: true };
 }
 
 /** Leave remote mode (viewer-only — never touches the host's terminals/processes). */
 export function disconnectRemote(): void {
+    stopEventsBridge();
     state.host = null;
     state.token = null;
     state.connected = false;
