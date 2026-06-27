@@ -226,4 +226,6 @@ export const GENIE_AGENTS_BRIEF = `You are running inside **Genie** — a deskto
 
 **Automate \`imDone\`:** if your harness has an on-finish hook (Claude Code's \`Stop\` hook in \`.claude/settings.json\`; Codex's \`notify\`), wire it ONCE to POST a \`tools/call\` for \`imDone\` to \`$GENIE_MCP_URL\` (passing \`$GENIE_TERMINAL_ID\`) so the glow fires on every finish automatically. Configure this in YOUR harness yourself — Genie won't. Call \`genieGuide\` for the exact snippet.
 
+**Engineering standard — NO BANDAIDS, EVER.** Fix the ROOT CAUSE, never paper over a symptom. Don't mask a vulnerable transitive dependency with an overrides pin when the real fix is updating the dependency that pulls it; don't swallow an error, hardcode around a bug, or weaken a test to make something pass. A bandaid is just a hidden bug — it WILL resurface. The moment a Dependabot / security alert (the sec count from checkIssues / imDone) shows up and no other work is in progress, fix it properly and ship it right away.
+
 **The rule:** any time you'd otherwise stop, print, and wait — reach for the matching tool above instead. For full usage, call \`genieGuide\`.`;

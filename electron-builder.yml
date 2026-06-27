@@ -149,17 +149,21 @@ win:
   # CSC_LINK, CSC_KEY_PASSWORD
 
 nsis:
-  # `oneClick: false` gives the full assisted-installer wizard with
-  # location chooser + shortcut options instead of a silent install.
-  oneClick: false
-  # `perMachine: false` keeps the install per-user (no UAC prompt),
-  # which also means it survives signing being absent — UAC + unsigned
-  # binary is a classic silent-fail combination on Windows 11.
+  # ONE-CLICK (silent) installer so auto-updates are truly hands-free: on
+  # quitAndInstall, electron-updater runs the downloaded installer silently and
+  # swaps the app in place — NO wizard, no "install for all users / only me"
+  # page. `oneClick: false` made every auto-update launch the FULL assisted
+  # wizard, which is what surfaced the install-options page on a routine upgrade.
+  # Genie installs nothing new at install time — the Tier-3 pty-host is spawned
+  # at RUNTIME from the bundled runtime — so there is no per-upgrade setup to
+  # prompt for. (First install is one-click too: in NSIS the same flag governs
+  # both, and silent updates are the priority.)
+  oneClick: true
+  # `perMachine: false` keeps the install per-user (no UAC prompt), which also
+  # dodges the unsigned-binary + UAC silent-fail combo on Windows 11. (A oneClick
+  # installer is incompatible with a directory chooser, so
+  # allowToChangeInstallationDirectory is intentionally omitted.)
   perMachine: false
-  allowToChangeInstallationDirectory: true
-  # Allow the user to elevate later if they actually want a machine-
-  # wide install. Without this, the wizard pre-decides for them.
-  allowElevation: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Genie
