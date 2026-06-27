@@ -402,6 +402,19 @@ export interface GenieHost {
     port: number;
 }
 
+/** The host this Genie is driving in remote mode (no token — main holds that). */
+export interface RemoteHost {
+    ip: string;
+    port: number;
+    hostname: string;
+}
+
+/** Remote-mode status surfaced to the renderer (titlebar indicator + bridge). */
+export interface RemoteStatus {
+    connected: boolean;
+    host: RemoteHost | null;
+}
+
 export interface DocEntry {
     slug: string;
     title: string;
@@ -825,6 +838,13 @@ interface GenieApi {
             port: number;
             hostname: string;
         }) => Promise<{ ok: boolean }>;
+    };
+    remote: {
+        connect: (host: RemoteHost, pin: string) => Promise<{ ok: boolean; error?: string }>;
+        disconnect: () => Promise<{ ok: boolean }>;
+        status: () => Promise<RemoteStatus>;
+        request: (path: string, init?: { method?: string; json?: unknown }) => Promise<unknown>;
+        onStatus: (cb: (s: RemoteStatus) => void) => () => void;
     };
     aionima: {
         getConfig: () => Promise<AionimaConfig>;

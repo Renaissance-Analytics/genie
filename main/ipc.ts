@@ -79,6 +79,7 @@ import {
 } from './mobile/server';
 import { getTailscaleStatus, tailscaleUp, installTailscale } from './tailscale';
 import { discoverHosts, openRemoteWindow } from './workmode';
+import { connectRemote, disconnectRemote, remoteStatus, remoteRequest } from './remote';
 import QRCode from 'qrcode';
 import { tynnCliInfo, installTynnCliSystemWide } from './cli/tynn-cli';
 import { registerShortcuts } from './shortcuts';
@@ -362,6 +363,25 @@ export function registerIpcHandlers(): void {
         'workmode:open-remote',
         (_e, host: { ip: string; port: number; hostname: string }) =>
             openRemoteWindow(host),
+    );
+
+    // Work Mode — remote desktop: pair+connect to a host, proxy REST, status.
+    // (The renderer's remote bridge maps every desktop call onto remote:request;
+    //  the local main holds the token and routes to the host over the tailnet.)
+    ipcMain.handle(
+        'remote:connect',
+        (_e, host: { ip: string; port: number; hostname: string }, pin: string) =>
+            connectRemote(host, pin),
+    );
+    ipcMain.handle('remote:disconnect', () => {
+        disconnectRemote();
+        return { ok: true };
+    });
+    ipcMain.handle('remote:status', () => remoteStatus());
+    ipcMain.handle(
+        'remote:request',
+        (_e, path: string, init?: { method?: string; json?: unknown }) =>
+            remoteRequest(path, init),
     );
 
     ipcMain.handle('workspaces:open', async (_e, id: string) => {

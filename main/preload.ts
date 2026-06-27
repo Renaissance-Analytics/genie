@@ -123,6 +123,42 @@ const api = {
             ipcRenderer.invoke('workmode:open-remote', host) as Promise<{ ok: boolean }>,
     },
 
+    // Work Mode — remote desktop: pair/connect to a host, the REST proxy the
+    // renderer's remote bridge maps every desktop call onto, and a status
+    // subscription (the titlebar mode/host indicator listens on it).
+    remote: {
+        connect: (host: { ip: string; port: number; hostname: string }, pin: string) =>
+            ipcRenderer.invoke('remote:connect', host, pin) as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
+        disconnect: () =>
+            ipcRenderer.invoke('remote:disconnect') as Promise<{ ok: boolean }>,
+        status: () =>
+            ipcRenderer.invoke('remote:status') as Promise<{
+                connected: boolean;
+                host: { ip: string; port: number; hostname: string } | null;
+            }>,
+        request: (path: string, init?: { method?: string; json?: unknown }) =>
+            ipcRenderer.invoke('remote:request', path, init),
+        onStatus: (
+            cb: (s: {
+                connected: boolean;
+                host: { ip: string; port: number; hostname: string } | null;
+            }) => void,
+        ) => {
+            const handler = (
+                _e: unknown,
+                payload: {
+                    connected: boolean;
+                    host: { ip: string; port: number; hostname: string } | null;
+                },
+            ) => cb(payload);
+            ipcRenderer.on('remote:status', handler);
+            return () => ipcRenderer.off('remote:status', handler);
+        },
+    },
+
     aionima: {
         getConfig: () => ipcRenderer.invoke('auth:aionima-config'),
         setConfig: (patch: { host?: string; token?: string | null }) =>
