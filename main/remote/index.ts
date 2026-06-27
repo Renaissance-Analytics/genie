@@ -137,6 +137,105 @@ function stopEventsBridge(): void {
     eventsWs = null;
 }
 
+// --- per-terminal pty bridge ----------------------------------------------
+// The desktop terminal grid drives the host's pty-host terminals: the renderer's
+// XTerm subscribes to terminal:data {id} as usual, and the main feeds it from the
+// host's pty over a per-terminal /ws/term, forwarding the renderer's input/resize
+// back. Keyed by terminal id; attach is idempotent. The pty itself lives on the
+// HOST (its detached pty-host) and is never touched on detach (viewer semantics).
+const termWs = new Map<string, WebSocket>();
+
+/** Attach to a host terminal's pty stream and re-emit terminal:data/exit onto the
+ *  local channels (keyed by id). Idempotent per id; a no-op when not connected. */
+export function remoteAttachTerminal(id: string): void {
+    if (!state.host || !state.token || termWs.has(id)) return;
+    const url = `ws://${state.host.ip}:${state.host.port}/ws/term?terminal=${encodeURIComponent(id)}&token=${encodeURIComponent(state.token)}`;
+    let ws: WebSocket;
+    try {
+        ws = new WebSocket(url);
+    } catch {
+        return;
+    }
+    termWs.set(id, ws);
+    ws.on('message', (raw) => {
+        try {
+            const msg = JSON.parse(String(raw)) as {
+                type?: string;
+                data?: string;
+                exitCode?: number;
+                signal?: number;
+            };
+            if (msg.type === 'data' && typeof msg.data === 'string') {
+                broadcast('terminal:data', { id, data: msg.data });
+            } else if (msg.type === 'exit') {
+                broadcast('terminal:exit', { id, exitCode: msg.exitCode ?? 0, signal: msg.signal });
+            }
+            // 'dropped' (host backpressure marker) — ignored; on re-attach the
+            // host replays scrollback, so the viewport catches up.
+        } catch {
+            /* ignore malformed frames */
+        }
+    });
+    ws.on('close', () => {
+        if (termWs.get(id) === ws) termWs.delete(id);
+    });
+    ws.on('error', () => {
+        try {
+            ws.close();
+        } catch {
+            /* already closing */
+        }
+    });
+}
+
+/** Forward the renderer's keystrokes to the host pty. */
+export function remoteTerminalInput(id: string, data: string): void {
+    const ws = termWs.get(id);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        try {
+            ws.send(JSON.stringify({ type: 'input', data }));
+        } catch {
+            /* socket died mid-send — the renderer re-attaches */
+        }
+    }
+}
+
+/** Forward a viewport resize to the host pty. */
+export function remoteTerminalResize(id: string, cols: number, rows: number): void {
+    const ws = termWs.get(id);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        try {
+            ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+        } catch {
+            /* dropped — replayed on the next resize */
+        }
+    }
+}
+
+/** Detach the viewer from a host terminal (NEVER kills the host pty). */
+export function remoteDetachTerminal(id: string): void {
+    const ws = termWs.get(id);
+    if (ws) {
+        try {
+            ws.close();
+        } catch {
+            /* already closing */
+        }
+        termWs.delete(id);
+    }
+}
+
+function closeAllTerminals(): void {
+    for (const ws of termWs.values()) {
+        try {
+            ws.close();
+        } catch {
+            /* already closing */
+        }
+    }
+    termWs.clear();
+}
+
 /**
  * Pair with + connect to a host Genie. `POST /api/pair {pin}` — the host pops a
  * desktop confirm, so this BLOCKS until the user approves on the host (or it's
@@ -181,6 +280,7 @@ export async function connectRemote(
 /** Leave remote mode (viewer-only — never touches the host's terminals/processes). */
 export function disconnectRemote(): void {
     stopEventsBridge();
+    closeAllTerminals();
     state.host = null;
     state.token = null;
     state.connected = false;

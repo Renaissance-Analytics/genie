@@ -157,6 +157,14 @@ const api = {
             ipcRenderer.on('remote:status', handler);
             return () => ipcRenderer.off('remote:status', handler);
         },
+        terminalAttach: (id: string) =>
+            ipcRenderer.invoke('remote:terminal-attach', id) as Promise<{ ok: boolean }>,
+        terminalInput: (id: string, data: string) =>
+            ipcRenderer.invoke('remote:terminal-input', id, data) as Promise<boolean>,
+        terminalResize: (id: string, cols: number, rows: number) =>
+            ipcRenderer.invoke('remote:terminal-resize', id, cols, rows) as Promise<boolean>,
+        terminalDetach: (id: string) =>
+            ipcRenderer.invoke('remote:terminal-detach', id) as Promise<{ ok: boolean }>,
     },
 
     aionima: {

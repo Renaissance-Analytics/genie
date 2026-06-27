@@ -79,7 +79,16 @@ import {
 } from './mobile/server';
 import { getTailscaleStatus, tailscaleUp, installTailscale } from './tailscale';
 import { discoverHosts, openRemoteWindow } from './workmode';
-import { connectRemote, disconnectRemote, remoteStatus, remoteRequest } from './remote';
+import {
+    connectRemote,
+    disconnectRemote,
+    remoteStatus,
+    remoteRequest,
+    remoteAttachTerminal,
+    remoteTerminalInput,
+    remoteTerminalResize,
+    remoteDetachTerminal,
+} from './remote';
 import QRCode from 'qrcode';
 import { tynnCliInfo, installTynnCliSystemWide } from './cli/tynn-cli';
 import { registerShortcuts } from './shortcuts';
@@ -383,6 +392,27 @@ export function registerIpcHandlers(): void {
         (_e, path: string, init?: { method?: string; json?: unknown }) =>
             remoteRequest(path, init),
     );
+    // Terminal I/O bridge: the renderer's XTerm attaches to a host terminal's pty
+    // (main re-emits terminal:data/exit) and forwards keystrokes/resize to it.
+    ipcMain.handle('remote:terminal-attach', (_e, id: string) => {
+        remoteAttachTerminal(id);
+        return { ok: true };
+    });
+    ipcMain.handle('remote:terminal-input', (_e, id: string, data: string) => {
+        remoteTerminalInput(id, data);
+        return true;
+    });
+    ipcMain.handle(
+        'remote:terminal-resize',
+        (_e, id: string, cols: number, rows: number) => {
+            remoteTerminalResize(id, cols, rows);
+            return true;
+        },
+    );
+    ipcMain.handle('remote:terminal-detach', (_e, id: string) => {
+        remoteDetachTerminal(id);
+        return { ok: true };
+    });
 
     ipcMain.handle('workspaces:open', async (_e, id: string) => {
         await openWorkspace(id);

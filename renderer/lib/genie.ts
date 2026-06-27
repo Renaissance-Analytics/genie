@@ -845,6 +845,10 @@ interface GenieApi {
         status: () => Promise<RemoteStatus>;
         request: (path: string, init?: { method?: string; json?: unknown }) => Promise<unknown>;
         onStatus: (cb: (s: RemoteStatus) => void) => () => void;
+        terminalAttach: (id: string) => Promise<{ ok: boolean }>;
+        terminalInput: (id: string, data: string) => Promise<boolean>;
+        terminalResize: (id: string, cols: number, rows: number) => Promise<boolean>;
+        terminalDetach: (id: string) => Promise<{ ok: boolean }>;
     };
     aionima: {
         getConfig: () => Promise<AionimaConfig>;
