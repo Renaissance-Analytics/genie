@@ -2705,7 +2705,8 @@ function MobileSection({
                     Mobile remote control
                 </Heading>
                 <Text size="xs" className="text-zinc-500">
-                    Drive Genie from your phone over Tailscale
+                    Let your phone — or another Genie in remote mode — drive this
+                    Genie over Tailscale
                 </Text>
                 <span style={{ flex: 1 }} />
                 <Text size="xs" style={{ color: statusColor }}>
@@ -2725,9 +2726,9 @@ function MobileSection({
 
             <Text size="xs" className="text-zinc-500">
                 Remote control works only over your Tailscale network — the server
-                binds to your tailnet IP and nothing else. Pairing a phone must be
-                confirmed on this desktop; once paired, the phone can drive
-                terminals freely until you Disconnect or Lock.
+                binds to your tailnet IP and nothing else. Pairing a device must be
+                confirmed on this desktop; once paired, it can drive terminals
+                freely until you Disconnect or Lock.
             </Text>
 
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
