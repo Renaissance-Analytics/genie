@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
     Action,
+    Badge,
     Card,
     Heading,
     Icon,
@@ -16,6 +17,7 @@ import {
     type McpServerState,
     type MobileStatus,
     type Settings,
+    type TailscaleStatus,
     type ShellDetection,
     type UpdaterConfig,
     type UpdaterStatus,
@@ -505,13 +507,22 @@ export default function SettingsPage() {
                     </Tabs.Panel>
                     <Tabs.Panel value="mobile" className="settings-tab">
 
-            <MobileSection
-                enabled={s.mobile_enabled === 'on'}
-                onEnabledChange={(on) => patch({ mobile_enabled: on ? 'on' : 'off' })}
-                port={s.mobile_port ?? '51718'}
-                onPortChange={(v) => patch({ mobile_port: v })}
-                persistSettings={save}
+            <WorkModeModeCard
+                mode={s.work_mode ?? 'host'}
+                onModeChange={(m) => patch({ work_mode: m })}
             />
+            <TailscaleSection />
+            {(s.work_mode ?? 'host') === 'host' ? (
+                <MobileSection
+                    enabled={s.mobile_enabled === 'on'}
+                    onEnabledChange={(on) => patch({ mobile_enabled: on ? 'on' : 'off' })}
+                    port={s.mobile_port ?? '51718'}
+                    onPortChange={(v) => patch({ mobile_port: v })}
+                    persistSettings={save}
+                />
+            ) : (
+                <RemoteHostCard />
+            )}
 
                     </Tabs.Panel>
                     <Tabs.Panel value="connections" className="settings-tab">
@@ -2205,6 +2216,265 @@ function AgentMcpSection({
                     </>
                 )}
             </div>
+        </Card>
+    );
+}
+
+/**
+ * Settings → Work Mode → Mode. Host (default) vs Remote. Host means this Genie
+ * runs your projects and lets phones / (Phase 2) other Genies connect to it;
+ * Remote means this Genie connects out to a host Genie over the tailnet. Phase 1
+ * persists the choice + drives the section below it; the remote client is Phase 2.
+ */
+function WorkModeModeCard({
+    mode,
+    onModeChange,
+}: {
+    mode: 'host' | 'remote';
+    onModeChange: (m: 'host' | 'remote') => void;
+}) {
+    return (
+        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Heading as="h2" size="sm" style={{ margin: 0 }}>
+                    Mode
+                </Heading>
+                <Text size="xs" className="text-zinc-500">
+                    How this Genie participates over the tailnet
+                </Text>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+                {(['host', 'remote'] as const).map((m) => (
+                    <Action
+                        key={m}
+                        size="sm"
+                        variant={mode === m ? 'default' : 'ghost'}
+                        color={mode === m ? 'blue' : undefined}
+                        onClick={() => onModeChange(m)}
+                    >
+                        {m === 'host' ? 'Host (default)' : 'Remote'}
+                    </Action>
+                ))}
+            </div>
+            <Text size="xs" className="text-zinc-500">
+                {mode === 'host'
+                    ? 'Host — this Genie runs your projects and lets your phone (and, soon, other Genies) connect to it over Tailscale.'
+                    : 'Remote — connect this Genie to a host Genie over Tailscale and drive it from here. Desktop-to-desktop control arrives in Phase 2; Tailscale + discovery are set up below.'}
+            </Text>
+        </Card>
+    );
+}
+
+/**
+ * Settings → Work Mode → Tailscale. Genie MANAGES Tailscale (no separate app):
+ * shows live status (installed / online / tailnet IP + online peers), installs
+ * it (downloads Tailscale's signed installer on Windows, else opens the download
+ * page), and brings the node online (`tailscale up`, opening the login URL when
+ * interactive auth is needed). All via the `tailscale:*` IPC.
+ */
+function TailscaleSection() {
+    const [status, setStatus] = useState<TailscaleStatus | null>(null);
+    const [busy, setBusy] = useState(false);
+    const [msg, setMsg] = useState<string | null>(null);
+
+    const refresh = async () => {
+        try {
+            setStatus(await api().tailscale.status());
+        } catch {
+            setStatus(null);
+        }
+    };
+    useEffect(() => {
+        void refresh();
+    }, []);
+
+    const install = async () => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            const r = await api().tailscale.install();
+            setMsg(
+                r.started
+                    ? 'Tailscale installer launched — finish it, then click Refresh.'
+                    : r.url
+                        ? 'Opened the Tailscale download page — install it, then Refresh.'
+                        : (r.message ?? 'Could not start the installer.'),
+            );
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const connect = async () => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            const r = await api().tailscale.up();
+            if (r.ok) {
+                setMsg('Tailscale is online.');
+            } else if (r.authUrl) {
+                await api().tailscale.openAuth(r.authUrl);
+                setMsg('Opened the Tailscale login — sign in, then click Refresh.');
+            } else {
+                setMsg(r.message ?? 'Could not bring Tailscale online.');
+            }
+            await refresh();
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const installed = status?.installed ?? false;
+    const running = status?.running ?? false;
+    const selfIp = status?.self?.ip ?? null;
+    const onlinePeers = (status?.peers ?? []).filter((p) => p.online);
+
+    const label = !status
+        ? '—'
+        : !installed
+            ? 'Not installed'
+            : running
+                ? `Connected${selfIp ? ` · ${selfIp}` : ''}`
+                : 'Installed · offline';
+    const color = !status
+        ? 'var(--fg-3)'
+        : !installed
+            ? 'var(--rose-500)'
+            : running
+                ? 'var(--emerald-600)'
+                : 'var(--amber-600)';
+
+    return (
+        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Heading as="h2" size="sm" style={{ margin: 0 }}>
+                    Tailscale
+                </Heading>
+                <Text size="xs" className="text-zinc-500">
+                    The encrypted network Work Mode runs over
+                </Text>
+                <span style={{ flex: 1 }} />
+                <Text size="xs" style={{ color }}>
+                    <Icon
+                        name={!installed ? 'alert-triangle' : running ? 'check' : 'circle'}
+                        size="xs"
+                    />{' '}
+                    {label}
+                </Text>
+            </div>
+
+            <Text size="xs" className="text-zinc-500">
+                Genie manages Tailscale for you — no separate app. Work Mode binds
+                only to your tailnet, so your projects are reachable from your own
+                devices and nothing else.
+            </Text>
+
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {!installed && (
+                    <Action
+                        size="sm"
+                        color="blue"
+                        icon="download"
+                        disabled={busy}
+                        onClick={() => void install()}
+                    >
+                        Install Tailscale
+                    </Action>
+                )}
+                {installed && !running && (
+                    <Action
+                        size="sm"
+                        color="blue"
+                        icon="zap"
+                        disabled={busy}
+                        onClick={() => void connect()}
+                    >
+                        Bring online
+                    </Action>
+                )}
+                <Action
+                    size="sm"
+                    variant="ghost"
+                    icon="refresh-cw"
+                    disabled={busy}
+                    onClick={() => void refresh()}
+                >
+                    Refresh
+                </Action>
+            </div>
+
+            {running && (
+                <Text size="xs" className="text-zinc-500">
+                    {onlinePeers.length === 0
+                        ? 'No other devices online on your tailnet yet.'
+                        : `${onlinePeers.length} device${onlinePeers.length === 1 ? '' : 's'} online: ${onlinePeers
+                              .map((p) => p.hostname || p.ip)
+                              .filter(Boolean)
+                              .slice(0, 8)
+                              .join(', ')}`}
+                </Text>
+            )}
+
+            {msg && (
+                <Text size="xs" style={{ color: 'var(--fg-2)' }}>
+                    {msg}
+                </Text>
+            )}
+        </Card>
+    );
+}
+
+/**
+ * Settings → Work Mode → Remote host (shown in remote mode). Phase 1 surfaces the
+ * reachable tailnet devices Genie can see; selecting a host Genie to drive lands
+ * in Phase 2 (the native remote client).
+ */
+function RemoteHostCard() {
+    const [status, setStatus] = useState<TailscaleStatus | null>(null);
+    useEffect(() => {
+        api()
+            .tailscale.status()
+            .then(setStatus)
+            .catch(() => setStatus(null));
+    }, []);
+    const peers = (status?.peers ?? []).filter((p) => p.online);
+    return (
+        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Heading as="h2" size="sm" style={{ margin: 0 }}>
+                    Remote host
+                </Heading>
+                <Badge color="violet" variant="soft" size="sm">
+                    Phase 2
+                </Badge>
+            </div>
+            <Text size="xs" className="text-zinc-500">
+                In remote mode you&apos;ll pick a host Genie on your tailnet and
+                drive its workspaces and terminals from here. The connection client
+                is landing in Phase 2 — for now, these are the devices Genie can see
+                on your tailnet:
+            </Text>
+            {peers.length === 0 ? (
+                <Text size="xs" className="text-zinc-500">
+                    No online tailnet devices detected. Bring Tailscale online from
+                    the Tailscale card above.
+                </Text>
+            ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {peers.slice(0, 12).map((p) => (
+                        <div
+                            key={p.ip ?? p.hostname}
+                            style={{ display: 'flex', gap: 8, alignItems: 'center' }}
+                        >
+                            <Icon name="monitor" size="xs" />
+                            <Text size="xs">{p.hostname || '(unnamed)'}</Text>
+                            <Text size="xs" className="text-zinc-500">
+                                {p.ip} · {p.os}
+                            </Text>
+                        </div>
+                    ))}
+                </div>
+            )}
         </Card>
     );
 }

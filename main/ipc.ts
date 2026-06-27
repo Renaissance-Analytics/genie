@@ -77,6 +77,7 @@ import {
     revokeAllSessions,
     type MobileServerState,
 } from './mobile/server';
+import { getTailscaleStatus, tailscaleUp, installTailscale } from './tailscale';
 import QRCode from 'qrcode';
 import { tynnCliInfo, installTynnCliSystemWide } from './cli/tynn-cli';
 import { registerShortcuts } from './shortcuts';
@@ -333,6 +334,24 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('mobile:lock', async (_e, locked: boolean) => {
         setLocked(!!locked);
         return mobileStatus();
+    });
+
+    // Work Mode — Tailscale lifecycle management (status / bring online / install).
+    ipcMain.handle('tailscale:status', () => getTailscaleStatus());
+    ipcMain.handle('tailscale:up', () => tailscaleUp());
+    ipcMain.handle('tailscale:open-auth', async (_e, url: string) => {
+        // Only ever open Tailscale's own login URLs.
+        if (typeof url === 'string' && /^https:\/\/login\.tailscale\.com\//.test(url)) {
+            await shell.openExternal(url);
+            return { ok: true };
+        }
+        return { ok: false };
+    });
+    ipcMain.handle('tailscale:install', async () => {
+        const r = await installTailscale();
+        // Non-Windows / fallback hands back a URL — open it for the user.
+        if (r.url) await shell.openExternal(r.url);
+        return r;
     });
 
     ipcMain.handle('workspaces:open', async (_e, id: string) => {

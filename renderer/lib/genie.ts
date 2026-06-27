@@ -302,6 +302,8 @@ export interface Settings {
     /** Fixed port for the mobile server (bound on the Tailscale IP). String-
      *  encoded; default '51718'. Changing it requires restarting the server. */
     mobile_port?: string;
+    /** Work Mode: 'host' (default) or 'remote' (connect to a host Genie). */
+    work_mode?: 'host' | 'remote';
     /** Keep the Genie endpoint synced into each workspace's Claude `.mcp.json`.
      *  Default 'on'; 'off' leaves that file alone. */
     mcp_sync_claude?: 'on' | 'off';
@@ -373,6 +375,23 @@ export interface MobileStatus {
     pin: string;
     /** A data-URL PNG QR of `<url>?pair=<pin>`, or null when not bound. */
     qrDataUrl: string | null;
+}
+
+/** A peer node on the tailnet (from `tailscale status`). */
+export interface TailnetPeer {
+    hostname: string;
+    ip: string | null;
+    online: boolean;
+    os: string;
+}
+
+/** Tailscale lifecycle status for the Work Mode settings (mirrors main/tailscale). */
+export interface TailscaleStatus {
+    installed: boolean;
+    running: boolean;
+    self: { ip: string | null; hostname: string; online: boolean } | null;
+    peers: TailnetPeer[];
+    authUrl?: string | null;
 }
 
 export interface DocEntry {
@@ -784,6 +803,12 @@ interface GenieApi {
         regeneratePin: () => Promise<MobileStatus>;
         revokeSessions: () => Promise<MobileStatus & { revoked: number }>;
         lock: (locked: boolean) => Promise<MobileStatus>;
+    };
+    tailscale: {
+        status: () => Promise<TailscaleStatus>;
+        up: () => Promise<{ ok: boolean; authUrl?: string | null; message?: string }>;
+        openAuth: (url: string) => Promise<{ ok: boolean }>;
+        install: () => Promise<{ started: boolean; url?: string; message?: string }>;
     };
     aionima: {
         getConfig: () => Promise<AionimaConfig>;

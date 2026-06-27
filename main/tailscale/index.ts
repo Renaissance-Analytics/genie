@@ -1,6 +1,8 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const pexecFile = promisify(execFile);
 
@@ -135,5 +137,48 @@ export async function tailscaleUp(): Promise<{ ok: boolean; authUrl?: string | n
         const url = /(https:\/\/login\.tailscale\.com\/[^\s]+)/.exec(out)?.[1] ?? null;
         if (url) return { ok: false, authUrl: url, message: 'Tailscale needs you to log in.' };
         return { ok: false, message: (err.message ?? 'tailscale up failed').slice(0, 300) };
+    }
+}
+
+const TAILSCALE_DOWNLOAD_PAGE = 'https://tailscale.com/download';
+const WIN_INSTALLER_URL = 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe';
+
+/**
+ * Install Tailscale so Work Mode has a tailnet to run over. On Windows, download
+ * Tailscale's official signed installer and launch it (the user clicks through
+ * Tailscale's own UI). On macOS/Linux the install path differs (App Store /
+ * package manager), so hand back the download-page URL for the caller to open.
+ * The signed installer is only ever fetched from Tailscale's own `pkgs.` host.
+ *
+ * Returns `{ started: true }` when the Windows installer was launched, or a `url`
+ * for the caller to open instead (other platforms, or a download failure).
+ */
+export async function installTailscale(): Promise<{
+    started: boolean;
+    url?: string;
+    message?: string;
+}> {
+    if (tailscaleCliPath()) {
+        return { started: false, message: 'Tailscale is already installed.' };
+    }
+    if (process.platform !== 'win32') {
+        // macOS / Linux: open the official download page; install is OS-specific.
+        return { started: false, url: TAILSCALE_DOWNLOAD_PAGE };
+    }
+    try {
+        const res = await fetch(WIN_INSTALLER_URL);
+        if (!res.ok) throw new Error(`Download failed (HTTP ${res.status}).`);
+        const buf = Buffer.from(await res.arrayBuffer());
+        const dest = path.join(os.tmpdir(), `tailscale-setup-${Date.now()}.exe`);
+        fs.writeFileSync(dest, buf);
+        // Launch detached so Tailscale's installer outlives this call; the user
+        // drives its UI. Not windowsHide — the user needs to see the installer.
+        const child = spawn(dest, [], { detached: true, stdio: 'ignore' });
+        child.unref();
+        return { started: true };
+    } catch (e) {
+        // Network / write failure → fall back to the download page so the user
+        // can still get Tailscale.
+        return { started: false, url: WIN_INSTALLER_URL, message: (e as Error).message };
     }
 }

@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import type { TailscaleStatus } from './tailscale';
 
 /**
  * Typed contextBridge exposed to the renderer. Every channel matches a
@@ -90,6 +91,25 @@ const api = {
             >,
         lock: (locked: boolean) =>
             ipcRenderer.invoke('mobile:lock', locked) as Promise<MobileStatus>,
+    },
+
+    // Work Mode — Tailscale lifecycle management (status / bring online / install).
+    tailscale: {
+        status: () => ipcRenderer.invoke('tailscale:status') as Promise<TailscaleStatus>,
+        up: () =>
+            ipcRenderer.invoke('tailscale:up') as Promise<{
+                ok: boolean;
+                authUrl?: string | null;
+                message?: string;
+            }>,
+        openAuth: (url: string) =>
+            ipcRenderer.invoke('tailscale:open-auth', url) as Promise<{ ok: boolean }>,
+        install: () =>
+            ipcRenderer.invoke('tailscale:install') as Promise<{
+                started: boolean;
+                url?: string;
+                message?: string;
+            }>,
     },
 
     aionima: {

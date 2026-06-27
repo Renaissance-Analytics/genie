@@ -440,6 +440,11 @@ export interface Settings {
      *  encoded; default '51718' (obscure, beside the MCP port). Same Integer/
      *  range guard as mcp_port. Changing it requires restarting the server. */
     mobile_port?: string;
+    /** Work Mode: 'host' (default) — this Genie hosts; phones / other Genies
+     *  connect to it. 'remote' — this Genie connects to a host Genie over the
+     *  tailnet. The desktop-to-desktop remote client is Phase 2; the setting +
+     *  Tailscale lifecycle management land in Phase 1. */
+    work_mode?: 'host' | 'remote';
     /** Keep the Genie endpoint synced into a workspace's Claude `.mcp.json`.
      *  Default 'on'; 'off' means Genie never touches that file (manual edits
      *  stick). */
@@ -540,6 +545,7 @@ export function getAllSettings(): Settings {
         mcp_port: out['mcp_port'] ?? '51717',
         mobile_enabled: (out['mobile_enabled'] as 'on' | 'off') ?? 'off',
         mobile_port: out['mobile_port'] ?? '51718',
+        work_mode: (out['work_mode'] as 'host' | 'remote') ?? 'host',
         mcp_sync_claude: (out['mcp_sync_claude'] as 'on' | 'off') ?? 'on',
         mcp_sync_cursor: (out['mcp_sync_cursor'] as 'on' | 'off') ?? 'on',
         mcp_sync_agents: (out['mcp_sync_agents'] as 'on' | 'off') ?? 'on',
