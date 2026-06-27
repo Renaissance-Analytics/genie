@@ -96,7 +96,7 @@ export default function SettingsPage() {
                     <Tabs.Tab value="workspaces">Workspaces</Tabs.Tab>
                     <Tabs.Tab value="customization">Customization</Tabs.Tab>
                     <Tabs.Tab value="agent-mcp">Agent MCP</Tabs.Tab>
-                    <Tabs.Tab value="mobile">Mobile</Tabs.Tab>
+                    <Tabs.Tab value="mobile">Work Mode</Tabs.Tab>
                     <Tabs.Tab value="connections">Connections</Tabs.Tab>
                     <Tabs.Tab value="updates">Updates</Tabs.Tab>
                 </Tabs.List>
