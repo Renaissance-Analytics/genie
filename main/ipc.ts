@@ -41,6 +41,7 @@ import {
 import { analyseFolder } from './workspace/analyse';
 import { validateSimpleWorkspace } from './workspace/create-simple';
 import { openWorkspace } from './workspace/open';
+import { cloneRepo } from './workspace/clone';
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import {
@@ -210,6 +211,13 @@ export function registerIpcHandlers(): void {
         rebuildMenu();
         return r;
     });
+    // Clone a remote repo to a chosen parent → return the local path, so the
+    // Add-workspace Simple flow can register a remote repo (not just a folder).
+    ipcMain.handle(
+        'workspaces:clone',
+        (_e, url: string, parentPath: string, folder?: string) =>
+            cloneRepo({ url, parent_path: parentPath, folder }),
+    );
     ipcMain.handle(
         'workspaces:update',
         (_e, id: string, patch: Partial<WorkspaceRow>) => {

@@ -210,6 +210,11 @@ function SimpleWizard({
     onCreated: (row: WorkspaceRow) => void;
 }) {
     const [folder, setFolder] = useState<string>('');
+    // Source: a local folder (default) OR a remote git repo Genie clones into a
+    // chosen parent and then registers as the workspace.
+    const [sourceMode, setSourceMode] = useState<'local' | 'remote'>('local');
+    const [sourceUrl, setSourceUrl] = useState<string>('');
+    const [cloneParent, setCloneParent] = useState<string>('');
     const [projectId, setProjectId] = useState<string>('');
     const [editor, setEditor] = useState<string>('cursor');
     const [submitting, setSubmitting] = useState(false);
@@ -231,6 +236,9 @@ function SimpleWizard({
                 setPrimaryWorkspace(s.primary_workspace);
                 if (!agiParent && s.primary_workspace) {
                     setAgiParent(s.primary_workspace);
+                }
+                if (s.primary_workspace) {
+                    setCloneParent((c) => c || s.primary_workspace!);
                 }
             });
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -259,6 +267,10 @@ function SimpleWizard({
         );
         if (p) setAgiParent(p);
     };
+    const chooseCloneParent = async () => {
+        const p = await api().settings.chooseFolder('Choose where to clone the repo');
+        if (p) setCloneParent(p);
+    };
 
     const submit = async () => {
         setSubmitting(true);
@@ -266,10 +278,22 @@ function SimpleWizard({
         try {
             const project = projects.find((p) => p.id === projectId);
             if (!project) throw new Error('Pick a project to associate.');
-            if (!folder) throw new Error('Pick a folder.');
+
+            // Resolve the source folder: a local pick, or a fresh clone of a remote repo.
+            let sourceFolder = folder;
+            if (sourceMode === 'remote') {
+                if (!sourceUrl.trim()) throw new Error('Enter the repository URL.');
+                if (!cloneParent.trim()) throw new Error('Pick where to clone the repo.');
+                const cloned = await api().workspaces.clone(
+                    sourceUrl.trim(),
+                    cloneParent.trim(),
+                );
+                sourceFolder = cloned.path;
+            }
+            if (!sourceFolder) throw new Error('Pick a folder.');
             const settings = await api().settings.get();
 
-            let workspacePath = folder;
+            let workspacePath = sourceFolder;
             let shape: WorkspaceRow['shape'] = 'simple';
             let createdByGenie = 0;
 
@@ -281,7 +305,7 @@ function SimpleWizard({
                     slug: agiSlug.trim(),
                     name: project.name,
                     parent_path: agiParent.trim(),
-                    source: { kind: 'local', path: folder },
+                    source: { kind: 'local', path: sourceFolder },
                     sub_name: agiSubName.trim(),
                 });
                 workspacePath = res.path;
@@ -316,7 +340,43 @@ function SimpleWizard({
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <FolderRow folder={folder} onChoose={choose} />
+            <div>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                    {(['local', 'remote'] as const).map((m) => (
+                        <Action
+                            key={m}
+                            size="sm"
+                            variant={sourceMode === m ? 'default' : 'ghost'}
+                            color={sourceMode === m ? 'blue' : undefined}
+                            onClick={() => setSourceMode(m)}
+                        >
+                            {m === 'local' ? 'Local folder' : 'Remote repo'}
+                        </Action>
+                    ))}
+                </div>
+                {sourceMode === 'local' ? (
+                    <FolderRow folder={folder} onChoose={choose} />
+                ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <Input
+                            label="Repository URL"
+                            description="Genie clones it with your existing git auth (SSH key / credential helper); submodules included."
+                            value={sourceUrl}
+                            onValueChange={setSourceUrl}
+                            placeholder="git@github.com:owner/repo.git"
+                        />
+                        <FolderRow
+                            folder={cloneParent}
+                            onChoose={chooseCloneParent}
+                            description={
+                                primaryWorkspace
+                                    ? `Clone destination parent (default: ${primaryWorkspace}). The repo lands at <parent>/<repo>/.`
+                                    : 'Where to clone the repo. It lands at <parent>/<repo>/.'
+                            }
+                        />
+                    </div>
+                )}
+            </div>
             <ProjectPicker
                 value={projectId}
                 onChange={setProjectId}
@@ -348,7 +408,9 @@ function SimpleWizard({
                 submitting={submitting}
                 label={upgradeToAgi ? 'Upgrade and add' : 'Add workspace'}
                 disabled={
-                    !folder ||
+                    (sourceMode === 'local'
+                        ? !folder
+                        : !sourceUrl.trim() || !cloneParent.trim()) ||
                     !projectId ||
                     (upgradeToAgi && (!agiSlug.trim() || !agiParent.trim() || !agiSubName.trim()))
                 }

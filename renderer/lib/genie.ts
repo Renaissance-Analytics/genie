@@ -836,6 +836,12 @@ interface GenieApi {
         /** Repo subfolder names under the workspace envelope (for Add Process cwd). */
         repos: (id: string) => Promise<string[]>;
         open: (id: string) => Promise<{ ok: boolean }>;
+        /** Clone a remote git repo to parentPath/<folder>; returns the local path. */
+        clone: (
+            url: string,
+            parentPath: string,
+            folder?: string,
+        ) => Promise<{ path: string }>;
     };
     agi: {
         detect: (folder: string) => Promise<DetectResult>;

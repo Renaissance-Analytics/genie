@@ -198,6 +198,12 @@ const api = {
         repos: (id: string) =>
             ipcRenderer.invoke('workspaces:repos', id) as Promise<string[]>,
         open: (id: string) => ipcRenderer.invoke('workspaces:open', id),
+        /** Clone a remote git repo to `parentPath/<folder>` and return the local
+         *  path, so the Add-workspace Simple flow can use a remote repo source. */
+        clone: (url: string, parentPath: string, folder?: string) =>
+            ipcRenderer.invoke('workspaces:clone', url, parentPath, folder) as Promise<{
+                path: string;
+            }>,
     },
 
     agi: {
