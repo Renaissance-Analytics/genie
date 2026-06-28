@@ -33,7 +33,12 @@ import { getToken, needsReauth } from '../github/storage';
  *     a titlebar badge (no OS toast). Reuses the existing `repo` OAuth token.
  */
 
-const POLL_INTERVAL_MS = 5 * 60 * 1000;
+/**
+ * Round-robin auto-refresh cadence. A single workspace is polled per tick (see
+ * {@link pollNextWorkspace}), so ~60s/workspace keeps each tick cheap while
+ * still covering every workspace within a few minutes for a typical handful.
+ */
+const ROUND_ROBIN_INTERVAL_MS = 60 * 1000;
 
 /** Cached feed per `<owner>/<repo>` (the last poll's open items). */
 const feedCache = new Map<string, WatchItem[]>();
@@ -46,6 +51,8 @@ const feedCache = new Map<string, WatchItem[]>();
  */
 const errorCache = new Map<string, WatchErrorDetail | null>();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+/** Round-robin cursor into listWorkspaces() — which workspace polls next. */
+let roundRobinCursor = 0;
 
 export interface ResolvedRepo {
     owner: string;
@@ -251,23 +258,28 @@ export async function pollWorkspace(workspaceId: string): Promise<void> {
 }
 
 /**
- * Poll every workspace's enabled/default-on repos (the interval tick + the
- * startup kick). Goes through `pollWorkspace`, which resolves repos via
- * `getWorkspaceRepoViews` — so it covers auto-detected, default-on repos that
- * have no persisted `issue_watches` row yet. Without this, a workspace whose
- * repos were never toggled would have no rows for `listEnabledIssueWatches`,
- * leaving its feed cache empty and its 3-dot pill grey until the flyout was
- * opened. Per-workspace failures are swallowed so one bad workspace doesn't
- * sink the rest; a single `broadcastUpdate()` fires at the end.
+ * Round-robin tick: poll exactly ONE workspace's enabled/default-on repos, then
+ * broadcast. Cycling a single workspace per tick — instead of polling EVERY
+ * workspace at once — keeps each tick cheap and self-throttling: N workspaces
+ * are covered over N ticks rather than firing every workspace's GitHub reads on
+ * one timer fire (which choked with many workspaces). Goes through
+ * `pollWorkspace`, so it still covers auto-detected, default-on repos that have
+ * no persisted `issue_watches` row yet. The broadcast reflects EVERY workspace
+ * (getOpenCounts/getWorkspaceErrors read the cache), so the pills fill in
+ * progressively as each workspace's turn comes up and never go dark. The cursor
+ * wraps and tolerates workspaces being added/removed between ticks.
  */
-async function pollAll(): Promise<void> {
+async function pollNextWorkspace(): Promise<void> {
     if (!getToken()) return;
-    for (const ws of listWorkspaces()) {
-        try {
-            await pollWorkspace(ws.id);
-        } catch {
-            /* best-effort — one workspace's failure shouldn't sink the rest */
-        }
+    const workspaces = listWorkspaces();
+    if (workspaces.length === 0) return;
+    if (roundRobinCursor >= workspaces.length) roundRobinCursor = 0;
+    const ws = workspaces[roundRobinCursor];
+    roundRobinCursor = (roundRobinCursor + 1) % workspaces.length;
+    try {
+        await pollWorkspace(ws.id);
+    } catch {
+        /* best-effort — one workspace's failure shouldn't break the cycle */
     }
     await broadcastUpdate();
 }
@@ -432,8 +444,12 @@ export function registerIssueWatchIpc(): void {
     );
 
     if (!pollTimer) {
-        pollTimer = setInterval(() => void pollAll(), POLL_INTERVAL_MS);
-        // Kick an initial poll shortly after startup (token may settle first).
-        setTimeout(() => void pollAll(), 8000);
+        pollTimer = setInterval(
+            () => void pollNextWorkspace(),
+            ROUND_ROBIN_INTERVAL_MS,
+        );
+        // Kick the first workspace shortly after startup (token may settle
+        // first); subsequent ticks advance round-robin through the rest.
+        setTimeout(() => void pollNextWorkspace(), 8000);
     }
 }
