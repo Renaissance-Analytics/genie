@@ -139,6 +139,14 @@ export default function IssueWatchFlyout({
     /** The stored GitHub session is dead — show the Reconnect banner + CTA. */
     const [needsReauth, setNeedsReauth] = useState(false);
     const [loading, setLoading] = useState(false);
+    /**
+     * False until the FIRST status read for the current workspace resolves. The
+     * connection/reauth flags are account-global and only become meaningful once
+     * loaded; rendering the disconnected/Reconnect UI before then (or carrying
+     * the PREVIOUS workspace's flags across a switch) flashes a spurious
+     * "reconnect GitHub" state. While `!loaded` we show a neutral loading line.
+     */
+    const [loaded, setLoaded] = useState(false);
     const [reconnect, setReconnect] = useState<ReconnectState>({ kind: 'idle' });
 
     // An auth failure (dead session / a 401 read) is its own state: the App
@@ -180,6 +188,7 @@ export default function IssueWatchFlyout({
             setNeedsReauth(!!st.needsReauth);
         } finally {
             setLoading(false);
+            setLoaded(true);
         }
     };
 
@@ -187,6 +196,11 @@ export default function IssueWatchFlyout({
     // we just captured keeps its unread highlights for this viewing.
     useEffect(() => {
         if (!open || !workspaceId) return;
+        // New workspace (or fresh open) — drop the stale connection flags and
+        // show the neutral loading line until this workspace's own status read
+        // lands, so a switch never flashes the previous workspace's reconnect
+        // state (or a default disconnected one) mid-load.
+        setLoaded(false);
         void (async () => {
             await refresh();
             await api().issueWatch.markSeen(workspaceId).catch(() => {});
@@ -325,6 +339,11 @@ export default function IssueWatchFlyout({
                 <div className="iw-body">
                     {!hasGenieBridge() ? (
                         <div className="iw-muted">Issue Watch runs inside Genie.</div>
+                    ) : !loaded ? (
+                        // Account-global GitHub status not resolved yet for this
+                        // workspace — stay neutral instead of flashing the
+                        // disconnected/Reconnect UI during the load race.
+                        <div className="iw-muted">Loading…</div>
                     ) : authFailed ? (
                         // The stored session is dead (expired/revoked token) —
                         // the App permissions are FINE; the fix is a one-click

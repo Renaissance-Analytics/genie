@@ -72,23 +72,53 @@ export interface GitHubAccount {
     isInstalledFor: (ownerLogin: string) => boolean;
 }
 
+/**
+ * Account-global GitHub status cache. The connection (connected / username /
+ * installations) is per-ACCOUNT, never per-workspace, so re-fetching it from
+ * scratch on every mount — e.g. each workspace switch or modal open that
+ * re-mounts a consumer — made the panel flash its disconnected state for the
+ * duration of the async `github:status` round-trip before snapping to
+ * connected. Caching the last resolved snapshot module-side lets a fresh mount
+ * START from the known-connected state (no flicker); `refresh()` then updates
+ * the cache in the background. The cache is process-lifetime; every refresh
+ * (mount, window focus, device-flow poll) keeps it current, and a disconnect
+ * in Settings is reflected on the next refresh.
+ */
+interface GitHubAccountSnapshot {
+    connected: boolean;
+    username: string | null;
+    orgs: GitHubOrgLite[];
+    installations: GitHubInstallationLite[];
+    installationsLoaded: boolean;
+    storageOk: boolean;
+    clientIdSet: boolean;
+}
+let accountCache: GitHubAccountSnapshot | null = null;
+
 export function useGitHubAccount(): GitHubAccount {
-    const [loaded, setLoaded] = useState(false);
-    const [connected, setConnected] = useState(false);
-    const [username, setUsername] = useState<string | null>(null);
-    const [orgs, setOrgs] = useState<GitHubOrgLite[]>([]);
-    const [installations, setInstallations] = useState<GitHubInstallationLite[]>([]);
-    const [installationsLoaded, setInstallationsLoaded] = useState(false);
-    const [storageOk, setStorageOk] = useState(true);
-    const [clientIdSet, setClientIdSet] = useState(false);
+    const [loaded, setLoaded] = useState(accountCache !== null);
+    const [connected, setConnected] = useState(accountCache?.connected ?? false);
+    const [username, setUsername] = useState<string | null>(accountCache?.username ?? null);
+    const [orgs, setOrgs] = useState<GitHubOrgLite[]>(accountCache?.orgs ?? []);
+    const [installations, setInstallations] = useState<GitHubInstallationLite[]>(
+        accountCache?.installations ?? [],
+    );
+    const [installationsLoaded, setInstallationsLoaded] = useState(
+        accountCache?.installationsLoaded ?? false,
+    );
+    const [storageOk, setStorageOk] = useState(accountCache?.storageOk ?? true);
+    const [clientIdSet, setClientIdSet] = useState(accountCache?.clientIdSet ?? false);
     const [flow, setFlow] = useState<Flow>({ kind: 'idle' });
     const polling = useRef(false);
     // Guards the one-shot post-connect install-chooser bounce so it fires at
     // most once per fresh connect — not on every status refresh (mount, poll
     // tick, window-focus refetch), which would re-spam the browser. Armed
     // (reset to false) by connect(); disarmed at mount for a pre-existing
-    // connection and by any manual open via markInstallSurfaced().
-    const autoOpenedInstall = useRef(false);
+    // connection and by any manual open via markInstallSurfaced(). Seeded from
+    // the account cache so a remount onto an already-connected account (the
+    // no-flicker path) is treated like a pre-existing connection and does NOT
+    // re-bounce the user to the install chooser.
+    const autoOpenedInstall = useRef(accountCache?.connected === true);
 
     const refresh = async () => {
         const st = await api().github.status();
@@ -97,26 +127,46 @@ export function useGitHubAccount(): GitHubAccount {
         setStorageOk(st.storageOk);
         setClientIdSet(st.clientIdSet);
         setLoaded(true);
+        let nextInstallations: GitHubInstallationLite[] = [];
+        let nextOrgs: GitHubOrgLite[] = [];
+        let nextInstallationsLoaded = false;
         if (st.connected) {
             // One installations fetch covers both the org picker AND the
             // "where is Genie installed" detection — orgs are derived from it.
             try {
                 const list = await api().github.installations();
-                setInstallations(
-                    list.map((i) => ({ login: i.login, id: i.id, isOrg: i.isOrg })),
-                );
-                setOrgs(list.filter((i) => i.isOrg).map((o) => ({ login: o.login })));
+                nextInstallations = list.map((i) => ({
+                    login: i.login,
+                    id: i.id,
+                    isOrg: i.isOrg,
+                }));
+                nextOrgs = list.filter((i) => i.isOrg).map((o) => ({ login: o.login }));
             } catch {
-                setInstallations([]);
-                setOrgs([]);
+                nextInstallations = [];
+                nextOrgs = [];
             } finally {
-                setInstallationsLoaded(true);
+                nextInstallationsLoaded = true;
             }
+            setInstallations(nextInstallations);
+            setOrgs(nextOrgs);
+            setInstallationsLoaded(nextInstallationsLoaded);
         } else {
             setInstallations([]);
             setOrgs([]);
             setInstallationsLoaded(false);
         }
+        // Persist the account-global snapshot so the NEXT mount of any consumer
+        // starts from this known state instead of flashing disconnected while
+        // its own github:status round-trip is in flight.
+        accountCache = {
+            connected: st.connected,
+            username: st.username,
+            orgs: nextOrgs,
+            installations: nextInstallations,
+            installationsLoaded: nextInstallationsLoaded,
+            storageOk: st.storageOk,
+            clientIdSet: st.clientIdSet,
+        };
         // Reflect the main-side flow outcome into local state.
         if (st.flow.kind === 'success') {
             setFlow({ kind: 'idle' });
