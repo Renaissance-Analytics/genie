@@ -379,7 +379,7 @@ export function registerIpcHandlers(): void {
     //  the local main holds the token and routes to the host over the tailnet.)
     ipcMain.handle(
         'remote:connect',
-        (_e, host: { ip: string; port: number; hostname: string }, pin: string) =>
+        (_e, host: { ip: string; port: number; hostname: string }, pin?: string) =>
             connectRemote(host, pin),
     );
     ipcMain.handle('remote:disconnect', () => {

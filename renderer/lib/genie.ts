@@ -842,7 +842,10 @@ export interface GenieApi {
         }) => Promise<{ ok: boolean }>;
     };
     remote: {
-        connect: (host: RemoteHost, pin: string) => Promise<{ ok: boolean; error?: string }>;
+        connect: (
+            host: RemoteHost,
+            pin?: string,
+        ) => Promise<{ ok: boolean; error?: string; needsPin?: boolean }>;
         disconnect: () => Promise<{ ok: boolean }>;
         status: () => Promise<RemoteStatus>;
         request: (path: string, init?: { method?: string; json?: unknown }) => Promise<unknown>;

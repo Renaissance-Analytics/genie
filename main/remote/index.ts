@@ -1,5 +1,7 @@
-import { BrowserWindow } from 'electron';
+import { app, BrowserWindow, safeStorage } from 'electron';
 import { WebSocket } from 'ws';
+import fs from 'node:fs';
+import path from 'node:path';
 
 /**
  * Work Mode — remote desktop (the local-main proxy).
@@ -31,6 +33,60 @@ interface RemoteState {
 }
 
 const state: RemoteState = { host: null, token: null, connected: false };
+
+// Persisted per-host session tokens — so a paired host RECONNECTS with one click
+// (no PIN). Keyed by ip:port, encrypted at rest via safeStorage when available.
+// The PIN is only ever needed the FIRST time you pair a host, or if the saved
+// token is rejected (host re-paired / forgot the device).
+function tokenStorePath(): string {
+    return path.join(app.getPath('userData'), 'genie-remote-tokens.json');
+}
+function hostKey(host: RemoteHost): string {
+    return `${host.ip}:${host.port}`;
+}
+function readTokenStore(): Record<string, string> {
+    try {
+        return JSON.parse(fs.readFileSync(tokenStorePath(), 'utf8')) as Record<string, string>;
+    } catch {
+        return {};
+    }
+}
+function writeTokenStore(store: Record<string, string>): void {
+    try {
+        fs.writeFileSync(tokenStorePath(), JSON.stringify(store), 'utf8');
+    } catch {
+        /* best-effort persistence */
+    }
+}
+function loadSavedToken(host: RemoteHost): string | null {
+    const enc = readTokenStore()[hostKey(host)];
+    if (!enc) return null;
+    try {
+        return safeStorage.isEncryptionAvailable()
+            ? safeStorage.decryptString(Buffer.from(enc, 'base64'))
+            : enc;
+    } catch {
+        return null;
+    }
+}
+function saveSavedToken(host: RemoteHost, token: string): void {
+    const store = readTokenStore();
+    store[hostKey(host)] = safeStorage.isEncryptionAvailable()
+        ? safeStorage.encryptString(token).toString('base64')
+        : token;
+    writeTokenStore(store);
+}
+function clearSavedToken(host: RemoteHost): void {
+    const store = readTokenStore();
+    delete store[hostKey(host)];
+    writeTokenStore(store);
+}
+
+/** Is a saved token on file for this host? (Lets the UI default to a 1-click
+ *  reconnect and only show the PIN field for a first-time pair.) */
+export function hasSavedToken(host: RemoteHost): boolean {
+    return !!readTokenStore()[hostKey(host)];
+}
 
 /** The host's base URL while connected, else null. */
 export function remoteBase(): string | null {
@@ -243,34 +299,66 @@ function closeAllTerminals(): void {
  */
 export async function connectRemote(
     host: RemoteHost,
-    pin: string,
-): Promise<{ ok: boolean; error?: string }> {
-    let res: Response;
+    pin?: string,
+): Promise<{ ok: boolean; error?: string; needsPin?: boolean }> {
+    let token: string;
+
+    if (pin) {
+        // First pairing (or re-pair): PIN → token. Remember it so EVERY future
+        // reconnect is one click, no PIN.
+        let res: Response;
+        try {
+            res = await fetch(`http://${host.ip}:${host.port}/api/pair`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pin }),
+            });
+        } catch (e) {
+            return { ok: false, error: `Couldn't reach ${host.hostname}: ${(e as Error).message}` };
+        }
+        if (!res.ok) {
+            const error =
+                res.status === 401
+                    ? 'Wrong PIN — check the host and try again.'
+                    : res.status === 403
+                        ? 'The host declined this device.'
+                        : res.status === 429
+                            ? 'Too many attempts — wait a moment and retry.'
+                            : `Pairing failed (HTTP ${res.status}).`;
+            return { ok: false, error };
+        }
+        const data = (await res.json().catch(() => null)) as { token?: string } | null;
+        if (!data?.token) return { ok: false, error: 'Malformed pairing response from the host.' };
+        token = data.token;
+        saveSavedToken(host, token);
+    } else {
+        // Reconnect with the REMEMBERED token — no PIN. needsPin tells the UI to
+        // reveal the PIN field only for a genuine first-time pair.
+        const saved = loadSavedToken(host);
+        if (!saved) return { ok: false, needsPin: true };
+        token = saved;
+    }
+
+    // Validate before entering remote mode (a cheap authed call). A 401 means a
+    // saved token is dead (host re-paired / forgot the device) → forget it + ask
+    // for the PIN rather than failing opaquely.
     try {
-        res = await fetch(`http://${host.ip}:${host.port}/api/pair`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pin }),
+        const res = await fetch(`http://${host.ip}:${host.port}/api/state`, {
+            headers: { Authorization: `Bearer ${token}` },
         });
+        if (res.status === 401) {
+            clearSavedToken(host);
+            return { ok: false, needsPin: true };
+        }
+        if (!res.ok && res.status !== 423) {
+            return { ok: false, error: `Host returned HTTP ${res.status}.` };
+        }
     } catch (e) {
         return { ok: false, error: `Couldn't reach ${host.hostname}: ${(e as Error).message}` };
     }
-    if (!res.ok) {
-        const error =
-            res.status === 401
-                ? 'Wrong PIN — check the host and try again.'
-                : res.status === 403
-                    ? 'The host declined this device.'
-                    : res.status === 429
-                        ? 'Too many attempts — wait a moment and retry.'
-                        : `Pairing failed (HTTP ${res.status}).`;
-        return { ok: false, error };
-    }
-    const data = (await res.json().catch(() => null)) as { token?: string } | null;
-    if (!data?.token) return { ok: false, error: 'Malformed pairing response from the host.' };
 
     state.host = host;
-    state.token = data.token;
+    state.token = token;
     state.connected = true;
     broadcastStatus();
     startEventsBridge();

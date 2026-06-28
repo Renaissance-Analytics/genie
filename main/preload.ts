@@ -127,10 +127,11 @@ const api = {
     // renderer's remote bridge maps every desktop call onto, and a status
     // subscription (the titlebar mode/host indicator listens on it).
     remote: {
-        connect: (host: { ip: string; port: number; hostname: string }, pin: string) =>
+        connect: (host: { ip: string; port: number; hostname: string }, pin?: string) =>
             ipcRenderer.invoke('remote:connect', host, pin) as Promise<{
                 ok: boolean;
                 error?: string;
+                needsPin?: boolean;
             }>,
         disconnect: () =>
             ipcRenderer.invoke('remote:disconnect') as Promise<{ ok: boolean }>,

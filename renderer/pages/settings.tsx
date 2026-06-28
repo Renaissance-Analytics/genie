@@ -2438,6 +2438,7 @@ function RemoteHostCard() {
     const [scanning, setScanning] = useState(false);
     const [status, setStatus] = useState<RemoteStatus | null>(null);
     const [pins, setPins] = useState<Record<string, string>>({});
+    const [pinNeeded, setPinNeeded] = useState<Record<string, boolean>>({});
     const [busy, setBusy] = useState<string | null>(null);
     const [manualIp, setManualIp] = useState('');
     const [manualPort, setManualPort] = useState('51718');
@@ -2468,22 +2469,28 @@ function RemoteHostCard() {
 
     const connect = async (
         host: { ip: string; port: number; hostname: string },
-        pin: string,
+        pin?: string,
     ) => {
         const key = `${host.ip}:${host.port}`;
-        if (!pin.trim()) {
-            setMsg('Enter the pairing PIN shown on the host.');
-            return;
-        }
         setBusy(key);
         setMsg(null);
         try {
-            const r = await api().remote.connect(host, pin.trim());
-            setMsg(
-                r.ok
-                    ? `Connected to ${host.hostname} — your desktop is now controlling it.`
-                    : (r.error ?? 'Could not connect.'),
-            );
+            // No PIN → reconnect with the remembered token. The host answers
+            // needsPin only for a genuine first-time pair (or a dead token).
+            const r = await api().remote.connect(host, pin?.trim() || undefined);
+            if (r.ok) {
+                setPinNeeded((p) => ({ ...p, [key]: false }));
+                setMsg(`Connected to ${host.hostname} — your desktop is now controlling it.`);
+            } else if (r.needsPin) {
+                setPinNeeded((p) => ({ ...p, [key]: true }));
+                setMsg(
+                    pin
+                        ? 'That PIN was rejected — check the host and try again.'
+                        : `First time pairing ${host.hostname}: enter the PIN shown on it.`,
+                );
+            } else {
+                setMsg(r.error ?? 'Could not connect.');
+            }
         } finally {
             setBusy(null);
         }
@@ -2542,7 +2549,10 @@ function RemoteHostCard() {
     const connectManual = () => {
         const ip = manualIp.trim();
         if (!ip) return;
-        void connect({ ip, port: Number(manualPort) || 51718, hostname: ip }, manualPin);
+        void connect(
+            { ip, port: Number(manualPort) || 51718, hostname: ip },
+            manualPin.trim() || undefined,
+        );
     };
 
     return (
@@ -2569,8 +2579,9 @@ function RemoteHostCard() {
             <Text size="xs" className="text-zinc-500">
                 Connect to another Genie and control it from THIS desktop — same
                 desktop UX, driving the host&apos;s workspaces, terminals (on its
-                pty-host), editor and processes over Tailscale. Enter the pairing
-                PIN shown on the host; it also confirms on its own screen.
+                pty-host), editor and processes over Tailscale. The FIRST connect
+                pairs with the PIN shown on the host (it confirms on its own
+                screen); after that, Connect reconnects with no PIN.
             </Text>
 
             {hosts === null ? (
@@ -2595,22 +2606,35 @@ function RemoteHostCard() {
                                         {h.ip}:{h.port}
                                     </Text>
                                 </div>
-                                <div style={{ width: 88 }}>
-                                    <Input
-                                        label="PIN"
-                                        value={pins[key] ?? ''}
-                                        onValueChange={(v) => setPin(key, v)}
-                                        placeholder="123456"
-                                    />
-                                </div>
+                                {pinNeeded[key] && (
+                                    <div style={{ width: 88 }}>
+                                        <Input
+                                            label="PIN"
+                                            value={pins[key] ?? ''}
+                                            onValueChange={(v) => setPin(key, v)}
+                                            placeholder="123456"
+                                        />
+                                    </div>
+                                )}
                                 <Action
                                     size="sm"
                                     color="blue"
                                     icon="link"
                                     disabled={busy === key}
-                                    onClick={() => void connect(h, pins[key] ?? '')}
+                                    onClick={() =>
+                                        void connect(
+                                            h,
+                                            pinNeeded[key] ? (pins[key] ?? '') : undefined,
+                                        )
+                                    }
                                 >
-                                    {busy === key ? 'Pairing…' : 'Connect'}
+                                    {busy === key
+                                        ? pinNeeded[key]
+                                            ? 'Pairing…'
+                                            : 'Connecting…'
+                                        : pinNeeded[key]
+                                            ? 'Pair'
+                                            : 'Connect'}
                                 </Action>
                             </div>
                         );
