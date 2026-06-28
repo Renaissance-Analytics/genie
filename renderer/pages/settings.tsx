@@ -2520,6 +2520,7 @@ function RemoteHostCard() {
                     processes you see are the host&apos;s. The title bar shows you&apos;re in a
                     remote session.
                 </Text>
+                <HostUpdate />
                 <Action
                     size="sm"
                     color="rose"
@@ -2660,6 +2661,99 @@ function RemoteHostCard() {
                 </Text>
             )}
         </Card>
+    );
+}
+
+/**
+ * Settings → Work Mode → host update (shown while controlling a host). The host's
+ * own version + a one-click "Update host" (download → install → restart on the
+ * host's updater). The local install updates from the title-bar pill, as usual —
+ * together they are the "update both" surface.
+ */
+function HostUpdate() {
+    const [st, setSt] = useState<{
+        currentVersion: string;
+        latestVersion: string | null;
+    } | null>(null);
+    const [busy, setBusy] = useState(false);
+    const [msg, setMsg] = useState<string | null>(null);
+
+    useEffect(() => {
+        const refresh = () => {
+            api()
+                .remote.request('/api/update/status')
+                .then((s) =>
+                    setSt(s as { currentVersion: string; latestVersion: string | null }),
+                )
+                .catch(() => setSt(null));
+        };
+        refresh();
+        const t = setInterval(refresh, 15000);
+        return () => clearInterval(t);
+    }, []);
+
+    const updateHost = async () => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            await api().remote.request('/api/update/install', { method: 'POST' });
+            setMsg(
+                'Updating the host — it downloads, installs and restarts on its own. The remote session drops while it restarts; reconnect after.',
+            );
+        } catch (e) {
+            setMsg(e instanceof Error ? e.message : 'Could not update the host.');
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const hasUpdate = !!st?.latestVersion && st.latestVersion !== st.currentVersion;
+    return (
+        <div
+            style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+                borderTop: '1px solid var(--border-1)',
+                paddingTop: 10,
+            }}
+        >
+            <Text size="xs" style={{ fontWeight: 600 }}>
+                Host update
+            </Text>
+            {!st ? (
+                <Text size="xs" className="text-zinc-500">
+                    Checking the host&apos;s version…
+                </Text>
+            ) : hasUpdate ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Text size="xs" className="text-zinc-500" style={{ flex: 1 }}>
+                        Host {st.currentVersion} → <strong>{st.latestVersion}</strong> available
+                    </Text>
+                    <Action
+                        size="sm"
+                        color="blue"
+                        icon="download"
+                        disabled={busy}
+                        onClick={() => void updateHost()}
+                    >
+                        {busy ? 'Updating…' : 'Update host'}
+                    </Action>
+                </div>
+            ) : (
+                <Text size="xs" className="text-zinc-500">
+                    Host is up to date ({st.currentVersion}).
+                </Text>
+            )}
+            {msg && (
+                <Text size="xs" style={{ color: 'var(--fg-2)' }}>
+                    {msg}
+                </Text>
+            )}
+            <Text size="xs" className="text-zinc-500">
+                Your local install updates from the title-bar pill, as usual.
+            </Text>
+        </div>
     );
 }
 
