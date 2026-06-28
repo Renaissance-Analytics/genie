@@ -1102,13 +1102,70 @@ function AgiImportWizard({
     const [detection, setDetection] = useState<DetectResult | null>(null);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // Source: an existing LOCAL .agi folder (default) OR a REMOTE .agi repo Genie
+    // clones into a chosen parent, then inspects + registers exactly like a local
+    // one. Reuses the same workspaces.clone path the Simple/Convert wizards use.
+    const [sourceMode, setSourceMode] = useState<'local' | 'remote'>('local');
+    const [sourceUrl, setSourceUrl] = useState<string>('');
+    const [cloneParent, setCloneParent] = useState<string>('');
+    const [primaryWorkspace, setPrimaryWorkspace] = useState<string | undefined>();
+    const [cloning, setCloning] = useState(false);
+
+    useEffect(() => {
+        api()
+            .settings.get()
+            .then((s) => {
+                setPrimaryWorkspace(s.primary_workspace);
+                if (s.primary_workspace) {
+                    setCloneParent((c) => c || s.primary_workspace!);
+                }
+            });
+    }, []);
+
+    // Detect + remember a folder (after a local pick or a remote clone) so the
+    // detection card + Register footer light up the same way for both sources.
+    const inspect = async (p: string) => {
+        setFolder(p);
+        try {
+            setDetection(await api().agi.detect(p));
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        }
+    };
 
     const choose = async () => {
         const p = await api().settings.chooseFolder('Choose existing folder');
         if (!p) return;
-        setFolder(p);
-        const d = await api().agi.detect(p);
-        setDetection(d);
+        await inspect(p);
+    };
+
+    const chooseCloneParent = async () => {
+        const p = await api().settings.chooseFolder('Choose where to clone the repo');
+        if (p) setCloneParent(p);
+    };
+
+    const clone = async () => {
+        if (!sourceUrl.trim()) {
+            setError('Enter the repository URL.');
+            return;
+        }
+        if (!cloneParent.trim()) {
+            setError('Pick where to clone the repo.');
+            return;
+        }
+        setCloning(true);
+        setError(null);
+        try {
+            const cloned = await api().workspaces.clone(
+                sourceUrl.trim(),
+                cloneParent.trim(),
+            );
+            await inspect(cloned.path);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setCloning(false);
+        }
     };
 
     const submit = async () => {
@@ -1147,7 +1204,67 @@ function AgiImportWizard({
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <FolderRow folder={folder} onChoose={choose} description="Pick the existing envelope (or pre-init) folder." />
+            <div>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                    {(['local', 'remote'] as const).map((m) => (
+                        <Action
+                            key={m}
+                            size="sm"
+                            variant={sourceMode === m ? 'default' : 'ghost'}
+                            color={sourceMode === m ? 'blue' : undefined}
+                            onClick={() => setSourceMode(m)}
+                        >
+                            {m === 'local' ? 'Local folder' : 'Remote repo'}
+                        </Action>
+                    ))}
+                </div>
+                {sourceMode === 'local' ? (
+                    <FolderRow
+                        folder={folder}
+                        onChoose={choose}
+                        description="Pick the existing envelope (or pre-init) folder."
+                    />
+                ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <Input
+                            label="Repository URL"
+                            description="Genie clones the .agi envelope with your existing git auth (SSH key / credential helper); submodules included."
+                            value={sourceUrl}
+                            onValueChange={setSourceUrl}
+                            placeholder="git@github.com:owner/repo.agi.git"
+                        />
+                        <FolderRow
+                            folder={cloneParent}
+                            onChoose={chooseCloneParent}
+                            description={
+                                primaryWorkspace
+                                    ? `Clone destination parent (default: ${primaryWorkspace}). The repo lands at <parent>/<repo>/.`
+                                    : 'Where to clone the repo. It lands at <parent>/<repo>/.'
+                            }
+                        />
+                        <div>
+                            <Action
+                                size="sm"
+                                color="blue"
+                                icon="download"
+                                disabled={cloning || !sourceUrl.trim() || !cloneParent.trim()}
+                                onClick={clone}
+                            >
+                                {cloning ? 'Cloning…' : 'Clone & inspect'}
+                            </Action>
+                            {folder && !cloning && (
+                                <Text
+                                    size="xs"
+                                    className="text-zinc-500"
+                                    style={{ display: 'block', marginTop: 4 }}
+                                >
+                                    Cloned to {folder}
+                                </Text>
+                            )}
+                        </div>
+                    </div>
+                )}
+            </div>
             {detection && (
                 <Card style={{ padding: 12 }}>
                     <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginBottom: 4 }}>

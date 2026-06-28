@@ -135,6 +135,14 @@ export default function InteractiveUpgradeWizard({
     const [scan, setScan] = useState<AnalyseResult | null>(null);
     const [scanning, setScanning] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // Source can be a LOCAL folder (default) or a REMOTE git repo Genie clones
+    // into a chosen parent and then analyses in place — the same workspaces.clone
+    // path the Simple/Convert/Import flows use. After a clone the rest of the
+    // wizard treats it exactly like a local source (it IS a local checkout).
+    const [sourceMode, setSourceMode] = useState<'local' | 'remote'>('local');
+    const [sourceUrl, setSourceUrl] = useState<string>('');
+    const [cloneParent, setCloneParent] = useState<string>('');
+    const [cloning, setCloning] = useState(false);
 
     // Plan state
     const [repoRows, setRepoRows] = useState<RepoRow[]>([]);
@@ -183,6 +191,9 @@ export default function InteractiveUpgradeWizard({
                 setPrimaryWorkspace(s.primary_workspace);
                 if (!parentFolder && s.primary_workspace) {
                     setParentFolder(s.primary_workspace);
+                }
+                if (s.primary_workspace) {
+                    setCloneParent((c) => c || s.primary_workspace!);
                 }
             });
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -359,6 +370,37 @@ export default function InteractiveUpgradeWizard({
         if (p) {
             setSourceFolder(p);
             await runScan(p);
+        }
+    };
+    const chooseCloneParent = async () => {
+        const p = await api().settings.chooseFolder('Choose where to clone the repo');
+        if (p) setCloneParent(p);
+    };
+    // Remote source: clone the repo, then analyse the local checkout. The clone
+    // lands at <cloneParent>/<repo>/; from there the wizard is identical to a
+    // local source.
+    const cloneAndScan = async () => {
+        if (!sourceUrl.trim()) {
+            setError('Enter the repository URL.');
+            return;
+        }
+        if (!cloneParent.trim()) {
+            setError('Pick where to clone the repo.');
+            return;
+        }
+        setCloning(true);
+        setError(null);
+        try {
+            const cloned = await api().workspaces.clone(
+                sourceUrl.trim(),
+                cloneParent.trim(),
+            );
+            setSourceFolder(cloned.path);
+            await runScan(cloned.path);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setCloning(false);
         }
     };
     const pickParentFolder = async () => {
@@ -669,6 +711,15 @@ export default function InteractiveUpgradeWizard({
                             scanning={scanning}
                             onPick={pickSourceFolder}
                             onRescan={() => sourceFolder && void runScan(sourceFolder)}
+                            sourceMode={sourceMode}
+                            onSourceModeChange={setSourceMode}
+                            sourceUrl={sourceUrl}
+                            onSourceUrlChange={setSourceUrl}
+                            cloneParent={cloneParent}
+                            onChooseCloneParent={chooseCloneParent}
+                            cloning={cloning}
+                            onClone={() => void cloneAndScan()}
+                            primaryWorkspace={primaryWorkspace}
                         />
                     </Carousel.Slide>
 
@@ -828,38 +879,128 @@ function SourceStep({
     scanning,
     onPick,
     onRescan,
+    sourceMode,
+    onSourceModeChange,
+    sourceUrl,
+    onSourceUrlChange,
+    cloneParent,
+    onChooseCloneParent,
+    cloning,
+    onClone,
+    primaryWorkspace,
 }: {
     folder: string;
     scan: AnalyseResult | null;
     scanning: boolean;
     onPick: () => void;
     onRescan: () => void;
+    sourceMode: 'local' | 'remote';
+    onSourceModeChange: (m: 'local' | 'remote') => void;
+    sourceUrl: string;
+    onSourceUrlChange: (v: string) => void;
+    cloneParent: string;
+    onChooseCloneParent: () => void;
+    cloning: boolean;
+    onClone: () => void;
+    primaryWorkspace?: string;
 }) {
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
-                Pick the folder to upgrade. Genie reads its layout (never
-                modifies it) and figures out whether it's a single repo, a
-                collection of repos, or a plain folder.
+                Pick the source to upgrade — a local folder or a remote git repo
+                Genie clones first. Genie reads its layout (never modifies it) and
+                figures out whether it's a single repo, a collection of repos, or a
+                plain folder.
             </Text>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                <div style={{ flex: 1 }}>
-                    <Input value={folder} readOnly placeholder="No folder chosen" />
-                </div>
-                <Action variant="ghost" onClick={onPick} icon="folder" disabled={scanning}>
-                    Browse
-                </Action>
-                {folder && (
+            <div style={{ display: 'flex', gap: 8 }}>
+                {(['local', 'remote'] as const).map((m) => (
                     <Action
-                        variant="ghost"
-                        onClick={onRescan}
-                        icon="refresh-cw"
-                        disabled={scanning}
+                        key={m}
+                        size="sm"
+                        variant={sourceMode === m ? 'default' : 'ghost'}
+                        color={sourceMode === m ? 'blue' : undefined}
+                        onClick={() => onSourceModeChange(m)}
+                        disabled={scanning || cloning}
                     >
-                        {scanning ? 'Scanning…' : 'Re-scan'}
+                        {m === 'local' ? 'Local folder' : 'Remote repo'}
                     </Action>
-                )}
+                ))}
             </div>
+
+            {sourceMode === 'local' ? (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                    <div style={{ flex: 1 }}>
+                        <Input value={folder} readOnly placeholder="No folder chosen" />
+                    </div>
+                    <Action variant="ghost" onClick={onPick} icon="folder" disabled={scanning}>
+                        Browse
+                    </Action>
+                    {folder && (
+                        <Action
+                            variant="ghost"
+                            onClick={onRescan}
+                            icon="refresh-cw"
+                            disabled={scanning}
+                        >
+                            {scanning ? 'Scanning…' : 'Re-scan'}
+                        </Action>
+                    )}
+                </div>
+            ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <Input
+                        label="Repository URL"
+                        description="Genie clones it with your existing git auth (SSH key / credential helper), then analyses the clone; submodules included."
+                        value={sourceUrl}
+                        onValueChange={onSourceUrlChange}
+                        placeholder="git@github.com:owner/repo.git"
+                    />
+                    <div>
+                        <Text size="xs" style={{ display: 'block', fontWeight: 600, marginBottom: 4 }}>
+                            Clone destination parent
+                        </Text>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                            <div style={{ flex: 1 }}>
+                                <Input value={cloneParent} readOnly placeholder="No folder chosen" />
+                            </div>
+                            <Action
+                                variant="ghost"
+                                onClick={onChooseCloneParent}
+                                icon="folder"
+                                disabled={cloning}
+                            >
+                                Browse
+                            </Action>
+                        </div>
+                        <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
+                            {primaryWorkspace
+                                ? `Default: ${primaryWorkspace}. The repo lands at <parent>/<repo>/.`
+                                : 'Where to clone the repo. It lands at <parent>/<repo>/.'}
+                        </Text>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <Action
+                            size="sm"
+                            color="blue"
+                            icon="download"
+                            disabled={cloning || scanning || !sourceUrl.trim() || !cloneParent.trim()}
+                            onClick={onClone}
+                        >
+                            {cloning ? 'Cloning…' : scanning ? 'Scanning…' : 'Clone & scan'}
+                        </Action>
+                        {folder && !cloning && (
+                            <Text size="xs" className="text-zinc-500">
+                                Cloned to {folder}
+                            </Text>
+                        )}
+                        {folder && !cloning && !scanning && (
+                            <Action variant="ghost" onClick={onRescan} icon="refresh-cw">
+                                Re-scan
+                            </Action>
+                        )}
+                    </div>
+                </div>
+            )}
 
             {scan && (
                 <div className="upgrade-kind">
