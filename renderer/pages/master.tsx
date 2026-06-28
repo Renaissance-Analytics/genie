@@ -50,6 +50,7 @@ import {
     type UpdaterStatus,
     type WorkspaceRow,
     type RemoteStatus,
+    type MobilePeer,
 } from '../lib/genie';
 
 /**
@@ -1654,6 +1655,7 @@ function TitleBar({
                 Genie
             </span>
             <RemoteIndicator />
+            <HostSessionOverlay />
             {/* No internal view codenames in the UI — a Stage window shows its
                 pinned workspace name, the master window shows nothing extra. */}
             {isStage && stageWorkspaceName && (
@@ -1756,6 +1758,119 @@ function RemoteIndicator() {
                 ×
             </button>
         </span>
+    );
+}
+
+/**
+ * Host-side remote-session overlay. When a REMOTE is currently controlling THIS
+ * machine, a loud banner makes that obvious + shows where it's from, and lets the
+ * host TAKE BACK CONTROL (pauses the remote's input via the kill-switch — the
+ * session stays CONNECTED, not killed) or END the session outright.
+ */
+function HostSessionOverlay() {
+    const [peers, setPeers] = useState<MobilePeer[]>([]);
+    const [locked, setLocked] = useState(false);
+    const [busy, setBusy] = useState(false);
+
+    useEffect(() => {
+        let alive = true;
+        const poll = () =>
+            api()
+                .mobile.status()
+                .then((s) => {
+                    if (!alive) return;
+                    setPeers(s.peers ?? []);
+                    setLocked(s.locked);
+                })
+                .catch(() => {});
+        void poll();
+        const t = setInterval(() => void poll(), 3000);
+        return () => {
+            alive = false;
+            clearInterval(t);
+        };
+    }, []);
+
+    if (peers.length === 0) return null;
+
+    const from = peers.map((p) => p.ip.replace(/^::ffff:/, '')).join(', ');
+    const act = async (fn: () => Promise<{ peers: MobilePeer[]; locked: boolean }>) => {
+        setBusy(true);
+        try {
+            const s = await fn();
+            setPeers(s.peers ?? []);
+            setLocked(s.locked);
+        } finally {
+            setBusy(false);
+        }
+    };
+    const btn = {
+        background: 'rgba(255,255,255,0.18)',
+        color: '#fff',
+        border: '1px solid rgba(255,255,255,0.35)',
+        borderRadius: 6,
+        padding: '3px 9px',
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer',
+    } as const;
+
+    return (
+        <div
+            style={{
+                position: 'fixed',
+                top: 40,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 9999,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '7px 13px',
+                borderRadius: 10,
+                background: locked ? 'rgba(180,83,9,0.96)' : 'rgba(2,132,199,0.96)',
+                color: '#fff',
+                fontSize: 12,
+                fontWeight: 700,
+                boxShadow: '0 6px 20px rgba(0,0,0,0.4)',
+            }}
+        >
+            <span
+                style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: 999,
+                    background: locked ? '#fbbf24' : '#7dd3fc',
+                }}
+            />
+            <span>
+                {locked
+                    ? `Remote paused — you have control (from ${from})`
+                    : `Remote session active — controlling from ${from}`}
+            </span>
+            <button
+                type="button"
+                disabled={busy}
+                style={btn}
+                title={
+                    locked
+                        ? 'Hand control back to the remote (it stayed connected)'
+                        : 'Pause the remote and take control — without disconnecting it'
+                }
+                onClick={() => void act(() => api().mobile.lock(!locked))}
+            >
+                {locked ? 'Resume remote' : 'Take control'}
+            </button>
+            <button
+                type="button"
+                disabled={busy}
+                style={btn}
+                title="Disconnect the remote session entirely"
+                onClick={() => void act(() => api().mobile.revokeSessions())}
+            >
+                End session
+            </button>
+        </div>
     );
 }
 

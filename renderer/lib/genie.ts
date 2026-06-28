@@ -377,6 +377,14 @@ export interface MobileStatus {
     pin: string;
     /** A data-URL PNG QR of `<url>?pair=<pin>`, or null when not bound. */
     qrDataUrl: string | null;
+    /** Remotes currently connected (drives the host's "remote session" overlay). */
+    peers: MobilePeer[];
+}
+
+/** A remote/phone currently controlling THIS host. */
+export interface MobilePeer {
+    ip: string;
+    since: number;
 }
 
 /** A peer node on the tailnet (from `tailscale status`). */

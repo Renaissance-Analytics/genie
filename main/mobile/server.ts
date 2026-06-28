@@ -78,6 +78,19 @@ let questionSubWired = false;
 /** Live `/ws/events` dashboard sockets. The bus fans mobileEmit out to these. */
 const eventSockets = new Set<WebSocket>();
 
+/** A connected remote/phone session — surfaced to the HOST so it can SEE (and
+ *  pause/end) who's controlling it, without having to kill the pairing. */
+export interface MobilePeer {
+    ip: string;
+    since: number;
+}
+/** Per-events-socket peer info (ip + connect time) for the host presence overlay. */
+const peerByEventSocket = new Map<WebSocket, MobilePeer>();
+/** The remotes currently connected to `/ws/events` (drives host presence). */
+export function activeMobilePeers(): MobilePeer[] {
+    return [...peerByEventSocket.values()];
+}
+
 // --- static serving --------------------------------------------------------
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -260,10 +273,16 @@ function attachWebSocket(srv: http.Server): void {
         }
 
         if (pathname === '/ws/events') {
+            const ip = req.socket.remoteAddress ?? 'unknown';
             wss!.handleUpgrade(req, socket, head, (ws) => {
                 eventSockets.add(ws);
-                ws.on('close', () => eventSockets.delete(ws));
-                ws.on('error', () => eventSockets.delete(ws));
+                peerByEventSocket.set(ws, { ip, since: Date.now() });
+                const drop = () => {
+                    eventSockets.delete(ws);
+                    peerByEventSocket.delete(ws);
+                };
+                ws.on('close', drop);
+                ws.on('error', drop);
             });
             return;
         }
@@ -508,6 +527,8 @@ export interface MobileServerState {
     tailnetNotDetected: boolean;
     /** True when the global kill-switch is engaged. */
     locked: boolean;
+    /** Remotes currently connected (drives the host's "remote session" overlay). */
+    peers: MobilePeer[];
 }
 
 export function mobileServerState(): MobileServerState {
@@ -522,5 +543,6 @@ export function mobileServerState(): MobileServerState {
         conflict,
         tailnetNotDetected: notDetected,
         locked: isLocked(),
+        peers: activeMobilePeers(),
     };
 }
