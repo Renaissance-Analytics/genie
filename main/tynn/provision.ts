@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { TynnBackend } from '../backend/tynn';
+import { getWorkspaceByPath } from '../db';
 import {
     readProjectJson,
     writeProjectJson,
@@ -48,12 +49,75 @@ export interface ProvisionResult {
     error?: string;
 }
 
-/** The link block, if this workspace points at a Tynn project. */
+/**
+ * The link block AS STORED IN project.json — null unless it carries a
+ * projectId. The narrow, file-only view; most callers want `resolveTynnLink`,
+ * which also honours the durable workspace row.
+ */
 export function readTynnLink(workspacePath: string): ProjectJsonTynn | null {
     const pj = readProjectJson(workspacePath);
     const tynn = pj?.tynn;
     if (!tynn || !tynn.projectId) return null;
     return tynn;
+}
+
+/**
+ * Pure: decide a workspace's effective Tynn link from its two possible homes.
+ *
+ * A Tynn link lives in TWO places: the secret-free `tynn` block in project.json
+ * (written on link / provision) AND the durable `tynn_project_id` recorded on
+ * the workspace row at creation. project.json is AUTHORITATIVE when it carries a
+ * `tynn` key — *including an empty `{}`*, which is the deliberate "unlinked"
+ * marker `unlinkWorkspaceTynn` writes, so an explicit unlink is never silently
+ * re-linked from the row. Only when project.json has NO `tynn` key at all do we
+ * fall back to the row, so a workspace that was associated with a Tynn project
+ * but whose project.json never got (or lost) its `tynn` block is still
+ * recognised as linked rather than reported 'unlinked'.
+ */
+export function pickTynnLink(input: {
+    /** project.json's `tynn` value (may be {} for an explicit unlink). */
+    projectJsonTynn: ProjectJsonTynn | undefined;
+    /** Whether project.json carries a `tynn` key at all (vs the key absent). */
+    hasTynnKey: boolean;
+    /** The durable workspace row, if one matches this path. */
+    row: {
+        backend: string;
+        tynnProjectId?: string | null;
+        tynnProjectName?: string | null;
+    } | null;
+}): ProjectJsonTynn | null {
+    if (input.hasTynnKey) {
+        return input.projectJsonTynn?.projectId ? input.projectJsonTynn : null;
+    }
+    if (input.row && input.row.backend === 'tynn' && input.row.tynnProjectId) {
+        return {
+            projectId: input.row.tynnProjectId,
+            project: input.row.tynnProjectName || undefined,
+        };
+    }
+    return null;
+}
+
+/**
+ * A workspace's effective Tynn link, resolving project.json against the durable
+ * workspace row (see `pickTynnLink`). This is the source of truth for status +
+ * provisioning, so the link survives a project.json that never carried — or lost
+ * — its `tynn` block.
+ */
+export function resolveTynnLink(workspacePath: string): ProjectJsonTynn | null {
+    const pj = readProjectJson(workspacePath);
+    const ws = getWorkspaceByPath(workspacePath);
+    return pickTynnLink({
+        projectJsonTynn: pj?.tynn,
+        hasTynnKey: !!pj && Object.prototype.hasOwnProperty.call(pj, 'tynn'),
+        row: ws
+            ? {
+                  backend: ws.backend,
+                  tynnProjectId: ws.tynn_project_id,
+                  tynnProjectName: ws.tynn_project_name,
+              }
+            : null,
+    });
 }
 
 /**
@@ -66,7 +130,7 @@ export async function provisionWorkspaceTynn(
     workspacePath: string,
     opts: { force?: boolean } = {},
 ): Promise<ProvisionResult> {
-    const link = readTynnLink(workspacePath);
+    const link = resolveTynnLink(workspacePath);
     const backend = new TynnBackend();
 
     const signedIn = link ? !!(await backend.whoami()) : false;
@@ -81,6 +145,16 @@ export async function provisionWorkspaceTynn(
 
     try {
         const minted = await backend.mintAgentToken(link!.projectId!);
+        // Self-heal: when the link was recovered from the durable workspace row
+        // (project.json carried no `tynn` block), write it back so project.json
+        // and the row agree and the AGI gateway sees the mapping too.
+        if (!readTynnLink(workspacePath)) {
+            try {
+                linkWorkspaceTynn(workspacePath, link!);
+            } catch {
+                /* best-effort — provisioning must not fail on a self-heal write */
+            }
+        }
         ensureMcpGitignored(workspacePath);
         writeWorkspaceTynnMcp(workspacePath, true, {
             url: minted.mcpUrl,
@@ -104,7 +178,7 @@ export async function provisionStatus(workspacePath: string): Promise<{
     status: ProvisionDecision;
     link: ProjectJsonTynn | null;
 }> {
-    const link = readTynnLink(workspacePath);
+    const link = resolveTynnLink(workspacePath);
     const signedIn = link ? !!(await new TynnBackend().whoami()) : false;
     return {
         status: decideProvision({
@@ -126,17 +200,18 @@ export function linkWorkspaceTynn(workspacePath: string, link: ProjectJsonTynn):
 }
 
 /**
- * Clear a workspace's Tynn project link by dropping the `tynn` block from
- * project.json entirely. writeProjectJson MERGES the tynn block (so it can't
- * clear it), so we rewrite the whole file with the key removed. The provisioned
- * `.mcp.json` token is left as-is — clearing the link just stops auto-provision
- * and lets the user pick a different project; the next provision is a no-op
- * ('unlinked') until they re-link.
+ * Clear a workspace's Tynn project link. Writes an EXPLICIT empty `tynn: {}`
+ * block (not a delete): the empty-but-present block is the deliberate "unlinked"
+ * marker `resolveTynnLink` honours, so the unlink sticks instead of being
+ * silently re-linked from the durable workspace row on the next open. We rewrite
+ * the whole file because writeProjectJson MERGES the tynn block (so it can't
+ * empty it). The provisioned `.mcp.json` token is left as-is — clearing the link
+ * just stops auto-provision and lets the user pick a different project; the next
+ * provision is a no-op ('unlinked') until they re-link.
  */
 export function unlinkWorkspaceTynn(workspacePath: string): void {
-    const pj = readProjectJson(workspacePath);
-    if (!pj || pj.tynn === undefined) return;
-    delete pj.tynn;
+    const pj = readProjectJson(workspacePath) ?? {};
+    pj.tynn = {};
     const file = path.join(workspacePath, 'project.json');
     const tmp = file + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(pj, null, 2) + '\n', 'utf8');

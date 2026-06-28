@@ -654,6 +654,20 @@ export function getWorkspace(id: string): WorkspaceRow | undefined {
         .get(id);
 }
 
+/**
+ * Look a workspace up by its on-disk path. Used to recover a workspace's
+ * durable Tynn-project association (the `tynn_project_id` recorded at creation)
+ * from a path-only caller — e.g. the Tynn provisioner, which is handed a
+ * workspace path, not an id.
+ */
+export function getWorkspaceByPath(wsPath: string): WorkspaceRow | undefined {
+    return getDb()
+        .prepare<[string], WorkspaceRow | undefined>(
+            'SELECT * FROM workspaces WHERE path = ?',
+        )
+        .get(wsPath);
+}
+
 export function addWorkspace(
     row: Omit<
         WorkspaceRow,
