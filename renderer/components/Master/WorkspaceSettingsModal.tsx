@@ -107,7 +107,7 @@ export default function WorkspaceSettingsModal({
     };
 
     return (
-        <Modal open onClose={onClose} size="md">
+        <Modal open onClose={onClose} size="xl">
             <div className="ws-settings">
                 <div className="ws-settings-head">
                     <Heading as="h2" size="sm">
