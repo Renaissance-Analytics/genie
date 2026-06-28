@@ -1,4 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, {
+    createContext,
+    useContext,
+    useEffect,
+    useState,
+    type ReactNode,
+} from 'react';
 import {
     Action,
     Card,
@@ -7,7 +13,6 @@ import {
     Input,
     Select,
     Switch,
-    Tabs,
     Text,
 } from '@particle-academy/react-fancy';
 import {
@@ -36,6 +41,9 @@ export default function SettingsPage() {
     const [cliShipped, setCliShipped] = useState<boolean | null>(null);
     const [cliBusy, setCliBusy] = useState(false);
     const [cliMsg, setCliMsg] = useState<string | null>(null);
+    // New IA: which sidebar section is showing + the cross-row search filter.
+    const [section, setSection] = useState<SectionId>('general');
+    const [filter, setFilter] = useState('');
 
     useEffect(() => {
         (async () => {
@@ -86,25 +94,56 @@ export default function SettingsPage() {
 
     if (!s) return <div className="surface" style={{ padding: 24 }}>Loading…</div>;
 
-    return (
-        <div className="surface" style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <Heading as="h1" size="lg">
-                <Icon name="settings" size="md" className="text-zinc-500" /> Settings
-            </Heading>
+    const activeLabel =
+        NAV_GROUPS.flatMap((g) => g.items).find((i) => i.id === section)?.label ??
+        'Settings';
 
-            <Tabs defaultTab="general" variant="underline">
-                <Tabs.List>
-                    <Tabs.Tab value="general">General</Tabs.Tab>
-                    <Tabs.Tab value="tools">Tools</Tabs.Tab>
-                    <Tabs.Tab value="workspaces">Workspaces</Tabs.Tab>
-                    <Tabs.Tab value="customization">Customization</Tabs.Tab>
-                    <Tabs.Tab value="agent-mcp">Agent MCP</Tabs.Tab>
-                    <Tabs.Tab value="mobile">Work Mode</Tabs.Tab>
-                    <Tabs.Tab value="connections">Connections</Tabs.Tab>
-                    <Tabs.Tab value="updates">Updates</Tabs.Tab>
-                </Tabs.List>
-                <Tabs.Panels>
-                    <Tabs.Panel value="general" className="settings-tab">
+    return (
+        <SettingsFilterCtx.Provider value={filter.trim().toLowerCase()}>
+            <div className="set-shell">
+                <nav className="set-nav">
+                    <div className="set-nav-title">
+                        <Icon name="settings" size="sm" className="text-zinc-500" />
+                        Settings
+                    </div>
+                    {NAV_GROUPS.map((g) => (
+                        <div className="set-nav-group" key={g.label}>
+                            <div className="set-nav-group-label">{g.label}</div>
+                            {g.items.map((it) => (
+                                <button
+                                    key={it.id}
+                                    type="button"
+                                    className={`set-nav-item${section === it.id ? ' active' : ''}`}
+                                    onClick={() => {
+                                        setSection(it.id);
+                                        setFilter('');
+                                    }}
+                                >
+                                    <Icon name={it.icon} size="sm" />
+                                    {it.label}
+                                </button>
+                            ))}
+                        </div>
+                    ))}
+                </nav>
+
+                <div className="set-main">
+                    <div className="set-main-head">
+                        <h1>{activeLabel}</h1>
+                        <div className="set-search">
+                            <Input
+                                type="search"
+                                value={filter}
+                                onValueChange={setFilter}
+                                placeholder="Search settings…"
+                                leading={<Icon name="search" size="sm" />}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="set-body">
+                        {section === 'general' && (
+                            <div className="settings-tab">
 
             <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Heading as="h2" size="sm">Primary workspace</Heading>
@@ -233,8 +272,10 @@ export default function SettingsPage() {
                 </div>
             </Card>
 
-                    </Tabs.Panel>
-                    <Tabs.Panel value="tools" className="settings-tab">
+                            </div>
+                        )}
+                        {section === 'tools' && (
+                            <div className="settings-tab">
 
             <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Heading as="h2" size="sm">CLI tools</Heading>
@@ -300,8 +341,10 @@ export default function SettingsPage() {
                 </Text>
             </Card>
 
-                    </Tabs.Panel>
-                    <Tabs.Panel value="workspaces" className="settings-tab">
+                            </div>
+                        )}
+                        {section === 'workspaces' && (
+                            <div className="settings-tab">
 
             <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Heading as="h2" size="sm">Workspace layout</Heading>
@@ -338,8 +381,10 @@ export default function SettingsPage() {
                 />
             </Card>
 
-                    </Tabs.Panel>
-                    <Tabs.Panel value="customization" className="settings-tab">
+                            </div>
+                        )}
+                        {section === 'customization' && (
+                            <div className="settings-tab">
 
             <AppearanceCard />
 
@@ -461,8 +506,10 @@ export default function SettingsPage() {
                 />
             </Card>
 
-                    </Tabs.Panel>
-                    <Tabs.Panel value="agent-mcp" className="settings-tab">
+                            </div>
+                        )}
+                        {section === 'agent-mcp' && (
+                            <div className="settings-tab">
 
             <AgentMcpSection
                 port={s.mcp_port ?? '51717'}
@@ -505,8 +552,10 @@ export default function SettingsPage() {
                 />
             </Card>
 
-                    </Tabs.Panel>
-                    <Tabs.Panel value="mobile" className="settings-tab">
+                            </div>
+                        )}
+                        {section === 'mobile' && (
+                            <div className="settings-tab">
 
             <WorkModeModeCard
                 mode={s.work_mode ?? 'host'}
@@ -525,8 +574,10 @@ export default function SettingsPage() {
                 <RemoteHostCard />
             )}
 
-                    </Tabs.Panel>
-                    <Tabs.Panel value="connections" className="settings-tab">
+                            </div>
+                        )}
+                        {section === 'connections' && (
+                            <div className="settings-tab">
 
             <TynnSection
                 hostOverride={s.tynn_host ?? ''}
@@ -537,27 +588,198 @@ export default function SettingsPage() {
 
             <AionimaSection />
 
-                    </Tabs.Panel>
-                    <Tabs.Panel value="updates" className="settings-tab">
+                            </div>
+                        )}
+                        {section === 'updates' && (
+                            <div className="settings-tab">
 
             <UpdaterSection />
 
             <StartupSection />
 
-                    </Tabs.Panel>
-                </Tabs.Panels>
-            </Tabs>
+                            </div>
+                        )}
+                    </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                {savedAt && (
-                    <Text size="xs" style={{ color: 'var(--emerald-500)' }}>
-                        <Icon name="check" size="xs" /> Saved
-                    </Text>
-                )}
-                <Action color="blue" icon="check" onClick={save} disabled={saving}>
-                    {saving ? 'Saving…' : 'Save'}
-                </Action>
+                    <div className="set-foot">
+                        {savedAt && (
+                            <Text size="xs" style={{ color: 'var(--emerald-500)' }}>
+                                <Icon name="check" size="xs" /> Saved
+                            </Text>
+                        )}
+                        <Action color="blue" icon="check" onClick={save} disabled={saving}>
+                            {saving ? 'Saving…' : 'Save'}
+                        </Action>
+                    </div>
+                </div>
             </div>
+        </SettingsFilterCtx.Provider>
+    );
+}
+
+/* ===================================================================== *
+ *  Reimagined Settings shell — sidebar IA, dense rows, filter context.
+ *  Layout primitives are bespoke (for density); every value control inside
+ *  a row is a reused react-fancy primitive (Switch / Select / Input /
+ *  Action / Icon).
+ * ===================================================================== */
+
+type SectionId =
+    | 'general'
+    | 'tools'
+    | 'workspaces'
+    | 'customization'
+    | 'agent-mcp'
+    | 'mobile'
+    | 'connections'
+    | 'updates';
+
+/**
+ * The settings search box publishes its (lowercased, trimmed) query here.
+ * Dense `SettingRow`s read it and hide themselves when they don't match;
+ * `SetSubhead`s collapse while a query is active so results read as a flat
+ * list. Legacy card-based panes don't consume it yet (see migration plan).
+ */
+const SettingsFilterCtx = createContext('');
+
+/**
+ * Left-sidebar information architecture. Every former top-tab is still here,
+ * now grouped so the whole surface is visible at a glance with no wrapping.
+ * `icon` values are kebab-case lucide names resolved by react-fancy's <Icon>.
+ */
+const NAV_GROUPS: Array<{
+    label: string;
+    items: Array<{ id: SectionId; label: string; icon: string }>;
+}> = [
+    {
+        label: 'Workspace',
+        items: [
+            { id: 'general', label: 'General', icon: 'settings' },
+            { id: 'tools', label: 'Tools', icon: 'terminal' },
+            { id: 'workspaces', label: 'Workspaces', icon: 'layout-grid' },
+            { id: 'customization', label: 'Customization', icon: 'palette' },
+        ],
+    },
+    {
+        label: 'Agents & network',
+        items: [
+            { id: 'agent-mcp', label: 'Agent MCP', icon: 'plug' },
+            { id: 'mobile', label: 'Work Mode', icon: 'monitor' },
+            { id: 'connections', label: 'Connections', icon: 'link' },
+        ],
+    },
+    {
+        label: 'System',
+        items: [{ id: 'updates', label: 'Updates', icon: 'download' }],
+    },
+];
+
+/**
+ * A settings section — a slim heading (+ optional one-line description and a
+ * right-aligned status pill) over a stack of dense rows. Replaces the old
+ * heavy padded <Card> per section.
+ */
+function SetSection({
+    title,
+    desc,
+    status,
+    statusColor,
+    statusIcon,
+    children,
+}: {
+    title: string;
+    desc?: string;
+    status?: ReactNode;
+    statusColor?: string;
+    statusIcon?: string;
+    children: ReactNode;
+}) {
+    return (
+        <section className="set-section">
+            <div className="set-section-head">
+                <h2>{title}</h2>
+                {desc && <span className="set-section-desc">{desc}</span>}
+                {status != null && (
+                    <span className="set-section-status" style={{ color: statusColor }}>
+                        {statusIcon && <Icon name={statusIcon} size="xs" />} {status}
+                    </span>
+                )}
+            </div>
+            {children}
+        </section>
+    );
+}
+
+/** Slim subsection heading inside a section. Collapses while searching. */
+function SetSubhead({ children }: { children: ReactNode }) {
+    const filter = useContext(SettingsFilterCtx);
+    if (filter) return null;
+    return <div className="set-subhead">{children}</div>;
+}
+
+/**
+ * One dense setting row: label + muted subtext on the left, the control on the
+ * right (or full-width underneath when `vertical`). Pass searchable `keywords`
+ * for rows whose label is not a plain string. Hides itself when a search query
+ * is active and nothing matches.
+ */
+function SettingRow({
+    label,
+    desc,
+    keywords,
+    vertical,
+    grow,
+    children,
+}: {
+    label: ReactNode;
+    desc?: ReactNode;
+    keywords?: string;
+    vertical?: boolean;
+    grow?: boolean;
+    children: ReactNode;
+}) {
+    const filter = useContext(SettingsFilterCtx);
+    if (filter) {
+        const labelText = typeof label === 'string' ? label : '';
+        const descText = typeof desc === 'string' ? desc : '';
+        const hay = `${labelText} ${descText} ${keywords ?? ''}`.toLowerCase();
+        if (!hay.includes(filter)) return null;
+    }
+    return (
+        <div className={`set-row${vertical ? ' vertical' : ''}`}>
+            <div className="set-row-main">
+                <span className="set-row-label">{label}</span>
+                {desc && <span className="set-row-desc">{desc}</span>}
+            </div>
+            <div className={`set-row-control${grow ? ' grow' : ''}`}>{children}</div>
+        </div>
+    );
+}
+
+/** Compact segmented control — a tighter alternative to a row of buttons. */
+function Segmented<T extends string>({
+    value,
+    options,
+    onChange,
+}: {
+    value: T;
+    options: Array<{ value: T; label: string }>;
+    onChange: (v: T) => void;
+}) {
+    return (
+        <div className="set-seg" role="tablist">
+            {options.map((o) => (
+                <button
+                    key={o.value}
+                    type="button"
+                    role="tab"
+                    aria-selected={value === o.value}
+                    className={value === o.value ? 'active' : ''}
+                    onClick={() => onChange(o.value)}
+                >
+                    {o.label}
+                </button>
+            ))}
         </div>
     );
 }
@@ -2236,34 +2458,26 @@ function WorkModeModeCard({
     onModeChange: (m: 'host' | 'remote') => void;
 }) {
     return (
-        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Heading as="h2" size="sm" style={{ margin: 0 }}>
-                    Mode
-                </Heading>
-                <Text size="xs" className="text-zinc-500">
-                    How this Genie participates over the tailnet
-                </Text>
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-                {(['host', 'remote'] as const).map((m) => (
-                    <Action
-                        key={m}
-                        size="sm"
-                        variant={mode === m ? 'default' : 'ghost'}
-                        color={mode === m ? 'blue' : undefined}
-                        onClick={() => onModeChange(m)}
-                    >
-                        {m === 'host' ? 'Host (default)' : 'Remote'}
-                    </Action>
-                ))}
-            </div>
-            <Text size="xs" className="text-zinc-500">
-                {mode === 'host'
-                    ? 'Host — this Genie runs your projects and lets your phone (and, soon, other Genies) connect to it over Tailscale.'
-                    : 'Remote — connect this Genie to a host Genie over Tailscale and drive it from here. Desktop-to-desktop control arrives in Phase 2; Tailscale + discovery are set up below.'}
-            </Text>
-        </Card>
+        <SetSection title="Mode" desc="How this Genie participates over the tailnet">
+            <SettingRow
+                label="Participation mode"
+                keywords="host remote tailnet participate work mode"
+                desc={
+                    mode === 'host'
+                        ? 'Host — this Genie runs your projects and lets your phone (and, soon, other Genies) connect to it over Tailscale.'
+                        : 'Remote — connect this Genie to a host Genie over Tailscale and drive it from here. Desktop-to-desktop control arrives in Phase 2; Tailscale + discovery are set up below.'
+                }
+            >
+                <Segmented
+                    value={mode}
+                    onChange={onModeChange}
+                    options={[
+                        { value: 'host', label: 'Host' },
+                        { value: 'remote', label: 'Remote' },
+                    ]}
+                />
+            </SettingRow>
+        </SetSection>
     );
 }
 
@@ -2347,31 +2561,18 @@ function TailscaleSection() {
                 : 'var(--amber-600)';
 
     return (
-        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Heading as="h2" size="sm" style={{ margin: 0 }}>
-                    Tailscale
-                </Heading>
-                <Text size="xs" className="text-zinc-500">
-                    The encrypted network Work Mode runs over
-                </Text>
-                <span style={{ flex: 1 }} />
-                <Text size="xs" style={{ color }}>
-                    <Icon
-                        name={!installed ? 'alert-triangle' : running ? 'check' : 'circle'}
-                        size="xs"
-                    />{' '}
-                    {label}
-                </Text>
-            </div>
-
-            <Text size="xs" className="text-zinc-500">
-                Genie manages Tailscale for you — no separate app. Work Mode binds
-                only to your tailnet, so your projects are reachable from your own
-                devices and nothing else.
-            </Text>
-
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <SetSection
+            title="Tailscale"
+            desc="The encrypted network Work Mode runs over"
+            status={label}
+            statusColor={color}
+            statusIcon={!installed ? 'alert-triangle' : running ? 'check' : 'circle'}
+        >
+            <SettingRow
+                label="Connection"
+                keywords="tailscale install online connect network vpn tailnet"
+                desc="Genie manages Tailscale for you — no separate app. Work Mode binds only to your tailnet, so your projects are reachable from your own devices and nothing else."
+            >
                 {!installed && (
                     <Action
                         size="sm"
@@ -2380,7 +2581,7 @@ function TailscaleSection() {
                         disabled={busy}
                         onClick={() => void install()}
                     >
-                        Install Tailscale
+                        Install
                     </Action>
                 )}
                 {installed && !running && (
@@ -2403,26 +2604,27 @@ function TailscaleSection() {
                 >
                     Refresh
                 </Action>
-            </div>
+            </SettingRow>
 
             {running && (
-                <Text size="xs" className="text-zinc-500">
-                    {onlinePeers.length === 0
-                        ? 'No other devices online on your tailnet yet.'
-                        : `${onlinePeers.length} device${onlinePeers.length === 1 ? '' : 's'} online: ${onlinePeers
-                              .map((p) => p.hostname || p.ip)
-                              .filter(Boolean)
-                              .slice(0, 8)
-                              .join(', ')}`}
-                </Text>
+                <SettingRow
+                    label="Devices on your tailnet"
+                    keywords="peers devices online tailnet"
+                >
+                    <Text size="xs" className="text-zinc-500">
+                        {onlinePeers.length === 0
+                            ? 'None online yet'
+                            : `${onlinePeers.length} online: ${onlinePeers
+                                  .map((p) => p.hostname || p.ip)
+                                  .filter(Boolean)
+                                  .slice(0, 6)
+                                  .join(', ')}`}
+                    </Text>
+                </SettingRow>
             )}
 
-            {msg && (
-                <Text size="xs" style={{ color: 'var(--fg-2)' }}>
-                    {msg}
-                </Text>
-            )}
-        </Card>
+            {msg && <div className="set-note">{msg}</div>}
+        </SetSection>
     );
 }
 
@@ -2511,38 +2713,33 @@ function RemoteHostCard() {
     // Already controlling a host → show the active session + a disconnect.
     if (status?.connected && status.host) {
         return (
-            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Heading as="h2" size="sm" style={{ margin: 0 }}>
-                        Remote host
-                    </Heading>
-                    <span style={{ flex: 1 }} />
-                    <Text size="xs" style={{ color: 'var(--rose-500)' }}>
-                        <Icon name="circle" size="xs" /> Controlling {status.host.hostname}
-                    </Text>
-                </div>
-                <Text size="xs" className="text-zinc-500">
-                    Your desktop is driving <strong>{status.host.hostname}</strong> (
-                    {status.host.ip}) over Tailscale — the workspaces, terminals, editor and
-                    processes you see are the host&apos;s. The title bar shows you&apos;re in a
-                    remote session.
-                </Text>
-                <HostUpdate />
-                <Action
-                    size="sm"
-                    color="rose"
-                    icon="log-out"
-                    disabled={busy === 'disconnect'}
-                    onClick={() => void disconnect()}
+            <SetSection
+                title="Remote host"
+                desc="Driving another Genie over Tailscale"
+                status={`Controlling ${status.host.hostname}`}
+                statusColor="var(--rose-500)"
+                statusIcon="circle"
+            >
+                <SettingRow
+                    label="Active session"
+                    keywords="remote host controlling disconnect session"
+                    desc={
+                        `Your desktop is driving ${status.host.hostname} (${status.host.ip}) over Tailscale — the workspaces, terminals, editor and processes you see are the host's. The title bar shows you're in a remote session.`
+                    }
                 >
-                    {busy === 'disconnect' ? 'Disconnecting…' : 'Disconnect — back to local'}
-                </Action>
-                {msg && (
-                    <Text size="xs" style={{ color: 'var(--fg-2)' }}>
-                        {msg}
-                    </Text>
-                )}
-            </Card>
+                    <Action
+                        size="sm"
+                        color="rose"
+                        icon="log-out"
+                        disabled={busy === 'disconnect'}
+                        onClick={() => void disconnect()}
+                    >
+                        {busy === 'disconnect' ? 'Disconnecting…' : 'Disconnect'}
+                    </Action>
+                </SettingRow>
+                <HostUpdate />
+                {msg && <div className="set-note">{msg}</div>}
+            </SetSection>
         );
     }
 
@@ -2556,15 +2753,15 @@ function RemoteHostCard() {
     };
 
     return (
-        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Heading as="h2" size="sm" style={{ margin: 0 }}>
-                    Remote host
-                </Heading>
-                <Text size="xs" className="text-zinc-500">
-                    Connect to another Genie and control it
-                </Text>
-                <span style={{ flex: 1 }} />
+        <SetSection
+            title="Remote host"
+            desc="Connect to another Genie and control it from this desktop"
+        >
+            <SettingRow
+                label="Discover hosts"
+                keywords="remote host discover scan tailnet connect pair"
+                desc="Drive another Genie's workspaces, terminals, editor and processes over Tailscale. The FIRST connect pairs with the PIN shown on the host; after that, Connect reconnects with no PIN."
+            >
                 <Action
                     size="sm"
                     variant="ghost"
@@ -2574,15 +2771,7 @@ function RemoteHostCard() {
                 >
                     {scanning ? 'Scanning…' : 'Rescan'}
                 </Action>
-            </div>
-
-            <Text size="xs" className="text-zinc-500">
-                Connect to another Genie and control it from THIS desktop — same
-                desktop UX, driving the host&apos;s workspaces, terminals (on its
-                pty-host), editor and processes over Tailscale. The FIRST connect
-                pairs with the PIN shown on the host (it confirms on its own
-                screen); after that, Connect reconnects with no PIN.
-            </Text>
+            </SettingRow>
 
             {hosts === null ? (
                 <Text size="xs" className="text-zinc-500">Scanning the tailnet…</Text>
@@ -2679,12 +2868,8 @@ function RemoteHostCard() {
                 </Action>
             </div>
 
-            {msg && (
-                <Text size="xs" style={{ color: 'var(--fg-2)' }}>
-                    {msg}
-                </Text>
-            )}
-        </Card>
+            {msg && <div className="set-note">{msg}</div>}
+        </SetSection>
     );
 }
 
@@ -2917,39 +3102,24 @@ function MobileSection({
                 : 'var(--fg-3)';
 
     return (
-        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Heading as="h2" size="sm" style={{ margin: 0 }}>
-                    Mobile remote control
-                </Heading>
-                <Text size="xs" className="text-zinc-500">
-                    Let your phone — or another Genie in remote mode — drive this
-                    Genie over Tailscale
-                </Text>
-                <span style={{ flex: 1 }} />
-                <Text size="xs" style={{ color: statusColor }}>
-                    <Icon
-                        name={
-                            status?.tailnetNotDetected || status?.conflict
-                                ? 'alert-triangle'
-                                : status?.running
-                                    ? 'check'
-                                    : 'circle'
-                        }
-                        size="xs"
-                    />{' '}
-                    {statusLabel}
-                </Text>
-            </div>
-
-            <Text size="xs" className="text-zinc-500">
-                Remote control works only over your Tailscale network — the server
-                binds to your tailnet IP and nothing else. Pairing a device must be
-                confirmed on this desktop; once paired, it can drive terminals
-                freely until you Disconnect or Lock.
-            </Text>
-
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <SetSection
+            title="Mobile remote control"
+            desc="Let your phone — or another Genie in remote mode — drive this Genie over Tailscale"
+            status={statusLabel}
+            statusColor={statusColor}
+            statusIcon={
+                status?.tailnetNotDetected || status?.conflict
+                    ? 'alert-triangle'
+                    : status?.running
+                        ? 'check'
+                        : 'circle'
+            }
+        >
+            <SettingRow
+                label="Enable mobile remote control"
+                keywords="mobile remote control phone enable server pairing tailscale"
+                desc="Off by default. Starts a small web server on your Tailscale interface so a paired phone can reach this desktop. Works only over your tailnet; pairing is confirmed here, then the device can drive terminals until you Disconnect or Lock."
+            >
                 <Switch
                     checked={enabled}
                     disabled={busy}
@@ -2958,84 +3128,86 @@ function MobileSection({
                         void persistThenRestart(on);
                     }}
                 />
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <Text size="sm">Enable mobile remote control</Text>
-                    <Text size="xs" className="text-zinc-500">
-                        Off by default. When on, Genie starts a small web server on
-                        your Tailscale interface so a paired phone can reach this
-                        desktop.
-                    </Text>
+            </SettingRow>
+
+            <SettingRow
+                label="Server port"
+                keywords="port server"
+                desc="A fixed port bound on your Tailscale IP (default 51718). The phone URL embeds it, so changing it requires a restart of the server below."
+            >
+                <div style={{ width: 120 }}>
+                    <Input
+                        type="number"
+                        min={1024}
+                        max={65535}
+                        value={port}
+                        onValueChange={(v) => {
+                            const n = parseInt(v, 10);
+                            if (v === '') onPortChange('');
+                            else if (Number.isFinite(n)) onPortChange(String(Math.min(65535, Math.max(1, n))));
+                        }}
+                        placeholder="51718"
+                    />
                 </div>
-            </div>
+            </SettingRow>
 
             {status?.tailnetNotDetected && (
-                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                <div className="set-note bad">
                     Tailscale not detected — start Tailscale and click Restart. The
                     server binds only to the tailnet and won&apos;t start without it.
-                </Text>
+                </div>
             )}
 
             {status?.conflict && (
-                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                <div className="set-note bad">
                     Port {status.configuredPort} is in use — pick another port and
                     Restart. Genie won&apos;t silently fall back to a random port so
                     the phone URL stays stable.
-                </Text>
-            )}
-
-            <Input
-                label="Server port"
-                type="number"
-                min={1024}
-                max={65535}
-                description="A fixed port bound on your Tailscale IP (default 51718). The phone URL embeds it, so changing it requires a restart of the server below."
-                value={port}
-                onValueChange={(v) => {
-                    const n = parseInt(v, 10);
-                    if (v === '') onPortChange('');
-                    else if (Number.isFinite(n)) onPortChange(String(Math.min(65535, Math.max(1, n))));
-                }}
-                placeholder="51718"
-            />
-
-            {status?.running && status.url && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    <Text size="xs" className="text-zinc-500">
-                        Open this on your phone (must be on the same tailnet):
-                    </Text>
-                    <MobileCodeChip code={status.url} />
                 </div>
             )}
 
-            {status?.running && (status.pin || status.qrDataUrl) && (
-                <div
-                    style={{
-                        display: 'flex',
-                        gap: 16,
-                        alignItems: 'center',
-                        padding: 12,
-                        borderRadius: 8,
-                        border: '1px solid var(--border-1)',
-                        background: 'var(--bg-2)',
-                    }}
+            {status?.running && status.url && (
+                <SettingRow
+                    label="Phone URL"
+                    keywords="url link phone open address"
+                    desc="Open this on your phone (must be on the same tailnet)."
+                    vertical
                 >
-                    {status.qrDataUrl && (
-                        <img
-                            src={status.qrDataUrl}
-                            alt="Pairing QR code"
-                            width={140}
-                            height={140}
-                            style={{
-                                borderRadius: 8,
-                                background: '#fff',
-                                padding: 6,
-                            }}
-                        />
-                    )}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1 }}>
-                        <Text size="xs" className="text-zinc-500">
-                            Scan to pair, or enter the PIN on your phone.
-                        </Text>
+                    <MobileCodeChip code={status.url} />
+                </SettingRow>
+            )}
+
+            {status?.running && (status.pin || status.qrDataUrl) && (
+                <SettingRow
+                    label="Pairing code"
+                    keywords="pair pin qr code scan"
+                    desc="Scan to pair, or enter the PIN on your phone."
+                    vertical
+                >
+                    <div
+                        style={{
+                            display: 'flex',
+                            gap: 16,
+                            alignItems: 'center',
+                            padding: 12,
+                            borderRadius: 8,
+                            border: '1px solid var(--border-1)',
+                            background: 'var(--bg-2)',
+                        }}
+                    >
+                        {status.qrDataUrl && (
+                            <img
+                                src={status.qrDataUrl}
+                                alt="Pairing QR code"
+                                width={140}
+                                height={140}
+                                style={{
+                                    borderRadius: 8,
+                                    background: '#fff',
+                                    padding: 6,
+                                }}
+                            />
+                        )}
                         {status.pin && (
                             <button
                                 type="button"
@@ -3061,11 +3233,12 @@ function MobileSection({
                             </button>
                         )}
                     </div>
-                </div>
+                </SettingRow>
             )}
 
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div className="set-actions">
                 <Action
+                    size="sm"
                     color="blue"
                     icon="refresh-cw"
                     onClick={restart}
@@ -3074,6 +3247,7 @@ function MobileSection({
                     {busy ? 'Working…' : 'Restart'}
                 </Action>
                 <Action
+                    size="sm"
                     variant="ghost"
                     icon="key-round"
                     onClick={regeneratePin}
@@ -3082,6 +3256,7 @@ function MobileSection({
                     Regenerate PIN
                 </Action>
                 <Action
+                    size="sm"
                     variant="ghost"
                     icon="unplug"
                     onClick={revokeSessions}
@@ -3090,6 +3265,7 @@ function MobileSection({
                     Disconnect all devices
                 </Action>
                 <Action
+                    size="sm"
                     color={status?.locked ? 'red' : undefined}
                     variant={status?.locked ? 'default' : 'ghost'}
                     icon={status?.locked ? 'lock' : 'lock-open'}
@@ -3097,7 +3273,7 @@ function MobileSection({
                     disabled={busy || !status?.running}
                     title="Freeze remote control without disconnecting paired devices"
                 >
-                    {status?.locked ? 'Unlock' : 'Lock (freeze remote control)'}
+                    {status?.locked ? 'Unlock' : 'Lock'}
                 </Action>
                 {msg && (
                     <Text size="xs" className="text-zinc-500">
@@ -3105,7 +3281,7 @@ function MobileSection({
                     </Text>
                 )}
             </div>
-        </Card>
+        </SetSection>
     );
 }
 

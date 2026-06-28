@@ -1485,8 +1485,10 @@ function createMainWindow(): BrowserWindow {
 
 function createSettingsWindow(): BrowserWindow {
     const win = new BrowserWindow({
-        width: 720,
-        height: 640,
+        width: 860,
+        height: 680,
+        minWidth: 680,
+        minHeight: 520,
         show: false,
         frame: true,
         title: 'Genie Settings',

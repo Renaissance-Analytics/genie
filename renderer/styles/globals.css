@@ -318,13 +318,279 @@ textarea.input {
     border-top: 1px solid var(--border-1);
 }
 
-/* Settings tab panels — stack their cards with the same gap the old single
-   column used. */
+/* Settings panes — stack sections (dense or legacy cards) with one gap.
+   Formerly the per-tab panel; now the content block inside the new
+   sidebar-driven settings shell (.set-body). */
 .settings-tab {
     display: flex;
     flex-direction: column;
     gap: 16px;
-    padding-top: 16px;
+}
+
+/* ===== Reimagined Settings — sidebar IA + dense rows ===================
+   Replaces the wrapping 8 top-tabs + heavy per-section cards with a
+   left section nav and a dense, scannable content frame. Reuses the
+   react-fancy form primitives (Switch / Select / Input / Button) inside
+   the rows; only the layout/chrome is bespoke. */
+.set-shell {
+    display: flex;
+    height: 100vh;
+    background: var(--bg-0);
+    color: var(--fg-1);
+}
+
+/* Left section nav (macOS System Settings / VS Code style) */
+.set-nav {
+    flex: 0 0 200px;
+    width: 200px;
+    border-right: 1px solid var(--border-1);
+    background: var(--bg-1);
+    padding: 14px 10px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.set-nav-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 8px 6px;
+    font-weight: 600;
+    font-size: 14px;
+}
+.set-nav-group {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+.set-nav-group-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--fg-4);
+    padding: 6px 8px 3px;
+}
+.set-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 6px 8px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--fg-2);
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.2;
+    text-align: left;
+    cursor: pointer;
+}
+.set-nav-item:hover {
+    background: var(--bg-2);
+    color: var(--fg-1);
+}
+.set-nav-item.active {
+    background: color-mix(in srgb, var(--blue-500) 14%, transparent);
+    color: var(--fg-1);
+    font-weight: 600;
+}
+.set-nav-item.active svg {
+    color: var(--blue-500);
+}
+.set-nav-item svg {
+    width: 15px;
+    height: 15px;
+    flex: 0 0 auto;
+    opacity: 0.9;
+}
+
+/* Main content pane */
+.set-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.set-main-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 13px 20px;
+    border-bottom: 1px solid var(--border-1);
+}
+.set-main-head h1 {
+    margin: 0;
+    flex: 0 0 auto;
+    font-size: 16px;
+    font-weight: 600;
+}
+.set-search {
+    margin-left: auto;
+    width: 230px;
+    max-width: 45%;
+}
+.set-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 18px 20px 28px;
+}
+.set-foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 10px 20px;
+    border-top: 1px solid var(--border-1);
+    background: var(--bg-1);
+}
+
+/* A section: slim heading + dense rows, replacing the old padded <Card>. */
+.set-section {
+    display: flex;
+    flex-direction: column;
+}
+.set-section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 2px;
+}
+.set-section-head h2 {
+    margin: 0;
+    font-size: 13.5px;
+    font-weight: 600;
+}
+.set-section-desc {
+    font-size: 11.5px;
+    color: var(--fg-3);
+}
+.set-section-status {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11.5px;
+    white-space: nowrap;
+}
+
+/* Slim subsection heading inside a section. */
+.set-subhead {
+    margin-top: 12px;
+    padding-bottom: 2px;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--fg-4);
+}
+
+/* One dense setting row: label + muted subtext on the left, control right. */
+.set-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 9px 0;
+    border-top: 1px solid var(--border-1);
+}
+.set-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.set-row-label {
+    font-size: 13px;
+    color: var(--fg-1);
+}
+.set-row-desc {
+    font-size: 11.5px;
+    line-height: 1.4;
+    color: var(--fg-3);
+}
+.set-row-control {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.set-row-control.grow {
+    flex: 1 1 auto;
+    max-width: 300px;
+    justify-content: flex-end;
+}
+/* Vertical row — control spans full width under the label (wide selects,
+   executable lines, QR/PIN panels). */
+.set-row.vertical {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+}
+.set-row.vertical .set-row-control {
+    width: 100%;
+    max-width: none;
+    justify-content: flex-start;
+}
+
+/* Segmented control (Host / Remote, etc.) — a compact alternative to a
+   row of buttons. */
+.set-seg {
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md);
+    background: var(--bg-2);
+}
+.set-seg button {
+    padding: 4px 12px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--fg-2);
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+}
+.set-seg button.active {
+    background: var(--card);
+    color: var(--fg-1);
+    font-weight: 600;
+    box-shadow: var(--shadow-xs);
+}
+
+/* Inline note / banner used inside a section (status, warnings). */
+.set-note {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md);
+    background: var(--bg-2);
+    font-size: 11.5px;
+    line-height: 1.45;
+    color: var(--fg-2);
+}
+.set-note.warn {
+    background: color-mix(in srgb, var(--amber-500) 12%, transparent);
+    border-color: color-mix(in srgb, var(--amber-500) 35%, var(--border-1));
+}
+.set-note.bad {
+    background: color-mix(in srgb, var(--rose-500) 12%, transparent);
+    border-color: color-mix(in srgb, var(--rose-500) 35%, var(--border-1));
+}
+
+/* A free-standing controls strip at the foot of a section (action buttons). */
+.set-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
 }
 
 /* Interactive upgrade wizard tables — used inside the AddWorkspace modal. */
