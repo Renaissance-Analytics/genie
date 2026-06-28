@@ -7,8 +7,6 @@ import React, {
 } from 'react';
 import {
     Action,
-    Card,
-    Heading,
     Icon,
     Input,
     Select,
@@ -92,9 +90,14 @@ export default function SettingsPage() {
 
     if (!s) return <div className="surface" style={{ padding: 24 }}>Loading…</div>;
 
-    const activeLabel =
-        NAV_GROUPS.flatMap((g) => g.items).find((i) => i.id === section)?.label ??
-        'Settings';
+    // Global cross-section search: when a query is present, EVERY tab's rows are
+    // mounted (so matches surface from any tab), each under its tab's group
+    // label; CSS collapses tabs/sections with no matching `.set-row`.
+    const searching = filter.trim().length > 0;
+    const activeLabel = searching
+        ? 'Search results'
+        : NAV_GROUPS.flatMap((g) => g.items).find((i) => i.id === section)?.label ??
+          'Settings';
 
     return (
         <SettingsFilterCtx.Provider value={filter.trim().toLowerCase()}>
@@ -139,116 +142,118 @@ export default function SettingsPage() {
                         </div>
                     </div>
 
-                    <div className="set-body">
-                        {section === 'general' && (
-                            <div className="settings-tab">
+                    <div className={`set-body${searching ? ' set-searching' : ''}`}>
+                        {(searching || section === 'general') && (
+                            <SearchGroup label="General" searching={searching}>
 
-            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Heading as="h2" size="sm">Primary workspace</Heading>
-                <Text size="xs" className="text-zinc-500">
-                    Default destination for NEW projects created from Genie. Existing
-                    projects can live anywhere — this is a default, not a constraint.
-                </Text>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                    <div style={{ flex: 1 }}>
-                        <Input
-                            readOnly
-                            value={s.primary_workspace ?? ''}
-                            placeholder="No primary workspace chosen"
-                        />
-                    </div>
+            <SetSection title="General" desc="Core defaults for new projects and panels">
+                <SettingRow
+                    label="Primary workspace"
+                    desc="Default destination for NEW projects created from Genie. Existing projects can live anywhere — this is a default, not a constraint."
+                    keywords="primary workspace folder default destination new projects path"
+                    grow
+                >
+                    <Input
+                        readOnly
+                        value={s.primary_workspace ?? ''}
+                        placeholder="No primary workspace chosen"
+                    />
                     <Action variant="ghost" icon="folder" onClick={pickPrimary}>
                         Browse
                     </Action>
-                </div>
-            </Card>
+                </SettingRow>
 
-            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Heading as="h2" size="sm">Default editor</Heading>
-                <Select
-                    value={s.default_editor ?? ''}
-                    onValueChange={(v) => {
-                        const ed = editors.find((e) => e.id === v);
-                        patch({ default_editor: v, default_editor_cmd: ed?.path ?? s.default_editor_cmd });
-                    }}
-                    list={[
-                        ...editors.map((e) => ({ value: e.id, label: e.label })),
-                        { value: 'custom', label: 'Custom executable' },
-                    ]}
-                />
-                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                    <div style={{ flex: 1 }}>
-                        <Input
-                            value={s.default_editor_cmd ?? ''}
-                            onValueChange={(v) => patch({ default_editor_cmd: v })}
-                            placeholder="cursor / code / path/to/binary"
-                        />
-                    </div>
-                    <Action variant="ghost" icon="folder" onClick={pickEditor}>
-                        Browse
-                    </Action>
-                </div>
-            </Card>
-
-            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Heading as="h2" size="sm">Default terminal</Heading>
-                <Text size="xs" className="text-zinc-500">
-                    Shell used when a terminal panel doesn't specify one. Detected
-                    on this machine{shellDefault
-                        ? ` — ${shells.find((d) => d.id === shellDefault)?.label ?? shellDefault} is the recommended default`
-                        : ''}. Each panel can still switch shells from its toolbar.
-                </Text>
-                <Select
-                    value={s.terminal_shell || shellDefault || ''}
-                    onValueChange={(v) => patch({ terminal_shell: v })}
-                    list={[
-                        ...shells.map((d) => ({
-                            value: d.id,
-                            label:
-                                d.id === shellDefault
-                                    ? `${d.label} (recommended)`
-                                    : d.label,
-                        })),
-                        { value: 'custom', label: 'Custom executable' },
-                    ]}
-                />
-                {(s.terminal_shell === 'custom' || shells.length === 0) && (
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                <SettingRow
+                    label="Default editor"
+                    desc="The editor Genie opens workspaces in — pick a detected one or a custom executable."
+                    keywords="default editor cursor vscode code insiders custom executable binary"
+                    vertical
+                >
+                    <Select
+                        value={s.default_editor ?? ''}
+                        onValueChange={(v) => {
+                            const ed = editors.find((e) => e.id === v);
+                            patch({ default_editor: v, default_editor_cmd: ed?.path ?? s.default_editor_cmd });
+                        }}
+                        list={[
+                            ...editors.map((e) => ({ value: e.id, label: e.label })),
+                            { value: 'custom', label: 'Custom executable' },
+                        ]}
+                    />
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', width: '100%' }}>
                         <div style={{ flex: 1 }}>
                             <Input
-                                label="Executable line"
-                                description='Full command line; quote paths with spaces, e.g. "C:\Program Files\Git\bin\bash.exe" --login -i'
-                                value={s.terminal_custom_cmd ?? ''}
-                                onValueChange={(v) => patch({ terminal_custom_cmd: v })}
-                                placeholder="pwsh -NoLogo"
+                                value={s.default_editor_cmd ?? ''}
+                                onValueChange={(v) => patch({ default_editor_cmd: v })}
+                                placeholder="cursor / code / path/to/binary"
                             />
                         </div>
-                        <Action
-                            variant="ghost"
-                            icon="folder"
-                            onClick={async () => {
-                                const p = await api().settings.chooseFile(
-                                    'Choose shell executable',
-                                );
-                                if (p) {
-                                    patch({
-                                        terminal_shell: 'custom',
-                                        terminal_custom_cmd: p.includes(' ') ? `"${p}"` : p,
-                                    });
-                                }
-                            }}
-                        >
+                        <Action variant="ghost" icon="folder" onClick={pickEditor}>
                             Browse
                         </Action>
                     </div>
-                )}
-                <div
-                    style={{
-                        display: 'flex',
-                        alignItems: 'flex-start',
-                        gap: 12,
-                        marginTop: 4,
-                    }}
+                </SettingRow>
+
+                <SettingRow
+                    label="Default terminal"
+                    desc={`Shell used when a terminal panel doesn't specify one.${
+                        shellDefault
+                            ? ` ${shells.find((d) => d.id === shellDefault)?.label ?? shellDefault} is the recommended default.`
+                            : ''
+                    } Each panel can still switch shells from its toolbar.`}
+                    keywords="default terminal shell bash pwsh powershell git custom executable"
+                    vertical
+                >
+                    <Select
+                        value={s.terminal_shell || shellDefault || ''}
+                        onValueChange={(v) => patch({ terminal_shell: v })}
+                        list={[
+                            ...shells.map((d) => ({
+                                value: d.id,
+                                label:
+                                    d.id === shellDefault
+                                        ? `${d.label} (recommended)`
+                                        : d.label,
+                            })),
+                            { value: 'custom', label: 'Custom executable' },
+                        ]}
+                    />
+                    {(s.terminal_shell === 'custom' || shells.length === 0) && (
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', width: '100%' }}>
+                            <div style={{ flex: 1 }}>
+                                <Input
+                                    label="Executable line"
+                                    description='Full command line; quote paths with spaces, e.g. "C:\Program Files\Git\bin\bash.exe" --login -i'
+                                    value={s.terminal_custom_cmd ?? ''}
+                                    onValueChange={(v) => patch({ terminal_custom_cmd: v })}
+                                    placeholder="pwsh -NoLogo"
+                                />
+                            </div>
+                            <Action
+                                variant="ghost"
+                                icon="folder"
+                                onClick={async () => {
+                                    const p = await api().settings.chooseFile(
+                                        'Choose shell executable',
+                                    );
+                                    if (p) {
+                                        patch({
+                                            terminal_shell: 'custom',
+                                            terminal_custom_cmd: p.includes(' ') ? `"${p}"` : p,
+                                        });
+                                    }
+                                }}
+                            >
+                                Browse
+                            </Action>
+                        </div>
+                    )}
+                </SettingRow>
+
+                <SettingRow
+                    label="Keep terminals running after quit"
+                    desc="On by default. Runs terminals in a detached background process so dev servers, shells, and the agents running in them survive a full quit of Genie and reattach on next launch. Falls back to in-process terminals if the background process can't start."
+                    keywords="detached terminals keep running quit background survive reattach dev server"
                 >
                     <Switch
                         checked={s.detached_terminals === 'on'}
@@ -256,169 +261,172 @@ export default function SettingsPage() {
                             patch({ detached_terminals: on ? 'on' : 'off' })
                         }
                     />
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <Text size="sm">Keep terminals running after quit</Text>
-                        <Text size="xs" className="text-zinc-500">
-                            On by default. Runs terminals in a detached background
-                            process so dev servers, shells, and the agents running in
-                            them survive a full quit of Genie and reattach on next
-                            launch. If the background process can't start, Genie falls
-                            back to in-process terminals (which still restore from a
-                            snapshot, but don't survive a full quit).
-                        </Text>
-                    </div>
-                </div>
-            </Card>
+                </SettingRow>
+            </SetSection>
 
-                            </div>
+                            </SearchGroup>
                         )}
-                        {section === 'tools' && (
-                            <div className="settings-tab">
+                        {(searching || section === 'tools') && (
+                            <SearchGroup label="Tools" searching={searching}>
 
-            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Heading as="h2" size="sm">CLI tools</Heading>
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                    <Switch
-                        checked={s.cli_tools_in_terminals !== 'off'}
-                        onCheckedChange={(on: boolean) =>
-                            patch({ cli_tools_in_terminals: on ? 'on' : 'off' })
-                        }
-                    />
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <Text size="sm">Make tynn-cli tools available in terminals</Text>
-                        <Text size="xs" className="text-zinc-500">
+            <SetSection title="Tools" desc="The bundled tynn-cli toolkit in Genie terminals">
+                <SettingRow
+                    label="Make tynn-cli tools available in terminals"
+                    desc={
+                        <>
                             Prepends the bundled toolkit (<code>resetme</code>,{' '}
                             <code>reload</code>, <code>puse</code>, <code>sandbox</code>,
-                            …) to each Genie terminal&apos;s PATH and injects{' '}
+                            …) to each terminal&apos;s PATH and injects{' '}
                             <code>GENIE_WORKSPACE</code> / <code>GENIE_ENVELOPE_ROOT</code>{' '}
-                            / <code>GENIE_REPO</code> so the tools and agents know which
-                            project they&apos;re working in. Bash-family shells only
-                            (Git Bash on Windows).
+                            / <code>GENIE_REPO</code>. Bash-family shells only (Git Bash
+                            on Windows).
                             {cliShipped === false && (
                                 <>
                                     {' '}
                                     <strong>Not bundled in this build.</strong>
                                 </>
                             )}
-                        </Text>
-                    </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <Action
-                        variant="ghost"
-                        icon="download"
-                        disabled={cliBusy || cliShipped === false}
-                        onClick={async () => {
-                            setCliBusy(true);
-                            setCliMsg(null);
-                            try {
-                                const r = await api().cli.install();
-                                setCliMsg(
-                                    r.ok
-                                        ? 'Installed system-wide. Open a new Git Bash session to use the tools everywhere.'
-                                        : `Install failed: ${r.output}`,
-                                );
-                            } finally {
-                                setCliBusy(false);
-                            }
+                        </>
+                    }
+                    keywords="cli tools tynn-cli resetme reload puse sandbox path terminal toolkit bundled"
+                >
+                    <Switch
+                        checked={s.cli_tools_in_terminals !== 'off'}
+                        onCheckedChange={(on: boolean) =>
+                            patch({ cli_tools_in_terminals: on ? 'on' : 'off' })
+                        }
+                    />
+                </SettingRow>
+
+                <SettingRow
+                    label="Install system-wide"
+                    desc={
+                        <>
+                            Copies the toolkit to <code>~/.genie/tynn-cli</code> and adds
+                            it to your <code>~/.bashrc</code> — so <code>resetme</code>{' '}
+                            works in any terminal, not just Genie&apos;s.
+                        </>
+                    }
+                    keywords="install system-wide cli tools bashrc global terminal"
+                    grow
+                >
+                    <div
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 12,
+                            flexWrap: 'wrap',
+                            justifyContent: 'flex-end',
                         }}
                     >
-                        {cliBusy ? 'Installing…' : 'Install system-wide…'}
-                    </Action>
-                    {cliMsg && (
-                        <Text size="xs" className="text-zinc-500">
-                            {cliMsg}
-                        </Text>
-                    )}
-                </div>
-                <Text size="xs" className="text-zinc-500">
-                    System-wide install copies the toolkit to{' '}
-                    <code>~/.genie/tynn-cli</code> and adds it to your{' '}
-                    <code>~/.bashrc</code> — so <code>resetme</code> works in any
-                    terminal, not just Genie&apos;s.
-                </Text>
-            </Card>
-
-                            </div>
+                        {cliMsg && (
+                            <Text size="xs" className="text-zinc-500">
+                                {cliMsg}
+                            </Text>
                         )}
-                        {section === 'workspaces' && (
-                            <div className="settings-tab">
+                        <Action
+                            variant="ghost"
+                            icon="download"
+                            disabled={cliBusy || cliShipped === false}
+                            onClick={async () => {
+                                setCliBusy(true);
+                                setCliMsg(null);
+                                try {
+                                    const r = await api().cli.install();
+                                    setCliMsg(
+                                        r.ok
+                                            ? 'Installed system-wide. Open a new Git Bash session to use the tools everywhere.'
+                                            : `Install failed: ${r.output}`,
+                                    );
+                                } finally {
+                                    setCliBusy(false);
+                                }
+                            }}
+                        >
+                            {cliBusy ? 'Installing…' : 'Install system-wide…'}
+                        </Action>
+                    </div>
+                </SettingRow>
+            </SetSection>
 
-            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Heading as="h2" size="sm">Workspace layout</Heading>
-                <Input
+                            </SearchGroup>
+                        )}
+                        {(searching || section === 'workspaces') && (
+                            <SearchGroup label="Workspaces" searching={searching}>
+
+            <SetSection title="Defaults" desc="Applied to newly-created workspaces">
+                <SettingRow
                     label="Max views"
-                    type="number"
-                    min={1}
-                    max={9}
-                    description="Maximum panels visible at once per workspace. Reaching the limit disables the Add Terminal / Add Editor buttons until you raise it or close a view."
-                    value={String(s.max_views ?? '4')}
-                    onValueChange={(v) => {
-                        // Clamp to 1–9; ignore empty/garbage so the field stays usable.
-                        const n = parseInt(v, 10);
-                        if (Number.isFinite(n)) {
-                            patch({ max_views: String(Math.min(9, Math.max(1, n))) });
-                        } else if (v === '') {
-                            patch({ max_views: '' });
-                        }
-                    }}
-                />
-            </Card>
-
-            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Heading as="h2" size="sm">Defaults for new workspaces</Heading>
-                <Input
+                    desc="Maximum panels visible at once per workspace. Reaching the limit disables the Add Terminal / Add Editor buttons until you raise it or close a view."
+                    keywords="max views panels limit layout terminals editors workspace"
+                    grow
+                >
+                    <Input
+                        type="number"
+                        min={1}
+                        max={9}
+                        value={String(s.max_views ?? '4')}
+                        onValueChange={(v) => {
+                            // Clamp to 1–9; ignore empty/garbage so the field stays usable.
+                            const n = parseInt(v, 10);
+                            if (Number.isFinite(n)) {
+                                patch({ max_views: String(Math.min(9, Math.max(1, n))) });
+                            } else if (v === '') {
+                                patch({ max_views: '' });
+                            }
+                        }}
+                    />
+                </SettingRow>
+                <SettingRow
                     label="Start command"
-                    value={s.default_start_cmd ?? ''}
-                    onValueChange={(v) => patch({ default_start_cmd: v })}
-                />
-                <Input
+                    desc="Default start command pre-filled for new workspaces."
+                    keywords="start command default new workspace run"
+                    grow
+                >
+                    <Input
+                        value={s.default_start_cmd ?? ''}
+                        onValueChange={(v) => patch({ default_start_cmd: v })}
+                    />
+                </SettingRow>
+                <SettingRow
                     label="Env file name"
-                    value={s.default_env_file ?? ''}
-                    onValueChange={(v) => patch({ default_env_file: v })}
-                />
-            </Card>
+                    desc="Default environment file name for new workspaces."
+                    keywords="env file name environment default new workspace dotenv"
+                    grow
+                >
+                    <Input
+                        value={s.default_env_file ?? ''}
+                        onValueChange={(v) => patch({ default_env_file: v })}
+                    />
+                </SettingRow>
+            </SetSection>
 
-                            </div>
+                            </SearchGroup>
                         )}
-                        {section === 'customization' && (
-                            <div className="settings-tab">
+                        {(searching || section === 'customization') && (
+                            <SearchGroup label="Customization" searching={searching}>
 
             <AppearanceCard />
 
-            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Heading as="h2" size="sm">Notifications</Heading>
-                <Text size="xs" className="text-zinc-500">
-                    How Genie alerts you when an agent in a terminal calls{' '}
-                    <code>imDone</code> or asks you a question. The terminal always
-                    glows in the sidebar; these add an audible and/or system-tray
-                    alert on top.
-                </Text>
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+            <SetSection
+                title="Notifications"
+                desc="How Genie alerts you when an agent finishes (imDone) or asks a question"
+            >
+                <SettingRow
+                    label="Play a sound"
+                    desc="Master switch for the alert sounds below. The terminal always glows in the sidebar; this adds an audible alert on top."
+                    keywords="notifications sound play alert audio imdone question chime"
+                >
                     <Switch
                         checked={s.notify_sound === 'on'}
                         onCheckedChange={(on: boolean) =>
                             patch({ notify_sound: on ? 'on' : 'off' })
                         }
                     />
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <Text size="sm">Play a sound</Text>
-                        <Text size="xs" className="text-zinc-500">
-                            Master switch for the alert sounds below.
-                        </Text>
-                    </div>
-                </div>
+                </SettingRow>
                 {s.notify_sound === 'on' && (
-                    <div
-                        style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: 14,
-                            paddingLeft: 8,
-                            borderLeft: '2px solid var(--border-1)',
-                            marginLeft: 8,
-                        }}
-                    >
+                    <>
+                        <SetSubhead>Alert sounds</SetSubhead>
                         <AlertSoundRow
                             label="Agent finishes — imDone"
                             choice={s.sound_imdone ?? 'synth'}
@@ -435,79 +443,77 @@ export default function SettingsPage() {
                             onChoice={(v) => patch({ sound_forcequestion: v })}
                             onCustom={(p) => patch({ sound_forcequestion_custom: p })}
                         />
-                    </div>
+                    </>
                 )}
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                <SettingRow
+                    label="Show a tray popup"
+                    desc="A system notification from the tray; click it to bring Genie to the front."
+                    keywords="notifications tray popup toast system notification"
+                >
                     <Switch
                         checked={s.notify_toast === 'on'}
                         onCheckedChange={(on: boolean) =>
                             patch({ notify_toast: on ? 'on' : 'off' })
                         }
                     />
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <Text size="sm">Show a tray popup</Text>
-                        <Text size="xs" className="text-zinc-500">
-                            A system notification from the tray; click it to bring
-                            Genie to the front.
-                        </Text>
-                    </div>
-                </div>
-            </Card>
+                </SettingRow>
+            </SetSection>
 
-            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Heading as="h2" size="sm">Startup</Heading>
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+            <SetSection title="Startup" desc="What Genie does on launch">
+                <SettingRow
+                    label="Start minimized to the tray"
+                    desc="Off by default — Genie opens its window on launch. Turn on to start in the tray only; the window opens on the first tray click or the quick-capture hotkey."
+                    keywords="startup start minimized tray launch window boot"
+                >
                     <Switch
                         checked={s.start_minimized === 'on'}
                         onCheckedChange={(on: boolean) =>
                             patch({ start_minimized: on ? 'on' : 'off' })
                         }
                     />
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <Text size="sm">Start minimized to the tray</Text>
-                        <Text size="xs" className="text-zinc-500">
-                            Off by default — Genie opens its window on launch. Turn
-                            this on to start in the tray only; the window opens on the
-                            first tray click or the quick-capture hotkey.
-                        </Text>
-                    </div>
-                </div>
-            </Card>
+                </SettingRow>
+            </SetSection>
 
-            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Heading as="h2" size="sm">Quick capture hotkey</Heading>
-                <Input
+            <SetSection title="Quick capture hotkey" desc="Global shortcut to pop the capture window">
+                <SettingRow
                     label="Accelerator"
-                    description="Electron accelerator string, e.g. CommandOrControl+Shift+W"
-                    value={s.global_hotkey ?? ''}
-                    onValueChange={(v) => patch({ global_hotkey: v })}
-                />
-            </Card>
+                    desc="Electron accelerator string, e.g. CommandOrControl+Shift+W"
+                    keywords="quick capture hotkey accelerator global shortcut keybinding"
+                    grow
+                >
+                    <Input
+                        value={s.global_hotkey ?? ''}
+                        onValueChange={(v) => patch({ global_hotkey: v })}
+                        placeholder="CommandOrControl+Shift+W"
+                    />
+                </SettingRow>
+            </SetSection>
 
-            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Heading as="h2" size="sm">Terminal copy &amp; paste</Heading>
-                <Text size="xs" className="text-zinc-500">
-                    How copy and paste work inside terminals. Pasting always
-                    refocuses the terminal so you can keep typing. Applies to
-                    newly-opened terminals.
-                </Text>
-                <Select
-                    value={s.terminal_copy_paste ?? 'contextmenu'}
-                    onValueChange={(v) =>
-                        patch({ terminal_copy_paste: v as 'contextmenu' | 'linux' | 'winmac' })
-                    }
-                    list={[
-                        { value: 'contextmenu', label: 'Context menu — right-click for Copy/Paste (+ Ctrl+Shift+C/V)' },
-                        { value: 'linux', label: 'Linux — highlight to copy, right-/middle-click to paste' },
-                        { value: 'winmac', label: 'Windows / Mac — Ctrl/Cmd+C copies, Ctrl/Cmd+V pastes' },
-                    ]}
-                />
-            </Card>
+            <SetSection title="Terminal copy & paste" desc="How copy and paste work inside terminals">
+                <SettingRow
+                    label="Copy &amp; paste mode"
+                    desc="Pasting always refocuses the terminal so you can keep typing. Applies to newly-opened terminals."
+                    keywords="terminal copy paste clipboard context menu linux windows mac"
+                    vertical
+                >
+                    <Select
+                        value={s.terminal_copy_paste ?? 'contextmenu'}
+                        onValueChange={(v) =>
+                            patch({ terminal_copy_paste: v as 'contextmenu' | 'linux' | 'winmac' })
+                        }
+                        list={[
+                            { value: 'contextmenu', label: 'Context menu — right-click for Copy/Paste (+ Ctrl+Shift+C/V)' },
+                            { value: 'linux', label: 'Linux — highlight to copy, right-/middle-click to paste' },
+                            { value: 'winmac', label: 'Windows / Mac — Ctrl/Cmd+C copies, Ctrl/Cmd+V pastes' },
+                        ]}
+                    />
+                </SettingRow>
+            </SetSection>
 
-                            </div>
+                            </SearchGroup>
                         )}
-                        {section === 'agent-mcp' && (
-                            <div className="settings-tab">
+                        {(searching || section === 'agent-mcp') && (
+                            <SearchGroup label="Agent MCP" searching={searching}>
 
             <AgentMcpSection
                 port={s.mcp_port ?? '51717'}
@@ -520,39 +526,39 @@ export default function SettingsPage() {
                 }
             />
 
-            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
-                <Heading as="h2" size="sm" style={{ margin: 0 }}>
-                    IssueWatch remediation
-                </Heading>
-                <Text size="xs" className="text-zinc-500">
-                    How agents should act on IssueWatch pings — the open Issues, PRs,
-                    and security alerts surfaced by <code>checkIssues</code> and the{' '}
-                    <code>imDone</code> <code>sec:</code> count. The choice rides along
-                    on the imDone count line, so it actually steers what the agent
-                    does. Fixes are always at the root cause — never a bandaid.
-                </Text>
-                <Select
-                    value={s.agent_issuewatch_policy ?? 'surface'}
-                    onValueChange={(v) =>
-                        patch({
-                            agent_issuewatch_policy: v as
-                                | 'surface'
-                                | 'fix'
-                                | 'fix-and-ship',
-                        })
-                    }
-                    list={[
-                        { value: 'surface', label: 'Surface only — report the counts, wait for me (default)' },
-                        { value: 'fix', label: 'Fix when idle — fix the root cause, then report before shipping' },
-                        { value: 'fix-and-ship', label: 'Fix & ship when idle — remediate and ship right away' },
-                    ]}
-                />
-            </Card>
+            <SetSection
+                title="IssueWatch remediation"
+                desc="How agents act on IssueWatch pings (checkIssues / the imDone sec: count)"
+            >
+                <SettingRow
+                    label="Remediation policy"
+                    desc="The choice rides on the imDone count line, so it steers what the agent does with open Issues / PRs / security alerts. Fixes are always at the root cause — never a bandaid."
+                    keywords="issuewatch remediation policy agent fix ship surface security dependabot checkissues"
+                    vertical
+                >
+                    <Select
+                        value={s.agent_issuewatch_policy ?? 'surface'}
+                        onValueChange={(v) =>
+                            patch({
+                                agent_issuewatch_policy: v as
+                                    | 'surface'
+                                    | 'fix'
+                                    | 'fix-and-ship',
+                            })
+                        }
+                        list={[
+                            { value: 'surface', label: 'Surface only — report the counts, wait for me (default)' },
+                            { value: 'fix', label: 'Fix when idle — fix the root cause, then report before shipping' },
+                            { value: 'fix-and-ship', label: 'Fix & ship when idle — remediate and ship right away' },
+                        ]}
+                    />
+                </SettingRow>
+            </SetSection>
 
-                            </div>
+                            </SearchGroup>
                         )}
-                        {section === 'mobile' && (
-                            <div className="settings-tab">
+                        {(searching || section === 'mobile') && (
+                            <SearchGroup label="Work Mode" searching={searching}>
 
             <WorkModeModeCard
                 mode={s.work_mode ?? 'host'}
@@ -571,10 +577,10 @@ export default function SettingsPage() {
                 <RemoteHostCard />
             )}
 
-                            </div>
+                            </SearchGroup>
                         )}
-                        {section === 'connections' && (
-                            <div className="settings-tab">
+                        {(searching || section === 'connections') && (
+                            <SearchGroup label="Connections" searching={searching}>
 
             <TynnSection
                 hostOverride={s.tynn_host ?? ''}
@@ -585,16 +591,16 @@ export default function SettingsPage() {
 
             <AionimaSection />
 
-                            </div>
+                            </SearchGroup>
                         )}
-                        {section === 'updates' && (
-                            <div className="settings-tab">
+                        {(searching || section === 'updates') && (
+                            <SearchGroup label="Updates" searching={searching}>
 
             <UpdaterSection />
 
             <StartupSection />
 
-                            </div>
+                            </SearchGroup>
                         )}
                     </div>
 
@@ -670,6 +676,30 @@ const NAV_GROUPS: Array<{
         items: [{ id: 'updates', label: 'Updates', icon: 'download' }],
     },
 ];
+
+/**
+ * Per-tab wrapper for the body. In normal browsing it's a transparent
+ * `.settings-tab` (one tab visible). During a global search EVERY tab is
+ * mounted, so this prefixes each tab's rows with its nav label — and the
+ * `.set-searching` CSS collapses any tab/section whose rows don't match.
+ */
+function SearchGroup({
+    label,
+    searching,
+    children,
+}: {
+    label: string;
+    searching: boolean;
+    children: ReactNode;
+}) {
+    if (!searching) return <div className="settings-tab">{children}</div>;
+    return (
+        <div className="set-search-group">
+            <div className="set-search-group-label">{label}</div>
+            <div className="settings-tab">{children}</div>
+        </div>
+    );
+}
 
 /**
  * A settings section — a slim heading (+ optional one-line description and a
@@ -894,9 +924,12 @@ function AlertSoundRow({
         if (p) onCustom(p);
     };
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <Text size="sm">{label}</Text>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <SettingRow
+            label={label}
+            keywords={`alert sound ${kind} ${label} preview synth chime custom file`}
+            vertical
+        >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
                 <div style={{ flex: 1 }}>
                     <Select
                         value={choice}
@@ -923,7 +956,7 @@ function AlertSoundRow({
                     </Text>
                 </div>
             )}
-        </div>
+        </SettingRow>
     );
 }
 
@@ -961,22 +994,24 @@ function AppearanceCard() {
     };
 
     return (
-        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <Heading as="h2" size="sm">Appearance</Heading>
-            <Text size="xs" className="text-zinc-500">
-                The colour theme for Genie. “System” follows your operating
-                system and updates live when you switch it.
-            </Text>
-            <Select
-                value={theme}
-                onValueChange={(v) => applyTheme(v as 'system' | 'light' | 'dark')}
-                list={[
-                    { value: 'system', label: 'System' },
-                    { value: 'light', label: 'Light' },
-                    { value: 'dark', label: 'Dark' },
-                ]}
-            />
-        </Card>
+        <SetSection title="Appearance" desc="The colour theme for Genie">
+            <SettingRow
+                label="Theme"
+                desc="“System” follows your operating system and updates live when you switch it."
+                keywords="appearance theme colour color light dark system"
+                grow
+            >
+                <Select
+                    value={theme}
+                    onValueChange={(v) => applyTheme(v as 'system' | 'light' | 'dark')}
+                    list={[
+                        { value: 'system', label: 'System' },
+                        { value: 'light', label: 'Light' },
+                        { value: 'dark', label: 'Dark' },
+                    ]}
+                />
+            </SettingRow>
+        </SetSection>
     );
 }
 
@@ -1052,61 +1087,65 @@ function TynnSection({
     const hostLabel = host.replace(/^https?:\/\//, '');
 
     return (
-        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Heading as="h2" size="sm" style={{ margin: 0 }}>
-                    Tynn
-                </Heading>
-                <Text size="xs" className="text-zinc-500">
-                    Project management · browser sign-in via {hostLabel || 'tynn.ai'}
-                </Text>
-                <span style={{ flex: 1 }} />
-                {user && (
-                    <Text size="xs" style={{ color: 'var(--emerald-600)' }}>
-                        <Icon name="check" size="xs" /> Connected as {user.name}
-                    </Text>
-                )}
-            </div>
-
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                {!user && (
-                    <Action color="blue" size="sm" onClick={signIn} disabled={busy}>
-                        {busy ? 'Opening…' : `Sign in at ${hostLabel || 'tynn.ai'}…`}
-                    </Action>
-                )}
-                {user && (
-                    <Action variant="ghost" size="sm" onClick={signOut} disabled={busy}>
-                        Sign out
-                    </Action>
-                )}
-                <span style={{ flex: 1 }} />
-                <Action
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setShowAdvanced((s) => !s)}
+        <SetSection
+            title="Tynn"
+            desc={`Project management · browser sign-in via ${hostLabel || 'tynn.ai'}`}
+            status={user ? `Connected as ${user.name}` : undefined}
+            statusColor="var(--emerald-600)"
+            statusIcon={user ? 'check' : undefined}
+        >
+            <SettingRow
+                label="Account"
+                desc="Sign in through your browser to manage work in Tynn."
+                keywords="tynn account sign in out connect project management browser"
+                grow
+            >
+                <div
+                    style={{
+                        display: 'flex',
+                        gap: 8,
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        justifyContent: 'flex-end',
+                    }}
                 >
-                    {showAdvanced ? 'Hide Advanced' : 'Advanced'}
-                </Action>
-            </div>
+                    {!user && (
+                        <Action color="blue" size="sm" onClick={signIn} disabled={busy}>
+                            {busy ? 'Opening…' : `Sign in at ${hostLabel || 'tynn.ai'}…`}
+                        </Action>
+                    )}
+                    {user && (
+                        <Action variant="ghost" size="sm" onClick={signOut} disabled={busy}>
+                            Sign out
+                        </Action>
+                    )}
+                    <Action
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setShowAdvanced((s) => !s)}
+                    >
+                        {showAdvanced ? 'Hide Advanced' : 'Advanced'}
+                    </Action>
+                </div>
+            </SettingRow>
 
-            {error && (
-                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
-                    {error}
-                </Text>
-            )}
+            {error && <div className="set-note bad">{error}</div>}
 
             {showAdvanced && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 8, borderTop: '1px solid var(--border-1)' }}>
+                <SettingRow
+                    label="Tynn host override"
+                    desc="Leave blank for the environment default (tynn.test in dev, tynn.ai when installed). Set only for self-hosted Tynn or a staging instance — e.g. https://tynn-staging.example.com."
+                    keywords="tynn host override self-hosted staging url advanced instance"
+                    vertical
+                >
                     <Input
-                        label="Tynn host override"
-                        description="Leave blank to use the environment default (tynn.test in dev, tynn.ai when installed). Set this only for self-hosted Tynn or a staging instance — e.g. https://tynn-staging.example.com."
                         value={hostOverride}
                         onValueChange={onHostOverrideChange}
                         placeholder={host || 'https://tynn.ai'}
                     />
-                </div>
+                </SettingRow>
             )}
-        </Card>
+        </SetSection>
     );
 }
 
@@ -1169,36 +1208,38 @@ function AionimaSection() {
     };
 
     return (
-        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Heading as="h2" size="sm" style={{ margin: 0 }}>
-                    Aionima
-                </Heading>
-                <Text size="xs" className="text-zinc-500">
-                    Local LAN AGI gateway
-                </Text>
-                <span style={{ flex: 1 }} />
-                {user && (
-                    <Text size="xs" style={{ color: 'var(--emerald-600)' }}>
-                        <Icon name="check" size="xs" /> Connected as {user.name}
-                    </Text>
-                )}
-            </div>
-            <Input
+        <SetSection
+            title="Aionima"
+            desc="Local LAN AGI gateway"
+            status={user ? `Connected as ${user.name}` : undefined}
+            statusColor="var(--emerald-600)"
+            statusIcon={user ? 'check' : undefined}
+        >
+            <SettingRow
                 label="Aionima host"
-                description="e.g. http://192.168.0.144:3100 (the machine running AGI)"
-                value={host}
-                onValueChange={setHost}
-                placeholder="http://192.168.0.144:3100"
-            />
-            <Input
+                desc="e.g. http://192.168.0.144:3100 (the machine running AGI)"
+                keywords="aionima host agi gateway lan ip address"
+                vertical
+            >
+                <Input
+                    value={host}
+                    onValueChange={setHost}
+                    placeholder="http://192.168.0.144:3100"
+                />
+            </SettingRow>
+            <SettingRow
                 label="Bearer token"
-                description="Mint a token in your Aionima dashboard and paste it here."
-                value={token}
-                onValueChange={setToken}
-                placeholder="(paste token)"
-            />
-            <div style={{ display: 'flex', gap: 8 }}>
+                desc="Mint a token in your Aionima dashboard and paste it here."
+                keywords="aionima bearer token auth paste dashboard"
+                vertical
+            >
+                <Input
+                    value={token}
+                    onValueChange={setToken}
+                    placeholder="(paste token)"
+                />
+            </SettingRow>
+            <div className="set-actions">
                 <Action color="blue" icon="check" onClick={save} disabled={busy}>
                     {busy ? 'Saving…' : 'Save + test'}
                 </Action>
@@ -1219,7 +1260,7 @@ function AionimaSection() {
                     </Text>
                 )}
             </div>
-        </Card>
+        </SetSection>
     );
 }
 
@@ -1401,36 +1442,27 @@ function GitHubSection() {
     };
 
     return (
-        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Heading as="h2" size="sm" style={{ margin: 0 }}>
-                    GitHub
-                </Heading>
-                <Text size="xs" className="text-zinc-500">
-                    GitHub App (Device Flow) · used to create .agi repos
-                </Text>
-                <span style={{ flex: 1 }} />
-                {connected && username && (
-                    <Text size="xs" style={{ color: 'var(--emerald-600)' }}>
-                        <Icon name="check" size="xs" /> Connected as {username}
-                    </Text>
-                )}
-            </div>
-
+        <SetSection
+            title="GitHub"
+            desc="GitHub App (Device Flow) · used to create .agi repos"
+            status={connected && username ? `Connected as ${username}` : undefined}
+            statusColor="var(--emerald-600)"
+            statusIcon={connected && username ? 'check' : undefined}
+        >
             {!storageOk && (
-                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                <div className="set-note bad">
                     OS keychain unavailable. Genie won't store a GitHub token
                     unencrypted. On Linux: install gnome-keyring / libsecret.
-                </Text>
+                </div>
             )}
 
             {!builtInClientId && !showAdvanced && (
-                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                <div className="set-note bad">
                     This Genie build doesn't ship a baked-in GitHub App Client
                     ID. Open Advanced to paste one (you'll need to register your
                     own GitHub App at github.com/settings/apps/new with Device
                     Flow enabled).
-                </Text>
+                </div>
             )}
 
             {/* Stale-override guard. A custom client ID shadowing the bundled
@@ -1439,15 +1471,8 @@ function GitHubSection() {
                 to paste their own). Surface it with a one-click reset. */}
             {usingOverride && builtInClientId && !connected && (
                 <div
-                    style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        padding: '8px 10px',
-                        borderRadius: 8,
-                        background: 'color-mix(in srgb, #f59e0b 12%, transparent)',
-                        border: '1px solid color-mix(in srgb, #f59e0b 35%, var(--border-1))',
-                    }}
+                    className="set-note warn"
+                    style={{ display: 'flex', alignItems: 'center', gap: 8 }}
                 >
                     <Text size="xs" style={{ flex: 1 }}>
                         Using a custom GitHub App Client ID (<code>{activeClientId}</code>)
@@ -1460,55 +1485,69 @@ function GitHubSection() {
                 </div>
             )}
 
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                {!connected && (
-                    <Action
-                        color="blue"
-                        size="sm"
-                        onClick={start}
-                        disabled={!clientIdSet || flow.kind === 'pending' || flow.kind === 'starting' || !storageOk}
-                    >
-                        Connect GitHub…
-                    </Action>
-                )}
-                {connected && (
-                    <Action variant="ghost" size="sm" onClick={disconnect}>
-                        Disconnect
-                    </Action>
-                )}
-                {connected && (
-                    <Action
-                        variant="ghost"
-                        size="sm"
-                        icon="external-link"
-                        onClick={async () => {
-                            const url = await api().github.installUrl();
-                            void api().tynn.openInBrowser(url);
-                        }}
-                    >
-                        Add account/org…
-                    </Action>
-                )}
-                {connected && (
-                    <Action
-                        variant="ghost"
-                        size="sm"
-                        icon="refresh-cw"
-                        title="Re-check where Genie is installed"
-                        onClick={() => void refresh()}
-                    >
-                        Refresh
-                    </Action>
-                )}
-                <span style={{ flex: 1 }} />
-                <Action
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setShowAdvanced((s) => !s)}
+            <SettingRow
+                label="Account"
+                desc="Connect the Genie IDE GitHub App via Device Flow to create and fork .agi repos."
+                keywords="github connect device flow app repos install account org disconnect advanced refresh"
+                grow
+            >
+                <div
+                    style={{
+                        display: 'flex',
+                        gap: 8,
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        justifyContent: 'flex-end',
+                    }}
                 >
-                    {showAdvanced ? 'Hide Advanced' : 'Advanced'}
-                </Action>
-            </div>
+                    {!connected && (
+                        <Action
+                            color="blue"
+                            size="sm"
+                            onClick={start}
+                            disabled={!clientIdSet || flow.kind === 'pending' || flow.kind === 'starting' || !storageOk}
+                        >
+                            Connect GitHub…
+                        </Action>
+                    )}
+                    {connected && (
+                        <Action variant="ghost" size="sm" onClick={disconnect}>
+                            Disconnect
+                        </Action>
+                    )}
+                    {connected && (
+                        <Action
+                            variant="ghost"
+                            size="sm"
+                            icon="external-link"
+                            onClick={async () => {
+                                const url = await api().github.installUrl();
+                                void api().tynn.openInBrowser(url);
+                            }}
+                        >
+                            Add account/org…
+                        </Action>
+                    )}
+                    {connected && (
+                        <Action
+                            variant="ghost"
+                            size="sm"
+                            icon="refresh-cw"
+                            title="Re-check where Genie is installed"
+                            onClick={() => void refresh()}
+                        >
+                            Refresh
+                        </Action>
+                    )}
+                    <Action
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setShowAdvanced((s) => !s)}
+                    >
+                        {showAdvanced ? 'Hide Advanced' : 'Advanced'}
+                    </Action>
+                </div>
+            </SettingRow>
 
             {/* A stored token that no longer works (expired beyond refresh, or
                 revoked) used to masquerade as "installed nowhere" because the
@@ -1637,14 +1676,17 @@ function GitHubSection() {
             )}
 
             {showAdvanced && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 8, borderTop: '1px solid var(--border-1)' }}>
+                <SettingRow
+                    label="GitHub App Client ID override"
+                    desc={
+                        builtInClientId
+                            ? 'This Genie build ships with a baked-in GitHub App Client ID. Use this field only to point Genie at a different GitHub App (self-hosters, devs testing forks). Leave blank to use the bundle default. The Client ID is public, not a secret.'
+                            : 'Register a GitHub App at github.com/settings/apps/new with Device Flow enabled, then paste its Client ID here. The Client ID is public, not a secret.'
+                    }
+                    keywords="github client id override app advanced self-hosted device flow"
+                    vertical
+                >
                     <Input
-                        label="GitHub App Client ID override"
-                        description={
-                            builtInClientId
-                                ? 'This Genie build ships with a baked-in GitHub App Client ID. Use this field only if you want to point Genie at a different GitHub App (self-hosters, devs testing forks). Leave blank to use the bundle default. The Client ID is public, not a secret. Permissions live on the App (no scopes requested at sign-in).'
-                                : 'Register a GitHub App at github.com/settings/apps/new with Device Flow enabled, then paste its Client ID here. The Client ID is public, not a secret. Permissions live on the App (no scopes requested at sign-in).'
-                        }
                         value={clientId}
                         onValueChange={setClientId}
                         placeholder="e.g. Iv23liXXXXXXXXXXXXXX"
@@ -1654,7 +1696,7 @@ function GitHubSection() {
                             Save client ID
                         </Action>
                     </div>
-                </div>
+                </SettingRow>
             )}
 
             {(flow.kind === 'pending' || flow.kind === 'starting') && (
@@ -1665,11 +1707,9 @@ function GitHubSection() {
             )}
 
             {flow.kind === 'error' && (
-                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
-                    {flow.message}
-                </Text>
+                <div className="set-note bad">{flow.message}</div>
             )}
-        </Card>
+        </SetSection>
     );
 }
 
@@ -1817,55 +1857,48 @@ function UpdaterSection() {
     };
 
     return (
-        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Heading as="h2" size="sm" style={{ margin: 0 }}>
-                    Updates
-                </Heading>
-                <Text size="xs" className="text-zinc-500">
-                    {mode === 'phase2'
-                        ? 'Signed installer (auto-update)'
-                        : 'git-pull + rebuild (dev)'}
-                </Text>
-                <span style={{ flex: 1 }} />
-                <Text size="xs" className="text-zinc-500">
-                    {status ? stateLabel[status.state] ?? status.state : '—'}
-                </Text>
-            </div>
-
+        <SetSection
+            title="Updates"
+            desc={mode === 'phase2' ? 'Signed installer (auto-update)' : 'git-pull + rebuild (dev)'}
+            status={status ? stateLabel[status.state] ?? status.state : '—'}
+            statusColor="var(--fg-3)"
+        >
             {mode === 'phase1' && (
                 <>
-                    <Input
+                    <SettingRow
                         label="Source repository"
-                        description={'GitHub owner/repo. Default is renaissance-analytics/genie; change only if you’re tracking a fork. Empty disables the updater.'}
-                        value={config.repo}
-                        onValueChange={(v) => setConfig((c) => ({ ...c, repo: v }))}
-                        placeholder="renaissance-analytics/genie"
-                    />
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                        <div style={{ flex: 1 }}>
-                            <Input
-                                label="Poll every (hours)"
-                                description="0 disables automatic polling."
-                                value={String(config.pollHours)}
-                                onValueChange={(v) =>
-                                    setConfig((c) => ({
-                                        ...c,
-                                        pollHours: Number(v) || 0,
-                                    }))
-                                }
-                                placeholder="6"
-                            />
-                        </div>
+                        desc="GitHub owner/repo. Default renaissance-analytics/genie; change only if you’re tracking a fork. Empty disables the updater."
+                        keywords="updates source repository github owner repo updater fork"
+                        vertical
+                    >
+                        <Input
+                            value={config.repo}
+                            onValueChange={(v) => setConfig((c) => ({ ...c, repo: v }))}
+                            placeholder="renaissance-analytics/genie"
+                        />
+                    </SettingRow>
+                    <SettingRow
+                        label="Poll every (hours)"
+                        desc="0 disables automatic polling."
+                        keywords="updates poll hours interval automatic check frequency"
+                        grow
+                    >
+                        <Input
+                            value={String(config.pollHours)}
+                            onValueChange={(v) =>
+                                setConfig((c) => ({ ...c, pollHours: Number(v) || 0 }))
+                            }
+                            placeholder="6"
+                        />
                         <Action color="blue" size="sm" onClick={saveConfig}>
                             Save
                         </Action>
-                    </div>
+                    </SettingRow>
                 </>
             )}
 
             {mode === 'phase2' && (
-                <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                <div className="set-note">
                     Updates are downloaded from{' '}
                     <a
                         href="#"
@@ -1880,19 +1913,18 @@ function UpdaterSection() {
                         the canonical Genie releases page
                     </a>
                     . Installer is checksum-verified before applying.
-                </Text>
+                </div>
             )}
 
-            <div
-                style={{
-                    padding: 12,
-                    borderRadius: 8,
-                    border: '1px solid var(--border-1)',
-                    background: 'var(--bg-2)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 6,
-                }}
+            <SettingRow
+                label="Version"
+                desc={
+                    status?.publishedAt
+                        ? `Published ${new Date(status.publishedAt).toLocaleString()}`
+                        : undefined
+                }
+                keywords="updates version current latest check apply restart download"
+                vertical
             >
                 <div style={{ display: 'flex', gap: 16, alignItems: 'baseline' }}>
                     <Text size="xs" className="text-zinc-500">
@@ -1908,71 +1940,66 @@ function UpdaterSection() {
                         {status?.latestVersion ? `v${status.latestVersion}` : '—'}
                     </Text>
                 </div>
-                {status?.publishedAt && (
+            </SettingRow>
+
+            <div className="set-actions">
+                <Action
+                    size="sm"
+                    variant="ghost"
+                    onClick={check}
+                    disabled={
+                        busy ||
+                        (mode === 'phase1' && !config.repo) ||
+                        status?.state === 'applying' ||
+                        status?.state === 'downloading'
+                    }
+                >
+                    Check for updates
+                </Action>
+                {status?.state === 'available' && (
+                    <Action color="blue" size="sm" onClick={apply} disabled={busy}>
+                        {mode === 'phase2'
+                            ? `Update to v${status.latestVersion}`
+                            : `Update now (v${status.latestVersion})`}
+                    </Action>
+                )}
+                {status?.state === 'ready-to-restart' && (
+                    <Action color="blue" size="sm" onClick={restart}>
+                        Restart Genie now
+                    </Action>
+                )}
+                {status?.state === 'downloading' && status.progress != null && (
                     <Text size="xs" className="text-zinc-500">
-                        Published {new Date(status.publishedAt).toLocaleString()}
+                        {mode === 'phase2' ? 'Updating… ' : ''}
+                        {Math.round(status.progress * 100)}%
                     </Text>
                 )}
-                <div style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}>
-                    <Action
-                        size="sm"
-                        variant="ghost"
-                        onClick={check}
-                        disabled={
-                            busy ||
-                            (mode === 'phase1' && !config.repo) ||
-                            status?.state === 'applying' ||
-                            status?.state === 'downloading'
-                        }
-                    >
-                        Check for updates
-                    </Action>
-                    {status?.state === 'available' && (
-                        <Action color="blue" size="sm" onClick={apply} disabled={busy}>
-                            {mode === 'phase2'
-                                ? `Update to v${status.latestVersion}`
-                                : `Update now (v${status.latestVersion})`}
-                        </Action>
-                    )}
-                    {status?.state === 'ready-to-restart' && (
-                        <Action color="blue" size="sm" onClick={restart}>
-                            Restart Genie now
-                        </Action>
-                    )}
-                    {status?.state === 'downloading' && status.progress != null && (
-                        <Text size="xs" className="text-zinc-500">
-                            {mode === 'phase2' ? 'Updating… ' : ''}
-                            {Math.round(status.progress * 100)}%
-                        </Text>
-                    )}
-                </div>
-                {status?.manualDownloadUrl ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        <Text size="xs" style={{ color: 'var(--amber-600)' }}>
-                            Automatic update isn&apos;t available on macOS for this build (it
-                            isn&apos;t Developer-ID signed yet). Download the latest version and
-                            drag it into Applications to update.
-                        </Text>
-                        <div>
-                            <Action
-                                size="sm"
-                                color="blue"
-                                icon="download"
-                                onClick={() => {
+            </div>
+
+            {status?.manualDownloadUrl ? (
+                <div className="set-note warn" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <Text size="xs">
+                        Automatic update isn&apos;t available on macOS for this build (it
+                        isn&apos;t Developer-ID signed yet). Download the latest version and
+                        drag it into Applications to update.
+                    </Text>
+                    <div>
+                        <Action
+                            size="sm"
+                            color="blue"
+                            icon="download"
+                            onClick={() => {
                                 const url = status.manualDownloadUrl;
                                 if (url) void api().shell.openExternal(url);
                             }}
-                            >
-                                Download {status.latestVersion ? `v${status.latestVersion}` : 'the latest'} for macOS
-                            </Action>
-                        </div>
+                        >
+                            Download {status.latestVersion ? `v${status.latestVersion}` : 'the latest'} for macOS
+                        </Action>
                     </div>
-                ) : status?.error ? (
-                    <Text size="xs" style={{ color: 'var(--rose-500)' }}>
-                        {status.error}
-                    </Text>
-                ) : null}
-            </div>
+                </div>
+            ) : status?.error ? (
+                <div className="set-note bad">{status.error}</div>
+            ) : null}
 
             {status &&
                 (status.state === 'applying' ||
@@ -1982,7 +2009,7 @@ function UpdaterSection() {
                 status.log.length > 0 && (
                     <UpdaterLogPanel log={status.log} />
                 )}
-        </Card>
+        </SetSection>
     );
 }
 
@@ -2037,30 +2064,25 @@ function StartupSection() {
                     : 'OS login items';
 
     return (
-        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <Heading as="h2" size="sm">Startup</Heading>
-            <Text size="sm" style={{ color: 'var(--fg-2)' }}>
-                When enabled, Genie starts hidden in the tray every time you
-                sign in. Click the tray icon to open the workspace window.
-                Backed by {platformLabel}.
-            </Text>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <Action
-                    color={enabled ? 'blue' : undefined}
-                    icon={enabled ? 'check' : 'circle'}
-                    onClick={() => toggle(!enabled)}
+        <SetSection title="Launch at startup" desc="Start Genie automatically when you sign in">
+            <SettingRow
+                label="Launch Genie when I sign in"
+                desc={`Starts hidden in the tray every time you sign in; click the tray icon to open the workspace window. Backed by ${platformLabel}.`}
+                keywords="startup launch sign-in autostart login boot tray run at startup"
+            >
+                <Switch
+                    checked={enabled}
                     disabled={busy || !supported}
-                >
-                    {enabled ? 'Launch at sign-in: on' : 'Launch at sign-in: off'}
-                </Action>
-                {!supported && (
-                    <Text size="xs" style={{ color: 'var(--fg-3)' }}>
-                        Dev builds can't register a stable autostart path.
-                        Install the packaged release to use this.
-                    </Text>
-                )}
-            </div>
-        </Card>
+                    onCheckedChange={(on: boolean) => toggle(on)}
+                />
+            </SettingRow>
+            {!supported && (
+                <div className="set-note">
+                    Dev builds can&apos;t register a stable autostart path. Install the
+                    packaged release to use this.
+                </div>
+            )}
+        </SetSection>
     );
 }
 
@@ -2135,57 +2157,46 @@ function AgentMcpSection({
             String(state.configuredPort) !== String(port));
 
     return (
-        <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Heading as="h2" size="sm" style={{ margin: 0 }}>
-                    Agent MCP server
-                </Heading>
-                <Text size="xs" className="text-zinc-500">
-                    Loopback server that lets agents call <code>imDone</code> /{' '}
-                    <code>ForceTheQuestion</code>
-                </Text>
-                <span style={{ flex: 1 }} />
-                <Text size="xs" style={{ color: statusColor }}>
-                    <Icon
-                        name={
-                            state?.conflict
-                                ? 'alert-triangle'
-                                : state?.running
-                                    ? 'check'
-                                    : 'circle'
-                        }
-                        size="xs"
-                    />{' '}
-                    {statusLabel}
-                </Text>
-            </div>
-
+        <SetSection
+            title="Agent MCP server"
+            desc="Loopback server that lets agents call imDone / ForceTheQuestion"
+            status={statusLabel}
+            statusColor={statusColor}
+            statusIcon={
+                state?.conflict ? 'alert-triangle' : state?.running ? 'check' : 'circle'
+            }
+        >
             {state?.conflict && (
-                <Text size="xs" style={{ color: 'var(--amber-600)' }}>
+                <div className="set-note warn">
                     The configured port {state.configuredPort} was in use, so the
                     server bound a temporary port instead. Workspace{' '}
                     <code>.mcp.json</code> URLs point at {state.configuredPort} and
-                    won&apos;t resolve until you free that port (or pick another)
-                    and restart the server below.
-                </Text>
+                    won&apos;t resolve until you free that port (or pick another) and
+                    restart the server below.
+                </div>
             )}
 
-            <Input
+            <SettingRow
                 label="Server port"
-                type="number"
-                min={1024}
-                max={65535}
-                description="A fixed, obscure loopback port baked into each workspace's .mcp.json (e.g. 51717). Changing it requires a restart of the server below; open terminals keep their old endpoint until recreated."
-                value={port}
-                onValueChange={(v) => {
-                    const n = parseInt(v, 10);
-                    if (v === '') onPortChange('');
-                    else if (Number.isFinite(n)) onPortChange(String(Math.min(65535, Math.max(1, n))));
-                }}
-                placeholder="51717"
-            />
+                desc="A fixed, obscure loopback port baked into each workspace's .mcp.json (e.g. 51717). Changing it requires a restart; open terminals keep their old endpoint until recreated."
+                keywords="agent mcp server port loopback 51717 restart imdone forcethequestion"
+                grow
+            >
+                <Input
+                    type="number"
+                    min={1024}
+                    max={65535}
+                    value={port}
+                    onValueChange={(v) => {
+                        const n = parseInt(v, 10);
+                        if (v === '') onPortChange('');
+                        else if (Number.isFinite(n)) onPortChange(String(Math.min(65535, Math.max(1, n))));
+                    }}
+                    placeholder="51717"
+                />
+            </SettingRow>
 
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div className="set-actions">
                 <Action
                     color={needsRestart ? 'blue' : undefined}
                     variant={needsRestart ? 'default' : 'ghost'}
@@ -2201,46 +2212,29 @@ function AgentMcpSection({
                 </Text>
             </div>
 
-            <div
-                style={{
-                    marginTop: 4,
-                    paddingTop: 12,
-                    borderTop: '1px solid var(--border-1)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 8,
-                }}
-            >
-                <Heading as="h3" size="xs" style={{ margin: 0 }}>
-                    Config sync
-                </Heading>
-                <Text size="xs" className="text-zinc-500">
-                    Keep the Genie endpoint in these agent configs. Unchecking one
-                    leaves that file alone — Genie won&apos;t re-add or remove its
-                    entry, so your manual edits stick.
-                </Text>
-                {([
-                    ['claude', syncClaude, 'Claude', '.mcp.json'],
-                    ['cursor', syncCursor, 'Cursor', '.cursor/mcp.json'],
-                    ['agents', syncAgents, 'AGENTS.md', 'Genie brief block'],
-                ] as const).map(([target, on, label, file]) => (
-                    <label
-                        key={target}
-                        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
-                    >
-                        <input
-                            type="checkbox"
-                            checked={on}
-                            onChange={(e) => onSyncChange(target, e.target.checked)}
-                        />
-                        <Text size="sm">
-                            {label}{' '}
-                            <code style={{ color: 'var(--fg-3)' }}>{file}</code>
-                        </Text>
-                    </label>
-                ))}
-            </div>
-        </Card>
+            <SetSubhead>Config sync</SetSubhead>
+            <Text size="xs" className="text-zinc-500" style={{ marginBottom: 2 }}>
+                Keep the Genie endpoint in these agent configs. Unchecking one leaves
+                that file alone — your manual edits stick.
+            </Text>
+            {([
+                ['claude', syncClaude, 'Claude', '.mcp.json'],
+                ['cursor', syncCursor, 'Cursor', '.cursor/mcp.json'],
+                ['agents', syncAgents, 'AGENTS.md', 'Genie brief block'],
+            ] as const).map(([target, on, label, file]) => (
+                <SettingRow
+                    key={target}
+                    label={label}
+                    desc={file}
+                    keywords={`config sync ${target} ${label} ${file} agent endpoint mcp`}
+                >
+                    <Switch
+                        checked={on}
+                        onCheckedChange={(v: boolean) => onSyncChange(target, v)}
+                    />
+                </SettingRow>
+            ))}
+        </SetSection>
     );
 }
 
