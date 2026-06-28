@@ -1072,6 +1072,12 @@ function MasterInner() {
                 return;
             }
 
+            if (intent.kind === 'settings') {
+                e.preventDefault();
+                api().app.showSettings().catch(() => {});
+                return;
+            }
+
             // focus: index into the visible grid order (selectedSpecs).
             // Out-of-range → no-op (and don't preventDefault).
             const target = selectedSpecs[intent.index];

@@ -14,7 +14,8 @@
 export type ShortcutIntent =
     | { kind: 'focus'; index: number }
     | { kind: 'pin' }
-    | { kind: 'close' };
+    | { kind: 'close' }
+    | { kind: 'settings' };
 
 /** The subset of a KeyboardEvent the resolver needs (so tests don't need a DOM). */
 export interface ShortcutKeyEvent {
@@ -38,6 +39,11 @@ export function resolveShortcut(e: ShortcutKeyEvent): ShortcutIntent | null {
     // ⌘/Ctrl + \\ → toggle the pinned tree/chooser.
     if (e.key === '\\') {
         return { kind: 'pin' };
+    }
+
+    // ⌘/Ctrl + , → open Settings (the standard app-settings shortcut).
+    if (e.key === ',') {
+        return { kind: 'settings' };
     }
 
     // ⌘/Ctrl + 1–9 → focus the Nth visible panel (0-based index).

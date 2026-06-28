@@ -158,6 +158,11 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         log: async () => '',
     };
 
+    // xterm forwards the host app's mouse-tracking (CSI M / CSI < … M|m) as input.
+    // A remote session must only drive the UI — never push our mouse into the host
+    // terminal — so strip mouse reports before they reach the host pty.
+    const isMouseReport = (data: string): boolean => /^\x1b\[(M|<[0-9;]+[Mm])/.test(data);
+
     // Drive the host's pty-host terminals (data/exit arrive on the local channels).
     const terminal: GenieApi['terminal'] = {
         ...local.terminal,
@@ -173,7 +178,8 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             await r.terminalAttach(opts.id);
             return { id: opts.id, pid: 0, shell: opts.shell ?? '', existing: true, scrollback: '' };
         },
-        write: (id: string, data: string) => r.terminalInput(id, data),
+        write: (id: string, data: string) =>
+            r.terminalInput(id, isMouseReport(data) ? '' : data),
         resize: (id: string, cols: number, rows: number) => r.terminalResize(id, cols, rows),
         detach: async (id: string) => (await r.terminalDetach(id)).ok,
         kill: async (id: string) =>

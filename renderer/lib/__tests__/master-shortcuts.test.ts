@@ -52,10 +52,20 @@ describe('resolveShortcut', () => {
         });
     });
 
+    it('maps ⌘/Ctrl + , to a settings intent', () => {
+        expect(resolveShortcut(ev({ key: ',', metaKey: true }))).toEqual({
+            kind: 'settings',
+        });
+        expect(resolveShortcut(ev({ key: ',', ctrlKey: true }))).toEqual({
+            kind: 'settings',
+        });
+    });
+
     it('requires the ⌘/Ctrl modifier — bare keys are ignored', () => {
         expect(resolveShortcut(ev({ key: '1' }))).toBeNull();
         expect(resolveShortcut(ev({ key: '\\' }))).toBeNull();
         expect(resolveShortcut(ev({ key: 'w' }))).toBeNull();
+        expect(resolveShortcut(ev({ key: ',' }))).toBeNull();
     });
 
     it('ignores the combo when Alt is held (avoid clobbering OS/app combos)', () => {

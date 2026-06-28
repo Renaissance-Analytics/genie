@@ -123,6 +123,17 @@ export default function MobileTerminalView({
         termRef.current = term;
         fitRef.current = fit;
 
+        // Phones autocorrect / autocapitalize / predict in the hidden xterm
+        // textarea, which injects whole words + stray punctuation into the pty.
+        // A terminal needs raw keystrokes — turn all of that off.
+        const ta = term.textarea;
+        if (ta) {
+            ta.setAttribute('autocorrect', 'off');
+            ta.setAttribute('autocapitalize', 'none');
+            ta.setAttribute('autocomplete', 'off');
+            ta.setAttribute('spellcheck', 'false');
+        }
+
         // Fit once mounted, then on every viewport change (rotation, soft
         // keyboard). Each fit pushes the new grid down to the pty.
         const doFit = () => {
