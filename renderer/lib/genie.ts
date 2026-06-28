@@ -4,6 +4,8 @@
  * renderer.
  */
 
+import { makeRemoteBridge } from './remote-bridge';
+
 export type BackendKind = 'tynn' | 'aionima';
 
 export interface BackendUser {
@@ -777,7 +779,7 @@ export interface ConvertPlanOpts {
         | { kind: 'auto'; owner: string };
 }
 
-interface GenieApi {
+export interface GenieApi {
     auth: {
         startSignIn: (kind?: BackendKind) => Promise<{
             ok: boolean;
@@ -1407,13 +1409,35 @@ declare global {
     }
 }
 
+let activeRemoteBridge: GenieApi | null = null;
+let remoteSwapWired = false;
+
+/**
+ * Wire the local↔remote api() swap ONCE: subscribe to remote status and build the
+ * remote bridge while connected to a host (else null → api() returns the local
+ * bridge, byte-for-byte unchanged in local mode). Idempotent.
+ */
+function ensureRemoteSwap(local: GenieApi): void {
+    if (remoteSwapWired) return;
+    remoteSwapWired = true;
+    const apply = (connected: boolean) => {
+        activeRemoteBridge = connected ? makeRemoteBridge(local) : null;
+    };
+    local.remote.onStatus((s) => apply(s.connected));
+    local.remote
+        .status()
+        .then((s) => apply(s.connected))
+        .catch(() => {});
+}
+
 export function api(): GenieApi {
     if (typeof window === 'undefined' || !window.genie) {
         throw new Error(
             'window.genie unavailable — preload.ts did not run. Either the page is being rendered outside Electron (e.g. opened directly in a browser) or the preload script failed to compile. Check the Electron main-process console for a load error.',
         );
     }
-    return window.genie;
+    ensureRemoteSwap(window.genie);
+    return activeRemoteBridge ?? window.genie;
 }
 
 /** Returns true when the preload bridge is wired and callable. */

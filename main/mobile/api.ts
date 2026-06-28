@@ -570,7 +570,7 @@ export async function handleApi(
             return true;
         }
         let f: {
-            workspaceId?: string;
+            workspacePath?: string;
             relPath?: string;
             fromRel?: string;
             toRel?: string;
@@ -584,7 +584,10 @@ export async function handleApi(
             sendJson(res, 400, { error: 'invalid body' });
             return true;
         }
-        const wsRow = deps.listWorkspaces().find((w) => w.id === f.workspaceId);
+        // Verify the path is one of THIS host's workspaces (a remote can't point
+        // file ops at an arbitrary host path). The desktop carries the real path
+        // in the WorkspaceRow it got from /api/desktop/workspaces.
+        const wsRow = deps.listWorkspaces().find((w) => w.path === f.workspacePath);
         if (!wsRow) {
             sendJson(res, 404, { error: 'unknown workspace' });
             return true;
