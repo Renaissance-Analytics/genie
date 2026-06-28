@@ -6,20 +6,19 @@ import { rebuildMenu } from '../tray';
 import { detectFolder } from './detect';
 
 /**
- * "Open" a registered workspace IN GENIE'S OWN UI (no external process launch):
+ * "Open" a registered workspace — FOCUS it in Genie (no external process, and no
+ * editor auto-open; terminals are Genie's main surface):
  *   1. (`.agi` only) `git submodule update --init --recursive` if repos/ is
  *      empty but .gitmodules has entries.
  *   2. Make it the ACTIVE workspace — persist `active_workspace` (so a fresh /
  *      relaunching master window opens to it) AND broadcast `workspace:open`
- *      (so an already-open master focuses it live). Genie's in-app editor opens
- *      to that single workspace, scoped to its folder.
+ *      (so an already-open master focuses it live).
  *   3. Touch `last_opened_at` + rebuild the tray menu.
  *
- * Genie's in-app editor IS the editor: it opens to a single workspace and can be
- * locked to a folder, so the old "launch an external editor + a terminal" flow
- * (and the `default_editor` setting that drove it) was removed. The caller is
- * responsible for surfacing the master window (e.g. `showMainWindow()`); this
- * just prepares + signals the workspace to focus.
+ * The old "launch an external editor + a terminal" flow (and the `default_editor`
+ * setting that drove it) was removed — Genie has its own editor + terminals. The
+ * caller surfaces the master window (e.g. `showMainWindow()`); this just prepares
+ * + signals the workspace to focus.
  */
 
 // Tracks in-flight openWorkspace calls so rapid double-clicks (or HMR re-fires)

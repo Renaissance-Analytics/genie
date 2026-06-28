@@ -897,19 +897,15 @@ function MasterInner() {
         [specs],
     );
 
-    // Open-workspace from the tray / native menu / MCP now focuses Genie's OWN
-    // editor UI (replacing the removed "launch an external editor" flow): make
-    // the workspace active, and ensure it has an in-app editor scoped to its
-    // folder so the user lands in the editor.
+    // Open-workspace from the tray / native menu / MCP just FOCUSES the workspace
+    // in Genie (replacing the removed "launch an external editor" flow). It does
+    // NOT auto-open the editor — terminals are Genie's main surface; the user
+    // opens an editor only if they want one.
     useEffect(() => {
         return api().on.workspaceOpen?.(({ workspaceId }) => {
             activateWorkspace(workspaceId);
-            const hasEditor = specs.some(
-                (s) => specWorkspaceId(s) === workspaceId && s.type === 'code',
-            );
-            if (!hasEditor) void addSpec(workspaceId, 'code');
         });
-    }, [activateWorkspace, addSpec, specs]);
+    }, [activateWorkspace]);
 
     /** Close every view in the ACTIVE workspace (deselect; PTYs detach on unmount). */
     const clearSelection = useCallback(() => {
