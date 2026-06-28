@@ -49,6 +49,7 @@ import {
     type TerminalSpec,
     type UpdaterStatus,
     type WorkspaceRow,
+    type RemoteStatus,
 } from '../lib/genie';
 
 /**
@@ -1646,6 +1647,7 @@ function TitleBar({
                 <img className="lamp" src="./logo.png" alt="" width={22} height={22} />
                 Genie
             </span>
+            <RemoteIndicator />
             {/* No internal view codenames in the UI — a Stage window shows its
                 pinned workspace name, the master window shows nothing extra. */}
             {isStage && stageWorkspaceName && (
@@ -1702,6 +1704,52 @@ function TitleBar({
                 <IconSettings />
             </button>
         </div>
+    );
+}
+
+/**
+ * Title-bar remote-session indicator. When this Genie is driving a HOST over
+ * Tailscale, shows a loud red "● REMOTE — <host>" badge + a one-click disconnect,
+ * so it's always obvious you're controlling another machine. Nothing locally.
+ */
+function RemoteIndicator() {
+    const [status, setStatus] = useState<RemoteStatus | null>(null);
+    useEffect(() => {
+        api().remote.status().then(setStatus).catch(() => {});
+        return api().remote.onStatus(setStatus);
+    }, []);
+    if (!status?.connected || !status.host) return null;
+    const host = status.host;
+    return (
+        <span
+            title={`Controlling ${host.hostname} (${host.ip}) over Tailscale`}
+            style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                background: '#b91c1c',
+                color: '#fff',
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: '0.03em',
+                padding: '2px 6px 2px 9px',
+                borderRadius: 999,
+                marginLeft: 10,
+            }}
+        >
+            <span style={{ width: 7, height: 7, borderRadius: 999, background: '#fff' }} />
+            REMOTE — {host.hostname}
+            <button
+                type="button"
+                className="gicon"
+                title="Disconnect — back to your local desktop"
+                aria-label="Disconnect remote session"
+                onClick={() => void api().remote.disconnect().catch(() => {})}
+                style={{ color: '#fff', width: 18, height: 18, fontSize: 13, lineHeight: 1 }}
+            >
+                ×
+            </button>
+        </span>
     );
 }
 

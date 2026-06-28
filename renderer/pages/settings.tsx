@@ -16,6 +16,7 @@ import {
     type McpServerState,
     type GenieHost,
     type MobileStatus,
+    type RemoteStatus,
     type Settings,
     type TailscaleStatus,
     type ShellDetection,
@@ -2435,10 +2436,18 @@ function TailscaleSection() {
 function RemoteHostCard() {
     const [hosts, setHosts] = useState<GenieHost[] | null>(null);
     const [scanning, setScanning] = useState(false);
-    const [busy, setBusy] = useState<string | null>(null); // ip:port being opened
+    const [status, setStatus] = useState<RemoteStatus | null>(null);
+    const [pins, setPins] = useState<Record<string, string>>({});
+    const [busy, setBusy] = useState<string | null>(null);
     const [manualIp, setManualIp] = useState('');
     const [manualPort, setManualPort] = useState('51718');
+    const [manualPin, setManualPin] = useState('');
     const [msg, setMsg] = useState<string | null>(null);
+
+    useEffect(() => {
+        api().remote.status().then(setStatus).catch(() => {});
+        return api().remote.onStatus(setStatus);
+    }, []);
 
     const scan = async () => {
         setScanning(true);
@@ -2457,24 +2466,82 @@ function RemoteHostCard() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const connect = async (host: { ip: string; port: number; hostname: string }) => {
+    const connect = async (
+        host: { ip: string; port: number; hostname: string },
+        pin: string,
+    ) => {
         const key = `${host.ip}:${host.port}`;
+        if (!pin.trim()) {
+            setMsg('Enter the pairing PIN shown on the host.');
+            return;
+        }
         setBusy(key);
         setMsg(null);
         try {
-            await api().workmode.openRemote(host);
-            setMsg(`Opened a remote session to ${host.hostname}. Approve the pairing PIN on ${host.hostname}.`);
-        } catch (e) {
-            setMsg(e instanceof Error ? e.message : 'Could not open the remote session.');
+            const r = await api().remote.connect(host, pin.trim());
+            setMsg(
+                r.ok
+                    ? `Connected to ${host.hostname} — your desktop is now controlling it.`
+                    : (r.error ?? 'Could not connect.'),
+            );
         } finally {
             setBusy(null);
         }
     };
 
+    const disconnect = async () => {
+        setBusy('disconnect');
+        try {
+            await api().remote.disconnect();
+            setMsg('Disconnected — back to your local desktop.');
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    const setPin = (key: string, v: string) => setPins((p) => ({ ...p, [key]: v }));
+
+    // Already controlling a host → show the active session + a disconnect.
+    if (status?.connected && status.host) {
+        return (
+            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Heading as="h2" size="sm" style={{ margin: 0 }}>
+                        Remote host
+                    </Heading>
+                    <span style={{ flex: 1 }} />
+                    <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                        <Icon name="circle" size="xs" /> Controlling {status.host.hostname}
+                    </Text>
+                </div>
+                <Text size="xs" className="text-zinc-500">
+                    Your desktop is driving <strong>{status.host.hostname}</strong> (
+                    {status.host.ip}) over Tailscale — the workspaces, terminals, editor and
+                    processes you see are the host&apos;s. The title bar shows you&apos;re in a
+                    remote session.
+                </Text>
+                <Action
+                    size="sm"
+                    color="rose"
+                    icon="log-out"
+                    disabled={busy === 'disconnect'}
+                    onClick={() => void disconnect()}
+                >
+                    {busy === 'disconnect' ? 'Disconnecting…' : 'Disconnect — back to local'}
+                </Action>
+                {msg && (
+                    <Text size="xs" style={{ color: 'var(--fg-2)' }}>
+                        {msg}
+                    </Text>
+                )}
+            </Card>
+        );
+    }
+
     const connectManual = () => {
         const ip = manualIp.trim();
         if (!ip) return;
-        void connect({ ip, port: Number(manualPort) || 51718, hostname: ip });
+        void connect({ ip, port: Number(manualPort) || 51718, hostname: ip }, manualPin);
     };
 
     return (
@@ -2499,9 +2566,10 @@ function RemoteHostCard() {
             </div>
 
             <Text size="xs" className="text-zinc-500">
-                Connecting opens a dedicated Genie window — clearly marked as a
-                remote session — driving that machine&apos;s workspaces, terminals
-                and questions over Tailscale. The host must approve the pairing PIN.
+                Connect to another Genie and control it from THIS desktop — same
+                desktop UX, driving the host&apos;s workspaces, terminals (on its
+                pty-host), editor and processes over Tailscale. Enter the pairing
+                PIN shown on the host; it also confirms on its own screen.
             </Text>
 
             {hosts === null ? (
@@ -2516,8 +2584,8 @@ function RemoteHostCard() {
                     {hosts.map((h) => {
                         const key = `${h.ip}:${h.port}`;
                         return (
-                            <div key={key} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                                <Icon name="monitor" size="xs" />
+                            <div key={key} style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                                <Icon name="monitor" size="xs" style={{ marginBottom: 9 }} />
                                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                                     <Text size="sm" style={{ fontWeight: 600 }}>
                                         {h.hostname}
@@ -2526,14 +2594,22 @@ function RemoteHostCard() {
                                         {h.ip}:{h.port}
                                     </Text>
                                 </div>
+                                <div style={{ width: 88 }}>
+                                    <Input
+                                        label="PIN"
+                                        value={pins[key] ?? ''}
+                                        onValueChange={(v) => setPin(key, v)}
+                                        placeholder="123456"
+                                    />
+                                </div>
                                 <Action
                                     size="sm"
                                     color="blue"
-                                    icon="external-link"
+                                    icon="link"
                                     disabled={busy === key}
-                                    onClick={() => void connect(h)}
+                                    onClick={() => void connect(h, pins[key] ?? '')}
                                 >
-                                    {busy === key ? 'Opening…' : 'Connect'}
+                                    {busy === key ? 'Pairing…' : 'Connect'}
                                 </Action>
                             </div>
                         );
@@ -2542,7 +2618,7 @@ function RemoteHostCard() {
             )}
 
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                <div style={{ flex: 1, minWidth: 160 }}>
+                <div style={{ flex: 1, minWidth: 130 }}>
                     <Input
                         label="Manual connect"
                         description="Host tailnet IP"
@@ -2551,7 +2627,7 @@ function RemoteHostCard() {
                         placeholder="100.x.y.z"
                     />
                 </div>
-                <div style={{ width: 92 }}>
+                <div style={{ width: 76 }}>
                     <Input
                         label="Port"
                         value={manualPort}
@@ -2559,10 +2635,18 @@ function RemoteHostCard() {
                         placeholder="51718"
                     />
                 </div>
+                <div style={{ width: 88 }}>
+                    <Input
+                        label="PIN"
+                        value={manualPin}
+                        onValueChange={setManualPin}
+                        placeholder="123456"
+                    />
+                </div>
                 <Action
                     size="sm"
                     variant="ghost"
-                    icon="external-link"
+                    icon="link"
                     disabled={!manualIp.trim()}
                     onClick={connectManual}
                 >
