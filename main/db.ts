@@ -342,6 +342,22 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v15: per-workspace IssueWatch remediation policy. How agents should
+            // act on this workspace's IssueWatch pings (checkIssues / the imDone
+            // sec: count) — 'surface' (default) | 'fix' | 'fix-and-ship'. Was a
+            // single GLOBAL setting (agent_issuewatch_policy); a NULL column reads
+            // as the 'surface' default, so existing workspaces keep that behaviour.
+            version: 15,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('issuewatch_policy')) {
+                    db.exec(
+                        `ALTER TABLE workspaces ADD COLUMN issuewatch_policy TEXT`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -480,16 +496,6 @@ export interface Settings {
      *  No default — the agent must pass an explicit `command`, or this is used
      *  when set. Empty means "no preset; require an explicit command". */
     agent_command_custom?: string;
-    /** How agents should act on IssueWatch pings — the open Issues / PRs /
-     *  security alerts surfaced via the `checkIssues` tool and the `imDone`
-     *  `sec:` count. Surfaced to agents on the imDone count line so it actually
-     *  steers behaviour:
-     *    - 'surface' (default): just report the counts; wait for direction.
-     *    - 'fix': fix the ROOT CAUSE when no other work is in progress, then
-     *      report before shipping.
-     *    - 'fix-and-ship': fix the root cause AND ship right away when no other
-     *      work is in progress. */
-    agent_issuewatch_policy?: 'surface' | 'fix' | 'fix-and-ship';
 }
 
 export function getAllSettings(): Settings {
@@ -557,9 +563,6 @@ export function getAllSettings(): Settings {
         agent_command_claude: out['agent_command_claude'] ?? 'claude',
         agent_command_codex: out['agent_command_codex'] ?? 'codex',
         agent_command_custom: out['agent_command_custom'] ?? '',
-        agent_issuewatch_policy:
-            (out['agent_issuewatch_policy'] as Settings['agent_issuewatch_policy']) ??
-            'surface',
     };
 }
 
@@ -609,6 +612,9 @@ export interface WorkspaceRow {
      *  agent. 1=require approval (default), 0=auto-run. Higher-power sibling of
      *  process_approval. */
     terminal_approval: number;
+    /** Per-workspace IssueWatch remediation policy surfaced to agents on the
+     *  imDone count line. NULL/absent reads as the 'surface' default. */
+    issuewatch_policy?: 'surface' | 'fix' | 'fix-and-ship' | null;
 }
 
 export function listWorkspaces(): WorkspaceRow[] {
@@ -795,6 +801,33 @@ export function workspaceTerminalApproval(id: string): boolean {
         )
         .get(id);
     return !row || row.terminal_approval !== 0;
+}
+
+export type IssuewatchPolicy = 'surface' | 'fix' | 'fix-and-ship';
+
+/** Set this workspace's IssueWatch remediation policy. */
+export function setWorkspaceIssuewatchPolicy(
+    id: string,
+    policy: IssuewatchPolicy,
+): void {
+    getDb()
+        .prepare('UPDATE workspaces SET issuewatch_policy = ? WHERE id = ?')
+        .run(policy, id);
+}
+
+/**
+ * This workspace's IssueWatch remediation policy (how agents act on its
+ * IssueWatch pings). Defaults to 'surface' when unset / unknown — the same
+ * conservative default the old global setting used.
+ */
+export function getWorkspaceIssuewatchPolicy(id: string): IssuewatchPolicy {
+    const row = getDb()
+        .prepare<[string], { issuewatch_policy: string | null } | undefined>(
+            'SELECT issuewatch_policy FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    const p = row?.issuewatch_policy;
+    return p === 'fix' || p === 'fix-and-ship' ? p : 'surface';
 }
 
 // Backend connection helpers --------------------------------------------

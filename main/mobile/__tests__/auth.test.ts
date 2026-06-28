@@ -8,6 +8,7 @@ import {
     listSessions,
     regeneratePin,
     revokeAllSessions,
+    revokeSession,
     sessionFromAuthHeader,
     validateSession,
 } from '../auth';
@@ -134,6 +135,28 @@ describe('sessions', () => {
         expect(listSessions()).toHaveLength(0);
         if (a.ok) expect(validateSession(a.token)).toBeNull();
         if (b.ok) expect(validateSession(b.token)).toBeNull();
+    });
+
+    it('paired sessions carry a roster id + ip for the Devices page', async () => {
+        const r = await attemptPair(currentPin(), info);
+        expect(r.ok).toBe(true);
+        const [s] = listSessions();
+        expect(s.id).toBeTruthy();
+        expect(s.id).not.toBe(s.token); // the roster id is NOT the bearer token
+        expect(s.ip).toBe(info.ip);
+        expect(s.label).toBe('iPhone');
+    });
+
+    it('revokeSession unpairs exactly one device by id, leaving the rest', async () => {
+        const a = await attemptPair(currentPin(), info);
+        await attemptPair(currentPin(), info);
+        expect(listSessions()).toHaveLength(2);
+        const target = listSessions().find((s) => a.ok && s.token === a.token)!;
+        expect(revokeSession(target.id)).toBe(true);
+        expect(listSessions()).toHaveLength(1);
+        if (a.ok) expect(validateSession(a.token)).toBeNull(); // the revoked one is gone
+        expect(revokeSession('no-such-id')).toBe(false); // unknown id is a no-op
+        expect(listSessions()).toHaveLength(1);
     });
 
     it('regeneratePin rolls the PIN but keeps existing sessions', async () => {

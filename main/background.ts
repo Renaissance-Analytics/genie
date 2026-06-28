@@ -23,6 +23,7 @@ import {
     createTerminalSpec,
     workspaceProcessApproval,
     workspaceTerminalApproval,
+    getWorkspaceIssuewatchPolicy,
     removeWorkspace,
 } from './db';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
@@ -344,8 +345,9 @@ async function checkIssuesForMcp(terminalId: string): Promise<IssueWatchSnapshot
         counts,
         items,
         // The user's remediation preference rides along so the imDone count line
-        // (formatIssueCountsLine) can tell the agent how to act on these.
-        policy: getAllSettings().agent_issuewatch_policy,
+        // (formatIssueCountsLine) can tell the agent how to act on these. This is
+        // a PER-WORKSPACE choice (set in the workspace settings window).
+        policy: getWorkspaceIssuewatchPolicy(wsId),
     };
 }
 

@@ -19,6 +19,7 @@ import {
     type McpServerState,
     type GenieHost,
     type MobileStatus,
+    type MobileDevice,
     type RemoteStatus,
     type Settings,
     type TailscaleStatus,
@@ -151,16 +152,20 @@ export default function SettingsPage() {
                     label="Primary workspace"
                     desc="Default destination for NEW projects created from Genie. Existing projects can live anywhere — this is a default, not a constraint."
                     keywords="primary workspace folder default destination new projects path"
-                    grow
+                    vertical
                 >
-                    <Input
-                        readOnly
-                        value={s.primary_workspace ?? ''}
-                        placeholder="No primary workspace chosen"
-                    />
-                    <Action variant="ghost" icon="folder" onClick={pickPrimary}>
-                        Browse
-                    </Action>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', width: '100%' }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                            <Input
+                                readOnly
+                                value={s.primary_workspace ?? ''}
+                                placeholder="No primary workspace chosen"
+                            />
+                        </div>
+                        <Action variant="ghost" icon="folder" onClick={pickPrimary}>
+                            Browse
+                        </Action>
+                    </div>
                 </SettingRow>
 
                 <SettingRow
@@ -181,7 +186,7 @@ export default function SettingsPage() {
                         ]}
                     />
                     <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', width: '100%' }}>
-                        <div style={{ flex: 1 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
                             <Input
                                 value={s.default_editor_cmd ?? ''}
                                 onValueChange={(v) => patch({ default_editor_cmd: v })}
@@ -220,7 +225,7 @@ export default function SettingsPage() {
                     />
                     {(s.terminal_shell === 'custom' || shells.length === 0) && (
                         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', width: '100%' }}>
-                            <div style={{ flex: 1 }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
                                 <Input
                                     label="Executable line"
                                     description='Full command line; quote paths with spaces, e.g. "C:\Program Files\Git\bin\bash.exe" --login -i'
@@ -381,7 +386,7 @@ export default function SettingsPage() {
                     label="Start command"
                     desc="Default start command pre-filled for new workspaces."
                     keywords="start command default new workspace run"
-                    grow
+                    vertical
                 >
                     <Input
                         value={s.default_start_cmd ?? ''}
@@ -479,7 +484,7 @@ export default function SettingsPage() {
                     label="Accelerator"
                     desc="Electron accelerator string, e.g. CommandOrControl+Shift+W"
                     keywords="quick capture hotkey accelerator global shortcut keybinding"
-                    grow
+                    vertical
                 >
                     <Input
                         value={s.global_hotkey ?? ''}
@@ -526,35 +531,6 @@ export default function SettingsPage() {
                 }
             />
 
-            <SetSection
-                title="IssueWatch remediation"
-                desc="How agents act on IssueWatch pings (checkIssues / the imDone sec: count)"
-            >
-                <SettingRow
-                    label="Remediation policy"
-                    desc="The choice rides on the imDone count line, so it steers what the agent does with open Issues / PRs / security alerts. Fixes are always at the root cause — never a bandaid."
-                    keywords="issuewatch remediation policy agent fix ship surface security dependabot checkissues"
-                    vertical
-                >
-                    <Select
-                        value={s.agent_issuewatch_policy ?? 'surface'}
-                        onValueChange={(v) =>
-                            patch({
-                                agent_issuewatch_policy: v as
-                                    | 'surface'
-                                    | 'fix'
-                                    | 'fix-and-ship',
-                            })
-                        }
-                        list={[
-                            { value: 'surface', label: 'Surface only — report the counts, wait for me (default)' },
-                            { value: 'fix', label: 'Fix when idle — fix the root cause, then report before shipping' },
-                            { value: 'fix-and-ship', label: 'Fix & ship when idle — remediate and ship right away' },
-                        ]}
-                    />
-                </SettingRow>
-            </SetSection>
-
                             </SearchGroup>
                         )}
                         {(searching || section === 'mobile') && (
@@ -590,6 +566,13 @@ export default function SettingsPage() {
             <GitHubSection />
 
             <AionimaSection />
+
+                            </SearchGroup>
+                        )}
+                        {(searching || section === 'devices') && (
+                            <SearchGroup label="Devices" searching={searching}>
+
+            <DevicesSection />
 
                             </SearchGroup>
                         )}
@@ -635,6 +618,7 @@ type SectionId =
     | 'agent-mcp'
     | 'mobile'
     | 'connections'
+    | 'devices'
     | 'updates';
 
 /**
@@ -669,6 +653,7 @@ const NAV_GROUPS: Array<{
             { id: 'agent-mcp', label: 'Agent MCP', icon: 'plug' },
             { id: 'mobile', label: 'Work Mode', icon: 'monitor' },
             { id: 'connections', label: 'Connections', icon: 'link' },
+            { id: 'devices', label: 'Devices', icon: 'smartphone' },
         ],
     },
     {
@@ -3075,6 +3060,112 @@ function MobileSection({
                     </Text>
                 )}
             </div>
+        </SetSection>
+    );
+}
+
+/**
+ * Settings → Devices. The host-side roster of devices that have PAIRED with this
+ * Genie over Work Mode (the mobile / remote sessions in main/mobile/auth.ts).
+ * Distinct from the Work Mode card (which does the pairing): this is the standing
+ * list, with a per-device Unpair and a Disconnect-all. Tokens never reach here —
+ * each row carries only a non-secret roster id + label + ip + paired time.
+ */
+function DevicesSection() {
+    const [devices, setDevices] = useState<MobileDevice[] | null>(null);
+    const [busy, setBusy] = useState<string | null>(null);
+
+    const refresh = async () => {
+        try {
+            setDevices(await api().mobile.sessions());
+        } catch {
+            setDevices([]);
+        }
+    };
+    useEffect(() => {
+        void refresh();
+    }, []);
+
+    const unpair = async (id: string) => {
+        setBusy(id);
+        try {
+            await api().mobile.revokeSession(id);
+            await refresh();
+        } finally {
+            setBusy(null);
+        }
+    };
+    const disconnectAll = async () => {
+        setBusy('__all__');
+        try {
+            await api().mobile.revokeSessions();
+            await refresh();
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    const count = devices?.length ?? 0;
+
+    return (
+        <SetSection
+            title="Paired devices"
+            desc="Phones and remotes that have paired with this Host over Work Mode"
+            status={devices ? `${count} paired` : '—'}
+            statusColor="var(--fg-3)"
+            statusIcon="smartphone"
+        >
+            {devices === null ? (
+                <SettingRow
+                    label="Loading…"
+                    keywords="devices paired loading mobile phone remote"
+                >
+                    <span />
+                </SettingRow>
+            ) : count === 0 ? (
+                <SettingRow
+                    label="No paired devices"
+                    desc="Pair a phone from the Work Mode page (scan the QR or enter the PIN). Paired devices appear here, where you can unpair them."
+                    keywords="devices paired none empty mobile phone remote pair unpair revoke"
+                >
+                    <span />
+                </SettingRow>
+            ) : (
+                <>
+                    {devices.map((d) => (
+                        <SettingRow
+                            key={d.id}
+                            label={d.label || 'Device'}
+                            desc={`${d.ip ? d.ip + ' · ' : ''}paired ${new Date(
+                                d.createdAt,
+                            ).toLocaleString()}`}
+                            keywords={`device paired ${d.label} ${d.ip} mobile phone remote revoke unpair`}
+                        >
+                            <Action
+                                size="sm"
+                                variant="ghost"
+                                color="rose"
+                                icon="unplug"
+                                disabled={busy !== null}
+                                onClick={() => void unpair(d.id)}
+                            >
+                                {busy === d.id ? 'Unpairing…' : 'Unpair'}
+                            </Action>
+                        </SettingRow>
+                    ))}
+                    <div className="set-actions">
+                        <Action
+                            size="sm"
+                            color="rose"
+                            icon="unplug"
+                            disabled={busy !== null}
+                            onClick={() => void disconnectAll()}
+                        >
+                            {busy === '__all__' ? 'Disconnecting…' : 'Disconnect all'}
+                        </Action>
+                    </div>
+                </>
+            )}
         </SetSection>
     );
 }

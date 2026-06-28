@@ -504,7 +504,13 @@ export function setMobileEnabled(enabled: boolean): void {
 // Re-export the kill-switch + revoke so the desktop IPC layer drives them
 // through one module (server.ts) without reaching into auth/audit directly.
 export { setLocked, isLocked } from './audit';
-export { regeneratePin, currentPin, revokeAllSessions, listSessions } from './auth';
+export {
+    regeneratePin,
+    currentPin,
+    revokeAllSessions,
+    revokeSession,
+    listSessions,
+} from './auth';
 // Re-export the terminal fanout so ipc.ts taps it with a single import.
 export { mobileTermFanout, mobileTermClose } from './terminal-bridge';
 export { mobileEmit } from './bus';

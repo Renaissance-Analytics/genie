@@ -27,12 +27,31 @@ import { safeStorage } from 'electron';
 
 /** A minted session for one paired device. */
 export interface MobileSession {
+    /** Stable, NON-secret id for the Settings roster + per-device revoke. The
+     *  bearer token is never exposed to the renderer; this is. */
+    id: string;
     /** The opaque bearer token (hex). */
     token: string;
+    /** The tailnet IP the device paired from (for the roster; '' if unknown). */
+    ip: string;
     /** When it was minted (epoch ms). */
     createdAt: number;
     /** A short human label for the Settings list (derived from the UA / time). */
     label: string;
+}
+
+/**
+ * Backfill a persisted session that predates `id` / `ip` (so old paired devices
+ * still appear in the roster + can be revoked individually after an upgrade).
+ */
+function normalizeSession(s: Partial<MobileSession> & { token: string }): MobileSession {
+    return {
+        id: s.id ?? crypto.randomUUID(),
+        token: s.token,
+        ip: s.ip ?? '',
+        createdAt: s.createdAt ?? Date.now(),
+        label: s.label ?? 'Device',
+    };
 }
 
 interface PersistShape {
@@ -108,10 +127,20 @@ function load(dir: string): { pin: string | null; sessions: MobileSession[] } {
         ) as PersistShape;
         if (j.enc && encryptionAvailable()) {
             const dec = safeStorage.decryptString(Buffer.from(j.enc, 'base64'));
-            const payload = JSON.parse(dec) as { pin: string; sessions: MobileSession[] };
-            return { pin: payload.pin ?? null, sessions: payload.sessions ?? [] };
+            const payload = JSON.parse(dec) as {
+                pin: string;
+                sessions: Array<Partial<MobileSession> & { token: string }>;
+            };
+            return {
+                pin: payload.pin ?? null,
+                sessions: (payload.sessions ?? []).map(normalizeSession),
+            };
         }
-        if (j.plain) return { pin: j.plain.pin ?? null, sessions: j.plain.sessions ?? [] };
+        if (j.plain)
+            return {
+                pin: j.plain.pin ?? null,
+                sessions: (j.plain.sessions ?? []).map(normalizeSession),
+            };
     } catch {
         /* no/garbled state — start fresh */
     }
@@ -222,7 +251,9 @@ export async function attemptPair(
     }
     const token = crypto.randomBytes(32).toString('hex');
     const session: MobileSession = {
+        id: crypto.randomUUID(),
         token,
+        ip: info.ip,
         createdAt: Date.now(),
         label: deviceLabel(info.ua),
     };
@@ -264,6 +295,22 @@ export function revokeAllSessions(): number {
     state.sessions.clear();
     persist();
     return n;
+}
+
+/**
+ * Drop ONE session by its (non-secret) id — the per-device "unpair" in the
+ * Devices roster. Returns true when a matching session was found + removed.
+ */
+export function revokeSession(id: string): boolean {
+    if (!state) return false;
+    for (const [token, s] of state.sessions) {
+        if (s.id === id) {
+            state.sessions.delete(token);
+            persist();
+            return true;
+        }
+    }
+    return false;
 }
 
 /** The live sessions (for the Settings device list). */

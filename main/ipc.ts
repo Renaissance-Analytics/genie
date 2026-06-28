@@ -11,6 +11,8 @@ import {
     setWorkspaceMcp,
     setWorkspaceProcessApproval,
     setWorkspaceTerminalApproval,
+    setWorkspaceIssuewatchPolicy,
+    type IssuewatchPolicy,
     setSettings,
     touchWorkspace,
     updateWorkspace,
@@ -84,6 +86,8 @@ import {
     regeneratePin,
     currentPin,
     revokeAllSessions,
+    revokeSession,
+    listSessions,
     type MobileServerState,
 } from './mobile/server';
 import { getTailscaleStatus, tailscaleUp, installTailscale } from './tailscale';
@@ -302,6 +306,13 @@ export function registerIpcHandlers(): void {
             return { ok: true };
         },
     );
+    ipcMain.handle(
+        'workspaces:set-issuewatch-policy',
+        (_e, id: string, policy: IssuewatchPolicy) => {
+            setWorkspaceIssuewatchPolicy(id, policy);
+            return { ok: true };
+        },
+    );
 
     // --- Agent MCP server status / restart (Settings → Agent MCP) -------
     ipcMain.handle('mcp:status', () => mcpServerState());
@@ -367,6 +378,20 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('mobile:revoke-sessions', async () => {
         const n = revokeAllSessions();
         return { revoked: n, ...(await mobileStatus()) };
+    });
+    // The host-side roster of paired devices (NON-secret fields only — the bearer
+    // token never leaves main). Drives the Settings → Devices page.
+    ipcMain.handle('mobile:sessions', () =>
+        listSessions().map((s) => ({
+            id: s.id,
+            label: s.label,
+            ip: s.ip,
+            createdAt: s.createdAt,
+        })),
+    );
+    ipcMain.handle('mobile:revoke-session', async (_e, id: string) => {
+        const ok = revokeSession(id);
+        return { ok, ...(await mobileStatus()) };
     });
     ipcMain.handle('mobile:lock', async (_e, locked: boolean) => {
         setLocked(!!locked);

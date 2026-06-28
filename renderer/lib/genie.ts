@@ -65,6 +65,8 @@ export interface WorkspaceRow {
      *  a terminal, writes to one, or launches/drives a coding agent. 1=require
      *  approval (default), 0=auto-run. */
     terminal_approval?: number;
+    /** Per-workspace IssueWatch remediation policy (null reads as 'surface'). */
+    issuewatch_policy?: 'surface' | 'fix' | 'fix-and-ship' | null;
 }
 
 export interface DetectResult {
@@ -272,10 +274,6 @@ export interface Settings {
     detached_terminals?: 'on' | 'off';
     /** Whether Genie launches minimized to the tray (default 'off' = start open). */
     start_minimized?: 'on' | 'off';
-    /** How agents act on IssueWatch pings (open Issues / PRs / security alerts).
-     *  'surface' (default) reports only; 'fix' fixes the root cause when idle;
-     *  'fix-and-ship' fixes + ships right away when idle. */
-    agent_issuewatch_policy?: 'surface' | 'fix' | 'fix-and-ship';
     /** Prepend the bundled tynn-cli bin to terminal PATH + inject GENIE_* env.
      *  Defaults ON; 'off' disables. */
     cli_tools_in_terminals?: 'on' | 'off';
@@ -356,6 +354,18 @@ export interface McpServerState {
  * `conflict` is true when the configured port was taken (no silent fallback);
  * `locked` reflects the global kill-switch.
  */
+/** One paired device in the host-side Devices roster (no bearer token). */
+export interface MobileDevice {
+    /** Stable, non-secret roster id (used to revoke this one device). */
+    id: string;
+    /** Short human label derived from the device's User-Agent. */
+    label: string;
+    /** The tailnet IP it paired from ('' if unknown / pre-upgrade). */
+    ip: string;
+    /** When it paired (epoch ms). */
+    createdAt: number;
+}
+
 export interface MobileStatus {
     running: boolean;
     enabled: boolean;
@@ -875,6 +885,10 @@ export interface GenieApi {
         restart: (enabled?: boolean) => Promise<MobileStatus>;
         regeneratePin: () => Promise<MobileStatus>;
         revokeSessions: () => Promise<MobileStatus & { revoked: number }>;
+        /** Host-side roster of paired devices (no bearer tokens). */
+        sessions: () => Promise<MobileDevice[]>;
+        /** Unpair one device by its roster id. */
+        revokeSession: (id: string) => Promise<MobileStatus & { ok: boolean }>;
         lock: (locked: boolean) => Promise<MobileStatus>;
     };
     tailscale: {
@@ -952,6 +966,11 @@ export interface GenieApi {
         setTerminalApproval: (
             id: string,
             require: boolean,
+        ) => Promise<{ ok: boolean }>;
+        /** Set this workspace's IssueWatch remediation policy. */
+        setIssuewatchPolicy: (
+            id: string,
+            policy: 'surface' | 'fix' | 'fix-and-ship',
         ) => Promise<{ ok: boolean }>;
         /** Repo subfolder names under the workspace envelope (for Add Process cwd). */
         repos: (id: string) => Promise<string[]>;

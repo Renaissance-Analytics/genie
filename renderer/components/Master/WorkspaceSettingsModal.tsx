@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Action, Heading, Icon, Input, Modal, Text } from '@particle-academy/react-fancy';
+import { Action, Heading, Icon, Input, Modal, Select, Text } from '@particle-academy/react-fancy';
 import TynnProvisionPanel from '../TynnProvisionPanel';
 import type {
     WorkspaceRow,
@@ -34,6 +34,10 @@ export default function WorkspaceSettingsModal({
     // Per-workspace "require approval before an agent spawns a terminal /
     // launches a coding agent" (the higher-power manageTerminals / runAgent gate).
     const [terminalApproval, setTerminalApproval] = useState<boolean | null>(null);
+    // Per-workspace IssueWatch remediation policy (moved here from global Settings).
+    const [iwPolicy, setIwPolicy] = useState<'surface' | 'fix' | 'fix-and-ship'>(
+        workspace.issuewatch_policy ?? 'surface',
+    );
 
     const saveName = async () => {
         const next = name.trim();
@@ -60,6 +64,7 @@ export default function WorkspaceSettingsModal({
                 if (alive) {
                     setProcessApproval(ws ? ws.process_approval !== 0 : true);
                     setTerminalApproval(ws ? ws.terminal_approval !== 0 : true);
+                    if (ws?.issuewatch_policy) setIwPolicy(ws.issuewatch_policy);
                 }
             } catch {
                 if (alive) {
@@ -88,6 +93,16 @@ export default function WorkspaceSettingsModal({
             await api().workspaces.setTerminalApproval(workspace.id, require);
         } catch {
             setTerminalApproval((prev) => !prev); // revert
+        }
+    };
+
+    const changeIwPolicy = async (policy: 'surface' | 'fix' | 'fix-and-ship') => {
+        const prev = iwPolicy;
+        setIwPolicy(policy); // optimistic
+        try {
+            await api().workspaces.setIssuewatchPolicy(workspace.id, policy);
+        } catch {
+            setIwPolicy(prev); // revert
         }
     };
 
@@ -152,6 +167,38 @@ export default function WorkspaceSettingsModal({
                 {workspace.path && <OpsReposPanel workspacePath={workspace.path} />}
 
                 {workspace.path && <OpsWorkspacesPanel workspacePath={workspace.path} />}
+
+                <div
+                    style={{
+                        paddingTop: 12,
+                        borderTop: '1px solid var(--border-1)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                    }}
+                >
+                    <Heading as="h3" size="xs" style={{ margin: 0 }}>
+                        IssueWatch remediation
+                    </Heading>
+                    <Text size="xs" className="text-zinc-500">
+                        How agents act on THIS workspace&apos;s IssueWatch pings — the
+                        open Issues / PRs / security alerts from <code>checkIssues</code>{' '}
+                        and the <code>imDone</code> <code>sec:</code> count. The choice
+                        rides on the imDone count line; fixes are always at the root
+                        cause — never a bandaid.
+                    </Text>
+                    <Select
+                        value={iwPolicy}
+                        onValueChange={(v) =>
+                            void changeIwPolicy(v as 'surface' | 'fix' | 'fix-and-ship')
+                        }
+                        list={[
+                            { value: 'surface', label: 'Surface only — report the counts, wait for me (default)' },
+                            { value: 'fix', label: 'Fix when idle — fix the root cause, then report before shipping' },
+                            { value: 'fix-and-ship', label: 'Fix & ship when idle — remediate and ship right away' },
+                        ]}
+                    />
+                </div>
 
                 <div
                     style={{

@@ -89,6 +89,16 @@ const api = {
             ipcRenderer.invoke('mobile:revoke-sessions') as Promise<
                 MobileStatus & { revoked: number }
             >,
+        /** The host-side roster of paired devices (no bearer tokens). */
+        sessions: () =>
+            ipcRenderer.invoke('mobile:sessions') as Promise<
+                Array<{ id: string; label: string; ip: string; createdAt: number }>
+            >,
+        /** Unpair one device by its roster id. */
+        revokeSession: (id: string) =>
+            ipcRenderer.invoke('mobile:revoke-session', id) as Promise<
+                MobileStatus & { ok: boolean }
+            >,
         lock: (locked: boolean) =>
             ipcRenderer.invoke('mobile:lock', locked) as Promise<MobileStatus>,
     },
@@ -271,6 +281,10 @@ const api = {
             ipcRenderer.invoke('workspaces:set-process-approval', id, require),
         setTerminalApproval: (id: string, require: boolean) =>
             ipcRenderer.invoke('workspaces:set-terminal-approval', id, require),
+        setIssuewatchPolicy: (
+            id: string,
+            policy: 'surface' | 'fix' | 'fix-and-ship',
+        ) => ipcRenderer.invoke('workspaces:set-issuewatch-policy', id, policy),
         repos: (id: string) =>
             ipcRenderer.invoke('workspaces:repos', id) as Promise<string[]>,
         open: (id: string) => ipcRenderer.invoke('workspaces:open', id),
