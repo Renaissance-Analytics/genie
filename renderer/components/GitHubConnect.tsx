@@ -321,6 +321,101 @@ export function useGitHubAccount(): GitHubAccount {
     };
 }
 
+/** The reconnect device-flow state (idle → starting → pending → idle/error). */
+export type GitHubReconnectState =
+    | { kind: 'idle' }
+    | { kind: 'starting' }
+    | { kind: 'pending'; userCode: string; verificationUri: string }
+    | { kind: 'error'; message: string };
+
+export interface GitHubReconnect {
+    state: GitHubReconnectState;
+    /** Kick off the device flow (request a code + open the verify page). */
+    start: () => Promise<void>;
+    /** Cancel an in-flight flow and return to idle. */
+    cancel: () => void;
+}
+
+/**
+ * Shared GitHub RECONNECT device-flow driver — the dead-token / re-grant re-mint
+ * that IssueWatch and the capability flyout both run. This is the SAME device
+ * flow as `useGitHubAccount().connect()` (request code → poll github:status →
+ * complete on the DEVICE FLOW's own `flow.kind`, never `connected`, so a dead
+ * token that still reads connected can't clear the code on the first poll),
+ * EXCEPT it deliberately does NOT bounce to the install chooser — the user
+ * already has an installation; this only re-mints the token. Each caller passes
+ * `onSuccess` for its own post-reconnect step (re-check capabilities, refresh
+ * the feed). `active` (the host flyout's `open` flag) cancels an in-flight flow
+ * when the surface closes. Consolidates two byte-identical copies onto one hook.
+ */
+export function useGitHubReconnect(opts: {
+    active: boolean;
+    onSuccess?: () => void | Promise<void>;
+}): GitHubReconnect {
+    const { active, onSuccess } = opts;
+    const [state, setState] = useState<GitHubReconnectState>({ kind: 'idle' });
+    // Latest state + onSuccess in refs so the poll/close effects key only off
+    // `state.kind` / `active` (not a fresh onSuccess closure each render).
+    const stateRef = useRef(state);
+    stateRef.current = state;
+    const onSuccessRef = useRef(onSuccess);
+    onSuccessRef.current = onSuccess;
+
+    const start = async () => {
+        try {
+            setState({ kind: 'starting' });
+            const code = await api().github.startDevice();
+            setState({
+                kind: 'pending',
+                userCode: code.user_code,
+                verificationUri: code.verification_uri,
+            });
+            api().tynn.openInBrowser(code.verification_uri).catch(() => {});
+        } catch (e) {
+            setState({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+        }
+    };
+
+    const cancel = () => {
+        api().github.cancelDevice().catch(() => {});
+        setState({ kind: 'idle' });
+    };
+
+    // Cancel an in-flight flow when the host surface closes, so a half-started
+    // reconnect doesn't keep polling in the background.
+    useEffect(() => {
+        if (active) return;
+        const k = stateRef.current.kind;
+        if (k === 'pending' || k === 'starting') {
+            api().github.cancelDevice().catch(() => {});
+            setState({ kind: 'idle' });
+        }
+    }, [active]);
+
+    // While pending, poll github:status until the DEVICE FLOW completes, then
+    // run the caller's onSuccess.
+    useEffect(() => {
+        if (state.kind !== 'pending') return;
+        const t = setInterval(async () => {
+            const st = await api().github.status().catch(() => null);
+            if (!st) return;
+            if (st.flow.kind === 'success' || st.flow.kind === 'error') {
+                clearInterval(t);
+                if (st.flow.kind === 'success') {
+                    setState({ kind: 'idle' });
+                    await onSuccessRef.current?.();
+                } else {
+                    setState({ kind: 'error', message: st.flow.message });
+                }
+            }
+        }, 1500);
+        return () => clearInterval(t);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [state.kind]);
+
+    return { state, start, cancel };
+}
+
 export function GitHubConnect({ account }: { account: GitHubAccount }) {
     const {
         loaded,

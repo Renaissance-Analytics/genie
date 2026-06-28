@@ -12,6 +12,10 @@ import {
     useGithubCapabilities,
     CAPABILITY_LABEL,
 } from '../../lib/githubCapabilities';
+import {
+    useGitHubReconnect,
+    type GitHubReconnectState,
+} from '../GitHubConnect';
 
 /**
  * Issue Watch flyout. Right-side slide-in (reuses the Docs flyout chrome, so it
@@ -99,17 +103,6 @@ const IW_CAPABILITIES = [
     'issue-watch.secret-scanning',
 ] as const;
 
-/**
- * The Reconnect device-flow state. Mirrors GithubCapabilitiesFlyout's
- * ReconnectState exactly — same shape, so the device flow is reused, not
- * reinvented (start → pending while the user enters the code → idle/error).
- */
-type ReconnectState =
-    | { kind: 'idle' }
-    | { kind: 'starting' }
-    | { kind: 'pending'; userCode: string; verificationUri: string }
-    | { kind: 'error'; message: string };
-
 export default function IssueWatchFlyout({
     open,
     workspaceId,
@@ -147,7 +140,6 @@ export default function IssueWatchFlyout({
      * "reconnect GitHub" state. While `!loaded` we show a neutral loading line.
      */
     const [loaded, setLoaded] = useState(false);
-    const [reconnect, setReconnect] = useState<ReconnectState>({ kind: 'idle' });
 
     // An auth failure (dead session / a 401 read) is its own state: the App
     // permissions are fine, so the fix is a reconnect, not Settings. It takes
@@ -192,6 +184,21 @@ export default function IssueWatchFlyout({
         }
     };
 
+    // Reconnect device flow — the SHARED driver (no install-chooser bounce),
+    // with IssueWatch's own post-success step: re-check capabilities + re-poll
+    // the feed so it recovers live without a restart.
+    const {
+        state: reconnectState,
+        start: startReconnect,
+        cancel: cancelReconnect,
+    } = useGitHubReconnect({
+        active: open,
+        onSuccess: async () => {
+            await api().github.recheckCapabilities().catch(() => {});
+            await refresh();
+        },
+    });
+
     // On open: load + mark the workspace seen (clears rail dot/badge). The feed
     // we just captured keeps its unread highlights for this viewing.
     useEffect(() => {
@@ -235,70 +242,6 @@ export default function IssueWatchFlyout({
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open, workspaceId]);
-
-    // Cancel any in-flight device flow when the flyout closes, so a half-started
-    // reconnect doesn't keep polling in the background. Mirrors the
-    // GithubCapabilitiesFlyout cleanup.
-    useEffect(() => {
-        if (open) return;
-        if (reconnect.kind === 'pending' || reconnect.kind === 'starting') {
-            api().github.cancelDevice().catch(() => {});
-            setReconnect({ kind: 'idle' });
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open]);
-
-    // While a reconnect device flow is pending, poll github:status until the
-    // token lands, then refresh Issue Watch — a fresh grant re-polls the repos
-    // (issue-watch:repos refreshes on view) so the feed recovers live, no app
-    // restart. Reuses the EXISTING github device methods + status poll, same as
-    // the capabilities flyout.
-    useEffect(() => {
-        if (reconnect.kind !== 'pending') return;
-        const t = setInterval(async () => {
-            const st = await api().github.status().catch(() => null);
-            if (!st) return;
-            // Complete on the DEVICE FLOW's own outcome, NOT st.connected: the
-            // dead/stale token is still stored, so `connected` stays true and
-            // would fire on the FIRST tick — clearing the user code before the
-            // user can enter it at github.com. flow.kind flips to 'success' only
-            // once a FRESH token lands.
-            if (st.flow.kind === 'success' || st.flow.kind === 'error') {
-                clearInterval(t);
-                if (st.flow.kind === 'success') {
-                    setReconnect({ kind: 'idle' });
-                    // Re-check capabilities (clears the header warning if the
-                    // fresh grant resolved everything) AND re-poll Issue Watch so
-                    // the feed updates without a restart.
-                    await api().github.recheckCapabilities().catch(() => {});
-                    await refresh();
-                } else {
-                    setReconnect({ kind: 'error', message: st.flow.message });
-                }
-            }
-        }, 1500);
-        return () => clearInterval(t);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [reconnect.kind]);
-
-    /** Kick off the existing GitHub reconnect (device) flow. */
-    const startReconnect = async () => {
-        try {
-            setReconnect({ kind: 'starting' });
-            const code = await api().github.startDevice();
-            setReconnect({
-                kind: 'pending',
-                userCode: code.user_code,
-                verificationUri: code.verification_uri,
-            });
-            api().tynn.openInBrowser(code.verification_uri).catch(() => {});
-        } catch (e) {
-            setReconnect({
-                kind: 'error',
-                message: e instanceof Error ? e.message : String(e),
-            });
-        }
-    };
 
     const toggleRepo = async (r: WatchRepoView) => {
         if (!workspaceId) return;
@@ -351,14 +294,9 @@ export default function IssueWatchFlyout({
                         // instead of the generic "connect in Settings" copy.
                         <ReconnectBanner
                             detail={detail}
-                            reconnect={reconnect}
+                            reconnect={reconnectState}
                             onReconnect={() => void startReconnect()}
-                            onCancel={() =>
-                                api()
-                                    .github.cancelDevice()
-                                    .catch(() => {})
-                                    .finally(() => setReconnect({ kind: 'idle' }))
-                            }
+                            onCancel={cancelReconnect}
                         />
                     ) : !connected ? (
                         <div className="iw-muted">
@@ -509,7 +447,7 @@ function ReconnectBanner({
     onCancel,
 }: {
     detail: WatchErrorDetail | null;
-    reconnect: ReconnectState;
+    reconnect: GitHubReconnectState;
     onReconnect: () => void;
     onCancel: () => void;
 }) {

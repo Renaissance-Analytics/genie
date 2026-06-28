@@ -10,6 +10,7 @@ import {
     CAPABILITY_LABEL,
     PERMISSION_LABEL,
 } from '../../lib/githubCapabilities';
+import { useGitHubReconnect } from '../GitHubConnect';
 
 /**
  * GitHub permissions resolve flyout. Surfaced two ways:
@@ -35,12 +36,6 @@ import {
  * Reuses the Docs flyout chrome (right-side slide-in) like IssueWatchFlyout.
  */
 
-type ReconnectState =
-    | { kind: 'idle' }
-    | { kind: 'starting' }
-    | { kind: 'pending'; userCode: string; verificationUri: string }
-    | { kind: 'error'; message: string };
-
 export default function GithubCapabilitiesFlyout({
     open,
     caps,
@@ -50,8 +45,20 @@ export default function GithubCapabilitiesFlyout({
     caps: GithubCapabilities;
     onClose: () => void;
 }) {
-    const [reconnect, setReconnect] = useState<ReconnectState>({ kind: 'idle' });
     const [rechecking, setRechecking] = useState(false);
+    // Reconnect device flow — the SHARED driver (no install-chooser bounce);
+    // on success re-check capabilities so the header warning clears if the
+    // fresh grant resolved everything.
+    const {
+        state: reconnectState,
+        start: startReconnect,
+        cancel: cancelReconnect,
+    } = useGitHubReconnect({
+        active: open,
+        onSuccess: async () => {
+            await api().github.recheckCapabilities().catch(() => {});
+        },
+    });
 
     useEffect(() => {
         if (!open) return;
@@ -65,66 +72,12 @@ export default function GithubCapabilitiesFlyout({
         return () => window.removeEventListener('keydown', onKey);
     }, [open, onClose]);
 
-    // Cancel any in-flight device flow when the flyout closes, so a half-started
-    // reconnect doesn't keep polling in the background.
-    useEffect(() => {
-        if (open) return;
-        if (reconnect.kind === 'pending' || reconnect.kind === 'starting') {
-            api().github.cancelDevice().catch(() => {});
-            setReconnect({ kind: 'idle' });
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open]);
-
-    // While a reconnect device flow is pending, poll github:status until the
-    // token lands, then re-check capabilities (which broadcasts the fresh
-    // status — the header warning clears if the new grant resolved everything).
-    useEffect(() => {
-        if (reconnect.kind !== 'pending') return;
-        const t = setInterval(async () => {
-            const st = await api().github.status().catch(() => null);
-            if (!st) return;
-            // Key off the DEVICE FLOW's outcome, not st.connected: a stale/dead
-            // token still reads connected=true, which would complete on the
-            // first tick and clear the user code prematurely. flow.kind reaches
-            // 'success' only when a FRESH token lands.
-            if (st.flow.kind === 'success' || st.flow.kind === 'error') {
-                clearInterval(t);
-                if (st.flow.kind === 'success') {
-                    setReconnect({ kind: 'idle' });
-                    await api().github.recheckCapabilities().catch(() => {});
-                } else {
-                    setReconnect({ kind: 'error', message: st.flow.message });
-                }
-            }
-        }, 1500);
-        return () => clearInterval(t);
-    }, [reconnect.kind]);
-
     // Open any GitHub deep-link in the OS browser (App settings, a specific
     // installation's review page). The URLs are built main-side and ride along
     // in the capabilities payload, so the renderer just opens them.
     const openUrl = (url: string) => {
         if (!url) return;
         void api().tynn.openInBrowser(url).catch(() => {});
-    };
-
-    const startReconnect = async () => {
-        try {
-            setReconnect({ kind: 'starting' });
-            const code = await api().github.startDevice();
-            setReconnect({
-                kind: 'pending',
-                userCode: code.user_code,
-                verificationUri: code.verification_uri,
-            });
-            api().tynn.openInBrowser(code.verification_uri).catch(() => {});
-        } catch (e) {
-            setReconnect({
-                kind: 'error',
-                message: e instanceof Error ? e.message : String(e),
-            });
-        }
     };
 
     const recheckNow = async () => {
@@ -241,25 +194,18 @@ export default function GithubCapabilitiesFlyout({
                                     reconnect so Genie picks up the new
                                     permissions.
                                 </p>
-                                {reconnect.kind === 'pending' ? (
+                                {reconnectState.kind === 'pending' ? (
                                     <div className="ghcap-device">
                                         <span className="iw-muted">
                                             A browser opened at{' '}
-                                            <code>{reconnect.verificationUri}</code>.
+                                            <code>{reconnectState.verificationUri}</code>.
                                             Enter this code:
                                         </span>
-                                        <CodeChip code={reconnect.userCode} />
+                                        <CodeChip code={reconnectState.userCode} />
                                         <button
                                             type="button"
                                             className="ghcap-btn"
-                                            onClick={() =>
-                                                api()
-                                                    .github.cancelDevice()
-                                                    .catch(() => {})
-                                                    .finally(() =>
-                                                        setReconnect({ kind: 'idle' }),
-                                                    )
-                                            }
+                                            onClick={cancelReconnect}
                                         >
                                             Cancel
                                         </button>
@@ -268,17 +214,17 @@ export default function GithubCapabilitiesFlyout({
                                     <button
                                         type="button"
                                         className="ghcap-btn"
-                                        disabled={reconnect.kind === 'starting'}
+                                        disabled={reconnectState.kind === 'starting'}
                                         onClick={() => void startReconnect()}
                                     >
-                                        {reconnect.kind === 'starting'
+                                        {reconnectState.kind === 'starting'
                                             ? 'Requesting code…'
                                             : 'Reconnect GitHub…'}
                                     </button>
                                 )}
-                                {reconnect.kind === 'error' && (
+                                {reconnectState.kind === 'error' && (
                                     <span className="ghcap-error">
-                                        {reconnect.message}
+                                        {reconnectState.message}
                                     </span>
                                 )}
 
