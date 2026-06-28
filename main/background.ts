@@ -151,6 +151,7 @@ import {
     checkForUpdatesNow,
     mobileUpdateStatus,
     mobileInstallUpdate,
+    mobileCheckUpdate,
 } from './updater/ipc';
 import { registerDocsIpc } from './docs/ipc';
 import { installAppMenu } from './app-menu';
@@ -2008,6 +2009,7 @@ app.whenReady().then(async () => {
             // the identical quitAndInstall / two-phase teardown path.
             updateStatus: () => mobileUpdateStatus(),
             installUpdate: () => mobileInstallUpdate(),
+            checkUpdate: () => mobileCheckUpdate(),
         },
     }).catch((e) => console.error('[mobile] failed to start', e));
     // Docs viewer IPC (docs:list / docs:read). __dirname is the compiled main

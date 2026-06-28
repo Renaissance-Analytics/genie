@@ -3,6 +3,7 @@ import { Action, Icon, Text } from '@particle-academy/react-fancy';
 import UploadToAi from './Upload';
 import type { ProcessListItem, ProcessStatus } from '../../lib/genie';
 import {
+    checkUpdate,
     getUpdateStatus,
     installUpdate,
     listProcesses,
@@ -318,8 +319,16 @@ function UpgradeGenie({
             .then(setStatus)
             .catch(() => {});
 
+    // On open, ASK the host to check — it never auto-downloads, so a pending
+    // update isn't visible until we tell it to look. (Errors just leave the last
+    // status; the host's 'checking' state shows progress via update:changed.)
+    const check = () =>
+        checkUpdate()
+            .then(setStatus)
+            .catch(() => {});
+
     useEffect(() => {
-        void refetch();
+        void check();
     }, []);
 
     // Live updater state — once the user taps Update the desktop advances
@@ -441,6 +450,27 @@ function UpgradeGenie({
                 <Text size="xs" className="m-mono text-zinc-500">
                     v{status.currentVersion}
                 </Text>
+                <button
+                    type="button"
+                    onClick={() => void check()}
+                    title="Check the host for updates"
+                    style={{
+                        marginLeft: 'auto',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--fg-3)',
+                        cursor: 'pointer',
+                        font: 'inherit',
+                        fontSize: 12,
+                        padding: '4px 6px',
+                    }}
+                >
+                    <Icon name="refresh-cw" size="xs" />
+                    Check
+                </button>
             </div>
         );
     }

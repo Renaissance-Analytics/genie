@@ -2702,18 +2702,27 @@ function HostUpdate() {
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState<string | null>(null);
 
+    const check = () =>
+        api()
+            .remote.request('/api/update/check', { method: 'POST' })
+            .then((s) =>
+                setSt(s as { currentVersion: string; latestVersion: string | null }),
+            )
+            .catch(() => {});
+
     useEffect(() => {
-        const refresh = () => {
+        // Ask the host to LOOK on open (it never auto-downloads), then poll status.
+        void check();
+        const t = setInterval(() => {
             api()
                 .remote.request('/api/update/status')
                 .then((s) =>
                     setSt(s as { currentVersion: string; latestVersion: string | null }),
                 )
-                .catch(() => setSt(null));
-        };
-        refresh();
-        const t = setInterval(refresh, 15000);
+                .catch(() => {});
+        }, 15000);
         return () => clearInterval(t);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const updateHost = async () => {
@@ -2742,9 +2751,15 @@ function HostUpdate() {
                 paddingTop: 10,
             }}
         >
-            <Text size="xs" style={{ fontWeight: 600 }}>
-                Host update
-            </Text>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Text size="xs" style={{ fontWeight: 600 }}>
+                    Host update
+                </Text>
+                <span style={{ flex: 1 }} />
+                <Action size="sm" variant="ghost" icon="refresh-cw" onClick={() => void check()}>
+                    Check
+                </Action>
+            </div>
             {!st ? (
                 <Text size="xs" className="text-zinc-500">
                     Checking the host&apos;s version…

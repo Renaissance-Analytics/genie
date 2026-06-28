@@ -470,6 +470,12 @@ function buildMobileE2EDeps(): MobileDataDeps {
             readyToInstall: false,
         }),
         installUpdate: () => ({ ok: false, reason: 'not-ready' as const }),
+        checkUpdate: async () => ({
+            state: 'up-to-date',
+            currentVersion: '0.0.0-e2e',
+            latestVersion: '0.0.0-e2e',
+            readyToInstall: false,
+        }),
     };
 }
 

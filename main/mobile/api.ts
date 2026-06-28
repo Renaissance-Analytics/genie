@@ -201,6 +201,15 @@ export interface MobileDataDeps {
         error?: string;
         reason?: 'not-ready' | 'unsupported';
     };
+    /** Trigger a check on the host's updater, returning the fresh compact status.
+     *  The host never auto-downloads, so a pending update isn't visible until the
+     *  phone/remote asks it to look. */
+    checkUpdate: () => Promise<{
+        state: string;
+        currentVersion: string;
+        latestVersion: string | null;
+        readyToInstall: boolean;
+    }>;
 }
 
 /** A small JSON response helper (CORS-free — same-origin from the served app). */
@@ -387,6 +396,13 @@ export async function handleApi(
     // Update state for the "Upgrade Genie" tool — a read, so no kill-switch gate.
     if (pathname === '/api/update/status' && method === 'GET') {
         sendJson(res, 200, deps.updateStatus());
+        return true;
+    }
+
+    // Trigger a host update CHECK — the host never auto-downloads, so the phone /
+    // remote must ask it to LOOK for a pending update. Read-ish; no kill-switch.
+    if (pathname === '/api/update/check' && method === 'POST') {
+        sendJson(res, 200, await deps.checkUpdate());
         return true;
     }
 

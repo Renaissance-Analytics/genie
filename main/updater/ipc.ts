@@ -179,6 +179,23 @@ export function mobileUpdateStatus(): MobileUpdateStatus {
 }
 
 /**
+ * Trigger a check on the ACTIVE backend, then return the fresh compact status.
+ * The host never auto-downloads (no background staging), so a pending update has
+ * no state for the phone/remote to read until the host is asked to LOOK — this is
+ * that ask. Mirrors the desktop `updater:check` handler.
+ */
+export async function mobileCheckUpdate(): Promise<MobileUpdateStatus> {
+    if (updaterMode() === 'phase1') {
+        const u = updater();
+        await u.checkForUpdate();
+        return compactUpdate(u.getStatus());
+    }
+    const a = autoUpdaterInstance();
+    await a.checkForUpdate();
+    return compactUpdate(a.getStatus());
+}
+
+/**
  * Apply an update from the phone — the SAME one-click hands-free path the
  * desktop "Update" button uses. Two valid entry states (we never auto-download
  * in the background, so a build is rarely pre-staged):

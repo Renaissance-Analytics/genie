@@ -80,6 +80,12 @@ const deps = (): MobileDataDeps => ({
     }),
     installUpdate: () =>
         updateReady ? { ok: true } : { ok: false, reason: 'not-ready' as const },
+    checkUpdate: async () => ({
+        state: updateReady ? 'ready-to-restart' : 'up-to-date',
+        currentVersion: '0.0.0-test',
+        latestVersion: updateReady ? '0.0.1-test' : null,
+        readyToInstall: updateReady,
+    }),
 });
 
 async function start(autoConfirm = true): Promise<number> {

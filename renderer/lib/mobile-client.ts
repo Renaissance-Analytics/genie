@@ -324,6 +324,14 @@ export function getUpdateStatus(): Promise<MobileUpdateStatus> {
 }
 
 /**
+ * Ask the HOST to check for an update, returning the fresh status. The host never
+ * auto-downloads, so a pending update isn't visible until we ask it to LOOK.
+ */
+export function checkUpdate(): Promise<MobileUpdateStatus> {
+    return request<MobileUpdateStatus>('/api/update/check', { method: 'POST' });
+}
+
+/**
  * Ask the desktop to restart + apply a downloaded update — the same one-click
  * path the desktop pill uses. The server answers 409 (→ MobileApiError) when
  * nothing is staged yet, so the caller only enables this when `readyToInstall`.
