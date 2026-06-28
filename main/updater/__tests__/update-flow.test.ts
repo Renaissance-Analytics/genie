@@ -190,9 +190,13 @@ describe('auto-updater one-click hands-free apply', () => {
         expect(mockAuto.downloadUpdate).toHaveBeenCalledTimes(1);
         expect(u.getStatus().state).toBe('downloading');
 
-        // The install fires the instant the build lands — automatically.
+        // The install fires the instant the build lands — automatically, and
+        // EXACTLY ONCE. (The pill's frontend driver must NOT also call restart on
+        // this fresh-apply path — see shouldDriveRestart — or quitAndInstall would
+        // double-fire. The backend's installWhenReady is the single source here.)
         handlers.get('update-downloaded')?.({ version: '2.0.0' });
         expect(markQuit).toHaveBeenCalledTimes(1);
+        expect(mockAuto.quitAndInstall).toHaveBeenCalledTimes(1);
         expect(mockAuto.quitAndInstall).toHaveBeenCalledWith(true, true);
     });
 

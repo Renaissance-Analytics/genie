@@ -21,6 +21,7 @@ import SignInPrompt from '../components/SignInPrompt';
 import type { BackendUser, ViewType } from '../lib/genie';
 import { resolveShortcut } from '../lib/master-shortcuts';
 import { computeLaunchSelection } from '../lib/launch-restore';
+import { shouldDriveRestart } from '../lib/updater-flow';
 import {
     IconBox,
     IconChevronDown,
@@ -1407,12 +1408,21 @@ function UpdatePill() {
     // Each step fires at most once after the user commits.
     const appliedRef = useRef(false);
     const restartedRef = useRef(false);
+    // Which updater backend is active — decides whether the FRONTEND drives the
+    // restart or the backend auto-restarts itself (see shouldDriveRestart).
+    const modeRef = useRef<'phase1' | 'phase2' | null>(null);
 
     useEffect(() => {
         let alive = true;
         void api()
             .updater.status()
             .then((s) => alive && setStatus(s))
+            .catch(() => {});
+        void api()
+            .updater.mode()
+            .then((m) => {
+                if (alive) modeRef.current = m;
+            })
             .catch(() => {});
         const off = api().on.updaterStatus((s) => setStatus(s));
         return () => {
@@ -1451,12 +1461,28 @@ function UpdatePill() {
             void api().updater.apply(); // downloadUpdate
         } else if (status.state === 'ready-to-restart' && !restartedRef.current) {
             restartedRef.current = true;
-            void (async () => {
-                const r = await api().updater.restart(); // quitAndInstall
-                // Phase-1 (git checkout) restarts manually — quit so relaunch
-                // picks up the new code.
-                if (!r.ok) await api().app.quit();
-            })();
+            // Only drive the restart when the backend WON'T auto-restart itself.
+            // On a fresh phase-2 apply, downloadAndInstall() armed installWhenReady
+            // so the backend already runs quitAndInstall on update-downloaded —
+            // calling restart() here too would double-fire it. (Default mode to
+            // phase2 in the rare window before mode loads: only the pre-staged /
+            // phase-1 paths — where appliedThisCommit is false — drive a restart,
+            // and those resolve to `true` regardless of the assumed mode.)
+            if (
+                shouldDriveRestart({
+                    mode: modeRef.current ?? 'phase2',
+                    appliedThisCommit: appliedRef.current,
+                })
+            ) {
+                void (async () => {
+                    const r = await api().updater.restart(); // quitAndInstall
+                    // Phase-1 (git checkout) restarts manually — quit so relaunch
+                    // picks up the new code.
+                    if (!r.ok) await api().app.quit();
+                })();
+            }
+            // else: the phase-2 backend applies via installWhenReady; the progress
+            // display just rides its states to "Restarting…".
         }
     }, [committed, status?.state]);
 
