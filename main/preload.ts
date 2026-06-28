@@ -253,7 +253,6 @@ const api = {
             ipcRenderer.invoke('settings:sound-data-url', path) as Promise<
                 string | null
             >,
-        detectEditors: () => ipcRenderer.invoke('settings:detect-editors'),
         detectShells: () =>
             ipcRenderer.invoke('terminal:shells') as Promise<{
                 shells: Array<{
@@ -757,6 +756,14 @@ const api = {
                 cb(payload);
             ipcRenderer.on('workspace:pulse', handler);
             return () => ipcRenderer.off('workspace:pulse', handler);
+        },
+        /** A workspace was "opened" (tray / menu / MCP) — the master window
+         *  should focus it and open its in-app editor scoped to the folder. */
+        workspaceOpen: (cb: (payload: { workspaceId: string }) => void) => {
+            const handler = (_e: unknown, payload: { workspaceId: string }) =>
+                cb(payload);
+            ipcRenderer.on('workspace:open', handler);
+            return () => ipcRenderer.off('workspace:open', handler);
         },
         /** A background Process changed status (running/stopped/crashed/…). */
         processStatus: (

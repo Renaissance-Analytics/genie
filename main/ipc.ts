@@ -113,7 +113,6 @@ import {
     showMainWindow,
     showStageWindow,
 } from './background';
-import { detectEditors } from './editors';
 import {
     allConfiguredBackends,
     backendOfKind,
@@ -210,7 +209,6 @@ export function registerIpcHandlers(): void {
         });
         return r.canceled ? null : r.filePaths[0];
     });
-    ipcMain.handle('settings:detect-editors', () => detectEditors());
     // Read a sound file (custom alert sound) into a base64 data-URL so the
     // sandboxed renderer can play it via new Audio(...). Used by the Settings
     // sound Preview and the per-alert "Custom file…" choice. Null when the path
@@ -467,6 +465,9 @@ export function registerIpcHandlers(): void {
 
     ipcMain.handle('workspaces:open', async (_e, id: string) => {
         await openWorkspace(id);
+        // Open = bring it into Genie's own UI: surface the master window so the
+        // user lands on the now-active workspace + its in-app editor.
+        showMainWindow();
         return { ok: true };
     });
     // The repo subfolders under a workspace's envelope (names only). Used by the

@@ -15,7 +15,6 @@ import {
 } from '@particle-academy/react-fancy';
 import {
     api,
-    type EditorDetection,
     type McpServerState,
     type GenieHost,
     type MobileStatus,
@@ -30,7 +29,6 @@ import {
 
 export default function SettingsPage() {
     const [s, setS] = useState<Settings | null>(null);
-    const [editors, setEditors] = useState<EditorDetection[]>([]);
     const [shells, setShells] = useState<ShellDetection[]>([]);
     const [shellDefault, setShellDefault] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
@@ -46,15 +44,6 @@ export default function SettingsPage() {
         (async () => {
             const cur = await api().settings.get();
             setS(cur);
-            const eds = await api().settings.detectEditors();
-            setEditors(eds);
-            if (!cur.default_editor_cmd && eds[0]) {
-                setS({
-                    ...cur,
-                    default_editor: eds[0].id,
-                    default_editor_cmd: eds[0].path,
-                });
-            }
             const det = await api().settings.detectShells().catch(() => ({
                 shells: [] as ShellDetection[],
                 defaultId: null,
@@ -83,10 +72,6 @@ export default function SettingsPage() {
     const pickPrimary = async () => {
         const p = await api().settings.chooseFolder('Choose primary workspace folder');
         if (p) patch({ primary_workspace: p });
-    };
-    const pickEditor = async () => {
-        const p = await api().settings.chooseFile('Choose editor executable');
-        if (p) patch({ default_editor: 'custom', default_editor_cmd: p });
     };
 
     if (!s) return <div className="surface" style={{ padding: 24 }}>Loading…</div>;
@@ -163,37 +148,6 @@ export default function SettingsPage() {
                             />
                         </div>
                         <Action variant="ghost" icon="folder" onClick={pickPrimary}>
-                            Browse
-                        </Action>
-                    </div>
-                </SettingRow>
-
-                <SettingRow
-                    label="Default editor"
-                    desc="The editor Genie opens workspaces in — pick a detected one or a custom executable."
-                    keywords="default editor cursor vscode code insiders custom executable binary"
-                    vertical
-                >
-                    <Select
-                        value={s.default_editor ?? ''}
-                        onValueChange={(v) => {
-                            const ed = editors.find((e) => e.id === v);
-                            patch({ default_editor: v, default_editor_cmd: ed?.path ?? s.default_editor_cmd });
-                        }}
-                        list={[
-                            ...editors.map((e) => ({ value: e.id, label: e.label })),
-                            { value: 'custom', label: 'Custom executable' },
-                        ]}
-                    />
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', width: '100%' }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                            <Input
-                                value={s.default_editor_cmd ?? ''}
-                                onValueChange={(v) => patch({ default_editor_cmd: v })}
-                                placeholder="cursor / code / path/to/binary"
-                            />
-                        </div>
-                        <Action variant="ghost" icon="folder" onClick={pickEditor}>
                             Browse
                         </Action>
                     </div>

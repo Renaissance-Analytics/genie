@@ -216,7 +216,6 @@ function SimpleWizard({
     const [sourceUrl, setSourceUrl] = useState<string>('');
     const [cloneParent, setCloneParent] = useState<string>('');
     const [projectId, setProjectId] = useState<string>('');
-    const [editor, setEditor] = useState<string>('cursor');
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -322,8 +321,8 @@ function SimpleWizard({
                 tynn_project_name: project.name,
                 shape,
                 path: workspacePath,
-                editor,
-                editor_cmd: settings.default_editor_cmd ?? null,
+                editor: null,
+                editor_cmd: null,
                 start_cmd: settings.default_start_cmd ?? null,
                 env_file: settings.default_env_file ?? '.env',
                 last_opened_at: null,
@@ -387,8 +386,6 @@ function SimpleWizard({
                     setProjectId(p.id);
                 }}
             />
-            <EditorPicker value={editor} onChange={setEditor} />
-
             <AgiUpgradeBlock
                 checked={upgradeToAgi}
                 onCheckedChange={setUpgradeToAgi}
@@ -706,8 +703,8 @@ function AgiConvertWizard({
                 tynn_project_name: project.name,
                 shape: 'agi',
                 path: res.path,
-                editor: settings.default_editor ?? 'cursor',
-                editor_cmd: settings.default_editor_cmd ?? null,
+                editor: null,
+                editor_cmd: null,
                 start_cmd: settings.default_start_cmd ?? null,
                 env_file: settings.default_env_file ?? '.env',
                 last_opened_at: null,
@@ -966,8 +963,8 @@ function AgiCreateWizard({
                 tynn_project_name: project.name,
                 shape: 'agi',
                 path: res.path,
-                editor: settings.default_editor ?? 'cursor',
-                editor_cmd: settings.default_editor_cmd ?? null,
+                editor: null,
+                editor_cmd: null,
                 start_cmd: settings.default_start_cmd ?? null,
                 env_file: settings.default_env_file ?? '.env',
                 last_opened_at: null,
@@ -1186,8 +1183,8 @@ function AgiImportWizard({
                 tynn_project_name: project.name,
                 shape: 'agi',
                 path: folder,
-                editor: settings.default_editor ?? 'cursor',
-                editor_cmd: settings.default_editor_cmd ?? null,
+                editor: null,
+                editor_cmd: null,
                 start_cmd: settings.default_start_cmd ?? null,
                 env_file: settings.default_env_file ?? '.env',
                 last_opened_at: null,
@@ -1538,21 +1535,6 @@ function CreateProjectForm({
                 </Action>
             </div>
         </Card>
-    );
-}
-
-function EditorPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-    return (
-        <Select
-            label="Editor"
-            value={value}
-            onValueChange={onChange}
-            list={[
-                { value: 'cursor', label: 'Cursor' },
-                { value: 'vscode', label: 'VS Code' },
-                { value: 'code-insiders', label: 'VS Code Insiders' },
-            ]}
-        />
     );
 }
 

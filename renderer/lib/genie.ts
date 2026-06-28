@@ -253,8 +253,6 @@ export interface Settings {
     /** Collapsed sidebar workspace rows — JSON-encoded string[] of workspace
      *  ids. Persists the expand/collapse state across restarts. */
     collapsed_workspaces?: string;
-    default_editor?: string;
-    default_editor_cmd?: string;
     default_start_cmd?: string;
     default_env_file?: string;
     global_hotkey?: string;
@@ -450,12 +448,6 @@ export interface ShellDetection {
 export interface AionimaConfig {
     host?: string;
     token?: string | null;
-}
-
-export interface EditorDetection {
-    id: 'cursor' | 'vscode' | 'code-insiders';
-    label: string;
-    path: string;
 }
 
 export interface InboxPayload {
@@ -937,7 +929,6 @@ export interface GenieApi {
         /** Read a sound file into a base64 data-URL (null when unreadable).
          *  Backs the per-alert "Custom file…" choice + the Settings Preview. */
         soundDataUrl: (path: string) => Promise<string | null>;
-        detectEditors: () => Promise<EditorDetection[]>;
         detectShells: () => Promise<{
             shells: ShellDetection[];
             defaultId: string | null;
@@ -1465,6 +1456,11 @@ export interface GenieApi {
          *  imDone (workspaceId is the synthetic System Workspace id for a
          *  System-Workspace terminal). A transient sidebar-level cue. */
         workspacePulse: (
+            cb: (payload: { workspaceId: string }) => void,
+        ) => () => void;
+        /** A workspace was "opened" (tray / menu / MCP) — focus it in the master
+         *  window and open its in-app editor scoped to the workspace folder. */
+        workspaceOpen: (
             cb: (payload: { workspaceId: string }) => void,
         ) => () => void;
         /** A background Process changed status. */

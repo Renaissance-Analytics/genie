@@ -1,24 +1,30 @@
-import { spawn, ChildProcess } from 'child_process';
+import { BrowserWindow } from 'electron';
 import fs from 'fs';
-import path from 'path';
-import os from 'os';
 import { simpleGit } from 'simple-git';
-import { getWorkspace, touchWorkspace, getAllSettings } from '../db';
+import { getWorkspace, touchWorkspace, setSettings } from '../db';
 import { rebuildMenu } from '../tray';
 import { detectFolder } from './detect';
 
 /**
- * Open a registered workspace:
- *   1. (`.agi` only) `git submodule update --init --recursive` if repos/
- *      is empty but .gitmodules has entries.
- *   2. Launch the configured editor at the path.
- *   3. Open a terminal at the path with the workspace's env file sourced.
- *   4. Touch the row's last_opened_at.
+ * "Open" a registered workspace IN GENIE'S OWN UI (no external process launch):
+ *   1. (`.agi` only) `git submodule update --init --recursive` if repos/ is
+ *      empty but .gitmodules has entries.
+ *   2. Make it the ACTIVE workspace — persist `active_workspace` (so a fresh /
+ *      relaunching master window opens to it) AND broadcast `workspace:open`
+ *      (so an already-open master focuses it live). Genie's in-app editor opens
+ *      to that single workspace, scoped to its folder.
+ *   3. Touch `last_opened_at` + rebuild the tray menu.
+ *
+ * Genie's in-app editor IS the editor: it opens to a single workspace and can be
+ * locked to a folder, so the old "launch an external editor + a terminal" flow
+ * (and the `default_editor` setting that drove it) was removed. The caller is
+ * responsible for surfacing the master window (e.g. `showMainWindow()`); this
+ * just prepares + signals the workspace to focus.
  */
-// Tracks in-flight openWorkspace calls so rapid double-clicks (or HMR
-// re-fires) can't stack multiple terminals + editors for the same row.
-// Entry is removed when the call resolves; concurrent calls for OTHER
-// workspaces are unaffected.
+
+// Tracks in-flight openWorkspace calls so rapid double-clicks (or HMR re-fires)
+// can't stack duplicate work for the same row. Entry is removed when the call
+// resolves; concurrent calls for OTHER workspaces are unaffected.
 const opening = new Set<string>();
 
 export async function openWorkspace(id: string): Promise<void> {
@@ -46,143 +52,17 @@ async function openWorkspaceInner(id: string): Promise<void> {
         }
     }
 
-    const settings = getAllSettings();
-    const editorCmd =
-        row.editor_cmd ||
-        settings.default_editor_cmd ||
-        defaultEditorBinary(row.editor ?? settings.default_editor);
-    const envFile = row.env_file || settings.default_env_file || '.env';
-    const envFilePath = path.join(row.path, envFile);
-
-    // Editor
-    if (editorCmd) {
-        try {
-            const child = spawn(editorCmd, [row.path], {
-                detached: true,
-                stdio: 'ignore',
-                shell: process.platform === 'win32',
-            });
-            child.unref();
-        } catch (e) {
-            console.error('Failed to launch editor', editorCmd, e);
+    // Focus it in Genie's own UI: persist as the active workspace (covers a
+    // fresh / relaunching master, which reads `active_workspace` on mount) and
+    // broadcast so an already-open master activates it live. No external editor
+    // or terminal is spawned.
+    setSettings({ active_workspace: id });
+    for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.webContents.isDestroyed()) {
+            w.webContents.send('workspace:open', { workspaceId: id });
         }
     }
-
-    // Terminal
-    spawnTerminal(row.path, envFilePath);
 
     touchWorkspace(id);
     rebuildMenu();
-}
-
-function defaultEditorBinary(editor: string | null | undefined): string {
-    switch ((editor ?? '').toLowerCase()) {
-        case 'vscode':
-            return process.platform === 'win32' ? 'code.cmd' : 'code';
-        case 'code-insiders':
-            return process.platform === 'win32'
-                ? 'code-insiders.cmd'
-                : 'code-insiders';
-        case 'cursor':
-        default:
-            return process.platform === 'win32' ? 'cursor.cmd' : 'cursor';
-    }
-}
-
-function spawnTerminal(workspacePath: string, envFilePath: string): void {
-    const hasEnvFile = fs.existsSync(envFilePath);
-
-    if (process.platform === 'win32') {
-        // Inlining a multi-line PowerShell command through `wt new-tab` and
-        // `shell: true` is a quoting nightmare — wt's argv parser, cmd.exe,
-        // and PowerShell each get a turn at the string and the quotes don't
-        // survive. Write the source-env-then-cd script to a temp .ps1 and
-        // launch PowerShell with `-File`. No shell layer needed, no escaping.
-        const script = [
-            hasEnvFile
-                ? `Get-Content -LiteralPath ${psStringLiteral(envFilePath)} | ForEach-Object { if ($_ -match '^\\s*([^#=\\s][^=]*)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1].Trim(), $Matches[2].Trim()) } }`
-                : null,
-            `Set-Location -LiteralPath ${psStringLiteral(workspacePath)}`,
-        ].filter(Boolean).join('\n');
-
-        const tmpDir = path.join(os.tmpdir(), 'genie-shell');
-        try { fs.mkdirSync(tmpDir, { recursive: true }); } catch { /* fine */ }
-        const scriptPath = path.join(tmpDir, `open-${Date.now()}-${process.pid}.ps1`);
-        fs.writeFileSync(scriptPath, script, 'utf8');
-
-        const wtArgs = [
-            'new-tab',
-            '-d', workspacePath,
-            'powershell.exe',
-            '-NoExit',
-            '-ExecutionPolicy', 'Bypass',
-            '-File', scriptPath,
-        ];
-
-        try {
-            spawn('wt.exe', wtArgs, {
-                detached: true,
-                stdio: 'ignore',
-                shell: false,
-            }).unref();
-        } catch {
-            // Windows Terminal not installed (older Win10). Open plain
-            // PowerShell in a new console at the workspace path.
-            try {
-                spawn('powershell.exe', [
-                    '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', scriptPath,
-                ], {
-                    detached: true,
-                    stdio: 'ignore',
-                    shell: false,
-                }).unref();
-            } catch {
-                // Last resort: cmd.exe at the path.
-                spawn('cmd.exe', ['/c', 'start', '', 'cmd', '/K', `cd /d "${workspacePath}"`], {
-                    detached: true,
-                    stdio: 'ignore',
-                    shell: false,
-                }).unref();
-            }
-        }
-        return;
-    }
-
-    if (process.platform === 'darwin') {
-        const script = hasEnvFile
-            ? `tell application "Terminal" to do script "cd '${workspacePath.replace(/'/g, "'\\''")}' && set -a && source '${envFilePath.replace(/'/g, "'\\''")}' && set +a"`
-            : `tell application "Terminal" to do script "cd '${workspacePath.replace(/'/g, "'\\''")}'"`;
-        spawn('osascript', ['-e', script], {
-            detached: true,
-            stdio: 'ignore',
-        }).unref();
-        return;
-    }
-
-    // Linux — try gnome-terminal, fall back to xterm.
-    // (PowerShell single-quoted literal helper lives just below; not used on Linux.)
-    const terminals = ['gnome-terminal', 'konsole', 'xfce4-terminal', 'xterm'];
-    const args = hasEnvFile
-        ? ['--', 'bash', '-c', `cd "${workspacePath}" && set -a && source "${envFilePath}" && set +a && exec bash`]
-        : ['--working-directory', workspacePath];
-    for (const term of terminals) {
-        try {
-            spawn(term, args, {
-                detached: true,
-                stdio: 'ignore',
-            }).unref();
-            return;
-        } catch {
-            /* try next */
-        }
-    }
-}
-
-/**
- * Wrap a path/value as a PowerShell single-quoted string literal. Single
- * quotes in PowerShell strings are escaped by doubling them; nothing else
- * is interpreted. Safe for paths with spaces, $, backticks, parens, etc.
- */
-function psStringLiteral(value: string): string {
-    return `'${value.replace(/'/g, "''")}'`;
 }

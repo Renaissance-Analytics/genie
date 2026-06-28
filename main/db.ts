@@ -394,8 +394,6 @@ export interface Settings {
     primary_workspace?: string;
     /** Last-activated workspace id in the master view; seeds the active workspace on launch. */
     active_workspace?: string;
-    default_editor?: string;
-    default_editor_cmd?: string;
     default_start_cmd?: string;
     default_env_file?: string;
     global_hotkey?: string;
@@ -520,8 +518,6 @@ export function getAllSettings(): Settings {
         ...out,
         primary_workspace: out['primary_workspace'],
         active_workspace: out['active_workspace'],
-        default_editor: out['default_editor'] ?? 'cursor',
-        default_editor_cmd: out['default_editor_cmd'],
         default_start_cmd: out['default_start_cmd'] ?? 'npm run dev',
         default_env_file: out['default_env_file'] ?? '.env',
         global_hotkey:
