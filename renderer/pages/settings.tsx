@@ -27,9 +27,7 @@ import {
     type ShellDetection,
     type UpdaterConfig,
     type UpdaterStatus,
-    type WorkspaceDocHealth,
 } from '../lib/genie';
-import TynnProvisionPanel from '../components/TynnProvisionPanel';
 
 export default function SettingsPage() {
     const [s, setS] = useState<Settings | null>(null);
@@ -520,7 +518,6 @@ export default function SettingsPage() {
                 onSyncChange={(target, on) =>
                     patch({ [`mcp_sync_${target}`]: on ? 'on' : 'off' })
                 }
-                activeWorkspace={s.active_workspace}
             />
 
             <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
@@ -2081,7 +2078,6 @@ function AgentMcpSection({
     syncCursor,
     syncAgents,
     onSyncChange,
-    activeWorkspace,
 }: {
     port: string;
     onPortChange: (v: string) => void;
@@ -2089,80 +2085,9 @@ function AgentMcpSection({
     syncCursor: boolean;
     syncAgents: boolean;
     onSyncChange: (target: 'claude' | 'cursor' | 'agents', on: boolean) => void;
-    activeWorkspace?: string;
 }) {
     const [state, setState] = useState<McpServerState | null>(null);
     const [busy, setBusy] = useState(false);
-    const [docHealth, setDocHealth] = useState<WorkspaceDocHealth | null>(null);
-    const [repairing, setRepairing] = useState(false);
-    const [repairMsg, setRepairMsg] = useState<string | null>(null);
-    // Per-workspace "require approval before an agent starts a process" toggle.
-    // null until loaded / when no active workspace.
-    const [processApproval, setProcessApprovalState] = useState<boolean | null>(
-        null,
-    );
-
-    const refreshProcessApproval = async () => {
-        if (!activeWorkspace) {
-            setProcessApprovalState(null);
-            return;
-        }
-        try {
-            const ws = (await api().workspaces.list()).find(
-                (w) => w.id === activeWorkspace,
-            );
-            // Default to require-approval (true) when the column is unset.
-            setProcessApprovalState(ws ? ws.process_approval !== 0 : null);
-        } catch {
-            setProcessApprovalState(null);
-        }
-    };
-
-    const toggleProcessApproval = async (require: boolean) => {
-        if (!activeWorkspace) return;
-        setProcessApprovalState(require); // optimistic
-        try {
-            await api().workspaces.setProcessApproval(activeWorkspace, require);
-        } catch {
-            void refreshProcessApproval(); // revert to truth on failure
-        }
-    };
-
-    const refreshDocHealth = async () => {
-        if (!activeWorkspace) {
-            setDocHealth(null);
-            return;
-        }
-        try {
-            setDocHealth(await api().mcp.docHealth(activeWorkspace));
-        } catch {
-            setDocHealth(null);
-        }
-    };
-
-    const repairDocs = async () => {
-        if (!activeWorkspace) return;
-        setRepairing(true);
-        setRepairMsg(null);
-        try {
-            const r = await api().mcp.repairDocs(activeWorkspace);
-            if (!r) {
-                setRepairMsg('No active workspace to repair.');
-            } else if (r.claudeDivergent) {
-                setRepairMsg(
-                    'CLAUDE.md is a separate, divergent file — left untouched so your content is preserved. ' +
-                        (r.actions.length ? r.actions.join('; ') + '.' : ''),
-                );
-            } else {
-                setRepairMsg(
-                    r.actions.length ? r.actions.join('; ') + '.' : 'Already healthy — nothing to repair.',
-                );
-            }
-            setDocHealth(r?.health ?? null);
-        } finally {
-            setRepairing(false);
-        }
-    };
 
     const refresh = async () => {
         try {
@@ -2174,10 +2099,8 @@ function AgentMcpSection({
 
     useEffect(() => {
         void refresh();
-        void refreshDocHealth();
-        void refreshProcessApproval();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [activeWorkspace]);
+    }, []);
 
     const restart = async () => {
         setBusy(true);
@@ -2316,129 +2239,6 @@ function AgentMcpSection({
                         </Text>
                     </label>
                 ))}
-            </div>
-
-            <div
-                style={{
-                    marginTop: 4,
-                    paddingTop: 12,
-                    borderTop: '1px solid var(--border-1)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 8,
-                }}
-            >
-                <Heading as="h3" size="xs" style={{ margin: 0 }}>
-                    Background process approval
-                </Heading>
-                <Text size="xs" className="text-zinc-500">
-                    When ON, an agent that tries to create or start a background
-                    process (via the <code>manageProcess</code> tool) must be
-                    approved by you first — Genie pops a prompt showing the
-                    command and blocks the agent until you approve or deny. OFF
-                    lets agents start processes immediately.
-                </Text>
-                {!activeWorkspace ? (
-                    <Text size="xs" className="text-zinc-500">
-                        Open a workspace to change its process-approval setting.
-                    </Text>
-                ) : (
-                    <label
-                        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
-                    >
-                        <input
-                            type="checkbox"
-                            checked={processApproval ?? true}
-                            disabled={processApproval === null}
-                            onChange={(e) => void toggleProcessApproval(e.target.checked)}
-                        />
-                        <Text size="sm">
-                            Require my approval before an agent starts a process
-                        </Text>
-                    </label>
-                )}
-            </div>
-
-            <div
-                style={{
-                    marginTop: 4,
-                    paddingTop: 12,
-                    borderTop: '1px solid var(--border-1)',
-                }}
-            >
-                <TynnProvisionPanel workspaceId={activeWorkspace} />
-            </div>
-
-            <div
-                style={{
-                    marginTop: 4,
-                    paddingTop: 12,
-                    borderTop: '1px solid var(--border-1)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 8,
-                }}
-            >
-                <Heading as="h3" size="xs" style={{ margin: 0 }}>
-                    Workspace docs
-                </Heading>
-                <Text size="xs" className="text-zinc-500">
-                    Keep the active workspace&apos;s <code>AGENTS.md</code> (with the
-                    Genie MCP section) and <code>CLAUDE.md</code> healthy. Repair is
-                    idempotent and safe to re-run; a divergent <code>CLAUDE.md</code>{' '}
-                    is reported, never overwritten.
-                </Text>
-                {!activeWorkspace ? (
-                    <Text size="xs" className="text-zinc-500">
-                        Open a workspace to check or repair its docs.
-                    </Text>
-                ) : (
-                    <>
-                        {docHealth && (
-                            <Text
-                                size="xs"
-                                style={{
-                                    color: docHealth.healthy
-                                        ? 'var(--emerald-600)'
-                                        : 'var(--amber-600)',
-                                }}
-                            >
-                                <Icon
-                                    name={docHealth.healthy ? 'check' : 'alert-triangle'}
-                                    size="xs"
-                                />{' '}
-                                {docHealth.healthy
-                                    ? 'Docs healthy'
-                                    : !docHealth.hasAgents
-                                        ? 'AGENTS.md missing'
-                                        : !docHealth.hasGenieSection
-                                            ? 'AGENTS.md missing the Genie MCP section'
-                                            : docHealth.claudeDivergent
-                                                ? 'CLAUDE.md diverges from AGENTS.md (won’t auto-overwrite)'
-                                                : docHealth.claude === 'broken-pointer'
-                                                    ? 'CLAUDE.md is a broken one-liner'
-                                                    : docHealth.claude === 'missing'
-                                                        ? 'CLAUDE.md missing'
-                                                        : 'Needs repair'}
-                            </Text>
-                        )}
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                            <Action
-                                variant="ghost"
-                                icon="wrench"
-                                onClick={repairDocs}
-                                disabled={repairing}
-                            >
-                                {repairing ? 'Repairing…' : 'Repair workspace docs'}
-                            </Action>
-                            {repairMsg && (
-                                <Text size="xs" className="text-zinc-500">
-                                    {repairMsg}
-                                </Text>
-                            )}
-                        </div>
-                    </>
-                )}
             </div>
         </Card>
     );

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Action, Heading, Icon, Modal, Text } from '@particle-academy/react-fancy';
 import TynnProvisionPanel from '../TynnProvisionPanel';
-import type { WorkspaceRow } from '../../lib/genie';
+import type { WorkspaceRow, WorkspaceDocHealth } from '../../lib/genie';
 import { api } from '../../lib/genie';
 
 /**
@@ -64,7 +64,7 @@ export default function WorkspaceSettingsModal({
 
     return (
         <Modal open onClose={onClose} size="md">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 4 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 20 }}>
                 <div>
                     <Heading as="h2" size="sm" style={{ margin: 0 }}>
                         Workspace settings
@@ -76,6 +76,8 @@ export default function WorkspaceSettingsModal({
                 </div>
 
                 <TynnProvisionPanel workspaceId={workspace.id} />
+
+                <WorkspaceDocsPanel workspaceId={workspace.id} />
 
                 {workspace.path && <OpsReposPanel workspacePath={workspace.path} />}
 
@@ -143,6 +145,123 @@ export default function WorkspaceSettingsModal({
                 </div>
             </div>
         </Modal>
+    );
+}
+
+/**
+ * Workspace docs health + repair — per-workspace. Keeps this workspace's
+ * AGENTS.md (with the Genie MCP section) and CLAUDE.md healthy. Repair is
+ * idempotent and safe to re-run; a divergent CLAUDE.md is reported, never
+ * overwritten. Moved here from the global Settings → Agent MCP pane, where it
+ * was acting on whichever workspace happened to be active — it belongs with the
+ * workspace it edits.
+ */
+function WorkspaceDocsPanel({ workspaceId }: { workspaceId: string }) {
+    const [docHealth, setDocHealth] = useState<WorkspaceDocHealth | null>(null);
+    const [repairing, setRepairing] = useState(false);
+    const [repairMsg, setRepairMsg] = useState<string | null>(null);
+
+    const refreshDocHealth = async () => {
+        try {
+            setDocHealth(await api().mcp.docHealth(workspaceId));
+        } catch {
+            setDocHealth(null);
+        }
+    };
+
+    useEffect(() => {
+        void refreshDocHealth();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [workspaceId]);
+
+    const repairDocs = async () => {
+        setRepairing(true);
+        setRepairMsg(null);
+        try {
+            const r = await api().mcp.repairDocs(workspaceId);
+            if (!r) {
+                setRepairMsg('No active workspace to repair.');
+            } else if (r.claudeDivergent) {
+                setRepairMsg(
+                    'CLAUDE.md is a separate, divergent file — left untouched so your content is preserved. ' +
+                        (r.actions.length ? r.actions.join('; ') + '.' : ''),
+                );
+            } else {
+                setRepairMsg(
+                    r.actions.length
+                        ? r.actions.join('; ') + '.'
+                        : 'Already healthy — nothing to repair.',
+                );
+            }
+            setDocHealth(r?.health ?? null);
+        } finally {
+            setRepairing(false);
+        }
+    };
+
+    return (
+        <div
+            style={{
+                paddingTop: 12,
+                borderTop: '1px solid var(--border-1)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+            }}
+        >
+            <Heading as="h3" size="xs" style={{ margin: 0 }}>
+                Workspace docs
+            </Heading>
+            <Text size="xs" className="text-zinc-500">
+                Keep this workspace&apos;s <code>AGENTS.md</code> (with the Genie MCP
+                section) and <code>CLAUDE.md</code> healthy. Repair is idempotent and
+                safe to re-run; a divergent <code>CLAUDE.md</code> is reported, never
+                overwritten.
+            </Text>
+            {docHealth && (
+                <Text
+                    size="xs"
+                    style={{
+                        color: docHealth.healthy
+                            ? 'var(--emerald-600)'
+                            : 'var(--amber-600)',
+                    }}
+                >
+                    <Icon
+                        name={docHealth.healthy ? 'check' : 'alert-triangle'}
+                        size="xs"
+                    />{' '}
+                    {docHealth.healthy
+                        ? 'Docs healthy'
+                        : !docHealth.hasAgents
+                            ? 'AGENTS.md missing'
+                            : !docHealth.hasGenieSection
+                                ? 'AGENTS.md missing the Genie MCP section'
+                                : docHealth.claudeDivergent
+                                    ? 'CLAUDE.md diverges from AGENTS.md (won’t auto-overwrite)'
+                                    : docHealth.claude === 'broken-pointer'
+                                        ? 'CLAUDE.md is a broken one-liner'
+                                        : docHealth.claude === 'missing'
+                                            ? 'CLAUDE.md missing'
+                                            : 'Needs repair'}
+                </Text>
+            )}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Action
+                    variant="ghost"
+                    icon="wrench"
+                    onClick={repairDocs}
+                    disabled={repairing}
+                >
+                    {repairing ? 'Repairing…' : 'Repair workspace docs'}
+                </Action>
+                {repairMsg && (
+                    <Text size="xs" className="text-zinc-500">
+                        {repairMsg}
+                    </Text>
+                )}
+            </div>
+        </div>
     );
 }
 
