@@ -614,6 +614,76 @@ textarea.input {
     display: none;
 }
 
+/* ===== Workspace settings modal — dense per-workspace settings ==========
+   Reuses the shared .set-section / .set-row / .set-row-* dense primitives;
+   these add the modal column, the name row, and the compact knowledge grid. */
+.ws-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 16px 20px 20px;
+}
+.ws-settings-head {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+.ws-settings-head h2 {
+    margin: 0;
+}
+.ws-name-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 6px;
+}
+.ws-name-row > :first-child {
+    flex: 1;
+    min-width: 0;
+}
+/* Compact knowledge buckets: a 2-col grid of single-line rows so 6 buckets
+   take 3 rows instead of dominating the modal. */
+.ws-know {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px 18px;
+    margin-top: 4px;
+}
+.ws-know-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 3px 0;
+    font-size: 12px;
+}
+.ws-know-name {
+    overflow: hidden;
+    color: var(--fg-2);
+    font-family: var(--font-mono);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ws-know-meta {
+    flex: 0 0 auto;
+    color: var(--fg-4);
+}
+.ws-know-act {
+    margin-left: auto;
+    flex: 0 0 auto;
+    padding: 0 2px;
+    border: none;
+    background: transparent;
+    color: var(--blue-400);
+    font: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+}
+.ws-know-act:disabled {
+    color: var(--fg-4);
+    cursor: default;
+}
+
 /* Interactive upgrade wizard tables — used inside the AddWorkspace modal. */
 .upgrade-tbl {
     width: 100%;

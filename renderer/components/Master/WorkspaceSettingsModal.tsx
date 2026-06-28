@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Action, Heading, Icon, Input, Modal, Select, Text } from '@particle-academy/react-fancy';
 import TynnProvisionPanel from '../TynnProvisionPanel';
 import type {
@@ -108,9 +108,9 @@ export default function WorkspaceSettingsModal({
 
     return (
         <Modal open onClose={onClose} size="md">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 20 }}>
-                <div>
-                    <Heading as="h2" size="sm" style={{ margin: 0 }}>
+            <div className="ws-settings">
+                <div className="ws-settings-head">
+                    <Heading as="h2" size="sm">
                         Workspace settings
                     </Heading>
                     {workspace.path && (
@@ -120,21 +120,25 @@ export default function WorkspaceSettingsModal({
                     )}
                 </div>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    <Heading as="h3" size="xs" style={{ margin: 0 }}>
-                        Name
-                    </Heading>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                        <div style={{ flex: 1 }}>
-                            <Input
-                                value={name}
-                                onValueChange={setName}
-                                placeholder="Workspace name"
-                                onKeyDown={(e: React.KeyboardEvent) => {
-                                    if (e.key === 'Enter') void saveName();
-                                }}
-                            />
-                        </div>
+                <Section
+                    title="Name"
+                    action={
+                        nameSaved ? (
+                            <Text size="xs" style={{ color: 'var(--emerald-600)' }}>
+                                <Icon name="check" size="xs" /> Renamed
+                            </Text>
+                        ) : undefined
+                    }
+                >
+                    <div className="ws-name-row">
+                        <Input
+                            value={name}
+                            onValueChange={setName}
+                            placeholder="Workspace name"
+                            onKeyDown={(e: React.KeyboardEvent) => {
+                                if (e.key === 'Enter') void saveName();
+                            }}
+                        />
                         <Action
                             size="sm"
                             color="blue"
@@ -149,12 +153,7 @@ export default function WorkspaceSettingsModal({
                             {savingName ? 'Saving…' : 'Rename'}
                         </Action>
                     </div>
-                    {nameSaved && (
-                        <Text size="xs" style={{ color: 'var(--emerald-600)' }}>
-                            <Icon name="check" size="xs" /> Renamed
-                        </Text>
-                    )}
-                </div>
+                </Section>
 
                 <TynnProvisionPanel workspaceId={workspace.id} />
 
@@ -168,100 +167,100 @@ export default function WorkspaceSettingsModal({
 
                 {workspace.path && <OpsWorkspacesPanel workspacePath={workspace.path} />}
 
-                <div
-                    style={{
-                        paddingTop: 12,
-                        borderTop: '1px solid var(--border-1)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 8,
-                    }}
-                >
-                    <Heading as="h3" size="xs" style={{ margin: 0 }}>
-                        IssueWatch remediation
-                    </Heading>
-                    <Text size="xs" className="text-zinc-500">
-                        How agents act on THIS workspace&apos;s IssueWatch pings — the
-                        open Issues / PRs / security alerts from <code>checkIssues</code>{' '}
-                        and the <code>imDone</code> <code>sec:</code> count. The choice
-                        rides on the imDone count line; fixes are always at the root
-                        cause — never a bandaid.
-                    </Text>
-                    <Select
-                        value={iwPolicy}
-                        onValueChange={(v) =>
-                            void changeIwPolicy(v as 'surface' | 'fix' | 'fix-and-ship')
-                        }
-                        list={[
-                            { value: 'surface', label: 'Surface only — report the counts, wait for me (default)' },
-                            { value: 'fix', label: 'Fix when idle — fix the root cause, then report before shipping' },
-                            { value: 'fix-and-ship', label: 'Fix & ship when idle — remediate and ship right away' },
-                        ]}
-                    />
-                </div>
-
-                <div
-                    style={{
-                        paddingTop: 12,
-                        borderTop: '1px solid var(--border-1)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 8,
-                    }}
-                >
-                    <Heading as="h3" size="xs" style={{ margin: 0 }}>
-                        Background process approval
-                    </Heading>
-                    <Text size="xs" className="text-zinc-500">
-                        When ON, an agent that tries to start a background process
-                        (via <code>manageProcess</code>) must be approved by you
-                        first.
-                    </Text>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <Section title="Agent behavior">
+                    <Row
+                        label="IssueWatch remediation"
+                        sub="How agents act on this workspace's IssueWatch pings"
+                        vertical
+                    >
+                        <Select
+                            value={iwPolicy}
+                            onValueChange={(v) =>
+                                void changeIwPolicy(v as 'surface' | 'fix' | 'fix-and-ship')
+                            }
+                            list={[
+                                { value: 'surface', label: 'Surface only — report the counts, wait for me (default)' },
+                                { value: 'fix', label: 'Fix when idle — fix the root cause, then report before shipping' },
+                                { value: 'fix-and-ship', label: 'Fix & ship when idle — remediate and ship right away' },
+                            ]}
+                        />
+                    </Row>
+                    <Row
+                        label="Background process approval"
+                        sub="Approve before an agent starts a process (manageProcess)"
+                    >
                         <input
                             type="checkbox"
                             checked={processApproval ?? true}
                             disabled={processApproval === null}
                             onChange={(e) => void toggleProcessApproval(e.target.checked)}
+                            aria-label="Require approval before an agent starts a process"
                         />
-                        <Text size="sm">Require my approval before an agent starts a process</Text>
-                    </label>
-                </div>
-
-                <div
-                    style={{
-                        paddingTop: 12,
-                        borderTop: '1px solid var(--border-1)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 8,
-                    }}
-                >
-                    <Heading as="h3" size="xs" style={{ margin: 0 }}>
-                        Terminal &amp; agent approval
-                    </Heading>
-                    <Text size="xs" className="text-zinc-500">
-                        When ON, an agent that tries to open a terminal, run a
-                        command, or launch/drive a coding agent (via{' '}
-                        <code>manageTerminals</code> / <code>runAgent</code>) must be
-                        approved by you first. This is higher-power than process
-                        approval — it can execute arbitrary code and spawn other
-                        agents — so leave it on unless you trust the agent fully.
-                    </Text>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                    </Row>
+                    <Row
+                        label="Terminal & agent approval"
+                        sub="Approve before an agent runs a terminal or launches an agent (manageTerminals / runAgent)"
+                    >
                         <input
                             type="checkbox"
                             checked={terminalApproval ?? true}
                             disabled={terminalApproval === null}
                             onChange={(e) => void toggleTerminalApproval(e.target.checked)}
+                            aria-label="Require approval before an agent runs a terminal or launches an agent"
                         />
-                        <Text size="sm">
-                            Require my approval before an agent runs a terminal or launches an agent
-                        </Text>
-                    </label>
-                </div>
+                    </Row>
+                </Section>
             </div>
         </Modal>
+    );
+}
+
+/** Dense section: a slim heading (+ optional one-line sub / right-aligned
+ *  action) over its rows. Reuses the shared .set-section primitives. */
+function Section({
+    title,
+    sub,
+    action,
+    children,
+}: {
+    title: string;
+    sub?: ReactNode;
+    action?: ReactNode;
+    children: ReactNode;
+}) {
+    return (
+        <section className="set-section">
+            <div className="set-section-head">
+                <h2>{title}</h2>
+                {sub && <span className="set-section-desc">{sub}</span>}
+                {action && <span style={{ marginLeft: 'auto' }}>{action}</span>}
+            </div>
+            {children}
+        </section>
+    );
+}
+
+/** One dense row: label (+ optional one-line sub) on the left, control on the
+ *  right — or full-width underneath when `vertical`. */
+function Row({
+    label,
+    sub,
+    vertical,
+    children,
+}: {
+    label: ReactNode;
+    sub?: ReactNode;
+    vertical?: boolean;
+    children: ReactNode;
+}) {
+    return (
+        <div className={`set-row${vertical ? ' vertical' : ''}`}>
+            <div className="set-row-main">
+                <span className="set-row-label">{label}</span>
+                {sub && <span className="set-row-desc">{sub}</span>}
+            </div>
+            <div className="set-row-control">{children}</div>
+        </div>
     );
 }
 
@@ -317,68 +316,57 @@ function WorkspaceDocsPanel({ workspaceId }: { workspaceId: string }) {
     };
 
     return (
-        <div
-            style={{
-                paddingTop: 12,
-                borderTop: '1px solid var(--border-1)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-            }}
-        >
-            <Heading as="h3" size="xs" style={{ margin: 0 }}>
-                Workspace docs
-            </Heading>
-            <Text size="xs" className="text-zinc-500">
-                Keep this workspace&apos;s <code>AGENTS.md</code> (with the Genie MCP
-                section) and <code>CLAUDE.md</code> healthy. Repair is idempotent and
-                safe to re-run; a divergent <code>CLAUDE.md</code> is reported, never
-                overwritten.
-            </Text>
-            {docHealth && (
-                <Text
-                    size="xs"
-                    style={{
-                        color: docHealth.healthy
-                            ? 'var(--emerald-600)'
-                            : 'var(--amber-600)',
-                    }}
-                >
-                    <Icon
-                        name={docHealth.healthy ? 'check' : 'alert-triangle'}
-                        size="xs"
-                    />{' '}
-                    {docHealth.healthy
-                        ? 'Docs healthy'
-                        : !docHealth.hasAgents
-                            ? 'AGENTS.md missing'
-                            : !docHealth.hasGenieSection
-                                ? 'AGENTS.md missing the Genie MCP section'
-                                : docHealth.claudeDivergent
-                                    ? 'CLAUDE.md diverges from AGENTS.md (won’t auto-overwrite)'
-                                    : docHealth.claude === 'broken-pointer'
-                                        ? 'CLAUDE.md is a broken one-liner'
-                                        : docHealth.claude === 'missing'
-                                            ? 'CLAUDE.md missing'
-                                            : 'Needs repair'}
-                </Text>
-            )}
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <Section
+            title="Workspace docs"
+            sub="AGENTS.md (with the Genie MCP section) + CLAUDE.md"
+            action={
                 <Action
                     variant="ghost"
+                    size="sm"
                     icon="wrench"
                     onClick={repairDocs}
                     disabled={repairing}
                 >
-                    {repairing ? 'Repairing…' : 'Repair workspace docs'}
+                    {repairing ? 'Repairing…' : 'Repair'}
                 </Action>
-                {repairMsg && (
-                    <Text size="xs" className="text-zinc-500">
-                        {repairMsg}
-                    </Text>
-                )}
-            </div>
-        </div>
+            }
+        >
+            {(docHealth || repairMsg) && (
+                <div className="set-row">
+                    <div className="set-row-main">
+                        {docHealth && (
+                            <span
+                                style={{
+                                    fontSize: 12.5,
+                                    color: docHealth.healthy
+                                        ? 'var(--emerald-600)'
+                                        : 'var(--amber-600)',
+                                }}
+                            >
+                                <Icon
+                                    name={docHealth.healthy ? 'check' : 'alert-triangle'}
+                                    size="xs"
+                                />{' '}
+                                {docHealth.healthy
+                                    ? 'Docs healthy'
+                                    : !docHealth.hasAgents
+                                        ? 'AGENTS.md missing'
+                                        : !docHealth.hasGenieSection
+                                            ? 'AGENTS.md missing the Genie MCP section'
+                                            : docHealth.claudeDivergent
+                                                ? 'CLAUDE.md diverges from AGENTS.md'
+                                                : docHealth.claude === 'broken-pointer'
+                                                    ? 'CLAUDE.md is a broken one-liner'
+                                                    : docHealth.claude === 'missing'
+                                                        ? 'CLAUDE.md missing'
+                                                        : 'Needs repair'}
+                            </span>
+                        )}
+                        {repairMsg && <span className="set-row-desc">{repairMsg}</span>}
+                    </div>
+                </div>
+            )}
+        </Section>
     );
 }
 
@@ -465,20 +453,10 @@ function EnvelopeReposPanel({ workspacePath }: { workspacePath: string }) {
     };
 
     return (
-        <div
-            style={{
-                paddingTop: 12,
-                borderTop: '1px solid var(--border-1)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-            }}
-        >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Heading as="h3" size="xs" style={{ margin: 0 }}>
-                    Repos
-                </Heading>
-                <span style={{ flex: 1 }} />
+        <Section
+            title="Repos"
+            sub="Submodules under repos/, registered in project.json"
+            action={
                 <Action
                     size="sm"
                     variant="ghost"
@@ -487,15 +465,10 @@ function EnvelopeReposPanel({ workspacePath }: { workspacePath: string }) {
                 >
                     Add repo
                 </Action>
-            </div>
-            <Text size="xs" className="text-zinc-500">
-                The envelope&apos;s member repos — git submodules under{' '}
-                <code>repos/</code>, registered in <code>project.json</code>. Add or
-                remove leaves the change staged for you to commit.
-            </Text>
-
+            }
+        >
             {repos.length === 0 ? (
-                <Text size="xs" className="text-zinc-500">
+                <Text size="xs" className="text-zinc-500" style={{ paddingTop: 4 }}>
                     No repos yet. Add one to register it as a submodule.
                 </Text>
             ) : (
@@ -621,16 +594,14 @@ function EnvelopeReposPanel({ workspacePath }: { workspacePath: string }) {
                     {error}
                 </Text>
             )}
-        </div>
+        </Section>
     );
 }
 
 /**
  * Envelope `.ai/` knowledge folders — only for a `.agi` workspace (else renders
- * nothing). Shows the standard knowledge buckets (`.ai/knowledge`, `.ai/plans`,
- * …) with whether each exists + how many entries, an Open (reveal), and a Create
- * for a missing one. This is the envelope's knowledge-folder mapping: which
- * buckets are present and where they live.
+ * nothing). A compact 2-col grid of the standard buckets (`.ai/knowledge` · N)
+ * with an inline Open / Create, so it stays dense and doesn't dominate the modal.
  */
 function KnowledgeFoldersPanel({ workspacePath }: { workspacePath: string }) {
     const [folders, setFolders] = useState<KnowledgeFolderView[] | null>(null);
@@ -673,74 +644,42 @@ function KnowledgeFoldersPanel({ workspacePath }: { workspacePath: string }) {
     };
 
     return (
-        <div
-            style={{
-                paddingTop: 12,
-                borderTop: '1px solid var(--border-1)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-            }}
-        >
-            <Heading as="h3" size="xs" style={{ margin: 0 }}>
-                Knowledge folders
-            </Heading>
-            <Text size="xs" className="text-zinc-500">
-                The envelope&apos;s shared-knowledge buckets under <code>.ai/</code>.
-                Create the ones you use; agents read and write them as the
-                project&apos;s memory.
-            </Text>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <Section title="Knowledge folders" sub=".ai/ buckets — create the ones you use">
+            <div className="ws-know">
                 {folders.map((f) => (
-                    <div
-                        key={f.name}
-                        style={{ display: 'flex', alignItems: 'center', gap: 8 }}
-                    >
-                        <Icon
-                            name={f.exists ? 'folder' : 'folder-plus'}
-                            size="xs"
-                            className="text-zinc-500"
-                        />
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                            <Text size="sm" style={{ fontWeight: 600 }}>
-                                {f.relPath}
-                            </Text>
-                            <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
-                                {f.exists
-                                    ? `${f.entryCount} item${f.entryCount === 1 ? '' : 's'}`
-                                    : 'not created'}
-                            </Text>
-                        </div>
+                    <div className="ws-know-item" key={f.name} title={f.relPath}>
+                        <span className="ws-know-name">{f.relPath}</span>
+                        <span className="ws-know-meta">
+                            · {f.exists ? f.entryCount : '—'}
+                        </span>
                         {f.exists ? (
-                            <Action
-                                size="sm"
-                                variant="ghost"
-                                icon="folder-open"
+                            <button
+                                type="button"
+                                className="ws-know-act"
                                 disabled={busy !== null}
                                 onClick={() => open(f.relPath)}
                             >
                                 Open
-                            </Action>
+                            </button>
                         ) : (
-                            <Action
-                                size="sm"
-                                variant="ghost"
-                                icon="plus"
+                            <button
+                                type="button"
+                                className="ws-know-act"
                                 disabled={busy !== null}
                                 onClick={() => void create(f.name)}
                             >
-                                {busy === f.name ? 'Creating…' : 'Create'}
-                            </Action>
+                                {busy === f.name ? '…' : 'Create'}
+                            </button>
                         )}
                     </div>
                 ))}
             </div>
             {error && (
-                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                <Text size="xs" style={{ color: 'var(--rose-500)', marginTop: 4 }}>
                     {error}
                 </Text>
             )}
-        </div>
+        </Section>
     );
 }
 
@@ -793,26 +732,12 @@ function OpsReposPanel({ workspacePath }: { workspacePath: string }) {
     };
 
     return (
-        <div
-            style={{
-                paddingTop: 12,
-                borderTop: '1px solid var(--border-1)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-            }}
+        <Section
+            title="Ops-managed repos"
+            sub="Kept in sync with governed projects' *.agi repos — you approve each sync"
         >
-            <Heading as="h3" size="xs" style={{ margin: 0 }}>
-                Ops-managed repos
-            </Heading>
-            <Text size="xs" className="text-zinc-500">
-                This Ops project governs other projects. Genie keeps its envelope&apos;s
-                repos in sync with the <code>*.agi</code> repos of those projects — you
-                approve each sync.
-            </Text>
-
             {inSync ? (
-                <Text size="xs" style={{ color: 'var(--emerald-600)' }}>
+                <Text size="xs" style={{ color: 'var(--emerald-600)', paddingTop: 4 }}>
                     <Icon name="check" size="xs" /> In sync.
                 </Text>
             ) : (
@@ -848,7 +773,7 @@ function OpsReposPanel({ workspacePath }: { workspacePath: string }) {
                     {msg}
                 </Text>
             )}
-        </div>
+        </Section>
     );
 }
 
@@ -928,35 +853,22 @@ function OpsWorkspacesPanel({ workspacePath }: { workspacePath: string }) {
     };
 
     return (
-        <div
-            style={{
-                paddingTop: 12,
-                borderTop: '1px solid var(--border-1)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-            }}
+        <Section
+            title="Ops-managed workspaces"
+            sub="Stand up a local workspace per governed child by cloning its *.agi repo"
         >
-            <Heading as="h3" size="xs" style={{ margin: 0 }}>
-                Ops-managed workspaces
-            </Heading>
-            <Text size="xs" className="text-zinc-500">
-                This Ops project governs other projects. Genie can stand up a local
-                workspace for each governed child by cloning its <code>*.agi</code>{' '}
-                repo — you approve each batch (or turn on auto-provision below).
-            </Text>
-
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <Row
+                label="Auto-provision child workspaces"
+                sub="Skip my approval (the provisionWorkspaces MCP tool acts directly)"
+            >
                 <input
                     type="checkbox"
                     checked={autoProvision ?? false}
                     disabled={autoProvision === null}
                     onChange={(e) => void toggleAuto(e.target.checked)}
+                    aria-label="Auto-provision child workspaces"
                 />
-                <Text size="sm">
-                    Auto-provision child workspaces (skip my approval)
-                </Text>
-            </label>
+            </Row>
 
             {provisionable.length === 0 && unresolved.length === 0 ? (
                 <Text size="xs" style={{ color: 'var(--emerald-600)' }}>
@@ -1004,6 +916,6 @@ function OpsWorkspacesPanel({ workspacePath }: { workspacePath: string }) {
                     {msg}
                 </Text>
             )}
-        </div>
+        </Section>
     );
 }

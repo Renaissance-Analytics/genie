@@ -152,6 +152,11 @@
     cursor: default;
     opacity: 0.85;
 }
+/* One-way progress (after the user commits with the single Upgrade click) —
+   a non-interactive status display, not a button. */
+.update-pill.is-progress {
+    cursor: default;
+}
 /* Ready-to-restart is the call to action — fill it solid. */
 .update-pill.ready {
     background: #f59e0b;

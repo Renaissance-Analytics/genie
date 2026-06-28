@@ -1390,18 +1390,23 @@ function MasterInner() {
 }
 
 /**
- * Header update pill. Lives in the title bar and only renders while an
- * update is pending (available → downloading → ready-to-restart). One
- * click walks the updater's state machine: Install (download) → Restart.
- * Hovering reveals a popover of the incoming changes — commit subjects
- * between the installed and latest version, grouped per version so a
- * user several releases behind sees them stacked newest-first.
+ * Header update pill. Lives in the title bar and only renders while an update is
+ * pending (available → downloading → ready-to-restart). It's ONE-WAY: a single
+ * "Upgrade" click commits, after which the button is REPLACED by a
+ * non-interactive progress display (downloading → installing → Restarting…) that
+ * drives the existing updater calls (apply = downloadUpdate, then restart =
+ * quitAndInstall) automatically — no second clickable button to mis-/double-click.
+ * Hovering (pre-commit) reveals a popover of the incoming changes + the
+ * pty-host-restart warning, so the user sees what they're committing to.
  */
 function UpdatePill() {
     const [status, setStatus] = useState<UpdaterStatus | null>(null);
-    const [busy, setBusy] = useState(false);
+    const [committed, setCommitted] = useState(false);
     const [changelog, setChangelog] = useState<Changelog | null>(null);
     const [hover, setHover] = useState(false);
+    // Each step fires at most once after the user commits.
+    const appliedRef = useRef(false);
+    const restartedRef = useRef(false);
 
     useEffect(() => {
         let alive = true;
@@ -1436,38 +1441,48 @@ function UpdatePill() {
         };
     }, [pending, status?.latestVersion]);
 
+    // After the user commits (one Upgrade click), carry the whole sequence
+    // through hands-free: download the update, then auto-restart once it's
+    // staged. The refs guard each step to a single fire.
+    useEffect(() => {
+        if (!committed || !status) return;
+        if (status.state === 'available' && !appliedRef.current) {
+            appliedRef.current = true;
+            void api().updater.apply(); // downloadUpdate
+        } else if (status.state === 'ready-to-restart' && !restartedRef.current) {
+            restartedRef.current = true;
+            void (async () => {
+                const r = await api().updater.restart(); // quitAndInstall
+                // Phase-1 (git checkout) restarts manually — quit so relaunch
+                // picks up the new code.
+                if (!r.ok) await api().app.quit();
+            })();
+        }
+    }, [committed, status?.state]);
+
     if (!status || !pending) return null;
 
     const version = status.latestVersion ?? '';
-    const working = status.state === 'downloading' || status.state === 'applying';
     const ready = status.state === 'ready-to-restart';
     const pct =
         status.state === 'downloading' && typeof status.progress === 'number'
             ? Math.round(status.progress * 100)
             : null;
 
-    const label = ready
-        ? 'Restart to update'
-        : working
-            ? `Installing…${pct !== null ? ` ${pct}%` : ''}`
-            : 'Install update';
+    // Pre-commit, an actionable update shows ONE button. A pre-staged ready
+    // build is just as actionable — one click commits to the restart. (A
+    // background working state, which the one-click path shouldn't produce,
+    // falls through to the progress display.)
+    const actionable = !committed && (status.state === 'available' || ready);
 
-    const act = async () => {
-        if (working) return;
-        setBusy(true);
-        try {
-            if (status.state === 'available') {
-                await api().updater.apply();
-            } else if (ready) {
-                const r = await api().updater.restart();
-                // Phase-1 (git checkout) restarts manually — quitting is the
-                // honest fallback so relaunch picks up the new code.
-                if (!r.ok) await api().app.quit();
-            }
-        } finally {
-            setBusy(false);
-        }
-    };
+    const progressLabel =
+        status.state === 'ready-to-restart'
+            ? 'Restarting…'
+            : status.state === 'applying'
+                ? 'Installing…'
+                : status.state === 'downloading'
+                    ? `Downloading…${pct !== null ? ` ${pct}%` : ''}`
+                    : 'Upgrading…';
 
     return (
         <div
@@ -1475,15 +1490,27 @@ function UpdatePill() {
             onMouseEnter={() => setHover(true)}
             onMouseLeave={() => setHover(false)}
         >
-            <button
-                type="button"
-                className={`update-pill${ready ? ' ready' : ''}`}
-                onClick={act}
-                disabled={busy || working}
-            >
-                <span className="up-dot" />
-                {label}
-            </button>
+            {actionable ? (
+                <button
+                    type="button"
+                    className="update-pill ready"
+                    onClick={() => setCommitted(true)}
+                >
+                    <span className="up-dot" />
+                    Upgrade
+                </button>
+            ) : (
+                // One-way progress: no button, no second click — the effect
+                // above carries it through install → restart.
+                <div
+                    className="update-pill is-progress"
+                    role="status"
+                    aria-live="polite"
+                >
+                    <span className="up-dot" />
+                    {progressLabel}
+                </div>
+            )}
             {hover && (
                 <UpdatePopover
                     version={version}
