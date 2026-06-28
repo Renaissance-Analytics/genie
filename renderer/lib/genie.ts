@@ -649,6 +649,48 @@ export interface CreateAgiResult {
     remote?: string;
 }
 
+/** A member repo of an envelope as the workspace settings window sees it. */
+export interface EnvelopeRepoView {
+    name: string;
+    url: string | null;
+    role: 'host' | 'package' | null;
+    /** Checkout path inside the envelope (`repos/<name>`). */
+    path: string;
+    /** Present in project.json `repos[]`. */
+    inRegistry: boolean;
+    /** A git checkout exists at `repos/<name>` on disk. */
+    onDisk: boolean;
+}
+
+export interface EnvelopeReposResult {
+    /** False for a plain-folder (non-`.agi`) workspace — UI hides the section. */
+    isEnvelope: boolean;
+    repos: EnvelopeRepoView[];
+}
+
+/** Result of an envelope repo / knowledge mutation. */
+export interface RepoMutationResult {
+    ok: boolean;
+    error?: string;
+}
+
+/** One `.ai/` knowledge folder's state. */
+export interface KnowledgeFolderView {
+    name: string;
+    /** Envelope-relative path, e.g. `.ai/knowledge`. */
+    relPath: string;
+    exists: boolean;
+    /** Entries directly inside (0 when absent; `.gitkeep` excluded). */
+    entryCount: number;
+}
+
+export interface KnowledgeResult {
+    isEnvelope: boolean;
+    /** Whether the `.ai/` folder itself exists. */
+    aiExists: boolean;
+    folders: KnowledgeFolderView[];
+}
+
 export interface ConvertToAgiOpts {
     slug: string;
     name: string;
@@ -920,6 +962,11 @@ export interface GenieApi {
             parentPath: string,
             folder?: string,
         ) => Promise<{ path: string }>;
+        /** Reveal a workspace-relative path in the OS file manager (guarded). */
+        reveal: (
+            workspacePath: string,
+            relPath: string,
+        ) => Promise<{ ok: boolean; error?: string }>;
     };
     agi: {
         detect: (folder: string) => Promise<DetectResult>;
@@ -937,6 +984,26 @@ export interface GenieApi {
         ) => Promise<AddStructureDocsResult>;
         mcpStatus: (envelopePath: string) => Promise<McpStatus>;
         consolidateMcp: (envelopePath: string) => Promise<ConsolidateMcpResult>;
+        /** Envelope member repos (project.json registry ∪ on-disk submodules). */
+        reposList: (workspacePath: string) => Promise<EnvelopeReposResult>;
+        /** Add a repo as a submodule under repos/<name> and register it. */
+        repoAdd: (
+            workspacePath: string,
+            url: string,
+            name: string,
+        ) => Promise<RepoMutationResult>;
+        /** Remove a repo (deinit + rm + unregister). Host repo is protected. */
+        repoRemove: (
+            workspacePath: string,
+            name: string,
+        ) => Promise<RepoMutationResult>;
+        /** The envelope's `.ai/` knowledge folders + whether each exists. */
+        knowledgeList: (workspacePath: string) => Promise<KnowledgeResult>;
+        /** Scaffold a standard `.ai/<name>` knowledge folder. */
+        knowledgeCreate: (
+            workspacePath: string,
+            name: string,
+        ) => Promise<RepoMutationResult>;
     };
     tynn: {
         projects: () => Promise<TynnProject[]>;
@@ -965,6 +1032,8 @@ export interface GenieApi {
             workspacePath: string,
             link: { host?: string; owner?: string; project?: string; projectId?: string },
         ) => Promise<{ ok: boolean }>;
+        /** Clear the workspace's Tynn project link (drops the project.json block). */
+        unlink: (workspacePath: string) => Promise<{ ok: boolean }>;
         /** Where the workspace stands without minting anything (UI display). */
         provisionStatus: (workspacePath: string) => Promise<{
             status: 'unlinked' | 'signed-out' | 'already' | 'provision';

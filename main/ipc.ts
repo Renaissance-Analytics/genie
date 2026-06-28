@@ -1,5 +1,6 @@
 import { app, dialog, ipcMain, shell, BrowserWindow } from 'electron';
 import os from 'node:os';
+import path from 'node:path';
 import {
     addWorkspace,
     getAllSettings,
@@ -42,12 +43,20 @@ import { analyseFolder } from './workspace/analyse';
 import { validateSimpleWorkspace } from './workspace/create-simple';
 import { openWorkspace } from './workspace/open';
 import { cloneRepo } from './workspace/clone';
+import {
+    listEnvelopeRepos,
+    addEnvelopeRepo,
+    removeEnvelopeRepo,
+    listKnowledgeFolders,
+    createKnowledgeFolder,
+} from './workspace/envelope';
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import {
     provisionWorkspaceTynn,
     provisionStatus,
     linkWorkspaceTynn,
+    unlinkWorkspaceTynn,
 } from './tynn/provision';
 import {
     computeOpsRepoPlan,
@@ -235,7 +244,24 @@ export function registerIpcHandlers(): void {
         (_e, id: string, patch: Partial<WorkspaceRow>) => {
             const r = updateWorkspace(id, patch);
             rebuildMenu();
+            // A rename (project_name) must reflect live in the sidebar rail.
+            broadcastWorkspacesChanged();
             return r;
+        },
+    );
+    // Reveal a workspace-relative path (a repo under repos/, an .ai/ knowledge
+    // folder) in the OS file manager. Guard-resolved under the workspace root so
+    // a `..`/absolute path can't escape it.
+    ipcMain.handle(
+        'workspaces:reveal',
+        async (_e, workspacePath: string, relPath: string) => {
+            const root = path.resolve(workspacePath);
+            const abs = path.resolve(root, relPath ?? '');
+            if (abs !== root && !abs.startsWith(root + path.sep)) {
+                return { ok: false };
+            }
+            const err = await shell.openPath(abs);
+            return { ok: !err, error: err || undefined };
         },
     );
     ipcMain.handle('workspaces:remove', (_e, id: string) => {
@@ -480,6 +506,31 @@ export function registerIpcHandlers(): void {
         return consolidateMcpAndCommit(envelopePath);
     });
 
+    // --- Envelope repo + knowledge management (workspace settings window) ----
+    // Read the envelope's member repos (project.json registry ∪ on-disk
+    // submodules), add a repo (submodule add + register), remove one (deinit +
+    // rm + unregister). All no-ops / { isEnvelope:false } for plain folders.
+    ipcMain.handle('agi:repos-list', (_e, workspacePath: string) =>
+        listEnvelopeRepos(workspacePath),
+    );
+    ipcMain.handle(
+        'agi:repo-add',
+        (_e, workspacePath: string, url: string, name: string) =>
+            addEnvelopeRepo(workspacePath, url, name),
+    );
+    ipcMain.handle('agi:repo-remove', (_e, workspacePath: string, name: string) =>
+        removeEnvelopeRepo(workspacePath, name),
+    );
+    // The envelope's `.ai/` knowledge folders + a scaffold for a missing one.
+    ipcMain.handle('agi:knowledge-list', (_e, workspacePath: string) =>
+        listKnowledgeFolders(workspacePath),
+    );
+    ipcMain.handle(
+        'agi:knowledge-create',
+        (_e, workspacePath: string, name: string) =>
+            createKnowledgeFolder(workspacePath, name),
+    );
+
     // --- Terminal specs (persistent definitions, NOT live ptys) ---------
     ipcMain.handle('terminal-spec:list', (): TerminalSpecRow[] => listTerminalSpecs());
     ipcMain.handle(
@@ -563,6 +614,11 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('tynn:provision-status', async (_e, workspacePath: string) =>
         provisionStatus(workspacePath),
     );
+    // Clear a workspace's Tynn project link (drops the project.json tynn block).
+    ipcMain.handle('tynn:unlink', async (_e, workspacePath: string) => {
+        unlinkWorkspaceTynn(workspacePath);
+        return { ok: true };
+    });
     ipcMain.handle(
         'tynn:provision',
         async (_e, workspacePath: string, force = false) =>

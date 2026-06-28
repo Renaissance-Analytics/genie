@@ -126,6 +126,24 @@ export function linkWorkspaceTynn(workspacePath: string, link: ProjectJsonTynn):
 }
 
 /**
+ * Clear a workspace's Tynn project link by dropping the `tynn` block from
+ * project.json entirely. writeProjectJson MERGES the tynn block (so it can't
+ * clear it), so we rewrite the whole file with the key removed. The provisioned
+ * `.mcp.json` token is left as-is — clearing the link just stops auto-provision
+ * and lets the user pick a different project; the next provision is a no-op
+ * ('unlinked') until they re-link.
+ */
+export function unlinkWorkspaceTynn(workspacePath: string): void {
+    const pj = readProjectJson(workspacePath);
+    if (!pj || pj.tynn === undefined) return;
+    delete pj.tynn;
+    const file = path.join(workspacePath, 'project.json');
+    const tmp = file + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(pj, null, 2) + '\n', 'utf8');
+    fs.renameSync(tmp, file);
+}
+
+/**
  * Make sure `.mcp.json` (which carries the bearer token) and `.cursor/` can't
  * be committed. Appends the entries to the workspace `.gitignore` when absent.
  * Best-effort — a missing/locked .gitignore must not break provisioning.

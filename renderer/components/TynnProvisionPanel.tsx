@@ -92,6 +92,19 @@ export default function TynnProvisionPanel({ workspaceId }: { workspaceId?: stri
         }
     };
 
+    const unlink = async () => {
+        if (!path) return;
+        setBusy(true);
+        setMsg(null);
+        try {
+            await api().tynn.unlink(path);
+            setMsg('Unlinked from the Tynn project.');
+            await refresh();
+        } finally {
+            setBusy(false);
+        }
+    };
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <Heading as="h3" size="xs" style={{ margin: 0 }}>
@@ -156,6 +169,9 @@ export default function TynnProvisionPanel({ workspaceId }: { workspaceId?: stri
                     <span style={{ flex: 1 }} />
                     <Action size="sm" variant="ghost" icon="refresh-cw" disabled={busy} onClick={reprovision}>
                         {busy ? 'Re-provisioning…' : 'Re-provision'}
+                    </Action>
+                    <Action size="sm" variant="ghost" icon="unlink" disabled={busy} onClick={unlink}>
+                        Unlink
                     </Action>
                 </div>
             )}

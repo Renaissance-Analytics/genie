@@ -280,6 +280,13 @@ const api = {
             ipcRenderer.invoke('workspaces:clone', url, parentPath, folder) as Promise<{
                 path: string;
             }>,
+        /** Reveal a workspace-relative path (a repo, an .ai/ folder) in the OS
+         *  file manager. Guard-resolved under the workspace root in main. */
+        reveal: (workspacePath: string, relPath: string) =>
+            ipcRenderer.invoke('workspaces:reveal', workspacePath, relPath) as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
     },
 
     agi: {
@@ -303,6 +310,18 @@ const api = {
             ipcRenderer.invoke('agi:mcp-status', envelopePath),
         consolidateMcp: (envelopePath: string) =>
             ipcRenderer.invoke('agi:consolidate-mcp', envelopePath),
+        // Envelope repo registry management (workspace settings window).
+        reposList: (workspacePath: string) =>
+            ipcRenderer.invoke('agi:repos-list', workspacePath),
+        repoAdd: (workspacePath: string, url: string, name: string) =>
+            ipcRenderer.invoke('agi:repo-add', workspacePath, url, name),
+        repoRemove: (workspacePath: string, name: string) =>
+            ipcRenderer.invoke('agi:repo-remove', workspacePath, name),
+        // Envelope `.ai/` knowledge folders.
+        knowledgeList: (workspacePath: string) =>
+            ipcRenderer.invoke('agi:knowledge-list', workspacePath),
+        knowledgeCreate: (workspacePath: string, name: string) =>
+            ipcRenderer.invoke('agi:knowledge-create', workspacePath, name),
     },
 
     tynn: {
@@ -342,6 +361,9 @@ const api = {
             ipcRenderer.invoke('tynn:provision-status', workspacePath),
         provision: (workspacePath: string, force = false) =>
             ipcRenderer.invoke('tynn:provision', workspacePath, force),
+        /** Clear the workspace's Tynn project link (drops the project.json block). */
+        unlink: (workspacePath: string) =>
+            ipcRenderer.invoke('tynn:unlink', workspacePath),
         // Ops-project repo auto-management.
         opsPlan: (workspacePath: string) =>
             ipcRenderer.invoke('tynn:ops-plan', workspacePath),

@@ -1,14 +1,21 @@
 import { useEffect, useState } from 'react';
-import { Action, Heading, Icon, Modal, Text } from '@particle-academy/react-fancy';
+import { Action, Heading, Icon, Input, Modal, Text } from '@particle-academy/react-fancy';
 import TynnProvisionPanel from '../TynnProvisionPanel';
-import type { WorkspaceRow, WorkspaceDocHealth } from '../../lib/genie';
+import type {
+    WorkspaceRow,
+    WorkspaceDocHealth,
+    EnvelopeRepoView,
+    KnowledgeFolderView,
+} from '../../lib/genie';
 import { api } from '../../lib/genie';
 
 /**
- * Per-workspace settings, opened from the workspace context menu. Edits the
- * settings that belong to ONE workspace — attaching a Tynn project (and its
- * auto-provisioned agent token) and the background-process-approval gate.
- * Global/app settings still live in the Settings window.
+ * Per-workspace settings, opened from the workspace context menu. The single
+ * home for EVERYTHING about one workspace: its display name, its linked Tynn
+ * project (+ agent provisioning), the `.agi` envelope's member repos and `.ai/`
+ * knowledge folders, doc health, the Ops panels, and the approval gates.
+ * Envelope-only sections (repos / knowledge) hide themselves for a plain-folder
+ * workspace. Genuinely global/app settings still live in the Settings window.
  */
 export default function WorkspaceSettingsModal({
     workspace,
@@ -17,11 +24,33 @@ export default function WorkspaceSettingsModal({
     workspace: WorkspaceRow;
     onClose: () => void;
 }) {
+    // Editable workspace display name (the rail label). Persisted to the DB row;
+    // the rename broadcasts so the sidebar updates live.
+    const [name, setName] = useState(workspace.project_name);
+    const [savingName, setSavingName] = useState(false);
+    const [nameSaved, setNameSaved] = useState(false);
     // Per-workspace "require approval before an agent starts a process".
     const [processApproval, setProcessApproval] = useState<boolean | null>(null);
     // Per-workspace "require approval before an agent spawns a terminal /
     // launches a coding agent" (the higher-power manageTerminals / runAgent gate).
     const [terminalApproval, setTerminalApproval] = useState<boolean | null>(null);
+
+    const saveName = async () => {
+        const next = name.trim();
+        if (!next || next === workspace.project_name) return;
+        setSavingName(true);
+        setNameSaved(false);
+        try {
+            await api().workspaces.update(workspace.id, {
+                project_name: next,
+                tynn_project_name: next,
+            });
+            setNameSaved(true);
+            setTimeout(() => setNameSaved(false), 1800);
+        } finally {
+            setSavingName(false);
+        }
+    };
 
     useEffect(() => {
         let alive = true;
@@ -69,13 +98,54 @@ export default function WorkspaceSettingsModal({
                     <Heading as="h2" size="sm" style={{ margin: 0 }}>
                         Workspace settings
                     </Heading>
-                    <Text size="xs" className="text-zinc-500">
-                        {workspace.project_name}
-                        {workspace.path ? ` · ${workspace.path}` : ''}
-                    </Text>
+                    {workspace.path && (
+                        <Text size="xs" className="text-zinc-500">
+                            {workspace.path}
+                        </Text>
+                    )}
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <Heading as="h3" size="xs" style={{ margin: 0 }}>
+                        Name
+                    </Heading>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                        <div style={{ flex: 1 }}>
+                            <Input
+                                value={name}
+                                onValueChange={setName}
+                                placeholder="Workspace name"
+                                onKeyDown={(e: React.KeyboardEvent) => {
+                                    if (e.key === 'Enter') void saveName();
+                                }}
+                            />
+                        </div>
+                        <Action
+                            size="sm"
+                            color="blue"
+                            icon="check"
+                            disabled={
+                                savingName ||
+                                !name.trim() ||
+                                name.trim() === workspace.project_name
+                            }
+                            onClick={saveName}
+                        >
+                            {savingName ? 'Saving…' : 'Rename'}
+                        </Action>
+                    </div>
+                    {nameSaved && (
+                        <Text size="xs" style={{ color: 'var(--emerald-600)' }}>
+                            <Icon name="check" size="xs" /> Renamed
+                        </Text>
+                    )}
                 </div>
 
                 <TynnProvisionPanel workspaceId={workspace.id} />
+
+                {workspace.path && <EnvelopeReposPanel workspacePath={workspace.path} />}
+
+                {workspace.path && <KnowledgeFoldersPanel workspacePath={workspace.path} />}
 
                 <WorkspaceDocsPanel workspaceId={workspace.id} />
 
@@ -261,6 +331,368 @@ function WorkspaceDocsPanel({ workspaceId }: { workspaceId: string }) {
                     </Text>
                 )}
             </div>
+        </div>
+    );
+}
+
+/** Derive a git-safe submodule name from a repo URL (strip path + `.git`). */
+function repoNameFromUrl(url: string): string {
+    const last = url.trim().replace(/[/\\]+$/, '').split(/[/\\:]/).pop() ?? '';
+    return last.replace(/\.git$/i, '').replace(/[^A-Za-z0-9._-]/g, '-');
+}
+
+/**
+ * Envelope repo management — only meaningful for a `.agi` workspace, so it
+ * renders nothing for a plain folder (reposList → isEnvelope:false). Lists the
+ * member repos (project.json registry ∪ on-disk submodules under `repos/`) with
+ * their role, an Open (reveal in OS file manager), and a Remove; plus an Add
+ * form (clone a repo as a new submodule). Mutations leave the change staged for
+ * the user to commit, mirroring the Ops repo panel.
+ */
+function EnvelopeReposPanel({ workspacePath }: { workspacePath: string }) {
+    const [repos, setRepos] = useState<EnvelopeRepoView[] | null>(null);
+    const [isEnvelope, setIsEnvelope] = useState(false);
+    const [busy, setBusy] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [showAdd, setShowAdd] = useState(false);
+    const [addUrl, setAddUrl] = useState('');
+    const [addName, setAddName] = useState('');
+    const [addNameTouched, setAddNameTouched] = useState(false);
+
+    const load = async () => {
+        try {
+            const r = await api().agi.reposList(workspacePath);
+            setIsEnvelope(r.isEnvelope);
+            setRepos(r.repos);
+        } catch {
+            setRepos([]);
+            setIsEnvelope(false);
+        }
+    };
+
+    useEffect(() => {
+        void load();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [workspacePath]);
+
+    if (repos === null || !isEnvelope) return null; // loading or plain folder
+
+    const onUrlChange = (v: string) => {
+        setAddUrl(v);
+        if (!addNameTouched) setAddName(repoNameFromUrl(v));
+    };
+
+    const add = async () => {
+        setBusy('__add__');
+        setError(null);
+        try {
+            const r = await api().agi.repoAdd(workspacePath, addUrl, addName);
+            if (!r.ok) {
+                setError(r.error ?? 'Could not add the repo.');
+                return;
+            }
+            setShowAdd(false);
+            setAddUrl('');
+            setAddName('');
+            setAddNameTouched(false);
+            await load();
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    const remove = async (repo: EnvelopeRepoView) => {
+        setBusy(repo.name);
+        setError(null);
+        try {
+            const r = await api().agi.repoRemove(workspacePath, repo.name);
+            if (!r.ok) setError(r.error ?? 'Could not remove the repo.');
+            await load();
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    const open = (repo: EnvelopeRepoView) => {
+        void api().workspaces.reveal(workspacePath, repo.path);
+    };
+
+    return (
+        <div
+            style={{
+                paddingTop: 12,
+                borderTop: '1px solid var(--border-1)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+            }}
+        >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Heading as="h3" size="xs" style={{ margin: 0 }}>
+                    Repos
+                </Heading>
+                <span style={{ flex: 1 }} />
+                <Action
+                    size="sm"
+                    variant="ghost"
+                    icon="plus"
+                    onClick={() => setShowAdd((s) => !s)}
+                >
+                    Add repo
+                </Action>
+            </div>
+            <Text size="xs" className="text-zinc-500">
+                The envelope&apos;s member repos — git submodules under{' '}
+                <code>repos/</code>, registered in <code>project.json</code>. Add or
+                remove leaves the change staged for you to commit.
+            </Text>
+
+            {repos.length === 0 ? (
+                <Text size="xs" className="text-zinc-500">
+                    No repos yet. Add one to register it as a submodule.
+                </Text>
+            ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {repos.map((r) => (
+                        <div
+                            key={r.name}
+                            style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                        >
+                            <Icon name="git-branch" size="xs" className="text-zinc-500" />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <Text size="sm" style={{ fontWeight: 600 }}>
+                                    {r.name}
+                                    {r.role === 'host' && (
+                                        <span
+                                            style={{
+                                                marginLeft: 6,
+                                                fontSize: 10,
+                                                fontWeight: 600,
+                                                color: 'var(--violet-500)',
+                                            }}
+                                        >
+                                            host
+                                        </span>
+                                    )}
+                                </Text>
+                                <Text
+                                    size="xs"
+                                    className="text-zinc-500"
+                                    style={{
+                                        display: 'block',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                    }}
+                                >
+                                    {r.url ?? r.path}
+                                    {!r.onDisk && ' · not cloned'}
+                                    {!r.inRegistry && ' · unregistered'}
+                                </Text>
+                            </div>
+                            <Action
+                                size="sm"
+                                variant="ghost"
+                                icon="folder-open"
+                                disabled={!r.onDisk || busy !== null}
+                                onClick={() => open(r)}
+                            >
+                                Open
+                            </Action>
+                            <Action
+                                size="sm"
+                                variant="ghost"
+                                icon="trash-2"
+                                disabled={r.role === 'host' || busy !== null}
+                                title={
+                                    r.role === 'host'
+                                        ? 'The host repo can’t be removed here'
+                                        : 'Remove this repo'
+                                }
+                                onClick={() => void remove(r)}
+                            >
+                                {busy === r.name ? 'Removing…' : 'Remove'}
+                            </Action>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {showAdd && (
+                <div
+                    style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                        padding: 10,
+                        borderRadius: 8,
+                        background: 'var(--bg-2)',
+                        border: '1px solid var(--border-1)',
+                    }}
+                >
+                    <Input
+                        label="Repository URL"
+                        description="Cloned as a submodule with your existing git auth."
+                        value={addUrl}
+                        onValueChange={onUrlChange}
+                        placeholder="git@github.com:owner/repo.git"
+                    />
+                    <Input
+                        label="Submodule name"
+                        description={`Lands at repos/${addName || '…'}/`}
+                        value={addName}
+                        onValueChange={(v) => {
+                            setAddNameTouched(true);
+                            setAddName(v);
+                        }}
+                        placeholder="web"
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                        <Action
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setShowAdd(false)}
+                            disabled={busy === '__add__'}
+                        >
+                            Cancel
+                        </Action>
+                        <Action
+                            size="sm"
+                            color="blue"
+                            icon="download"
+                            disabled={busy === '__add__' || !addUrl.trim() || !addName.trim()}
+                            onClick={add}
+                        >
+                            {busy === '__add__' ? 'Adding…' : 'Add repo'}
+                        </Action>
+                    </div>
+                </div>
+            )}
+
+            {error && (
+                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                    {error}
+                </Text>
+            )}
+        </div>
+    );
+}
+
+/**
+ * Envelope `.ai/` knowledge folders — only for a `.agi` workspace (else renders
+ * nothing). Shows the standard knowledge buckets (`.ai/knowledge`, `.ai/plans`,
+ * …) with whether each exists + how many entries, an Open (reveal), and a Create
+ * for a missing one. This is the envelope's knowledge-folder mapping: which
+ * buckets are present and where they live.
+ */
+function KnowledgeFoldersPanel({ workspacePath }: { workspacePath: string }) {
+    const [folders, setFolders] = useState<KnowledgeFolderView[] | null>(null);
+    const [isEnvelope, setIsEnvelope] = useState(false);
+    const [busy, setBusy] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
+
+    const load = async () => {
+        try {
+            const r = await api().agi.knowledgeList(workspacePath);
+            setIsEnvelope(r.isEnvelope);
+            setFolders(r.folders);
+        } catch {
+            setFolders([]);
+            setIsEnvelope(false);
+        }
+    };
+
+    useEffect(() => {
+        void load();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [workspacePath]);
+
+    if (folders === null || !isEnvelope) return null; // loading or plain folder
+
+    const create = async (name: string) => {
+        setBusy(name);
+        setError(null);
+        try {
+            const r = await api().agi.knowledgeCreate(workspacePath, name);
+            if (!r.ok) setError(r.error ?? 'Could not create the folder.');
+            await load();
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    const open = (relPath: string) => {
+        void api().workspaces.reveal(workspacePath, relPath);
+    };
+
+    return (
+        <div
+            style={{
+                paddingTop: 12,
+                borderTop: '1px solid var(--border-1)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+            }}
+        >
+            <Heading as="h3" size="xs" style={{ margin: 0 }}>
+                Knowledge folders
+            </Heading>
+            <Text size="xs" className="text-zinc-500">
+                The envelope&apos;s shared-knowledge buckets under <code>.ai/</code>.
+                Create the ones you use; agents read and write them as the
+                project&apos;s memory.
+            </Text>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {folders.map((f) => (
+                    <div
+                        key={f.name}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                    >
+                        <Icon
+                            name={f.exists ? 'folder' : 'folder-plus'}
+                            size="xs"
+                            className="text-zinc-500"
+                        />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                            <Text size="sm" style={{ fontWeight: 600 }}>
+                                {f.relPath}
+                            </Text>
+                            <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                                {f.exists
+                                    ? `${f.entryCount} item${f.entryCount === 1 ? '' : 's'}`
+                                    : 'not created'}
+                            </Text>
+                        </div>
+                        {f.exists ? (
+                            <Action
+                                size="sm"
+                                variant="ghost"
+                                icon="folder-open"
+                                disabled={busy !== null}
+                                onClick={() => open(f.relPath)}
+                            >
+                                Open
+                            </Action>
+                        ) : (
+                            <Action
+                                size="sm"
+                                variant="ghost"
+                                icon="plus"
+                                disabled={busy !== null}
+                                onClick={() => void create(f.name)}
+                            >
+                                {busy === f.name ? 'Creating…' : 'Create'}
+                            </Action>
+                        )}
+                    </div>
+                ))}
+            </div>
+            {error && (
+                <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                    {error}
+                </Text>
+            )}
         </div>
     );
 }
