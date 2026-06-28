@@ -17,6 +17,15 @@ import {
     deletePath,
     gitStatus,
 } from '../files/ipc';
+import {
+    listWorkspaces as dbListWorkspaces,
+    listTerminalSpecs,
+    getTerminalSpec,
+    createTerminalSpec,
+    updateTerminalSpec,
+    deleteTerminalSpec,
+    touchTerminalSpec,
+} from '../db';
 
 /**
  * REST surface for the mobile remote-control server. Pure routing over the
@@ -631,6 +640,68 @@ export async function handleApi(
             return true;
         }
         sendJson(res, 404, { error: 'unknown files route' });
+        return true;
+    }
+
+    // --- desktop data API — the remote DESKTOP's rich GenieApi shapes --------
+    // Serves the host's OWN data model (full WorkspaceRow / TerminalSpecRow) so
+    // the remote desktop's bridge is a THIN pass-through, not a lossy adaptation
+    // of the mobile subset. Authed; spec mutations also honour the kill-switch.
+    if (pathname.startsWith('/api/desktop/')) {
+        if (pathname === '/api/desktop/workspaces' && method === 'GET') {
+            sendJson(res, 200, { workspaces: dbListWorkspaces() });
+            return true;
+        }
+        if (pathname === '/api/desktop/terminal-specs' && method === 'GET') {
+            sendJson(res, 200, { specs: listTerminalSpecs() });
+            return true;
+        }
+        if (method !== 'POST') {
+            sendJson(res, 405, { error: 'method not allowed' });
+            return true;
+        }
+        let d: {
+            id?: string;
+            input?: Parameters<typeof createTerminalSpec>[0];
+            patch?: Parameters<typeof updateTerminalSpec>[1];
+        };
+        try {
+            d = await readJsonBody(req);
+        } catch {
+            sendJson(res, 400, { error: 'invalid body' });
+            return true;
+        }
+        try {
+            if (pathname === '/api/desktop/terminal-spec/get') {
+                sendJson(res, 200, { spec: getTerminalSpec(String(d.id ?? '')) });
+                return true;
+            }
+            // Mutations — kill-switch-gated.
+            if (guardLocked()) return true;
+            if (pathname === '/api/desktop/terminal-spec/create' && d.input) {
+                sendJson(res, 200, { spec: createTerminalSpec(d.input) });
+                return true;
+            }
+            if (pathname === '/api/desktop/terminal-spec/update') {
+                sendJson(res, 200, {
+                    spec: updateTerminalSpec(String(d.id ?? ''), d.patch ?? {}),
+                });
+                return true;
+            }
+            if (pathname === '/api/desktop/terminal-spec/remove') {
+                sendJson(res, 200, { ok: deleteTerminalSpec(String(d.id ?? '')) });
+                return true;
+            }
+            if (pathname === '/api/desktop/terminal-spec/touch') {
+                touchTerminalSpec(String(d.id ?? ''));
+                sendJson(res, 200, { ok: true });
+                return true;
+            }
+        } catch (e) {
+            sendJson(res, 400, { error: e instanceof Error ? e.message : 'desktop op failed' });
+            return true;
+        }
+        sendJson(res, 404, { error: 'unknown desktop route' });
         return true;
     }
 
