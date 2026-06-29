@@ -180,17 +180,14 @@ export function forgetHost(connKey: string): void {
 // --- window ↔ connection resolution ----------------------------------------
 
 /**
- * The connection a CALLING window should use, or null when it's local.
- * Explicit binding wins; otherwise (legacy global flow, before the renderer
- * adopts per-window binding) fall back to the sole connection when exactly one
- * exists. Once windows bind explicitly (Phase 2/3), only bound host windows
- * resolve to a connection here and the local window resolves to null (local).
+ * The connection a CALLING window should use, or null when it's LOCAL. A window
+ * is remote ONLY if it was explicitly bound (the host-window factory). Every
+ * other window — the local window, Settings, a Stage — is local, so connecting a
+ * host never flips them: that's the whole point of multi-host coexistence.
  */
 function connForWebContents(wcId: number): RemoteConnection | null {
     const key = bindings.get(wcId);
-    if (key) return connections.get(key) ?? null;
-    if (connections.size === 1) return connections.values().next().value ?? null;
-    return null;
+    return key ? connections.get(key) ?? null : null;
 }
 
 /** Bind a window to a host connection (called by the host-window factory). */
@@ -216,15 +213,12 @@ export function remoteBindingFor(wcId: number): { mode: 'local' | 'remote'; host
     return { mode: conn ? 'remote' : 'local', host: conn?.host ?? null };
 }
 
-/** Send a payload to the windows that should receive a connection's events:
- *  the windows bound to it — or, when nothing is bound (legacy flow), all of
- *  them. */
+/** Send a connection's events ONLY to the windows bound to it — so a host's
+ *  data never reaches the local window or another host's window. */
 function emitToConn(conn: RemoteConnection, channel: string, payload: unknown): void {
-    const boundIds = new Set<number>();
-    for (const [wcId, key] of bindings) if (key === conn.connKey) boundIds.add(wcId);
     for (const w of BrowserWindow.getAllWindows()) {
         if (w.isDestroyed()) continue;
-        if (boundIds.size === 0 || boundIds.has(w.webContents.id)) {
+        if (bindings.get(w.webContents.id) === conn.connKey) {
             w.webContents.send(channel, payload);
         }
     }

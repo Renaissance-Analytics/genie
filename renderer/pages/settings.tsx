@@ -2410,12 +2410,13 @@ function RemoteHostCard() {
         setBusy(key);
         setMsg(null);
         try {
-            // No PIN → reconnect with the remembered token. The host answers
-            // needsPin only for a genuine first-time pair (or a dead token).
-            const r = await api().remote.connect(host, pin?.trim() || undefined);
+            // Open the host in its OWN native Floor window (the local window
+            // stays local). No PIN → reconnect with the remembered token; the
+            // host answers needsPin only for a first-time pair (or a dead token).
+            const r = await api().remote.open(host, pin?.trim() || undefined);
             if (r.ok) {
                 setPinNeeded((p) => ({ ...p, [key]: false }));
-                setMsg(`Connected to ${host.hostname} — your desktop is now controlling it.`);
+                setMsg(`Opened ${host.hostname} in its own window.`);
             } else if (r.needsPin) {
                 setPinNeeded((p) => ({ ...p, [key]: true }));
                 setMsg(
