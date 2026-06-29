@@ -622,6 +622,14 @@ textarea.input {
     flex-direction: column;
     gap: 14px;
     padding: 16px 20px 20px;
+    /* The modal grew long (name, IssueWatch policy + granularity, devices,
+       Tynn link, knowledge…). The react-fancy Modal `size` only caps WIDTH,
+       and this modal drops a custom column straight in instead of Modal.Body,
+       so without an explicit bound the content overran the panel and the
+       bottom rows were unreachable. Bound to the viewport + scroll internally
+       (78vh stays safely under the panel's own height cap → no double bar). */
+    max-height: 78vh;
+    overflow-y: auto;
 }
 .ws-settings-head {
     display: flex;
