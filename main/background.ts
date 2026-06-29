@@ -29,6 +29,7 @@ import {
 } from './db';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import { resolveAlertSound, deliverAlertSound } from './notify-sound';
+import { demandWindowAttention, resolveAttentionWindow } from './attention-flash';
 import { workspaceDocHealth, repairWorkspaceDocs } from './workspace/create-agi';
 import { registerForceQuestionIpc, forceQuestion } from './ask/force-question';
 import {
@@ -233,6 +234,13 @@ function notifyImDone(terminalId: string): void {
         });
         n.show();
     }
+    // Demand attention at the OS level (taskbar flash / dock bounce) for the
+    // window hosting this workspace, but only when it isn't focused. A local
+    // terminal lives in the master window; resolveAttentionWindow encodes the
+    // host-window-vs-master pick (this process's imDone is always local → the
+    // master window). Fires on every alert, like the glow — independent of the
+    // sound/toast toggles above.
+    demandWindowAttention(resolveAttentionWindow(null, masterWindow, hostWindows));
 }
 
 /** Detect which package manifests sit at a repo root (orientation hint). */

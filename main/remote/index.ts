@@ -2,6 +2,7 @@ import { app, BrowserWindow, safeStorage } from 'electron';
 import { WebSocket } from 'ws';
 import fs from 'node:fs';
 import path from 'node:path';
+import { demandWindowAttention } from '../attention-flash';
 
 /**
  * Work Mode — remote desktop (the local-main proxy).
@@ -250,6 +251,15 @@ function emitToConn(conn: RemoteConnection, channel: string, payload: unknown): 
     }
 }
 
+/** Flash the OS window(s) bound to this connection (the host windows viewing
+ *  it) when unfocused — used when a remote agent on the host calls imDone. */
+function flashConnWindows(conn: RemoteConnection): void {
+    for (const w of BrowserWindow.getAllWindows()) {
+        if (w.isDestroyed()) continue;
+        if (bindings.get(w.webContents.id) === conn.connKey) demandWindowAttention(w);
+    }
+}
+
 /** Push each window its OWN status (correct for both legacy + multi-window). */
 function broadcastStatus(): void {
     for (const w of BrowserWindow.getAllWindows()) {
@@ -299,7 +309,19 @@ function startEventsBridge(conn: RemoteConnection): void {
         ws.on('message', (raw) => {
             try {
                 const msg = JSON.parse(String(raw)) as { type?: string; payload?: unknown };
-                if (msg.type && PASSTHROUGH_EVENTS.has(msg.type)) emitToConn(conn, msg.type, msg.payload);
+                if (msg.type && PASSTHROUGH_EVENTS.has(msg.type)) {
+                    emitToConn(conn, msg.type, msg.payload);
+                    // A remote agent on THIS host asked for attention (imDone
+                    // glow). Flash the OS window(s) viewing this host — not the
+                    // master, not another host's window — when they're not
+                    // focused, so the right window among several is identifiable.
+                    if (
+                        msg.type === 'terminal:attention' &&
+                        (msg.payload as { on?: boolean } | null)?.on
+                    ) {
+                        flashConnWindows(conn);
+                    }
+                }
             } catch {
                 /* ignore malformed frames */
             }

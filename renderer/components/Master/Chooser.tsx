@@ -23,6 +23,7 @@ import {
     IconTynn,
 } from './icons';
 import { showPrompt } from './Prompt';
+import { workspaceNeedsAttention } from '../../lib/attention';
 import {
     api,
     detectedShells,
@@ -571,7 +572,7 @@ export default function Chooser({
                 {orderedWorkspaces.map((ws) => {
                     const wsSpecs = byWorkspace.get(ws.id) ?? [];
                     const live = wsSpecs.filter((s) => activeIds.has(s.id)).length;
-                    const wsAttention = wsSpecs.some((s) => attentionIds.has(s.id));
+                    const wsAttention = workspaceNeedsAttention(wsSpecs, attentionIds);
                     const isActive = ws.id === activeWorkspaceId;
                     return (
                         <button
@@ -679,6 +680,10 @@ export default function Chooser({
                         const wsSpecs = wsAll.filter((s) => s.type !== 'process');
                         const wsProcs = wsAll.filter((s) => s.type === 'process');
                         const collapsed = collapsedWorkspaces.has(ws.id);
+                        // Same derivation the rail uses: any terminal in the
+                        // workspace flagged for attention → the ROW glows, so a
+                        // COLLAPSED workspace shows it's ready without expanding.
+                        const wsAttention = workspaceNeedsAttention(wsAll, attentionIds);
                         const isActive = ws.id === activeWorkspaceId;
                         const dragging = draggingId.current === ws.id;
                         const toggleCollapse = () =>
@@ -702,7 +707,9 @@ export default function Chooser({
                                     isActive ? ' is-active' : ''
                                 }${dragging ? ' dragging' : ''}${
                                     ws.shape === 'agi' ? ' agi' : ''
-                                }${pulsingWs.has(ws.id) ? ' pulsing' : ''}`}
+                                }${wsAttention ? ' attention' : ''}${
+                                    pulsingWs.has(ws.id) ? ' pulsing' : ''
+                                }`}
                                 onDragOver={(e) => {
                                     if (!draggingId.current) return;
                                     e.preventDefault();

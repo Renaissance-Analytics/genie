@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import path from 'path';
 import { getAllSettings } from '../db';
 import { resolveAlertSound, deliverAlertSound } from '../notify-sound';
+import { demandWindowAttention } from '../attention-flash';
 import type {
     ForceAnswer,
     ForceQuestion,
@@ -50,6 +51,11 @@ interface QueueItem {
  * plays once; the renderer branches on `kind` to a more urgent motif.
  */
 function notifyForceQuestion(): void {
+    // Demand OS-level attention for the (local) master window hosting the asking
+    // workspace, when it isn't focused — fired FIRST so it runs regardless of
+    // the sound toggle, like the glow. The modal itself floats above every app;
+    // this additionally flashes the taskbar / bounces the dock.
+    demandWindowAttention(config?.getMasterWindow() ?? null);
     try {
         if (getAllSettings().notify_sound !== 'on') return;
     } catch {
