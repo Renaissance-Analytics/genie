@@ -109,3 +109,71 @@ export function resolveAlertSound(kind: AlertKind): SoundDescriptor | null {
     // 'synth' and any unknown/legacy value → the built-in chime.
     return { mode: 'synth' };
 }
+
+/**
+ * The slice of an Electron BrowserWindow this module needs to deliver the
+ * one-shot `notify:sound` event. Structural so the delivery decision is
+ * unit-testable without spinning up Electron.
+ */
+export interface AlertSoundWindow {
+    isDestroyed(): boolean;
+    webContents: {
+        isLoading(): boolean;
+        send(channel: string, payload: unknown): void;
+        once(event: 'did-finish-load', listener: () => void): void;
+    };
+}
+
+/** How to deliver a `notify:sound` event so it isn't silently dropped. */
+export interface SoundDeliveryPlan {
+    /** The renderer to play the chime in, or null when none can play it. */
+    target: AlertSoundWindow | null;
+    /** True when that renderer is still loading — send on did-finish-load. */
+    deferUntilLoaded: boolean;
+}
+
+/**
+ * Decide where the one-shot `notify:sound` event goes.
+ *
+ * Only the MASTER window's renderer subscribes to `notify:sound`, so we target
+ * it specifically — the legacy `getAllWindows()[0]` / first-non-destroyed pick
+ * could land on a non-subscribing window (Settings / Docs / Capture / the ask
+ * modal) and silently drop the chime. When the master window exists but its
+ * renderer hasn't finished loading yet (a freshly-created window on a cold
+ * launch or right after an upgrade-restart), sending immediately is dropped —
+ * so we flag a deferral to `did-finish-load`, matching the pattern already used
+ * by openTaskManagerWindow / sendOpenFile for renderer round-trips. When no
+ * master window exists at all (fully tray-resident), no renderer can produce
+ * audio: target is null and the caller skips the chime (the OS toast still
+ * fires). This is why the visual alert (toast + the main-side attention glow,
+ * which is replayed when a window mounts) survives an upgrade while the
+ * fire-and-forget chime did not.
+ */
+export function planAlertSoundDelivery(
+    master: AlertSoundWindow | null,
+): SoundDeliveryPlan {
+    if (!master || master.isDestroyed()) {
+        return { target: null, deferUntilLoaded: false };
+    }
+    return { target: master, deferUntilLoaded: master.webContents.isLoading() };
+}
+
+/**
+ * Deliver a `notify:sound` payload to the master renderer per
+ * planAlertSoundDelivery: send now, or once the renderer has loaded. Returns
+ * whether a renderer was available to receive it (false ⇒ no audio possible,
+ * e.g. fully tray-resident — the caller relies on the OS toast instead).
+ */
+export function deliverAlertSound(
+    master: AlertSoundWindow | null,
+    payload: unknown,
+): boolean {
+    const { target, deferUntilLoaded } = planAlertSoundDelivery(master);
+    if (!target) return false;
+    const send = () => {
+        if (!target.isDestroyed()) target.webContents.send('notify:sound', payload);
+    };
+    if (deferUntilLoaded) target.webContents.once('did-finish-load', send);
+    else send();
+    return true;
+}

@@ -2,7 +2,7 @@ import { BrowserWindow, ipcMain } from 'electron';
 import crypto from 'crypto';
 import path from 'path';
 import { getAllSettings } from '../db';
-import { resolveAlertSound } from '../notify-sound';
+import { resolveAlertSound, deliverAlertSound } from '../notify-sound';
 import type {
     ForceAnswer,
     ForceQuestion,
@@ -30,6 +30,10 @@ import type {
 interface Config {
     isDev: boolean;
     preloadPath: string;
+    /** The master window (the only `notify:sound` subscriber), or null when
+     *  tray-resident. Injected so the chime targets it instead of an arbitrary
+     *  window (e.g. the ask modal, which doesn't subscribe). */
+    getMasterWindow: () => BrowserWindow | null;
 }
 
 /** One queued ForceTheQuestion request awaiting (or currently taking) its turn. */
@@ -55,8 +59,13 @@ function notifyForceQuestion(): void {
     // A null descriptor means this alert is set to "off" — skip the chime.
     const sound = resolveAlertSound('forceQuestion');
     if (!sound) return;
-    const target = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
-    target?.webContents.send('notify:sound', { kind: 'force-question', sound });
+    // Deliver to the master renderer (the only `notify:sound` subscriber),
+    // deferring to did-finish-load if it's still loading. When tray-resident the
+    // chime can't play (no renderer), but the always-on-top modal is unmissable.
+    deliverAlertSound(config?.getMasterWindow() ?? null, {
+        kind: 'force-question',
+        sound,
+    });
 }
 
 let config: Config | null = null;

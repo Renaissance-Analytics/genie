@@ -123,7 +123,11 @@ describe('ForceTheQuestion FIFO queue', () => {
         state.nextWcId = 1;
         // Register once — the manager guards re-registration, and the ipc
         // handlers are stable across tests, so we keep them (don't clear).
-        registerForceQuestionIpc({ isDev: false, preloadPath: '/preload.js' });
+        registerForceQuestionIpc({
+            isDev: false,
+            preloadPath: '/preload.js',
+            getMasterWindow: () => null,
+        });
     });
     afterEach(() => vi.clearAllMocks());
 

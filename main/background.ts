@@ -28,7 +28,7 @@ import {
     removeWorkspace,
 } from './db';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
-import { resolveAlertSound } from './notify-sound';
+import { resolveAlertSound, deliverAlertSound } from './notify-sound';
 import { workspaceDocHealth, repairWorkspaceDocs } from './workspace/create-agi';
 import { registerForceQuestionIpc, forceQuestion } from './ask/force-question';
 import {
@@ -207,12 +207,14 @@ function notifyImDone(terminalId: string): void {
     const sound =
         settings.notify_sound === 'on' ? resolveAlertSound('imDone') : null;
     if (sound) {
-        // Send to exactly one live renderer so the chime plays once. A hidden
-        // window still runs its renderer, so this works tray-resident too.
-        const target =
-            (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null) ??
-            BrowserWindow.getAllWindows()[0];
-        target?.webContents.send('notify:sound', { kind: 'imDone', sound });
+        // Deliver the chime to the MASTER renderer specifically — it's the only
+        // window that subscribes to `notify:sound`. A freshly-created master
+        // window (cold launch / upgrade-restart) may still be loading when the
+        // alert fires; sending then drops the message, so deliverAlertSound
+        // defers to did-finish-load (mirrors openTaskManagerWindow /
+        // sendOpenFile). When fully tray-resident (no master window) no renderer
+        // can play audio — the OS toast below still notifies.
+        deliverAlertSound(masterWindow, { kind: 'imDone', sound });
     }
     if (settings.notify_toast === 'on' && Notification.isSupported()) {
         const label = getTerminalSpec(terminalId)?.label ?? 'A terminal';
@@ -224,9 +226,10 @@ function notifyImDone(terminalId: string): void {
             silent: !!sound,
         });
         n.on('click', () => {
-            const win = mainWindow ?? BrowserWindow.getAllWindows()[0];
-            win?.show();
-            win?.focus();
+            // Surface (creating if needed) the master window — the previous
+            // `mainWindow` reference is never assigned, so this used to focus an
+            // arbitrary window and did nothing when tray-resident.
+            showMasterWindow();
         });
         n.show();
     }
@@ -1906,6 +1909,7 @@ app.whenReady().then(async () => {
     registerForceQuestionIpc({
         isDev,
         preloadPath: path.join(__dirname, 'preload.js'),
+        getMasterWindow: () => masterWindow,
     });
     // Wire the openFileForUser tool's renderer round-trip: resolve workspace +
     // path in main, then ask the master Floor to reuse/open an editor panel.

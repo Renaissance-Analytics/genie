@@ -102,7 +102,11 @@ describe('force-question server exports', () => {
     beforeEach(() => {
         state.windows = [];
         state.nextWcId = 1;
-        registerForceQuestionIpc({ isDev: false, preloadPath: '/preload.js' });
+        registerForceQuestionIpc({
+            isDev: false,
+            preloadPath: '/preload.js',
+            getMasterWindow: () => null,
+        });
     });
 
     it('listPendingQuestions reflects the live FIFO queue', async () => {
