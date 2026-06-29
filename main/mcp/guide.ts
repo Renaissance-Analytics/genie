@@ -153,6 +153,19 @@ hook. The response also reports your workspace's open IssueWatch counts (e.g.
 aggregate), so you see what's still open the moment you hand back; call
 \`checkIssues\` for the full list.
 
+### openFileForUser
+**Put a file in front of the user** in Genie's built-in editor (a Code panel on
+the Floor) — instead of only describing a change or result, surface the actual
+file. It REUSES an editor panel already open for this workspace (adds the file as
+a tab and focuses it; just focuses the tab if it's already open), or opens a NEW
+panel when none is open. Args: \`path\` (workspace-relative — preferred — or
+absolute; System-workspace agents pass an absolute/system path), optional \`line\`
+(1-based) to reveal, and the usual \`terminalId\` (your \`GENIE_TERMINAL_ID\`) for
+exact workspace resolution (omit → most-recently-active terminal). Benign DISPLAY
+action — like \`imDone\` it just surfaces something, so there's NO approval prompt.
+Returns whether it reused an existing panel or opened a new one + the resolved
+file. Available to System-workspace agents too.
+
 ### ForceTheQuestion
 Call this whenever you are **blocked on a decision, clarification, or approval
 only the user can give**. It raises an OS-level, always-on-top modal that floats

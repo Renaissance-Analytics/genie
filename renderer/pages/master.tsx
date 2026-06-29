@@ -22,6 +22,7 @@ import type { BackendUser, ViewType } from '../lib/genie';
 import { resolveShortcut } from '../lib/master-shortcuts';
 import { computeLaunchSelection } from '../lib/launch-restore';
 import { shouldDriveRestart } from '../lib/updater-flow';
+import { pickReusePanel, emitOpenInPanel } from '../lib/editor-open';
 import {
     IconBox,
     IconChevronDown,
@@ -910,6 +911,79 @@ function MasterInner() {
             activateWorkspace(workspaceId);
         });
     }, [activateWorkspace]);
+
+    // openFileForUser (MCP): open a file in the workspace's built-in editor —
+    // REUSE an editor panel already open for the workspace (incl __system__), or
+    // open a new one. Refs keep the subscription stable while reading live state.
+    const specsRef = useRef(specs);
+    specsRef.current = specs;
+    const selectedRef = useRef(selected);
+    selectedRef.current = selected;
+    const focusIdRef = useRef(focusId);
+    focusIdRef.current = focusId;
+    const workspacesByIdRef = useRef(workspacesById);
+    workspacesByIdRef.current = workspacesById;
+    const activateWorkspaceRef = useRef(activateWorkspace);
+    activateWorkspaceRef.current = activateWorkspace;
+    useEffect(() => {
+        return api().on.editorOpenFile?.(({ requestId, workspaceId, root, relPath }) => {
+            const system = workspaceId === SYSTEM_WORKSPACE_ID;
+            const reuseId = pickReusePanel(
+                specsRef.current,
+                { workspaceId, root },
+                focusIdRef.current,
+                selectedRef.current,
+                workspacesByIdRef.current,
+            );
+            if (reuseId) {
+                if (system) setSystemRevealed(true);
+                activateWorkspaceRef.current(workspaceId);
+                setFocusId(reuseId);
+                emitOpenInPanel(reuseId, relPath);
+                void api().editor.openFileResult(requestId, { reused: true, opened: false });
+                return;
+            }
+            // No open editor panel for this workspace → create one seeded with the
+            // file (its mount-seed opens the tab), select + surface it. For the
+            // System workspace the spec is unattached (workspace_id null + system)
+            // and roots at the file's directory (its cwd), so absolute/system
+            // paths resolve under the panel root.
+            void (async () => {
+                try {
+                    const wsRow = workspacesByIdRef.current.get(workspaceId);
+                    const base = (wsRow?.project_name ?? 'system')
+                        .toLowerCase()
+                        .replace(/\s+/g, '-');
+                    const existingCode = specsRef.current.filter(
+                        (s) => specWorkspaceId(s) === workspaceId && s.type === 'code',
+                    ).length;
+                    const label =
+                        existingCode === 0 ? `${base}-editor` : `${base}-editor-${existingCode + 1}`;
+                    const created = await api().terminalSpec.create({
+                        id: ulid(),
+                        workspace_id: system ? null : workspaceId,
+                        label,
+                        cwd: root,
+                        type: 'code',
+                        meta: {
+                            ...(system ? { system: true } : {}),
+                            open_files: [relPath],
+                            active_file: relPath,
+                            file_path: relPath,
+                        },
+                    });
+                    setSpecs((prev) => [...prev, created]);
+                    setSelected((prev) => new Set(prev).add(created.id));
+                    if (system) setSystemRevealed(true);
+                    activateWorkspaceRef.current(workspaceId);
+                    void api().editor.openFileResult(requestId, { reused: false, opened: true });
+                } catch {
+                    void api().editor.openFileResult(requestId, { reused: false, opened: false });
+                }
+            })();
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     /** Close every view in the ACTIVE workspace (deselect; PTYs detach on unmount). */
     const clearSelection = useCallback(() => {

@@ -239,6 +239,18 @@ export interface McpContext {
         terminalId: string,
         req: ManageWorkspacesRequest,
     ) => Promise<ManageWorkspacesResult>;
+    /**
+     * Open a file in Genie's built-in editor FOR THE USER (the openFileForUser
+     * tool): resolve the caller's workspace from the terminal (incl the System
+     * workspace), resolve the path (workspace-relative against the root, or
+     * absolute), then surface it on the Floor — REUSING an editor panel already
+     * open for that workspace, or opening a new one. Benign display action (no
+     * gate). Does the workspace/path resolution + the renderer round-trip.
+     */
+    openFileForUser: (
+        terminalId: string,
+        req: OpenFileRequest,
+    ) => Promise<OpenFileResult>;
 }
 
 /** A managed background process as the manageProcess tool reports it. */
@@ -470,6 +482,30 @@ export interface ManageWorkspacesResult {
     affectedId?: string;
 }
 
+// --- openFileForUser ---------------------------------------------------------
+
+export interface OpenFileRequest {
+    /** The file to open — workspace-relative (preferred) or absolute. For the
+     *  System workspace, an absolute/system path. */
+    path: string;
+    /** Optional 1-based line to reveal. */
+    line?: number;
+}
+
+export interface OpenFileResult {
+    ok: boolean;
+    /** Set when ok is false (no workspace, file missing, bad path, …). */
+    error?: string;
+    /** The resolved absolute path that was opened (on ok). */
+    file?: string;
+    /** The workspace the file was opened in (incl the System workspace). */
+    workspaceId?: string;
+    /** True when an editor panel already open for the workspace was reused. */
+    reused?: boolean;
+    /** True when a NEW editor panel was opened (none was open to reuse). */
+    openedNew?: boolean;
+}
+
 const TERMINAL_ID_PROP = {
     terminalId: {
         type: 'string',
@@ -496,6 +532,29 @@ const CHECK_ISSUES_TOOL = {
     inputSchema: {
         type: 'object',
         properties: { ...TERMINAL_ID_PROP },
+        additionalProperties: false,
+    },
+};
+
+const OPEN_FILE_TOOL = {
+    name: 'openFileForUser',
+    description:
+        "Open a file in Genie's BUILT-IN editor for the USER to look at — surfaces it on the Floor in a Code panel. This REUSES an editor panel already open for this workspace (adds the file as a tab and focuses it — or just focuses the tab if the file is already open); if no editor panel is open for the workspace, it opens a NEW one with the file loaded. Use it to put a file in front of the user (a change you made, a result, something to review) instead of only describing it. Benign DISPLAY action — like imDone it just surfaces something, so there is NO approval prompt. `path` is workspace-relative (preferred) or absolute; for the System workspace pass an absolute/system path. Optional `line` reveals a 1-based line. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; omit to use the most-recently-active terminal. Available to System-workspace agents too.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            ...TERMINAL_ID_PROP,
+            path: {
+                type: 'string',
+                description:
+                    'The file to open — workspace-relative (preferred) or absolute. System-workspace agents pass an absolute/system path.',
+            },
+            line: {
+                type: 'number',
+                description: 'Optional 1-based line number to reveal.',
+            },
+        },
+        required: ['path'],
         additionalProperties: false,
     },
 };
@@ -1076,6 +1135,7 @@ export async function handleMcpMessage(
                     MANAGE_TERMINALS_TOOL,
                     RUN_AGENT_TOOL,
                     MANAGE_WORKSPACES_TOOL,
+                    OPEN_FILE_TOOL,
                     GUIDE_TOOL,
                 ],
             });
@@ -1339,6 +1399,32 @@ export async function handleMcpMessage(
                           result.affectedId ? ` (acted on ${result.affectedId})` : ''
                       }.`
                     : `manageWorkspaces failed: ${result.error ?? 'unknown error'}`;
+                return ok(msg.id, {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `${summary}\n\n${JSON.stringify(result, null, 2)}`,
+                        },
+                    ],
+                });
+            }
+            if (params.name === 'openFileForUser') {
+                const a = (params.arguments ?? {}) as Partial<OpenFileRequest>;
+                const p = typeof a.path === 'string' ? a.path.trim() : '';
+                if (!p) {
+                    return err(msg.id, -32602, 'openFileForUser requires a `path`.');
+                }
+                const result = await ctx.openFileForUser(ctx.terminalId, {
+                    path: p,
+                    line: typeof a.line === 'number' ? a.line : undefined,
+                });
+                const summary = result.ok
+                    ? `Opened ${result.file ?? p} for the user — ${
+                          result.reused
+                              ? 'reused the editor panel already open for this workspace'
+                              : 'opened a new editor panel'
+                      }.`
+                    : `openFileForUser failed: ${result.error ?? 'unknown error'}`;
                 return ok(msg.id, {
                     content: [
                         {

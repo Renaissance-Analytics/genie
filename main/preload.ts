@@ -273,6 +273,18 @@ const api = {
             ipcRenderer.invoke('clipboard:write', text) as Promise<{ ok: boolean }>,
         read: () => ipcRenderer.invoke('clipboard:read') as Promise<string>,
     },
+    // Built-in editor — the renderer's reply to a main `editor:open-file` request
+    // (openFileForUser MCP tool): reports whether it reused an open panel or
+    // opened a new one, keyed by the request id main is awaiting.
+    editor: {
+        openFileResult: (
+            requestId: string,
+            result: { reused: boolean; opened: boolean },
+        ) =>
+            ipcRenderer.invoke('editor:open-file-result', requestId, result) as Promise<{
+                ok: boolean;
+            }>,
+    },
     settings: {
         get: () => ipcRenderer.invoke('settings:get'),
         set: (patch: Record<string, unknown>) =>
@@ -809,6 +821,31 @@ const api = {
                 cb(payload);
             ipcRenderer.on('workspace:open', handler);
             return () => ipcRenderer.off('workspace:open', handler);
+        },
+        /** openFileForUser (MCP): open a file in the workspace's built-in editor,
+         *  reusing an open Code panel or opening a new one. The renderer applies
+         *  the reuse-vs-new logic and replies via editor.openFileResult(requestId). */
+        editorOpenFile: (
+            cb: (payload: {
+                requestId: string;
+                workspaceId: string;
+                root: string;
+                relPath: string;
+                line?: number;
+            }) => void,
+        ) => {
+            const handler = (
+                _e: unknown,
+                payload: {
+                    requestId: string;
+                    workspaceId: string;
+                    root: string;
+                    relPath: string;
+                    line?: number;
+                },
+            ) => cb(payload);
+            ipcRenderer.on('editor:open-file', handler);
+            return () => ipcRenderer.off('editor:open-file', handler);
         },
         /** A background Process changed status (running/stopped/crashed/…). */
         processStatus: (

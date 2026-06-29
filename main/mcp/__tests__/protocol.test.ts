@@ -30,6 +30,9 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
         manageWorkspaces: vi
             .fn()
             .mockResolvedValue({ ok: true, workspaces: [] }),
+        openFileForUser: vi
+            .fn()
+            .mockResolvedValue({ ok: true, reused: false, openedNew: true }),
         isOpsProject: vi.fn().mockResolvedValue(false),
         ...overrides,
     };
@@ -74,6 +77,7 @@ describe('handleMcpMessage', () => {
             'manageTerminals',
             'runAgent',
             'manageWorkspaces',
+            'openFileForUser',
             'genieGuide',
         ]);
         expect(tools.map((t) => t.name)).not.toContain('initializeWorkspace');
@@ -93,6 +97,7 @@ describe('handleMcpMessage', () => {
             'manageTerminals',
             'runAgent',
             'manageWorkspaces',
+            'openFileForUser',
             'genieGuide',
         ]);
     });
@@ -215,6 +220,40 @@ describe('handleMcpMessage', () => {
     it('manageProcess rejects a bad/missing action', async () => {
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 26, method: 'tools/call', params: { name: 'manageProcess', arguments: {} } },
+            ctx(),
+        );
+        expect(res?.error?.code).toBe(-32602);
+    });
+
+    it('openFileForUser routes to the dep and reports reuse vs new', async () => {
+        const openFileForUser = vi.fn().mockResolvedValue({
+            ok: true,
+            file: '/ws/app/src/index.ts',
+            workspaceId: 'ws1',
+            reused: true,
+            openedNew: false,
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 27,
+                method: 'tools/call',
+                params: {
+                    name: 'openFileForUser',
+                    arguments: { path: 'src/index.ts', line: 12, terminalId: 'term-X' },
+                },
+            },
+            ctx({ terminalId: 'term-X', openFileForUser }),
+        );
+        expect(openFileForUser).toHaveBeenCalledWith('term-X', { path: 'src/index.ts', line: 12 });
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('reused the editor panel');
+        expect(text).toContain('/ws/app/src/index.ts'); // the JSON block
+    });
+
+    it('openFileForUser requires a path', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 28, method: 'tools/call', params: { name: 'openFileForUser', arguments: {} } },
             ctx(),
         );
         expect(res?.error?.code).toBe(-32602);

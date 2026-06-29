@@ -18,6 +18,8 @@ import {
     type RunAgentResult,
     type ManageWorkspacesRequest,
     type ManageWorkspacesResult,
+    type OpenFileRequest,
+    type OpenFileResult,
     type WorkspaceMap,
     type IssueWatchSnapshot,
 } from './protocol';
@@ -98,6 +100,11 @@ interface ServerDeps {
         terminalId: string,
         req: ManageWorkspacesRequest,
     ) => Promise<ManageWorkspacesResult>;
+    /** Open a file in Genie's built-in editor for the user (openFileForUser tool). */
+    openFileForUser: (
+        terminalId: string,
+        req: OpenFileRequest,
+    ) => Promise<OpenFileResult>;
     /** True when the caller's workspace is an Ops project. Gates the ops-only
      *  `provisionWorkspaces` tool OUT of tools/list for non-Ops workspaces. */
     isOpsProject: (terminalId: string) => Promise<boolean>;
@@ -404,6 +411,7 @@ async function handle(
         manageTerminals: deps.manageTerminals,
         runAgent: deps.runAgent,
         manageWorkspaces: deps.manageWorkspaces,
+        openFileForUser: deps.openFileForUser,
         isOpsProject: deps.isOpsProject,
     };
 

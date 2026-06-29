@@ -141,6 +141,7 @@ const deps = (
     manageTerminals,
     runAgent,
     manageWorkspaces,
+    openFileForUser: async () => ({ ok: true, reused: false, openedNew: true }),
     isOpsProject: async () => true,
 });
 

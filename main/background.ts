@@ -13,6 +13,7 @@ import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { launchedFromAutostart } from './autostart';
 import { registerIpcHandlers } from './ipc';
 import crypto from 'node:crypto';
+import os from 'node:os';
 import {
     initDatabase,
     listWorkspaces,
@@ -146,6 +147,7 @@ import {
     pickDialogWindow,
 } from './terminal/quit-confirm';
 import { workspaceIdOfTerminal } from './terminal/workspace-of-terminal';
+import { registerOpenFile, openFileForUserForMcp } from './editor/open-file';
 import { isQuittingForUpdate } from './updater/quit-state';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
@@ -1905,6 +1907,25 @@ app.whenReady().then(async () => {
         isDev,
         preloadPath: path.join(__dirname, 'preload.js'),
     });
+    // Wire the openFileForUser tool's renderer round-trip: resolve workspace +
+    // path in main, then ask the master Floor to reuse/open an editor panel.
+    registerOpenFile({
+        workspaceIdOfTerminal,
+        getWorkspaceRoot: (wsId) => getWorkspace(wsId)?.path ?? null,
+        homeDir: () => os.homedir(),
+        sendOpenFile: (payload) => {
+            // Surface the master window so the file is actually visible, then push
+            // the request (after its content has loaded, on a cold open).
+            showMasterWindow();
+            const w = masterWindow;
+            if (!w || w.isDestroyed()) return;
+            const send = () => {
+                if (!w.isDestroyed()) w.webContents.send('editor:open-file', payload);
+            };
+            if (w.webContents.isLoading()) w.webContents.once('did-finish-load', send);
+            else send();
+        },
+    });
     // Agent-integration MCP server (loopback). imDone pulses the caller's
     // terminal glow + optional chime/toast; ForceTheQuestion raises the modal.
     // Best-effort: a failed bind just means no MCP endpoints.
@@ -1965,6 +1986,7 @@ app.whenReady().then(async () => {
         runAgent: (terminalId, req) => runAgentForMcp(terminalId, req),
         manageWorkspaces: (terminalId, req) =>
             manageWorkspacesForMcp(terminalId, req),
+        openFileForUser: (terminalId, req) => openFileForUserForMcp(terminalId, req),
         // Ops-tool gating: only an Ops project's workspace sees `provisionWorkspaces`
         // in tools/list. Resolve the caller's workspace → its Ops status (fail closed).
         isOpsProject: async (terminalId) => {

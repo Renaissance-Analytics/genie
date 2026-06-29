@@ -973,6 +973,14 @@ export interface GenieApi {
         write: (text: string) => Promise<{ ok: boolean }>;
         read: () => Promise<string>;
     };
+    /** Built-in editor — reply to a main `editor:open-file` request
+     *  (openFileForUser MCP tool), keyed by the request id main awaits. */
+    editor: {
+        openFileResult: (
+            requestId: string,
+            result: { reused: boolean; opened: boolean },
+        ) => Promise<{ ok: boolean }>;
+    };
     settings: {
         get: () => Promise<Settings>;
         set: (patch: Partial<Settings>) => Promise<Settings>;
@@ -1524,6 +1532,18 @@ export interface GenieApi {
          *  window and open its in-app editor scoped to the workspace folder. */
         workspaceOpen: (
             cb: (payload: { workspaceId: string }) => void,
+        ) => () => void;
+        /** openFileForUser (MCP) — open a file in the workspace's built-in editor,
+         *  reusing an open Code panel or opening a new one. Reply with
+         *  api().editor.openFileResult(requestId, …). */
+        editorOpenFile: (
+            cb: (payload: {
+                requestId: string;
+                workspaceId: string;
+                root: string;
+                relPath: string;
+                line?: number;
+            }) => void,
         ) => () => void;
         /** A background Process changed status. */
         processStatus: (

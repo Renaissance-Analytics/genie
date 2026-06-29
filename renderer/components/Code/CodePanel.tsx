@@ -15,6 +15,7 @@ import {
 } from '../Master/icons';
 import { showPrompt } from '../Master/Prompt';
 import { closeTab as closeTabState, openTab as openTabState, reconcileTabs } from '../../lib/editor-tabs';
+import { onOpenInPanel } from '../../lib/editor-open';
 import {
     api,
     type TerminalSpec,
@@ -249,6 +250,17 @@ export default function CodePanel({
         },
         [workspacePath, persistTabs],
     );
+
+    // External "open this file" requests targeting THIS live panel (the
+    // openFileForUser MCP tool reusing an already-open editor): open the path as
+    // a tab + focus it. The mount-seed below only runs once, so a live panel
+    // needs this side channel.
+    useEffect(() => {
+        return onOpenInPanel(spec.id, (relPath) => {
+            void openTab(relPath);
+            if (!treePinnedRef.current) setTreeVisible(false);
+        });
+    }, [spec.id, openTab]);
 
     // Seed the editor from persisted open tabs once the panel mounts. Falls
     // back to the legacy single `file_path`. Tabs whose file no longer exists
