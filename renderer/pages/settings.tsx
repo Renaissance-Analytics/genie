@@ -1057,23 +1057,29 @@ function TynnSection({
                             Sign out
                         </Action>
                     )}
-                    <Action
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setShowAdvanced((s) => !s)}
-                    >
-                        {showAdvanced ? 'Hide Advanced' : 'Advanced'}
-                    </Action>
+                    {/* Dev/staging-only escape hatch. Tynn is SaaS-only (not
+                        self-hostable), so end users never need a host override —
+                        compile it out of the packaged app. process.env.NODE_ENV
+                        is inlined by Next at build time. */}
+                    {process.env.NODE_ENV !== 'production' && (
+                        <Action
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setShowAdvanced((s) => !s)}
+                        >
+                            {showAdvanced ? 'Hide Advanced' : 'Advanced'}
+                        </Action>
+                    )}
                 </div>
             </SettingRow>
 
             {error && <div className="set-note bad">{error}</div>}
 
-            {showAdvanced && (
+            {process.env.NODE_ENV !== 'production' && showAdvanced && (
                 <SettingRow
                     label="Tynn host override"
-                    desc="Leave blank for the environment default (tynn.test in dev, tynn.ai when installed). Set only for self-hosted Tynn or a staging instance — e.g. https://tynn-staging.example.com."
-                    keywords="tynn host override self-hosted staging url advanced instance"
+                    desc="Dev/staging only — point Genie at a non-default Tynn instance (e.g. a staging URL). Leave blank for the environment default: tynn.test in dev, tynn.ai when installed."
+                    keywords="tynn host override staging url advanced instance dev"
                     vertical
                 >
                     <Input
