@@ -33,7 +33,7 @@
     "@particle-academy/fancy-code": "^0.5.0",
     "@particle-academy/fancy-features": "^0.1.0",
     "@particle-academy/fancy-term": "^0.3.0",
-    "@particle-academy/fancy-term-host": "^0.2.1",
+    "@particle-academy/fancy-term-host": "^0.2.2",
     "@types/ws": "^8.18.1",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-serialize": "^0.14.0",
