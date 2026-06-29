@@ -114,8 +114,13 @@ export function rebuildMenu(): void {
         label: 'Check for updates…',
         click: async () => {
             try {
-                const { updater } = await import('./updater/git-updater');
-                await updater().checkForUpdate();
+                // Use the ACTIVE backend (electron-updater on a packaged build),
+                // not the phase-1 git updater — which can't update a packaged
+                // install and silently no-ops, so the tray check looked dead on
+                // real builds (the tray is the primary update touchpoint when
+                // Genie is tray-resident, e.g. on Linux).
+                const { checkForUpdatesNow } = await import('./updater/ipc');
+                checkForUpdatesNow(true);
             } catch (e) {
                 console.error('updater check failed', e);
             }
