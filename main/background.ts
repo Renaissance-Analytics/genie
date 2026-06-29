@@ -105,6 +105,12 @@ import type {
 import { resolveTargetWorkspace, type TargetDecision } from './mcp/target-workspace';
 import { TynnBackend } from './backend/tynn';
 import { readTynnLink } from './tynn/provision';
+import {
+    bindWindowToConnection,
+    unbindWindow,
+    disconnectConnKey,
+    type RemoteHost,
+} from './remote';
 import { openWorkspace } from './workspace/open';
 import {
     computeOpsProvisionPlan,
@@ -1354,6 +1360,73 @@ export function showStageWindow(workspaceId?: string): void {
     win.once('ready-to-show', () => win.show());
     stageWindows.add(win);
     win.on('closed', () => stageWindows.delete(win));
+}
+
+/**
+ * Open (or focus) a HOST window — a native Genie Floor (`/master`) whose `api()`
+ * is routed over the remote bridge to a paired host, so you drive that machine's
+ * REAL desktop UI (rail, terminals, processes) — NOT its `/m/` mobile web view.
+ *
+ * The connection must already be live in the registry (the Hosts picker calls
+ * `connectRemote` first, handling the PIN). We BIND this window's webContents to
+ * the connKey BEFORE the page loads, so the renderer's boot-time `myBinding()`
+ * resolves `remote` and wires the bridge for THIS window only — the local window
+ * (and any other host window) is unaffected. Closing it unbinds + disconnects
+ * that host (the saved token persists for a 1-click reconnect).
+ */
+const hostWindows = new Map<string, BrowserWindow>();
+export function showHostWindow(host: RemoteHost, connKey: string): void {
+    const existing = hostWindows.get(connKey);
+    if (existing && !existing.isDestroyed()) {
+        existing.show();
+        existing.focus();
+        return;
+    }
+    const win = new BrowserWindow({
+        width: 1280,
+        height: 820,
+        minWidth: 980,
+        minHeight: 620,
+        show: false,
+        // Same hidden-titlebar chrome as the master/stage windows.
+        title: `Genie — ${host.hostname}`,
+        titleBarStyle: 'hidden',
+        ...(process.platform !== 'darwin'
+            ? {
+                  titleBarOverlay: {
+                      color: '#0a0a0c',
+                      symbolColor: '#a1a1aa',
+                      height: 46,
+                  },
+              }
+            : {}),
+        autoHideMenuBar: true,
+        backgroundColor: '#0a0a0c',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false,
+        },
+    });
+    const wcId = win.webContents.id;
+    // Bind BEFORE load so the renderer's first myBinding() already reads remote.
+    bindWindowToConnection(wcId, connKey);
+    const query = `?host=${encodeURIComponent(connKey)}`;
+    if (isDev) {
+        win.loadURL(`http://localhost:8888/master${query}`);
+    } else {
+        win.loadFile(path.join(__dirname, 'master.html'), { search: query.slice(1) });
+    }
+    win.once('ready-to-show', () => win.show());
+    hostWindows.set(connKey, win);
+    win.on('closed', () => {
+        hostWindows.delete(connKey);
+        unbindWindow(wcId);
+        // Last window driving this host is gone → tear down its WS bridges
+        // (the saved token stays for a quick reconnect next time).
+        disconnectConnKey(connKey);
+    });
 }
 
 /**

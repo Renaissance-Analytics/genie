@@ -433,6 +433,19 @@ export interface RemoteStatus {
     host: RemoteHost | null;
 }
 
+/** A host remembered in the Hosts picker (persisted; survives discovery gaps). */
+export interface KnownHost {
+    ip: string;
+    port: number;
+    hostname: string;
+    /** User-chosen label; the UI falls back to hostname. */
+    name?: string;
+    /** `ip:port` — the registry/persistence key. */
+    connKey: string;
+    /** Whether this host currently has a live connection (a host window open). */
+    connected: boolean;
+}
+
 export interface DocEntry {
     slug: string;
     title: string;
@@ -916,6 +929,16 @@ export interface GenieApi {
         terminalInput: (id: string, data: string) => Promise<boolean>;
         terminalResize: (id: string, cols: number, rows: number) => Promise<boolean>;
         terminalDetach: (id: string) => Promise<{ ok: boolean }>;
+        /** Connect a host (handling the PIN) and open its OWN native Floor window.
+         *  The local window stays local — only the new host window is remote. */
+        open: (
+            host: RemoteHost,
+            pin?: string,
+        ) => Promise<{ ok: boolean; connKey?: string; error?: string; needsPin?: boolean }>;
+        /** The persisted known-hosts list (for the picker), each tagged connected. */
+        known: () => Promise<KnownHost[]>;
+        forget: (connKey: string) => Promise<{ ok: boolean }>;
+        rename: (connKey: string, name: string) => Promise<{ ok: boolean }>;
     };
     aionima: {
         getConfig: () => Promise<AionimaConfig>;
@@ -1511,23 +1534,33 @@ declare global {
 }
 
 let activeRemoteBridge: GenieApi | null = null;
-let remoteSwapWired = false;
+let remoteBindingResolved = false;
 
 /**
- * Wire the local↔remote api() swap ONCE: subscribe to remote status and build the
- * remote bridge while connected to a host (else null → api() returns the local
- * bridge, byte-for-byte unchanged in local mode). Idempotent.
+ * Bind THIS WINDOW's api() to local-or-remote ONCE, by the window's OWN binding —
+ * NOT a global status swap. Multi-host coexistence depends on this: a HOST window
+ * (opened by the factory, loaded with `?host=<connKey>`) routes api() to its host
+ * over the bridge for its whole lifetime, while the LOCAL window — and every other
+ * host window — is unaffected. There is no `onStatus`-driven global flip, so
+ * opening or closing a host can NEVER turn another window remote.
+ *
+ * The URL `?host=` hint decides SYNCHRONOUSLY (so a host window never flashes the
+ * local desktop before an async call resolves); we then confirm against main's
+ * authoritative `myBinding()` once and correct any mismatch.
  */
-function ensureRemoteSwap(local: GenieApi): void {
-    if (remoteSwapWired) return;
-    remoteSwapWired = true;
-    const apply = (connected: boolean) => {
-        activeRemoteBridge = connected ? makeRemoteBridge(local) : null;
-    };
-    local.remote.onStatus((s) => apply(s.connected));
+function ensureRemoteBinding(local: GenieApi): void {
+    if (remoteBindingResolved) return;
+    remoteBindingResolved = true;
+    const isHostWindow =
+        typeof window !== 'undefined' && /[?&]host=/.test(window.location?.search ?? '');
+    if (isHostWindow) activeRemoteBridge = makeRemoteBridge(local);
+    // Confirm against main (authoritative): a host window stays remote, the local
+    // window stays local. Defensive — corrects a stale/absent URL hint.
     local.remote
-        .status()
-        .then((s) => apply(s.connected))
+        .myBinding()
+        .then((b) => {
+            activeRemoteBridge = b.mode === 'remote' ? makeRemoteBridge(local) : null;
+        })
         .catch(() => {});
 }
 
@@ -1537,7 +1570,7 @@ export function api(): GenieApi {
             'window.genie unavailable — preload.ts did not run. Either the page is being rendered outside Electron (e.g. opened directly in a browser) or the preload script failed to compile. Check the Electron main-process console for a load error.',
         );
     }
-    ensureRemoteSwap(window.genie);
+    ensureRemoteBinding(window.genie);
     return activeRemoteBridge ?? window.genie;
 }
 

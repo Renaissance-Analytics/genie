@@ -373,6 +373,12 @@
     border-color: var(--agent);
     color: #09090b;
 }
+/* Compact variant — used in dense popovers (e.g. the Hosts picker rows). */
+.gbtn-sm {
+    padding: 3px 9px;
+    font-size: 11.5px;
+    border-radius: 7px;
+}
 .gicon {
     width: 30px;
     height: 30px;

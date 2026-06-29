@@ -102,6 +102,10 @@ import {
     remoteTerminalInput,
     remoteTerminalResize,
     remoteDetachTerminal,
+    listKnownHosts,
+    forgetHost,
+    renameKnownHost,
+    type RemoteHost,
 } from './remote';
 import QRCode from 'qrcode';
 import { tynnCliInfo, installTynnCliSystemWide } from './cli/tynn-cli';
@@ -113,6 +117,7 @@ import {
     showDocsWindow,
     showMainWindow,
     showStageWindow,
+    showHostWindow,
 } from './background';
 import {
     allConfiguredBackends,
@@ -467,6 +472,27 @@ export function registerIpcHandlers(): void {
     );
     ipcMain.handle('remote:terminal-detach', (e, id: string) => {
         remoteDetachTerminal(e.sender.id, id);
+        return { ok: true };
+    });
+
+    // Hosts picker (local window): connect a host (handling the PIN) and open its
+    // OWN native Floor window, plus the persisted known-hosts list management. The
+    // local window stays local throughout — only the new host window is remote.
+    ipcMain.handle(
+        'host:open',
+        async (_e, host: RemoteHost, pin?: string) => {
+            const res = await connectRemote(host, pin);
+            if (res.ok && res.connKey) showHostWindow(host, res.connKey);
+            return res;
+        },
+    );
+    ipcMain.handle('host:known', () => listKnownHosts());
+    ipcMain.handle('host:forget', (_e, connKey: string) => {
+        forgetHost(connKey);
+        return { ok: true };
+    });
+    ipcMain.handle('host:rename', (_e, connKey: string, name: string) => {
+        renameKnownHost(connKey, name);
         return { ok: true };
     });
 

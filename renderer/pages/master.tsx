@@ -52,6 +52,8 @@ import {
     type WorkspaceRow,
     type RemoteStatus,
     type MobilePeer,
+    type KnownHost,
+    type GenieHost,
 } from '../lib/genie';
 
 /**
@@ -1725,6 +1727,7 @@ function TitleBar({
                 <span className="ttl">{stageWorkspaceName}</span>
             )}
             <span className="spacer" />
+            <HostsButton />
             <UpdatePill />
             {githubNeedsResolve && (
                 <button
@@ -1785,10 +1788,22 @@ function TitleBar({
  */
 function RemoteIndicator() {
     const [status, setStatus] = useState<RemoteStatus | null>(null);
+    const isHostWindow =
+        typeof window !== 'undefined' && /[?&]host=/.test(window.location.search);
+    const wasConnectedRef = useRef(false);
     useEffect(() => {
         api().remote.status().then(setStatus).catch(() => {});
         return api().remote.onStatus(setStatus);
     }, []);
+    useEffect(() => {
+        if (status?.connected) wasConnectedRef.current = true;
+        // A HOST window whose connection has dropped (the user disconnected, or the
+        // host token expired) is a dead remote Floor — close it rather than show a
+        // broken view. Guarded by wasConnected so a boot-time race can't false-close.
+        if (isHostWindow && wasConnectedRef.current && status && !status.connected) {
+            window.close();
+        }
+    }, [status, isHostWindow]);
     if (!status?.connected || !status.host) return null;
     const host = status.host;
     return (
@@ -1821,6 +1836,216 @@ function RemoteIndicator() {
                 ×
             </button>
         </span>
+    );
+}
+
+/**
+ * Hosts picker (LOCAL window only). A titlebar affordance to open OTHER machines'
+ * native Genie Floors — each host gets its OWN window driven over the remote
+ * bridge, while THIS local window keeps full local functionality. Lists tailnet-
+ * discovered hosts + the persisted known-hosts list; first-time pairs collect a
+ * PIN inline. Hidden inside a host window (a remote Floor doesn't open further
+ * hosts from here).
+ */
+function HostsButton() {
+    const isHostWindow =
+        typeof window !== 'undefined' && /[?&]host=/.test(window.location.search);
+    const [open, setOpen] = useState(false);
+    if (isHostWindow) return null;
+    return (
+        <div style={{ position: 'relative', display: 'inline-flex' }}>
+            <button
+                type="button"
+                className="gicon"
+                title="Connect to a host Genie — opens its desktop in a new window"
+                aria-label="Hosts"
+                aria-expanded={open}
+                onClick={() => setOpen((o) => !o)}
+            >
+                {/* stacked-servers glyph */}
+                <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <rect x="3" y="3" width="18" height="7" rx="1.5" />
+                    <rect x="3" y="14" width="18" height="7" rx="1.5" />
+                    <line x1="7" y1="6.5" x2="7.01" y2="6.5" />
+                    <line x1="7" y1="17.5" x2="7.01" y2="17.5" />
+                </svg>
+            </button>
+            {open && <HostsPanel onClose={() => setOpen(false)} />}
+        </div>
+    );
+}
+
+interface HostRow {
+    ip: string;
+    port: number;
+    hostname: string;
+    name?: string;
+    connKey: string;
+    /** Known (persisted, can Forget) vs only just discovered on the tailnet. */
+    known: boolean;
+    connected: boolean;
+    online: boolean;
+}
+
+function HostsPanel({ onClose }: { onClose: () => void }) {
+    const [rows, setRows] = useState<HostRow[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [pinFor, setPinFor] = useState<string | null>(null);
+    const [pin, setPin] = useState('');
+    const [busy, setBusy] = useState<string | null>(null);
+    const [err, setErr] = useState<string | null>(null);
+
+    const load = async () => {
+        setLoading(true);
+        try {
+            const [known, discovered] = await Promise.all([
+                api().remote.known().catch(() => [] as KnownHost[]),
+                api().workmode.discoverHosts().catch(() => [] as GenieHost[]),
+            ]);
+            const byKey = new Map<string, HostRow>();
+            for (const k of known) {
+                byKey.set(k.connKey, {
+                    ip: k.ip,
+                    port: k.port,
+                    hostname: k.hostname,
+                    name: k.name,
+                    connKey: k.connKey,
+                    known: true,
+                    connected: k.connected,
+                    online: false,
+                });
+            }
+            for (const d of discovered) {
+                const key = `${d.ip}:${d.port}`;
+                const existing = byKey.get(key);
+                if (existing) existing.online = true;
+                else
+                    byKey.set(key, {
+                        ip: d.ip,
+                        port: d.port,
+                        hostname: d.hostname,
+                        connKey: key,
+                        known: false,
+                        connected: false,
+                        online: true,
+                    });
+            }
+            setRows([...byKey.values()]);
+        } finally {
+            setLoading(false);
+        }
+    };
+    useEffect(() => {
+        void load();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const openHost = async (row: HostRow, withPin?: string) => {
+        setErr(null);
+        setBusy(row.connKey);
+        try {
+            const res = await api().remote.open(
+                { ip: row.ip, port: row.port, hostname: row.hostname },
+                withPin,
+            );
+            if (res.ok) {
+                setPinFor(null);
+                setPin('');
+                onClose();
+            } else if (res.needsPin) {
+                setPinFor(row.connKey);
+            } else {
+                setErr(res.error ?? 'Could not connect.');
+            }
+        } catch (e) {
+            setErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    const forget = async (row: HostRow) => {
+        await api().remote.forget(row.connKey).catch(() => {});
+        void load();
+    };
+
+    return (
+        <>
+            {/* click-away */}
+            <div
+                onClick={onClose}
+                style={{ position: 'fixed', inset: 0, zIndex: 60 }}
+                aria-hidden
+            />
+            <div
+                role="menu"
+                style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 6px)',
+                    right: 0,
+                    zIndex: 61,
+                    width: 320,
+                    maxHeight: 420,
+                    overflowY: 'auto',
+                    background: '#141418',
+                    border: '1px solid #2a2a33',
+                    borderRadius: 10,
+                    boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
+                    padding: 8,
+                    fontSize: 12,
+                    color: '#e4e4e7',
+                }}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 6px 8px' }}>
+                    <strong style={{ fontSize: 11, letterSpacing: '0.04em', color: '#a1a1aa' }}>HOSTS</strong>
+                    <button type="button" className="gicon" title="Rescan the tailnet" onClick={() => void load()} aria-label="Refresh hosts" style={{ width: 20, height: 20 }}>⟳</button>
+                </div>
+                {loading && <div style={{ padding: '8px 6px', color: '#71717a' }}>Scanning…</div>}
+                {!loading && rows.length === 0 && (
+                    <div style={{ padding: '8px 6px', color: '#71717a', lineHeight: 1.4 }}>
+                        No hosts found. Enable Work Mode on another Genie on your tailnet, then rescan.
+                    </div>
+                )}
+                {err && <div style={{ padding: '6px', color: '#f87171' }}>{err}</div>}
+                {rows.map((row) => (
+                    <div key={row.connKey} style={{ borderRadius: 8, padding: '7px 8px', marginBottom: 2, background: '#1b1b21' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ width: 7, height: 7, borderRadius: 999, flex: '0 0 auto', background: row.connected ? '#22c55e' : row.online ? '#eab308' : '#52525b' }} title={row.connected ? 'Connected' : row.online ? 'Online' : 'Offline / not on the tailnet now'} />
+                            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                <span style={{ fontWeight: 600 }}>{row.name || row.hostname}</span>
+                                <span style={{ color: '#71717a', marginLeft: 6 }}>{row.ip}:{row.port}</span>
+                            </span>
+                            <button
+                                type="button"
+                                className="gbtn gbtn-sm"
+                                disabled={busy === row.connKey}
+                                onClick={() => void openHost(row)}
+                                style={{ flex: '0 0 auto' }}
+                            >
+                                {row.connected ? 'Focus' : busy === row.connKey ? '…' : 'Open'}
+                            </button>
+                            {row.known && (
+                                <button type="button" className="gicon" title="Forget this host (drops the saved pairing)" aria-label="Forget host" onClick={() => void forget(row)} style={{ width: 20, height: 20, flex: '0 0 auto' }}>×</button>
+                            )}
+                        </div>
+                        {pinFor === row.connKey && (
+                            <div style={{ display: 'flex', gap: 6, marginTop: 7 }}>
+                                <input
+                                    autoFocus
+                                    value={pin}
+                                    onChange={(e) => setPin(e.target.value)}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') void openHost(row, pin); }}
+                                    placeholder="Pairing PIN from the host"
+                                    inputMode="numeric"
+                                    style={{ flex: 1, background: '#0f0f13', border: '1px solid #2a2a33', borderRadius: 6, color: '#e4e4e7', padding: '5px 8px', fontSize: 12 }}
+                                />
+                                <button type="button" className="gbtn gbtn-sm" disabled={!pin.trim() || busy === row.connKey} onClick={() => void openHost(row, pin)}>Pair</button>
+                            </div>
+                        )}
+                    </div>
+                ))}
+            </div>
+        </>
     );
 }
 

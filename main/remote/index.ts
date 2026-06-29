@@ -107,6 +107,76 @@ export function hasSavedToken(host: RemoteHost): boolean {
     return !!readTokenStore()[connKeyOf(host)];
 }
 
+// --- known hosts (the Hosts picker's persisted list) -----------------------
+// A host you've paired with is REMEMBERED so it shows in the picker even when
+// tailnet discovery finds nothing right now (host asleep / off the tailnet), and
+// can carry a friendly name. Stored separately from the (secret) token store.
+
+export interface KnownHost {
+    ip: string;
+    port: number;
+    hostname: string;
+    /** User-chosen label; falls back to hostname in the UI. */
+    name?: string;
+}
+
+function knownHostsPath(): string {
+    return path.join(app.getPath('userData'), 'genie-remote-hosts.json');
+}
+function readKnownHosts(): Record<string, KnownHost> {
+    try {
+        return JSON.parse(fs.readFileSync(knownHostsPath(), 'utf8')) as Record<string, KnownHost>;
+    } catch {
+        return {};
+    }
+}
+function writeKnownHosts(store: Record<string, KnownHost>): void {
+    try {
+        fs.writeFileSync(knownHostsPath(), JSON.stringify(store), 'utf8');
+    } catch {
+        /* best-effort persistence */
+    }
+}
+
+/** Remember a host in the picker list (called on a successful connect). Keeps any
+ *  existing friendly name; refreshes ip/hostname in case they changed. */
+export function recordKnownHost(host: RemoteHost): void {
+    const store = readKnownHosts();
+    const key = connKeyOf(host);
+    store[key] = { ...store[key], ip: host.ip, port: host.port, hostname: host.hostname };
+    writeKnownHosts(store);
+}
+
+/** The persisted known hosts, each tagged with whether it's currently connected. */
+export function listKnownHosts(): Array<KnownHost & { connKey: string; connected: boolean }> {
+    const store = readKnownHosts();
+    return Object.entries(store).map(([connKey, h]) => ({
+        ...h,
+        connKey,
+        connected: connections.has(connKey),
+    }));
+}
+
+/** Set a host's friendly name (or clear it with ''). */
+export function renameKnownHost(connKey: string, name: string): void {
+    const store = readKnownHosts();
+    if (!store[connKey]) return;
+    store[connKey] = { ...store[connKey], name: name.trim() || undefined };
+    writeKnownHosts(store);
+}
+
+/** Forget a host: disconnect it, drop its saved token, and remove it from the
+ *  picker list. The next connect needs the PIN again. */
+export function forgetHost(connKey: string): void {
+    disconnectConnKey(connKey);
+    const tokens = readTokenStore();
+    delete tokens[connKey];
+    writeTokenStore(tokens);
+    const known = readKnownHosts();
+    delete known[connKey];
+    writeKnownHosts(known);
+}
+
 // --- window ↔ connection resolution ----------------------------------------
 
 /**
@@ -422,6 +492,7 @@ export async function connectRemote(
         termWs: new Map(),
     };
     connections.set(connKey, conn);
+    recordKnownHost(host);
     startEventsBridge(conn);
     broadcastStatus();
     return { ok: true, connKey };
@@ -449,6 +520,16 @@ export function disconnectRemote(wcId?: number): void {
         for (const conn of [...connections.values()]) teardownConnection(conn);
     }
     broadcastStatus();
+}
+
+/** Disconnect a connection by its key (the host-window factory calls this when
+ *  the last window driving a host closes). No-op when not connected. */
+export function disconnectConnKey(connKey: string): void {
+    const conn = connections.get(connKey);
+    if (conn) {
+        teardownConnection(conn);
+        broadcastStatus();
+    }
 }
 
 /**

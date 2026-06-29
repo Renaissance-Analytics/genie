@@ -185,6 +185,30 @@ const api = {
             ipcRenderer.invoke('remote:terminal-resize', id, cols, rows) as Promise<boolean>,
         terminalDetach: (id: string) =>
             ipcRenderer.invoke('remote:terminal-detach', id) as Promise<{ ok: boolean }>,
+        // Hosts picker (local window): open a host's OWN native Floor window
+        // (connecting + handling the PIN), and manage the known-hosts list.
+        open: (host: { ip: string; port: number; hostname: string }, pin?: string) =>
+            ipcRenderer.invoke('host:open', host, pin) as Promise<{
+                ok: boolean;
+                connKey?: string;
+                error?: string;
+                needsPin?: boolean;
+            }>,
+        known: () =>
+            ipcRenderer.invoke('host:known') as Promise<
+                Array<{
+                    ip: string;
+                    port: number;
+                    hostname: string;
+                    name?: string;
+                    connKey: string;
+                    connected: boolean;
+                }>
+            >,
+        forget: (connKey: string) =>
+            ipcRenderer.invoke('host:forget', connKey) as Promise<{ ok: boolean }>,
+        rename: (connKey: string, name: string) =>
+            ipcRenderer.invoke('host:rename', connKey, name) as Promise<{ ok: boolean }>,
     },
 
     aionima: {
