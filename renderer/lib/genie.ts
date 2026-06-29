@@ -967,6 +967,12 @@ export interface GenieApi {
         }>;
         hostInfo: () => Promise<string>;
     };
+    /** System clipboard via Electron main (reliable; the renderer's
+     *  navigator.clipboard fails silently in a sandboxed window). */
+    clipboard: {
+        write: (text: string) => Promise<{ ok: boolean }>;
+        read: () => Promise<string>;
+    };
     settings: {
         get: () => Promise<Settings>;
         set: (patch: Partial<Settings>) => Promise<Settings>;
@@ -1501,6 +1507,9 @@ export interface GenieApi {
         terminalSnapshotRequest: (cb: () => void) => () => void;
         /** Live pty count broadcast (Tier 2 resource awareness). */
         terminalCount: (cb: (payload: { count: number }) => void) => () => void;
+        /** A setting changed (payload = changed keys) — live UI re-reads with no
+         *  restart (e.g. a terminal's copy/paste mode). */
+        settingsChanged: (cb: (changedKeys: string[]) => void) => () => void;
         /** Agent-integration MCP: a terminal asked for attention (imDone) or cleared. */
         terminalAttention: (
             cb: (payload: { id: string; on: boolean }) => void,

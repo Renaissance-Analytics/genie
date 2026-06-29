@@ -266,6 +266,13 @@ const api = {
             ipcRenderer.invoke('updater:changelog', latest),
     },
 
+    // System clipboard via Electron MAIN (reliable; renderer navigator.clipboard
+    // fails silently in a sandboxed window). Terminal copy/paste routes here.
+    clipboard: {
+        write: (text: string) =>
+            ipcRenderer.invoke('clipboard:write', text) as Promise<{ ok: boolean }>,
+        read: () => ipcRenderer.invoke('clipboard:read') as Promise<string>,
+    },
     settings: {
         get: () => ipcRenderer.invoke('settings:get'),
         set: (patch: Record<string, unknown>) =>
@@ -768,6 +775,13 @@ const api = {
             const handler = (_e: unknown, payload: { count: number }) => cb(payload);
             ipcRenderer.on('terminal:count', handler);
             return () => ipcRenderer.off('terminal:count', handler);
+        },
+        /** A setting changed (payload = the changed keys) — live UI re-reads
+         *  without a restart (e.g. a terminal's copy/paste mode). */
+        settingsChanged: (cb: (changedKeys: string[]) => void) => {
+            const handler = (_e: unknown, keys: string[]) => cb(keys);
+            ipcRenderer.on('settings:changed', handler);
+            return () => ipcRenderer.off('settings:changed', handler);
         },
         /** Agent-integration MCP: a terminal asked for attention (imDone) or it
          *  was cleared. The renderer pulses/clears that terminal's glow. */

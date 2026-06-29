@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, shell, BrowserWindow } from 'electron';
+import { app, clipboard, dialog, ipcMain, shell, BrowserWindow } from 'electron';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -198,8 +198,27 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('settings:set', (_e, patch: Record<string, unknown>) => {
         const next = setSettings(patch as Record<string, string>);
         if ('global_hotkey' in patch) registerShortcuts();
+        // Tell every window a setting changed so live UI (e.g. a terminal's
+        // copy/paste mode) re-reads without a restart. Settings are global, so
+        // this reaches all windows including host windows (their xterm rendering
+        // is local). The payload carries the changed keys for cheap filtering.
+        for (const w of BrowserWindow.getAllWindows()) {
+            if (!w.webContents.isDestroyed()) {
+                w.webContents.send('settings:changed', Object.keys(patch));
+            }
+        }
         return next;
     });
+
+    // System clipboard via the MAIN process (Electron `clipboard`). The renderer's
+    // navigator.clipboard is unreliable in a sandboxed Electron window — it fails
+    // SILENTLY (no permission / lost user-gesture), so terminal copy never reached
+    // the OS clipboard. Routing through main is the reliable path.
+    ipcMain.handle('clipboard:write', (_e, text: unknown) => {
+        clipboard.writeText(typeof text === 'string' ? text : String(text ?? ''));
+        return { ok: true };
+    });
+    ipcMain.handle('clipboard:read', () => clipboard.readText());
     ipcMain.handle(
         'settings:choose-folder',
         async (_e, label?: string, defaultPath?: string) => {
