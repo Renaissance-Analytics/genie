@@ -365,6 +365,49 @@ export interface RepoOwner {
 }
 
 /**
+ * A repo's metadata from GET /repos/{owner}/{repo}: its owner, whether it's a
+ * fork, and (for a fork) its upstream parent. THROWS on an HTTP failure so the
+ * caller can distinguish "not a fork" from "couldn't read" — this is what lets
+ * the upstream resolver avoid caching a transient error as a permanent
+ * "not a fork". {@link getRepoOwner} wraps it for the best-effort owner-only case.
+ */
+export interface RepoMetadata {
+    owner: RepoOwner;
+    /** True when GitHub reports `<owner>/<repo>` is a fork. */
+    fork: boolean;
+    /** The upstream (parent) repo to watch, or null for a non-fork / orphan fork. */
+    upstream: ParsedRepoRef | null;
+}
+
+/**
+ * Resolve a repo's metadata (owner + fork + upstream). GitHub's repo object
+ * carries `parent` (the immediate repo this was forked from) and `source` (the
+ * ultimate root of the fork network) ONLY on `?...` reads of a fork; prefer
+ * `parent`, fall back to `source`. An ORPHAN fork — `fork: true` but the parent
+ * was deleted, so neither `parent` nor `source` is present — resolves to
+ * `upstream: null` (there's nothing to watch). Throws on a read failure.
+ */
+export async function getRepoMetadata(owner: string, repo: string): Promise<RepoMetadata> {
+    const r = await gh<{
+        owner?: { login?: string; id?: number; type?: string };
+        fork?: boolean;
+        parent?: { name?: string; owner?: { login?: string } } | null;
+        source?: { name?: string; owner?: { login?: string } } | null;
+    }>('GET', `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+    const repoOwner: RepoOwner = {
+        login: r.owner?.login ?? owner,
+        id: r.owner?.id ?? null,
+        isOrg: r.owner?.type === 'Organization',
+    };
+    const parent = r.parent ?? r.source ?? null;
+    const upstream =
+        r.fork && parent && parent.owner?.login && parent.name
+            ? { owner: parent.owner.login, repo: parent.name }
+            : null;
+    return { owner: repoOwner, fork: !!r.fork, upstream };
+}
+
+/**
  * Resolve the owner of an existing repo (GET /repos/{owner}/{repo}). The
  * create/fork flows use this to target the SAME account the source repo lives
  * in (personal OR org), and to pre-target the install chooser at that account
@@ -374,15 +417,7 @@ export interface RepoOwner {
  */
 export async function getRepoOwner(owner: string, repo: string): Promise<RepoOwner> {
     try {
-        const r = await gh<{ owner?: { login?: string; id?: number; type?: string } }>(
-            'GET',
-            `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
-        );
-        return {
-            login: r.owner?.login ?? owner,
-            id: r.owner?.id ?? null,
-            isOrg: r.owner?.type === 'Organization',
-        };
+        return (await getRepoMetadata(owner, repo)).owner;
     } catch {
         return { login: owner, id: null, isOrg: false };
     }
@@ -494,6 +529,20 @@ export interface WatchItem {
     author?: string;
     /** Security severity (low|medium|high|critical), where the alert carries one. */
     severity?: string;
+    /**
+     * Whether this item came from the watched repo itself (`'own'`, the default
+     * for an absent value) or its fork-parent (`'upstream'`). Upstream watching
+     * folds a fork's parent's open Issues/PRs into the same feed, tagged here so
+     * the flyout can group them and the granularity setting can gate them.
+     */
+    source?: 'own' | 'upstream';
+    /**
+     * The repo this item actually lives in. Set on UPSTREAM items (the upstream
+     * owner/repo) so the feed attributes them to the upstream slug rather than the
+     * fork; own items omit it and the feed uses the watched repo.
+     */
+    owner?: string;
+    repo?: string;
 }
 
 /** The three security-alert kinds, aggregated into the `security` pill bucket. */
@@ -659,6 +708,27 @@ async function ghListOutcome<T>(path: string): Promise<ListOutcome<T>> {
     }
 }
 
+/** A skipped read's outcome — empty + success, so a disabled kind contributes
+ *  nothing and never surfaces an error (we simply didn't ask GitHub for it). */
+function skippedOutcome<T>(): Promise<ListOutcome<T>> {
+    return Promise.resolve({ items: [] as T[], detail: null });
+}
+
+/**
+ * Which own-repo streams to fetch — the per-workspace granularity gate on the
+ * FETCH side. A disabled kind's endpoint is never hit (no wasted call, no 403
+ * noise) and contributes no items. The three security-alert streams collapse
+ * under the single `security` flag.
+ */
+export interface OwnWatchKinds {
+    issues: boolean;
+    pulls: boolean;
+    security: boolean;
+}
+
+/** Default: every own kind ON (the prior, ungated behaviour). */
+const ALL_OWN_KINDS: OwnWatchKinds = { issues: true, pulls: true, security: true };
+
 /**
  * The normalized items for a repo plus why the read was empty. `error` is the
  * surfaced bucket (null = ok); `detail` carries the raw HTTP status + GitHub
@@ -693,14 +763,25 @@ export interface FetchOutcome {
 export async function fetchRepoWatchItemsResult(
     owner: string,
     repo: string,
+    kinds: OwnWatchKinds = ALL_OWN_KINDS,
 ): Promise<FetchOutcome> {
     const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
     const [issues, pulls, alerts, codeScanning, secretScanning] = await Promise.all([
-        ghListOutcome<GhIssue>(`${base}/issues?state=open&per_page=50&sort=updated`),
-        ghListOutcome<GhPull>(`${base}/pulls?state=open&per_page=50&sort=updated`),
-        ghListOutcome<GhAlert>(`${base}/dependabot/alerts?state=open&per_page=50`),
-        ghListOutcome<GhCodeScanningAlert>(`${base}/code-scanning/alerts?state=open&per_page=50`),
-        ghListOutcome<GhSecretScanningAlert>(`${base}/secret-scanning/alerts?state=open&per_page=50`),
+        kinds.issues
+            ? ghListOutcome<GhIssue>(`${base}/issues?state=open&per_page=50&sort=updated`)
+            : skippedOutcome<GhIssue>(),
+        kinds.pulls
+            ? ghListOutcome<GhPull>(`${base}/pulls?state=open&per_page=50&sort=updated`)
+            : skippedOutcome<GhPull>(),
+        kinds.security
+            ? ghListOutcome<GhAlert>(`${base}/dependabot/alerts?state=open&per_page=50`)
+            : skippedOutcome<GhAlert>(),
+        kinds.security
+            ? ghListOutcome<GhCodeScanningAlert>(`${base}/code-scanning/alerts?state=open&per_page=50`)
+            : skippedOutcome<GhCodeScanningAlert>(),
+        kinds.security
+            ? ghListOutcome<GhSecretScanningAlert>(`${base}/secret-scanning/alerts?state=open&per_page=50`)
+            : skippedOutcome<GhSecretScanningAlert>(),
     ]);
     // The issues read is the important one. When IT fails, surface that (and the
     // detail behind it). A secondary PR / security-alert failure of
@@ -819,6 +900,63 @@ function buildWatchItems(
         });
     }
     return items;
+}
+
+/**
+ * Fetch a fork's UPSTREAM (parent) open Issues — and PRs when `includePulls` —
+ * as WatchItems tagged `source: 'upstream'` and carrying the upstream owner/repo.
+ *
+ * Scope is deliberately Issues + PRs ONLY: a fork's GitHub-App install usually
+ * can't read the upstream's security streams (Dependabot / code- / secret-
+ * scanning), so we don't even ask. The caller passes an ALREADY-RESOLVED upstream
+ * (the fork→upstream cache + resolution lives in the issue-watch module, which
+ * owns the DB); this function is the pure fetch.
+ *
+ * No-access is SILENT: a 403/404 on the upstream issues read means "this fork's
+ * install can't see the parent's issues", which is normal — we don't nag the
+ * user about a repo they merely forked, so that read degrades to an empty success
+ * (error null). Only a failure that affects EVERY read — unauthenticated (token
+ * died) or rate_limited — surfaces, since those aren't upstream-specific.
+ */
+export async function fetchUpstreamWatchItems(
+    upstreamOwner: string,
+    upstreamRepo: string,
+    includePulls = true,
+): Promise<FetchOutcome> {
+    const base = `/repos/${encodeURIComponent(upstreamOwner)}/${encodeURIComponent(upstreamRepo)}`;
+    const [issues, pulls] = await Promise.all([
+        ghListOutcome<GhIssue>(`${base}/issues?state=open&per_page=50&sort=updated`),
+        includePulls
+            ? ghListOutcome<GhPull>(`${base}/pulls?state=open&per_page=50&sort=updated`)
+            : skippedOutcome<GhPull>(),
+    ]);
+    // Swallow a forbidden/not_found upstream read (no access — normal for a fork).
+    let detail = issues.detail;
+    if (detail && (detail.error === 'forbidden' || detail.error === 'not_found')) {
+        detail = null;
+    }
+    // A token/rate failure isn't upstream-specific — let it surface (own reads hit
+    // it too, but carry its detail here in case the upstream read is the witness).
+    if (
+        detail === null &&
+        pulls.detail &&
+        (pulls.detail.error === 'unauthenticated' || pulls.detail.error === 'rate_limited')
+    ) {
+        detail = pulls.detail;
+    }
+    const items = buildWatchItems(upstreamOwner, upstreamRepo, {
+        issues: issues.items,
+        pulls: pulls.items,
+        dependabot: [],
+        codeScanning: [],
+        secretScanning: [],
+    }).map((it) => ({
+        ...it,
+        source: 'upstream' as const,
+        owner: upstreamOwner,
+        repo: upstreamRepo,
+    }));
+    return { items, error: detail?.error ?? null, detail };
 }
 
 export interface ForkRepoOpts {

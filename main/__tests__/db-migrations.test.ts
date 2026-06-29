@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { runMigrations } from '../db';
+import { runMigrations, parseGranularity, DEFAULT_ISSUEWATCH_GRANULARITY } from '../db';
 
 /**
  * Schema migrations are exercised against a real in-memory better-sqlite3
@@ -432,6 +432,137 @@ describe('db migration v14 (per-workspace terminal/agent-approval gate)', () => 
         runMigrations(db);
         expect(() => runMigrations(db)).not.toThrow();
         expect(cols(db, 'workspaces').has('terminal_approval')).toBe(true);
+    });
+});
+
+describe('db migration v16 (fork→upstream cache)', () => {
+    it('creates the fork_upstream table with its columns', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const c = cols(db, 'fork_upstream');
+        expect(c.has('owner')).toBe(true);
+        expect(c.has('repo')).toBe(true);
+        expect(c.has('is_fork')).toBe(true);
+        expect(c.has('upstream_owner')).toBe(true);
+        expect(c.has('upstream_repo')).toBe(true);
+        expect(c.has('checked_at')).toBe(true);
+    });
+
+    it('round-trips a fork row and a non-fork row', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const insert = db.prepare(
+            `INSERT INTO fork_upstream (owner, repo, is_fork, upstream_owner, upstream_repo, checked_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+        );
+        insert.run('me', 'forked', 1, 'upstream-org', 'canonical', '2026-06-20T00:00:00.000Z');
+        insert.run('me', 'original', 0, null, null, '2026-06-20T00:00:00.000Z');
+
+        const fork = db
+            .prepare<[], { is_fork: number; upstream_owner: string | null; upstream_repo: string | null }>(
+                "SELECT is_fork, upstream_owner, upstream_repo FROM fork_upstream WHERE owner='me' AND repo='forked'",
+            )
+            .get();
+        expect(fork).toEqual({ is_fork: 1, upstream_owner: 'upstream-org', upstream_repo: 'canonical' });
+
+        const orig = db
+            .prepare<[], { is_fork: number; upstream_owner: string | null }>(
+                "SELECT is_fork, upstream_owner FROM fork_upstream WHERE owner='me' AND repo='original'",
+            )
+            .get();
+        expect(orig).toEqual({ is_fork: 0, upstream_owner: null });
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'fork_upstream').has('checked_at')).toBe(true);
+    });
+});
+
+describe('db migration v17 (per-workspace IssueWatch granularity)', () => {
+    const insertWs = (db: Database.Database, id: string) =>
+        db.prepare(
+            `INSERT INTO workspaces
+               (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, last_opened_at, created_by_genie)
+             VALUES (@id, 'tynn', 'p', 'P', 'p', 'P', 'simple', @path, NULL, 0)`,
+        ).run({ id, path: `/tmp/${id}` });
+
+    it('adds the issuewatch_granularity column to workspaces', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(cols(db, 'workspaces').has('issuewatch_granularity')).toBe(true);
+    });
+
+    it('a pre-existing workspace row reads back NULL (⇒ the all-on defaults)', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        insertWs(db, 'w-iwg');
+        const row = db
+            .prepare<[string], { issuewatch_granularity: string | null }>(
+                'SELECT issuewatch_granularity FROM workspaces WHERE id = ?',
+            )
+            .get('w-iwg');
+        expect(row?.issuewatch_granularity).toBeNull();
+        // NULL resolves to the documented defaults (every own kind ON + upstream issues+prs).
+        expect(parseGranularity(row?.issuewatch_granularity ?? null)).toEqual(
+            DEFAULT_ISSUEWATCH_GRANULARITY,
+        );
+    });
+
+    it('round-trips a stored granularity JSON blob', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        insertWs(db, 'w-iwg2');
+        const stored = JSON.stringify({
+            own: { issues: true, pulls: false, security: false },
+            upstream: 'issues',
+        });
+        db.prepare('UPDATE workspaces SET issuewatch_granularity = ? WHERE id = ?').run(
+            stored,
+            'w-iwg2',
+        );
+        const row = db
+            .prepare<[string], { issuewatch_granularity: string | null }>(
+                'SELECT issuewatch_granularity FROM workspaces WHERE id = ?',
+            )
+            .get('w-iwg2');
+        expect(parseGranularity(row?.issuewatch_granularity ?? null)).toEqual({
+            own: { issues: true, pulls: false, security: false },
+            upstream: 'issues',
+        });
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'workspaces').has('issuewatch_granularity')).toBe(true);
+    });
+});
+
+describe('parseGranularity (defaulting + robustness)', () => {
+    it('defaults NULL/empty to all-on + upstream issues+prs', () => {
+        expect(parseGranularity(null)).toEqual(DEFAULT_ISSUEWATCH_GRANULARITY);
+        expect(parseGranularity('')).toEqual(DEFAULT_ISSUEWATCH_GRANULARITY);
+    });
+
+    it('treats only an explicit false as off (missing own kinds default ON)', () => {
+        expect(parseGranularity(JSON.stringify({ own: { security: false } }))).toEqual({
+            own: { issues: true, pulls: true, security: false },
+            upstream: 'issues+prs',
+        });
+    });
+
+    it('falls back to issues+prs for an unrecognized upstream value', () => {
+        expect(parseGranularity(JSON.stringify({ upstream: 'everything' })).upstream).toBe(
+            'issues+prs',
+        );
+    });
+
+    it('survives corrupt JSON by returning the defaults', () => {
+        expect(parseGranularity('{not json')).toEqual(DEFAULT_ISSUEWATCH_GRANULARITY);
     });
 });
 

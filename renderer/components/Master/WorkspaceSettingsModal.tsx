@@ -6,8 +6,16 @@ import type {
     WorkspaceDocHealth,
     EnvelopeRepoView,
     KnowledgeFolderView,
+    IssuewatchGranularity,
 } from '../../lib/genie';
 import { api } from '../../lib/genie';
+
+/** The all-on + upstream-issues+prs defaults — the optimistic value shown until
+ *  the workspace's stored granularity loads (and the fallback on a read error). */
+const DEFAULT_GRANULARITY: IssuewatchGranularity = {
+    own: { issues: true, pulls: true, security: true },
+    upstream: 'issues+prs',
+};
 
 /**
  * Per-workspace settings, opened from the workspace context menu. The single
@@ -38,6 +46,9 @@ export default function WorkspaceSettingsModal({
     const [iwPolicy, setIwPolicy] = useState<'surface' | 'fix' | 'fix-and-ship'>(
         workspace.issuewatch_policy ?? 'surface',
     );
+    // Per-workspace IssueWatch granularity (what to watch + ping about). Null
+    // until the resolved value loads; we render the defaults optimistically.
+    const [granularity, setGranularity] = useState<IssuewatchGranularity | null>(null);
 
     const saveName = async () => {
         const next = name.trim();
@@ -72,6 +83,12 @@ export default function WorkspaceSettingsModal({
                     setTerminalApproval(true);
                 }
             }
+            try {
+                const g = await api().workspaces.getIssuewatchGranularity(workspace.id);
+                if (alive) setGranularity(g);
+            } catch {
+                if (alive) setGranularity(DEFAULT_GRANULARITY);
+            }
         })();
         return () => {
             alive = false;
@@ -105,6 +122,23 @@ export default function WorkspaceSettingsModal({
             setIwPolicy(prev); // revert
         }
     };
+
+    // Persist a granularity change optimistically, reverting on failure. Takes
+    // the full next granularity so the caller composes the own/upstream edit.
+    const saveGranularity = async (next: IssuewatchGranularity) => {
+        const prev = granularity;
+        setGranularity(next); // optimistic
+        try {
+            await api().workspaces.setIssuewatchGranularity(workspace.id, next);
+        } catch {
+            setGranularity(prev); // revert
+        }
+    };
+
+    // The granularity shown while the stored value loads (and the safe fallback).
+    const g = granularity ?? DEFAULT_GRANULARITY;
+    const setOwnKind = (kind: 'issues' | 'pulls' | 'security', on: boolean) =>
+        void saveGranularity({ ...g, own: { ...g.own, [kind]: on } });
 
     return (
         <Modal open onClose={onClose} size="xl">
@@ -182,6 +216,62 @@ export default function WorkspaceSettingsModal({
                                 { value: 'surface', label: 'Surface only — report the counts, wait for me (default)' },
                                 { value: 'fix', label: 'Fix when idle — fix the root cause, then report before shipping' },
                                 { value: 'fix-and-ship', label: 'Fix & ship when idle — remediate and ship right away' },
+                            ]}
+                        />
+                    </Row>
+                    <Row
+                        label="Watch — Issues"
+                        sub="Open issues on this workspace's repos"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={g.own.issues}
+                            disabled={granularity === null}
+                            onChange={(e) => setOwnKind('issues', e.target.checked)}
+                            aria-label="Watch issues on this workspace's repos"
+                        />
+                    </Row>
+                    <Row
+                        label="Watch — Pull Requests"
+                        sub="Open PRs on this workspace's repos"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={g.own.pulls}
+                            disabled={granularity === null}
+                            onChange={(e) => setOwnKind('pulls', e.target.checked)}
+                            aria-label="Watch pull requests on this workspace's repos"
+                        />
+                    </Row>
+                    <Row
+                        label="Watch — Security alerts"
+                        sub="Dependabot, code-scanning & secret-scanning alerts"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={g.own.security}
+                            disabled={granularity === null}
+                            onChange={(e) => setOwnKind('security', e.target.checked)}
+                            aria-label="Watch security alerts on this workspace's repos"
+                        />
+                    </Row>
+                    <Row
+                        label="Watch — Upstream (forks)"
+                        sub="For a forked repo, also watch its parent repo"
+                        vertical
+                    >
+                        <Select
+                            value={g.upstream}
+                            onValueChange={(v) =>
+                                void saveGranularity({
+                                    ...g,
+                                    upstream: v as IssuewatchGranularity['upstream'],
+                                })
+                            }
+                            list={[
+                                { value: 'none', label: 'None — ignore the upstream' },
+                                { value: 'issues', label: 'Issues — watch the upstream’s issues' },
+                                { value: 'issues+prs', label: 'Issues + PRs — watch upstream issues and PRs (default)' },
                             ]}
                         />
                     </Row>

@@ -50,7 +50,7 @@ const api = {
             ipcRenderer.invoke('issue-watch:mark-seen', workspaceId),
         counts: () =>
             ipcRenderer.invoke('issue-watch:counts') as Promise<
-                Record<string, { issue: number; pr: number; dependabot: number }>
+                Record<string, { issue: number; pr: number; security: number }>
             >,
         status: (workspaceId: string) =>
             ipcRenderer.invoke('issue-watch:status', workspaceId),
@@ -311,6 +311,10 @@ const api = {
             id: string,
             policy: 'surface' | 'fix' | 'fix-and-ship',
         ) => ipcRenderer.invoke('workspaces:set-issuewatch-policy', id, policy),
+        getIssuewatchGranularity: (id: string) =>
+            ipcRenderer.invoke('workspaces:get-issuewatch-granularity', id),
+        setIssuewatchGranularity: (id: string, granularity: unknown) =>
+            ipcRenderer.invoke('workspaces:set-issuewatch-granularity', id, granularity),
         repos: (id: string) =>
             ipcRenderer.invoke('workspaces:repos', id) as Promise<string[]>,
         open: (id: string) => ipcRenderer.invoke('workspaces:open', id),

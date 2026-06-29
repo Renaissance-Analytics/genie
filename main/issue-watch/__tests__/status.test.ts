@@ -39,12 +39,22 @@ vi.mock('../../db', () => ({
     listWorkspaces: () => [WS],
     setIssueWatch: () => {},
     markIssueWatchSeen: () => {},
+    // Upstream OFF so these own-repo status tests stay isolated from the fork
+    // resolver (no getRepoMetadata / fork_upstream cache needed).
+    getWorkspaceIssuewatchGranularity: () => ({
+        own: { issues: true, pulls: true, security: true },
+        upstream: 'none',
+    }),
+    getForkUpstream: () => undefined,
+    setForkUpstream: () => {},
 }));
 vi.mock('../../workspace/detect', () => ({ detectFolder: () => ({ repos: [] }) }));
 // worseError is a pure helper — re-implement its contract here so the mock
 // doesn't drag the real electron/net world in via api.ts.
 vi.mock('../../github/api', () => ({
     fetchRepoWatchItemsResult: async () => FETCH_RESULT,
+    fetchUpstreamWatchItems: async () => ({ items: [], error: null, detail: null }),
+    getRepoMetadata: async () => ({ owner: { login: 'o', id: null, isOrg: false }, fork: false, upstream: null }),
     parseGitHubRemote: () => ({ owner: 'o', repo: 'r' }),
     worseError: (a: string | null, b: string | null) => {
         const RANK = ['unauthenticated', 'forbidden', 'not_found', 'rate_limited', 'unknown'];

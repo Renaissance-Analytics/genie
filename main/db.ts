@@ -358,6 +358,48 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v16: fork → upstream cache (IssueWatch upstream-for-forks). A repo's
+            // fork status + its parent ("upstream") rarely changes, so we cache the
+            // GET /repos/{owner}/{repo} lookup here keyed by owner/repo: `is_fork`
+            // (1/0) plus the upstream owner/repo (NULL for a non-fork or an orphan
+            // fork whose parent was deleted). `checked_at` lets the resolver
+            // re-resolve only when the entry is stale (~7 days), so upstream
+            // watching costs one metadata read per repo per week, not per poll.
+            version: 16,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS fork_upstream (
+                        owner          TEXT NOT NULL,
+                        repo           TEXT NOT NULL,
+                        is_fork        INTEGER NOT NULL DEFAULT 0,
+                        upstream_owner TEXT,
+                        upstream_repo  TEXT,
+                        checked_at     TEXT NOT NULL,
+                        PRIMARY KEY (owner, repo)
+                    )
+                `);
+            },
+        },
+        {
+            // v17: per-workspace IssueWatch granularity. A JSON blob controlling
+            // WHAT IssueWatch watches + pings about for this workspace:
+            //   { own: { issues, pulls, security }, upstream: 'none'|'issues'|'issues+prs' }
+            // NULL/absent reads as the defaults (all own kinds ON + upstream
+            // issues+prs), so existing workspaces keep the prior behaviour AND gain
+            // upstream watching. Stored as TEXT JSON (one structured setting) rather
+            // than a fan of columns. Resolved + defaulted by
+            // getWorkspaceIssuewatchGranularity. Idempotent ADD COLUMN.
+            version: 17,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('issuewatch_granularity')) {
+                    db.exec(
+                        `ALTER TABLE workspaces ADD COLUMN issuewatch_granularity TEXT`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -611,6 +653,10 @@ export interface WorkspaceRow {
     /** Per-workspace IssueWatch remediation policy surfaced to agents on the
      *  imDone count line. NULL/absent reads as the 'surface' default. */
     issuewatch_policy?: 'surface' | 'fix' | 'fix-and-ship' | null;
+    /** Per-workspace IssueWatch granularity, JSON-encoded (what to watch + ping
+     *  about). NULL/absent reads as the all-on + upstream-issues+prs defaults —
+     *  resolve it via {@link getWorkspaceIssuewatchGranularity}, never parse here. */
+    issuewatch_granularity?: string | null;
 }
 
 export function listWorkspaces(): WorkspaceRow[] {
@@ -838,6 +884,125 @@ export function getWorkspaceIssuewatchPolicy(id: string): IssuewatchPolicy {
         .get(id);
     const p = row?.issuewatch_policy;
     return p === 'fix' || p === 'fix-and-ship' ? p : 'surface';
+}
+
+// IssueWatch granularity ------------------------------------------------
+
+/** How IssueWatch watches a fork's UPSTREAM (parent) repo. */
+export type UpstreamGranularity = 'none' | 'issues' | 'issues+prs';
+
+/**
+ * Per-workspace IssueWatch granularity — WHAT IssueWatch watches + pings about.
+ *   - `own`: each own-repo kind (Issues / Pull Requests / Security alerts) on/off.
+ *   - `upstream`: for a forked repo, watch its parent's None / Issues / Issues+PRs.
+ */
+export interface IssuewatchGranularity {
+    own: { issues: boolean; pulls: boolean; security: boolean };
+    upstream: UpstreamGranularity;
+}
+
+/** The defaults a NULL/absent granularity reads as: every own kind ON (the prior
+ *  behaviour) + upstream Issues+PRs auto-on for forks. */
+export const DEFAULT_ISSUEWATCH_GRANULARITY: IssuewatchGranularity = {
+    own: { issues: true, pulls: true, security: true },
+    upstream: 'issues+prs',
+};
+
+/**
+ * Parse a stored granularity JSON blob into a fully-defaulted granularity. Robust
+ * to NULL, corrupt JSON, and partial objects: each own kind defaults ON (only an
+ * explicit `false` disables it) and an unrecognized `upstream` falls back to
+ * `issues+prs`. Always returns a fresh object (never a shared reference).
+ */
+export function parseGranularity(raw: string | null | undefined): IssuewatchGranularity {
+    let j: { own?: Record<string, unknown>; upstream?: unknown } = {};
+    if (raw) {
+        try {
+            j = (JSON.parse(raw) as typeof j) ?? {};
+        } catch {
+            j = {};
+        }
+    }
+    const own = (j.own ?? {}) as Record<string, unknown>;
+    const up = j.upstream;
+    return {
+        own: {
+            issues: own.issues !== false,
+            pulls: own.pulls !== false,
+            security: own.security !== false,
+        },
+        upstream:
+            up === 'none' || up === 'issues' || up === 'issues+prs'
+                ? up
+                : 'issues+prs',
+    };
+}
+
+/** This workspace's resolved IssueWatch granularity (defaults applied). */
+export function getWorkspaceIssuewatchGranularity(id: string): IssuewatchGranularity {
+    const row = getDb()
+        .prepare<[string], { issuewatch_granularity: string | null } | undefined>(
+            'SELECT issuewatch_granularity FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    return parseGranularity(row?.issuewatch_granularity ?? null);
+}
+
+/** Persist this workspace's IssueWatch granularity (JSON-encoded). */
+export function setWorkspaceIssuewatchGranularity(
+    id: string,
+    granularity: IssuewatchGranularity,
+): void {
+    getDb()
+        .prepare('UPDATE workspaces SET issuewatch_granularity = ? WHERE id = ?')
+        .run(JSON.stringify(granularity), id);
+}
+
+// Fork → upstream cache -------------------------------------------------
+
+/** A cached fork→upstream resolution (see migration v16). */
+export interface ForkUpstreamRow {
+    owner: string;
+    repo: string;
+    /** 1 when `<owner>/<repo>` is a fork, else 0. */
+    is_fork: number;
+    /** The upstream (parent) owner — NULL for a non-fork or orphan fork. */
+    upstream_owner: string | null;
+    /** The upstream (parent) repo — NULL for a non-fork or orphan fork. */
+    upstream_repo: string | null;
+    /** ISO timestamp of the last resolution (drives the ~7-day staleness check). */
+    checked_at: string;
+}
+
+/** The cached fork→upstream entry for a repo, or undefined when never resolved. */
+export function getForkUpstream(owner: string, repo: string): ForkUpstreamRow | undefined {
+    return getDb()
+        .prepare<[string, string], ForkUpstreamRow | undefined>(
+            'SELECT owner, repo, is_fork, upstream_owner, upstream_repo, checked_at FROM fork_upstream WHERE owner = ? AND repo = ?',
+        )
+        .get(owner, repo);
+}
+
+/** Upsert a fork→upstream resolution, stamping `checked_at` (defaults to now). */
+export function setForkUpstream(
+    owner: string,
+    repo: string,
+    isFork: boolean,
+    upstreamOwner: string | null,
+    upstreamRepo: string | null,
+    checkedAt: string = new Date().toISOString(),
+): void {
+    getDb()
+        .prepare(
+            `INSERT INTO fork_upstream (owner, repo, is_fork, upstream_owner, upstream_repo, checked_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(owner, repo) DO UPDATE SET
+               is_fork        = excluded.is_fork,
+               upstream_owner = excluded.upstream_owner,
+               upstream_repo  = excluded.upstream_repo,
+               checked_at     = excluded.checked_at`,
+        )
+        .run(owner, repo, isFork ? 1 : 0, upstreamOwner, upstreamRepo, checkedAt);
 }
 
 // Backend connection helpers --------------------------------------------

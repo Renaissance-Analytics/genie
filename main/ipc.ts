@@ -13,6 +13,9 @@ import {
     setWorkspaceTerminalApproval,
     setWorkspaceIssuewatchPolicy,
     type IssuewatchPolicy,
+    getWorkspaceIssuewatchGranularity,
+    setWorkspaceIssuewatchGranularity,
+    type IssuewatchGranularity,
     setSettings,
     touchWorkspace,
     updateWorkspace,
@@ -29,6 +32,7 @@ import {
     TerminalSpecRow,
 } from './db';
 import { rebuildMenu } from './tray';
+import { broadcastIssueWatchUpdate } from './issue-watch';
 import { readSoundDataUrl } from './notify-sound';
 import { detectFolder } from './workspace/detect';
 import {
@@ -315,6 +319,19 @@ export function registerIpcHandlers(): void {
         'workspaces:set-issuewatch-policy',
         (_e, id: string, policy: IssuewatchPolicy) => {
             setWorkspaceIssuewatchPolicy(id, policy);
+            return { ok: true };
+        },
+    );
+    ipcMain.handle('workspaces:get-issuewatch-granularity', (_e, id: string) =>
+        getWorkspaceIssuewatchGranularity(id),
+    );
+    ipcMain.handle(
+        'workspaces:set-issuewatch-granularity',
+        async (_e, id: string, granularity: IssuewatchGranularity) => {
+            setWorkspaceIssuewatchGranularity(id, granularity);
+            // Refresh the rail pills immediately — the read paths gate on the live
+            // granularity, so a re-broadcast reflects the new setting without a poll.
+            await broadcastIssueWatchUpdate().catch(() => {});
             return { ok: true };
         },
     );

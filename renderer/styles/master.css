@@ -655,6 +655,15 @@
     color: var(--fg-4);
     margin: 10px 2px 4px;
 }
+/* Source subheading inside the Activity feed ("This repo" / "Upstream"),
+   lighter than the section head — only shown when there ARE upstream items. */
+.iw-subhead {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    color: var(--fg-4);
+    margin: 8px 2px 3px;
+}
 .iw-repos {
     display: flex;
     flex-direction: column;
@@ -685,6 +694,23 @@
     border-radius: 8px;
     padding: 0 6px;
     line-height: 16px;
+}
+/* Fork-upstream badge — a quiet pill on a forked repo naming the parent repo
+   whose issues/PRs are folded into the feed ("⬆ owner/repo"). */
+.iw-repo-upstream {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    color: var(--fg-3);
+    background: var(--bg-1);
+    border: 1px solid var(--border-1);
+    border-radius: 8px;
+    padding: 0 6px;
+    line-height: 16px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 55%;
 }
 /* Per-repo "couldn't read" badge — an amber pill that replaces the unread
    count when a repo's last read failed (403/404/…), so a silent-empty repo

@@ -7,16 +7,23 @@ import {
     listWorkspaces,
     setIssueWatch,
     markIssueWatchSeen,
+    getWorkspaceIssuewatchGranularity,
+    getForkUpstream,
+    setForkUpstream,
+    type IssuewatchGranularity,
 } from '../db';
 import { detectFolder } from '../workspace/detect';
 import {
     fetchRepoWatchItemsResult,
+    fetchUpstreamWatchItems,
+    getRepoMetadata,
     isSecurityKind,
     parseGitHubRemote,
     worseError,
     type WatchItem,
     type WatchFetchError,
     type WatchErrorDetail,
+    type ParsedRepoRef,
 } from '../github/api';
 import { getToken, needsReauth } from '../github/storage';
 
@@ -108,6 +115,80 @@ export function countByKind(items: WatchItem[]): TypeCounts {
 
 const cacheKey = (owner: string, repo: string) => `${owner}/${repo}`;
 
+/** Default seen-at floor — everything counts as unread against the epoch. */
+const EPOCH = '1970-01-01T00:00:00.000Z';
+
+/** Re-resolve a repo's fork→upstream after the cached entry is ~7 days stale. */
+const UPSTREAM_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Pure: keep only the items a workspace's granularity wants surfaced/counted —
+ * the READ-side gate (the FETCH side is gated in pollRepo). This guarantees
+ * per-workspace correctness even though feedCache is shared per-repo across
+ * workspaces: each workspace filters the shared cache by ITS OWN granularity.
+ *   - own items gate on g.own.{issues, pulls, security} (security = the 3 alert kinds);
+ *   - upstream items gate on g.upstream (none ⇒ drop all; issues ⇒ issues only;
+ *     issues+prs ⇒ issues + PRs). Upstream has no security stream.
+ */
+export function filterByGranularity(
+    items: WatchItem[],
+    g: IssuewatchGranularity,
+): WatchItem[] {
+    return items.filter((it) => {
+        if ((it.source ?? 'own') === 'upstream') {
+            if (g.upstream === 'none') return false;
+            if (it.kind === 'pr') return g.upstream === 'issues+prs';
+            return it.kind === 'issue';
+        }
+        if (it.kind === 'issue') return g.own.issues;
+        if (it.kind === 'pr') return g.own.pulls;
+        return g.own.security; // dependabot / code-scanning / secret-scanning
+    });
+}
+
+/** Map a cached fork→upstream row to its upstream ref (null = non-fork/orphan). */
+function upstreamRefOf(row: {
+    is_fork: number;
+    upstream_owner: string | null;
+    upstream_repo: string | null;
+}): ParsedRepoRef | null {
+    return row.is_fork && row.upstream_owner && row.upstream_repo
+        ? { owner: row.upstream_owner, repo: row.upstream_repo }
+        : null;
+}
+
+/**
+ * Resolve a repo's fork-upstream, cached in `fork_upstream` (it rarely changes).
+ * A cache entry younger than {@link UPSTREAM_STALE_MS} is trusted as-is; a
+ * missing/stale entry triggers a fresh `GET /repos/{owner}/{repo}`
+ * ({@link getRepoMetadata}) whose result is written back. A FAILED lookup falls
+ * back to the stale cache (or null) WITHOUT writing, so a transient error never
+ * caches a wrong "not a fork" for a week.
+ */
+export async function resolveUpstream(
+    owner: string,
+    repo: string,
+): Promise<ParsedRepoRef | null> {
+    const cached = getForkUpstream(owner, repo);
+    const fresh = cached && Date.now() - Date.parse(cached.checked_at) < UPSTREAM_STALE_MS;
+    if (cached && fresh) return upstreamRefOf(cached);
+    let meta: Awaited<ReturnType<typeof getRepoMetadata>> | null = null;
+    try {
+        meta = await getRepoMetadata(owner, repo);
+    } catch {
+        meta = null; // transient/forbidden — don't poison the cache
+    }
+    if (!meta) return cached ? upstreamRefOf(cached) : null;
+    setForkUpstream(
+        owner,
+        repo,
+        meta.fork,
+        meta.upstream?.owner ?? null,
+        meta.upstream?.repo ?? null,
+    );
+    return meta.upstream;
+}
+
 /**
  * Resolve a workspace's GitHub repos from its repo subfolders' origin remotes.
  * An .agi envelope has repos/<name>; a simple workspace is its own single repo.
@@ -159,6 +240,11 @@ export interface WatchRepoView {
     /** The raw detail (HTTP status + GitHub message) behind {@link error}, so
      *  the flyout can show the precise cause; null when the read succeeded. */
     detail: WatchErrorDetail | null;
+    /** When this repo is a fork AND the workspace watches upstream, the parent
+     *  repo whose Issues/PRs are folded in — drives the flyout's "⬆ owner/repo"
+     *  badge. Null for a non-fork, an orphan fork, or upstream watching off. Read
+     *  from the fork→upstream cache (no network); populated after the first poll. */
+    upstream?: { owner: string; repo: string } | null;
 }
 
 /**
@@ -171,19 +257,34 @@ export async function getWorkspaceRepoViews(
 ): Promise<WatchRepoView[]> {
     const repos = await resolveWorkspaceRepos(workspaceId);
     const watches = listIssueWatches(workspaceId);
+    const granularity = getWorkspaceIssuewatchGranularity(workspaceId);
     const byKey = new Map(watches.map((w) => [cacheKey(w.owner, w.repo), w]));
     return repos.map((r) => {
         const w = byKey.get(cacheKey(r.owner, r.repo));
         const enabled = w ? w.enabled === 1 : true; // default ON
-        const items = feedCache.get(cacheKey(r.owner, r.repo)) ?? [];
+        // Gate the cache by THIS workspace's granularity so the unread count only
+        // tallies kinds it actually watches (e.g. security off ⇒ alerts ignored).
+        const items = filterByGranularity(
+            feedCache.get(cacheKey(r.owner, r.repo)) ?? [],
+            granularity,
+        );
         const detail = enabled ? errorCache.get(cacheKey(r.owner, r.repo)) ?? null : null;
+        // Surface the fork-upstream (cached, no network) for the badge — only when
+        // this workspace wants upstream watching at all.
+        const up =
+            granularity.upstream !== 'none' ? getForkUpstream(r.owner, r.repo) : undefined;
+        const upstream =
+            up && up.is_fork && up.upstream_owner && up.upstream_repo
+                ? { owner: up.upstream_owner, repo: up.upstream_repo }
+                : null;
         return {
             owner: r.owner,
             repo: r.repo,
             enabled,
-            unread: enabled ? unreadCount(items, w?.seen_at ?? '1970-01-01T00:00:00.000Z') : 0,
+            unread: enabled ? unreadCount(items, w?.seen_at ?? EPOCH) : 0,
             error: detail?.error ?? null,
             detail,
+            upstream,
         };
     });
 }
@@ -240,20 +341,48 @@ export function worstViewDetail(views: WatchRepoView[]): WatchErrorDetail | null
  * Poll one repo and cache its open items AND its fetch outcome. Best-effort —
  * a failed read caches [] items + the failure class (so the flyout can explain
  * the empty feed) rather than throwing.
+ *
+ * `granularity` gates the FETCH: disabled own-kinds' endpoints are skipped, and
+ * upstream Issues/PRs are folded in (tagged `source: 'upstream'`) ONLY when the
+ * workspace wants them AND the repo is a fork. The repo's cached error stays the
+ * OWN read's detail — an upstream no-access is silent and never the fork's error.
  */
-async function pollRepo(owner: string, repo: string): Promise<WatchItem[]> {
-    const { items, detail } = await fetchRepoWatchItemsResult(owner, repo);
+async function pollRepo(
+    owner: string,
+    repo: string,
+    granularity: IssuewatchGranularity,
+): Promise<WatchItem[]> {
+    const own = await fetchRepoWatchItemsResult(owner, repo, {
+        issues: granularity.own.issues,
+        pulls: granularity.own.pulls,
+        security: granularity.own.security,
+    });
+    let items = own.items;
+    if (granularity.upstream !== 'none') {
+        const upstream = await resolveUpstream(owner, repo).catch(() => null);
+        if (upstream) {
+            const up = await fetchUpstreamWatchItems(
+                upstream.owner,
+                upstream.repo,
+                granularity.upstream === 'issues+prs',
+            ).catch(() => null);
+            if (up) items = items.concat(up.items);
+        }
+    }
     feedCache.set(cacheKey(owner, repo), items);
-    errorCache.set(cacheKey(owner, repo), detail);
+    errorCache.set(cacheKey(owner, repo), own.detail);
     return items;
 }
 
 /** Poll every enabled watch in a workspace (skips when GitHub isn't connected). */
 export async function pollWorkspace(workspaceId: string): Promise<void> {
     if (!getToken()) return;
+    const granularity = getWorkspaceIssuewatchGranularity(workspaceId);
     const views = await getWorkspaceRepoViews(workspaceId);
     await Promise.all(
-        views.filter((v) => v.enabled).map((v) => pollRepo(v.owner, v.repo).catch(() => [])),
+        views
+            .filter((v) => v.enabled)
+            .map((v) => pollRepo(v.owner, v.repo, granularity).catch(() => [])),
     );
 }
 
@@ -287,16 +416,41 @@ async function pollNextWorkspace(): Promise<void> {
 /** The flattened, unread-flagged feed for a workspace (newest first). */
 export async function getWorkspaceFeed(
     workspaceId: string,
-): Promise<Array<WatchItem & { repo: string; owner: string; unread: boolean }>> {
+): Promise<
+    Array<
+        WatchItem & {
+            repo: string;
+            owner: string;
+            source: 'own' | 'upstream';
+            unread: boolean;
+        }
+    >
+> {
     const watches = listIssueWatches(workspaceId);
     const seenByKey = new Map(watches.map((w) => [cacheKey(w.owner, w.repo), w.seen_at]));
+    const granularity = getWorkspaceIssuewatchGranularity(workspaceId);
     const views = await getWorkspaceRepoViews(workspaceId);
-    const out: Array<WatchItem & { repo: string; owner: string; unread: boolean }> = [];
+    const out: Array<
+        WatchItem & { repo: string; owner: string; source: 'own' | 'upstream'; unread: boolean }
+    > = [];
     for (const v of views) {
         if (!v.enabled) continue;
-        const seenAt = seenByKey.get(cacheKey(v.owner, v.repo)) ?? '1970-01-01T00:00:00.000Z';
-        for (const it of feedCache.get(cacheKey(v.owner, v.repo)) ?? []) {
-            out.push({ ...it, owner: v.owner, repo: v.repo, unread: it.updatedAt > seenAt });
+        const seenAt = seenByKey.get(cacheKey(v.owner, v.repo)) ?? EPOCH;
+        const items = filterByGranularity(
+            feedCache.get(cacheKey(v.owner, v.repo)) ?? [],
+            granularity,
+        );
+        for (const it of items) {
+            const isUpstream = (it.source ?? 'own') === 'upstream';
+            out.push({
+                ...it,
+                // Upstream items live in the parent repo — attribute them to its
+                // slug (carried on the item); own items use the watched repo.
+                owner: isUpstream ? it.owner ?? v.owner : v.owner,
+                repo: isUpstream ? it.repo ?? v.repo : v.repo,
+                source: isUpstream ? 'upstream' : 'own',
+                unread: it.updatedAt > seenAt,
+            });
         }
     }
     out.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
@@ -327,13 +481,19 @@ export async function getOpenCounts(): Promise<Record<string, TypeCounts>> {
         }
         if (repos.length === 0) continue;
         const watches = listIssueWatches(ws.id);
+        const granularity = getWorkspaceIssuewatchGranularity(ws.id);
         const byKey = new Map(watches.map((w) => [cacheKey(w.owner, w.repo), w]));
         const acc: TypeCounts = { issue: 0, pr: 0, security: 0 };
         for (const r of repos) {
             const w = byKey.get(cacheKey(r.owner, r.repo));
             const enabled = w ? w.enabled === 1 : true; // default ON
             if (!enabled) continue;
-            const k = countByKind(feedCache.get(cacheKey(r.owner, r.repo)) ?? []);
+            // Gate by granularity so a disabled kind (e.g. security off, or
+            // upstream none) doesn't light the pill — upstream Issues/PRs count
+            // toward the issue/pr buckets exactly when the workspace wants them.
+            const k = countByKind(
+                filterByGranularity(feedCache.get(cacheKey(r.owner, r.repo)) ?? [], granularity),
+            );
             acc.issue += k.issue;
             acc.pr += k.pr;
             acc.security += k.security;
@@ -405,6 +565,16 @@ async function broadcastUpdate(): Promise<void> {
     }
 }
 
+/**
+ * Force a fresh counts/errors broadcast (the rail pills + flyout reflect the
+ * cache through the per-workspace granularity gate). Exported so a granularity
+ * change can refresh the pills immediately — no re-poll needed, since the read
+ * paths gate on the live granularity.
+ */
+export async function broadcastIssueWatchUpdate(): Promise<void> {
+    await broadcastUpdate();
+}
+
 /** Register IPC + start the background poller. Idempotent. */
 export function registerIssueWatchIpc(): void {
     ipcMain.handle('issue-watch:repos', async (_e, workspaceId: string) => {
@@ -415,7 +585,12 @@ export function registerIssueWatchIpc(): void {
         'issue-watch:set',
         async (_e, workspaceId: string, owner: string, repo: string, enabled: boolean) => {
             setIssueWatch(workspaceId, owner, repo, enabled);
-            if (enabled) await pollRepo(owner, repo).catch(() => []);
+            if (enabled)
+                await pollRepo(
+                    owner,
+                    repo,
+                    getWorkspaceIssuewatchGranularity(workspaceId),
+                ).catch(() => []);
             await broadcastUpdate();
             return { ok: true };
         },

@@ -354,6 +354,14 @@ export default function IssueWatchFlyout({
                                             <span className="iw-repo-name">
                                                 {r.owner}/{r.repo}
                                             </span>
+                                            {r.upstream && (
+                                                <span
+                                                    className="iw-repo-upstream"
+                                                    title={`Forked from ${r.upstream.owner}/${r.upstream.repo} — its issues/PRs are watched too`}
+                                                >
+                                                    ⬆ {r.upstream.owner}/{r.upstream.repo}
+                                                </span>
+                                            )}
                                             {r.enabled && r.error && (
                                                 <span
                                                     className="iw-repo-error"
@@ -395,40 +403,70 @@ export default function IssueWatchFlyout({
                                     </div>
                                 )
                             ) : (
-                                <ul className="iw-feed">
-                                    {feed.map((it) => (
-                                        <li
-                                            key={it.key}
-                                            className={`iw-item${it.unread ? ' unread' : ''}`}
-                                        >
-                                            <button
-                                                type="button"
-                                                onClick={() =>
-                                                    void api().tynn.openInBrowser(it.url)
-                                                }
-                                                title={it.url}
-                                            >
-                                                <span className={`iw-kind iw-kind-${it.kind}`}>
-                                                    {KIND_LABEL[it.kind]}
-                                                </span>
-                                                <span className="iw-item-title">
-                                                    {it.title}
-                                                </span>
-                                                <span className="iw-item-meta">
-                                                    {it.repo}
-                                                    {it.number != null ? ` #${it.number}` : ''}
-                                                    {it.severity ? ` · ${it.severity}` : ''}
-                                                </span>
-                                            </button>
-                                        </li>
-                                    ))}
-                                </ul>
+                                <>
+                                    {/* Group by source: items from the watched repos
+                                        vs items folded in from a fork's upstream. The
+                                        "Upstream" subhead only shows when there ARE
+                                        upstream items, so a plain (non-fork) workspace
+                                        looks exactly as before. */}
+                                    {(() => {
+                                        const own = feed.filter((it) => it.source !== 'upstream');
+                                        const up = feed.filter((it) => it.source === 'upstream');
+                                        return (
+                                            <>
+                                                {up.length > 0 && (
+                                                    <div className="iw-subhead">This repo</div>
+                                                )}
+                                                <FeedList items={own} />
+                                                {up.length > 0 && (
+                                                    <>
+                                                        <div className="iw-subhead">Upstream</div>
+                                                        <FeedList items={up} />
+                                                    </>
+                                                )}
+                                            </>
+                                        );
+                                    })()}
+                                </>
                             )}
                         </>
                     )}
                 </div>
             </aside>
         </div>
+    );
+}
+
+/**
+ * One source-grouped feed list ("This repo" or "Upstream"). Each item links out
+ * to its GitHub URL and shows kind / repo / number / severity, unread items
+ * highlighted — the same row chrome the feed has always used, factored out so the
+ * own + upstream sections render identically.
+ */
+function FeedList({ items }: { items: WatchFeedItem[] }) {
+    if (items.length === 0) return null;
+    return (
+        <ul className="iw-feed">
+            {items.map((it) => (
+                <li key={it.key} className={`iw-item${it.unread ? ' unread' : ''}`}>
+                    <button
+                        type="button"
+                        onClick={() => void api().tynn.openInBrowser(it.url)}
+                        title={it.url}
+                    >
+                        <span className={`iw-kind iw-kind-${it.kind}`}>
+                            {KIND_LABEL[it.kind]}
+                        </span>
+                        <span className="iw-item-title">{it.title}</span>
+                        <span className="iw-item-meta">
+                            {it.owner}/{it.repo}
+                            {it.number != null ? ` #${it.number}` : ''}
+                            {it.severity ? ` · ${it.severity}` : ''}
+                        </span>
+                    </button>
+                </li>
+            ))}
+        </ul>
     );
 }
 

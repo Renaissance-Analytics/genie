@@ -45,6 +45,14 @@ vi.mock('../../db', () => ({
     listWorkspaces: () => [WS],
     setIssueWatch: () => {},
     markIssueWatchSeen: () => {},
+    // All own kinds ON (so security aggregation is exercised); upstream OFF so the
+    // counts come purely from the mocked own-repo items.
+    getWorkspaceIssuewatchGranularity: () => ({
+        own: { issues: true, pulls: true, security: true },
+        upstream: 'none',
+    }),
+    getForkUpstream: () => undefined,
+    setForkUpstream: () => {},
 }));
 // detectFolder returns no sub-repos → the workspace path itself is the repo.
 vi.mock('../../workspace/detect', () => ({ detectFolder: () => ({ repos: [] }) }));
@@ -52,7 +60,9 @@ vi.mock('../../github/api', () => ({
     fetchRepoWatchItems: async () => ITEMS,
     // pollRepo now reads the OUTCOME shape (items + read error) so a
     // silent-empty feed can explain itself; a clean read = null error.
-    fetchRepoWatchItemsResult: async () => ({ items: ITEMS, error: null }),
+    fetchRepoWatchItemsResult: async () => ({ items: ITEMS, error: null, detail: null }),
+    fetchUpstreamWatchItems: async () => ({ items: [], error: null, detail: null }),
+    getRepoMetadata: async () => ({ owner: { login: 'o', id: null, isOrg: false }, fork: false, upstream: null }),
     parseGitHubRemote: () => ({ owner: 'o', repo: 'r' }),
     worseError: (a: string | null, b: string | null) => a ?? b,
     // countByKind/getOpenCounts bucket the three security kinds into `security`.

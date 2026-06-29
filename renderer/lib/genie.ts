@@ -67,6 +67,10 @@ export interface WorkspaceRow {
     terminal_approval?: number;
     /** Per-workspace IssueWatch remediation policy (null reads as 'surface'). */
     issuewatch_policy?: 'surface' | 'fix' | 'fix-and-ship' | null;
+    /** Per-workspace IssueWatch granularity, JSON-encoded (null reads as the
+     *  all-on + upstream-issues+prs defaults). Resolve via the dedicated
+     *  `workspaces.getIssuewatchGranularity` IPC rather than parsing here. */
+    issuewatch_granularity?: string | null;
 }
 
 export interface DetectResult {
@@ -143,6 +147,20 @@ export interface WatchRepoView {
     error: WatchFetchError | null;
     /** Raw detail (HTTP status + message) behind `error`, or null. */
     detail: WatchErrorDetail | null;
+    /** When this repo is a fork AND the workspace watches upstream, the parent
+     *  repo whose Issues/PRs are folded in — drives the "⬆ owner/repo" badge.
+     *  Null/absent for a non-fork, an orphan fork, or upstream watching off. */
+    upstream?: { owner: string; repo: string } | null;
+}
+
+/**
+ * Issue Watch granularity — WHAT a workspace watches + pings about (mirrors
+ * `IssuewatchGranularity` in main/db.ts). `own` toggles each own-repo kind;
+ * `upstream` chooses how much of a fork's parent to watch.
+ */
+export interface IssuewatchGranularity {
+    own: { issues: boolean; pulls: boolean; security: boolean };
+    upstream: 'none' | 'issues' | 'issues+prs';
 }
 
 /** Issue Watch: the surfaced per-workspace status (why the feed is what it is). */
@@ -167,6 +185,9 @@ export interface WatchFeedItem {
     severity?: string;
     owner: string;
     repo: string;
+    /** Whether this item is from the watched repo itself or its fork-upstream —
+     *  the flyout groups the feed into "This repo" and "Upstream" sections. */
+    source: 'own' | 'upstream';
     unread: boolean;
 }
 
@@ -987,6 +1008,13 @@ export interface GenieApi {
         setIssuewatchPolicy: (
             id: string,
             policy: 'surface' | 'fix' | 'fix-and-ship',
+        ) => Promise<{ ok: boolean }>;
+        /** This workspace's resolved IssueWatch granularity (defaults applied). */
+        getIssuewatchGranularity: (id: string) => Promise<IssuewatchGranularity>;
+        /** Persist this workspace's IssueWatch granularity (what to watch + ping). */
+        setIssuewatchGranularity: (
+            id: string,
+            granularity: IssuewatchGranularity,
         ) => Promise<{ ok: boolean }>;
         /** Repo subfolder names under the workspace envelope (for Add Process cwd). */
         repos: (id: string) => Promise<string[]>;

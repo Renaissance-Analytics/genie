@@ -53,7 +53,9 @@ import {
     classifyFetchError,
     createRepo,
     fetchRepoWatchItemsResult,
+    fetchUpstreamWatchItems,
     forkRepo,
+    getRepoMetadata,
     getRepoOwner,
     listInstallations,
     listOrgs,
@@ -206,6 +208,169 @@ describe('getRepoOwner (source repo owner)', () => {
             id: null,
             isOrg: false,
         });
+    });
+});
+
+describe('getRepoMetadata (fork + upstream parsing)', () => {
+    it('resolves the parent as upstream for a fork (parent preferred over source)', async () => {
+        fetchMock.mockResolvedValueOnce(
+            res(200, {
+                owner: { login: 'me', id: 1, type: 'User' },
+                fork: true,
+                parent: { name: 'canonical', owner: { login: 'upstream-org' } },
+                // A different `source` (root of the network) must be IGNORED when a
+                // direct parent is present — we watch the repo we forked FROM.
+                source: { name: 'root', owner: { login: 'root-org' } },
+            }),
+        );
+        expect(await getRepoMetadata('me', 'canonical')).toEqual({
+            owner: { login: 'me', id: 1, isOrg: false },
+            fork: true,
+            upstream: { owner: 'upstream-org', repo: 'canonical' },
+        });
+    });
+
+    it('falls back to `source` when a fork has no direct `parent`', async () => {
+        fetchMock.mockResolvedValueOnce(
+            res(200, {
+                owner: { login: 'me', id: 1, type: 'User' },
+                fork: true,
+                source: { name: 'root', owner: { login: 'root-org' } },
+            }),
+        );
+        expect((await getRepoMetadata('me', 'root')).upstream).toEqual({
+            owner: 'root-org',
+            repo: 'root',
+        });
+    });
+
+    it('returns upstream:null for a non-fork', async () => {
+        fetchMock.mockResolvedValueOnce(
+            res(200, { owner: { login: 'me', id: 1, type: 'User' }, fork: false }),
+        );
+        expect(await getRepoMetadata('me', 'original')).toEqual({
+            owner: { login: 'me', id: 1, isOrg: false },
+            fork: false,
+            upstream: null,
+        });
+    });
+
+    it('handles an orphan fork (fork:true but parent/source deleted) → upstream:null', async () => {
+        fetchMock.mockResolvedValueOnce(
+            res(200, { owner: { login: 'me', type: 'User' }, fork: true }),
+        );
+        const meta = await getRepoMetadata('me', 'orphan');
+        expect(meta.fork).toBe(true);
+        expect(meta.upstream).toBeNull();
+    });
+
+    it('THROWS on an HTTP failure (so the resolver can avoid caching a transient miss)', async () => {
+        fetchMock.mockResolvedValueOnce(res(404, { message: 'Not Found' }));
+        await expect(getRepoMetadata('hidden', 'repo')).rejects.toBeInstanceOf(GitHubApiError);
+    });
+});
+
+describe('fetchUpstreamWatchItems (upstream issues + PRs only)', () => {
+    it('tags items source:upstream and carries the upstream owner/repo', async () => {
+        // Reads, in order: upstream issues, upstream pulls (NO security streams).
+        fetchMock
+            .mockResolvedValueOnce(
+                res(200, [
+                    {
+                        number: 9,
+                        title: 'upstream issue',
+                        html_url: 'https://github.com/up/r/issues/9',
+                        updated_at: '2026-06-20T10:00:00.000Z',
+                        user: { login: 'maintainer' },
+                    },
+                ]),
+            )
+            .mockResolvedValueOnce(
+                res(200, [
+                    {
+                        number: 4,
+                        title: 'upstream PR',
+                        html_url: 'https://github.com/up/r/pull/4',
+                        updated_at: '2026-06-21T10:00:00.000Z',
+                        user: { login: 'contrib' },
+                    },
+                ]),
+            );
+
+        const out = await fetchUpstreamWatchItems('up', 'r');
+        expect(out.error).toBeNull();
+        expect(out.items).toHaveLength(2);
+        for (const it of out.items) {
+            expect(it.source).toBe('upstream');
+            expect(it.owner).toBe('up');
+            expect(it.repo).toBe('r');
+        }
+        // Only two reads — security streams are never requested for upstream.
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(out.items.find((i) => i.kind === 'issue')?.key).toBe('up/r:issue:9');
+        expect(out.items.find((i) => i.kind === 'pr')?.key).toBe('up/r:pr:4');
+    });
+
+    it('skips the PRs read when includePulls is false (issues-only upstream)', async () => {
+        fetchMock.mockResolvedValueOnce(res(200, []));
+        const out = await fetchUpstreamWatchItems('up', 'r', false);
+        expect(out.error).toBeNull();
+        expect(fetchMock).toHaveBeenCalledTimes(1); // issues only
+    });
+
+    it('SILENTLY skips a forbidden upstream issues read (no access — normal for a fork)', async () => {
+        fetchMock
+            .mockResolvedValueOnce(res(403, { message: 'Resource not accessible by integration' }))
+            .mockResolvedValueOnce(res(200, []));
+        const out = await fetchUpstreamWatchItems('up', 'r');
+        // A fork's install often can't read the parent's issues — that's NOT an
+        // error worth surfacing, so it degrades to an empty success.
+        expect(out.error).toBeNull();
+        expect(out.detail).toBeNull();
+        expect(out.items).toEqual([]);
+    });
+
+    it('SILENTLY skips a 404 upstream issues read too', async () => {
+        fetchMock
+            .mockResolvedValueOnce(res(404, { message: 'Not Found' }))
+            .mockResolvedValueOnce(res(200, []));
+        const out = await fetchUpstreamWatchItems('up', 'r');
+        expect(out.error).toBeNull();
+    });
+
+    it('STILL surfaces an unauthenticated upstream read (token died — not fork-specific)', async () => {
+        fetchMock
+            .mockResolvedValueOnce(res(401, { message: 'Bad credentials' }))
+            .mockResolvedValueOnce(res(200, []));
+        const out = await fetchUpstreamWatchItems('up', 'r');
+        expect(out.error).toBe('unauthenticated');
+    });
+});
+
+describe('fetchRepoWatchItemsResult — kind gating (fetch side)', () => {
+    it('skips the disabled streams entirely (security off ⇒ only issues + PRs requested)', async () => {
+        fetchMock
+            .mockResolvedValueOnce(res(200, [])) // issues
+            .mockResolvedValueOnce(res(200, [])); // pulls
+        const out = await fetchRepoWatchItemsResult('o', 'r', {
+            issues: true,
+            pulls: true,
+            security: false,
+        });
+        expect(out.error).toBeNull();
+        // Only issues + PRs hit the network — the three security endpoints are skipped.
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('fetches nothing when every own kind is off', async () => {
+        const out = await fetchRepoWatchItemsResult('o', 'r', {
+            issues: false,
+            pulls: false,
+            security: false,
+        });
+        expect(out.items).toEqual([]);
+        expect(out.error).toBeNull();
+        expect(fetchMock).not.toHaveBeenCalled();
     });
 });
 
