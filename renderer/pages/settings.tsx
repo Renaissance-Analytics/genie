@@ -19,7 +19,6 @@ import {
     type GenieHost,
     type MobileStatus,
     type MobileDevice,
-    type RemoteStatus,
     type Settings,
     type TailscaleStatus,
     type ShellDetection,
@@ -2371,7 +2370,6 @@ function TailscaleSection() {
 function RemoteHostCard() {
     const [hosts, setHosts] = useState<GenieHost[] | null>(null);
     const [scanning, setScanning] = useState(false);
-    const [status, setStatus] = useState<RemoteStatus | null>(null);
     const [pins, setPins] = useState<Record<string, string>>({});
     const [pinNeeded, setPinNeeded] = useState<Record<string, boolean>>({});
     const [busy, setBusy] = useState<string | null>(null);
@@ -2379,11 +2377,6 @@ function RemoteHostCard() {
     const [manualPort, setManualPort] = useState('51718');
     const [manualPin, setManualPin] = useState('');
     const [msg, setMsg] = useState<string | null>(null);
-
-    useEffect(() => {
-        api().remote.status().then(setStatus).catch(() => {});
-        return api().remote.onStatus(setStatus);
-    }, []);
 
     const scan = async () => {
         setScanning(true);
@@ -2432,50 +2425,14 @@ function RemoteHostCard() {
         }
     };
 
-    const disconnect = async () => {
-        setBusy('disconnect');
-        try {
-            await api().remote.disconnect();
-            setMsg('Disconnected — back to your local desktop.');
-        } finally {
-            setBusy(null);
-        }
-    };
-
     const setPin = (key: string, v: string) => setPins((p) => ({ ...p, [key]: v }));
 
-    // Already controlling a host → show the active session + a disconnect.
-    if (status?.connected && status.host) {
-        return (
-            <SetSection
-                title="Remote host"
-                desc="Driving another Genie over Tailscale"
-                status={`Controlling ${status.host.hostname}`}
-                statusColor="var(--rose-500)"
-                statusIcon="circle"
-            >
-                <SettingRow
-                    label="Active session"
-                    keywords="remote host controlling disconnect session"
-                    desc={
-                        `Your desktop is driving ${status.host.hostname} (${status.host.ip}) over Tailscale — the workspaces, terminals, editor and processes you see are the host's. The title bar shows you're in a remote session.`
-                    }
-                >
-                    <Action
-                        size="sm"
-                        color="rose"
-                        icon="log-out"
-                        disabled={busy === 'disconnect'}
-                        onClick={() => void disconnect()}
-                    >
-                        {busy === 'disconnect' ? 'Disconnecting…' : 'Disconnect'}
-                    </Action>
-                </SettingRow>
-                <HostUpdate />
-                {msg && <div className="set-note">{msg}</div>}
-            </SetSection>
-        );
-    }
+    // NOTE: in the per-window model this Settings window is always LOCAL, so the
+    // old "active session / Disconnect / HostUpdate" branch (which assumed the
+    // whole desktop went remote) is gone. Connecting opens the host in its OWN
+    // window; manage live host sessions from the titlebar Hosts picker or by
+    // closing the host window. (Follow-on: re-home the host-updater UI inside the
+    // host window, where api() is remote.)
 
     const connectManual = () => {
         const ip = manualIp.trim();
@@ -2604,114 +2561,6 @@ function RemoteHostCard() {
 
             {msg && <div className="set-note">{msg}</div>}
         </SetSection>
-    );
-}
-
-/**
- * Settings → Work Mode → host update (shown while controlling a host). The host's
- * own version + a one-click "Update host" (download → install → restart on the
- * host's updater). The local install updates from the title-bar pill, as usual —
- * together they are the "update both" surface.
- */
-function HostUpdate() {
-    const [st, setSt] = useState<{
-        currentVersion: string;
-        latestVersion: string | null;
-    } | null>(null);
-    const [busy, setBusy] = useState(false);
-    const [msg, setMsg] = useState<string | null>(null);
-
-    const check = () =>
-        api()
-            .remote.request('/api/update/check', { method: 'POST' })
-            .then((s) =>
-                setSt(s as { currentVersion: string; latestVersion: string | null }),
-            )
-            .catch(() => {});
-
-    useEffect(() => {
-        // Ask the host to LOOK on open (it never auto-downloads), then poll status.
-        void check();
-        const t = setInterval(() => {
-            api()
-                .remote.request('/api/update/status')
-                .then((s) =>
-                    setSt(s as { currentVersion: string; latestVersion: string | null }),
-                )
-                .catch(() => {});
-        }, 15000);
-        return () => clearInterval(t);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
-    const updateHost = async () => {
-        setBusy(true);
-        setMsg(null);
-        try {
-            await api().remote.request('/api/update/install', { method: 'POST' });
-            setMsg(
-                'Updating the host — it downloads, installs and restarts on its own. The remote session drops while it restarts; reconnect after.',
-            );
-        } catch (e) {
-            setMsg(e instanceof Error ? e.message : 'Could not update the host.');
-        } finally {
-            setBusy(false);
-        }
-    };
-
-    const hasUpdate = !!st?.latestVersion && st.latestVersion !== st.currentVersion;
-    return (
-        <div
-            style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 6,
-                borderTop: '1px solid var(--border-1)',
-                paddingTop: 10,
-            }}
-        >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Text size="xs" style={{ fontWeight: 600 }}>
-                    Host update
-                </Text>
-                <span style={{ flex: 1 }} />
-                <Action size="sm" variant="ghost" icon="refresh-cw" onClick={() => void check()}>
-                    Check
-                </Action>
-            </div>
-            {!st ? (
-                <Text size="xs" className="text-zinc-500">
-                    Checking the host&apos;s version…
-                </Text>
-            ) : hasUpdate ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Text size="xs" className="text-zinc-500" style={{ flex: 1 }}>
-                        Host {st.currentVersion} → <strong>{st.latestVersion}</strong> available
-                    </Text>
-                    <Action
-                        size="sm"
-                        color="blue"
-                        icon="download"
-                        disabled={busy}
-                        onClick={() => void updateHost()}
-                    >
-                        {busy ? 'Updating…' : 'Update host'}
-                    </Action>
-                </div>
-            ) : (
-                <Text size="xs" className="text-zinc-500">
-                    Host is up to date ({st.currentVersion}).
-                </Text>
-            )}
-            {msg && (
-                <Text size="xs" style={{ color: 'var(--fg-2)' }}>
-                    {msg}
-                </Text>
-            )}
-            <Text size="xs" className="text-zinc-500">
-                Your local install updates from the title-bar pill, as usual.
-            </Text>
-        </div>
     );
 }
 

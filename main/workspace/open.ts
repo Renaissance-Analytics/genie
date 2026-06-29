@@ -1,8 +1,8 @@
-import { BrowserWindow } from 'electron';
 import fs from 'fs';
 import { simpleGit } from 'simple-git';
 import { getWorkspace, touchWorkspace, setSettings } from '../db';
 import { rebuildMenu } from '../tray';
+import { broadcastLocal } from '../remote';
 import { detectFolder } from './detect';
 
 /**
@@ -53,14 +53,12 @@ async function openWorkspaceInner(id: string): Promise<void> {
 
     // Focus it in Genie's own UI: persist as the active workspace (covers a
     // fresh / relaunching master, which reads `active_workspace` on mount) and
-    // broadcast so an already-open master activates it live. No external editor
-    // or terminal is spawned.
+    // broadcast so an already-open master activates it live. LOCAL-only: a host
+    // window must NOT navigate on a local nav (workspaceId is the shared Tynn
+    // project.id — it would jump every host window to that project, or blank it
+    // if the host lacks it). No external editor or terminal is spawned.
     setSettings({ active_workspace: id });
-    for (const w of BrowserWindow.getAllWindows()) {
-        if (!w.webContents.isDestroyed()) {
-            w.webContents.send('workspace:open', { workspaceId: id });
-        }
-    }
+    broadcastLocal('workspace:open', { workspaceId: id });
 
     touchWorkspace(id);
     rebuildMenu();

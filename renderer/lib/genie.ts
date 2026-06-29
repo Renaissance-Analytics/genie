@@ -914,10 +914,6 @@ export interface GenieApi {
         }) => Promise<{ ok: boolean }>;
     };
     remote: {
-        connect: (
-            host: RemoteHost,
-            pin?: string,
-        ) => Promise<{ ok: boolean; connKey?: string; error?: string; needsPin?: boolean }>;
         disconnect: () => Promise<{ ok: boolean }>;
         status: () => Promise<RemoteStatus>;
         /** This window's binding — `local`, or `remote` to a specific host. Read

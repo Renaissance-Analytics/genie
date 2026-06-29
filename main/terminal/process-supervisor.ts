@@ -1,4 +1,3 @@
-import { BrowserWindow } from 'electron';
 import path from 'node:path';
 import {
     terminalManager,
@@ -15,6 +14,7 @@ import { buildProcessArgs } from './process-spawn';
 import { buildTynnCliEnv } from '../cli/tynn-cli';
 import { decideOnExit, type ProcessStatus } from './process-lifecycle';
 import { mobileEmit } from '../mobile/server';
+import { broadcastLocal } from '../remote';
 
 /**
  * Headless supervisor for Process service runners.
@@ -108,11 +108,9 @@ function clearTimer(st: ProcState): void {
 
 function setStatus(id: string, status: ProcessStatus): void {
     ensure(id).status = status;
-    for (const w of BrowserWindow.getAllWindows()) {
-        if (!w.webContents.isDestroyed()) {
-            w.webContents.send('process:status', { id, status });
-        }
-    }
+    // LOCAL-only — a host window's process list reflects the HOST (via its
+    // /ws/events); a local process status must not leak in there.
+    broadcastLocal('process:status', { id, status });
     // Mirror to the mobile dashboard push channel (no-op when the server is off).
     mobileEmit('process:status', { id, status });
 }

@@ -36,6 +36,7 @@ import {
     workspaceEndpointUrl,
 } from '../mcp/server';
 import { mobileEmit, mobileTermFanout, mobileTermClose } from '../mobile/server';
+import { broadcastLocal } from '../remote';
 import { getSnapshotStore, dbSettingsProvider } from './genie-adapter';
 import { listAllProcesses } from './process-list';
 import crypto from 'node:crypto';
@@ -593,11 +594,9 @@ export function broadcastTerminalAttention(id: string, on: boolean): void {
  * synthetic System Workspace id for a System-Workspace terminal.
  */
 export function broadcastWorkspacePulse(workspaceId: string): void {
-    for (const w of BrowserWindow.getAllWindows()) {
-        if (!w.webContents.isDestroyed()) {
-            w.webContents.send('workspace:pulse', { workspaceId });
-        }
-    }
+    // LOCAL-only — a host window's pulse arrives via its host's /ws/events; a
+    // local pulse carrying a shared project.id / __system__ would false-glow it.
+    broadcastLocal('workspace:pulse', { workspaceId });
     mobileEmit('workspace:pulse', { workspaceId });
 }
 
@@ -610,11 +609,9 @@ export function broadcastWorkspacePulse(workspaceId: string): void {
  * in the Processes list immediately, never only after a restart.
  */
 export function broadcastTerminalSpecsChanged(): void {
-    for (const w of BrowserWindow.getAllWindows()) {
-        if (!w.webContents.isDestroyed()) {
-            w.webContents.send('terminal-spec:changed');
-        }
-    }
+    // LOCAL-only — a host window re-fetches its OWN specs from its /ws/events;
+    // a local spec mutation must not trigger a redundant remote round-trip there.
+    broadcastLocal('terminal-spec:changed');
     mobileEmit('terminal-spec:changed');
 }
 

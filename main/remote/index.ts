@@ -20,12 +20,9 @@ import path from 'node:path';
  *     window talks to exactly its own host (or local).
  *
  * The session token NEVER reaches the renderer — every host call is proxied
- * here, so the renderer can't leak it.
- *
- * BACK-COMPAT (pre-multi-window): a window with no explicit binding falls back
- * to the sole connection when exactly one exists, and connection events fan out
- * to ALL windows when nothing is bound — so the legacy single-host global flow
- * keeps working until the renderer adopts per-window binding (Phase 3).
+ * here, so the renderer can't leak it. A window is remote ONLY if it was
+ * explicitly bound (the host-window factory); every other window stays local, so
+ * connecting a host never flips the local desktop.
  */
 
 export interface RemoteHost {
@@ -33,6 +30,12 @@ export interface RemoteHost {
     port: number;
     hostname: string;
 }
+
+/** After this many consecutive `/ws/events` reconnects that never reach `open`
+ *  (the host keeps rejecting the upgrade — e.g. a dead token → HTTP 401), stop
+ *  the silent reconnect-storm and tear the connection down so it recovers
+ *  (the host window auto-closes on the resulting disconnect). ~10s at 2s spacing. */
+const MAX_EVENTS_FAILURES = 5;
 
 /** A live connection to one host. Self-contained: token + events bridge + ptys. */
 interface RemoteConnection {
@@ -43,6 +46,8 @@ interface RemoteConnection {
     eventsWs: WebSocket | null;
     eventsClosed: boolean;
     eventsRetry: NodeJS.Timeout | null;
+    /** Consecutive events-WS opens that failed (reset to 0 on a real `open`). */
+    eventsFailures: number;
     /** Host terminal id → its `/ws/term` socket (viewer-only; never kills host pty). */
     termWs: Map<string, WebSocket>;
 }
@@ -201,6 +206,27 @@ export function unbindWindow(wcId: number): void {
     bindings.delete(wcId);
 }
 
+/** Is this window bound to a remote host (i.e. a host window)? The predicate
+ *  `broadcastLocal` uses to keep LOCAL-machine events out of host windows. */
+export function isRemoteBoundWindow(wcId: number): boolean {
+    return bindings.has(wcId);
+}
+
+/**
+ * Broadcast a LOCAL-machine IPC event to every window EXCEPT host windows (those
+ * bound to a remote connection). A host window's UI reflects the HOST, so a
+ * local mutation must not reach it: shared ids (the Tynn `project.id`,
+ * `__system__`) would otherwise make it navigate, glow, or refetch wrongly.
+ * Host windows get their live events from `emitToConn` (the host's `/ws/events`).
+ */
+export function broadcastLocal(channel: string, payload?: unknown): void {
+    for (const w of BrowserWindow.getAllWindows()) {
+        if (w.webContents.isDestroyed()) continue;
+        if (isRemoteBoundWindow(w.webContents.id)) continue;
+        w.webContents.send(channel, payload);
+    }
+}
+
 /** Per-window status — deliberately omits the token. */
 export function remoteStatusFor(wcId: number): { connected: boolean; host: RemoteHost | null } {
     const conn = connForWebContents(wcId);
@@ -266,6 +292,10 @@ function startEventsBridge(conn: RemoteConnection): void {
             return;
         }
         conn.eventsWs = ws;
+        // A real upgrade reached the host → healthy; clear the failure streak.
+        ws.on('open', () => {
+            conn.eventsFailures = 0;
+        });
         ws.on('message', (raw) => {
             try {
                 const msg = JSON.parse(String(raw)) as { type?: string; payload?: unknown };
@@ -276,7 +306,18 @@ function startEventsBridge(conn: RemoteConnection): void {
         });
         ws.on('close', () => {
             if (conn.eventsWs === ws) conn.eventsWs = null;
-            if (!conn.eventsClosed) scheduleRetry();
+            if (conn.eventsClosed) return;
+            // A close WITHOUT a preceding healthy `open` (the streak wasn't reset)
+            // means the host keeps rejecting us — a dead token (HTTP 401 upgrade),
+            // a lock, etc. Past the cap, stop the silent reconnect-storm and tear
+            // the connection down so it recovers (the host window auto-closes).
+            conn.eventsFailures += 1;
+            if (conn.eventsFailures >= MAX_EVENTS_FAILURES) {
+                teardownConnection(conn);
+                broadcastStatus();
+                return;
+            }
+            scheduleRetry();
         });
         ws.on('error', () => {
             try {
@@ -409,17 +450,37 @@ function closeAllTerminals(conn: RemoteConnection): void {
  * the registry (`connKey`) with its events bridge running; the caller binds a
  * window to it. Reconnecting an already-live host is a no-op success.
  */
-export async function connectRemote(
-    host: RemoteHost,
-    pin?: string,
-): Promise<{ ok: boolean; connKey?: string; error?: string; needsPin?: boolean }> {
+type ConnectResult = { ok: boolean; connKey?: string; error?: string; needsPin?: boolean };
+
+/** In-flight connect promises keyed by connKey — so two concurrent connects for
+ *  the SAME host share one attempt instead of racing (the loser would otherwise
+ *  orphan the winner's eventsWs, which reconnects forever with no owner). */
+const connectInFlight = new Map<string, Promise<ConnectResult>>();
+
+export async function connectRemote(host: RemoteHost, pin?: string): Promise<ConnectResult> {
     const connKey = connKeyOf(host);
 
     // Already connected to this host → reuse it (a host window re-open / a second
     // request for the same host shares the one connection).
-    const existing = connections.get(connKey);
-    if (existing) return { ok: true, connKey };
+    if (connections.has(connKey)) return { ok: true, connKey };
+    // A connect for this host is already in flight → join it (no duplicate conn).
+    const inFlight = connectInFlight.get(connKey);
+    if (inFlight) return inFlight;
 
+    const run = connectRemoteInner(host, pin, connKey);
+    connectInFlight.set(connKey, run);
+    try {
+        return await run;
+    } finally {
+        connectInFlight.delete(connKey);
+    }
+}
+
+async function connectRemoteInner(
+    host: RemoteHost,
+    pin: string | undefined,
+    connKey: string,
+): Promise<ConnectResult> {
     let token: string;
 
     if (pin) {
@@ -483,6 +544,7 @@ export async function connectRemote(
         eventsWs: null,
         eventsClosed: false,
         eventsRetry: null,
+        eventsFailures: 0,
         termWs: new Map(),
     };
     connections.set(connKey, conn);

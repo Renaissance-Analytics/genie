@@ -133,17 +133,11 @@ const api = {
             ipcRenderer.invoke('workmode:open-remote', host) as Promise<{ ok: boolean }>,
     },
 
-    // Work Mode — remote desktop: pair/connect to a host, the REST proxy the
-    // renderer's remote bridge maps every desktop call onto, and a status
-    // subscription (the titlebar mode/host indicator listens on it).
+    // Work Mode — remote desktop: the REST proxy the renderer's remote bridge maps
+    // every desktop call onto, a per-window status subscription (the titlebar
+    // indicator listens on it), and the Hosts-picker surface (open/known/forget/
+    // rename). Pairing happens inside `open` — there is no standalone `connect`.
     remote: {
-        connect: (host: { ip: string; port: number; hostname: string }, pin?: string) =>
-            ipcRenderer.invoke('remote:connect', host, pin) as Promise<{
-                ok: boolean;
-                connKey?: string;
-                error?: string;
-                needsPin?: boolean;
-            }>,
         disconnect: () =>
             ipcRenderer.invoke('remote:disconnect') as Promise<{ ok: boolean }>,
         status: () =>

@@ -105,6 +105,7 @@ import {
     listKnownHosts,
     forgetHost,
     renameKnownHost,
+    broadcastLocal,
     type RemoteHost,
 } from './remote';
 import QRCode from 'qrcode';
@@ -429,16 +430,11 @@ export function registerIpcHandlers(): void {
             openRemoteWindow(host),
     );
 
-    // Work Mode — remote desktop: pair+connect to a host, proxy REST, status.
-    // (The renderer's remote bridge maps every desktop call onto remote:request;
-    //  the local main holds the token and routes to the host over the tailnet.)
-    // Pair+connect a host into the registry; the host window (Phase 2) binds to
-    // the returned connKey. The token stays in main.
-    ipcMain.handle(
-        'remote:connect',
-        (_e, host: { ip: string; port: number; hostname: string }, pin?: string) =>
-            connectRemote(host, pin),
-    );
+    // Work Mode — remote desktop. The renderer's remote bridge maps every desktop
+    // call onto remote:request; the local main holds the token and routes to the
+    // host over the tailnet. Pairing + opening a host go through host:open (which
+    // calls connectRemote then binds a window) — there is no standalone
+    // remote:connect, which would have created an orphan unbound connection.
     // Disconnect the connection THIS window drives (others stay live).
     ipcMain.handle('remote:disconnect', (e) => {
         disconnectRemote(e.sender.id);
@@ -817,11 +813,9 @@ function broadcast(channel: string, payload: unknown): void {
  * `provisionWorkspaces` tool, which must appear in the rail immediately.
  */
 export function broadcastWorkspacesChanged(): void {
-    for (const w of BrowserWindow.getAllWindows()) {
-        if (!w.webContents.isDestroyed()) {
-            w.webContents.send('workspaces:changed');
-        }
-    }
+    // LOCAL-only — a host window lists the HOST's workspaces (via its /ws/events);
+    // a local rail change must not force a redundant remote re-fetch there.
+    broadcastLocal('workspaces:changed');
     // Mirror to the mobile dashboard push channel (no-op when the server is off).
     mobileEmit('workspaces:changed');
 }
