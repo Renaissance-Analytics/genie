@@ -39,6 +39,7 @@ import { mobileEmit, mobileTermFanout, mobileTermClose } from '../mobile/server'
 import { broadcastLocal } from '../remote';
 import { getSnapshotStore, dbSettingsProvider } from './genie-adapter';
 import { listAllProcesses } from './process-list';
+import { logPtyOsc } from './osc-debug';
 import crypto from 'node:crypto';
 
 /**
@@ -452,6 +453,11 @@ export function registerTerminalIpc(): void {
     // firing from a stale backend after a fallback.
     subscribeBackendEvents({
         onData: (id: string, data: string) => {
+            // Diagnostic (no-op unless GENIE_OSC_DEBUG=1): record EVERY OSC
+            // sequence the pty emits — this sees the RAW bytes before xterm
+            // parses them, so it captures exactly what a TUI sends on copy
+            // (an OSC 52 clipboard write, or nothing → a $TERM/`Ms` gating issue).
+            logPtyOsc(id, data);
             // Buffer output for headless Process runners (the hover log popover).
             // No-ops for non-process ids.
             recordProcessOutput(id, data);
