@@ -822,9 +822,10 @@ function MasterInner() {
     /**
      * Tier 2 ENABLE: resume a suspended terminal. Re-selects it into the active
      * workspace grid; the remount's terminal:create rejoins the live pty and
-     * replays scrollback (no restart). Clears retention so a later plain close
-     * kills it as usual. Blocked when re-enabling would exceed Max Views, with
-     * the same hint as the Add affordances.
+     * replays scrollback (no restart). Clears retention so a later DELIBERATE
+     * detach (deselecting the panel) kills it as usual — a window CLOSE still
+     * persists it (the detached host keeps the pty for re-attach). Blocked when
+     * re-enabling would exceed Max Views, with the same hint as the Add affordances.
      */
     const enableSpec = useCallback(
         async (id: string) => {

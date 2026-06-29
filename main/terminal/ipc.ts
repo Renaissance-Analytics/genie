@@ -51,6 +51,34 @@ import crypto from 'node:crypto';
 export const MAX_RETAINED = 8;
 
 /**
+ * When the LAST owner of a pty detaches, should the pty be KILLED?
+ *
+ * The detached pty-host exists so terminals (and the agents in them) PERSIST
+ * across a window close — so a window CLOSE must NEVER kill the backend pty: we
+ * just drop the renderer's attachment and leave the pty alive in the host,
+ * re-attachable when a window reopens (terminal:create's rejoin path replays
+ * scrollback). Only a DELIBERATE per-panel detach (the renderer's
+ * `terminal:detach` — e.g. deselecting a panel) kills a non-retained pty, as
+ * before; a retained (suspended) pty always survives. Explicit close (the panel
+ * X) is a separate `terminal:kill`, unaffected.
+ *
+ * Pure → unit-testable without booting Electron.
+ */
+export function shouldKillOnDetach(input: {
+    /** True when this detach left the pty with zero owners. */
+    lastOwner: boolean;
+    /** The manager's retained (suspended) flag for this pty. */
+    retained: boolean;
+    /** True when the detach was triggered by the window being destroyed (close),
+     *  vs a deliberate `terminal:detach` from a still-live renderer. */
+    fromWindowClose: boolean;
+}): boolean {
+    if (!input.lastOwner) return false; // other windows still attached
+    if (input.fromWindowClose) return false; // persistence: a close never kills
+    return !input.retained; // deliberate detach kills a non-retained pty
+}
+
+/**
  * IPC layer for the terminal subsystem. The manager owns ptys + emits
  * `data`/`exit` events; this layer fans those events out to whichever
  * webContents own each terminal id, and routes renderer-side write /
@@ -206,12 +234,14 @@ export function registerTerminalIpc(): void {
         }
         if (entry.owners.has(sender)) return;
         entry.owners.add(sender);
-        const handler = () => detachOwner(id, sender);
+        // The window being DESTROYED (closed) detaches without killing — the pty
+        // persists in the host for re-attach. Hence fromWindowClose:true here.
+        const handler = () => detachOwner(id, sender, true);
         entry.cleanup.set(sender, handler);
         sender.once('destroyed', handler);
     };
 
-    const detachOwner = (id: string, sender: WebContents) => {
+    const detachOwner = (id: string, sender: WebContents, fromWindowClose = false) => {
         const entry = ownersByTerminal.get(id);
         if (!entry) return;
         if (!entry.owners.delete(sender)) return;
@@ -226,12 +256,17 @@ export function registerTerminalIpc(): void {
         }
         if (entry.owners.size === 0) {
             ownersByTerminal.delete(id);
-            // Tier 2: a RETAINED terminal (disabled-not-deleted) keeps its pty
-            // alive with zero owners. The manager still lists it and holds its
-            // scrollback, so re-enabling reattaches via the create() rejoin path
-            // and replays history — the LIVE session, not a snapshot replay.
-            // A non-retained terminal is killed as before.
-            if (!mgr().isRetained(id)) {
+            // A window CLOSE leaves the pty alive in the host (persistence — it
+            // re-attaches on reopen via the create() rejoin path, replaying
+            // scrollback). A RETAINED (suspended) terminal also survives. Only a
+            // DELIBERATE detach of a non-retained terminal kills it, as before.
+            if (
+                shouldKillOnDetach({
+                    lastOwner: true,
+                    retained: mgr().isRetained(id),
+                    fromWindowClose,
+                })
+            ) {
                 mgr().kill(id);
             }
         }
