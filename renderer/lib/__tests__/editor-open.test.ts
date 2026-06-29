@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pickReusePanel } from '../editor-open';
+import { pickReusePanel, resolveCursorLine } from '../editor-open';
 import type { TerminalSpec, WorkspaceRow } from '../genie';
 
 /** Minimal spec/row factories — only the fields pickReusePanel reads. */
@@ -84,5 +84,27 @@ describe('pickReusePanel', () => {
         expect(
             pickReusePanel(specs, { workspaceId: 'ws1', root: '/ws1' }, null, new Set(['t1']), wsById),
         ).toBeNull();
+    });
+});
+
+describe('resolveCursorLine (openFileForUser line → CodeEditor cursorLine)', () => {
+    it('reveals the line on the file it targets', () => {
+        expect(resolveCursorLine({ file: 'a.ts', line: 42 }, 'a.ts')).toBe(42);
+    });
+
+    it('does NOT reveal on a different active tab (no cross-file jump)', () => {
+        expect(resolveCursorLine({ file: 'a.ts', line: 42 }, 'b.ts')).toBeUndefined();
+    });
+
+    it('is undefined with no pending reveal', () => {
+        expect(resolveCursorLine(null, 'a.ts')).toBeUndefined();
+    });
+
+    it('is undefined when no tab is active', () => {
+        expect(resolveCursorLine({ file: 'a.ts', line: 42 }, null)).toBeUndefined();
+    });
+
+    it('carries a 1-based line through verbatim (incl. line 1)', () => {
+        expect(resolveCursorLine({ file: 'a.ts', line: 1 }, 'a.ts')).toBe(1);
     });
 });

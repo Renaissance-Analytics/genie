@@ -15,7 +15,7 @@ import {
 } from '../Master/icons';
 import { showPrompt } from '../Master/Prompt';
 import { closeTab as closeTabState, openTab as openTabState, reconcileTabs } from '../../lib/editor-tabs';
-import { onOpenInPanel } from '../../lib/editor-open';
+import { onOpenInPanel, resolveCursorLine, type RevealTarget } from '../../lib/editor-open';
 import {
     api,
     type TerminalSpec,
@@ -129,6 +129,12 @@ export default function CodePanel({
     const [activeFile, setActiveFile] = useState<string | null>(null);
     const [files, setFiles] = useState<Record<string, FileState>>({});
     const [loadError, setLoadError] = useState<string | null>(null);
+
+    // openFileForUser line-reveal: the line to scroll to, scoped to the file it
+    // targets so switching tabs doesn't jump the other file to this line. Drives
+    // the editor's declarative `cursorLine` (fancy-code reveals on mount AND on
+    // change, so re-opening the same file at a new line re-reveals).
+    const [reveal, setReveal] = useState<RevealTarget | null>(null);
 
     // Tree pinned open (stays after opening a file) + remembered expansion.
     const [treePinned, setTreePinned] = useState<boolean>(!!spec.meta?.tree_pinned);
@@ -256,8 +262,9 @@ export default function CodePanel({
     // a tab + focus it. The mount-seed below only runs once, so a live panel
     // needs this side channel.
     useEffect(() => {
-        return onOpenInPanel(spec.id, (relPath) => {
+        return onOpenInPanel(spec.id, (relPath, line) => {
             void openTab(relPath);
+            if (typeof line === 'number') setReveal({ file: relPath, line });
             if (!treePinnedRef.current) setTreeVisible(false);
         });
     }, [spec.id, openTab]);
@@ -300,6 +307,17 @@ export default function CodePanel({
             setFiles(loaded);
             setOpenFiles(recon.open);
             setActiveFile(recon.active);
+            // Consume a transient reveal line (a new panel opened by
+            // openFileForUser at a line): reveal it on the active seed tab, then
+            // clear it from persisted meta so it never re-reveals on relaunch.
+            if (
+                typeof spec.meta?.reveal_line === 'number' &&
+                recon.active &&
+                ok.includes(recon.active)
+            ) {
+                setReveal({ file: recon.active, line: spec.meta.reveal_line });
+                persistMeta({ reveal_line: undefined });
+            }
             // Persist the pruned set so vanished tabs don't keep reappearing.
             if (recon.open.length !== seedOpen.length)
                 persistTabs(recon.open, recon.active);
@@ -631,6 +649,7 @@ export default function CodePanel({
                             language={active.language}
                             theme="dark"
                             wordWrap={wordWrap}
+                            cursorLine={resolveCursorLine(reveal, activeFile)}
                             onChange={(v) => {
                                 setFiles((m) =>
                                     m[activeFile]

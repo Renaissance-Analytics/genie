@@ -603,6 +603,13 @@ export interface ViewMeta {
     expanded_tree_ids?: string[];
     /** Code view: word-wrap toggle state. */
     word_wrap?: boolean;
+    /**
+     * Code view: a TRANSIENT 1-based line to reveal when a freshly-created
+     * editor panel mounts (openFileForUser at a line that opened a new panel).
+     * Consumed + cleared by CodePanel on mount so it never re-reveals on a
+     * later relaunch — it is not persisted scroll state.
+     */
+    reveal_line?: number;
     /** Process view: the command line run (non-interactively) by the runner. */
     command?: string;
     /** Process view: start automatically when the workspace/app opens. */

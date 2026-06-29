@@ -926,7 +926,7 @@ function MasterInner() {
     const activateWorkspaceRef = useRef(activateWorkspace);
     activateWorkspaceRef.current = activateWorkspace;
     useEffect(() => {
-        return api().on.editorOpenFile?.(({ requestId, workspaceId, root, relPath }) => {
+        return api().on.editorOpenFile?.(({ requestId, workspaceId, root, relPath, line }) => {
             const system = workspaceId === SYSTEM_WORKSPACE_ID;
             const reuseId = pickReusePanel(
                 specsRef.current,
@@ -939,7 +939,9 @@ function MasterInner() {
                 if (system) setSystemRevealed(true);
                 activateWorkspaceRef.current(workspaceId);
                 setFocusId(reuseId);
-                emitOpenInPanel(reuseId, relPath);
+                // Forward the target line so the live panel scrolls to + reveals
+                // it (re-revealing if the file is already open at another line).
+                emitOpenInPanel(reuseId, relPath, line);
                 void api().editor.openFileResult(requestId, { reused: true, opened: false });
                 return;
             }
@@ -970,6 +972,9 @@ function MasterInner() {
                             open_files: [relPath],
                             active_file: relPath,
                             file_path: relPath,
+                            // Transient: the new panel reveals this line on mount,
+                            // then clears it (see CodePanel's mount-seed).
+                            ...(typeof line === 'number' ? { reveal_line: line } : {}),
                         },
                     });
                     setSpecs((prev) => [...prev, created]);

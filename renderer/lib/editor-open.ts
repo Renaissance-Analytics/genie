@@ -84,3 +84,24 @@ export function emitOpenInPanel(specId: string, relPath: string, line?: number):
     if (!set) return;
     for (const cb of set) cb(relPath, line);
 }
+
+/** A pending line-reveal scoped to the file it targets. */
+export interface RevealTarget {
+    file: string;
+    line: number;
+}
+
+/**
+ * Resolve the `cursorLine` to hand a CodePanel's `<CodeEditor>` for the active
+ * tab. A reveal target only applies to the file it was requested for, so
+ * switching to a DIFFERENT tab returns undefined (the editor keeps its own
+ * scroll/caret instead of jumping to the other file's reveal line). Pure →
+ * unit-testable. fancy-code's `cursorLine` is 1-based and clamps out-of-range.
+ */
+export function resolveCursorLine(
+    reveal: RevealTarget | null,
+    activeFile: string | null,
+): number | undefined {
+    if (!reveal || !activeFile || reveal.file !== activeFile) return undefined;
+    return reveal.line;
+}
