@@ -54,9 +54,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF_NAME}"
+          # Create the release as a DRAFT (not a visible prerelease). Drafts are
+          # invisible to electron-updater, so the three platform builds can
+          # attach their artifacts over the next ~6 min without any client
+          # seeing a half-built release. finalize-release un-drafts it at the end.
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
-              --prerelease \
+              --draft \
               --title "$TAG" \
               --notes "Automated build for $TAG"
           else
@@ -181,3 +185,22 @@ jobs:
             dist/*.blockmap
           if-no-files-found: warn
           retention-days: 14
+
+  # Publish the release: flip draft → prerelease ONLY after every platform leg
+  # (needs: release) has attached its artifacts — including the Windows
+  # latest.yml that electron-updater fetches (it uploads last). Drafts are
+  # invisible to the updater, so this makes the release appear atomically and
+  # complete, closing the race where a client saw the tag before latest.yml
+  # existed and 404'd on "Check for updates".
+  finalize-release:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the release (un-draft)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --draft=false \
+            --prerelease=true

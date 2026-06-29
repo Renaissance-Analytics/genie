@@ -186,7 +186,11 @@ publish:
   # `latest.yml` (Win + Linux) and `latest-mac.yml` are written next to
   # the installers when electron-builder ships a release. electron-updater
   # reads them from this provider via GitHub Releases.
-  # `prerelease` so CI uploads attach to existing pre-release tags created
-  # by `gh release create --prerelease`; switch to `release` for stable
-  # cuts so they're tagged Latest in the GitHub UI.
-  releaseType: prerelease
+  # `draft` so the Release stays INVISIBLE to electron-updater while the three
+  # per-OS jobs upload in parallel — release.yml's prepare-release job creates
+  # the draft, each platform attaches its artifacts, and finalize-release flips
+  # draft→prerelease only once latest.yml (Windows, uploaded last) and every
+  # installer are present. With `prerelease` here, a client that checked for
+  # updates during the ~6-min build window 404'd on the not-yet-uploaded
+  # latest.yml. (Stable cuts: drop --prerelease in finalize-release.)
+  releaseType: draft
