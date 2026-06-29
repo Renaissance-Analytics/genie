@@ -17,6 +17,7 @@ interface Props {
  */
 export default function SignInPrompt({ tynnHost, aionimaHost, onSignedIn }: Props) {
     const [waitingTynn, setWaitingTynn] = useState(false);
+    const [tynnUrl, setTynnUrl] = useState<string | null>(null);
     const [signedIn, setSignedIn] = useState<Record<string, BackendUser | null>>({
         tynn: null,
         aionima: null,
@@ -45,7 +46,12 @@ export default function SignInPrompt({ tynnHost, aionimaHost, onSignedIn }: Prop
         setError(null);
         setWaitingTynn(true);
         try {
-            await api().auth.startSignIn('tynn');
+            const r = await api().auth.startSignIn('tynn');
+            // Always surface the URL: on a browserless / remotely-driven
+            // machine shell.openExternal can't open anything, so the user
+            // copies this link, opens it on any device, signs in, and
+            // pastes the code back below.
+            if (r?.url) setTynnUrl(r.url);
         } catch (e: unknown) {
             setError(e instanceof Error ? e.message : String(e));
             setWaitingTynn(false);
@@ -82,6 +88,7 @@ export default function SignInPrompt({ tynnHost, aionimaHost, onSignedIn }: Prop
                     cta="Open Tynn in your browser"
                     onEditHost={openSettings}
                     showCodeFallback
+                    signInUrl={tynnUrl}
                     onRedeemCode={async (code) => {
                         const r = await api().auth.redeemCode(code);
                         if (r.ok) await refresh();
@@ -138,6 +145,7 @@ function BackendCard({
     cta,
     onEditHost,
     showCodeFallback,
+    signInUrl,
     onRedeemCode,
 }: {
     name: string;
@@ -152,12 +160,21 @@ function BackendCard({
     cta: string;
     onEditHost?: () => void;
     showCodeFallback?: boolean;
+    signInUrl?: string | null;
     onRedeemCode?: (code: string) => Promise<boolean>;
 }) {
     const [codeOpen, setCodeOpen] = useState(false);
     const [code, setCode] = useState('');
     const [redeeming, setRedeeming] = useState(false);
     const [redeemError, setRedeemError] = useState<string | null>(null);
+    const [copied, setCopied] = useState(false);
+
+    // Once the sign-in URL is available (the user clicked the button), auto-open
+    // the code entry so copy-URL → sign-in-elsewhere → paste-code reads as one
+    // continuous flow on a browserless / remotely-driven machine.
+    useEffect(() => {
+        if (signInUrl) setCodeOpen(true);
+    }, [signInUrl]);
 
     const submitCode = async () => {
         if (!onRedeemCode) return;
@@ -169,7 +186,7 @@ function BackendCard({
                 setCode('');
                 setCodeOpen(false);
             } else {
-                setRedeemError('Code rejected — it may have expired (90s) or already been used.');
+                setRedeemError('Code rejected — it may have expired (5 min) or already been used.');
             }
         } catch (e: unknown) {
             setRedeemError(e instanceof Error ? e.message : String(e));
@@ -230,6 +247,37 @@ function BackendCard({
                     <Action color="blue" size="sm" onClick={onSignIn} disabled={busy}>
                         {busy ? 'Waiting…' : cta}
                     </Action>
+
+                    {signInUrl && (
+                        <div className="flex flex-col gap-1.5 rounded-md border border-blue-500/20 bg-blue-500/5 p-2.5">
+                            <Text size="xs" className="text-zinc-500">
+                                No browser on this machine? Copy this link, open it
+                                on any device, sign in, then paste the code below.
+                            </Text>
+                            <div className="flex min-w-0 items-center gap-1.5">
+                                <Text
+                                    size="xs"
+                                    className="flex-1 truncate font-mono text-zinc-400"
+                                    title={signInUrl}
+                                >
+                                    {signInUrl}
+                                </Text>
+                                <Action
+                                    variant="ghost"
+                                    color="blue"
+                                    size="xs"
+                                    icon={copied ? 'check' : 'copy'}
+                                    onClick={() => {
+                                        void navigator.clipboard?.writeText(signInUrl);
+                                        setCopied(true);
+                                        setTimeout(() => setCopied(false), 1500);
+                                    }}
+                                >
+                                    {copied ? 'Copied' : 'Copy'}
+                                </Action>
+                            </div>
+                        </div>
+                    )}
 
                     {showCodeFallback && onRedeemCode && (
                         <div className="flex flex-col gap-2">

@@ -146,8 +146,8 @@ export function registerIpcHandlers(): void {
         if (kind === 'aionima') {
             return { ok: false, message: 'Configure Aionima host + token in Settings.' };
         }
-        await startSignIn();
-        return { ok: true };
+        const { url } = await startSignIn();
+        return { ok: true, url };
     });
     ipcMain.handle('auth:redeem-code', async (_e, code: string) => {
         const ok = await redeemCode(typeof code === 'string' ? code : '');

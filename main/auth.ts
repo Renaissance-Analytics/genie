@@ -50,7 +50,7 @@ export function registerProtocolHandler(): void {
     }
 }
 
-export async function startSignIn(): Promise<void> {
+export async function startSignIn(): Promise<{ url: string }> {
     const host = tynnHost();
     const ret = encodeURIComponent('genie://oauth/callback');
     // Send the user straight to /genie/callback, not /login. The
@@ -63,7 +63,16 @@ export async function startSignIn(): Promise<void> {
     // Tynn session — Fortify sees them as already-authenticated and
     // redirects to /dashboard, dropping the return URL on the floor.
     const url = `${host}/genie/callback?return=${ret}`;
-    await shell.openExternal(url);
+    // Best-effort open the LOCAL browser. On a headless / browserless /
+    // remotely-driven machine this no-ops or throws — so we always RETURN
+    // the URL too, and the renderer shows it for manual copy: open it on
+    // any other device, sign in, then paste the code back into Genie.
+    try {
+        await shell.openExternal(url);
+    } catch {
+        /* no local browser — the manual copy-URL path covers this */
+    }
+    return { url };
 }
 
 export async function signOut(): Promise<void> {

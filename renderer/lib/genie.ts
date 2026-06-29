@@ -836,6 +836,9 @@ export interface GenieApi {
         startSignIn: (kind?: BackendKind) => Promise<{
             ok: boolean;
             message?: string;
+            /** The Tynn sign-in URL. Shown for manual copy when there is no
+             *  local browser (open it on any device → sign in → paste code). */
+            url?: string;
         }>;
         redeemCode: (code: string) => Promise<{ ok: boolean }>;
         signOut: (kind?: BackendKind) => Promise<{ ok: boolean }>;
