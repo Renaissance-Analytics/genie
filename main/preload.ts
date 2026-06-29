@@ -140,6 +140,7 @@ const api = {
         connect: (host: { ip: string; port: number; hostname: string }, pin?: string) =>
             ipcRenderer.invoke('remote:connect', host, pin) as Promise<{
                 ok: boolean;
+                connKey?: string;
                 error?: string;
                 needsPin?: boolean;
             }>,
@@ -148,6 +149,14 @@ const api = {
         status: () =>
             ipcRenderer.invoke('remote:status') as Promise<{
                 connected: boolean;
+                host: { ip: string; port: number; hostname: string } | null;
+            }>,
+        // This WINDOW's binding — local, or remote to a specific host. The
+        // renderer reads it once on boot to decide whether to route api() to a
+        // host (a host window) or stay local (the local window).
+        myBinding: () =>
+            ipcRenderer.invoke('remote:my-binding') as Promise<{
+                mode: 'local' | 'remote';
                 host: { ip: string; port: number; hostname: string } | null;
             }>,
         request: (path: string, init?: { method?: string; json?: unknown }) =>

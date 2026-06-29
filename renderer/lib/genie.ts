@@ -904,9 +904,12 @@ export interface GenieApi {
         connect: (
             host: RemoteHost,
             pin?: string,
-        ) => Promise<{ ok: boolean; error?: string; needsPin?: boolean }>;
+        ) => Promise<{ ok: boolean; connKey?: string; error?: string; needsPin?: boolean }>;
         disconnect: () => Promise<{ ok: boolean }>;
         status: () => Promise<RemoteStatus>;
+        /** This window's binding — `local`, or `remote` to a specific host. Read
+         *  once on boot to route api() per-window (host window vs local window). */
+        myBinding: () => Promise<{ mode: 'local' | 'remote'; host: RemoteHost | null }>;
         request: (path: string, init?: { method?: string; json?: unknown }) => Promise<unknown>;
         onStatus: (cb: (s: RemoteStatus) => void) => () => void;
         terminalAttach: (id: string) => Promise<{ ok: boolean }>;

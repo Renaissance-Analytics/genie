@@ -95,7 +95,8 @@ import { discoverHosts, openRemoteWindow } from './workmode';
 import {
     connectRemote,
     disconnectRemote,
-    remoteStatus,
+    remoteStatusFor,
+    remoteBindingFor,
     remoteRequest,
     remoteAttachTerminal,
     remoteTerminalInput,
@@ -426,40 +427,46 @@ export function registerIpcHandlers(): void {
     // Work Mode — remote desktop: pair+connect to a host, proxy REST, status.
     // (The renderer's remote bridge maps every desktop call onto remote:request;
     //  the local main holds the token and routes to the host over the tailnet.)
+    // Pair+connect a host into the registry; the host window (Phase 2) binds to
+    // the returned connKey. The token stays in main.
     ipcMain.handle(
         'remote:connect',
         (_e, host: { ip: string; port: number; hostname: string }, pin?: string) =>
             connectRemote(host, pin),
     );
-    ipcMain.handle('remote:disconnect', () => {
-        disconnectRemote();
+    // Disconnect the connection THIS window drives (others stay live).
+    ipcMain.handle('remote:disconnect', (e) => {
+        disconnectRemote(e.sender.id);
         return { ok: true };
     });
-    ipcMain.handle('remote:status', () => remoteStatus());
+    // Per-window status + binding — every handler routes by the CALLING window.
+    ipcMain.handle('remote:status', (e) => remoteStatusFor(e.sender.id));
+    ipcMain.handle('remote:my-binding', (e) => remoteBindingFor(e.sender.id));
     ipcMain.handle(
         'remote:request',
-        (_e, path: string, init?: { method?: string; json?: unknown }) =>
-            remoteRequest(path, init),
+        (e, path: string, init?: { method?: string; json?: unknown }) =>
+            remoteRequest(e.sender.id, path, init),
     );
     // Terminal I/O bridge: the renderer's XTerm attaches to a host terminal's pty
-    // (main re-emits terminal:data/exit) and forwards keystrokes/resize to it.
-    ipcMain.handle('remote:terminal-attach', (_e, id: string) => {
-        remoteAttachTerminal(id);
+    // (main re-emits terminal:data/exit to THIS window) and forwards keystrokes/
+    // resize to it.
+    ipcMain.handle('remote:terminal-attach', (e, id: string) => {
+        remoteAttachTerminal(e.sender.id, id);
         return { ok: true };
     });
-    ipcMain.handle('remote:terminal-input', (_e, id: string, data: string) => {
-        remoteTerminalInput(id, data);
+    ipcMain.handle('remote:terminal-input', (e, id: string, data: string) => {
+        remoteTerminalInput(e.sender.id, id, data);
         return true;
     });
     ipcMain.handle(
         'remote:terminal-resize',
-        (_e, id: string, cols: number, rows: number) => {
-            remoteTerminalResize(id, cols, rows);
+        (e, id: string, cols: number, rows: number) => {
+            remoteTerminalResize(e.sender.id, id, cols, rows);
             return true;
         },
     );
-    ipcMain.handle('remote:terminal-detach', (_e, id: string) => {
-        remoteDetachTerminal(id);
+    ipcMain.handle('remote:terminal-detach', (e, id: string) => {
+        remoteDetachTerminal(e.sender.id, id);
         return { ok: true };
     });
 
