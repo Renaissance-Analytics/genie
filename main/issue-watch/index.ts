@@ -433,6 +433,11 @@ export async function getWorkspaceFeed(
     const out: Array<
         WatchItem & { repo: string; owner: string; source: 'own' | 'upstream'; unread: boolean }
     > = [];
+    // Dedup by item key: when two forks in the same workspace share ONE upstream,
+    // each fork's poll caches that upstream item under its own key, so a naive
+    // flatten would list (and count) it twice + collide React keys. Emit each
+    // unique item once.
+    const seenKeys = new Set<string>();
     for (const v of views) {
         if (!v.enabled) continue;
         const seenAt = seenByKey.get(cacheKey(v.owner, v.repo)) ?? EPOCH;
@@ -441,6 +446,8 @@ export async function getWorkspaceFeed(
             granularity,
         );
         for (const it of items) {
+            if (seenKeys.has(it.key)) continue;
+            seenKeys.add(it.key);
             const isUpstream = (it.source ?? 'own') === 'upstream';
             out.push({
                 ...it,

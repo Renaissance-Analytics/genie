@@ -12,6 +12,7 @@ import {
     useGithubCapabilities,
     CAPABILITY_LABEL,
 } from '../../lib/githubCapabilities';
+import { openCountForRepo } from '../../lib/issuewatch';
 import {
     useGitHubReconnect,
     type GitHubReconnectState,
@@ -150,15 +151,14 @@ export default function IssueWatchFlyout({
         if (!workspaceId || !hasGenieBridge()) return;
         setLoading(true);
         try {
-            // Re-poll FIRST (issue-watch:repos refreshes the cache on view), then
-            // read status — so the surfaced status/error/needsReauth reflect the
-            // FRESH read, not the stale cache. This is what makes the feed recover
-            // live after a reconnect: a fresh successful poll clears the dead
-            // session, and the status we read next sees it.
-            const [r, f] = await Promise.all([
-                api().issueWatch.repos(workspaceId),
-                api().issueWatch.feed(workspaceId),
-            ]);
+            // Re-poll FIRST via issue-watch:repos (it runs pollWorkspace, which
+            // populates feedCache), THEN read the feed — sequentially, NOT in
+            // parallel. The feed read must see the post-poll cache; racing it
+            // against the poll was the bug where the repo badge (read after the
+            // poll) said "1" while the feed (read before the poll completed) was
+            // empty. Reading status after both keeps the same fresh-read recovery.
+            const r = await api().issueWatch.repos(workspaceId);
+            const f = await api().issueWatch.feed(workspaceId);
             setRepos(r);
             setFeed(f);
             // The per-workspace status is the source of truth for WHY the feed
@@ -239,6 +239,17 @@ export default function IssueWatchFlyout({
                 setDetail(d);
             }
             if (reauth) setNeedsReauth(true);
+            // A background poll just landed (this broadcast). Re-read the feed
+            // (no re-poll — the poll that fired this already refreshed the cache)
+            // so the Activity list — and the repo badges, which derive from it —
+            // reflect the new items instead of going stale. Keeping the badge and
+            // feed off the SAME array is what keeps them consistent.
+            if (workspaceId) {
+                void api()
+                    .issueWatch.feed(workspaceId)
+                    .then(setFeed)
+                    .catch(() => {});
+            }
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open, workspaceId]);
@@ -374,8 +385,10 @@ export default function IssueWatchFlyout({
                                                     {repoReason(r.error)}
                                                 </span>
                                             )}
-                                            {r.enabled && !r.error && r.unread > 0 && (
-                                                <span className="iw-count">{r.unread}</span>
+                                            {r.enabled && !r.error && openCountForRepo(feed, r) > 0 && (
+                                                <span className="iw-count">
+                                                    {openCountForRepo(feed, r)}
+                                                </span>
                                             )}
                                         </label>
                                     ))}
