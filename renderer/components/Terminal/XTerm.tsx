@@ -6,7 +6,7 @@ import {
 } from '@particle-academy/fancy-term';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import { api, ulid } from '../../lib/genie';
-import { buildClipboardMenu } from '../../lib/terminal-clipboard';
+import { buildClipboardMenu, handleOsc52 } from '../../lib/terminal-clipboard';
 import { findUrls } from '../../lib/terminal-links';
 import '@xterm/xterm/css/xterm.css';
 
@@ -79,6 +79,11 @@ export default function XTerm({
     // OR after create. Track it either way: create uses the latest
     // known size, and any later resize is forwarded to the pty.
     const sizeRef = useRef<{ cols: number; rows: number }>({ cols: 80, rows: 24 });
+    // The xterm selection captured at the instant of a right-click mousedown —
+    // BEFORE the click can clear it — so the right-click "Copy" still has text to
+    // copy even when the live selection was cleared (common over a mouse-reporting
+    // TUI). Overwritten on every right-mousedown, so it never goes stale.
+    const rightClickSelRef = useRef('');
 
     // Copy/paste behaviour (Settings → Customization). REACTIVE: read on mount AND
     // re-read on settings:changed, so changing the mode applies to LIVE terminals
@@ -130,7 +135,14 @@ export default function XTerm({
     const contextMenuConfig = useMemo(
         () =>
             copyPaste === 'contextmenu'
-                ? buildClipboardMenu({ copy: copyText, paste: pasteFromClipboard })
+                ? buildClipboardMenu({
+                      copy: copyText,
+                      paste: pasteFromClipboard,
+                      // A right-click can clear xterm's live selection before the
+                      // menu reads it — fall back to the selection snapshotted at
+                      // right-mousedown (rightClickSelRef) so Copy still works.
+                      resolveSelection: (ctxSel) => rightClickSelRef.current || ctxSel,
+                  })
                 : false,
         [copyPaste, copyText, pasteFromClipboard],
     );
@@ -210,6 +222,7 @@ export default function XTerm({
         const id = providedId ?? ulid();
         ptyIdRef.current = id;
         let alive = true;
+        const cleanups: Array<() => void> = [];
 
         const offData = api().on.terminalData(({ id: hitId, data }) => {
             if (hitId !== id || !alive) return;
@@ -237,6 +250,52 @@ export default function XTerm({
                 serializeRef.current = addon;
             } catch {
                 serializeRef.current = null;
+            }
+
+            // Honour OSC 52 — the escape sequence TUIs (Claude Code, tmux, vim…)
+            // copy their selection with (`ESC]52;c;<base64>BEL`). xterm DROPS it
+            // by default, so the app shows "copied" but nothing reaches the OS
+            // clipboard. Route it to the system clipboard via main (the renderer's
+            // navigator.clipboard is unreliable here); a read request replies on
+            // the pty input. Registered before the pty streams so no copy is missed.
+            try {
+                const oscSub = live.parser.registerOscHandler(52, (oscData: string) =>
+                    handleOsc52(oscData, {
+                        write: (text) => {
+                            void api().clipboard.write(text).catch(() => {});
+                        },
+                        read: () => api().clipboard.read().catch(() => ''),
+                        respond: (oscBody) => {
+                            void api()
+                                .terminal.write(id, `\x1b]${oscBody}\x07`)
+                                .catch(() => {});
+                        },
+                    }),
+                );
+                cleanups.push(() => {
+                    try {
+                        oscSub.dispose();
+                    } catch {
+                        /* already disposed */
+                    }
+                });
+            } catch {
+                /* registerOscHandler unavailable — OSC 52 copy just isn't honoured */
+            }
+
+            // Snapshot the selection at right-mousedown — BEFORE the click can
+            // clear it — so the right-click Copy menu still has text to copy even
+            // when the live selection was cleared (common over a mouse-reporting
+            // TUI). Capture phase so we read it before xterm processes the click.
+            const selEl = live.element;
+            if (selEl) {
+                const onRightDown = (e: MouseEvent) => {
+                    if (e.button === 2) rightClickSelRef.current = live.getSelection();
+                };
+                selEl.addEventListener('mousedown', onRightDown, true);
+                cleanups.push(() =>
+                    selEl.removeEventListener('mousedown', onRightDown, true),
+                );
             }
 
             // Clickable URLs. We register our OWN xterm link provider rather
@@ -363,6 +422,7 @@ export default function XTerm({
         return () => {
             alive = false;
             clearInterval(interval);
+            for (const d of cleanups) d();
             offSnapReq();
             offData();
             offExit();
