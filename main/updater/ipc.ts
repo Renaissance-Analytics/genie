@@ -1,13 +1,14 @@
-import { BrowserWindow, ipcMain, Notification } from 'electron';
+import { BrowserWindow, ipcMain, Notification, shell } from 'electron';
 import { updater, type UpdaterConfig, type UpdaterStatus } from './git-updater';
 import {
     autoUpdaterInstance,
     updaterMode,
     type AutoUpdaterStatus,
 } from './auto-updater';
+import { planUpdateNotification } from './update-surface';
 import { getAllSettings, setSettings } from '../db';
 import { setUpdateAvailable } from '../tray';
-import { showSettingsWindow } from '../background';
+import { showSettingsWindow, showMasterWindow } from '../background';
 import { getChangelog, type Changelog } from './changelog';
 import { hostBackendKind, detachedHostPinsBinary } from '../terminal/host-service';
 import { mobileEmit } from '../mobile/bus';
@@ -289,21 +290,33 @@ function reflectUpdateState(status: UpdaterStatus | AutoUpdaterStatus): void {
         status.state === 'applying' ||
         status.state === 'ready-to-restart';
 
-    setUpdateAvailable(pending ? status.latestVersion : null);
+    // A manual-download update (Linux/macOS where auto-apply can't run) carries a
+    // manualDownloadUrl — pass it to the tray so its "update" entry links out.
+    const manualUrl =
+        'manualDownloadUrl' in status ? status.manualDownloadUrl ?? null : null;
+    setUpdateAvailable(pending ? status.latestVersion : null, pending ? manualUrl : null);
 
-    if (
-        status.state === 'available' &&
-        status.latestVersion &&
-        status.latestVersion !== notifiedVersion &&
-        Notification.isSupported()
-    ) {
+    // Native "update available" toast — the KEY surface when Genie is tray-
+    // resident with no window. Click acts: a manual-download opens the release
+    // page; an auto-update opens the master window where the Upgrade pill lives.
+    const notice = planUpdateNotification(
+        {
+            state: status.state,
+            latestVersion: status.latestVersion,
+            manualDownloadUrl: manualUrl,
+        },
+        { supported: Notification.isSupported(), notifiedVersion },
+    );
+    if (notice.fire) {
         notifiedVersion = status.latestVersion;
-        const n = new Notification({
-            title: `Genie v${status.latestVersion} is available`,
-            body: 'Click to open Settings and install the update.',
-            silent: true,
+        const n = new Notification({ title: notice.title, body: notice.body, silent: true });
+        n.on('click', () => {
+            if (notice.action === 'download' && notice.url) {
+                void shell.openExternal(notice.url).catch(() => {});
+            } else {
+                showMasterWindow();
+            }
         });
-        n.on('click', () => showSettingsWindow());
         n.show();
     }
 }

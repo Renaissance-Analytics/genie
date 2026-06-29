@@ -3,6 +3,7 @@ import {
     Menu,
     nativeImage,
     NativeImage,
+    shell,
     Tray,
     MenuItem,
 } from 'electron';
@@ -19,6 +20,9 @@ let normalImg: NativeImage | null = null;
 let updateImg: NativeImage | null = null;
 /** Version string when an update is available; null = no update pending. */
 let updateVersion: string | null = null;
+/** When the pending update must be downloaded by hand (Linux/macOS where auto-
+ *  apply can't run), the release page to open; null for an in-app auto-update. */
+let updateManualUrl: string | null = null;
 
 function sized(image: NativeImage): NativeImage {
     return image.isEmpty()
@@ -45,9 +49,10 @@ export function createTray(image: NativeImage, updateImage?: NativeImage): Tray 
  * tooltip, and a highlighted install entry at the top of the menu.
  * Safe to call before createTray — state is re-applied on creation.
  */
-export function setUpdateAvailable(version: string | null): void {
-    if (updateVersion === version) return;
+export function setUpdateAvailable(version: string | null, manualUrl: string | null = null): void {
+    if (updateVersion === version && updateManualUrl === manualUrl) return;
     updateVersion = version;
+    updateManualUrl = manualUrl;
     if (!tray) return;
     if (version && updateImg) tray.setImage(updateImg);
     else if (normalImg) tray.setImage(normalImg);
@@ -83,8 +88,15 @@ export function rebuildMenu(): void {
 
     if (updateVersion) {
         items.push({
-            label: `⬆ Update to v${updateVersion}…`,
-            click: () => showSettingsWindow(),
+            label: updateManualUrl
+                ? `⬆ Download Genie v${updateVersion}…`
+                : `⬆ Update to v${updateVersion}…`,
+            click: () => {
+                // A manual-download update (auto-apply can't run on this build)
+                // opens the release page; an auto-update opens Settings to install.
+                if (updateManualUrl) void shell.openExternal(updateManualUrl).catch(() => {});
+                else showSettingsWindow();
+            },
         });
         items.push({ type: 'separator' });
     }

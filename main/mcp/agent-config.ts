@@ -241,9 +241,24 @@ export function writeWorkspaceAgentMcp(
     } catch {
         /* best-effort — default to syncing all if settings can't be read */
     }
-    // Enabling without a resolved URL (server not listening yet) would write a
-    // broken entry — skip the config writes but still keep AGENTS.md in sync.
+    // Enabling without a resolved URL (the server isn't listening / a stale box
+    // can't resolve the endpoint). Writing the entry would be a broken stub, and
+    // LEAVING a previously-written one makes the agent's client fail to connect
+    // (a type-less / dead `genie` entry → "command expected"). So REMOVE any
+    // existing genie entry from the configs — but keep AGENTS.md in sync, since
+    // the workspace is still MCP-enabled; only the endpoint is down right now.
     if (enabled && !url) {
+        if (sync.claude) {
+            upsert(path.join(workspacePath, '.mcp.json'), GENIE_SERVER_NAME, claudeEntry(''), false);
+        }
+        if (sync.cursor) {
+            upsert(
+                path.join(workspacePath, '.cursor', 'mcp.json'),
+                GENIE_SERVER_NAME,
+                cursorEntry(''),
+                false,
+            );
+        }
         if (sync.agents) syncAgentsMd(workspacePath, true);
         return;
     }

@@ -1533,7 +1533,10 @@ function UpdatePill() {
     // staged. The refs guard each step to a single fire.
     useEffect(() => {
         if (!committed || !status) return;
-        if (status.state === 'available' && !appliedRef.current) {
+        // A manual-download update (manualDownloadUrl set) must NOT auto-apply —
+        // electron-updater can't download/install it on this build. The pill shows
+        // a Download button instead (handled in the render).
+        if (status.state === 'available' && !status.manualDownloadUrl && !appliedRef.current) {
             appliedRef.current = true;
             void api().updater.apply(); // downloadUpdate
         } else if (status.state === 'ready-to-restart' && !restartedRef.current) {
@@ -1567,6 +1570,10 @@ function UpdatePill() {
 
     const version = status.latestVersion ?? '';
     const ready = status.state === 'ready-to-restart';
+    // A manual-download update (auto-apply can't run on this build — e.g. a Linux
+    // AppImage launched without APPIMAGE) surfaces a Download button → the release
+    // page, instead of the in-app Upgrade flow.
+    const manualUrl = status.manualDownloadUrl ?? null;
     const pct =
         status.state === 'downloading' && typeof status.progress === 'number'
             ? Math.round(status.progress * 100)
@@ -1576,7 +1583,7 @@ function UpdatePill() {
     // build is just as actionable — one click commits to the restart. (A
     // background working state, which the one-click path shouldn't produce,
     // falls through to the progress display.)
-    const actionable = !committed && (status.state === 'available' || ready);
+    const actionable = !committed && !manualUrl && (status.state === 'available' || ready);
 
     const progressLabel =
         status.state === 'ready-to-restart'
@@ -1593,7 +1600,17 @@ function UpdatePill() {
             onMouseEnter={() => setHover(true)}
             onMouseLeave={() => setHover(false)}
         >
-            {actionable ? (
+            {manualUrl ? (
+                <button
+                    type="button"
+                    className="update-pill ready"
+                    title="Auto-update isn't available on this build — download the new version"
+                    onClick={() => void api().shell.openExternal(manualUrl).catch(() => {})}
+                >
+                    <span className="up-dot" />
+                    Download{version ? ` v${version}` : ''}
+                </button>
+            ) : actionable ? (
                 <button
                     type="button"
                     className="update-pill ready"

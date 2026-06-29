@@ -1,7 +1,9 @@
-import { app } from 'electron';
+import { app, net } from 'electron';
 import { autoUpdater, type UpdateInfo } from 'electron-updater';
 import { EventEmitter } from 'node:events';
 import { markQuittingForUpdate } from './quit-state';
+import { isNewer } from './git-updater';
+import { appImageUpdateUnavailable, planManualDownload } from './update-surface';
 
 /**
  * Phase 2 packaged-app updater. Wraps `electron-updater` so the
@@ -143,6 +145,15 @@ class AutoUpdater extends EventEmitter {
                 : null;
 
         this.setStatus({ state: 'checking', error: null, manualDownloadUrl: null });
+
+        // Linux AppImage updater is INERT when APPIMAGE is unset — electron-
+        // updater's checkForUpdates() then no-ops and would falsely report "up to
+        // date". Detect it and check GitHub directly, surfacing a MANUAL download.
+        if (this.appImageUnavailable()) {
+            await this.checkViaManualDownload(stagedVersion);
+            return;
+        }
+
         try {
             const res = await autoUpdater.checkForUpdates();
             if (!res || !res.updateInfo) {
@@ -324,13 +335,59 @@ class AutoUpdater extends EventEmitter {
         });
     }
 
+    /** True for a Linux AppImage build whose updater is inert (APPIMAGE unset). */
+    private appImageUnavailable(): boolean {
+        return appImageUpdateUnavailable({
+            platform: process.platform,
+            isPackaged: app.isPackaged,
+            appimage: process.env.APPIMAGE,
+        });
+    }
+
+    /**
+     * The APPIMAGE-unset Linux fallback: electron-updater can't check OR apply, so
+     * ask GitHub directly for the latest version and, when newer, surface a
+     * MANUAL download (the renderer shows a "Download" button → the release page,
+     * never the auto Update flow that would fail here). Quiet otherwise — a
+     * transient fetch failure stays "up to date" rather than nagging.
+     */
+    private async checkViaManualDownload(stagedVersion: string | null): Promise<void> {
+        this.appendLog(
+            'Linux AppImage updater inactive (APPIMAGE unset) — checking GitHub for a manual download.',
+        );
+        let latest: string | null = null;
+        try {
+            latest = await fetchLatestGenieVersion();
+        } catch (e) {
+            this.appendLog(`manual-download check failed: ${e instanceof Error ? e.message : String(e)}`);
+            latest = null;
+        }
+        const plan = planManualDownload(latest, app.getVersion(), releaseTagUrl);
+        if (plan.available) {
+            this.setStatus({
+                state: 'available',
+                latestVersion: plan.version,
+                releaseUrl: plan.url,
+                manualDownloadUrl: plan.url,
+            });
+            return;
+        }
+        this.setStatus(
+            stagedVersion
+                ? { state: 'ready-to-restart', latestVersion: stagedVersion, progress: 1 }
+                : { state: 'up-to-date', latestVersion: latest ?? app.getVersion() },
+        );
+    }
+
     /**
      * The release to download by hand when auto-update can't apply on this
-     * platform (macOS today). Prefers the exact tag once known, else the
-     * latest-release page. Returns null on platforms where auto-update works.
+     * platform: macOS (Squirrel rejects the ad-hoc signature) and a Linux
+     * AppImage launched without APPIMAGE (the updater is inert). Prefers the
+     * exact tag once known, else the latest-release page. Null where auto-update
+     * works.
      */
     private manualUrlForPlatform(): string | null {
-        if (process.platform !== 'darwin') return null;
+        if (process.platform !== 'darwin' && !this.appImageUnavailable()) return null;
         const tag = this.status.latestVersion ? `v${this.status.latestVersion}` : null;
 
         return tag
@@ -365,6 +422,45 @@ function pickReleaseUrl(info: UpdateInfo): string | null {
     const tag = info.version ? `v${info.version}` : null;
     if (!tag) return null;
     return `https://github.com/Renaissance-Analytics/genie/releases/tag/${tag}`;
+}
+
+/** The GitHub repo electron-updater publishes to (mirrors electron-builder.yml). */
+const GENIE_REPO = 'Renaissance-Analytics/genie';
+
+/** The download page for a specific version tag. */
+function releaseTagUrl(version: string): string {
+    return `https://github.com/${GENIE_REPO}/releases/tag/v${version}`;
+}
+
+/**
+ * Fetch the newest Genie release version directly from GitHub — used ONLY by the
+ * APPIMAGE-unset Linux fallback (electron-updater is inert there). Lists releases
+ * (so PRE-releases, which Genie ships, are included — `/releases/latest` would
+ * skip them), skips drafts, and returns the highest semver, or null. Never throws
+ * past the caller's guard.
+ */
+async function fetchLatestGenieVersion(): Promise<string | null> {
+    const res = await net.fetch(
+        `https://api.github.com/repos/${GENIE_REPO}/releases?per_page=20`,
+        {
+            headers: {
+                Accept: 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2022-11-28',
+                'User-Agent': 'Genie (updater)',
+            },
+        },
+    );
+    if (!res.ok) return null;
+    const list = (await res.json()) as Array<{ tag_name?: string; draft?: boolean }>;
+    if (!Array.isArray(list)) return null;
+    let best: string | null = null;
+    for (const r of list) {
+        if (r?.draft) continue;
+        const v = (r?.tag_name ?? '').replace(/^v/, '');
+        if (!v) continue;
+        if (!best || isNewer(v, best)) best = v;
+    }
+    return best;
 }
 
 /**
