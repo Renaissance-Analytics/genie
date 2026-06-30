@@ -132,7 +132,9 @@ import {
     killHostForUpdate,
     snapshotHostTerminalsForUpdate,
     detachedTerminalsEnabled,
+    electronEncryptor,
 } from './terminal/genie-adapter';
+import { setSecretEncryptor } from './secrets/store';
 import {
     hostBackendKind,
     shouldKillHostForUpdate,
@@ -1789,6 +1791,11 @@ app.whenReady().then(async () => {
     });
 
     initDatabase(app.getPath('userData'));
+    // Install the secrets-at-rest encryptor for ALL token stores (mobile / remote
+    // / GitHub) BEFORE anything reads them. Desktop injects the Electron
+    // safeStorage-backed impl; genie-cloud injects its KMS one. Fail-closed: if
+    // unavailable, those stores keep secrets in memory only (never plaintext).
+    setSecretEncryptor(electronEncryptor());
     registerIpcHandlers();
     // Wire the terminal core to its Electron/SQLite adapters (snapshot store +
     // settings provider + host spawner) and subscribe the cwd→db / host-status→

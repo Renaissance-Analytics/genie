@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
     _resetAuthForTest,
     attemptPair,
@@ -12,6 +14,8 @@ import {
     sessionFromAuthHeader,
     validateSession,
 } from '../auth';
+import { setSecretEncryptor } from '../../secrets/store';
+import { cleanupTmpRoot, makeTmpDir } from '../../../test/helpers';
 
 /**
  * Pairing PIN + session auth. A correct PIN alone is NOT enough — pairing also
@@ -167,5 +171,47 @@ describe('sessions', () => {
         expect(after).not.toBe(before); // overwhelmingly likely (1-in-1e6 clash)
         expect(after).toMatch(/^\d{6}$/);
         if (r.ok) expect(validateSession(r.token)).not.toBeNull(); // session survives
+    });
+});
+
+describe('at-rest persistence (fail closed — no plaintext tokens)', () => {
+    const fakeEnc = {
+        isAvailable: () => true,
+        encrypt: (b: Buffer) => Buffer.concat([Buffer.from('ENC:'), b]),
+        decrypt: (b: Buffer) => b.subarray(4),
+    };
+    afterEach(() => {
+        _resetAuthForTest();
+        setSecretEncryptor(null);
+    });
+    afterAll(() => cleanupTmpRoot());
+
+    it('writes NOTHING to disk when no encryptor is available (memory only)', async () => {
+        setSecretEncryptor(null);
+        const dir = makeTmpDir('auth-failclosed');
+        initAuth({ userDataDir: dir, confirmPair: async () => true });
+        const r = await attemptPair(currentPin(), info);
+        expect(r.ok).toBe(true);
+        if (r.ok) expect(validateSession(r.token)).not.toBeNull(); // in memory
+        // No genie-mobile.json (fail closed — never a plaintext PIN/token on disk).
+        expect(fs.existsSync(path.join(dir, 'genie-mobile.json'))).toBe(false);
+    });
+
+    it('persists an ENCRYPTED blob (not the raw token) and restores it', async () => {
+        setSecretEncryptor(fakeEnc);
+        const dir = makeTmpDir('auth-enc');
+        initAuth({ userDataDir: dir, confirmPair: async () => true });
+        const r = await attemptPair(currentPin(), info);
+        expect(r.ok).toBe(true);
+        const raw = fs.readFileSync(path.join(dir, 'genie-mobile.json'), 'utf8');
+        const file = JSON.parse(raw) as { enc?: string; plain?: unknown };
+        expect(file.enc).toBeTruthy();
+        expect(file.plain).toBeUndefined(); // the plaintext shape is gone
+        if (r.ok) expect(raw).not.toContain(r.token); // the token is NOT on disk in clear
+
+        // A fresh init (same dir + encryptor) restores the session.
+        _resetAuthForTest();
+        initAuth({ userDataDir: dir, confirmPair: async () => true });
+        if (r.ok) expect(validateSession(r.token)).not.toBeNull();
     });
 });

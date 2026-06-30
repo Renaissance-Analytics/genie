@@ -1,6 +1,10 @@
-import { safeStorage } from 'electron';
 import { getAllSettings, setSettings } from '../db';
 import { GENIE_GITHUB_CLIENT_ID } from '../config';
+import {
+    encryptSecret,
+    decryptSecret,
+    secretEncryptionAvailable,
+} from '../secrets/store';
 
 /**
  * GitHub access token storage. The raw token never lands in plain text
@@ -24,11 +28,7 @@ const USER_KEY = 'github_user';
 const REAUTH_KEY = 'github_needs_reauth';
 
 export function isStorageAvailable(): boolean {
-    try {
-        return safeStorage.isEncryptionAvailable();
-    } catch {
-        return false;
-    }
+    return secretEncryptionAvailable();
 }
 
 /**
@@ -50,17 +50,19 @@ export interface TokenSet {
 }
 
 function encrypt(value: string): string {
-    return safeStorage.encryptString(value).toString('base64');
+    const blob = encryptSecret(value);
+    if (blob == null) {
+        // Caller (saveTokenSet) already guards on isStorageAvailable(); this is
+        // the fail-closed backstop so a token is NEVER written in clear.
+        throw new Error('OS encryption is unavailable; refusing to store a token unencrypted.');
+    }
+    return blob;
 }
 
 function decrypt(enc: string | undefined): string | null {
-    if (!enc || !isStorageAvailable()) return null;
-    try {
-        return safeStorage.decryptString(Buffer.from(enc, 'base64'));
-    } catch {
-        // Written with a different key — possible after an OS user reset.
-        return null;
-    }
+    // decryptSecret returns null when unavailable or written under a different
+    // key (e.g. after an OS user reset).
+    return enc ? decryptSecret(enc) : null;
 }
 
 /** Persist a full token grant, computing absolute expiry instants from the

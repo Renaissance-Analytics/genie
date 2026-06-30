@@ -1,8 +1,9 @@
-import { app, BrowserWindow, Notification, safeStorage } from 'electron';
+import { app, BrowserWindow, Notification } from 'electron';
 import { WebSocket } from 'ws';
 import fs from 'node:fs';
 import path from 'node:path';
 import { demandWindowAttention } from '../attention-flash';
+import { encryptSecret, decryptSecret } from '../secrets/store';
 import { getAllSettings } from '../db';
 import { resolveAlertSound } from '../notify-sound';
 import { shouldForwardToDriver } from './forward-decision';
@@ -108,27 +109,23 @@ function readTokenStore(): Record<string, string> {
 }
 function writeTokenStore(store: Record<string, string>): void {
     try {
-        fs.writeFileSync(tokenStorePath(), JSON.stringify(store), 'utf8');
+        // 0600: the file holds host session tokens — never world/group-readable.
+        fs.writeFileSync(tokenStorePath(), JSON.stringify(store), { encoding: 'utf8', mode: 0o600 });
     } catch {
         /* best-effort persistence */
     }
 }
 function loadSavedToken(host: RemoteHost): string | null {
     const enc = readTokenStore()[connKeyOf(host)];
-    if (!enc) return null;
-    try {
-        return safeStorage.isEncryptionAvailable()
-            ? safeStorage.decryptString(Buffer.from(enc, 'base64'))
-            : enc;
-    } catch {
-        return null;
-    }
+    return enc ? decryptSecret(enc) : null;
 }
 function saveSavedToken(host: RemoteHost, token: string): void {
+    // FAIL CLOSED: without an encryptor we do NOT persist the token in clear —
+    // the host just asks for the PIN again after a restart.
+    const enc = encryptSecret(token);
+    if (enc == null) return;
     const store = readTokenStore();
-    store[connKeyOf(host)] = safeStorage.isEncryptionAvailable()
-        ? safeStorage.encryptString(token).toString('base64')
-        : token;
+    store[connKeyOf(host)] = enc;
     writeTokenStore(store);
 }
 function clearSavedToken(host: RemoteHost): void {

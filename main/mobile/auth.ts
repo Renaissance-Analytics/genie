@@ -1,7 +1,11 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { safeStorage } from 'electron';
+import {
+    encryptSecret,
+    decryptSecret,
+    secretEncryptionAvailable,
+} from '../secrets/store';
 
 /**
  * Pairing PIN + session-token store for the mobile remote-control server.
@@ -17,10 +21,11 @@ import { safeStorage } from 'electron';
  *     RATE-LIMITED (a sliding window of recent attempts) to blunt guessing.
  *   - A session token is `crypto.randomBytes(32)` hex. Every REST request
  *     (Bearer) and WS upgrade (`?token=`) is validated against the live set.
- *   - Tokens persist at rest ENCRYPTED via Electron safeStorage (like the GitHub
- *     token) in `<userData>/genie-mobile.json`, so a paired phone survives a
- *     Genie restart. When the OS has no encryption we keep tokens in memory only
- *     (they don't survive a restart) rather than writing them in clear.
+ *   - Tokens persist at rest ENCRYPTED via the injected Encryptor port (desktop:
+ *     Electron safeStorage; cloud: KMS) in `<userData>/genie-mobile.json`, so a
+ *     paired phone survives a Genie restart. FAIL CLOSED: when no encryptor is
+ *     available we keep EVERYTHING in memory only (no PIN/tokens on disk) rather
+ *     than writing anything in clear — they just don't survive a restart.
  *   - Revoke ("Disconnect all") drops every token; Regenerate PIN rolls the PIN
  *     (and, by the desktop's choice, may also revoke).
  */
@@ -55,10 +60,9 @@ function normalizeSession(s: Partial<MobileSession> & { token: string }): Mobile
 }
 
 interface PersistShape {
-    /** safeStorage-encrypted JSON blob (base64) of { pin, sessions }. */
+    /** Encryptor-port ciphertext blob (base64) of { pin, sessions }. The ONLY
+     *  on-disk shape — there is NO plaintext fallback (fail closed). */
     enc?: string;
-    /** Plaintext fallback ONLY used in tests / when encryption is unavailable. */
-    plain?: { pin: string; sessions: MobileSession[] };
 }
 
 /** Hook the desktop answers to confirm a pairing (reuses the forceQuestion/dialog
@@ -83,35 +87,22 @@ function statePath(dir: string): string {
     return path.join(dir, 'genie-mobile.json');
 }
 
-function encryptionAvailable(): boolean {
-    try {
-        return safeStorage.isEncryptionAvailable();
-    } catch {
-        return false;
-    }
-}
-
-/** Persist { pin, sessions } — encrypted when possible, else in-memory only. */
+/**
+ * Persist { pin, sessions } ENCRYPTED via the Encryptor port. FAIL CLOSED: when
+ * no encryptor is available we write NOTHING (everything stays in memory only) —
+ * never a plaintext PIN or token on disk.
+ */
 function persist(): void {
     if (!state?.userDataDir) return;
+    if (!secretEncryptionAvailable()) return; // fail closed — memory only
     const payload = {
         pin: state.pin,
         sessions: [...state.sessions.values()],
     };
+    const enc = encryptSecret(JSON.stringify(payload));
+    if (enc == null) return; // encrypt failed → don't write plaintext
     try {
-        let out: PersistShape;
-        if (encryptionAvailable()) {
-            const enc = safeStorage
-                .encryptString(JSON.stringify(payload))
-                .toString('base64');
-            out = { enc };
-        } else {
-            // No OS encryption — DON'T write tokens in clear to disk. Keep only
-            // the PIN (low-value; rotated freely) so the URL/PIN survive a
-            // restart, but drop sessions to memory-only.
-            out = { plain: { pin: state.pin, sessions: [] } };
-        }
-        fs.writeFileSync(statePath(state.userDataDir), JSON.stringify(out) + '\n', {
+        fs.writeFileSync(statePath(state.userDataDir), JSON.stringify({ enc } as PersistShape) + '\n', {
             mode: 0o600,
         });
     } catch {
@@ -125,8 +116,9 @@ function load(dir: string): { pin: string | null; sessions: MobileSession[] } {
         const j = JSON.parse(
             fs.readFileSync(statePath(dir), 'utf8'),
         ) as PersistShape;
-        if (j.enc && encryptionAvailable()) {
-            const dec = safeStorage.decryptString(Buffer.from(j.enc, 'base64'));
+        if (j.enc) {
+            const dec = decryptSecret(j.enc);
+            if (dec == null) return { pin: null, sessions: [] }; // can't decrypt → fresh
             const payload = JSON.parse(dec) as {
                 pin: string;
                 sessions: Array<Partial<MobileSession> & { token: string }>;
@@ -136,11 +128,6 @@ function load(dir: string): { pin: string | null; sessions: MobileSession[] } {
                 sessions: (payload.sessions ?? []).map(normalizeSession),
             };
         }
-        if (j.plain)
-            return {
-                pin: j.plain.pin ?? null,
-                sessions: (j.plain.sessions ?? []).map(normalizeSession),
-            };
     } catch {
         /* no/garbled state — start fresh */
     }
