@@ -21,6 +21,7 @@ import {
     dismissForwardedQuestionsForConn,
     type PendingQuestion,
 } from '../ask/force-question';
+import { RelayMemberClient } from './relay-client';
 
 /**
  * Work Mode — remote desktop (the local-main proxy).
@@ -59,9 +60,30 @@ const MAX_EVENTS_FAILURES = 5;
 /** A live connection to one host. Self-contained: token + events bridge + ptys. */
 interface RemoteConnection {
     host: RemoteHost;
-    /** `ip:port` — the registry key + token-store key. */
+    /** Tailnet `ip:port`, or `ws:<workstationId>` for a relay connection. The
+     *  registry key (+ token-store key for the tailnet path). */
     connKey: string;
     token: string;
+    /**
+     * Connection KIND. `tailnet` (the default) dials the host's `ip:port` over
+     * the LAN/tailnet with a Bearer token; `relay` drives a Virtual Workstation
+     * over the Tynn relay, routing every REST/events/term call through `relay`
+     * (member frames) instead. The two transports share this one bridge so the
+     * host window's `api()` is identical either way.
+     */
+    transport: 'tailnet' | 'relay';
+    /** The relay member client (transport === 'relay' only; null for tailnet). */
+    relay: RelayMemberClient | null;
+    /**
+     * Relay term streams keyed by terminal id (transport === 'relay' only). P4.1
+     * carries ONE term stream per session (the relay keys local sockets by
+     * (sid, channel)), so only the most-recently-attached terminal is live;
+     * attaching another switches the watched pty. Multi-terminal-over-relay needs
+     * a per-terminal frame key or a session each — a later protocol step.
+     */
+    relayTerms: Map<string, { send: (input: string) => void; close: () => void }>;
+    /** Relay `/ws/events` unsubscribe (transport === 'relay' only). */
+    relayEventsClose: (() => void) | null;
     eventsWs: WebSocket | null;
     eventsClosed: boolean;
     eventsRetry: NodeJS.Timeout | null;
@@ -301,6 +323,7 @@ async function connRequest(
     reqPath: string,
     init?: { method?: string; json?: unknown },
 ): Promise<unknown> {
+    if (conn.transport === 'relay') return relayRest(conn, reqPath, init, false);
     const headers: Record<string, string> = { Authorization: `Bearer ${conn.token}` };
     let body: string | undefined;
     if (init?.json !== undefined) {
@@ -315,6 +338,64 @@ async function connRequest(
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     if (res.status === 204) return undefined;
     return res.json().catch(() => undefined);
+}
+
+/**
+ * A REST call over a relay member session — the relay analogue of the tailnet
+ * Bearer fetch. Renders `{method, path, json}` onto a `rest` frame and maps the
+ * reply's `{status, body}` back to parsed JSON (mirroring `res.json()`). No
+ * Bearer header: the relay enforces the grant's scope×capability and the
+ * workstation's mobile-server self-pairs, so the member never holds a host token.
+ *
+ * `withControlSemantics` mirrors `remoteRequest`'s status handling: a 401 tears
+ * the connection down (the grant expired / was revoked) and a 423 surfaces the
+ * host's lock. Fail-closed: any non-2xx throws.
+ */
+async function relayRest(
+    conn: RemoteConnection,
+    reqPath: string,
+    init: { method?: string; json?: unknown } | undefined,
+    withControlSemantics: boolean,
+): Promise<unknown> {
+    if (!conn.relay) throw new Error('relay connection not established');
+    const headers: Record<string, string> = {};
+    let body: string | undefined;
+    if (init?.json !== undefined) {
+        headers['Content-Type'] = 'application/json';
+        body = JSON.stringify(init.json);
+    }
+    const reply = await conn.relay.rest({
+        method: init?.method ?? 'GET',
+        path: reqPath,
+        headers,
+        body,
+    });
+    if (withControlSemantics && reply.status === 401) {
+        teardownConnection(conn);
+        broadcastStatus();
+        throw new Error('Workstation session expired — reconnect to the workstation.');
+    }
+    if (withControlSemantics && reply.status === 423) {
+        throw new Error('The host has remote control locked.');
+    }
+    if (reply.status < 200 || reply.status >= 300) {
+        let msg = `HTTP ${reply.status}`;
+        if (withControlSemantics && reply.body) {
+            try {
+                const d = JSON.parse(reply.body) as { error?: string };
+                if (d?.error) msg = d.error;
+            } catch {
+                /* non-JSON error body */
+            }
+        }
+        throw new Error(msg);
+    }
+    if (reply.status === 204 || !reply.body) return undefined;
+    try {
+        return JSON.parse(reply.body);
+    } catch {
+        return undefined;
+    }
 }
 
 /** connKey → host question ids we've raised a local forwarded modal for. */
@@ -570,10 +651,70 @@ const PASSTHROUGH_EVENTS = new Set([
     'workspaces:changed',
 ]);
 
+/**
+ * Handle one host `/ws/events` frame — SHARED by the tailnet WS bridge and the
+ * relay member-events stream (both feed the SAME local channels, so the desktop
+ * dashboard updates identically over either transport). PASSTHROUGH events
+ * re-emit to the bound window(s) (+ flash on attention); question/imdone are
+ * handled in MAIN (the forwarded ForceTheQuestion modal + the imDone chime).
+ */
+function handleBridgeMessage(conn: RemoteConnection, raw: string): void {
+    try {
+        const msg = JSON.parse(raw) as { type?: string; payload?: unknown };
+        if (msg.type && PASSTHROUGH_EVENTS.has(msg.type)) {
+            emitToConn(conn, msg.type, msg.payload);
+            // A remote agent on THIS host asked for attention (imDone glow).
+            // Flash the OS window(s) viewing this host — not the master, not
+            // another host's window — when they're not focused, so the right
+            // window among several is identifiable.
+            if (
+                msg.type === 'terminal:attention' &&
+                (msg.payload as { on?: boolean } | null)?.on
+            ) {
+                flashConnWindows(conn);
+            }
+            return;
+        }
+        // Host alerts/prompts forwarded to the driving member (handled in MAIN,
+        // not re-emitted to the renderer): mirror the host's ForceTheQuestion
+        // modal locally + carry the imDone chime/toast.
+        if (msg.type === 'question:changed') {
+            void syncForwardedQuestions(conn);
+        } else if (msg.type === 'notify:imdone') {
+            forwardImDoneToDriver(conn, msg.payload as { label?: string } | null);
+        }
+    } catch {
+        /* ignore malformed frames */
+    }
+}
+
+/**
+ * The RELAY analogue of the tailnet events bridge: subscribe to the workstation's
+ * `/ws/events` over the member session and feed `handleBridgeMessage`. The
+ * RelayMemberClient owns the socket lifecycle (one `wss`, demuxed), so there's no
+ * tailnet-style reconnect/limbo machine here — a relay reconnect is a later
+ * increment; for now a dropped relay link fails in-flight requests and the host
+ * window's link state stays `connected` until the user reconnects.
+ */
+function startRelayEventsBridge(conn: RemoteConnection): void {
+    if (!conn.relay) return;
+    conn.everConnected = true;
+    conn.eventsFailures = 0;
+    conn.reconnectAttempt = 0;
+    conn.relayEventsClose = conn.relay.openEvents((raw) => handleBridgeMessage(conn, raw));
+    // Pick up any questions the host already had pending before we attached (the
+    // `question:changed` push only fires on a CHANGE, not on connect).
+    void syncForwardedQuestions(conn);
+}
+
 /** Connect a connection's host /ws/events and re-emit onto the local channels
  *  (scoped to its bound windows); reconnect on a fixed backoff while live. */
 function startEventsBridge(conn: RemoteConnection): void {
     conn.eventsClosed = false;
+    if (conn.transport === 'relay') {
+        startRelayEventsBridge(conn);
+        return;
+    }
     const scheduleRetry = () => {
         if (conn.eventsClosed || conn.eventsRetry) return;
         const delay = nextReconnectDelayMs(conn.reconnectAttempt);
@@ -616,35 +757,7 @@ function startEventsBridge(conn: RemoteConnection): void {
             }
             void syncForwardedQuestions(conn);
         });
-        ws.on('message', (raw) => {
-            try {
-                const msg = JSON.parse(String(raw)) as { type?: string; payload?: unknown };
-                if (msg.type && PASSTHROUGH_EVENTS.has(msg.type)) {
-                    emitToConn(conn, msg.type, msg.payload);
-                    // A remote agent on THIS host asked for attention (imDone
-                    // glow). Flash the OS window(s) viewing this host — not the
-                    // master, not another host's window — when they're not
-                    // focused, so the right window among several is identifiable.
-                    if (
-                        msg.type === 'terminal:attention' &&
-                        (msg.payload as { on?: boolean } | null)?.on
-                    ) {
-                        flashConnWindows(conn);
-                    }
-                    return;
-                }
-                // Host alerts/prompts forwarded to the driving member (handled in
-                // MAIN, not re-emitted to the renderer): mirror the host's
-                // ForceTheQuestion modal locally + carry the imDone chime/toast.
-                if (msg.type === 'question:changed') {
-                    void syncForwardedQuestions(conn);
-                } else if (msg.type === 'notify:imdone') {
-                    forwardImDoneToDriver(conn, msg.payload as { label?: string } | null);
-                }
-            } catch {
-                /* ignore malformed frames */
-            }
-        });
+        ws.on('message', (raw) => handleBridgeMessage(conn, String(raw)));
         ws.on('close', () => {
             if (conn.eventsWs === ws) conn.eventsWs = null;
             const decision = decideOnDisconnect({
@@ -689,6 +802,14 @@ function stopEventsBridge(conn: RemoteConnection): void {
         clearTimeout(conn.eventsRetry);
         conn.eventsRetry = null;
     }
+    if (conn.relayEventsClose) {
+        try {
+            conn.relayEventsClose();
+        } catch {
+            /* stream already gone */
+        }
+        conn.relayEventsClose = null;
+    }
     try {
         conn.eventsWs?.close();
     } catch {
@@ -704,11 +825,62 @@ function stopEventsBridge(conn: RemoteConnection): void {
 // back. Keyed by terminal id, per connection; attach is idempotent. The pty itself
 // lives on the HOST (its detached pty-host) and is never touched on detach.
 
+/** Parse one host `/ws/term` frame and re-emit terminal:data/exit onto the
+ *  connection's window channels — SHARED by the tailnet per-terminal WS and the
+ *  relay term stream (the host speaks the same `{type:'data'|'exit'}` wire). */
+function handleTermMessage(conn: RemoteConnection, id: string, raw: string): void {
+    try {
+        const msg = JSON.parse(raw) as {
+            type?: string;
+            data?: string;
+            exitCode?: number;
+            signal?: number;
+        };
+        if (msg.type === 'data' && typeof msg.data === 'string') {
+            emitToConn(conn, 'terminal:data', { id, data: msg.data });
+        } else if (msg.type === 'exit') {
+            emitToConn(conn, 'terminal:exit', { id, exitCode: msg.exitCode ?? 0, signal: msg.signal });
+        }
+        // 'dropped' (host backpressure marker) — ignored; on re-attach the
+        // host replays scrollback, so the viewport catches up.
+    } catch {
+        /* ignore malformed frames */
+    }
+}
+
+/**
+ * Attach to a workstation terminal over the relay member session — the relay
+ * analogue of the tailnet per-terminal WS. P4.1 carries ONE term stream per
+ * session, so attaching a new terminal first closes any other live one (the relay
+ * keys term by (sid, channel); a second concurrent open would collide). Only the
+ * most-recently-attached terminal streams over the relay.
+ */
+function relayAttachTerminal(conn: RemoteConnection, id: string): void {
+    if (!conn.relay || conn.relayTerms.has(id)) return;
+    for (const [otherId, stream] of conn.relayTerms) {
+        try {
+            stream.close();
+        } catch {
+            /* already closing */
+        }
+        conn.relayTerms.delete(otherId);
+    }
+    conn.relayTerms.set(
+        id,
+        conn.relay.openTerm(id, (raw) => handleTermMessage(conn, id, raw)),
+    );
+}
+
 /** Attach to a host terminal's pty stream and re-emit terminal:data/exit onto the
  *  calling window's channels (keyed by id). Idempotent per id. */
 export function remoteAttachTerminal(wcId: number, id: string): void {
     const conn = connForWebContents(wcId);
-    if (!conn || conn.termWs.has(id)) return;
+    if (!conn) return;
+    if (conn.transport === 'relay') {
+        relayAttachTerminal(conn, id);
+        return;
+    }
+    if (conn.termWs.has(id)) return;
     const url = `ws://${conn.host.ip}:${conn.host.port}/ws/term?terminal=${encodeURIComponent(id)}&token=${encodeURIComponent(conn.token)}`;
     let ws: WebSocket;
     try {
@@ -717,25 +889,7 @@ export function remoteAttachTerminal(wcId: number, id: string): void {
         return;
     }
     conn.termWs.set(id, ws);
-    ws.on('message', (raw) => {
-        try {
-            const msg = JSON.parse(String(raw)) as {
-                type?: string;
-                data?: string;
-                exitCode?: number;
-                signal?: number;
-            };
-            if (msg.type === 'data' && typeof msg.data === 'string') {
-                emitToConn(conn, 'terminal:data', { id, data: msg.data });
-            } else if (msg.type === 'exit') {
-                emitToConn(conn, 'terminal:exit', { id, exitCode: msg.exitCode ?? 0, signal: msg.signal });
-            }
-            // 'dropped' (host backpressure marker) — ignored; on re-attach the
-            // host replays scrollback, so the viewport catches up.
-        } catch {
-            /* ignore malformed frames */
-        }
-    });
+    ws.on('message', (raw) => handleTermMessage(conn, id, String(raw)));
     ws.on('close', () => {
         if (conn.termWs.get(id) === ws) conn.termWs.delete(id);
     });
@@ -748,9 +902,21 @@ export function remoteAttachTerminal(wcId: number, id: string): void {
     });
 }
 
-/** Forward the renderer's keystrokes to the host pty. */
+/** Forward the renderer's keystrokes to the host pty. Both transports speak the
+ *  same `{type:'input', data}` wire — tailnet over the term WS, relay as a term
+ *  `data` frame. */
 export function remoteTerminalInput(wcId: number, id: string, data: string): void {
-    const ws = connForWebContents(wcId)?.termWs.get(id);
+    const conn = connForWebContents(wcId);
+    if (!conn) return;
+    if (conn.transport === 'relay') {
+        try {
+            conn.relayTerms.get(id)?.send(JSON.stringify({ type: 'input', data }));
+        } catch {
+            /* stream died mid-send — the renderer re-attaches */
+        }
+        return;
+    }
+    const ws = conn.termWs.get(id);
     if (ws && ws.readyState === WebSocket.OPEN) {
         try {
             ws.send(JSON.stringify({ type: 'input', data }));
@@ -762,7 +928,17 @@ export function remoteTerminalInput(wcId: number, id: string, data: string): voi
 
 /** Forward a viewport resize to the host pty. */
 export function remoteTerminalResize(wcId: number, id: string, cols: number, rows: number): void {
-    const ws = connForWebContents(wcId)?.termWs.get(id);
+    const conn = connForWebContents(wcId);
+    if (!conn) return;
+    if (conn.transport === 'relay') {
+        try {
+            conn.relayTerms.get(id)?.send(JSON.stringify({ type: 'resize', cols, rows }));
+        } catch {
+            /* dropped — replayed on the next resize */
+        }
+        return;
+    }
+    const ws = conn.termWs.get(id);
     if (ws && ws.readyState === WebSocket.OPEN) {
         try {
             ws.send(JSON.stringify({ type: 'resize', cols, rows }));
@@ -774,14 +950,28 @@ export function remoteTerminalResize(wcId: number, id: string, cols: number, row
 
 /** Detach the viewer from a host terminal (NEVER kills the host pty). */
 export function remoteDetachTerminal(wcId: number, id: string): void {
-    const ws = connForWebContents(wcId)?.termWs.get(id);
+    const conn = connForWebContents(wcId);
+    if (!conn) return;
+    if (conn.transport === 'relay') {
+        const stream = conn.relayTerms.get(id);
+        if (stream) {
+            try {
+                stream.close();
+            } catch {
+                /* already closing */
+            }
+            conn.relayTerms.delete(id);
+        }
+        return;
+    }
+    const ws = conn.termWs.get(id);
     if (ws) {
         try {
             ws.close();
         } catch {
             /* already closing */
         }
-        connForWebContents(wcId)?.termWs.delete(id);
+        conn.termWs.delete(id);
     }
 }
 
@@ -794,6 +984,14 @@ function closeAllTerminals(conn: RemoteConnection): void {
         }
     }
     conn.termWs.clear();
+    for (const stream of conn.relayTerms.values()) {
+        try {
+            stream.close();
+        } catch {
+            /* already closing */
+        }
+    }
+    conn.relayTerms.clear();
 }
 
 /**
@@ -894,6 +1092,10 @@ async function connectRemoteInner(
         host,
         connKey,
         token,
+        transport: 'tailnet',
+        relay: null,
+        relayTerms: new Map(),
+        relayEventsClose: null,
         eventsWs: null,
         eventsClosed: false,
         eventsRetry: null,
@@ -922,6 +1124,101 @@ async function connectRemoteInner(
     return { ok: true, connKey };
 }
 
+// --- Virtual Workstation (relay transport) ---------------------------------
+
+/** The relay registry-key namespace — `ws:<workstationId>`, distinct from a
+ *  tailnet `ip:port`, so the two transports never collide in `connections`. */
+function workstationConnKey(workstationId: string): string {
+    return `ws:${workstationId}`;
+}
+
+/** What `connectWorkstation` needs to dial a Virtual Workstation over the relay.
+ *  `grant` is the short-TTL Tynn connection grant (EdDSA JWS) minted by the
+ *  member-facing connect-grant endpoint; `relayUrl` is its `relay_endpoint`. */
+export interface WorkstationConnectInput {
+    workstationId: string;
+    /** Display name for the host window title + the Hosts list. */
+    name: string;
+    relayUrl: string;
+    grant: string;
+}
+
+/**
+ * Connect to a Virtual Workstation over the Tynn relay — the relay-tier analogue
+ * of `connectRemote`. Dials the relay member session (`member-hello {workstationId,
+ * grant}` → `member-welcome {sid}`), registers a `relay`-kind connection, and
+ * starts its events bridge. `showHostWindow(host, connKey)` then drives that
+ * workstation's `/master` over relayed frames — identical to a tailnet host, but
+ * every REST/events/term call routes through the RelayMemberClient. Reconnecting
+ * an already-live workstation is a no-op success.
+ */
+export async function connectWorkstation(
+    input: WorkstationConnectInput,
+): Promise<ConnectResult> {
+    const connKey = workstationConnKey(input.workstationId);
+    if (connections.has(connKey)) return { ok: true, connKey };
+    const inFlight = connectInFlight.get(connKey);
+    if (inFlight) return inFlight;
+
+    const run = connectWorkstationInner(input, connKey);
+    connectInFlight.set(connKey, run);
+    try {
+        return await run;
+    } finally {
+        connectInFlight.delete(connKey);
+    }
+}
+
+async function connectWorkstationInner(
+    input: WorkstationConnectInput,
+    connKey: string,
+): Promise<ConnectResult> {
+    const relay = new RelayMemberClient();
+    try {
+        await relay.connect({
+            relayUrl: input.relayUrl,
+            workstationId: input.workstationId,
+            grant: input.grant,
+        });
+    } catch (e) {
+        try {
+            relay.close();
+        } catch {
+            /* never opened */
+        }
+        return { ok: false, error: `Couldn't reach the workstation: ${(e as Error).message}` };
+    }
+    // A relay conn has no LAN address; the placeholder host carries the display
+    // name (the window title + the REMOTE indicator read host.hostname). REST/
+    // events/term never touch host.ip/port on the relay path (they branch on
+    // `transport`).
+    const host: RemoteHost = { ip: 'relay', port: 0, hostname: input.name };
+    const conn: RemoteConnection = {
+        host,
+        connKey,
+        token: '',
+        transport: 'relay',
+        relay,
+        relayTerms: new Map(),
+        relayEventsClose: null,
+        eventsWs: null,
+        eventsClosed: false,
+        eventsRetry: null,
+        eventsFailures: 0,
+        termWs: new Map(),
+        everConnected: false,
+        upgrading: false,
+        linkState: { phase: 'connected' },
+        limboSince: null,
+        reconnectAttempt: 0,
+        limboTimer: null,
+    };
+    connections.set(connKey, conn);
+    startEventsBridge(conn);
+    broadcastStatus();
+    return { ok: true, connKey };
+}
+
 /** Tear a single connection down (viewer-only — never touches host terminals). */
 function teardownConnection(conn: RemoteConnection): void {
     stopEventsBridge(conn);
@@ -930,6 +1227,13 @@ function teardownConnection(conn: RemoteConnection): void {
         conn.limboTimer = null;
     }
     closeAllTerminals(conn);
+    if (conn.relay) {
+        try {
+            conn.relay.close();
+        } catch {
+            /* already closing */
+        }
+    }
     connections.delete(conn.connKey);
     // Dismiss any forwarded host-question modals still up for this connection
     // (the bridge is gone — answering them could never reach the host).
@@ -977,6 +1281,8 @@ export async function remoteRequest(
 ): Promise<unknown> {
     const conn = connForWebContents(wcId);
     if (!conn) throw new Error('Not connected to a host.');
+
+    if (conn.transport === 'relay') return relayRest(conn, reqPath, init, true);
 
     const headers: Record<string, string> = { Authorization: `Bearer ${conn.token}` };
     let body: string | undefined;
