@@ -104,6 +104,7 @@ import {
     registerForceQuestionIpc,
     raiseForwardedQuestion,
     dismissForwardedQuestion,
+    setQuestionTransport,
 } from '../force-question';
 
 /** Simulate the renderer for the currently-shown window: answer / cancel / dismiss. */
@@ -296,5 +297,38 @@ describe('forwarded questions (remote-driver forwarding)', () => {
         ]);
         const rB = await pB;
         expect(rB.cancelled).toBe(false);
+    });
+});
+
+describe('QuestionTransport routing (host-core decouple)', () => {
+    beforeEach(() => {
+        for (const w of state.windows) if (!w.destroyed) w.close();
+        state.windows = [];
+        state.nextWcId = 1;
+        registerForceQuestionIpc({ isDev: false, preloadPath: '/p.js', getMasterWindow: () => null });
+    });
+    afterEach(() => {
+        setQuestionTransport(null); // restore the desktop modal default
+        vi.clearAllMocks();
+    });
+
+    it('routes forceQuestion through an installed transport — NO BrowserWindow', async () => {
+        const ask = vi.fn().mockResolvedValue({ cancelled: true, answers: [] });
+        setQuestionTransport({ ask });
+        const r = await forceQuestion(Q('Proceed'), 'demo');
+        expect(r).toEqual({ cancelled: true, answers: [] });
+        expect(ask).toHaveBeenCalledWith(
+            [expect.objectContaining({ header: 'Proceed' })],
+            'demo',
+        );
+        // The headless transport raised NO modal (the GUI path is fully bypassed).
+        expect(state.windows).toHaveLength(0);
+    });
+
+    it('defaults to the desktop modal when no transport is installed', () => {
+        setQuestionTransport(null);
+        void forceQuestion(Q('A'));
+        expect(state.windows).toHaveLength(1); // the BrowserWindow modal
+        win().close();
     });
 });

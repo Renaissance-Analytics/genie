@@ -9,6 +9,7 @@ import type {
     ForceQuestion,
     ForceQuestionResult,
 } from '../mcp/protocol';
+import type { QuestionTransport } from '../host-core/ports';
 
 /**
  * ForceTheQuestion — an OS-level, always-on-top modal an agent can raise to ask
@@ -360,7 +361,10 @@ function enqueue(item: QueueItem): void {
     }
 }
 
-export function forceQuestion(
+/** The DESKTOP question transport: raise the BrowserWindow modal (the FIFO
+ *  queue + `createAskWindow`). This is the GUI-coupled path the headless build
+ *  must NOT run — it's behind the injected QuestionTransport port. */
+function raiseDesktopModal(
     questions: ForceQuestion[],
     workspaceLabel?: string,
 ): Promise<ForceQuestionResult> {
@@ -368,6 +372,36 @@ export function forceQuestion(
         const id = crypto.randomBytes(9).toString('hex');
         enqueue({ id, resolve, questions, workspaceLabel });
     });
+}
+
+/** The desktop QuestionTransport (the BrowserWindow modal). Exported so the
+ *  desktop shell can inject it explicitly; it's also the default when no
+ *  transport is installed. */
+export const desktopQuestionTransport: QuestionTransport = { ask: raiseDesktopModal };
+
+/** The active transport every gate funnels through. Null ⇒ the desktop modal
+ *  (so desktop works with no wiring). genie-cloud installs a fail-closed /
+ *  forward-to-member transport — replacing the BrowserWindow path entirely. */
+let questionTransport: QuestionTransport | null = null;
+
+/** Install the QuestionTransport (the composition root, once at boot). Pass null
+ *  to restore the desktop modal default. */
+export function setQuestionTransport(t: QuestionTransport | null): void {
+    questionTransport = t;
+}
+
+/**
+ * Ask the user one or more questions and resolve with their answer — the single
+ * chokepoint every approval gate (process run, ops-provision, terminal action,
+ * mobile pairing, the MCP ForceTheQuestion tool) funnels through. Routed via the
+ * injected {@link QuestionTransport}: desktop raises the modal; headless installs
+ * a fail-closed / forward-to-member transport (no BrowserWindow).
+ */
+export function forceQuestion(
+    questions: ForceQuestion[],
+    workspaceLabel?: string,
+): Promise<ForceQuestionResult> {
+    return (questionTransport ?? desktopQuestionTransport).ask(questions, workspaceLabel);
 }
 
 /**
