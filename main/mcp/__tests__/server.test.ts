@@ -142,6 +142,8 @@ const deps = (
     runAgent,
     manageWorkspaces,
     openFileForUser: async () => ({ ok: true, reused: false, openedNew: true }),
+    setEnv: () => ({ ok: true, file: '.env' }),
+    checkEnv: () => ({ ok: true, exists: false, file: '.env' }),
     isOpsProject: async () => true,
 });
 

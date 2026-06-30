@@ -2,7 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { decideProvision, ensureMcpGitignored } from '../provision';
-import { applyServer, tynnEntry, hasTynnServer } from '../../mcp/agent-config';
+import {
+    applyServer,
+    tynnEntry,
+    hasTynnServer,
+    writeWorkspaceTynnMcp,
+    TYNN_TOKEN_ENV_KEY,
+} from '../../mcp/agent-config';
 import { cleanupTmpRoot, makeTmpDir } from '../../../test/helpers';
 
 afterAll(() => cleanupTmpRoot());
@@ -40,22 +46,32 @@ describe('decideProvision', () => {
 });
 
 describe('tynn server config writing', () => {
-    it('writes an http entry with the bearer token under mcpServers.tynn', () => {
-        const next = applyServer(null, 'tynn', tynnEntry('https://tynn.ai/mcp/tynn', 'rpk_abc.def'), true);
+    it('writes an http entry that REFERENCES the token env var (secret stays in .env)', () => {
+        const next = applyServer(null, 'tynn', tynnEntry('https://tynn.ai/mcp/tynn', 'claude'), true);
         expect(next).toEqual({
             mcpServers: {
                 tynn: {
                     type: 'http',
                     url: 'https://tynn.ai/mcp/tynn',
-                    headers: { Authorization: 'Bearer rpk_abc.def' },
+                    // `:-` keeps an unset var from breaking the whole config outside Genie.
+                    headers: { Authorization: 'Bearer ${TYNN_AGENT_TOKEN:-}' },
                 },
+            },
+        });
+    });
+
+    it('uses Cursor ${env:…} syntax for the .cursor entry', () => {
+        const next = applyServer(null, 'tynn', tynnEntry('u', 'cursor'), true);
+        expect(next).toEqual({
+            mcpServers: {
+                tynn: { url: 'u', headers: { Authorization: 'Bearer ${env:TYNN_AGENT_TOKEN}' } },
             },
         });
     });
 
     it('preserves sibling servers when adding/removing tynn', () => {
         const withGenie = { mcpServers: { genie: { type: 'http', url: 'http://127.0.0.1:5/mcp/x' } } };
-        const added = applyServer(withGenie, 'tynn', tynnEntry('u', 't'), true);
+        const added = applyServer(withGenie, 'tynn', tynnEntry('u', 'claude'), true);
         expect(added?.mcpServers).toHaveProperty('genie');
         expect(added?.mcpServers).toHaveProperty('tynn');
 
@@ -72,6 +88,39 @@ describe('tynn server config writing', () => {
             JSON.stringify({ mcpServers: { tynn: { type: 'http', url: 'u' } } }),
         );
         expect(hasTynnServer(dir)).toBe(true);
+    });
+
+    it('MIGRATES a literal token out of .mcp.json into the gitignored .env', () => {
+        const dir = makeTmpDir('tynn-migrate');
+        // An OLD-style config with the literal token embedded inline.
+        fs.writeFileSync(
+            path.join(dir, '.mcp.json'),
+            JSON.stringify({
+                mcpServers: {
+                    other: { type: 'http', url: 'http://x' },
+                    tynn: {
+                        type: 'http',
+                        url: 'http://tynn/mcp/old',
+                        headers: { Authorization: 'Bearer rpk_OLD.literal' },
+                    },
+                },
+            }),
+        );
+        writeWorkspaceTynnMcp(dir, true, { url: 'http://tynn/mcp/new', token: 'rpk_NEW.minted' });
+
+        // The fresh token landed in .env (preserving siblings) and is gitignored.
+        const env = fs.readFileSync(path.join(dir, '.env'), 'utf8');
+        expect(env).toContain(`${TYNN_TOKEN_ENV_KEY}=rpk_NEW.minted`);
+        expect(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8')).toContain('.env');
+
+        // .mcp.json now REFERENCES the var — no literal token remains; the
+        // sibling server is preserved.
+        const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8'));
+        expect(cfg.mcpServers.tynn.headers.Authorization).toBe('Bearer ${TYNN_AGENT_TOKEN:-}');
+        expect(cfg.mcpServers.other).toBeTruthy();
+        const raw = fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8');
+        expect(raw).not.toContain('rpk_OLD.literal');
+        expect(raw).not.toContain('rpk_NEW.minted');
     });
 });
 

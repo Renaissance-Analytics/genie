@@ -20,6 +20,10 @@ import {
     type ManageWorkspacesResult,
     type OpenFileRequest,
     type OpenFileResult,
+    type SetEnvRequest,
+    type SetEnvResult,
+    type CheckEnvRequest,
+    type CheckEnvResult,
     type WorkspaceMap,
     type IssueWatchSnapshot,
 } from './protocol';
@@ -105,6 +109,10 @@ interface ServerDeps {
         terminalId: string,
         req: OpenFileRequest,
     ) => Promise<OpenFileResult>;
+    /** Upsert a KEY=value into the caller's workspace/repo `.env` (setEnv tool). */
+    setEnv: (terminalId: string, req: SetEnvRequest) => SetEnvResult;
+    /** Look up a key in the caller's workspace/repo `.env` (checkEnv tool). */
+    checkEnv: (terminalId: string, req: CheckEnvRequest) => CheckEnvResult;
     /** True when the caller's workspace is an Ops project. Gates the ops-only
      *  `provisionWorkspaces` tool OUT of tools/list for non-Ops workspaces. */
     isOpsProject: (terminalId: string) => Promise<boolean>;
@@ -412,6 +420,8 @@ async function handle(
         runAgent: deps.runAgent,
         manageWorkspaces: deps.manageWorkspaces,
         openFileForUser: deps.openFileForUser,
+        setEnv: deps.setEnv,
+        checkEnv: deps.checkEnv,
         isOpsProject: deps.isOpsProject,
     };
 

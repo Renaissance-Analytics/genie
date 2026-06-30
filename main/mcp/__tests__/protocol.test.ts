@@ -33,6 +33,8 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
         openFileForUser: vi
             .fn()
             .mockResolvedValue({ ok: true, reused: false, openedNew: true }),
+        setEnv: vi.fn().mockReturnValue({ ok: true, file: '.env' }),
+        checkEnv: vi.fn().mockReturnValue({ ok: true, exists: false, file: '.env' }),
         isOpsProject: vi.fn().mockResolvedValue(false),
         ...overrides,
     };
@@ -78,6 +80,8 @@ describe('handleMcpMessage', () => {
             'runAgent',
             'manageWorkspaces',
             'openFileForUser',
+            'setEnv',
+            'checkEnv',
             'genieGuide',
         ]);
         expect(tools.map((t) => t.name)).not.toContain('initializeWorkspace');
@@ -98,6 +102,8 @@ describe('handleMcpMessage', () => {
             'runAgent',
             'manageWorkspaces',
             'openFileForUser',
+            'setEnv',
+            'checkEnv',
             'genieGuide',
         ]);
     });
@@ -257,6 +263,49 @@ describe('handleMcpMessage', () => {
             ctx(),
         );
         expect(res?.error?.code).toBe(-32602);
+    });
+
+    it('setEnv routes key/value/target to the dep', async () => {
+        const setEnv = vi.fn().mockReturnValue({ ok: true, file: 'repos/web/.env' });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 40,
+                method: 'tools/call',
+                params: { name: 'setEnv', arguments: { key: 'API_KEY', value: 'rpk_x', target: 'web', terminalId: 'term-X' } },
+            },
+            ctx({ terminalId: 'term-X', setEnv }),
+        );
+        expect(setEnv).toHaveBeenCalledWith('term-X', { key: 'API_KEY', value: 'rpk_x', target: 'web' });
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('Set API_KEY in repos/web/.env');
+    });
+
+    it('setEnv requires a key and a string value', async () => {
+        const noKey = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 41, method: 'tools/call', params: { name: 'setEnv', arguments: { value: 'x' } } },
+            ctx(),
+        );
+        expect(noKey?.error?.code).toBe(-32602);
+        const noVal = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 42, method: 'tools/call', params: { name: 'setEnv', arguments: { key: 'K' } } },
+            ctx(),
+        );
+        expect(noVal?.error?.code).toBe(-32602);
+    });
+
+    it('checkEnv defaults to a presence check; passes value/force through', async () => {
+        const checkEnv = vi.fn().mockReturnValue({ ok: true, exists: true, isSecret: true, file: '.env' });
+        await handleMcpMessage(
+            { jsonrpc: '2.0', id: 43, method: 'tools/call', params: { name: 'checkEnv', arguments: { key: 'TOK' } } },
+            ctx({ checkEnv }),
+        );
+        expect(checkEnv).toHaveBeenCalledWith('term-1', { key: 'TOK', target: undefined, value: false, force: false });
+        await handleMcpMessage(
+            { jsonrpc: '2.0', id: 44, method: 'tools/call', params: { name: 'checkEnv', arguments: { key: 'TOK', value: true, force: true } } },
+            ctx({ checkEnv }),
+        );
+        expect(checkEnv).toHaveBeenLastCalledWith('term-1', { key: 'TOK', target: undefined, value: true, force: true });
     });
 
     it('provisionWorkspaces routes to the dep and summarizes children', async () => {

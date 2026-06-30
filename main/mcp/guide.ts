@@ -166,6 +166,27 @@ action — like \`imDone\` it just surfaces something, so there's NO approval pr
 Returns whether it reused an existing panel or opened a new one + the resolved
 file. Available to System-workspace agents too.
 
+### setEnv
+**Record a KEY=value in the workspace's \`.env\`** (or a repo's). Args: \`key\`
+(A–Z/0–9/_), \`value\`, optional \`target\` (omit / \`workspace\` → the workspace
+root \`.env\`; a REPO NAME → \`repos/<name>/.env\`), and the usual \`terminalId\`.
+PRESERVES other lines + comments and CREATES the gitignored \`.env\` if absent.
+\`.env\` is gitignored, so this never commits a secret — and Genie LOADS the
+workspace \`.env\` into the agent's terminal, so a value you set here is resolvable
+as \`\${KEY}\` (e.g. how the \`tynn\` MCP entry reads \`\${TYNN_AGENT_TOKEN}\`). No
+approval prompt — an agent manages its own workspace env. Returns which \`.env\`
+was written. Available to System-workspace agents too.
+
+### checkEnv
+**Check a key in the workspace's \`.env\`** (or a repo's, via \`target\`). By DEFAULT
+a PRESENCE check: returns \`exists\` and does NOT reveal the value — use it to
+decide whether you still need to \`setEnv\` something. Pass \`value:true\` to return
+the value, BUT a value detected as a SECRET (key name like \*TOKEN/\*SECRET/
+\*PASSWORD/\*PASS/\*PWD/\*KEY/\*API_KEY, or a token-shaped value) comes back
+OBFUSCATED to its last 4 chars (\`••••••3f2a\`) unless you pass \`force:true\`.
+Non-secret values return in full. Only \`force\` a secret when you truly need the
+literal. Available to System-workspace agents too.
+
 ### ForceTheQuestion
 Call this whenever you are **blocked on a decision, clarification, or approval
 only the user can give**. It raises an OS-level, always-on-top modal that floats

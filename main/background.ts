@@ -147,7 +147,11 @@ import {
     confirmQuitTerminals,
     pickDialogWindow,
 } from './terminal/quit-confirm';
-import { workspaceIdOfTerminal } from './terminal/workspace-of-terminal';
+import {
+    workspaceIdOfTerminal,
+    SYSTEM_WORKSPACE_ID,
+} from './terminal/workspace-of-terminal';
+import { applySetEnv, applyCheckEnv } from './env-store';
 import { registerOpenFile, openFileForUserForMcp } from './editor/open-file';
 import { isQuittingForUpdate } from './updater/quit-state';
 import { registerFilesIpc } from './files/ipc';
@@ -195,6 +199,18 @@ const isDev = !isProd;
  *     native Notification (proven in updater/ipc.ts).
  * Both default off and are independent of the always-on attention glow.
  */
+/**
+ * Resolve a terminal → its workspace ROOT directory for the env tools
+ * (setEnv/checkEnv): a real workspace's path, or the home directory for the
+ * synthetic System workspace (mirroring openFileForUser). Null when unresolved.
+ */
+function workspaceRootForTerminal(terminalId: string): string | null {
+    const wsId = workspaceIdOfTerminal(terminalId);
+    if (!wsId) return null;
+    if (wsId === SYSTEM_WORKSPACE_ID) return os.homedir();
+    return getWorkspace(wsId)?.path ?? null;
+}
+
 function notifyImDone(terminalId: string): void {
     let settings;
     try {
@@ -2005,6 +2021,16 @@ app.whenReady().then(async () => {
         manageWorkspaces: (terminalId, req) =>
             manageWorkspacesForMcp(terminalId, req),
         openFileForUser: (terminalId, req) => openFileForUserForMcp(terminalId, req),
+        setEnv: (terminalId, req) => {
+            const root = workspaceRootForTerminal(terminalId);
+            if (!root) return { ok: false, error: 'No workspace resolved for this terminal.' };
+            return applySetEnv(root, req);
+        },
+        checkEnv: (terminalId, req) => {
+            const root = workspaceRootForTerminal(terminalId);
+            if (!root) return { ok: false, error: 'No workspace resolved for this terminal.' };
+            return applyCheckEnv(root, req);
+        },
         // Ops-tool gating: only an Ops project's workspace sees `provisionWorkspaces`
         // in tools/list. Resolve the caller's workspace → its Ops status (fail closed).
         isOpsProject: async (terminalId) => {

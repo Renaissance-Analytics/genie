@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { GENIE_AGENTS_BRIEF } from './guide';
 import { getAllSettings } from '../db';
+import { upsertEnvLine } from '../env-file';
+import { ensureEnvGitignored } from '../env-store';
 
 /**
  * Write/remove the Genie MCP server entry in a workspace's agent config files
@@ -38,14 +40,54 @@ export function cursorEntry(url: string): JsonObj {
     return { url };
 }
 
+/** The workspace `.env` key the Tynn project agent token now lives under — the
+ *  `.mcp.json` entry only REFERENCES it, so the secret never sits in the config
+ *  (which Claude Code reads but the AGI envelope protocol moves to `.env`). */
+export const TYNN_TOKEN_ENV_KEY = 'TYNN_AGENT_TOKEN';
+
 /**
- * The Tynn MCP server entry — an authenticated remote endpoint, so unlike the
- * loopback `genie` entry it carries the project agent token as a Bearer header.
- * Claude Code wants the explicit `type`; Cursor infers it but tolerates the
- * extra key, so one shape serves both targets.
+ * The Tynn MCP server entry — an authenticated remote endpoint. The project
+ * agent token is NO LONGER embedded; the Authorization header REFERENCES the
+ * `${TYNN_AGENT_TOKEN}` env var (the secret lives in the gitignored workspace
+ * `.env`, which Genie loads into the agent's terminal).
+ *
+ * Per-target ref syntax:
+ *   - Claude (`.mcp.json`): `${TYNN_AGENT_TOKEN:-}` — the `:-` default keeps an
+ *     UNSET var from breaking the WHOLE config (the documented failure mode) when
+ *     an agent is launched OUTSIDE a Genie terminal; it just sends an empty token
+ *     (that one server fails auth) instead of poisoning every MCP server.
+ *   - Cursor (`.cursor/mcp.json`): `${env:TYNN_AGENT_TOKEN}` (Cursor's syntax).
  */
-export function tynnEntry(url: string, token: string): JsonObj {
-    return { type: 'http', url, headers: { Authorization: `Bearer ${token}` } };
+export function tynnEntry(url: string, mode: 'claude' | 'cursor'): JsonObj {
+    const auth =
+        mode === 'cursor'
+            ? `Bearer \${env:${TYNN_TOKEN_ENV_KEY}}`
+            : `Bearer \${${TYNN_TOKEN_ENV_KEY}:-}`;
+    const base: JsonObj = mode === 'claude' ? { type: 'http', url } : { url };
+    return { ...base, headers: { Authorization: auth } };
+}
+
+/**
+ * Move the Tynn token to the workspace `.env` (gitignored) under
+ * `TYNN_AGENT_TOKEN`, preserving any other `.env` lines. This is also the
+ * MIGRATION: re-writing a workspace's tynn config drops the literal token that
+ * older builds embedded in `.mcp.json` (the entry is rewritten to the ref) and
+ * lands the (freshly-minted) token here instead. Best-effort.
+ */
+function writeTynnTokenEnv(workspacePath: string, token: string): void {
+    const file = path.join(workspacePath, '.env');
+    let content = '';
+    try {
+        content = fs.readFileSync(file, 'utf8');
+    } catch {
+        /* no .env yet — created below */
+    }
+    try {
+        fs.writeFileSync(file, upsertEnvLine(content, TYNN_TOKEN_ENV_KEY, token));
+        ensureEnvGitignored(workspacePath);
+    } catch {
+        /* best-effort — a locked .env shouldn't break provisioning */
+    }
 }
 
 /**
@@ -131,11 +173,17 @@ export function writeWorkspaceTynnMcp(
     } catch {
         /* default to syncing if settings can't be read */
     }
-    const entry = opts ? tynnEntry(opts.url, opts.token) : {};
+    // Land the secret in the gitignored `.env` (also migrates an older literal
+    // token out of `.mcp.json`); the configs below only REFERENCE it.
+    if (enabled && opts?.token) {
+        writeTynnTokenEnv(workspacePath, opts.token);
+    }
     if (sync.claude) {
+        const entry = enabled && opts ? tynnEntry(opts.url, 'claude') : {};
         upsert(path.join(workspacePath, '.mcp.json'), TYNN_SERVER_NAME, entry, enabled);
     }
     if (sync.cursor) {
+        const entry = enabled && opts ? tynnEntry(opts.url, 'cursor') : {};
         upsert(path.join(workspacePath, '.cursor', 'mcp.json'), TYNN_SERVER_NAME, entry, enabled);
     }
 }

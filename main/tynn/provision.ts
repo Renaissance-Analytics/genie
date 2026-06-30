@@ -225,7 +225,9 @@ export function unlinkWorkspaceTynn(workspacePath: string): void {
  */
 export function ensureMcpGitignored(workspacePath: string): void {
     const file = path.join(workspacePath, '.gitignore');
-    const needed = ['.mcp.json', '.cursor/'];
+    // `.env` now carries the Tynn agent token (the `.mcp.json` entry only refs
+    // it); `.mcp.json` + `.cursor/` stay listed too.
+    const needed = ['.mcp.json', '.cursor/', '.env'];
     try {
         let content = '';
         try {

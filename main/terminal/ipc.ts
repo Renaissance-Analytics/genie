@@ -15,8 +15,10 @@ import {
     updateTerminalSpec,
     workspaceMcpEnabled,
     createTerminalSpec,
+    getWorkspace,
 } from '../db';
 import { buildTynnCliEnv } from '../cli/tynn-cli';
+import { loadWorkspaceEnvVars } from '../env-store';
 import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
 import { TerminalReadBuffer, type ReadResult } from './read-buffer';
@@ -189,11 +191,16 @@ export function createAgentTerminal(opts: {
             : {},
     });
 
-    // Env: bundled tynn-cli (behind its setting) + the workspace's agent MCP
+    // Env: the workspace `.env` (so an agent resolves ${TYNN_AGENT_TOKEN} etc.)
+    // + bundled tynn-cli (behind its setting) + the workspace's agent MCP
     // endpoint when enabled, so a coding agent launched here can call imDone etc.
     let env: Record<string, string> = {};
     const cliEnabled = getAllSettings().cli_tools_in_terminals !== 'off';
-    env = { ...buildTynnCliEnv(opts.cwd, cliEnabled) };
+    const wsRoot = getWorkspace(opts.workspaceId)?.path;
+    env = {
+        ...(wsRoot ? loadWorkspaceEnvVars(wsRoot) : {}),
+        ...buildTynnCliEnv(opts.cwd, cliEnabled),
+    };
     if (workspaceMcpEnabled(opts.workspaceId)) {
         const mcpUrl = registerTerminalEndpoint(id);
         if (mcpUrl) {
@@ -314,8 +321,15 @@ export function registerTerminalIpc(): void {
             const cliEnabled =
                 getAllSettings().cli_tools_in_terminals !== 'off';
             const cliEnv = buildTynnCliEnv(opts.cwd, cliEnabled);
-            if (Object.keys(cliEnv).length) {
-                opts = { ...opts, env: { ...cliEnv, ...opts.env } };
+            // Load the workspace `.env` so an agent here resolves the refs the
+            // tynn `.mcp.json` entry uses (${TYNN_AGENT_TOKEN}). Lowest precedence
+            // — cliEnv + the spec's own opts.env still win on any key collision.
+            const wsRoot = spec?.workspace_id
+                ? getWorkspace(spec.workspace_id)?.path
+                : undefined;
+            const envFileVars = wsRoot ? loadWorkspaceEnvVars(wsRoot) : {};
+            if (Object.keys(cliEnv).length || Object.keys(envFileVars).length) {
+                opts = { ...opts, env: { ...envFileVars, ...cliEnv, ...opts.env } };
             }
             // Agent-integration MCP: when the spec's workspace has opted in, mint
             // this terminal's auto-wired endpoint and expose it as GENIE_MCP_URL

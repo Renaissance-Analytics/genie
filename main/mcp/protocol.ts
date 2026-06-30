@@ -10,6 +10,14 @@
  */
 
 import { GENIE_MCP_GUIDE } from './guide';
+import type {
+    SetEnvRequest,
+    SetEnvResult,
+    CheckEnvRequest,
+    CheckEnvResult,
+} from '../env-store';
+
+export type { SetEnvRequest, SetEnvResult, CheckEnvRequest, CheckEnvResult };
 
 export const MCP_PROTOCOL_VERSION = '2024-11-05';
 
@@ -251,6 +259,12 @@ export interface McpContext {
         terminalId: string,
         req: OpenFileRequest,
     ) => Promise<OpenFileResult>;
+    /** Upsert a KEY=value into the caller's workspace `.env` (default) or a repo
+     *  `.env` (the `setEnv` tool). Resolves the workspace from the terminal. */
+    setEnv: (terminalId: string, req: SetEnvRequest) => SetEnvResult;
+    /** Presence/value lookup of a key in the workspace (default) or a repo `.env`
+     *  (the `checkEnv` tool), with secret obfuscation by default. */
+    checkEnv: (terminalId: string, req: CheckEnvRequest) => CheckEnvResult;
 }
 
 /** A managed background process as the manageProcess tool reports it. */
@@ -555,6 +569,58 @@ const OPEN_FILE_TOOL = {
             },
         },
         required: ['path'],
+        additionalProperties: false,
+    },
+};
+
+const ENV_TARGET_PROP = {
+    target: {
+        type: 'string',
+        description:
+            "Which `.env` to act on. Omit (or 'workspace') for the workspace root `.env`; pass a REPO NAME for `repos/<name>/.env`. Resolved within the workspace (no traversal).",
+    },
+} as const;
+
+const SET_ENV_TOOL = {
+    name: 'setEnv',
+    description:
+        "Upsert a KEY=value into the workspace's `.env` (default) or a repo's `.env` (`target` = repo name → `repos/<name>/.env`). PRESERVES other lines + comments and CREATES the gitignored `.env` if absent. Use it to record a secret/config the workspace needs (e.g. an API token a tool reads via ${KEY}) — `.env` is gitignored, so this never commits a secret. Returns which `.env` was written. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution. Available to System-workspace agents too.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            ...TERMINAL_ID_PROP,
+            key: {
+                type: 'string',
+                description: 'The env var name (A–Z, 0–9, _; starts with a letter or _).',
+            },
+            value: { type: 'string', description: 'The value to store.' },
+            ...ENV_TARGET_PROP,
+        },
+        required: ['key', 'value'],
+        additionalProperties: false,
+    },
+};
+
+const CHECK_ENV_TOOL = {
+    name: 'checkEnv',
+    description:
+        "Check a key in the workspace's `.env` (default) or a repo's `.env` (`target`). By DEFAULT it's a PRESENCE check (returns `exists` — does the key have a value?) and does NOT reveal the value. Pass `value:true` to return the value — but a value detected as a SECRET (key name like *TOKEN/*SECRET/*PASSWORD/*KEY/*API_KEY, or a token-shaped value) is OBFUSCATED to its last 4 chars (e.g. ••••••3f2a) unless you pass `force:true`. Non-secret values return in full. Use the presence check to decide whether you still need to set something; only `force` a secret when you genuinely need the literal. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution. Available to System-workspace agents too.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            ...TERMINAL_ID_PROP,
+            key: { type: 'string', description: 'The env var name to look up.' },
+            value: {
+                type: 'boolean',
+                description: 'Return the value (default false → presence check only).',
+            },
+            force: {
+                type: 'boolean',
+                description: 'Return the FULL value even for a detected secret (default false → obfuscated).',
+            },
+            ...ENV_TARGET_PROP,
+        },
+        required: ['key'],
         additionalProperties: false,
     },
 };
@@ -1136,6 +1202,8 @@ export async function handleMcpMessage(
                     RUN_AGENT_TOOL,
                     MANAGE_WORKSPACES_TOOL,
                     OPEN_FILE_TOOL,
+                    SET_ENV_TOOL,
+                    CHECK_ENV_TOOL,
                     GUIDE_TOOL,
                 ],
             });
@@ -1431,6 +1499,55 @@ export async function handleMcpMessage(
                             type: 'text',
                             text: `${summary}\n\n${JSON.stringify(result, null, 2)}`,
                         },
+                    ],
+                });
+            }
+            if (params.name === 'setEnv') {
+                const a = (params.arguments ?? {}) as Partial<SetEnvRequest>;
+                const key = typeof a.key === 'string' ? a.key.trim() : '';
+                if (!key) return err(msg.id, -32602, 'setEnv requires a `key`.');
+                if (typeof a.value !== 'string') {
+                    return err(msg.id, -32602, 'setEnv requires a string `value`.');
+                }
+                const result = ctx.setEnv(ctx.terminalId, {
+                    key,
+                    value: a.value,
+                    target: typeof a.target === 'string' ? a.target : undefined,
+                });
+                const summary = result.ok
+                    ? `Set ${key} in ${result.file}.`
+                    : `setEnv failed: ${result.error ?? 'unknown error'}`;
+                return ok(msg.id, {
+                    content: [
+                        { type: 'text', text: `${summary}\n\n${JSON.stringify(result, null, 2)}` },
+                    ],
+                });
+            }
+            if (params.name === 'checkEnv') {
+                const a = (params.arguments ?? {}) as Partial<CheckEnvRequest>;
+                const key = typeof a.key === 'string' ? a.key.trim() : '';
+                if (!key) return err(msg.id, -32602, 'checkEnv requires a `key`.');
+                const result = ctx.checkEnv(ctx.terminalId, {
+                    key,
+                    target: typeof a.target === 'string' ? a.target : undefined,
+                    value: a.value === true,
+                    force: a.force === true,
+                });
+                let summary: string;
+                if (!result.ok) {
+                    summary = `checkEnv failed: ${result.error ?? 'unknown error'}`;
+                } else if (!result.exists) {
+                    summary = `${key} is not set in ${result.file}.`;
+                } else if (result.value !== undefined) {
+                    summary = `${key} in ${result.file} = ${result.value}${
+                        result.obfuscated ? ' (obfuscated — pass force:true for the full value)' : ''
+                    }`;
+                } else {
+                    summary = `${key} is set in ${result.file}${result.isSecret ? ' (a secret)' : ''}.`;
+                }
+                return ok(msg.id, {
+                    content: [
+                        { type: 'text', text: `${summary}\n\n${JSON.stringify(result, null, 2)}` },
                     ],
                 });
             }
