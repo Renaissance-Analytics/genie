@@ -39,11 +39,28 @@ const { mockAuto, markQuit, handlers } = vi.hoisted(() => {
 vi.mock('electron-updater', () => ({ autoUpdater: mockAuto }));
 vi.mock('electron', () => ({
     app: { getVersion: () => '1.0.0', isPackaged: true },
+    // auto-updater imports `net` for the manual-download fallback. Stub it so the
+    // module's `import { app, net }` is complete — an incomplete mock left `net`
+    // undefined, and on Linux the fallback's `net.fetch(...)` then threw.
+    net: { fetch: vi.fn(async () => ({ ok: false, json: async () => [] })) },
 }));
 vi.mock('../quit-state', () => ({
     markQuittingForUpdate: markQuit,
     isQuittingForUpdate: () => false,
 }));
+// These tests cover the ACTIVE electron-updater path (checkForUpdates /
+// downloadUpdate). On a CI Linux runner the production code would otherwise
+// detect "AppImage updater inert" (process.platform === 'linux', isPackaged,
+// APPIMAGE unset) and divert to the GitHub manual-download fallback — a DIFFERENT
+// state machine that never reaches 'available'. That platform divergence (not
+// reproducible on the Windows/macOS dev boxes) was the CI-ONLY red: every
+// 'available'-expecting assertion saw 'up-to-date', and the in-flight test's
+// fire-and-forget then threw its state guard as an unhandled rejection that
+// polluted the whole suite. Pin the branch under test so it's OS-deterministic.
+vi.mock('../update-surface', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../update-surface')>();
+    return { ...actual, appImageUpdateUnavailable: () => false };
+});
 
 async function fresh() {
     vi.resetModules();
@@ -163,8 +180,20 @@ describe('auto-updater re-check over a staged build (the bug)', () => {
         mockAuto.checkForUpdates.mockResolvedValue({
             updateInfo: { version: '2.0.0' },
         });
+        // Hold the download GENUINELY in-flight: downloadUpdate stays pending
+        // until we release it, so 'downloading' is real for the whole window the
+        // concurrent check runs in (not racing a mock that resolves instantly).
+        let releaseDownload!: () => void;
+        mockAuto.downloadUpdate.mockReturnValueOnce(
+            new Promise<void>((resolve) => {
+                releaseDownload = resolve;
+            }),
+        );
         await u.checkForUpdate();
-        void u.downloadAndInstall();
+        // Keep a HANDLE on the download (not a fire-and-forget `void`), so its
+        // settlement is awaited and can never leak an unhandled rejection — that
+        // unawaited `void` was what polluted the suite on CI.
+        const downloading = u.downloadAndInstall();
         expect(u.getStatus().state).toBe('downloading');
 
         // A check fired while the installer is mid-download must be a no-op —
@@ -173,6 +202,10 @@ describe('auto-updater re-check over a staged build (the bug)', () => {
         await u.checkForUpdate();
         expect(mockAuto.checkForUpdates).not.toHaveBeenCalled();
         expect(u.getStatus().state).toBe('downloading');
+
+        // Let the download finish and settle its promise — no leaked rejection.
+        releaseDownload();
+        await downloading;
     });
 });
 
@@ -204,6 +237,36 @@ describe('auto-updater one-click hands-free apply', () => {
         const u = await fresh();
         await expect(u.downloadAndInstall()).rejects.toThrow();
         expect(mockAuto.downloadUpdate).not.toHaveBeenCalled();
+    });
+
+    it('the check → in-flight download → concurrent check flow leaks no unhandled rejection', async () => {
+        // Reproduce the exact flow that went red on CI, under an unhandled-
+        // rejection sentinel: if any promise in this path is ever left unhandled
+        // again (the regression that polluted the suite), this fails deterministically.
+        const leaks: unknown[] = [];
+        const onUnhandled = (reason: unknown) => leaks.push(reason);
+        process.on('unhandledRejection', onUnhandled);
+        try {
+            const u = await fresh();
+            mockAuto.checkForUpdates.mockResolvedValue({ updateInfo: { version: '2.0.0' } });
+            let releaseDownload!: () => void;
+            mockAuto.downloadUpdate.mockReturnValueOnce(
+                new Promise<void>((resolve) => {
+                    releaseDownload = resolve;
+                }),
+            );
+            await u.checkForUpdate();
+            const downloading = u.downloadAndInstall();
+            await u.checkForUpdate(); // concurrent re-check — must be a no-op
+            releaseDownload();
+            await downloading;
+            // Drain macrotasks so any deferred unhandledRejection would surface.
+            await new Promise((r) => setTimeout(r, 0));
+            await new Promise((r) => setTimeout(r, 0));
+        } finally {
+            process.off('unhandledRejection', onUnhandled);
+        }
+        expect(leaks).toEqual([]);
     });
 
     it('a download we did NOT initiate just rests at ready-to-restart (never force-quits)', async () => {
