@@ -57,7 +57,7 @@ const SERVER_NAME = 'genie';
 /** The default fixed port — obscure, outside the OS ephemeral range. */
 export const DEFAULT_MCP_PORT = 51717;
 
-interface ServerDeps {
+export interface ServerDeps {
     serverVersion: string;
     /** Persist the port + token maps here so endpoints survive a Genie restart. */
     userDataDir: string;

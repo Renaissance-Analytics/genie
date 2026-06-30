@@ -1,6 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import os from 'os';
+import {
+    workspaceIdOfTerminal,
+    SYSTEM_WORKSPACE_ID,
+} from '../terminal/workspace-of-terminal';
 import {
     listWorkspaces,
     listTerminalSpecs,
@@ -87,6 +92,18 @@ let deps: HostToolsDeps = { rebuildMenu: () => {}, showMasterWindow: () => {} };
 /** Inject the GUI side-effect hooks (desktop boot wires the Electron impls). */
 export function registerHostTools(d: HostToolsDeps): void {
     deps = d;
+}
+
+/**
+ * Resolve a terminal → its workspace ROOT directory for the env tools
+ * (setEnv/checkEnv): a real workspace's path, or the home directory for the
+ * synthetic System workspace (mirroring openFileForUser). Null when unresolved.
+ */
+export function workspaceRootForTerminal(terminalId: string): string | null {
+    const wsId = workspaceIdOfTerminal(terminalId);
+    if (!wsId) return null;
+    if (wsId === SYSTEM_WORKSPACE_ID) return os.homedir();
+    return getWorkspace(wsId)?.path ?? null;
 }
 
 const MANIFEST_FILES = [

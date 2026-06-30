@@ -53,11 +53,7 @@ import {
     requestFinalSnapshots,
     snapshotRetainedWindowless,
     terminalHasWindow,
-    broadcastTerminalAttention,
-    broadcastWorkspacePulse,
-    broadcastTerminalSpecsChanged,
     killTerminalById,
-    lastActiveTerminalForWorkspace,
     reapOrphanTerminals,
     createAgentTerminal,
     writeToTerminal,
@@ -74,10 +70,11 @@ import {
     DEFAULT_MCP_PORT,
 } from './mcp/server';
 import { startControlServer } from './control';
-import { startMobileServer, DEFAULT_MOBILE_PORT, mobileEmit } from './mobile/server';
+import { startMobileServer, DEFAULT_MOBILE_PORT } from './mobile/server';
 import {
     listPendingQuestions,
     answerPendingQuestion,
+    desktopQuestionTransport,
 } from './ask/force-question';
 import { listAllProcesses } from './terminal/process-list';
 import {
@@ -135,6 +132,8 @@ import {
     electronEncryptor,
 } from './terminal/genie-adapter';
 import { setSecretEncryptor } from './secrets/store';
+import { buildHostServerDeps } from './host-core/server-deps';
+import type { HostCorePorts } from './host-core/ports';
 import {
     hostBackendKind,
     shouldKillHostForUpdate,
@@ -151,19 +150,8 @@ import {
     workspaceIdOfTerminal,
     SYSTEM_WORKSPACE_ID,
 } from './terminal/workspace-of-terminal';
-import { applySetEnv, applyCheckEnv } from './env-store';
-import { registerOpenFile, openFileForUserForMcp } from './editor/open-file';
-import {
-    registerHostTools,
-    describeWorkspaceForMcp,
-    checkIssuesForMcp,
-    manageProcessForMcp,
-    provisionWorkspacesForMcp,
-    isOpsProjectFor,
-    manageTerminalsForMcp,
-    runAgentForMcp,
-    manageWorkspacesForMcp,
-} from './mcp/host-tools';
+import { registerOpenFile } from './editor/open-file';
+import { registerHostTools } from './mcp/host-tools';
 import { isQuittingForUpdate } from './updater/quit-state';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
@@ -210,17 +198,6 @@ const isDev = !isProd;
  *     native Notification (proven in updater/ipc.ts).
  * Both default off and are independent of the always-on attention glow.
  */
-/**
- * Resolve a terminal → its workspace ROOT directory for the env tools
- * (setEnv/checkEnv): a real workspace's path, or the home directory for the
- * synthetic System workspace (mirroring openFileForUser). Null when unresolved.
- */
-function workspaceRootForTerminal(terminalId: string): string | null {
-    const wsId = workspaceIdOfTerminal(terminalId);
-    if (!wsId) return null;
-    if (wsId === SYSTEM_WORKSPACE_ID) return os.homedir();
-    return getWorkspace(wsId)?.path ?? null;
-}
 
 function notifyImDone(terminalId: string): void {
     let settings;
@@ -832,6 +809,15 @@ app.whenReady().then(async () => {
     // Inject the two desktop-GUI hooks the extracted MCP tools need (tray-menu
     // rebuild + surfacing the master window). Headless leaves these as no-ops.
     registerHostTools({ rebuildMenu, showMasterWindow });
+    // The four host-core ports, Electron-backed. The headless genie-cloud build
+    // injects KMS / fail-closed / log impls of the same interfaces. These power
+    // the GUI-free server-deps factory (buildHostServerDeps) below.
+    const electronPorts: HostCorePorts = {
+        encryptor: electronEncryptor(),
+        questionTransport: desktopQuestionTransport,
+        notifier: { imDone: (terminalId) => notifyImDone(terminalId) },
+        lifecycle: { keepAlive: () => {} },
+    };
     registerIpcHandlers();
     // Wire the terminal core to its Electron/SQLite adapters (snapshot store +
     // settings provider + host spawner) and subscribe the cwd→db / host-status→
@@ -993,90 +979,24 @@ app.whenReady().then(async () => {
     // Agent-integration MCP server (loopback). imDone pulses the caller's
     // terminal glow + optional chime/toast; ForceTheQuestion raises the modal.
     // Best-effort: a failed bind just means no MCP endpoints.
-    await startMcpServer({
-        serverVersion: app.getVersion(),
-        userDataDir: app.getPath('userData'),
-        // The fixed, user-settable port (Settings → Agent MCP). Parsed from the
-        // k/v setting; falls back to the obscure default when unset/garbage.
-        configuredPort: () => {
-            const raw = (getAllSettings() as Record<string, string>)['mcp_port'];
-            const n = raw ? parseInt(raw, 10) : NaN;
-            return Number.isInteger(n) && n > 0 && n < 65536 ? n : DEFAULT_MCP_PORT;
-        },
-        // Resolve a workspace's terminals (for the workspace-scoped endpoint):
-        // the set of its terminal-spec ids + the most-recently-active one, so a
-        // tool call with no explicit terminalId still targets the right one.
-        workspaceTerminals: (workspaceId) => ({
-            ids: listTerminalSpecs()
-                .filter((t) => t.workspace_id === workspaceId)
-                .map((t) => t.id),
-            lastActive: lastActiveTerminalForWorkspace(workspaceId),
-        }),
-        onImDone: (terminalId) => {
-            if (!terminalId) return;
-            broadcastTerminalAttention(terminalId, true);
-            // Also pulse the workspace ROW so the user gets a sidebar-level cue
-            // ("something finished in workspace X"), not just the terminal glow.
-            // A System-Workspace terminal resolves to the synthetic system id.
-            const wsId = workspaceIdOfTerminal(terminalId);
-            if (wsId) broadcastWorkspacePulse(wsId);
-            notifyImDone(terminalId);
-            // Forward the chime/toast to a connected remote DRIVER (the glow +
-            // window-flash already forward via terminal:attention). No-op when
-            // no /ws/events client is connected, so it costs nothing locally.
-            mobileEmit('notify:imdone', {
-                label: getTerminalSpec(terminalId)?.label,
-            });
-        },
-        checkIssues: (terminalId) => checkIssuesForMcp(terminalId),
-        onForceQuestion: (terminalId, questions) => {
-            // Resolve the requesting terminal → its workspace name, so the modal
-            // title says WHICH project needs the user (a multi-project Genie
-            // raises these from any of them). Best-effort: an unattached terminal
-            // or lookup failure just falls back to the generic title.
-            let workspaceLabel: string | undefined;
-            try {
-                const wsId = terminalId
-                    ? getTerminalSpec(terminalId)?.workspace_id
-                    : null;
-                if (wsId) {
-                    workspaceLabel = listWorkspaces().find((w) => w.id === wsId)
-                        ?.project_name;
-                }
-            } catch {
-                /* fall back to the generic title */
-            }
-            return forceQuestion(questions, workspaceLabel);
-        },
-        describeWorkspace: (terminalId) => describeWorkspaceForMcp(terminalId),
-        manageProcess: (terminalId, req) => manageProcessForMcp(terminalId, req),
-        provisionWorkspaces: (terminalId, req) =>
-            provisionWorkspacesForMcp(terminalId, req),
-        manageTerminals: (terminalId, req) => manageTerminalsForMcp(terminalId, req),
-        runAgent: (terminalId, req) => runAgentForMcp(terminalId, req),
-        manageWorkspaces: (terminalId, req) =>
-            manageWorkspacesForMcp(terminalId, req),
-        openFileForUser: (terminalId, req) => openFileForUserForMcp(terminalId, req),
-        setEnv: (terminalId, req) => {
-            const root = workspaceRootForTerminal(terminalId);
-            if (!root) return { ok: false, error: 'No workspace resolved for this terminal.' };
-            return applySetEnv(root, req);
-        },
-        checkEnv: (terminalId, req) => {
-            const root = workspaceRootForTerminal(terminalId);
-            if (!root) return { ok: false, error: 'No workspace resolved for this terminal.' };
-            return applyCheckEnv(root, req);
-        },
-        // Ops-tool gating: only an Ops project's workspace sees `provisionWorkspaces`
-        // in tools/list. Resolve the caller's workspace → its Ops status (fail closed).
-        isOpsProject: async (terminalId) => {
-            const wsId = terminalId
-                ? getTerminalSpec(terminalId)?.workspace_id ?? null
-                : null;
-            const ws = wsId ? getWorkspace(wsId) : null;
-            return ws ? isOpsProjectFor(ws.path) : false;
-        },
-    }).catch((e) => console.error('[mcp] failed to start', e));
+    // The MCP server's deps are assembled by the GUI-free factory from the
+    // extracted host-tools + the injected ports (so the SAME deps run headless).
+    await startMcpServer(
+        buildHostServerDeps(
+            {
+                serverVersion: app.getVersion(),
+                userDataDir: app.getPath('userData'),
+                // The fixed, user-settable port (Settings → Agent MCP). Parsed
+                // from the k/v setting; falls back to the default when garbage.
+                configuredPort: () => {
+                    const raw = (getAllSettings() as Record<string, string>)['mcp_port'];
+                    const n = raw ? parseInt(raw, 10) : NaN;
+                    return Number.isInteger(n) && n > 0 && n < 65536 ? n : DEFAULT_MCP_PORT;
+                },
+            },
+            electronPorts,
+        ),
+    ).catch((e) => console.error('[mcp] failed to start', e));
     // Backfill the genie MCP entry into the Claude/Cursor config of any
     // workspace already opted in — now with the stable workspace endpoint URL,
     // so older configs that carried the broken ${GENIE_MCP_URL} ref are
