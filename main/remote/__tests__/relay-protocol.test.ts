@@ -4,8 +4,9 @@ import {
     decodeFrame,
     encodeMemberHello,
     decodeMemberControl,
+    encodePopChallenge,
     encodePopProof,
-    tryDecodePopChallenge,
+    decodePopChallenge,
     RelayProtocolError,
     type Frame,
 } from '../relay-protocol';
@@ -80,36 +81,52 @@ describe('member control', () => {
 describe('PoP control (P4.5)', () => {
     const jwk = { kty: 'OKP', crv: 'Ed25519', x: 'abc123' };
 
-    it('encodes a pop-proof', () => {
+    it('encodes a pop-proof as a control data frame', () => {
         expect(JSON.parse(encodePopProof('sid-1', jwk, 'sigb64'))).toEqual({
-            type: 'pop-proof',
+            kind: 'data',
+            channel: 'control',
             sid: 'sid-1',
-            jwk,
-            sig: 'sigb64',
+            payload: { type: 'pop-proof', jwk, sig: 'sigb64' },
         });
     });
 
-    it('decodes a valid pop-challenge', () => {
-        expect(
-            tryDecodePopChallenge(JSON.stringify({ type: 'pop-challenge', sid: 's', nonce: 'n' })),
-        ).toEqual({ type: 'pop-challenge', sid: 's', nonce: 'n' });
+    it('encodes a pop-challenge as a control data frame', () => {
+        expect(JSON.parse(encodePopChallenge('sid-1', 'the-nonce'))).toEqual({
+            kind: 'data',
+            channel: 'control',
+            sid: 'sid-1',
+            payload: { type: 'pop-challenge', nonce: 'the-nonce' },
+        });
     });
 
-    it('returns null for a routed frame or any non-challenge message', () => {
-        // A routed frame (has kind/channel, no type) is NOT a challenge.
+    it('decodes a valid pop-challenge frame (sid echoed from the frame)', () => {
+        const frame = decodeFrame(encodePopChallenge('s', 'n'));
+        expect(decodePopChallenge(frame)).toEqual({ sid: 's', nonce: 'n' });
+    });
+
+    it('returns null for a non-control frame or another control payload', () => {
+        expect(decodePopChallenge({ kind: 'data', channel: 'rest', sid: 's' })).toBeNull();
         expect(
-            tryDecodePopChallenge(encodeFrame({ kind: 'data', channel: 'rest', sid: 's' })),
+            decodePopChallenge({
+                kind: 'data',
+                channel: 'control',
+                sid: 's',
+                payload: { type: 'pop-proof', jwk, sig: 'x' },
+            }),
         ).toBeNull();
-        expect(tryDecodePopChallenge(JSON.stringify({ type: 'member-welcome', sid: 's' }))).toBeNull();
-        expect(tryDecodePopChallenge('not json')).toBeNull();
+        expect(
+            decodePopChallenge({ kind: 'data', channel: 'control', sid: 's', payload: 'oops' }),
+        ).toBeNull();
     });
 
-    it('fails closed on a pop-challenge missing sid / nonce', () => {
-        expect(() => tryDecodePopChallenge(JSON.stringify({ type: 'pop-challenge', nonce: 'n' }))).toThrow(
-            /pop-challenge: sid/,
-        );
-        expect(() => tryDecodePopChallenge(JSON.stringify({ type: 'pop-challenge', sid: 's' }))).toThrow(
-            /pop-challenge: nonce/,
-        );
+    it('fails closed on a pop-challenge frame missing its nonce', () => {
+        expect(() =>
+            decodePopChallenge({
+                kind: 'data',
+                channel: 'control',
+                sid: 's',
+                payload: { type: 'pop-challenge' },
+            }),
+        ).toThrow(/pop-challenge: nonce/);
     });
 });

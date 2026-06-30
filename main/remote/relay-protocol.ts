@@ -163,49 +163,52 @@ export function decodeMemberControl(raw: string | Buffer): MemberWelcome | Contr
 
 // --- Proof-of-Possession handshake (P4.5, post-welcome) ---------------------
 // The host challenges the member to prove possession of the ephemeral key the
-// grant is bound to. These ride the SAME socket as routed Frames but are NOT
-// Frames — they're typed control objects (like member-hello/welcome), told
-// apart by their `type` field (a routed Frame has `kind`/`channel`, never `type`).
+// grant is bound to. These ride `control`-channel DATA frames (the wire matches
+// GenieCloudScaffold's host side exactly): the `pop-challenge` / `pop-proof`
+// discriminator lives in `payload.type` inside an otherwise-ordinary Frame, so
+// `decodeFrame` parses the envelope and these helpers read/build the payload.
 
-/** Host → member: prove possession of the key bound to the grant. */
+/** A PoP challenge extracted from a `control` frame's payload. */
 export interface PopChallenge {
-    type: 'pop-challenge';
+    /** The member-session id (echoed from the challenge frame). */
     sid: string;
     /** Opaque challenge nonce (signed, never interpreted). */
     nonce: string;
 }
 
-/** Member → host: the ephemeral public JWK + the signature over the challenge. */
-export interface PopProofMessage {
-    type: 'pop-proof';
-    sid: string;
-    jwk: unknown;
-    sig: string;
+/** Build the host's PoP challenge control frame (host side; used in tests). */
+export function encodePopChallenge(sid: string, nonce: string): string {
+    return encodeFrame({
+        kind: 'data',
+        channel: 'control',
+        sid,
+        payload: { type: 'pop-challenge', nonce },
+    });
 }
 
-/** Encode the member's PoP proof control message. */
+/** Build the member's PoP proof as a `control` data frame. */
 export function encodePopProof(sid: string, jwk: unknown, sig: string): string {
-    const msg: PopProofMessage = { type: 'pop-proof', sid, jwk, sig };
-    return JSON.stringify(msg);
+    return encodeFrame({
+        kind: 'data',
+        channel: 'control',
+        sid,
+        payload: { type: 'pop-proof', jwk, sig },
+    });
 }
 
 /**
- * Classify a post-welcome server message: a PoP challenge (validated) when its
- * `type` says so, or `null` for everything else (routed Frames, which the caller
- * then hands to `decodeFrame`). Fail-closed: a message that CLAIMS to be a
- * pop-challenge but is malformed throws rather than being mistaken for a Frame.
+ * Read a PoP challenge out of a DECODED `control` frame. Returns `null` when the
+ * frame isn't a pop-challenge (a non-control frame, or another control payload),
+ * so the caller routes non-PoP frames onward. Fail-closed: a frame that IS a
+ * pop-challenge but is missing its nonce throws.
  */
-export function tryDecodePopChallenge(raw: string | Buffer): PopChallenge | null {
-    let obj: unknown;
-    try {
-        obj = JSON.parse(typeof raw === 'string' ? raw : raw.toString('utf8'));
-    } catch {
-        return null; // not parseable here → let decodeFrame fail-close on it
-    }
-    if (typeof obj !== 'object' || obj === null) return null;
-    const m = obj as Record<string, unknown>;
-    if (m.type !== 'pop-challenge') return null;
-    if (!isNonEmptyString(m.sid)) throw new RelayProtocolError('malformed pop-challenge: sid');
-    if (!isNonEmptyString(m.nonce)) throw new RelayProtocolError('malformed pop-challenge: nonce');
-    return { type: 'pop-challenge', sid: m.sid, nonce: m.nonce };
+export function decodePopChallenge(frame: Frame): PopChallenge | null {
+    if (frame.channel !== 'control') return null;
+    const payload = frame.payload;
+    if (typeof payload !== 'object' || payload === null) return null;
+    const p = payload as Record<string, unknown>;
+    if (p.type !== 'pop-challenge') return null;
+    // `frame.sid` is already guaranteed non-empty by decodeFrame.
+    if (!isNonEmptyString(p.nonce)) throw new RelayProtocolError('malformed pop-challenge: nonce');
+    return { sid: frame.sid, nonce: p.nonce };
 }

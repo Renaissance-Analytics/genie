@@ -5,7 +5,7 @@ import {
     encodeFrame,
     decodeFrame,
     encodePopProof,
-    tryDecodePopChallenge,
+    decodePopChallenge,
     type RestRequestPayload,
     type RestReplyPayload,
 } from './relay-protocol';
@@ -118,25 +118,29 @@ export class RelayMemberClient {
                     resolve();
                     return;
                 }
-                // Post-welcome: either a PoP challenge (a typed control message)
-                // or a routed frame. Answer a challenge with a signed proof; the
-                // host rejects a control session that never proves possession.
+                // Post-welcome: a routed frame. `control`-channel frames carry
+                // the PoP handshake — answer a pop-challenge with a signed proof
+                // (the host rejects a control session that never proves
+                // possession); everything else is multiplexed as usual.
+                let frame;
                 try {
-                    const challenge = tryDecodePopChallenge(raw);
-                    if (challenge) {
-                        this.respondToPopChallenge(ws, challenge.nonce, challenge.sid);
-                        return;
-                    }
+                    frame = decodeFrame(raw);
                 } catch {
-                    // A malformed pop-challenge — drop it; the host re-challenges
-                    // or rejects the session. Don't tear down on one bad message.
+                    return; // drop a malformed frame rather than tear down
+                }
+                if (frame.channel === 'control') {
+                    try {
+                        const challenge = decodePopChallenge(frame);
+                        if (challenge) {
+                            this.respondToPopChallenge(ws, challenge.nonce, challenge.sid);
+                        }
+                    } catch {
+                        // malformed pop-challenge payload — drop; the host
+                        // re-challenges or rejects. Don't tear down.
+                    }
                     return;
                 }
-                try {
-                    this.mux?.handle(decodeFrame(raw));
-                } catch {
-                    /* drop a malformed frame rather than tear the session down */
-                }
+                this.mux?.handle(frame);
             });
             ws.on('error', (e: Error) => {
                 if (!welcomed) {

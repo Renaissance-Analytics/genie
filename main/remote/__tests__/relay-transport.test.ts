@@ -258,25 +258,34 @@ describe('relay transport — PoP challenge/proof (P4.5)', () => {
             popKeypair: keypair,
         });
 
-        // Host challenges after welcome; the member must answer with pop-proof.
+        // Host challenges after welcome over a `control` data frame; the member
+        // must answer with a pop-proof control frame.
         const nonce = 'challenge-nonce-xyz';
-        stub.sendControl({ type: 'pop-challenge', sid: 'sid-test-1', nonce });
+        stub.sendControl({
+            kind: 'data',
+            channel: 'control',
+            sid: 'sid-test-1',
+            payload: { type: 'pop-challenge', nonce },
+        });
 
-        const proofMsg = (await stub.waitFor(
-            (f) => (f as unknown as { type?: string }).type === 'pop-proof',
-        )) as unknown as { type: string; sid: string; jwk: typeof popJwk; sig: string };
+        const proofFrame = await stub.waitFor(
+            (f) =>
+                f.channel === 'control' &&
+                (f.payload as { type?: string } | undefined)?.type === 'pop-proof',
+        );
+        const proof = proofFrame.payload as { jwk: typeof popJwk; sig: string };
 
-        expect(proofMsg.sid).toBe('sid-test-1');
+        expect(proofFrame.sid).toBe('sid-test-1');
         // The proof JWK must be byte-identical to what was sent as pop_jwk.
-        expect(proofMsg.jwk).toEqual(popJwk);
+        expect(proof.jwk).toEqual(popJwk);
 
         // The signature verifies over SHA-256(nonce || workstationId || sid).
-        const pub = crypto.createPublicKey({ key: proofMsg.jwk as crypto.JsonWebKey, format: 'jwk' });
+        const pub = crypto.createPublicKey({ key: proof.jwk as crypto.JsonWebKey, format: 'jwk' });
         const ok = crypto.verify(
             null,
             popSignedInput(nonce, WS_ID, 'sid-test-1'),
             pub,
-            Buffer.from(proofMsg.sig, 'base64url'),
+            Buffer.from(proof.sig, 'base64url'),
         );
         expect(ok).toBe(true);
     });
@@ -297,11 +306,15 @@ describe('relay transport — PoP challenge/proof (P4.5)', () => {
         );
         stub.replyRest(req.reqId as string, 200, { ok: true });
         await pending;
-        // …and no pop-proof was ever emitted.
+        // …and no pop-proof control frame was ever emitted.
         await new Promise((r) => setTimeout(r, 30));
         await expect(
             Promise.race([
-                stub.waitFor((f) => (f as unknown as { type?: string }).type === 'pop-proof'),
+                stub.waitFor(
+                    (f) =>
+                        f.channel === 'control' &&
+                        (f.payload as { type?: string } | undefined)?.type === 'pop-proof',
+                ),
                 new Promise((res) => setTimeout(() => res('none'), 50)),
             ]),
         ).resolves.toBe('none');
