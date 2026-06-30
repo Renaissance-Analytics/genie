@@ -99,7 +99,12 @@ vi.mock('electron', () => {
 // notify chime reads settings — keep it inert so it never throws/sends.
 vi.mock('../../db', () => ({ getAllSettings: () => ({ notify_sound: 'off' }) }));
 
-import { forceQuestion, registerForceQuestionIpc } from '../force-question';
+import {
+    forceQuestion,
+    registerForceQuestionIpc,
+    raiseForwardedQuestion,
+    dismissForwardedQuestion,
+} from '../force-question';
 
 /** Simulate the renderer for the currently-shown window: answer / cancel / dismiss. */
 function invokeIpc(channel: string, senderWcId: number, ...args: unknown[]) {
@@ -222,5 +227,74 @@ describe('ForceTheQuestion FIFO queue', () => {
         void forceQuestion(Q('B'));
         expect(state.windows).toHaveLength(2);
         expect(state.windows[1].destroyed).toBe(false);
+    });
+});
+
+describe('forwarded questions (remote-driver forwarding)', () => {
+    beforeEach(() => {
+        // Drain any modal/queue a prior describe's last test left open (closing
+        // the window cancels every still-queued item) so the module starts clean.
+        for (const w of state.windows) if (!w.destroyed) w.close();
+        state.windows = [];
+        state.nextWcId = 1;
+        registerForceQuestionIpc({
+            isDev: false,
+            preloadPath: '/preload.js',
+            getMasterWindow: () => null,
+        });
+    });
+    afterEach(() => vi.clearAllMocks());
+
+    it('raises a local modal for a forwarded host question and resolves the answer', async () => {
+        const p = raiseForwardedQuestion({
+            connKey: 'host-1',
+            hostId: 'Q1',
+            questions: Q('Proceed'),
+            workspaceLabel: 'demo',
+        });
+        // The driver sees the modal locally.
+        expect(state.windows).toHaveLength(1);
+        expect(win().shown[0].questions[0].header).toBe('Proceed');
+        // The driver answers → the promise resolves with the answer, which the
+        // remote bridge POSTs back to the host.
+        const localId = win().shown[0].id;
+        await invokeIpc('ask:answer', win().id, localId, [
+            { header: 'Proceed', question: 'Proceed?', selected: ['Yes'], note: '' },
+        ]);
+        const r = await p;
+        expect(r.cancelled).toBe(false);
+        expect(r.answers[0].selected).toEqual(['Yes']);
+    });
+
+    it('dismissForwardedQuestion (host answered first) resolves cancelled → no answer posted', async () => {
+        const p = raiseForwardedQuestion({
+            connKey: 'host-1',
+            hostId: 'Q2',
+            questions: Q('Proceed'),
+        });
+        expect(state.windows).toHaveLength(1);
+        // Host resolved it out from under us → dismiss the local modal.
+        dismissForwardedQuestion('host-1', 'Q2');
+        const r = await p;
+        // cancelled ⇒ the bridge posts NOTHING back (host already has the answer).
+        expect(r.cancelled).toBe(true);
+        expect(win().destroyed).toBe(true);
+    });
+
+    it('dismissForwardedQuestion is keyed by (connKey, hostId) — leaves others alone', async () => {
+        const pA = raiseForwardedQuestion({ connKey: 'host-1', hostId: 'Q3', questions: Q('A') });
+        const pB = raiseForwardedQuestion({ connKey: 'host-2', hostId: 'Q3', questions: Q('B') });
+        // Same hostId on a DIFFERENT connection must not be dismissed.
+        dismissForwardedQuestion('host-1', 'Q3');
+        const rA = await pA;
+        expect(rA.cancelled).toBe(true);
+        // B (host-2) still pending — answer it to drain.
+        const shownB = win().shown[win().shown.length - 1];
+        expect(shownB.questions[0].header).toBe('B');
+        await invokeIpc('ask:answer', win().id, shownB.id, [
+            { header: 'B', question: 'B?', selected: ['No'], note: '' },
+        ]);
+        const rB = await pB;
+        expect(rB.cancelled).toBe(false);
     });
 });

@@ -74,7 +74,7 @@ import {
     DEFAULT_MCP_PORT,
 } from './mcp/server';
 import { startControlServer } from './control';
-import { startMobileServer, DEFAULT_MOBILE_PORT } from './mobile/server';
+import { startMobileServer, DEFAULT_MOBILE_PORT, mobileEmit } from './mobile/server';
 import {
     listPendingQuestions,
     answerPendingQuestion,
@@ -1969,6 +1969,12 @@ app.whenReady().then(async () => {
             const wsId = workspaceIdOfTerminal(terminalId);
             if (wsId) broadcastWorkspacePulse(wsId);
             notifyImDone(terminalId);
+            // Forward the chime/toast to a connected remote DRIVER (the glow +
+            // window-flash already forward via terminal:attention). No-op when
+            // no /ws/events client is connected, so it costs nothing locally.
+            mobileEmit('notify:imdone', {
+                label: getTerminalSpec(terminalId)?.label,
+            });
         },
         checkIssues: (terminalId) => checkIssuesForMcp(terminalId),
         onForceQuestion: (terminalId, questions) => {

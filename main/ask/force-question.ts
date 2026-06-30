@@ -43,6 +43,14 @@ interface QueueItem {
     resolve: (r: ForceQuestionResult) => void;
     questions: ForceQuestion[];
     workspaceLabel?: string;
+    /**
+     * Set when this is a host question FORWARDED to a remote driver (its modal
+     * pops in the remote Genie). Carries the originating connection + the HOST's
+     * pending-question id so the host can dismiss it (first-answer-wins) and so
+     * the driver's answer routes back over the bridge instead of resolving a
+     * local agent's promise.
+     */
+    forward?: { connKey: string; hostId: string };
 }
 
 /**
@@ -310,45 +318,99 @@ function createAskWindow(): BrowserWindow {
  * each resolves with ITS OWN result when its turn is answered or dismissed.
  * Resolves cancelled if the window is closed before this request is answered.
  */
+/**
+ * Enqueue a question item and raise (or refresh) the shared modal. The single
+ * choke point both the LOCAL `forceQuestion` and the FORWARDED (remote-driver)
+ * path funnel through, so the FIFO queue + single-window invariant hold across
+ * both. On a window-open failure the item is dropped and resolved cancelled.
+ */
+function enqueue(item: QueueItem): void {
+    // First in line opens the shared window; later ones just enqueue and wait
+    // their turn (the window is reused as each is answered).
+    const startsQueue = queue.length === 0;
+    queue.push(item);
+    // A new pending question — tell the mobile/remote push channel (question:changed).
+    notifyQuestionsChanged();
+
+    if (!startsQueue) {
+        // A modal is already up. Refresh its "N more queued" badge so the user
+        // sees the new arrival, then return — this item shows later.
+        showHead();
+        return;
+    }
+
+    try {
+        win = createAskWindow();
+    } catch {
+        const idx = queue.indexOf(item);
+        if (idx !== -1) queue.splice(idx, 1);
+        item.resolve({ cancelled: true, answers: [] });
+        return;
+    }
+    // Distinct chime so the user can tell ForceTheQuestion from imDone by ear.
+    notifyForceQuestion();
+
+    // Primary delivery is the renderer's `ask:ready` handshake (race-free). Also
+    // push on load as a best-effort fallback; the renderer dedupes.
+    const w = win;
+    if (w.webContents.isLoading()) {
+        w.webContents.once('did-finish-load', () => showHead());
+    } else {
+        showHead();
+    }
+}
+
 export function forceQuestion(
     questions: ForceQuestion[],
     workspaceLabel?: string,
 ): Promise<ForceQuestionResult> {
     return new Promise((resolve) => {
         const id = crypto.randomBytes(9).toString('hex');
-        const item: QueueItem = { id, resolve, questions, workspaceLabel };
-
-        // First in line opens the shared window; later ones just enqueue and
-        // wait their turn (the window is reused as each is answered).
-        const startsQueue = queue.length === 0;
-        queue.push(item);
-        // A new pending question — tell the mobile push channel (question:new).
-        notifyQuestionsChanged();
-
-        if (!startsQueue) {
-            // A modal is already up. Refresh its "N more queued" badge so the
-            // user sees the new arrival, then return — this item shows later.
-            showHead();
-            return;
-        }
-
-        try {
-            win = createAskWindow();
-        } catch {
-            queue.pop();
-            resolve({ cancelled: true, answers: [] });
-            return;
-        }
-        // Distinct chime so the user can tell ForceTheQuestion from imDone by ear.
-        notifyForceQuestion();
-
-        // Primary delivery is the renderer's `ask:ready` handshake (race-free).
-        // Also push on load as a best-effort fallback; the renderer dedupes.
-        const w = win;
-        if (w.webContents.isLoading()) {
-            w.webContents.once('did-finish-load', () => showHead());
-        } else {
-            showHead();
-        }
+        enqueue({ id, resolve, questions, workspaceLabel });
     });
+}
+
+/**
+ * Raise a modal in THIS Genie for a question FORWARDED from a host being driven
+ * over the multi-host bridge (the remote driver answers on the host's behalf).
+ * Resolves with the driver's answer (→ POST back to the host) or `cancelled`
+ * (the driver dismissed it, OR the host resolved it first and we dismissed it
+ * locally — see `dismissForwardedQuestion`). Mirrors `forceQuestion` but tags
+ * the item so the host id is recoverable.
+ */
+export function raiseForwardedQuestion(opts: {
+    connKey: string;
+    hostId: string;
+    questions: ForceQuestion[];
+    workspaceLabel?: string;
+}): Promise<ForceQuestionResult> {
+    return new Promise((resolve) => {
+        const id = crypto.randomBytes(9).toString('hex');
+        enqueue({
+            id,
+            resolve,
+            questions: opts.questions,
+            workspaceLabel: opts.workspaceLabel,
+            forward: { connKey: opts.connKey, hostId: opts.hostId },
+        });
+    });
+}
+
+/**
+ * Dismiss a forwarded question because the HOST resolved it first (first-answer-
+ * wins — the host owner answered locally, or our own POSTed answer round-tripped
+ * back as a `question:changed`). Resolves its promise CANCELLED so the caller
+ * does NOT post an answer. No-op when it's already gone.
+ */
+export function dismissForwardedQuestion(connKey: string, hostId: string): void {
+    const item = queue.find(
+        (q) => q.forward?.connKey === connKey && q.forward?.hostId === hostId,
+    );
+    if (item) finish(item.id, { cancelled: true, answers: [] });
+}
+
+/** Dismiss EVERY forwarded question for a connection (the bridge dropped). */
+export function dismissForwardedQuestionsForConn(connKey: string): void {
+    const ids = queue.filter((q) => q.forward?.connKey === connKey).map((q) => q.id);
+    for (const id of ids) finish(id, { cancelled: true, answers: [] });
 }

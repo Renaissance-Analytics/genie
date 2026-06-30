@@ -1,8 +1,17 @@
-import { app, BrowserWindow, safeStorage } from 'electron';
+import { app, BrowserWindow, Notification, safeStorage } from 'electron';
 import { WebSocket } from 'ws';
 import fs from 'node:fs';
 import path from 'node:path';
 import { demandWindowAttention } from '../attention-flash';
+import { getAllSettings } from '../db';
+import { resolveAlertSound } from '../notify-sound';
+import { shouldForwardToDriver } from './forward-decision';
+import {
+    raiseForwardedQuestion,
+    dismissForwardedQuestion,
+    dismissForwardedQuestionsForConn,
+    type PendingQuestion,
+} from '../ask/force-question';
 
 /**
  * Work Mode — remote desktop (the local-main proxy).
@@ -260,6 +269,131 @@ function flashConnWindows(conn: RemoteConnection): void {
     }
 }
 
+// --- forward host alerts/prompts to the driving member ----------------------
+// When this Genie drives a host with CONTROL, the host's ForceTheQuestion
+// prompts + imDone chime/toast must reach THIS driver (the glow + window-flash
+// already arrive via terminal:attention). The host pushes `question:changed` /
+// `notify:imdone` over /ws/events; we mirror the modal locally (answer → POST
+// back) and surface the chime/toast here.
+
+/** A Bearer-token REST call to a SPECIFIC host connection (best-effort; the
+ *  events bridge owns disconnect, so this never tears the connection down). */
+async function connRequest(
+    conn: RemoteConnection,
+    reqPath: string,
+    init?: { method?: string; json?: unknown },
+): Promise<unknown> {
+    const headers: Record<string, string> = { Authorization: `Bearer ${conn.token}` };
+    let body: string | undefined;
+    if (init?.json !== undefined) {
+        headers['Content-Type'] = 'application/json';
+        body = JSON.stringify(init.json);
+    }
+    const res = await fetch(`http://${conn.host.ip}:${conn.host.port}${reqPath}`, {
+        method: init?.method ?? 'GET',
+        headers,
+        body,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (res.status === 204) return undefined;
+    return res.json().catch(() => undefined);
+}
+
+/** connKey → host question ids we've raised a local forwarded modal for. */
+const forwardedShown = new Map<string, Set<string>>();
+
+/**
+ * Reconcile the host's pending ForceTheQuestion list with our local forwarded
+ * modals: raise a modal for each NEW host question (the driver answers → POST
+ * the answer back), and dismiss any we showed that the host has since resolved
+ * (first-answer-wins). Driven by the host's `question:changed` push + once on
+ * connect. No-op for a readonly driver (it can't act on a control prompt).
+ */
+async function syncForwardedQuestions(conn: RemoteConnection): Promise<void> {
+    // Today every connection is a control driver; the grant model (later phase)
+    // supplies readonly, at which point this guard stops forwarding actionable
+    // prompts to a viewer.
+    if (!shouldForwardToDriver({ connected: true, capability: 'control' })) return;
+    let pending: PendingQuestion[];
+    try {
+        const data = (await connRequest(conn, '/api/questions')) as {
+            questions?: PendingQuestion[];
+        };
+        pending = data?.questions ?? [];
+    } catch {
+        return; // host unreachable / transient — try again on the next push
+    }
+    const shown = forwardedShown.get(conn.connKey) ?? new Set<string>();
+    forwardedShown.set(conn.connKey, shown);
+    const pendingIds = new Set(pending.map((q) => q.id));
+
+    // Raise newly-pending host questions as local modals.
+    for (const q of pending) {
+        if (shown.has(q.id)) continue;
+        shown.add(q.id);
+        void raiseForwardedQuestion({
+            connKey: conn.connKey,
+            hostId: q.id,
+            questions: q.questions,
+            workspaceLabel: q.workspaceLabel,
+        }).then((result) => {
+            shown.delete(q.id);
+            // Only an actual answer goes back to the host. A cancel (the driver
+            // dismissed it, OR the host resolved it first → we dismissed locally)
+            // posts nothing — the host owner stays in control.
+            if (!result.cancelled) {
+                void connRequest(conn, `/api/questions/${encodeURIComponent(q.id)}/answer`, {
+                    method: 'POST',
+                    json: { answers: result.answers },
+                }).catch(() => {});
+            }
+        });
+    }
+    // Dismiss modals the host has resolved out from under us.
+    for (const hostId of [...shown]) {
+        if (!pendingIds.has(hostId)) {
+            shown.delete(hostId);
+            dismissForwardedQuestion(conn.connKey, hostId);
+        }
+    }
+}
+
+/** Surface a host's imDone chime + toast on THIS driver (the glow + window-flash
+ *  arrive separately via terminal:attention). Honours the DRIVER's own
+ *  notify_sound / notify_toast settings. */
+function forwardImDoneToDriver(conn: RemoteConnection, payload: { label?: string } | null): void {
+    let settings;
+    try {
+        settings = getAllSettings();
+    } catch {
+        return;
+    }
+    if (settings.notify_sound === 'on') {
+        const sound = resolveAlertSound('imDone');
+        // Play in the bound host window's renderer (it subscribes to notify:sound).
+        if (sound) emitToConn(conn, 'notify:sound', { kind: 'imDone', sound });
+    }
+    if (settings.notify_toast === 'on' && Notification.isSupported()) {
+        const label = payload?.label ?? 'A terminal';
+        const n = new Notification({
+            title: 'Genie — agent finished (remote)',
+            body: `${label} is done on ${conn.host.hostname}.`,
+            silent: settings.notify_sound === 'on',
+        });
+        n.on('click', () => {
+            for (const w of BrowserWindow.getAllWindows()) {
+                if (w.isDestroyed()) continue;
+                if (bindings.get(w.webContents.id) === conn.connKey) {
+                    w.show();
+                    w.focus();
+                    break;
+                }
+            }
+        });
+        n.show();
+    }
+}
+
 /** Push each window its OWN status (correct for both legacy + multi-window). */
 function broadcastStatus(): void {
     for (const w of BrowserWindow.getAllWindows()) {
@@ -303,8 +437,12 @@ function startEventsBridge(conn: RemoteConnection): void {
         }
         conn.eventsWs = ws;
         // A real upgrade reached the host → healthy; clear the failure streak.
+        // Sync any questions the host ALREADY had pending before we connected so
+        // a forwarded modal isn't missed (the `question:changed` push only fires
+        // on a CHANGE, not on connect).
         ws.on('open', () => {
             conn.eventsFailures = 0;
+            void syncForwardedQuestions(conn);
         });
         ws.on('message', (raw) => {
             try {
@@ -321,6 +459,15 @@ function startEventsBridge(conn: RemoteConnection): void {
                     ) {
                         flashConnWindows(conn);
                     }
+                    return;
+                }
+                // Host alerts/prompts forwarded to the driving member (handled in
+                // MAIN, not re-emitted to the renderer): mirror the host's
+                // ForceTheQuestion modal locally + carry the imDone chime/toast.
+                if (msg.type === 'question:changed') {
+                    void syncForwardedQuestions(conn);
+                } else if (msg.type === 'notify:imdone') {
+                    forwardImDoneToDriver(conn, msg.payload as { label?: string } | null);
                 }
             } catch {
                 /* ignore malformed frames */
@@ -581,6 +728,10 @@ function teardownConnection(conn: RemoteConnection): void {
     stopEventsBridge(conn);
     closeAllTerminals(conn);
     connections.delete(conn.connKey);
+    // Dismiss any forwarded host-question modals still up for this connection
+    // (the bridge is gone — answering them could never reach the host).
+    dismissForwardedQuestionsForConn(conn.connKey);
+    forwardedShown.delete(conn.connKey);
     // Drop any window bindings that pointed at it.
     for (const [wcId, key] of [...bindings]) if (key === conn.connKey) bindings.delete(wcId);
 }
