@@ -84,6 +84,9 @@ interface RemoteConnection {
     relayTerms: Map<string, { send: (input: string) => void; close: () => void }>;
     /** Relay `/ws/events` unsubscribe (transport === 'relay' only). */
     relayEventsClose: (() => void) | null;
+    /** Grant heartbeat timer (transport === 'relay' only) — polls Tynn's grant
+     *  introspect to keep the session warm + catch revocation/lock/expiry. */
+    relayHeartbeat: NodeJS.Timeout | null;
     eventsWs: WebSocket | null;
     eventsClosed: boolean;
     eventsRetry: NodeJS.Timeout | null;
@@ -1096,6 +1099,7 @@ async function connectRemoteInner(
         relay: null,
         relayTerms: new Map(),
         relayEventsClose: null,
+        relayHeartbeat: null,
         eventsWs: null,
         eventsClosed: false,
         eventsRetry: null,
@@ -1141,6 +1145,12 @@ export interface WorkstationConnectInput {
     name: string;
     relayUrl: string;
     grant: string;
+    /** Heartbeat cadence (ms) for the grant introspect poll. Omit to skip. */
+    heartbeatIntervalMs?: number;
+    /** Poll Tynn's grant introspect — keeps the session warm + reports revocation/
+     *  lock/expiry. Injected by the IPC layer (which owns the Tynn client) so this
+     *  module stays free of the backend dependency. */
+    onHeartbeat?: () => Promise<{ active: boolean }>;
 }
 
 /**
@@ -1201,6 +1211,7 @@ async function connectWorkstationInner(
         relay,
         relayTerms: new Map(),
         relayEventsClose: null,
+        relayHeartbeat: null,
         eventsWs: null,
         eventsClosed: false,
         eventsRetry: null,
@@ -1215,8 +1226,38 @@ async function connectWorkstationInner(
     };
     connections.set(connKey, conn);
     startEventsBridge(conn);
+    startRelayHeartbeat(conn, input);
     broadcastStatus();
     return { ok: true, connKey };
+}
+
+/**
+ * Poll Tynn's grant introspect on the connection's heartbeat cadence. A
+ * definitive `active: false` (grant revoked / workstation locked / expired) puts
+ * the link into `lost` and stops the poll — the host window stays open (never
+ * yanked from under the user) and offers a manual reconnect. Transient introspect
+ * failures are swallowed by `onHeartbeat` (returns active:true-by-default only on
+ * a clear signal), so a network blip doesn't kill a healthy session.
+ */
+function startRelayHeartbeat(conn: RemoteConnection, input: WorkstationConnectInput): void {
+    if (!input.onHeartbeat || !input.heartbeatIntervalMs || input.heartbeatIntervalMs <= 0) return;
+    const tick = async () => {
+        let result: { active: boolean };
+        try {
+            result = await input.onHeartbeat!();
+        } catch {
+            return; // transient — keep the session, retry next tick
+        }
+        if (!result.active && connections.get(conn.connKey) === conn) {
+            if (conn.relayHeartbeat) {
+                clearInterval(conn.relayHeartbeat);
+                conn.relayHeartbeat = null;
+            }
+            setConnLinkState(conn, { phase: 'lost' });
+        }
+    };
+    conn.relayHeartbeat = setInterval(() => void tick(), input.heartbeatIntervalMs);
+    conn.relayHeartbeat.unref?.();
 }
 
 /** Tear a single connection down (viewer-only — never touches host terminals). */
@@ -1225,6 +1266,10 @@ function teardownConnection(conn: RemoteConnection): void {
     if (conn.limboTimer) {
         clearTimeout(conn.limboTimer);
         conn.limboTimer = null;
+    }
+    if (conn.relayHeartbeat) {
+        clearInterval(conn.relayHeartbeat);
+        conn.relayHeartbeat = null;
     }
     closeAllTerminals(conn);
     if (conn.relay) {

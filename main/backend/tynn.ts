@@ -27,6 +27,48 @@ interface TynnFetchOptions {
     headers?: Record<string, string>;
 }
 
+/** Source of a member's entitlement to a Virtual Workstation (resolved Tynn-side). */
+export type WorkstationEntitlementSource = 'owner' | 'grant' | 'invite';
+
+/** A Virtual Workstation the signed-in member may connect to — a row of
+ *  `GET /workstations/connectable`. `connectable` is true only when the
+ *  workstation is active AND the member is entitled; non-entitled rows carry
+ *  null capability/source. */
+export interface ConnectableWorkstation {
+    id: string;
+    name: string;
+    status: string;
+    relay_endpoint: string;
+    connectable: boolean;
+    capability: string | null;
+    scopes: string[];
+    source: WorkstationEntitlementSource | null;
+}
+
+/** The minted connect grant from `POST /workstations/{id}/connect-grant`.
+ *  `token` is the short-TTL EdDSA JWS to present in the relay `member-hello`;
+ *  capability/scope are resolved SERVER-side (no client self-escalation). */
+export interface WorkstationConnectGrant {
+    token: string;
+    workstation_id: string;
+    relay_endpoint: string;
+    capability: string;
+    scopes: string[];
+    source: WorkstationEntitlementSource;
+    /** ISO-8601 expiry. */
+    expires_at: string | null;
+    /** Seconds between heartbeat introspections the member should run. */
+    heartbeat_interval: number;
+}
+
+/** The heartbeat revocation check from `POST /api/v1/workstations/grants/introspect`. */
+export interface WorkstationGrantIntrospection {
+    active: boolean;
+    revoked?: boolean;
+    expired?: boolean;
+    workstation_locked?: boolean;
+}
+
 /**
  * Default Tynn host depends on whether Genie is running packaged
  * (production install) or from `npm run dev`. Packaged installs talk
@@ -236,6 +278,58 @@ export class TynnBackend implements Backend {
             return { isOpsProject: !!data.is_ops_project, slaves: data.slaves ?? [] };
         } catch {
             return { isOpsProject: false, slaves: [] };
+        }
+    }
+
+    // --- Virtual Workstations (member-facing) ------------------------------
+
+    /**
+     * The Virtual Workstations the signed-in member may connect to (GET
+     * /workstations/connectable) — owner/admin, a live grant, or an accepted
+     * invite. Session-cookie web endpoint (not /api/v1). Returns [] on a dead
+     * session or failure; the Hosts picker just shows no workstations.
+     */
+    async listConnectableWorkstations(): Promise<ConnectableWorkstation[]> {
+        try {
+            const data = await this.fetch<{ workstations: ConnectableWorkstation[] }>(
+                '/workstations/connectable',
+            );
+            return data.workstations ?? [];
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * Mint a fresh short-TTL connect grant for an entitled member (POST
+     * /workstations/{id}/connect-grant — no body; the session identifies the
+     * member). Returns the JWS + relay endpoint to dial. Throws TynnAuthError on
+     * a dead session, and a plain Error on 403 (not entitled) / 500 (workstation
+     * not active) carrying the server message.
+     */
+    async connectGrant(workstationId: string): Promise<WorkstationConnectGrant> {
+        return this.fetch<WorkstationConnectGrant>(
+            `/workstations/${encodeURIComponent(workstationId)}/connect-grant`,
+            { method: 'POST' },
+        );
+    }
+
+    /**
+     * The grant heartbeat / revocation check (POST /api/v1/workstations/grants/
+     * introspect) — a public, signed-token-gated stateless endpoint the member
+     * polls every `heartbeat_interval` to keep the session warm and detect
+     * revocation/lock/expiry. A non-200 (401 bad signature / 404 unknown grant)
+     * means the grant is no longer usable → reported as inactive.
+     */
+    async introspectGrant(token: string): Promise<WorkstationGrantIntrospection> {
+        try {
+            const data = await this.fetch<WorkstationGrantIntrospection>(
+                '/api/v1/workstations/grants/introspect',
+                { method: 'POST', body: { token } },
+            );
+            return { ...data, active: !!data.active };
+        } catch {
+            return { active: false };
         }
     }
 

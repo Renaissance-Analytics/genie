@@ -231,6 +231,31 @@ const api = {
             ipcRenderer.invoke('host:rename', connKey, name) as Promise<{ ok: boolean }>,
     },
 
+    // Virtual Workstations (relay transport): the signed-in member's entitled
+    // workstations (Hosts picker) + opening one over the Tynn relay. The connect
+    // grant is minted + held in main; the renderer only ever sees id + name.
+    workstations: {
+        connectable: () =>
+            ipcRenderer.invoke('workstation:connectable') as Promise<
+                Array<{
+                    id: string;
+                    name: string;
+                    status: string;
+                    relay_endpoint: string;
+                    connectable: boolean;
+                    capability: string | null;
+                    scopes: string[];
+                    source: 'owner' | 'grant' | 'invite' | null;
+                }>
+            >,
+        open: (workstationId: string, name: string) =>
+            ipcRenderer.invoke('workstation:open', workstationId, name) as Promise<{
+                ok: boolean;
+                connKey?: string;
+                error?: string;
+            }>,
+    },
+
     aionima: {
         getConfig: () => ipcRenderer.invoke('auth:aionima-config'),
         setConfig: (patch: { host?: string; token?: string | null }) =>

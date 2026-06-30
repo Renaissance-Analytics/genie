@@ -483,6 +483,19 @@ export interface KnownHost {
     connected: boolean;
 }
 
+/** A Virtual Workstation the signed-in member may connect to (Hosts picker).
+ *  `connectable` is true only when it's active AND the member is entitled. */
+export interface ConnectableWorkstation {
+    id: string;
+    name: string;
+    status: string;
+    relay_endpoint: string;
+    connectable: boolean;
+    capability: string | null;
+    scopes: string[];
+    source: 'owner' | 'grant' | 'invite' | null;
+}
+
 export interface DocEntry {
     slug: string;
     title: string;
@@ -987,6 +1000,15 @@ export interface GenieApi {
         known: () => Promise<KnownHost[]>;
         forget: (connKey: string) => Promise<{ ok: boolean }>;
         rename: (connKey: string, name: string) => Promise<{ ok: boolean }>;
+    };
+    /** Virtual Workstations (relay transport): the signed-in member's entitled
+     *  workstations + opening one over the Tynn relay (grant minted main-side). */
+    workstations: {
+        connectable: () => Promise<ConnectableWorkstation[]>;
+        open: (
+            workstationId: string,
+            name: string,
+        ) => Promise<{ ok: boolean; connKey?: string; error?: string }>;
     };
     aionima: {
         getConfig: () => Promise<AionimaConfig>;

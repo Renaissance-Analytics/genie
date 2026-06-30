@@ -57,6 +57,7 @@ import {
     type MobilePeer,
     type KnownHost,
     type GenieHost,
+    type ConnectableWorkstation,
 } from '../lib/genie';
 
 /**
@@ -2013,6 +2014,7 @@ interface HostRow {
 
 function HostsPanel({ onClose }: { onClose: () => void }) {
     const [rows, setRows] = useState<HostRow[]>([]);
+    const [workstations, setWorkstations] = useState<ConnectableWorkstation[]>([]);
     const [loading, setLoading] = useState(true);
     const [pinFor, setPinFor] = useState<string | null>(null);
     const [pin, setPin] = useState('');
@@ -2022,10 +2024,12 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
     const load = async () => {
         setLoading(true);
         try {
-            const [known, discovered] = await Promise.all([
+            const [known, discovered, ws] = await Promise.all([
                 api().remote.known().catch(() => [] as KnownHost[]),
                 api().workmode.discoverHosts().catch(() => [] as GenieHost[]),
+                api().workstations.connectable().catch(() => [] as ConnectableWorkstation[]),
             ]);
+            setWorkstations(ws);
             const byKey = new Map<string, HostRow>();
             for (const k of known) {
                 byKey.set(k.connKey, {
@@ -2088,6 +2092,20 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
         }
     };
 
+    const openWorkstation = async (ws: ConnectableWorkstation) => {
+        setErr(null);
+        setBusy(`ws:${ws.id}`);
+        try {
+            const res = await api().workstations.open(ws.id, ws.name);
+            if (res.ok) onClose();
+            else setErr(res.error ?? 'Could not connect to the workstation.');
+        } catch (e) {
+            setErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(null);
+        }
+    };
+
     const forget = async (row: HostRow) => {
         await api().remote.forget(row.connKey).catch(() => {});
         void load();
@@ -2125,9 +2143,10 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                     <button type="button" className="gicon" title="Rescan the tailnet" onClick={() => void load()} aria-label="Refresh hosts" style={{ width: 20, height: 20 }}>⟳</button>
                 </div>
                 {loading && <div style={{ padding: '8px 6px', color: '#71717a' }}>Scanning…</div>}
-                {!loading && rows.length === 0 && (
+                {!loading && rows.length === 0 && workstations.length === 0 && (
                     <div style={{ padding: '8px 6px', color: '#71717a', lineHeight: 1.4 }}>
-                        No hosts found. Enable Work Mode on another Genie on your tailnet, then rescan.
+                        No hosts or workstations found. Enable Work Mode on another Genie on your
+                        tailnet, or get access to a Virtual Workstation in Tynn, then rescan.
                     </div>
                 )}
                 {err && <div style={{ padding: '6px', color: '#f87171' }}>{err}</div>}
@@ -2168,6 +2187,33 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                         )}
                     </div>
                 ))}
+                {workstations.length > 0 && (
+                    <>
+                        <div style={{ padding: '8px 6px 6px', fontSize: 11, letterSpacing: '0.04em', color: '#a1a1aa' }}>WORKSTATIONS</div>
+                        {workstations.map((ws) => (
+                            <div key={`ws:${ws.id}`} style={{ borderRadius: 8, padding: '7px 8px', marginBottom: 2, background: '#1b1b21' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <span style={{ width: 7, height: 7, borderRadius: 999, flex: '0 0 auto', background: ws.connectable ? '#22c55e' : '#52525b' }} title={ws.connectable ? 'Connectable over the Tynn relay' : `Unavailable (${ws.status})`} />
+                                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        <span style={{ fontWeight: 600 }}>{ws.name}</span>
+                                        {ws.capability && <span style={{ color: '#71717a', marginLeft: 6 }}>{ws.capability}</span>}
+                                        {ws.source && ws.source !== 'owner' && <span style={{ color: '#52525b', marginLeft: 6 }}>via {ws.source}</span>}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        className="gbtn gbtn-sm"
+                                        disabled={!ws.connectable || busy === `ws:${ws.id}`}
+                                        onClick={() => void openWorkstation(ws)}
+                                        title={ws.connectable ? 'Connect to this workstation over the Tynn relay' : `Unavailable — ${ws.status}`}
+                                        style={{ flex: '0 0 auto' }}
+                                    >
+                                        {busy === `ws:${ws.id}` ? '…' : 'Connect'}
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </>
+                )}
             </div>
         </>
     );
