@@ -40,9 +40,21 @@ export interface PopProof {
 }
 
 /**
- * The exact bytes the member signs: `SHA-256(nonce || workstationId || sid)`,
- * each value as its UTF-8 bytes, concatenated in that order. Isolated so the
- * encoding can be reconciled with the host/Tynn definition in ONE place.
+ * The exact bytes the member signs — this MUST byte-match the host's verify
+ * preimage (GenieCloudScaffold), so the invariants are locked here:
+ *
+ *   `SHA-256( utf8(nonce) || utf8(workstationId) || utf8(sid) )`
+ *
+ *   - **nonce** is an OPAQUE hex string — signed as its UTF-8 bytes exactly as
+ *     received from the challenge. Do NOT hex-decode it.
+ *   - **workstationId** is the DIALED workstation's id (the grant `aud`, the
+ *     same id passed to member-hello) — NOT the relay session id.
+ *   - **sid** is the relay-assigned member-session id (echoed from the challenge).
+ *   - Concatenation order is exactly (nonce, workstationId, sid), with NO
+ *     separators; the signed message is the resulting 32-byte digest.
+ *
+ * Isolated so the encoding stays reconciled with the host/Tynn definition in
+ * ONE place.
  */
 export function popSignedInput(nonce: string, workstationId: string, sid: string): Buffer {
     const concatenated = Buffer.concat([

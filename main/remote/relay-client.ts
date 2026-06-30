@@ -156,7 +156,11 @@ export class RelayMemberClient {
 
     /** Sign the host's PoP challenge with the ephemeral key and send the proof.
      *  No keypair (a non-PoP connection) → nothing to prove; the host decides
-     *  whether to allow the session. */
+     *  whether to allow the session.
+     *
+     *  CRITICAL: the preimage's workstation id is `this.workstationId` — the
+     *  DIALED workstation id (the grant `aud`, from member-hello) — NOT `sid`
+     *  (the relay session id). The `sid` is echoed only into the proof envelope. */
     private respondToPopChallenge(ws: WebSocket, nonce: string, sid: string): void {
         if (!this.popKeypair || !this.workstationId) return;
         let proof;

@@ -27,6 +27,34 @@ describe('popSignedInput', () => {
         // A different nonce → different digest (the anti-replay property).
         expect(popSignedInput('n1', 'ws', 'sid').equals(popSignedInput('n2', 'ws', 'sid'))).toBe(false);
     });
+
+    it('treats the nonce as an OPAQUE string — utf8(nonce), never hex-decoded', () => {
+        const hexNonce = 'deadbeef';
+        // What the member actually signs: the literal hex CHARACTERS as UTF-8.
+        const asUtf8 = crypto
+            .createHash('sha256')
+            .update(Buffer.concat([Buffer.from(hexNonce, 'utf8'), Buffer.from('ws'), Buffer.from('sid')]))
+            .digest();
+        // The WRONG interpretation (hex-decoded to 4 bytes) must NOT match.
+        const asHexBytes = crypto
+            .createHash('sha256')
+            .update(Buffer.concat([Buffer.from(hexNonce, 'hex'), Buffer.from('ws'), Buffer.from('sid')]))
+            .digest();
+        expect(popSignedInput(hexNonce, 'ws', 'sid').equals(asUtf8)).toBe(true);
+        expect(popSignedInput(hexNonce, 'ws', 'sid').equals(asHexBytes)).toBe(false);
+    });
+
+    it('binds the DIALED workstationId, not the relay sid (distinct slots)', () => {
+        const nonce = 'n';
+        const workstationId = 'ws-dialed';
+        const sid = 'relay-sid';
+        // Signing with the real (workstationId, sid) must differ from signing as
+        // if the sid had been used in the workstationId slot — proving the member
+        // commits to the grant `aud`, not the session id.
+        expect(
+            popSignedInput(nonce, workstationId, sid).equals(popSignedInput(nonce, sid, sid)),
+        ).toBe(false);
+    });
 });
 
 describe('PopKeypair', () => {
