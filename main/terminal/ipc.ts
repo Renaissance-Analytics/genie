@@ -228,6 +228,46 @@ export function writeToTerminal(id: string, data: string): boolean {
     return terminalManager().write(id, data);
 }
 
+// --- backend-event fan-out (renderer-free) ----------------------------------
+// The pieces of the pty data/exit handling that DON'T touch a window: the OSC
+// diagnostic, the Process-runner log buffer, the agent read buffer (so
+// manageTerminals.read / runAgent.read work with no window attached), and the
+// mobile /ws/term mirror. Shared by the desktop `registerTerminalIpc` (which
+// adds the owner-window fan-out on top) and the headless
+// `subscribeHeadlessBackendEvents` (which uses ONLY these).
+
+function feedTerminalData(id: string, data: string): void {
+    // Diagnostic (no-op unless GENIE_OSC_DEBUG=1): the RAW pty bytes pre-xterm.
+    logPtyOsc(id, data);
+    // Buffer output for headless Process runners (no-op for non-process ids).
+    recordProcessOutput(id, data);
+    // Agent-control read buffer (manageTerminals.read / runAgent.read).
+    agentReadBuffer.append(id, data);
+    // Mirror to any attached mobile /ws/term socket (no-op when off / unwatched).
+    mobileTermFanout(id, data);
+}
+
+function feedTerminalExit(id: string, payload: { exitCode: number; signal?: number }): void {
+    // Supervisor decides a Process runner's fate (no-op for other ids).
+    onProcessPtyExit(id, payload);
+    // The pty is gone — drop its agent read buffer so it can't leak.
+    agentReadBuffer.forget(id);
+    // Tell any attached mobile /ws/term socket the pty exited + drop it.
+    mobileTermClose(id, payload);
+}
+
+/**
+ * Headless analogue of `registerTerminalIpc`'s backend subscription: the SAME
+ * data/exit fan-out (Process log, agent read buffer, mobile /ws/term) MINUS the
+ * renderer owner-window fan-out (no windows headless) and the renderer IPC
+ * handlers. The host-core calls this so the MCP/mobile servers see live terminal
+ * output with no GUI. Follows the active backend across a Tier-3 swap, like the
+ * desktop path. Call once at boot.
+ */
+export function subscribeHeadlessBackendEvents(): void {
+    subscribeBackendEvents({ onData: feedTerminalData, onExit: feedTerminalExit });
+}
+
 export function registerTerminalIpc(): void {
     // Always resolve the LIVE active backend per-call. Tier 3 can swap the
     // backend (in-process ↔ host client) under us; capturing it once would
@@ -467,20 +507,8 @@ export function registerTerminalIpc(): void {
     // firing from a stale backend after a fallback.
     subscribeBackendEvents({
         onData: (id: string, data: string) => {
-            // Diagnostic (no-op unless GENIE_OSC_DEBUG=1): record EVERY OSC
-            // sequence the pty emits — this sees the RAW bytes before xterm
-            // parses them, so it captures exactly what a TUI sends on copy
-            // (an OSC 52 clipboard write, or nothing → a $TERM/`Ms` gating issue).
-            logPtyOsc(id, data);
-            // Buffer output for headless Process runners (the hover log popover).
-            // No-ops for non-process ids.
-            recordProcessOutput(id, data);
-            // Mirror into the agent-control read buffer so manageTerminals.read /
-            // runAgent.read can return recent output even with no window attached.
-            agentReadBuffer.append(id, data);
-            // Fan the same bytes to any attached mobile /ws/term socket (no-op
-            // when the mobile server is off / nothing is watching this id).
-            mobileTermFanout(id, data);
+            feedTerminalData(id, data);
+            // DESKTOP fan-out: push the same bytes to the owning window(s).
             const entry = ownersByTerminal.get(id);
             if (!entry) return;
             for (const target of entry.owners) {
@@ -489,13 +517,8 @@ export function registerTerminalIpc(): void {
             }
         },
         onExit: (id: string, payload: { exitCode: number; signal?: number }) => {
-            // Headless Process runners have no window owner — let the supervisor
-            // decide their fate (restart/crash/stop). No-ops for other ids.
-            onProcessPtyExit(id, payload);
-            // The pty is gone — drop its agent read buffer so it can't leak.
-            agentReadBuffer.forget(id);
-            // Tell any attached mobile /ws/term socket the pty exited + drop it.
-            mobileTermClose(id, payload);
+            feedTerminalExit(id, payload);
+            // DESKTOP fan-out: notify + drop the owning window(s).
             const entry = ownersByTerminal.get(id);
             ownersByTerminal.delete(id);
             if (!entry) return;
