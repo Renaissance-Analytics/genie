@@ -1,6 +1,15 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { TailscaleStatus } from './tailscale';
 
+/** Remote-link health pushed/read by a host window's overlay (see link-state.ts). */
+type RemoteLinkStatePayload = {
+    phase: 'connected' | 'mismatch' | 'reconnecting' | 'lost';
+    direction?: 'host-behind' | 'client-behind';
+    hostVersion?: number;
+    localVersion?: number;
+    reason?: 'upgrade' | 'dropped';
+};
+
 /**
  * Typed contextBridge exposed to the renderer. Every channel matches a
  * handler registered in main/ipc.ts. No `nodeIntegration`, no `remote`,
@@ -170,6 +179,23 @@ const api = {
             ) => cb(payload);
             ipcRenderer.on('remote:status', handler);
             return () => ipcRenderer.off('remote:status', handler);
+        },
+        // Link health (bridge version match + upgrade/limbo reconnect): the host
+        // window reads it on mount + subscribes for live changes; "Upgrade host"
+        // drives the host's updater over the bridge.
+        linkState: () =>
+            ipcRenderer.invoke('remote:link-state') as Promise<RemoteLinkStatePayload>,
+        upgradeHost: () =>
+            ipcRenderer.invoke('remote:upgrade-host') as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
+        reconnect: () =>
+            ipcRenderer.invoke('remote:reconnect') as Promise<{ ok: boolean; error?: string }>,
+        onLink: (cb: (s: RemoteLinkStatePayload) => void) => {
+            const handler = (_e: unknown, payload: RemoteLinkStatePayload) => cb(payload);
+            ipcRenderer.on('remote:link', handler);
+            return () => ipcRenderer.off('remote:link', handler);
         },
         terminalAttach: (id: string) =>
             ipcRenderer.invoke('remote:terminal-attach', id) as Promise<{ ok: boolean }>,

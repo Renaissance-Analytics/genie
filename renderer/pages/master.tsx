@@ -12,6 +12,7 @@ import TerminalGrid, {
 } from '../components/Master/TerminalGrid';
 import AddWorkspaceModal from '../components/AddWorkspaceModal';
 import BootScreen from '../components/Master/BootScreen';
+import HostUpgradeOverlay from '../components/Master/HostUpgradeOverlay';
 import DocsFlyout from '../components/Master/DocsFlyout';
 import IssueWatchFlyout from '../components/Master/IssueWatchFlyout';
 import TaskManagerFlyout from '../components/Master/TaskManagerFlyout';
@@ -52,6 +53,7 @@ import {
     type UpdaterStatus,
     type WorkspaceRow,
     type RemoteStatus,
+    type RemoteLinkState,
     type MobilePeer,
     type KnownHost,
     type GenieHost,
@@ -98,13 +100,38 @@ export default function MasterPage() {
         return () => clearTimeout(t);
     }, [ready]);
 
+    // Host-window bridge link health (version match + upgrade/limbo reconnect).
+    const isHostWindow =
+        typeof window !== 'undefined' && /[?&]host=/.test(window.location.search);
+    const [link, setLink] = useState<RemoteLinkState>({ phase: 'connected' });
+    useEffect(() => {
+        if (!isHostWindow || !ready) return;
+        let alive = true;
+        api()
+            .remote.linkState()
+            .then((s) => alive && setLink(s))
+            .catch(() => {});
+        const off = api().remote.onLink(setLink);
+        return () => {
+            alive = false;
+            off();
+        };
+    }, [isHostWindow, ready]);
+    // A VERSION mismatch must NOT render the (incompatible) host dashboard — the
+    // overlay replaces it. 'reconnecting'/'lost' keep the floor mounted
+    // underneath (session restores on recovery); the overlay just covers it.
+    const blockDashboard = isHostWindow && link.phase === 'mismatch';
+
     return (
         <>
             {/* Mount the real UI as soon as the bridge is up; the boot screen
                 sits on top (z-index) and fades out, so the workspace is already
                 painted underneath when the fade completes — no second flash. */}
-            {ready && <MasterInner />}
-            {showBoot && <BootScreen fadingOut={ready} />}
+            {ready && !blockDashboard && <MasterInner />}
+            {showBoot && !blockDashboard && <BootScreen fadingOut={ready} />}
+            {isHostWindow && link.phase !== 'connected' && (
+                <HostUpgradeOverlay link={link} />
+            )}
         </>
     );
 }

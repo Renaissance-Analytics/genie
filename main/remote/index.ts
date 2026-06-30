@@ -7,6 +7,14 @@ import { getAllSettings } from '../db';
 import { resolveAlertSound } from '../notify-sound';
 import { shouldForwardToDriver } from './forward-decision';
 import {
+    BRIDGE_PROTOCOL_VERSION,
+    LIMBO_TIMEOUT_MS,
+    linkStateForVersions,
+    nextReconnectDelayMs,
+    decideOnDisconnect,
+    type LinkState,
+} from './link-state';
+import {
     raiseForwardedQuestion,
     dismissForwardedQuestion,
     dismissForwardedQuestionsForConn,
@@ -60,6 +68,19 @@ interface RemoteConnection {
     eventsFailures: number;
     /** Host terminal id → its `/ws/term` socket (viewer-only; never kills host pty). */
     termWs: Map<string, WebSocket>;
+    // --- link health (version match + upgrade/limbo reconnect) ---
+    /** The events bridge has reached `open` at least once (a healthy session). */
+    everConnected: boolean;
+    /** We triggered a host upgrade → a bridge drop is EXPECTED (limbo, not error). */
+    upgrading: boolean;
+    /** The link state pushed to the bound host window (overlay driver). */
+    linkState: LinkState;
+    /** When we entered limbo (reconnecting), for the give-up timeout. Null = healthy. */
+    limboSince: number | null;
+    /** Reconnect attempt count (drives the backoff ladder); reset on `open`. */
+    reconnectAttempt: number;
+    /** The limbo give-up watchdog (→ 'lost' if the host never returns). */
+    limboTimer: NodeJS.Timeout | null;
 }
 
 /** connKey → live connection. */
@@ -402,6 +423,144 @@ function broadcastStatus(): void {
     }
 }
 
+// --- link health: version handshake + upgrade/limbo reconnect --------------
+
+/** The link state for the host a window is bound to (read on mount by the
+ *  overlay; live changes arrive via the `remote:link` event). */
+export function remoteLinkStateFor(wcId: number): LinkState {
+    const conn = connForWebContents(wcId);
+    return conn?.linkState ?? { phase: 'connected' };
+}
+
+/** Store + push a connection's link state to its bound host window(s). */
+function setConnLinkState(conn: RemoteConnection, state: LinkState): void {
+    conn.linkState = state;
+    emitToConn(conn, 'remote:link', state);
+}
+
+/** Read the host's bridge protocol version from its unauthed `/api/ping`. Null
+ *  when unreachable; a host predating versioning reports none → 0 (→ behind). */
+async function fetchHostProtocolVersion(host: RemoteHost): Promise<number | null> {
+    try {
+        const res = await fetch(`http://${host.ip}:${host.port}/api/ping`);
+        if (!res.ok) return null;
+        const data = (await res.json()) as { protocolVersion?: number };
+        return typeof data?.protocolVersion === 'number' ? data.protocolVersion : 0;
+    } catch {
+        return null;
+    }
+}
+
+/** Re-check the host's version after a (re)connect and set the matching link
+ *  state (connected / mismatch). Unreachable ping → assume connected (the bridge
+ *  itself just reopened, so the host is up). */
+async function revalidateAndSetLinkState(conn: RemoteConnection): Promise<void> {
+    const v = await fetchHostProtocolVersion(conn.host);
+    setConnLinkState(
+        conn,
+        v == null ? { phase: 'connected' } : linkStateForVersions(BRIDGE_PROTOCOL_VERSION, v),
+    );
+}
+
+/**
+ * Enter (or stay in) limbo: the host dropped/upgrading. Show the reconnecting
+ * overlay and arm the give-up watchdog ONCE. The events bridge keeps retrying
+ * (scheduleRetry); on a healthy reopen the open handler recovers us out of
+ * limbo. If the host never returns within LIMBO_TIMEOUT_MS we declare it lost
+ * (overlay stays — the window is NEVER closed out from under the user).
+ */
+function beginLimbo(conn: RemoteConnection, reason: 'upgrade' | 'dropped'): void {
+    if (conn.limboSince == null) conn.limboSince = Date.now();
+    setConnLinkState(conn, { phase: 'reconnecting', reason });
+    if (conn.limboTimer) return;
+    conn.limboTimer = setTimeout(() => {
+        conn.limboTimer = null;
+        // The bridge came back but never recovered (e.g. upgrade didn't restart)
+        // → just re-validate the version rather than falsely declaring it lost.
+        if (conn.eventsWs && conn.eventsWs.readyState === 1) {
+            conn.upgrading = false;
+            conn.limboSince = null;
+            void revalidateAndSetLinkState(conn);
+            return;
+        }
+        // Host gone too long → lost. Stop the retry loop; the overlay offers a
+        // manual reconnect. We do NOT teardown (that would close the window).
+        conn.eventsClosed = true;
+        if (conn.eventsRetry) {
+            clearTimeout(conn.eventsRetry);
+            conn.eventsRetry = null;
+        }
+        setConnLinkState(conn, { phase: 'lost' });
+    }, LIMBO_TIMEOUT_MS);
+    conn.limboTimer.unref?.();
+}
+
+/**
+ * "Upgrade host" from the remote window: ask the host to check for an update,
+ * then trigger its install (download → apply → restart) over the bridge —
+ * reusing the existing Bearer + kill-switch-gated `/api/update/*` endpoints. The
+ * bridge will drop when the host restarts; we pre-enter the upgrade limbo so the
+ * overlay shows immediately and auto-reconnects when the host returns.
+ */
+export async function remoteUpgradeHost(
+    wcId: number,
+): Promise<{ ok: boolean; error?: string }> {
+    const conn = connForWebContents(wcId);
+    if (!conn) return { ok: false, error: 'Not connected to a host.' };
+    let status: { state?: string };
+    try {
+        status = (await connRequest(conn, '/api/update/check', { method: 'POST' })) as {
+            state?: string;
+        };
+    } catch (e) {
+        return { ok: false, error: `Couldn't ask the host to check for updates: ${(e as Error).message}` };
+    }
+    const state = status?.state;
+    if (state !== 'available' && state !== 'ready-to-restart') {
+        return {
+            ok: false,
+            error:
+                state === 'up-to-date'
+                    ? 'The host is already up to date.'
+                    : `The host updater is ${state ?? 'unavailable'} — try again shortly.`,
+        };
+    }
+    // Optimistically enter the upgrade limbo (overlay shows now; the install is
+    // deferred host-side, then the host restarts and the bridge drops).
+    conn.upgrading = true;
+    beginLimbo(conn, 'upgrade');
+    try {
+        await connRequest(conn, '/api/update/install', { method: 'POST' });
+    } catch (e) {
+        // The install POST itself failed → back out of limbo, restore the state.
+        conn.upgrading = false;
+        conn.limboSince = null;
+        if (conn.limboTimer) {
+            clearTimeout(conn.limboTimer);
+            conn.limboTimer = null;
+        }
+        await revalidateAndSetLinkState(conn);
+        return { ok: false, error: `The host refused the update: ${(e as Error).message}` };
+    }
+    return { ok: true };
+}
+
+/** Manually restart the events bridge for a window's connection — the 'lost'
+ *  overlay's "Reconnect" button (after the auto-retry gave up). */
+export async function remoteReconnect(wcId: number): Promise<{ ok: boolean; error?: string }> {
+    const conn = connForWebContents(wcId);
+    if (!conn) return { ok: false, error: 'No connection to reconnect.' };
+    if (conn.limboTimer) {
+        clearTimeout(conn.limboTimer);
+        conn.limboTimer = null;
+    }
+    conn.limboSince = null;
+    conn.reconnectAttempt = 0;
+    setConnLinkState(conn, { phase: 'reconnecting', reason: 'dropped' });
+    startEventsBridge(conn); // clears eventsClosed + re-opens (recovers on `open`)
+    return { ok: true };
+}
+
 // Host /ws/events types that map 1:1 onto the local IPC channels the desktop
 // renderer ALREADY subscribes to — so re-emitting them makes the desktop's live
 // dashboard updates (agent-attention glow, workspace pulse, process status,
@@ -420,10 +579,12 @@ function startEventsBridge(conn: RemoteConnection): void {
     conn.eventsClosed = false;
     const scheduleRetry = () => {
         if (conn.eventsClosed || conn.eventsRetry) return;
+        const delay = nextReconnectDelayMs(conn.reconnectAttempt);
+        conn.reconnectAttempt += 1;
         conn.eventsRetry = setTimeout(() => {
             conn.eventsRetry = null;
             open();
-        }, 2000);
+        }, delay);
     };
     const open = () => {
         if (conn.eventsClosed) return;
@@ -442,6 +603,20 @@ function startEventsBridge(conn: RemoteConnection): void {
         // on a CHANGE, not on connect).
         ws.on('open', () => {
             conn.eventsFailures = 0;
+            conn.everConnected = true;
+            conn.reconnectAttempt = 0;
+            if (conn.limboSince != null) {
+                // Recovered from limbo — the host returned (or finished
+                // upgrading). Clear limbo + re-validate the version (now
+                // hopefully matching) and dismiss the overlay.
+                conn.limboSince = null;
+                conn.upgrading = false;
+                if (conn.limboTimer) {
+                    clearTimeout(conn.limboTimer);
+                    conn.limboTimer = null;
+                }
+                void revalidateAndSetLinkState(conn);
+            }
             void syncForwardedQuestions(conn);
         });
         ws.on('message', (raw) => {
@@ -475,11 +650,23 @@ function startEventsBridge(conn: RemoteConnection): void {
         });
         ws.on('close', () => {
             if (conn.eventsWs === ws) conn.eventsWs = null;
-            if (conn.eventsClosed) return;
-            // A close WITHOUT a preceding healthy `open` (the streak wasn't reset)
-            // means the host keeps rejecting us — a dead token (HTTP 401 upgrade),
-            // a lock, etc. Past the cap, stop the silent reconnect-storm and tear
-            // the connection down so it recovers (the host window auto-closes).
+            const decision = decideOnDisconnect({
+                deliberate: conn.eventsClosed,
+                everConnected: conn.everConnected,
+                upgrading: conn.upgrading,
+            });
+            if (decision === 'ignore') return;
+            if (decision === 'limbo') {
+                // A HEALTHY session dropped (host restart / upgrade) — keep the
+                // window open, show the reconnecting overlay, and retry. Never
+                // tear down (that closes the window out from under the user).
+                beginLimbo(conn, conn.upgrading ? 'upgrade' : 'dropped');
+                scheduleRetry();
+                return;
+            }
+            // `retry-then-teardown`: never reached a healthy `open` — a dead token
+            // (HTTP 401 upgrade) or unreachable host. Past the cap, stop the
+            // reconnect-storm and tear down so it recovers (window auto-closes).
             conn.eventsFailures += 1;
             if (conn.eventsFailures >= MAX_EVENTS_FAILURES) {
                 teardownConnection(conn);
@@ -715,7 +902,22 @@ async function connectRemoteInner(
         eventsRetry: null,
         eventsFailures: 0,
         termWs: new Map(),
+        everConnected: false,
+        upgrading: false,
+        linkState: { phase: 'connected' },
+        limboSince: null,
+        reconnectAttempt: 0,
+        limboTimer: null,
     };
+    // Bridge version handshake: compare the host's protocol version to ours. On a
+    // mismatch the connection STILL establishes (so "Upgrade host" + ping polling
+    // work), but its linkState steers the window to the mismatch overlay instead
+    // of rendering the (incompatible) dashboard. The window binds AFTER this
+    // returns and reads remoteLinkStateFor() on mount, so we just seed the state.
+    const hostVersion = await fetchHostProtocolVersion(host);
+    if (hostVersion != null) {
+        conn.linkState = linkStateForVersions(BRIDGE_PROTOCOL_VERSION, hostVersion);
+    }
     connections.set(connKey, conn);
     recordKnownHost(host);
     startEventsBridge(conn);
@@ -726,6 +928,10 @@ async function connectRemoteInner(
 /** Tear a single connection down (viewer-only — never touches host terminals). */
 function teardownConnection(conn: RemoteConnection): void {
     stopEventsBridge(conn);
+    if (conn.limboTimer) {
+        clearTimeout(conn.limboTimer);
+        conn.limboTimer = null;
+    }
     closeAllTerminals(conn);
     connections.delete(conn.connKey);
     // Dismiss any forwarded host-question modals still up for this connection

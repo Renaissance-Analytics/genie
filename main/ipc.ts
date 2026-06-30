@@ -101,6 +101,9 @@ import {
     disconnectRemote,
     remoteStatusFor,
     remoteBindingFor,
+    remoteLinkStateFor,
+    remoteUpgradeHost,
+    remoteReconnect,
     remoteRequest,
     remoteAttachTerminal,
     remoteTerminalInput,
@@ -479,6 +482,11 @@ export function registerIpcHandlers(): void {
     // Per-window status + binding — every handler routes by the CALLING window.
     ipcMain.handle('remote:status', (e) => remoteStatusFor(e.sender.id));
     ipcMain.handle('remote:my-binding', (e) => remoteBindingFor(e.sender.id));
+    // Link health (version match + upgrade/limbo): read on mount + push via
+    // `remote:link`. "Upgrade host" triggers the host's updater over the bridge.
+    ipcMain.handle('remote:link-state', (e) => remoteLinkStateFor(e.sender.id));
+    ipcMain.handle('remote:upgrade-host', (e) => remoteUpgradeHost(e.sender.id));
+    ipcMain.handle('remote:reconnect', (e) => remoteReconnect(e.sender.id));
     ipcMain.handle(
         'remote:request',
         (e, path: string, init?: { method?: string; json?: unknown }) =>

@@ -6,6 +6,7 @@ import type { ForceAnswer } from '../mcp/protocol';
 import type { PendingQuestion } from '../ask/force-question';
 import { sessionFromAuthHeader, attemptPair } from './auth';
 import { audit, isLocked } from './audit';
+import { BRIDGE_PROTOCOL_VERSION } from '../remote/link-state';
 import {
     listTree,
     readFile,
@@ -349,9 +350,17 @@ export async function handleApi(
 
     // --- /api/ping — unauthed Genie-host beacon, for tailnet discovery -----
     // Lets another Genie probing the tailnet identify this node as a Genie host
-    // (and read its hostname) WITHOUT a token. Carries no sensitive data.
+    // (and read its hostname) WITHOUT a token. Carries no sensitive data. Also
+    // reports the bridge PROTOCOL version so a connecting/ reconnecting remote
+    // client can detect an incompatible peer (and the limbo poll can re-check it
+    // after the host upgrades) — an integer, not the app version, so patch betas
+    // don't force upgrades.
     if (pathname === '/api/ping') {
-        sendJson(res, 200, { genie: true, hostname: os.hostname() });
+        sendJson(res, 200, {
+            genie: true,
+            hostname: os.hostname(),
+            protocolVersion: BRIDGE_PROTOCOL_VERSION,
+        });
         return true;
     }
 

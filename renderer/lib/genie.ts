@@ -454,6 +454,22 @@ export interface RemoteStatus {
     host: RemoteHost | null;
 }
 
+/**
+ * Bridge link health for a host window — drives the upgrade/limbo overlay:
+ *   - connected     — versions match, normal operation,
+ *   - mismatch      — incompatible bridge protocol (direction → upgrade host vs
+ *                     update this Genie),
+ *   - reconnecting  — host dropped / upgrading; overlay + auto-reconnect,
+ *   - lost          — host didn't return within the limbo timeout (manual retry).
+ */
+export interface RemoteLinkState {
+    phase: 'connected' | 'mismatch' | 'reconnecting' | 'lost';
+    direction?: 'host-behind' | 'client-behind';
+    hostVersion?: number;
+    localVersion?: number;
+    reason?: 'upgrade' | 'dropped';
+}
+
 /** A host remembered in the Hosts picker (persisted; survives discovery gaps). */
 export interface KnownHost {
     ip: string;
@@ -949,6 +965,14 @@ export interface GenieApi {
         myBinding: () => Promise<{ mode: 'local' | 'remote'; host: RemoteHost | null }>;
         request: (path: string, init?: { method?: string; json?: unknown }) => Promise<unknown>;
         onStatus: (cb: (s: RemoteStatus) => void) => () => void;
+        /** Bridge link health (version match + upgrade/limbo). Read on mount;
+         *  live changes arrive via `onLink`. Drives the host-window overlay. */
+        linkState: () => Promise<RemoteLinkState>;
+        /** Trigger the HOST's self-update over the bridge (download + restart). */
+        upgradeHost: () => Promise<{ ok: boolean; error?: string }>;
+        /** Manually restart the bridge after the limbo auto-retry gave up ('lost'). */
+        reconnect: () => Promise<{ ok: boolean; error?: string }>;
+        onLink: (cb: (s: RemoteLinkState) => void) => () => void;
         terminalAttach: (id: string) => Promise<{ ok: boolean }>;
         terminalInput: (id: string, data: string) => Promise<boolean>;
         terminalResize: (id: string, cols: number, rows: number) => Promise<boolean>;
