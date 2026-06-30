@@ -22,6 +22,7 @@ import {
     type PendingQuestion,
 } from '../ask/force-question';
 import { RelayMemberClient } from './relay-client';
+import type { PopKeypair } from './relay-pop';
 
 /**
  * Work Mode — remote desktop (the local-main proxy).
@@ -1145,6 +1146,10 @@ export interface WorkstationConnectInput {
     name: string;
     relayUrl: string;
     grant: string;
+    /** The ephemeral PoP keypair the grant is bound to (P4.5) — answers the
+     *  host's post-welcome pop-challenge. Generated in the IPC layer (its public
+     *  JWK went to Tynn as `pop_jwk`); the private key is discarded on teardown. */
+    popKeypair?: PopKeypair;
     /** Heartbeat cadence (ms) for the grant introspect poll. Omit to skip. */
     heartbeatIntervalMs?: number;
     /** Poll Tynn's grant introspect — keeps the session warm + reports revocation/
@@ -1189,6 +1194,7 @@ async function connectWorkstationInner(
             relayUrl: input.relayUrl,
             workstationId: input.workstationId,
             grant: input.grant,
+            popKeypair: input.popKeypair,
         });
     } catch (e) {
         try {

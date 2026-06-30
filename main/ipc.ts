@@ -139,6 +139,7 @@ import {
 } from './backend/registry';
 import type { BackendKind } from './backend/backend';
 import { TynnAuthError, type WorkstationConnectGrant } from './backend/tynn';
+import { PopKeypair } from './remote/relay-pop';
 import {
     getAutostart,
     isAutostartSupported,
@@ -547,9 +548,14 @@ export function registerIpcHandlers(): void {
         getTynnBackend().listConnectableWorkstations(),
     );
     ipcMain.handle('workstation:open', async (_e, workstationId: string, name: string) => {
+        // PoP (P4.5): generate the ephemeral keypair in MAIN; its public JWK
+        // binds the grant (cnf.jkt) and its private key answers the host's
+        // post-welcome challenge. The private key never leaves main and is wiped
+        // when the connection tears down (RelayMemberClient.close → discard).
+        const popKeypair = PopKeypair.generate();
         let grant: WorkstationConnectGrant;
         try {
-            grant = await getTynnBackend().connectGrant(workstationId);
+            grant = await getTynnBackend().connectGrant(workstationId, popKeypair.publicJwk);
         } catch (e) {
             if (e instanceof TynnAuthError) {
                 return { ok: false, error: 'Sign in to Tynn to connect to this workstation.' };
@@ -564,6 +570,7 @@ export function registerIpcHandlers(): void {
             name,
             relayUrl: grant.relay_endpoint,
             grant: grant.token,
+            popKeypair,
             heartbeatIntervalMs:
                 grant.heartbeat_interval > 0 ? grant.heartbeat_interval * 1000 : undefined,
             onHeartbeat: () => getTynnBackend().introspectGrant(grant.token),

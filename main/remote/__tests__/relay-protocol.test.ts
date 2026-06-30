@@ -4,6 +4,8 @@ import {
     decodeFrame,
     encodeMemberHello,
     decodeMemberControl,
+    encodePopProof,
+    tryDecodePopChallenge,
     RelayProtocolError,
     type Frame,
 } from '../relay-protocol';
@@ -72,5 +74,42 @@ describe('member control', () => {
             /unexpected control reply/,
         );
         expect(() => decodeMemberControl('{')).toThrow(RelayProtocolError);
+    });
+});
+
+describe('PoP control (P4.5)', () => {
+    const jwk = { kty: 'OKP', crv: 'Ed25519', x: 'abc123' };
+
+    it('encodes a pop-proof', () => {
+        expect(JSON.parse(encodePopProof('sid-1', jwk, 'sigb64'))).toEqual({
+            type: 'pop-proof',
+            sid: 'sid-1',
+            jwk,
+            sig: 'sigb64',
+        });
+    });
+
+    it('decodes a valid pop-challenge', () => {
+        expect(
+            tryDecodePopChallenge(JSON.stringify({ type: 'pop-challenge', sid: 's', nonce: 'n' })),
+        ).toEqual({ type: 'pop-challenge', sid: 's', nonce: 'n' });
+    });
+
+    it('returns null for a routed frame or any non-challenge message', () => {
+        // A routed frame (has kind/channel, no type) is NOT a challenge.
+        expect(
+            tryDecodePopChallenge(encodeFrame({ kind: 'data', channel: 'rest', sid: 's' })),
+        ).toBeNull();
+        expect(tryDecodePopChallenge(JSON.stringify({ type: 'member-welcome', sid: 's' }))).toBeNull();
+        expect(tryDecodePopChallenge('not json')).toBeNull();
+    });
+
+    it('fails closed on a pop-challenge missing sid / nonce', () => {
+        expect(() => tryDecodePopChallenge(JSON.stringify({ type: 'pop-challenge', nonce: 'n' }))).toThrow(
+            /pop-challenge: sid/,
+        );
+        expect(() => tryDecodePopChallenge(JSON.stringify({ type: 'pop-challenge', sid: 's' }))).toThrow(
+            /pop-challenge: nonce/,
+        );
     });
 });

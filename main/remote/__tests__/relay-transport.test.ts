@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserWindow } from 'electron';
 import { WebSocketServer, type WebSocket as WsServerSocket } from 'ws';
 import { AddressInfo } from 'node:net';
+import crypto from 'node:crypto';
 import {
     connectWorkstation,
     disconnectConnKey,
@@ -12,6 +13,7 @@ import {
     remoteTerminalInput,
     remoteDetachTerminal,
 } from '../index';
+import { PopKeypair, popSignedInput } from '../relay-pop';
 
 /**
  * Integration coverage for the RELAY transport wiring (increment 2): drive a
@@ -105,6 +107,10 @@ function startRelayStub() {
             socket?.send(
                 JSON.stringify({ kind: 'data', channel: 'term', sid, payload: JSON.stringify(message) }),
             );
+        },
+        /** Send a raw control message (e.g. a pop-challenge) on the socket. */
+        sendControl(obj: unknown): void {
+            socket?.send(JSON.stringify(obj));
         },
         close(): Promise<void> {
             if (closed) return Promise.resolve();
@@ -238,3 +244,73 @@ describe('relay transport — bridge ops route through the relay', () => {
         expect(close.channel).toBe('term');
     });
 });
+
+describe('relay transport — PoP challenge/proof (P4.5)', () => {
+    it('answers a post-welcome pop-challenge with a proof that verifies under pop_jwk', async () => {
+        const keypair = PopKeypair.generate();
+        const popJwk = keypair.publicJwk;
+
+        await connectWorkstation({
+            workstationId: WS_ID,
+            name: 'Studio Box',
+            relayUrl: stub.url,
+            grant: 'jws.test.grant',
+            popKeypair: keypair,
+        });
+
+        // Host challenges after welcome; the member must answer with pop-proof.
+        const nonce = 'challenge-nonce-xyz';
+        stub.sendControl({ type: 'pop-challenge', sid: 'sid-test-1', nonce });
+
+        const proofMsg = (await stub.waitFor(
+            (f) => (f as unknown as { type?: string }).type === 'pop-proof',
+        )) as unknown as { type: string; sid: string; jwk: typeof popJwk; sig: string };
+
+        expect(proofMsg.sid).toBe('sid-test-1');
+        // The proof JWK must be byte-identical to what was sent as pop_jwk.
+        expect(proofMsg.jwk).toEqual(popJwk);
+
+        // The signature verifies over SHA-256(nonce || workstationId || sid).
+        const pub = crypto.createPublicKey({ key: proofMsg.jwk as crypto.JsonWebKey, format: 'jwk' });
+        const ok = crypto.verify(
+            null,
+            popSignedInput(nonce, WS_ID, 'sid-test-1'),
+            pub,
+            Buffer.from(proofMsg.sig, 'base64url'),
+        );
+        expect(ok).toBe(true);
+    });
+
+    it('does not send a proof when no challenge arrives (readonly path)', async () => {
+        const keypair = PopKeypair.generate();
+        await connectWorkstation({
+            workstationId: WS_ID,
+            name: 'Studio Box',
+            relayUrl: stub.url,
+            grant: 'jws.test.grant',
+            popKeypair: keypair,
+        });
+        // A REST round-trip proves the session is live without any challenge…
+        const pending = remoteRequestNoBind();
+        const req = await stub.waitFor(
+            (f) => f.channel === 'rest' && f.kind === 'open' && (f.payload as { path?: string })?.path === '/api/state',
+        );
+        stub.replyRest(req.reqId as string, 200, { ok: true });
+        await pending;
+        // …and no pop-proof was ever emitted.
+        await new Promise((r) => setTimeout(r, 30));
+        await expect(
+            Promise.race([
+                stub.waitFor((f) => (f as unknown as { type?: string }).type === 'pop-proof'),
+                new Promise((res) => setTimeout(() => res('none'), 50)),
+            ]),
+        ).resolves.toBe('none');
+    });
+});
+
+/** Bind a throwaway window to the relay conn + fire one REST call (helper for the
+ *  no-challenge test, which doesn't need the shared WC_ID binding lifecycle). */
+function remoteRequestNoBind(): Promise<unknown> {
+    bindWindowToConnection(WC_ID, CONN_KEY);
+    return remoteRequest(WC_ID, '/api/state', { method: 'GET' });
+}

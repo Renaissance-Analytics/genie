@@ -59,6 +59,9 @@ export interface WorkstationConnectGrant {
     expires_at: string | null;
     /** Seconds between heartbeat introspections the member should run. */
     heartbeat_interval: number;
+    /** PoP confirmation echo (informational): the JWK thumbprint Tynn bound the
+     *  grant to (`cnf.jkt`), derived from the `pop_jwk` we sent. */
+    cnf?: { jkt: string };
 }
 
 /** The heartbeat revocation check from `POST /api/v1/workstations/grants/introspect`. */
@@ -302,15 +305,20 @@ export class TynnBackend implements Backend {
 
     /**
      * Mint a fresh short-TTL connect grant for an entitled member (POST
-     * /workstations/{id}/connect-grant — no body; the session identifies the
-     * member). Returns the JWS + relay endpoint to dial. Throws TynnAuthError on
-     * a dead session, and a plain Error on 403 (not entitled) / 500 (workstation
-     * not active) carrying the server message.
+     * /workstations/{id}/connect-grant — the session identifies the member).
+     * `popJwk` is the ephemeral public key (RFC 8037 OKP) the member proves
+     * possession of (P4.5); Tynn binds the grant to its thumbprint (`cnf.jkt`),
+     * so a leaked grant can't be replayed without the private key. Returns the
+     * JWS + relay endpoint to dial. Throws TynnAuthError on a dead session, and a
+     * plain Error on 403 (not entitled) / 500 (workstation not active).
      */
-    async connectGrant(workstationId: string): Promise<WorkstationConnectGrant> {
+    async connectGrant(
+        workstationId: string,
+        popJwk?: unknown,
+    ): Promise<WorkstationConnectGrant> {
         return this.fetch<WorkstationConnectGrant>(
             `/workstations/${encodeURIComponent(workstationId)}/connect-grant`,
-            { method: 'POST' },
+            { method: 'POST', body: popJwk === undefined ? undefined : { pop_jwk: popJwk } },
         );
     }
 

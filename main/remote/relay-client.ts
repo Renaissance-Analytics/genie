@@ -4,10 +4,13 @@ import {
     decodeMemberControl,
     encodeFrame,
     decodeFrame,
+    encodePopProof,
+    tryDecodePopChallenge,
     type RestRequestPayload,
     type RestReplyPayload,
 } from './relay-protocol';
 import { RelayFrameMux } from './relay-mux';
+import type { PopKeypair } from './relay-pop';
 
 /**
  * The desktop MEMBER client for a Virtual Workstation connection over the Tynn
@@ -26,6 +29,12 @@ export interface RelayConnectOpts {
     workstationId: string;
     /** The short-TTL Tynn connection grant (JWS) for member-hello. */
     grant: string;
+    /**
+     * The ephemeral PoP keypair the grant is bound to (P4.5). When present, a
+     * post-welcome `pop-challenge` is answered with a `pop-proof` signed by it.
+     * Omit for a connection with no PoP binding (the host then mustn't challenge).
+     */
+    popKeypair?: PopKeypair;
     /** Handshake timeout (ms). */
     timeoutMs?: number;
 }
@@ -34,6 +43,8 @@ export class RelayMemberClient {
     private ws: WebSocket | null = null;
     private mux: RelayFrameMux | null = null;
     private sid: string | null = null;
+    private popKeypair: PopKeypair | null = null;
+    private workstationId: string | null = null;
 
     /** The relay-assigned member-session id (after connect). */
     get sessionId(): string | null {
@@ -45,6 +56,8 @@ export class RelayMemberClient {
      *  socket erroring before welcome, or the handshake timeout. */
     connect(opts: RelayConnectOpts): Promise<void> {
         const url = opts.relayUrl.replace(/\/+$/, '') + '/ws/member';
+        this.popKeypair = opts.popKeypair ?? null;
+        this.workstationId = opts.workstationId;
         return new Promise<void>((resolve, reject) => {
             let ws: WebSocket;
             try {
@@ -105,7 +118,20 @@ export class RelayMemberClient {
                     resolve();
                     return;
                 }
-                // Subsequent messages are routed frames.
+                // Post-welcome: either a PoP challenge (a typed control message)
+                // or a routed frame. Answer a challenge with a signed proof; the
+                // host rejects a control session that never proves possession.
+                try {
+                    const challenge = tryDecodePopChallenge(raw);
+                    if (challenge) {
+                        this.respondToPopChallenge(ws, challenge.nonce, challenge.sid);
+                        return;
+                    }
+                } catch {
+                    // A malformed pop-challenge — drop it; the host re-challenges
+                    // or rejects the session. Don't tear down on one bad message.
+                    return;
+                }
                 try {
                     this.mux?.handle(decodeFrame(raw));
                 } catch {
@@ -122,6 +148,22 @@ export class RelayMemberClient {
                 this.mux?.rejectAll('relay connection closed');
             });
         });
+    }
+
+    /** Sign the host's PoP challenge with the ephemeral key and send the proof.
+     *  No keypair (a non-PoP connection) → nothing to prove; the host decides
+     *  whether to allow the session. */
+    private respondToPopChallenge(ws: WebSocket, nonce: string, sid: string): void {
+        if (!this.popKeypair || !this.workstationId) return;
+        let proof;
+        try {
+            proof = this.popKeypair.prove(nonce, this.workstationId, sid);
+        } catch {
+            return; // keypair discarded mid-flight (disconnecting)
+        }
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(encodePopProof(sid, proof.jwk, proof.sig));
+        }
     }
 
     /** A REST call to the workstation over the `rest` channel. */
@@ -154,5 +196,9 @@ export class RelayMemberClient {
         this.mux?.rejectAll('relay client closed');
         this.mux = null;
         this.sid = null;
+        // Wipe the ephemeral private key — it must not outlive the connection.
+        this.popKeypair?.discard();
+        this.popKeypair = null;
+        this.workstationId = null;
     }
 }

@@ -160,3 +160,52 @@ export function decodeMemberControl(raw: string | Buffer): MemberWelcome | Contr
     }
     throw new RelayProtocolError('unexpected control reply');
 }
+
+// --- Proof-of-Possession handshake (P4.5, post-welcome) ---------------------
+// The host challenges the member to prove possession of the ephemeral key the
+// grant is bound to. These ride the SAME socket as routed Frames but are NOT
+// Frames — they're typed control objects (like member-hello/welcome), told
+// apart by their `type` field (a routed Frame has `kind`/`channel`, never `type`).
+
+/** Host → member: prove possession of the key bound to the grant. */
+export interface PopChallenge {
+    type: 'pop-challenge';
+    sid: string;
+    /** Opaque challenge nonce (signed, never interpreted). */
+    nonce: string;
+}
+
+/** Member → host: the ephemeral public JWK + the signature over the challenge. */
+export interface PopProofMessage {
+    type: 'pop-proof';
+    sid: string;
+    jwk: unknown;
+    sig: string;
+}
+
+/** Encode the member's PoP proof control message. */
+export function encodePopProof(sid: string, jwk: unknown, sig: string): string {
+    const msg: PopProofMessage = { type: 'pop-proof', sid, jwk, sig };
+    return JSON.stringify(msg);
+}
+
+/**
+ * Classify a post-welcome server message: a PoP challenge (validated) when its
+ * `type` says so, or `null` for everything else (routed Frames, which the caller
+ * then hands to `decodeFrame`). Fail-closed: a message that CLAIMS to be a
+ * pop-challenge but is malformed throws rather than being mistaken for a Frame.
+ */
+export function tryDecodePopChallenge(raw: string | Buffer): PopChallenge | null {
+    let obj: unknown;
+    try {
+        obj = JSON.parse(typeof raw === 'string' ? raw : raw.toString('utf8'));
+    } catch {
+        return null; // not parseable here → let decodeFrame fail-close on it
+    }
+    if (typeof obj !== 'object' || obj === null) return null;
+    const m = obj as Record<string, unknown>;
+    if (m.type !== 'pop-challenge') return null;
+    if (!isNonEmptyString(m.sid)) throw new RelayProtocolError('malformed pop-challenge: sid');
+    if (!isNonEmptyString(m.nonce)) throw new RelayProtocolError('malformed pop-challenge: nonce');
+    return { type: 'pop-challenge', sid: m.sid, nonce: m.nonce };
+}

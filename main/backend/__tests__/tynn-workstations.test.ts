@@ -20,17 +20,21 @@ interface CapturedRequest {
 }
 
 function mockFetch(captured: CapturedRequest[], reply: (req: CapturedRequest) => Response) {
+    const impl = async (
+        input: string | Request,
+        init?: { method?: string; body?: BodyInit | null },
+    ): Promise<Response> => {
+        const req: CapturedRequest = {
+            url: String(input),
+            method: init?.method,
+            body: typeof init?.body === 'string' ? init.body : undefined,
+        };
+        captured.push(req);
+        return reply(req);
+    };
     return vi
         .spyOn(session.defaultSession, 'fetch')
-        .mockImplementation(async (input: unknown, init?: { method?: string; body?: string }) => {
-            const req: CapturedRequest = {
-                url: String(input),
-                method: init?.method,
-                body: init?.body,
-            };
-            captured.push(req);
-            return reply(req);
-        });
+        .mockImplementation(impl as typeof session.defaultSession.fetch);
 }
 
 function json(body: unknown, status = 200): Response {
@@ -101,6 +105,32 @@ describe('TynnBackend.connectGrant', () => {
         expect(captured[0].body).toBeUndefined();
         expect(grant.token).toBe('jws.header.sig');
         expect(grant.heartbeat_interval).toBe(60);
+    });
+
+    it('includes pop_jwk in the body when given (P4.5 binding)', async () => {
+        const captured: CapturedRequest[] = [];
+        mockFetch(captured, () =>
+            json(
+                {
+                    token: 'jws.header.sig',
+                    workstation_id: 'ws1',
+                    relay_endpoint: 'wss://relay.tynn.ai',
+                    capability: 'control',
+                    scopes: ['host:all'],
+                    source: 'owner',
+                    expires_at: null,
+                    heartbeat_interval: 60,
+                    cnf: { jkt: 'thumb123' },
+                },
+                201,
+            ),
+        );
+
+        const popJwk = { kty: 'OKP', crv: 'Ed25519', x: 'pubkeyb64url' };
+        const grant = await new TynnBackend().connectGrant('ws1', popJwk);
+        expect(captured[0].method).toBe('POST');
+        expect(JSON.parse(captured[0].body as string)).toEqual({ pop_jwk: popJwk });
+        expect(grant.cnf?.jkt).toBe('thumb123');
     });
 
     it('throws TynnAuthError on a dead session (401)', async () => {
