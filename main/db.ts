@@ -1,4 +1,3 @@
-import { app } from 'electron';
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
@@ -14,10 +13,19 @@ import fs from 'fs';
 
 let db: Database.Database | null = null;
 
-export function initDatabase(): Database.Database {
+/**
+ * Open (once) the local SQLite store under `dataDir` and run pending migrations.
+ * `dataDir` is REQUIRED for the GUI-free host-core (genie-cloud passes its data
+ * volume); the desktop shell passes Electron's `app.getPath('userData')`. When
+ * omitted it lazily falls back to that Electron path so the module stays usable
+ * headless (electron is only required on the no-arg desktop path).
+ */
+export function initDatabase(dataDir?: string): Database.Database {
     if (db) return db;
 
-    const dir = app.getPath('userData');
+    const dir =
+        dataDir ??
+        (require('electron') as typeof import('electron')).app.getPath('userData');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, 'genie.db');
 

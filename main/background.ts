@@ -131,16 +131,14 @@ import {
     wireTerminalAdapter,
     killHostForUpdate,
     snapshotHostTerminalsForUpdate,
-    getSnapshotStore,
     detachedTerminalsEnabled,
 } from './terminal/genie-adapter';
 import {
-    activateHostService,
     hostBackendKind,
-    selectTerminalBackend,
     shouldKillHostForUpdate,
     detachedHostPinsBinary,
 } from './terminal/host-service';
+import { runBackendSelection as runBackendSelectionCore } from './host-core/backend-selection';
 import {
     liveHostTerminals,
     shouldConfirmQuit,
@@ -1694,24 +1692,19 @@ app.on('open-url', (event, url) => {
 });
 
 /**
- * The terminal-backend fallback chain (service → detached → in-process).
- * Reused by startup and the `genie host start/restart` control commands.
+ * Desktop wrapper over the extracted, GUI-free backend selection — injects the
+ * Electron/E2E-derived inputs. Reused by startup and the `genie host
+ * start/restart` control commands.
+ *
+ * Never attempt the detached host under E2E: the --no-pack test build ships no
+ * standalone runtime, and a detached + unref'd host child would outlive the test
+ * by design. The E2E specs don't exercise terminals, so in-process keeps boot
+ * deterministic. The production default is ON.
  */
 async function runBackendSelection() {
-    return selectTerminalBackend({
-        // Never attempt the detached host under E2E: the --no-pack test build
-        // ships no standalone runtime, and a detached + unref'd host child would
-        // outlive the test by design (an orphan process on the dev machine).
-        // The E2E specs don't exercise terminals, so in-process keeps boot
-        // deterministic + side-effect-free. The production default is ON.
+    return runBackendSelectionCore({
+        userDataDir: app.getPath('userData'),
         detachedEnabled: detachedTerminalsEnabled() && !isE2E(),
-        activateService: () =>
-            activateHostService({
-                snapshots: getSnapshotStore(),
-                userDataDir: app.getPath('userData'),
-            }),
-        initDetached: () => initTerminalBackend(),
-        isHostBackedProbe: () => isHostBacked(),
     });
 }
 
@@ -1795,7 +1788,7 @@ app.whenReady().then(async () => {
         });
     });
 
-    initDatabase();
+    initDatabase(app.getPath('userData'));
     registerIpcHandlers();
     // Wire the terminal core to its Electron/SQLite adapters (snapshot store +
     // settings provider + host spawner) and subscribe the cwd→db / host-status→
