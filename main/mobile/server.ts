@@ -10,6 +10,7 @@ import {
     mobileTermFanout,
     mobileTermClose,
     nextPtyGrid,
+    setTerminalRepaintHandler,
 } from './terminal-bridge';
 import { initAuth, validateSession, type ConfirmPairHook } from './auth';
 import { initAudit, setLocked, isLocked, audit } from './audit';
@@ -434,6 +435,10 @@ function bind(ip: string, wantPort: number): Promise<void> {
  */
 export async function startMobileServer(d: MobileServerDeps): Promise<void> {
     deps = d;
+    // Repaint-on-drop: when the terminal bridge drops a frame to a client, it
+    // asks the pty to re-emit a clean frame (SIGWINCH nudge) so a full-screen
+    // TUI resyncs instead of staying scrambled. The pty lives behind the deps.
+    setTerminalRepaintHandler((id) => deps?.data.repaint?.(id));
     initAudit(d.userDataDir);
     initAuth({ userDataDir: d.userDataDir, confirmPair: d.confirmPair });
     // Push new/resolved ForceTheQuestion prompts to /ws/events so a paired phone

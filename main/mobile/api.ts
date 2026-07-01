@@ -179,6 +179,9 @@ export interface MobileDataDeps {
     ) => { data: string; cursor: number; dropped: boolean };
     getScrollback: (id: string) => string;
     resize: (id: string, cols: number, rows: number) => boolean;
+    /** Force a full-screen TUI to repaint (SIGWINCH nudge) after the bridge
+     *  dropped a frame, so the client resyncs. Optional — a no-op if unwired. */
+    repaint?: (id: string) => void;
 
     // --- force-question ---
     listPendingQuestions: () => PendingQuestion[];

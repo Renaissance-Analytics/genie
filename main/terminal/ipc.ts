@@ -22,6 +22,7 @@ import { loadWorkspaceEnvVars } from '../env-store';
 import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
 import { TerminalReadBuffer, type ReadResult } from './read-buffer';
+import { recordTerminalSize } from './size-tracker';
 import {
     startProcess,
     stopProcess,
@@ -405,7 +406,11 @@ export function registerTerminalIpc(): void {
     });
 
     ipcMain.handle('terminal:resize', (_event, id: string, cols: number, rows: number): boolean => {
-        return mgr().resize(id, cols, rows);
+        const ok = mgr().resize(id, cols, rows);
+        // Track the applied size so the mobile bridge's repaint-on-drop can nudge
+        // SIGWINCH and restore the pty to exactly this size (no desktop reflow).
+        if (ok) recordTerminalSize(id, cols, rows);
+        return ok;
     });
 
     ipcMain.handle('terminal:detach', (event, id: string): boolean => {

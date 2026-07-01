@@ -77,6 +77,7 @@ import {
     desktopQuestionTransport,
 } from './ask/force-question';
 import { listAllProcesses } from './terminal/process-list';
+import { getTerminalSize, recordTerminalSize } from './terminal/size-tracker';
 import {
     startAutostartProcesses,
     startProcess,
@@ -1104,9 +1105,26 @@ app.whenReady().then(async () => {
             },
             resize: (id, cols, rows) => {
                 try {
-                    return terminalManager().resize(id, cols, rows);
+                    const ok = terminalManager().resize(id, cols, rows);
+                    if (ok) recordTerminalSize(id, cols, rows);
+                    return ok;
                 } catch {
                     return false;
+                }
+            },
+            // Repaint-on-drop (mobile bridge): nudge SIGWINCH so a full-screen
+            // TUI re-emits a clean frame after a dropped one, restoring the pty
+            // to its ACTUAL last-applied size (from the tracker) so it never
+            // reflows the desktop terminal.
+            repaint: (id) => {
+                const s = getTerminalSize(id);
+                if (!s) return;
+                try {
+                    const mgr = terminalManager();
+                    mgr.resize(id, s.cols, s.rows + 1);
+                    mgr.resize(id, s.cols, s.rows);
+                } catch {
+                    /* pty gone / resize unsupported — best-effort */
                 }
             },
             listPendingQuestions: () => listPendingQuestions(),

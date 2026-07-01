@@ -79,6 +79,8 @@ export type TermDownMessage =
 
 interface SocketEntry {
     ws: WebSocket;
+    /** The terminal this socket views — needed to ask the pty for a repaint on drop. */
+    terminalId: string;
     buffer: CoalesceBuffer;
     /** Pending batch timer handle, or null when idle. */
     timer: ReturnType<typeof setTimeout> | null;
@@ -110,6 +112,40 @@ const ptyGrowFloor = new Map<string, { cols: number; rows: number }>();
 /** ~20 ms batching window — coalesces a burst of tiny pty writes into one frame. */
 const BATCH_MS = 20;
 
+/** Cooldown between forced repaints for one terminal, so a sustained drop storm
+ *  doesn't itself flood the link with full-screen redraws. */
+export const REPAINT_COOLDOWN_MS = 400;
+
+/**
+ * Recovery from a dropped frame. A drop deletes bytes from the MIDDLE of a
+ * full-screen TUI's redraw stream (Claude Code, vim, tmux…): those apps position
+ * everything with ABSOLUTE cursor moves, so a lost sequence corrupts the cursor
+ * state and every later line lands at the wrong column — the scrambled screen the
+ * user sees. The client can't self-heal from mid-stream byte loss. So when a drop
+ * reaches a client we ask the pty to REPAINT (the server nudges SIGWINCH, which
+ * makes the TUI re-emit a clean full frame); the client then resyncs. The handler
+ * is injected by the server (which owns the pty) — a no-op until wired. Debounced
+ * per terminal via `requestRepaint`.
+ */
+let repaintHandler: ((terminalId: string) => void) | null = null;
+const repaintCooldown = new Set<string>();
+
+/** Wire the server's pty-repaint callback (SIGWINCH nudge). Pass null to clear. */
+export function setTerminalRepaintHandler(
+    fn: ((terminalId: string) => void) | null,
+): void {
+    repaintHandler = fn;
+}
+
+/** Ask the pty to repaint, at most once per REPAINT_COOLDOWN_MS per terminal. */
+function requestRepaint(terminalId: string): void {
+    if (!repaintHandler || repaintCooldown.has(terminalId)) return;
+    repaintCooldown.add(terminalId);
+    const t = setTimeout(() => repaintCooldown.delete(terminalId), REPAINT_COOLDOWN_MS);
+    if (typeof t.unref === 'function') t.unref();
+    repaintHandler(terminalId);
+}
+
 /** Send a JSON message down a socket, guarded. */
 function sendDown(ws: WebSocket, msg: TermDownMessage): void {
     if (ws.readyState !== 1) return; // 1 === OPEN
@@ -133,7 +169,14 @@ function flush(entry: SocketEntry): void {
         return;
     }
     const { data, dropped } = buffer.drain();
-    if (dropped) sendDown(ws, { type: 'dropped' });
+    if (dropped) {
+        sendDown(ws, { type: 'dropped' });
+        // We only reach here once ws.bufferedAmount is back under the high-water
+        // mark, so the link now has room — ask the pty to repaint so a clean full
+        // frame streams down and the TUI resyncs (the 'dropped' marker alone
+        // leaves the screen scrambled). Debounced per terminal.
+        requestRepaint(entry.terminalId);
+    }
     if (data) sendDown(ws, { type: 'data', data });
 }
 
@@ -149,7 +192,7 @@ function scheduleFlush(entry: SocketEntry): void {
  * Returns a detach fn the server binds to the socket's close.
  */
 export function attachTerminalSocket(terminalId: string, ws: WebSocket): () => void {
-    const entry: SocketEntry = { ws, buffer: new CoalesceBuffer(), timer: null };
+    const entry: SocketEntry = { ws, terminalId, buffer: new CoalesceBuffer(), timer: null };
     let set = byTerminal.get(terminalId);
     if (!set) {
         set = new Set();
@@ -248,4 +291,6 @@ export function _resetBridgeForTest(): void {
     }
     byTerminal.clear();
     ptyGrowFloor.clear();
+    repaintCooldown.clear();
+    repaintHandler = null;
 }
