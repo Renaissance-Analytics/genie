@@ -1362,6 +1362,9 @@ export interface GenieApi {
             workspacePath: string,
             opts?: { ignored?: boolean },
         ) => Promise<GitStatusMap>;
+        /** Start/stop live fs-watching of a workspace root; drives on.treeChanged. */
+        watch: (workspacePath: string) => Promise<{ ok: boolean }>;
+        unwatch: (workspacePath: string) => Promise<{ ok: boolean }>;
     };
     github: {
         status: () => Promise<{
@@ -1608,6 +1611,11 @@ export interface GenieApi {
         /** The set of workspaces changed outside the renderer's own edits (e.g.
          *  MCP-provisioned child workspaces) — re-fetch the workspace list. */
         workspacesChanged: (cb: () => void) => () => void;
+        /** A file changed on disk in a watched workspace (an agent, a git op, a
+         *  tool) — the Code panel re-lists its tree. Debounced in main. */
+        treeChanged: (
+            cb: (payload: { workspacePath: string }) => void,
+        ) => () => void;
         /** Tier 3 detached-host status — fired on fallback to in-process. */
         terminalHostStatus: (
             cb: (payload: { message: string; level: 'info' | 'warn' }) => void,

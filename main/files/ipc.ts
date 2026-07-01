@@ -4,6 +4,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { REGENERABLE_NAMES, SKIP_NAMES } from '../workspace/ignore';
+import { unwatchWorkspace, watchWorkspace } from './watch';
 
 const execFileAsync = promisify(execFile);
 
@@ -545,4 +546,14 @@ export function registerFilesIpc(): void {
         (_e, workspacePath: string, opts?: { ignored?: boolean }) =>
             gitStatus(workspacePath, opts ?? {}),
     );
+    // Live tree: start/stop watching a workspace root on disk. Changes made
+    // outside the renderer (agents, git, tools) broadcast 'files:tree-changed'.
+    ipcMain.handle('files:watch', (_e, workspacePath: string) => {
+        watchWorkspace(workspacePath);
+        return { ok: true };
+    });
+    ipcMain.handle('files:unwatch', (_e, workspacePath: string) => {
+        unwatchWorkspace(workspacePath);
+        return { ok: true };
+    });
 }

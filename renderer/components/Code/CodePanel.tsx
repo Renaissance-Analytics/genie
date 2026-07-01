@@ -214,6 +214,11 @@ export default function CodePanel({
             .catch(() => setNodes([]));
     }, [workspacePath, locked, lockedRoot]);
 
+    // Latest reloadTree for the fs-watch subscription, so a lock/root change
+    // doesn't churn (unwatch/rewatch) the watcher.
+    const reloadTreeRef = useRef(reloadTree);
+    reloadTreeRef.current = reloadTree;
+
     // Load the tree on mount and whenever the root (workspace or lock) shifts.
     useEffect(() => {
         let alive = true;
@@ -226,6 +231,26 @@ export default function CodePanel({
             alive = false;
         };
     }, [workspacePath, locked, lockedRoot]);
+
+    // Live-refresh: watch the workspace on disk so files created, renamed, or
+    // deleted OUTSIDE the editor (an agent, a git checkout, an MCP tool) appear
+    // without a manual reload. Debounced in main; here we just re-list on the
+    // push. Keyed on workspacePath only — reloadTree is read via a ref so a
+    // lock/root change never churns the watcher.
+    useEffect(() => {
+        void api().files.watch(workspacePath);
+        let t: ReturnType<typeof setTimeout> | null = null;
+        const off = api().on.treeChanged(({ workspacePath: changed }) => {
+            if (changed !== workspacePath) return;
+            if (t) clearTimeout(t);
+            t = setTimeout(() => void reloadTreeRef.current(), 120);
+        });
+        return () => {
+            if (t) clearTimeout(t);
+            off();
+            void api().files.unwatch(workspacePath);
+        };
+    }, [workspacePath]);
 
     /** Open (or focus) a file as a tab. Reads from disk only if not already open. */
     const openTab = useCallback(

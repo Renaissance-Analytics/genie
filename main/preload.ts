@@ -660,6 +660,12 @@ const api = {
             ipcRenderer.invoke('files:git-status', workspacePath, opts) as Promise<
                 Record<string, string>
             >,
+        /** Start live fs-watching of a workspace root; drives on.treeChanged. */
+        watch: (workspacePath: string) =>
+            ipcRenderer.invoke('files:watch', workspacePath) as Promise<{ ok: boolean }>,
+        /** Stop live fs-watching (ref-counted; closes on the last unwatch). */
+        unwatch: (workspacePath: string) =>
+            ipcRenderer.invoke('files:unwatch', workspacePath) as Promise<{ ok: boolean }>,
     },
 
     terminal: {
@@ -916,6 +922,15 @@ const api = {
             const handler = () => cb();
             ipcRenderer.on('terminal-spec:changed', handler);
             return () => ipcRenderer.off('terminal-spec:changed', handler);
+        },
+        /** A file was created/renamed/deleted on disk in a watched workspace
+         *  (outside the renderer's own edits — an agent, a git op, a tool). The
+         *  Code panel re-lists its tree. Debounced + ignore-filtered in main. */
+        treeChanged: (cb: (payload: { workspacePath: string }) => void) => {
+            const handler = (_e: unknown, payload: { workspacePath: string }) =>
+                cb(payload);
+            ipcRenderer.on('files:tree-changed', handler);
+            return () => ipcRenderer.off('files:tree-changed', handler);
         },
         /** The set of workspaces changed outside the renderer's own edits (e.g.
          *  workspaces provisioned via the MCP provisionWorkspaces tool) —
