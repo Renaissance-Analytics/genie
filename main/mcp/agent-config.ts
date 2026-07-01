@@ -211,9 +211,20 @@ export function hasGenieAgentsSection(content: string): boolean {
  *     (appended to the end when absent).
  *   - disabled: strip the block if present.
  * Returns the next string, or the input unchanged when there's nothing to do.
+ *
+ * `aiSystem` is the user's Ai.System instruction set (Settings → Customization).
+ * When non-empty it's appended as a labeled subsection INSIDE the marker block,
+ * after the Genie brief — so it's replaced in place on every sync (never
+ * duplicated) and removed cleanly on disable. Empty (the default) keeps the
+ * block byte-identical to the brief-only form, so existing callers/tests that
+ * omit it are unaffected.
  */
-export function applyAgentsSection(existing: string, enabled: boolean): string {
-    const block = `${AGENTS_BEGIN}\n## GENIE PROTOCOL\n\n${GENIE_AGENTS_BRIEF}\n${AGENTS_END}`;
+export function applyAgentsSection(existing: string, enabled: boolean, aiSystem = ''): string {
+    const trimmed = aiSystem.trim();
+    const aiSection = trimmed
+        ? `\n\n### Ai.System — workspace instructions (set in Genie → Settings → Customization)\n\n${trimmed}`
+        : '';
+    const block = `${AGENTS_BEGIN}\n## GENIE PROTOCOL\n\n${GENIE_AGENTS_BRIEF}${aiSection}\n${AGENTS_END}`;
     const begin = existing.indexOf(AGENTS_BEGIN);
     const end = existing.indexOf(AGENTS_END);
     const hasBlock = begin !== -1 && end !== -1 && end > begin;
@@ -251,7 +262,15 @@ function syncAgentsMd(workspacePath: string, enabled: boolean): void {
     } catch {
         return; // no AGENTS.md → nothing to update
     }
-    const next = applyAgentsSection(existing, enabled);
+    // The user's Ai.System instruction set, injected into the block below.
+    // Best-effort: a settings-read failure must not break the AGENTS.md sync.
+    let aiSystem = '';
+    try {
+        aiSystem = (getAllSettings().ai_system as string) ?? '';
+    } catch {
+        /* leave empty — sync proceeds with the brief-only block */
+    }
+    const next = applyAgentsSection(existing, enabled, aiSystem);
     if (next === existing) return;
     try {
         fs.writeFileSync(file, next);

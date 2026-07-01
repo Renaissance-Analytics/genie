@@ -1196,15 +1196,21 @@ export function repairWorkspaceDocs(
     }
     void slug; // reserved for future template variants; AGENTS template is name-only
 
-    // 2. Ensure the Genie MCP block (idempotent), gated on the opt-out.
+    // 2. Ensure the Genie MCP block (idempotent), gated on the opt-out. Read the
+    //    Ai.System instruction set too so this repair path writes the SAME block
+    //    as syncAgentsMd — otherwise a repair would regenerate the block
+    //    brief-only and strip the user's injected instructions. Best-effort.
     let syncAgents = true;
+    let aiSystem = '';
     try {
-        syncAgents = getAllSettings().mcp_sync_agents !== 'off';
+        const s = getAllSettings();
+        syncAgents = s.mcp_sync_agents !== 'off';
+        aiSystem = (s.ai_system as string) ?? '';
     } catch {
         /* default to syncing */
     }
     if (syncAgents) {
-        const next = applyAgentsSection(agents, true);
+        const next = applyAgentsSection(agents, true, aiSystem);
         if (next !== agents) {
             try {
                 fs.writeFileSync(agentsPath, next, 'utf8');

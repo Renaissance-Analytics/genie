@@ -26,6 +26,11 @@ import {
     type UpdaterStatus,
 } from '../lib/genie';
 
+/** Hard cap on the Ai.System instruction set (mirrors main's AI_SYSTEM_MAX).
+ *  Enforced here in the UI (`maxLength` + slice) and again server-side in the
+ *  `settings:set` IPC handler so AGENTS.md can't bloat. */
+const AI_SYSTEM_MAX = 2000;
+
 export default function SettingsPage() {
     const [s, setS] = useState<Settings | null>(null);
     const [shells, setShells] = useState<ShellDetection[]>([]);
@@ -465,6 +470,29 @@ export default function SettingsPage() {
                             { value: 'winmac', label: 'Windows / Mac — Ctrl/Cmd+C copies, Ctrl/Cmd+V pastes' },
                         ]}
                     />
+                </SettingRow>
+            </SetSection>
+
+            <SetSection title="Ai.System" desc="Instructions Genie injects into every workspace's AGENTS.md">
+                <SettingRow
+                    label="Workspace instructions"
+                    desc="Injected into every workspace's AGENTS.md, inside the auto-managed Genie Protocol block, so every agent in every workspace reads it. Keep it tight — capped at 2000 characters."
+                    keywords="ai system instructions agents.md genie protocol customization prompt workspace"
+                    vertical
+                >
+                    <textarea
+                        className="input"
+                        value={s.ai_system ?? ''}
+                        onChange={(e) => patch({ ai_system: e.target.value.slice(0, AI_SYSTEM_MAX) })}
+                        maxLength={AI_SYSTEM_MAX}
+                        rows={6}
+                        placeholder="e.g. Prefer TypeScript. Never edit files under /vendor. Ask before force-pushing."
+                    />
+                    <div style={{ marginTop: 4, textAlign: 'right' }}>
+                        <Text size="xs" className="text-zinc-500">
+                            {(s.ai_system ?? '').length} / {AI_SYSTEM_MAX}
+                        </Text>
+                    </div>
                 </SettingRow>
             </SetSection>
 

@@ -105,4 +105,46 @@ describe('applyAgentsSection', () => {
         const input = '# P\n\nbody\n';
         expect(applyAgentsSection(input, false)).toBe(input);
     });
+
+    it('injects the Ai.System instructions INSIDE the block when provided', () => {
+        const ai = 'Always prefer TypeScript. Never touch /vendor.';
+        const out = applyAgentsSection('# P\n', true, ai);
+        // present, exactly once, and bracketed by the markers (inside the block)
+        expect(out).toContain(ai);
+        expect(out).toContain('### Ai.System');
+        const begin = out.indexOf(BEGIN);
+        const end = out.indexOf(END);
+        const aiAt = out.indexOf(ai);
+        expect(aiAt).toBeGreaterThan(begin);
+        expect(aiAt).toBeLessThan(end);
+        // still a single block, and the brief is still present
+        expect(out.match(/BEGIN GENIE MCP/g)?.length).toBe(1);
+        expect(out).toContain('genieGuide');
+    });
+
+    it('empty aiSystem is byte-identical to the brief-only block (back-compat)', () => {
+        const base = '# My Project\n\nNotes.\n';
+        expect(applyAgentsSection(base, true, '')).toBe(applyAgentsSection(base, true));
+        // whitespace-only is treated as empty (trimmed away)
+        expect(applyAgentsSection(base, true, '   \n  ')).toBe(applyAgentsSection(base, true));
+    });
+
+    it('re-syncing replaces the Ai.System text in place (never duplicates)', () => {
+        const once = applyAgentsSection('# P\n', true, 'FIRST INSTRUCTIONS');
+        const twice = applyAgentsSection(once, true, 'SECOND INSTRUCTIONS');
+        expect(twice.match(/BEGIN GENIE MCP/g)?.length).toBe(1);
+        expect(twice).not.toContain('FIRST INSTRUCTIONS');
+        expect(twice).toContain('SECOND INSTRUCTIONS');
+    });
+
+    it('disable strips the whole block even when it carried Ai.System text', () => {
+        const ai = 'Secret workspace instructions.';
+        const withBlock = applyAgentsSection('# P\n\nbody\n', true, ai);
+        const out = applyAgentsSection(withBlock, false);
+        expect(out).not.toContain(BEGIN);
+        expect(out).not.toContain(ai);
+        expect(out).not.toContain('### Ai.System');
+        expect(out).toContain('# P');
+        expect(out).toContain('body');
+    });
 });

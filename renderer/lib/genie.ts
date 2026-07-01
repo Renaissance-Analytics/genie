@@ -333,6 +333,9 @@ export interface Settings {
     /** Terminal copy/paste behaviour: 'contextmenu' (default) | 'linux'
      *  (highlight-to-copy, right/middle-click paste) | 'winmac' (Ctrl/Cmd+C / +V). */
     terminal_copy_paste?: 'contextmenu' | 'linux' | 'winmac';
+    /** Ai.System — instruction set injected into every workspace's AGENTS.md
+     *  (inside the Genie Protocol block). Capped at 2000 chars. Default ''. */
+    ai_system?: string;
 }
 
 /** Health of a workspace's agent docs (AGENTS.md + Genie section + CLAUDE sync). */

@@ -529,6 +529,11 @@ export interface Settings {
      *  - 'linux': highlight-to-copy, right-click (and middle-click) to paste.
      *  - 'winmac': Ctrl/Cmd+C copies the selection, Ctrl/Cmd+V pastes. */
     terminal_copy_paste?: 'contextmenu' | 'linux' | 'winmac';
+    /** Ai.System — a user-authored instruction set Genie injects into EVERY
+     *  workspace's AGENTS.md, inside the auto-managed GENIE PROTOCOL block.
+     *  Capped at AI_SYSTEM_MAX chars (enforced UI + server-side) so AGENTS.md
+     *  doesn't bloat. Default '' (nothing injected). */
+    ai_system?: string;
     /** Collapsed workspace sidebar rows — JSON-encoded string[] of workspace
      *  ids (k/v values are text, like notifications_muted). Persists the
      *  sidebar expand/collapse state across restarts. Default '[]'. */
@@ -545,6 +550,11 @@ export interface Settings {
      *  when set. Empty means "no preset; require an explicit command". */
     agent_command_custom?: string;
 }
+
+/** Hard cap on the Ai.System instruction set. Enforced BOTH in the Settings UI
+ *  (`maxLength`) and server-side (in the `settings:set` IPC handler) so the text
+ *  injected into every workspace's AGENTS.md can't bloat the file. */
+export const AI_SYSTEM_MAX = 2000;
 
 export function getAllSettings(): Settings {
     const d = getDb();
@@ -605,6 +615,7 @@ export function getAllSettings(): Settings {
             (out['ops_auto_provision_workspaces'] as 'on' | 'off') ?? 'off',
         terminal_copy_paste:
             (out['terminal_copy_paste'] as 'contextmenu' | 'linux' | 'winmac') ?? 'contextmenu',
+        ai_system: out['ai_system'] ?? '',
         collapsed_workspaces: out['collapsed_workspaces'] ?? '[]',
         agent_command_claude: out['agent_command_claude'] ?? 'claude',
         agent_command_codex: out['agent_command_codex'] ?? 'codex',

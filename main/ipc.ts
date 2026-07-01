@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
     addWorkspace,
+    AI_SYSTEM_MAX,
     getAllSettings,
     getWorkspace,
     listWorkspaces,
@@ -202,6 +203,12 @@ export function registerIpcHandlers(): void {
     // --- Settings -------------------------------------------------------
     ipcMain.handle('settings:get', () => getAllSettings());
     ipcMain.handle('settings:set', (_e, patch: Record<string, unknown>) => {
+        // Ai.System is injected verbatim into every workspace's AGENTS.md, so cap
+        // it server-side (never trust the UI's maxLength alone) to keep AGENTS.md
+        // from bloating. Truncate anything over the limit before persisting.
+        if (typeof patch.ai_system === 'string' && patch.ai_system.length > AI_SYSTEM_MAX) {
+            patch = { ...patch, ai_system: patch.ai_system.slice(0, AI_SYSTEM_MAX) };
+        }
         const next = setSettings(patch as Record<string, string>);
         if ('global_hotkey' in patch) registerShortcuts();
         // Tell every window a setting changed so live UI (e.g. a terminal's
