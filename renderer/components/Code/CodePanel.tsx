@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { CodeEditor } from '@particle-academy/fancy-code';
 import FileTree from './FileTree';
 import EditorWand from './EditorWand';
+import WordWrapSync from './WordWrapSync';
 import {
     IconCheck,
     IconCode,
@@ -693,6 +694,7 @@ export default function CodePanel({
                             <CodeEditor.Panel className="cv-panel" />
                             <CodeEditor.StatusBar />
                             <EditorWand />
+                            <WordWrapSync wrap={wordWrap} />
                         </CodeEditor>
                     ) : (
                         <div className="code-empty">
