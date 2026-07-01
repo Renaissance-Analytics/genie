@@ -250,7 +250,15 @@ function notifyImDone(terminalId: string): void {
 // Single-instance lock. If a second copy of Genie is launched (e.g. clicking
 // a genie:// URL), the existing process gets the activation event and the
 // second one exits. This is also how the Windows protocol handoff works.
-const gotLock = app.requestSingleInstanceLock();
+//
+// SKIPPED in E2E (GENIE_E2E): the lock is process-wide (app-name-keyed on
+// Windows, so --user-data-dir does NOT isolate it), so a running real Genie —
+// or a leftover test instance — makes every E2E launch quit before it opens a
+// window (the Playwright `firstWindow` timeout). Each E2E run is already
+// isolated by its own --user-data-dir + E2E ports, so skipping the lock is safe
+// and lets the suite run alongside a live Genie.
+const gotLock =
+    process.env.GENIE_E2E === '1' || app.requestSingleInstanceLock();
 if (!gotLock) {
     app.quit();
 }

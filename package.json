@@ -19,6 +19,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "build:e2e": "nextron build --no-pack",
+    "pretest:e2e": "node scripts/electron-rebuild-e2e.mjs",
     "test:e2e": "npm run build:e2e && playwright test",
     "build:icons": "node resources/build-icons.cjs"
   },
