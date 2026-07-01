@@ -94,6 +94,14 @@ export default function XTerm({
     const [copyPaste, setCopyPaste] = useState<'contextmenu' | 'linux' | 'winmac'>(
         'contextmenu',
     );
+    // Flips true once fancy-term has actually mounted the live xterm
+    // (handle.xterm). fancy-term opens xterm only after it can measure the
+    // container, so a late-laid-out / background panel can still have a null
+    // handle.xterm when our effects first run. Everything that needs the live
+    // instance (OSC 52 clipboard, copy keybindings, right-click snapshot, links)
+    // keys off this so it wires the moment xterm is ready — not just once at
+    // mount, which is why copy silently failed in "some terminals but not others".
+    const [xtermReady, setXtermReady] = useState(false);
     useEffect(() => {
         const read = () => {
             void api()
@@ -213,7 +221,10 @@ export default function XTerm({
         return () => {
             for (const d of disposers) d();
         };
-    }, [copyPaste, copyText, pasteFromClipboard]);
+        // xtermReady: re-run once fancy-term has mounted the live xterm, so the
+        // keybindings, highlight-to-copy, and (linux) right-click-paste actually
+        // attach even when handle.xterm was null on the first run.
+    }, [copyPaste, copyText, pasteFromClipboard, xtermReady]);
 
     useEffect(() => {
         const handle = handleRef.current;
@@ -242,8 +253,14 @@ export default function XTerm({
         // fancy-term 0.3.0's `handle.xterm` escape hatch (non-null after the
         // fit above mounts it). Best-effort — a missing instance just disables
         // snapshots for this terminal, it never breaks the session.
-        const live = handle.xterm;
-        if (live) {
+        // fancy-term mounts the live xterm (handle.xterm) only after it can
+        // measure the container, so a late-laid-out / background panel may still
+        // have a null handle.xterm right now. Define the xterm-dependent wiring
+        // and RETRY until it's mounted — otherwise a terminal that lays out a
+        // frame late permanently loses its OSC 52 clipboard handler (Claude Code
+        // / tmux "copied" never reaches the system clipboard), its right-click
+        // copy snapshot, and (once xtermReady fires) its copy/paste keybindings.
+        const wireLive = (live: NonNullable<typeof handle.xterm>) => {
             try {
                 const addon = new SerializeAddon();
                 live.loadAddon(addon);
@@ -349,6 +366,29 @@ export default function XTerm({
             } catch {
                 // non-fatal — terminal works, links just aren't clickable
             }
+            // xterm is live — let the copy/paste-mode effect (keybindings,
+            // highlight-to-copy, linux right-click-paste) wire now too.
+            setXtermReady(true);
+        };
+
+        const readyNow = handle.xterm;
+        if (readyNow) {
+            wireLive(readyNow);
+        } else {
+            // Poll briefly for the mount (fancy-term opens xterm after it can
+            // measure the container). ~2s ceiling, then give up — the terminal
+            // still works, only OSC 52 / links / right-click copy would be missing.
+            let tries = 0;
+            const iv = setInterval(() => {
+                const live = handle.xterm;
+                if (live) {
+                    clearInterval(iv);
+                    if (alive) wireLive(live);
+                } else if (++tries > 120) {
+                    clearInterval(iv);
+                }
+            }, 16);
+            cleanups.push(() => clearInterval(iv));
         }
 
         const serializeNow = (): string | null => {
