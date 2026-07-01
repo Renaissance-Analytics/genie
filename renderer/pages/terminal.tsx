@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import XTerm from '../components/Terminal/XTerm';
+import Terminal from '../components/Terminal/Terminal';
 import { hasGenieBridge } from '../lib/genie';
 
 /**
@@ -53,7 +53,7 @@ export default function TerminalPage() {
                 <span>· cwd: {home}</span>
             </div>
             <div className="min-h-0 flex-1">
-                <XTerm cwd={home} />
+                <Terminal cwd={home} />
             </div>
         </div>
     );

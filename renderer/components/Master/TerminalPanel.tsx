@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { ShellProfile } from '@particle-academy/fancy-term';
-import XTerm from '../Terminal/XTerm';
+import Terminal from '../Terminal/Terminal';
 import { IconMaximize, IconMinimize, IconPause, IconX } from './icons';
 import {
     api,
@@ -198,7 +198,7 @@ export default function TerminalPanel({
             </div>
             <div className="term-host">
                 {shellOptions !== null && (
-                    <XTerm
+                    <Terminal
                         key={`${spec.id}:${shell.command ?? 'default'}`}
                         id={spec.id}
                         // Tier 1: a fresh shell starts where the old one was —

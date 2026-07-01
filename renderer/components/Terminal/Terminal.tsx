@@ -10,7 +10,7 @@ import { buildClipboardMenu, handleOsc52 } from '../../lib/terminal-clipboard';
 import { findUrls } from '../../lib/terminal-links';
 import '@xterm/xterm/css/xterm.css';
 
-interface XTermProps {
+interface TerminalProps {
     /** Optional stable id. Otherwise a fresh ulid is minted on mount. */
     id?: string;
     /** Working directory for the spawned shell. */
@@ -57,7 +57,7 @@ const SNAPSHOT_INTERVAL_MS = 30_000;
  *   - On a COLD spawn that returns a `snapshot`, we replay it, draw a dim
  *     "— previous session —" divider, full-reset, THEN wire the live shell.
  */
-export default function XTerm({
+export default function Terminal({
     id: providedId,
     cwd,
     shell,
@@ -68,7 +68,7 @@ export default function XTerm({
     shells,
     activeShell,
     onShellChange,
-}: XTermProps) {
+}: TerminalProps) {
     const handleRef = useRef<TerminalHandle>(null);
     const ptyIdRef = useRef<string | null>(null);
     const createFailedRef = useRef(false);

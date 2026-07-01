@@ -11,7 +11,7 @@ import {
 
 /**
  * A FRESH, thin xterm for the phone — deliberately NOT
- * `components/Terminal/XTerm.tsx` (that one is wired to the Electron IPC bridge,
+ * `components/Terminal/Terminal.tsx` (that one is wired to the Electron IPC bridge,
  * which doesn't exist over the wire). This instance talks ONLY to the
  * `/ws/term` bridge via `connectTerminal`:
  *   down  `data`    → term.write
