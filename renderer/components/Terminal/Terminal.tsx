@@ -7,7 +7,11 @@ import {
 import { SerializeAddon } from '@xterm/addon-serialize';
 import { api, isRemoteWindow, ulid } from '../../lib/genie';
 import { buildClipboardMenu, handleOsc52 } from '../../lib/terminal-clipboard';
-import { parseImageDataUrl, PASTE_TRIGGER_CTRL_V } from '../../lib/terminal-image-paste';
+import {
+    parseImageDataUrl,
+    PASTE_TRIGGER_CTRL_V,
+    PASTE_TRIGGER_ALT_V,
+} from '../../lib/terminal-image-paste';
 import { findUrls } from '../../lib/terminal-links';
 import '@xterm/xterm/css/xterm.css';
 
@@ -71,6 +75,9 @@ export default function Terminal({
     onShellChange,
 }: TerminalProps) {
     const handleRef = useRef<TerminalHandle>(null);
+    // The host element wrapping fancy-term's <Terminal>. We observe THIS for
+    // size changes and re-fit — see the ResizeObserver effect below.
+    const hostElRef = useRef<HTMLDivElement>(null);
     const ptyIdRef = useRef<string | null>(null);
     const createFailedRef = useRef(false);
     const serializeRef = useRef<SerializeAddon | null>(null);
@@ -119,6 +126,36 @@ export default function Terminal({
         });
     }, []);
 
+    // Re-fit on ANY container size change. fancy-term already fits its own
+    // surface via an internal ResizeObserver, but that fires SYNCHRONOUSLY
+    // inside the observer callback and can measure a transiently-stale width
+    // when an ANCESTOR reflows the panel — most visibly when the workspace
+    // sidebar is pinned/unpinned: pinning it narrows the Floor (the sidebar is
+    // in-flow, not an overlay), yet the terminal kept its old wider `cols`, so
+    // TUIs (Claude Code, etc.) wrapped at a column past the visible edge.
+    // Observing our own host element and re-fitting on the NEXT animation frame
+    // (after layout has settled) reports the true visible cols/rows through
+    // fancy-term's onResize below, which forwards them to the pty. This covers
+    // every layout change generally — sidebar pin, gutter drag, window resize,
+    // panel show/hide. (fancy-term 0.3.0's own observer should ideally suffice;
+    // this is the robust Genie-side safeguard — tracked for a fancy-term issue.)
+    useEffect(() => {
+        const el = hostElRef.current;
+        if (!el || typeof ResizeObserver === 'undefined') return;
+        let raf = 0;
+        const ro = new ResizeObserver(() => {
+            // Coalesce bursts (e.g. a live gutter drag) into one fit per frame,
+            // and measure after the browser has finished laying out.
+            cancelAnimationFrame(raf);
+            raf = requestAnimationFrame(() => handleRef.current?.fit());
+        });
+        ro.observe(el);
+        return () => {
+            cancelAnimationFrame(raf);
+            ro.disconnect();
+        };
+    }, []);
+
     // Copy/paste go through Electron's MAIN clipboard via IPC — the renderer's
     // navigator.clipboard (what fancy-term uses) fails SILENTLY in a sandboxed
     // window, so terminal copy never reached the OS clipboard. These are the ONLY
@@ -135,35 +172,41 @@ export default function Terminal({
     // text-only), so if the LOCAL clipboard holds one we sync it to the clipboard of
     // the machine THIS terminal runs on — locally that's this machine; in a host
     // window `clipboard.writeImage` is re-pointed to the HOST clipboard over the
-    // authed bridge — then deliver the Ctrl+V trigger to the pty so Claude Code reads
+    // authed bridge — then deliver the paste trigger to the pty so Claude Code reads
     // it exactly like a native local paste (inline [Image] chip). Ordering matters:
     // we AWAIT the (host) clipboard write before the trigger so the image is in place
-    // when the CLI reads it. Returns true when an image was handled (caller must NOT
-    // also paste text/forward the raw key); false ⇒ no image, fall through.
-    const tryPasteImage = useCallback(async (): Promise<boolean> => {
-        const id = ptyIdRef.current;
-        if (!id) return false;
-        let image: ReturnType<typeof parseImageDataUrl>;
-        try {
-            image = parseImageDataUrl(await api().clipboard.readImage());
-        } catch {
-            return false; // clipboard-image read failed — let the caller fall back
-        }
-        if (!image) return false; // no image → the caller handles it as text/raw
-        try {
-            const res = await api().clipboard.writeImage(image.base64);
-            // supported:false ⇒ the target has no OS clipboard (a headless host):
-            // no-op the image gracefully — never send a trigger for an empty
-            // clipboard, never break text paste. Still "handled" so the caller
-            // doesn't fall through and paste stale text.
-            if (res.supported && res.ok) {
-                await api().terminal.write(id, PASTE_TRIGGER_CTRL_V);
+    // when the CLI reads it. `trigger` is the byte(s) sent AFTER the write lands
+    // (default: the Ctrl+V byte); pass '' to sync the image but send NOTHING, so the
+    // caller can forward its own gesture bytes (e.g. Alt+V) once the image is in
+    // place. Returns true when an image was handled (caller must NOT also paste
+    // text/forward the raw key as a paste); false ⇒ no image, fall through.
+    const tryPasteImage = useCallback(
+        async (trigger: string = PASTE_TRIGGER_CTRL_V): Promise<boolean> => {
+            const id = ptyIdRef.current;
+            if (!id) return false;
+            let image: ReturnType<typeof parseImageDataUrl>;
+            try {
+                image = parseImageDataUrl(await api().clipboard.readImage());
+            } catch {
+                return false; // clipboard-image read failed — let the caller fall back
             }
-        } catch {
-            /* host write / trigger failed — swallow; the image was still handled */
-        }
-        return true;
-    }, []);
+            if (!image) return false; // no image → the caller handles it as text/raw
+            try {
+                const res = await api().clipboard.writeImage(image.base64);
+                // supported:false ⇒ the target has no OS clipboard (a headless host):
+                // no-op the image gracefully — never send a trigger for an empty
+                // clipboard, never break text paste. Still "handled" so the caller
+                // doesn't fall through and paste stale text.
+                if (res.supported && res.ok && trigger) {
+                    await api().terminal.write(id, trigger);
+                }
+            } catch {
+                /* host write / trigger failed — swallow; the image was still handled */
+            }
+            return true;
+        },
+        [],
+    );
 
     // Explicit paste gesture (winmac Ctrl/Cmd+V, the context-menu Paste item, and
     // linux right/middle-click): image first, else the EXISTING text paste unchanged.
@@ -197,6 +240,26 @@ export default function Terminal({
             if (!handledImage) {
                 await api().terminal.write(id, PASTE_TRIGGER_CTRL_V).catch(() => {});
             }
+        })();
+    }, [tryPasteImage]);
+
+    // Alt/Meta+V on a REMOTE host — the owner's image-paste gesture. Claude Code (in
+    // this build) reads the OS clipboard of the machine it runs ON when it sees
+    // Meta+V; on a host that clipboard is empty/stale, so a raw Alt+V pastes stale
+    // text (the reported bug). Intercept it: sync any LOCAL clipboard image to the
+    // HOST clipboard FIRST (awaited — the host write lands before we send anything),
+    // then forward the Alt+V bytes so the CLI's own Meta+V handler reads the
+    // now-populated host clipboard and inlines the image. No image ⇒ we still forward
+    // Alt+V unchanged, so the gesture's native behaviour is preserved. We deliberately
+    // sync with an EMPTY trigger (no \x16) and forward the Alt+V bytes ourselves so
+    // the CLI sees exactly ONE Meta+V, after the image is in place. Remote-only: a
+    // LOCAL window's Alt+V already reads the local clipboard natively — no help needed.
+    const pasteAltV = useCallback(() => {
+        const id = ptyIdRef.current;
+        if (!id) return;
+        void (async () => {
+            await tryPasteImage('');
+            await api().terminal.write(id, PASTE_TRIGGER_ALT_V).catch(() => {});
         })();
     }, [tryPasteImage]);
 
@@ -259,6 +322,16 @@ export default function Terminal({
                 pasteCtrlVRaw();
                 return false;
             }
+            // Remote host: Alt/Meta+V is the owner's image-paste gesture (Claude Code
+            // reads the HOST clipboard on Meta+V). Intercept in EVERY mode — sync the
+            // image to the host, THEN forward the Alt+V bytes so the CLI reads the
+            // populated clipboard (pasteAltV). Preventing xterm's own Alt+V here is
+            // what enforces the ordering (sync before the CLI reads). No ctrl/meta on
+            // this chord, so it never collides with the Ctrl/Cmd handlers above.
+            if (remote && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && k === 'v') {
+                pasteAltV();
+                return false;
+            }
             return true;
         });
         disposers.push(() => live.attachCustomKeyEventHandler(() => true));
@@ -297,7 +370,7 @@ export default function Terminal({
         // xtermReady: re-run once fancy-term has mounted the live xterm, so the
         // keybindings, highlight-to-copy, and (linux) right-click-paste actually
         // attach even when handle.xterm was null on the first run.
-    }, [copyPaste, copyText, pasteFromClipboard, pasteCtrlVRaw, remote, xtermReady]);
+    }, [copyPaste, copyText, pasteFromClipboard, pasteCtrlVRaw, pasteAltV, remote, xtermReady]);
 
     useEffect(() => {
         const handle = handleRef.current;
@@ -553,7 +626,7 @@ export default function Terminal({
     }, []);
 
     return (
-        <div className={className ?? 'h-full w-full'}>
+        <div ref={hostElRef} className={className ?? 'h-full w-full'}>
             <FancyTerminal
                 ref={handleRef}
                 className="h-full w-full"

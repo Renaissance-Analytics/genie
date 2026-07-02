@@ -417,8 +417,12 @@ function MasterInner() {
 
     // The synthetic System Workspace row (null until the home dir resolves).
     // Built in-memory — never persisted, never in `workspaces`/the DB.
+    // It's the CLIENT machine's local full-filesystem home dir — a desktop-only
+    // concept. In a remote/host window you're driving ANOTHER machine, so it makes
+    // no sense there and must NOT appear in the rail: keep it null (which also
+    // inerts the reveal chip + the id resolver entry for a host window).
     const systemWorkspace = useMemo(
-        () => (homeDir ? makeSystemWorkspace(homeDir) : null),
+        () => (homeDir && !isRemoteWindow() ? makeSystemWorkspace(homeDir) : null),
         [homeDir],
     );
 

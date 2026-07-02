@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     PASTE_TRIGGER_CTRL_V,
+    PASTE_TRIGGER_ALT_V,
     parseImageDataUrl,
 } from '../terminal-image-paste';
 
@@ -12,6 +13,17 @@ describe('PASTE_TRIGGER_CTRL_V', () => {
     it('is the Ctrl+V byte (ASCII SYN / 0x16) the CLI reads to paste', () => {
         expect(PASTE_TRIGGER_CTRL_V).toBe('\x16');
         expect(PASTE_TRIGGER_CTRL_V.charCodeAt(0)).toBe(0x16);
+    });
+});
+
+describe('PASTE_TRIGGER_ALT_V', () => {
+    it('is the Alt/Meta+V bytes (ESC + v) the CLI reads to paste on the host', () => {
+        // xterm encodes Alt+<key> as the meta prefix ESC (0x1b) followed by the key.
+        // Forwarded AFTER the host clipboard write lands, so the CLI's own Meta+V
+        // handler reads the populated clipboard.
+        expect(PASTE_TRIGGER_ALT_V).toBe('\x1bv');
+        expect(PASTE_TRIGGER_ALT_V.charCodeAt(0)).toBe(0x1b);
+        expect(PASTE_TRIGGER_ALT_V.charCodeAt(1)).toBe(0x76); // 'v'
     });
 });
 

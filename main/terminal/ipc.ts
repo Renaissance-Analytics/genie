@@ -666,9 +666,11 @@ export function reapOrphanTerminals(): { reaped: string[]; live: number } {
  * and the panel border until it gets focus. Called by the MCP `imDone` tool.
  */
 export function broadcastTerminalAttention(id: string, on: boolean): void {
-    for (const w of BrowserWindow.getAllWindows()) {
-        w.webContents.send('terminal:attention', { id, on });
-    }
+    // LOCAL-only (mirrors broadcastWorkspacePulse): a host terminal's attention
+    // arrives via its host's /ws/events, so a LOCAL terminal:attention must not
+    // leak into remote-bound windows. Terminal ids are unique UUIDs so it's
+    // harmless today, but broadcastLocal is the correct routing discipline.
+    broadcastLocal('terminal:attention', { id, on });
     // Mirror to the mobile dashboard push channel (no-op when the server is off).
     mobileEmit('terminal:attention', { id, on });
 }

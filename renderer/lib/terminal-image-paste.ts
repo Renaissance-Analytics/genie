@@ -22,6 +22,17 @@
  */
 export const PASTE_TRIGGER_CTRL_V = '\x16';
 
+/**
+ * The bytes an Alt/Meta+V keystroke sends to a pty: ESC + 'v' (xterm encodes
+ * Alt+<key> as the meta prefix `\x1b` followed by the key). This is the image-paste
+ * gesture Claude Code reads in the owner's build — it reads the OS clipboard of the
+ * machine it runs on when it sees Meta+V. We forward these bytes AFTER syncing the
+ * image to the (host) clipboard so the CLI's own Meta+V handler reads the populated
+ * clipboard, exactly like a native local paste. Ordering is load-bearing: the host
+ * clipboard write must land before this trigger reaches the pty.
+ */
+export const PASTE_TRIGGER_ALT_V = '\x1bv';
+
 /** A parsed image clipboard payload: the mime type + the raw base64 (no data-URL
  *  prefix, whitespace stripped), ready to ship to a clipboard writer. */
 export interface ParsedClipboardImage {
