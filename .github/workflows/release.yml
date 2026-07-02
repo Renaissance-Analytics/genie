@@ -48,7 +48,7 @@ jobs:
   prepare-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Ensure GitHub Release exists for tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -93,10 +93,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: npm
@@ -106,7 +106,7 @@ jobs:
         # which still imports distutils. Python 3.12 dropped it from
         # stdlib; pin to 3.11 across all runners so the rebuild succeeds
         # without manual setuptools installs.
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -176,7 +176,7 @@ jobs:
         run: npx nextron build --linux
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.os }}-installer
           path: |
