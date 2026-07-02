@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions):
+# this workflow only reads the repo — checkout, install, typecheck, test, build.
+# No PR writes, releases, or SARIF uploads, so read-only contents is sufficient.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest

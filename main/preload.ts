@@ -35,6 +35,10 @@ interface MobileStatus {
     locked: boolean;
     pin: string;
     qrDataUrl: string | null;
+    /** win32 only: server listening but no inbound firewall rule for the port. */
+    needsFirewallRule: boolean;
+    /** True when served over browser-trusted HTTPS (Tailscale cert); false = http. */
+    secure: boolean;
 }
 const api = {
     auth: {
@@ -95,6 +99,12 @@ const api = {
             ipcRenderer.invoke('mobile:restart', enabled) as Promise<MobileStatus>,
         regeneratePin: () =>
             ipcRenderer.invoke('mobile:regenerate-pin') as Promise<MobileStatus>,
+        /** win32: add the inbound firewall rule for the live port (one UAC prompt).
+         *  Returns the elevation result merged with fresh status. */
+        allowFirewall: () =>
+            ipcRenderer.invoke('mobile:allow-firewall') as Promise<
+                MobileStatus & { ok: boolean; cancelled?: boolean; error?: string }
+            >,
         revokeSessions: () =>
             ipcRenderer.invoke('mobile:revoke-sessions') as Promise<
                 MobileStatus & { revoked: number }

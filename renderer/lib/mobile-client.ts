@@ -420,14 +420,29 @@ function fileToBase64(file: File): Promise<string> {
 
 // ---- WebSocket: dashboard events -----------------------------------------
 
-/** Build a same-origin ws:// (or wss://) URL with the session token attached. */
+/**
+ * Build a SAME-ORIGIN ws/wss URL with the session token attached. Pure (no
+ * `window`) so it's unit-tested: the scheme is derived from the page's protocol —
+ * an https page yields `wss:` — which is exactly what makes serving the mobile UX
+ * over TLS "just work" without any hardcoded host/scheme.
+ */
+export function buildWsUrl(
+    protocol: string,
+    host: string,
+    path: string,
+    token: string | null,
+    params: Record<string, string> = {},
+): string {
+    const scheme = protocol === 'https:' ? 'wss:' : 'ws:';
+    const qs = new URLSearchParams(params);
+    if (token) qs.set('token', token);
+    return `${scheme}//${host}${path}?${qs.toString()}`;
+}
+
+/** Same-origin ws/wss URL for the live page, with the token attached. */
 function wsUrl(path: string, params: Record<string, string> = {}): string {
     const loc = window.location;
-    const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
-    const qs = new URLSearchParams(params);
-    const token = getToken();
-    if (token) qs.set('token', token);
-    return `${proto}//${loc.host}${path}?${qs.toString()}`;
+    return buildWsUrl(loc.protocol, loc.host, path, getToken(), params);
 }
 
 /**

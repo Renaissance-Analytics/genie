@@ -96,6 +96,7 @@ import {
     listSessions,
     type MobileServerState,
 } from './mobile/server';
+import { firewallRuleExists, ensureFirewallRule } from './mobile/firewall';
 import { getTailscaleStatus, tailscaleUp, installTailscale } from './tailscale';
 import { discoverHosts, openRemoteWindow } from './workmode';
 import {
@@ -428,7 +429,11 @@ export function registerIpcHandlers(): void {
     // state + the current PIN + a QR data-URL (of the phone URL with the PIN
     // pre-filled) so Settings can show the big PIN + a scannable code.
     const mobileStatus = async (): Promise<
-        MobileServerState & { pin: string; qrDataUrl: string | null }
+        MobileServerState & {
+            pin: string;
+            qrDataUrl: string | null;
+            needsFirewallRule: boolean;
+        }
     > => {
         const state = mobileServerState();
         const pin = currentPin();
@@ -443,7 +448,19 @@ export function registerIpcHandlers(): void {
                 qrDataUrl = null;
             }
         }
-        return { ...state, pin, qrDataUrl };
+        // Windows only: the server binds to the tailnet IP, but Windows blocks
+        // inbound by default — so a paired phone can't connect until an allow-rule
+        // for the LIVE port exists. Surface whether it's still missing so Settings
+        // can offer the one-click fix. Best-effort: never block/throw the status.
+        let needsFirewallRule = false;
+        if (process.platform === 'win32' && state.running && state.port) {
+            try {
+                needsFirewallRule = !(await firewallRuleExists(state.port));
+            } catch {
+                needsFirewallRule = false;
+            }
+        }
+        return { ...state, pin, qrDataUrl, needsFirewallRule };
     };
     ipcMain.handle('mobile:status', () => mobileStatus());
     ipcMain.handle('mobile:restart', async (_e, enabled?: boolean) => {
@@ -456,6 +473,17 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('mobile:regenerate-pin', async () => {
         regeneratePin();
         return mobileStatus();
+    });
+    // Windows only: add the inbound firewall allow-rule for the LIVE mobile port
+    // via a single UAC prompt (delete-then-add, idempotent + migrates a changed
+    // port). Returns the elevation result + fresh status so the panel re-checks
+    // needsFirewallRule and hides the prompt on success.
+    ipcMain.handle('mobile:allow-firewall', async () => {
+        const state = mobileServerState();
+        // The live bound port (falls back to the configured port if not yet bound).
+        const port = state.port ?? state.configuredPort;
+        const result = await ensureFirewallRule(port);
+        return { ...result, ...(await mobileStatus()) };
     });
     ipcMain.handle('mobile:revoke-sessions', async () => {
         const n = revokeAllSessions();

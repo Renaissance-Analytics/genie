@@ -2664,6 +2664,27 @@ function MobileSection({
         }
     };
 
+    // Windows: add the inbound firewall allow-rule for the live port (one UAC
+    // prompt). The returned status re-checks needsFirewallRule, so the prompt hides
+    // itself on success; a declined UAC is a gentle "click again", not a failure.
+    const allowFirewall = async () => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            const r = await api().mobile.allowFirewall();
+            setStatus(r);
+            if (r.ok) {
+                setMsg('Allowed through Windows Firewall — your phone should connect now.');
+            } else if (r.cancelled) {
+                setMsg('Firewall change cancelled — click Allow again when you’re ready.');
+            } else {
+                setMsg(r.error ?? 'Couldn’t update Windows Firewall.');
+            }
+        } finally {
+            setBusy(false);
+        }
+    };
+
     const revokeSessions = async () => {
         setBusy(true);
         setMsg(null);
@@ -2772,15 +2793,41 @@ function MobileSection({
                 </div>
             )}
 
+            {status?.needsFirewallRule && (
+                <div className="set-note bad">
+                    Windows Firewall is blocking the mobile port — your phone can&apos;t
+                    connect until you allow it (scoped to your Tailscale network only).
+                    <div style={{ marginTop: 8 }}>
+                        <Action
+                            size="sm"
+                            color="blue"
+                            icon="shield"
+                            onClick={allowFirewall}
+                            disabled={busy}
+                        >
+                            {busy ? 'Working…' : 'Allow through Windows Firewall'}
+                        </Action>
+                    </div>
+                </div>
+            )}
+
             {status?.running && status.url && (
                 <SettingRow
                     label="Phone URL"
-                    keywords="url link phone open address"
+                    keywords="url link phone open address https tls"
                     desc="Open this on your phone (must be on the same tailnet)."
                     vertical
                 >
                     <MobileCodeChip code={status.url} />
                 </SettingRow>
+            )}
+
+            {status?.running && (
+                <div className={`set-note${status.secure ? '' : ' warn'}`}>
+                    {status.secure
+                        ? 'Secured with Tailscale TLS — the phone loads over browser-trusted HTTPS (wss for live streams).'
+                        : 'Encrypted over Tailscale (HTTP) — traffic is still fully encrypted by your tailnet. For a browser-trusted HTTPS URL, enable “HTTPS Certificates” for your tailnet in the Tailscale admin console (DNS settings), then Restart.'}
+                </div>
             )}
 
             {status?.running && (status.pin || status.qrDataUrl) && (

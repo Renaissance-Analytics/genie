@@ -41,9 +41,24 @@ vi.mock('../storage', () => ({
         store.saved = set;
     },
 }));
-vi.mock('../device-flow', () => ({
-    refreshUserToken: (...args: unknown[]) => refreshUserTokenMock(...args),
-}));
+vi.mock('../device-flow', () => {
+    // A real DeviceFlowError class so api.ts's `e instanceof DeviceFlowError`
+    // checks match the errors these tests throw (both resolve to THIS class).
+    class DeviceFlowError extends Error {
+        constructor(
+            public code: string,
+            message: string,
+            public retryable = false,
+        ) {
+            super(message);
+            this.name = 'DeviceFlowError';
+        }
+    }
+    return {
+        refreshUserToken: (...args: unknown[]) => refreshUserTokenMock(...args),
+        DeviceFlowError,
+    };
+});
 
 import {
     GitHubApiError,
@@ -61,6 +76,7 @@ import {
     listOrgs,
     worseError,
 } from '../api';
+import { DeviceFlowError } from '../device-flow';
 
 /** Build a Response-like object the gh() client understands. */
 function res(status: number, body: unknown) {
@@ -518,6 +534,60 @@ describe('token refresh (expiring user-to-server tokens)', () => {
         store.accessExpiryMs = Date.now() - 1000;
         store.refreshToken = 'ghr_dead';
         refreshUserTokenMock.mockRejectedValueOnce(new Error('refresh rejected'));
+
+        await expect(listInstallations()).rejects.toBeInstanceOf(GitHubAuthError);
+        expect(store.reauthFlagged).toBe(true);
+    });
+
+    it('single-flights concurrent refreshes — ONE rotation shared by all callers', async () => {
+        // Two concurrent callers both see a stale access token + a live refresh
+        // token. Without single-flight they'd BOTH POST the refresh (rotating it
+        // twice → the second sends a now-dead token) and burst the token endpoint
+        // (429). The guard shares one refresh + one rotation.
+        store.accessExpiryMs = Date.now() - 1000;
+        store.refreshToken = 'ghr_old';
+        refreshUserTokenMock.mockResolvedValue({
+            access_token: 'ghu_new',
+            token_type: 'bearer',
+            refresh_token: 'ghr_new',
+            expires_in: 28800,
+        });
+        fetchMock.mockResolvedValue(res(200, { installations: [] }));
+
+        await Promise.all([listInstallations(), listInstallations()]);
+
+        // EXACTLY ONE refresh (one rotation) shared by both callers.
+        expect(refreshUserTokenMock).toHaveBeenCalledTimes(1);
+        expect(store.reauthFlagged).toBe(false);
+    });
+
+    it('does NOT flag reauth on a transient 429 refresh (rate-limited, not rejected)', async () => {
+        store.accessExpiryMs = Date.now() - 1000;
+        store.refreshToken = 'ghr_old';
+        // A RETRYABLE DeviceFlowError = the refresh token is fine; GitHub is just
+        // rate-limiting / unreachable right now.
+        refreshUserTokenMock.mockRejectedValueOnce(
+            new DeviceFlowError('http_429', 'GitHub returned 429', true),
+        );
+
+        let caught: unknown;
+        await listInstallations().catch((e) => {
+            caught = e;
+        });
+
+        // Surfaces as a transient rate-limit, NOT an auth failure...
+        expect(caught).toBeInstanceOf(GitHubApiError);
+        expect(classifyFetchError(caught)).toBe('rate_limited');
+        // ...and the session is NOT marked dead — it self-heals on the next poll.
+        expect(store.reauthFlagged).toBe(false);
+    });
+
+    it('DOES flag reauth when the refresh token is rejected (non-retryable error)', async () => {
+        store.accessExpiryMs = Date.now() - 1000;
+        store.refreshToken = 'ghr_dead';
+        refreshUserTokenMock.mockRejectedValueOnce(
+            new DeviceFlowError('bad_refresh_token', 'Refresh token rejected', false),
+        );
 
         await expect(listInstallations()).rejects.toBeInstanceOf(GitHubAuthError);
         expect(store.reauthFlagged).toBe(true);

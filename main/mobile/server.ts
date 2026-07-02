@@ -1,8 +1,10 @@
 import http from 'node:http';
+import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { detectTailnetIp } from './tailnet';
+import { ensureCert, buildMobileUrl, shouldRenew, type MobileCert } from './tls';
 import { handleApi, terminalServable, type MobileDataDeps } from './api';
 import { setEventSockets, mobileEmit } from './bus';
 import {
@@ -66,10 +68,18 @@ export interface MobileServerDeps {
     bindIpOverride?: string;
 }
 
-let server: http.Server | null = null;
+let server: http.Server | https.Server | null = null;
 let wss: WebSocketServer | null = null;
 let boundIp: string | null = null;
 let boundPort: number | null = null;
+/** True when bound over HTTPS (a Tailscale cert was issued); false = http. */
+let boundSecure = false;
+/** The MagicDNS name HTTPS is addressed by (cert can't cover a raw 100.x IP). */
+let boundDnsName: string | null = null;
+/** The cert currently serving (for the renewal check); null over http. */
+let activeCert: MobileCert | null = null;
+/** Daily cert-renewal timer (rebinds when the cert nears expiry). */
+let renewTimer: ReturnType<typeof setInterval> | null = null;
 let conflict = false;
 let notDetected = false;
 let deps: MobileServerDeps | null = null;
@@ -249,16 +259,22 @@ function originAllowed(req: http.IncomingMessage): boolean {
     if (!origin) return true; // non-browser client (no Origin) — token still gates it
     try {
         const u = new URL(origin);
-        // Host must be our bound ip (any port is fine — same machine) — a
-        // rebinding attacker's page would carry its OWN origin, not ours.
-        return u.hostname === boundIp;
+        // Host must be our bound ip OR — over HTTPS — our MagicDNS name (the phone
+        // loads https://<dnsname>:<port>/m/, so a same-origin wss upgrade carries
+        // the dnsname as its Origin, not the raw ip). Any port is fine (same
+        // machine); a rebinding attacker's page would carry its OWN origin.
+        return (
+            u.hostname === boundIp ||
+            (!!boundDnsName && u.hostname === boundDnsName)
+        );
     } catch {
         return false;
     }
 }
 
-/** Wire the WS server onto the http upgrade event. Two endpoints, token-gated. */
-function attachWebSocket(srv: http.Server): void {
+/** Wire the WS server onto the http upgrade event. Two endpoints, token-gated.
+ *  Works on http OR https servers (both emit 'upgrade'; TLS terminates first). */
+function attachWebSocket(srv: http.Server | https.Server): void {
     wss = new WebSocketServer({ noServer: true });
     setEventSockets(eventSockets);
 
@@ -402,19 +418,48 @@ function resolveBindIp(): string | null {
     return detectTailnetIp();
 }
 
-/** Bind the server on `ip:port`, flagging a conflict on EADDRINUSE (no fallback). */
-function bind(ip: string, wantPort: number): Promise<void> {
-    return new Promise((resolve) => {
-        const srv = http.createServer((req, res) => {
-            void handle(req, res).catch(() => {
-                try {
-                    res.writeHead(500, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'internal error' }));
-                } catch {
-                    /* response already sent */
-                }
-            });
+/** Bind the server on `ip:port`, flagging a conflict on EADDRINUSE (no fallback).
+ *  Prefers browser-trusted HTTPS via a Tailscale cert; FAILS OPEN to http-over-
+ *  WireGuard (still encrypted) when the tailnet can't provide one. */
+async function bind(ip: string, wantPort: number): Promise<void> {
+    // Try a Tailscale cert for HTTPS. Skipped under the test bind-override (no real
+    // tailnet — and we must never issue a real cert from the integration test).
+    activeCert =
+        deps && !deps.bindIpOverride ? await ensureCert(deps.userDataDir) : null;
+
+    const onRequest = (req: http.IncomingMessage, res: http.ServerResponse) => {
+        void handle(req, res).catch(() => {
+            try {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'internal error' }));
+            } catch {
+                /* response already sent */
+            }
         });
+    };
+
+    let srv: http.Server | https.Server;
+    if (activeCert) {
+        try {
+            const cert = fs.readFileSync(activeCert.certFile);
+            const key = fs.readFileSync(activeCert.keyFile);
+            srv = https.createServer({ cert, key }, onRequest);
+            boundSecure = true;
+            boundDnsName = activeCert.dnsName;
+        } catch {
+            // Cert files vanished/unreadable → fall back to http.
+            activeCert = null;
+            boundSecure = false;
+            boundDnsName = null;
+            srv = http.createServer(onRequest);
+        }
+    } else {
+        boundSecure = false;
+        boundDnsName = null;
+        srv = http.createServer(onRequest);
+    }
+
+    return new Promise((resolve) => {
         srv.once('error', (e: NodeJS.ErrnoException) => {
             if (e.code === 'EADDRINUSE') {
                 // Port taken → flag conflict, DON'T fall back (the URL must stay
@@ -431,9 +476,25 @@ function bind(ip: string, wantPort: number): Promise<void> {
             conflict = false;
             attachWebSocket(srv);
             persistState();
+            scheduleCertRenewal();
             resolve();
         });
     });
+}
+
+/** Daily cert-renewal check: `tailscale cert` renews in place, so when the active
+ *  cert nears expiry we rebind (which re-runs ensureCert). No-op over http. The
+ *  timer is unref'd so it never keeps the process alive. */
+function scheduleCertRenewal(): void {
+    if (renewTimer) return;
+    renewTimer = setInterval(() => void maybeRenewCert(), 24 * 60 * 60 * 1000);
+    renewTimer.unref?.();
+}
+
+async function maybeRenewCert(): Promise<void> {
+    if (!server || !activeCert) return;
+    if (!shouldRenew(activeCert.notAfter)) return;
+    await restartMobileServer();
 }
 
 /**
@@ -491,6 +552,13 @@ export function stopMobileServer(): void {
     server = null;
     boundIp = null;
     boundPort = null;
+    boundSecure = false;
+    boundDnsName = null;
+    activeCert = null;
+    if (renewTimer) {
+        clearInterval(renewTimer);
+        renewTimer = null;
+    }
     conflict = false;
 }
 
@@ -539,8 +607,12 @@ export interface MobileServerState {
     port: number | null;
     /** The port the user configured. */
     configuredPort: number;
-    /** The phone URL `http://<ip>:<port>/m/`, or null when not running. */
+    /** The phone URL — `https://<magic-dns>:<port>/m/` over TLS, else
+     *  `http://<ip>:<port>/m/`; null when not running. */
     url: string | null;
+    /** True when served over browser-trusted HTTPS (a Tailscale cert was issued);
+     *  false = http-over-WireGuard (still encrypted, the fail-open fallback). */
+    secure: boolean;
     /** True when the configured port was taken (no silent fallback). */
     conflict: boolean;
     /** True when the server is enabled but no Tailscale interface was found. */
@@ -552,7 +624,12 @@ export interface MobileServerState {
 }
 
 export function mobileServerState(): MobileServerState {
-    const url = boundIp && boundPort ? `http://${boundIp}:${boundPort}/m/` : null;
+    const url = buildMobileUrl({
+        secure: boundSecure,
+        dnsName: boundDnsName,
+        ip: boundIp,
+        port: boundPort,
+    });
     return {
         running: server !== null,
         enabled: deps?.enabled ?? false,
@@ -560,6 +637,7 @@ export function mobileServerState(): MobileServerState {
         port: boundPort,
         configuredPort: deps?.configuredPort() ?? DEFAULT_MOBILE_PORT,
         url,
+        secure: boundSecure,
         conflict,
         tailnetNotDetected: notDetected,
         locked: isLocked(),

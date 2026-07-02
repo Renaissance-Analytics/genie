@@ -130,6 +130,24 @@ describe('sessions', () => {
         expect(sessionFromAuthHeader(r.token)).toBeNull(); // no "Bearer " prefix
     });
 
+    it('parses the Bearer token in linear time (ReDoS-safe, was js/polynomial-redos)', async () => {
+        const r = await attemptPair(currentPin(), info);
+        expect(r.ok).toBe(true);
+        if (!r.ok) return;
+        // A valid single-blob token still resolves.
+        expect(sessionFromAuthHeader(`Bearer ${r.token}`)).not.toBeNull();
+        // `\S+` stops at whitespace, so a token with an internal space is rejected.
+        expect(sessionFromAuthHeader('Bearer tok en')).toBeNull();
+        // Adversarial header: a long whitespace/newline run (which `\s` matches but
+        // `.` does not) is exactly what made the old `(.+)` backtrack polynomially.
+        // The `(\S+)` fix keeps it linear — this must return null effectively
+        // instantly; a regression to `(.+)` would blow the time bound / time out.
+        const evil = 'Bearer ' + ' \n'.repeat(50_000) + 'x';
+        const start = Date.now();
+        expect(sessionFromAuthHeader(evil)).toBeNull();
+        expect(Date.now() - start).toBeLessThan(1000);
+    });
+
     it('revokeAllSessions drops every token', async () => {
         const a = await attemptPair(currentPin(), info);
         const b = await attemptPair(currentPin(), info);

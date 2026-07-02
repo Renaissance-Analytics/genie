@@ -271,7 +271,11 @@ export function sessionFromAuthHeader(
     header: string | undefined,
 ): MobileSession | null {
     if (!header) return null;
-    const m = /^Bearer\s+(.+)$/i.exec(header.trim());
+    // `(\S+)` (not `(.+)`): a bearer token is a single non-whitespace blob, and
+    // `\s+`/`\S+` are disjoint classes, so there's no whitespace overlap for the
+    // engine to backtrack over — closing a polynomial-ReDoS (CodeQL
+    // js/polynomial-redos) on the attacker-controlled Authorization header.
+    const m = /^Bearer\s+(\S+)$/i.exec(header.trim());
     return m ? validateSession(m[1]) : null;
 }
 

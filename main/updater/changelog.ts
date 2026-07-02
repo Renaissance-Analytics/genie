@@ -1,10 +1,12 @@
 import { app, net } from 'electron';
 
 /**
- * Build a human changelog for the update popover by reading the git
- * commit subjects between the installed version and the latest release,
- * grouped per version so a user several releases behind sees the changes
- * stacked newest-first.
+ * Build a human changelog for the update popover by reading a description per
+ * git commit between the installed version and the latest release, grouped per
+ * version so a user several releases behind sees the changes stacked newest-first.
+ * Release commits tag the VERSION as the subject with the note in the body, so a
+ * per-commit description is resolved (see describeCommit) rather than the raw
+ * subject — otherwise the popover just repeats the version string.
  *
  * Two GitHub calls, then bucket locally:
  *   1. /compare/v{current}...v{latest} → every commit in the range, each
@@ -21,7 +23,7 @@ const REPO = 'Renaissance-Analytics/genie';
 
 export interface ChangelogGroup {
     version: string; // e.g. "0.7.0-alpha.17"
-    changes: string[]; // commit subject lines, newest-first
+    changes: string[]; // per-commit descriptions, newest-first
 }
 
 export interface Changelog {
@@ -63,8 +65,48 @@ function isNoise(subject: string): boolean {
     );
 }
 
-function subjectOf(message: string): string {
-    return (message.split('\n')[0] ?? '').trim();
+/**
+ * Strip a leading release-version prefix from a line: `v0.7.0-beta.100 — Foo`
+ * → `Foo`. The separator may be an em-dash (—), en-dash (–), or hyphen (-), and
+ * must be whitespace-flanked so a prerelease hyphen (e.g. `-beta.100`) is never
+ * mistaken for the separator. A line with no such prefix is returned unchanged.
+ */
+function stripVersionPrefix(text: string): string {
+    const m = /^v?\d+\.\d+\.\d+[0-9A-Za-z.-]*\s+[—–-]\s+(.+)$/.exec(text);
+    return m ? m[1].trim() : text;
+}
+
+/** True when a line is JUST a version, e.g. `v0.7.0-beta.100` (nothing after). */
+function isVersionOnly(text: string): boolean {
+    return /^v?\d+\.\d+\.\d+[\w.-]*$/.test(text.trim());
+}
+
+/**
+ * A user-facing description for one commit, robust to release-commit style.
+ * Release commits tag the VERSION as the subject (`v0.7.0-beta.100`) and put the
+ * real note in the BODY, so using the subject verbatim would show the version
+ * repeated with no context. Resolution order:
+ *   1. Subject with any leading version prefix stripped (`vX — Foo` → `Foo`).
+ *   2. If that's still just a version, the first non-empty BODY line (also
+ *      version-prefix-stripped).
+ *   3. Otherwise '' — nothing meaningful — so the caller drops it (a version
+ *      header must not be echoed as its own "change").
+ */
+export function describeCommit(message: string): string {
+    const lines = message.split('\n');
+    const subject = (lines[0] ?? '').trim();
+    const fromSubject = stripVersionPrefix(subject);
+    if (fromSubject && !isVersionOnly(fromSubject)) return fromSubject;
+    // Subject was a bare version → fall back to the first meaningful body line.
+    const bodyLine = lines
+        .slice(1)
+        .map((l) => l.trim())
+        .find((l) => l.length > 0);
+    if (bodyLine) {
+        const fromBody = stripVersionPrefix(bodyLine);
+        if (fromBody && !isVersionOnly(fromBody)) return fromBody;
+    }
+    return '';
 }
 
 let cache: { key: string; value: Changelog } | null = null;
@@ -108,8 +150,10 @@ export async function getChangelog(latest: string): Promise<Changelog> {
     // last known release date fall under `latest`.
     const byVersion = new Map<string, string[]>();
     for (const c of compare.commits) {
-        const subject = subjectOf(c.commit.message);
-        if (!subject || isNoise(subject)) continue;
+        // Resolve a meaningful description (release commits tag the version as
+        // the subject and put the note in the body); '' drops version-only/empty.
+        const change = describeCommit(c.commit.message);
+        if (!change || isNoise(change)) continue;
         const when = Date.parse(
             c.commit.committer?.date ?? c.commit.author?.date ?? '',
         );
@@ -119,7 +163,7 @@ export async function getChangelog(latest: string): Promise<Changelog> {
             if (hit) version = hit.version;
         }
         if (!byVersion.has(version)) byVersion.set(version, []);
-        byVersion.get(version)!.push(subject);
+        byVersion.get(version)!.push(change);
     }
 
     // Emit groups newest-first. GitHub's compare returns commits oldest →

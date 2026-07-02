@@ -172,6 +172,13 @@ nsis:
   unicode: true
   # Surface uninstaller in Add/Remove Programs cleanly.
   deleteAppDataOnUninstall: false
+  # Custom install/uninstall hooks (build/installer.nsh): open a tightly-scoped
+  # inbound Windows Firewall rule for the Mobile server port (51718, scoped to the
+  # Tailscale CGNAT range 100.64.0.0/10) so a paired phone can reach it, and remove
+  # it on uninstall. NOTE: netsh needs admin, so this only takes effect in an
+  # elevated/perMachine install (see build/installer.nsh) — the per-user runtime
+  # path adds it via a UAC prompt from Settings -> Mobile.
+  include: build/installer.nsh
 
 linux:
   target:

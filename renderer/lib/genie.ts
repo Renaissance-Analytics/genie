@@ -424,6 +424,13 @@ export interface MobileStatus {
     qrDataUrl: string | null;
     /** Remotes currently connected (drives the host's "remote session" overlay). */
     peers: MobilePeer[];
+    /** win32 only: server is listening but no inbound Windows Firewall rule for the
+     *  live port exists — a paired phone can't connect until it's allowed. Always
+     *  false on non-win32 / when a matching rule is present. */
+    needsFirewallRule: boolean;
+    /** True when served over browser-trusted HTTPS (a Tailscale cert was issued);
+     *  false = http-over-WireGuard (still encrypted — the fail-open fallback). */
+    secure: boolean;
 }
 
 /** A remote/phone currently controlling THIS host. */
@@ -969,6 +976,11 @@ export interface GenieApi {
         status: () => Promise<MobileStatus>;
         restart: (enabled?: boolean) => Promise<MobileStatus>;
         regeneratePin: () => Promise<MobileStatus>;
+        /** win32: add the inbound firewall rule for the live port (one UAC prompt).
+         *  `cancelled` when the user declines UAC; `error` on any other failure. */
+        allowFirewall: () => Promise<
+            MobileStatus & { ok: boolean; cancelled?: boolean; error?: string }
+        >;
         revokeSessions: () => Promise<MobileStatus & { revoked: number }>;
         /** Host-side roster of paired devices (no bearer tokens). */
         sessions: () => Promise<MobileDevice[]>;

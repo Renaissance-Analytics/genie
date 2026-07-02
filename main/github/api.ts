@@ -10,7 +10,7 @@ import {
     clearReauthNeeded,
     saveTokenSet,
 } from './storage';
-import { refreshUserToken } from './device-flow';
+import { refreshUserToken, DeviceFlowError } from './device-flow';
 import { genieInstallUrl } from '../config';
 
 /**
@@ -57,9 +57,38 @@ async function freshAccessToken(): Promise<string> {
     return refreshOrFail();
 }
 
+/**
+ * SINGLE-FLIGHT the refresh. GitHub rotates the refresh token on every use
+ * (the old one is invalidated), and Genie has many concurrent GitHub callers
+ * (capability pollers, the issue-watch counter, repo ops). Without this guard, a
+ * stale access token makes them ALL refresh at once: the first rotates the token
+ * and every other in-flight refresh then POSTs the now-dead refresh token —
+ * GitHub rejects it (a forced, spurious reconnect) AND the burst of duplicate
+ * POSTs to the token endpoint trips the SECONDARY rate limit (429). Sharing ONE
+ * refresh + ONE rotation across all concurrent callers cures both. BOTH callers
+ * route through here: the preemptive path (freshAccessToken) and the 401-retry
+ * path (gh), so they always share the single flight.
+ */
+let refreshInFlight: Promise<string> | null = null;
+
 /** Exchange the refresh token for a new grant, persist it, and return the new
- *  access token. On any failure, flag reauth and surface GitHubAuthError. */
+ *  access token — shared across concurrent callers via {@link refreshInFlight}. */
 async function refreshOrFail(): Promise<string> {
+    if (refreshInFlight) return refreshInFlight;
+    refreshInFlight = doRefresh();
+    try {
+        return await refreshInFlight;
+    } finally {
+        refreshInFlight = null;
+    }
+}
+
+/** The actual refresh work (one flight). Distinguishes a TRANSIENT failure
+ *  (429/5xx/network — retry may succeed) from a REJECTED refresh token: only the
+ *  latter flags reauth. A transient failure surfaces as a rate-limit-class API
+ *  error (classifyFetchError → 'rate_limited') so a passing 429 during a poll
+ *  burst never nukes a healthy session — the next poll self-heals. */
+async function doRefresh(): Promise<string> {
     const refreshToken = getRefreshToken();
     const refreshExp = getRefreshExpiryMs();
     const refreshDead = refreshExp !== null && Date.now() >= refreshExp;
@@ -79,7 +108,17 @@ async function refreshOrFail(): Promise<string> {
             getUsername() ?? '',
         );
         return next.access_token;
-    } catch {
+    } catch (e) {
+        // Transient (429 secondary rate limit / 5xx / network): the refresh token
+        // is NOT rejected. Do NOT flag reauth — surface a rate-limit-class error so
+        // the caller backs off and the session self-heals on the next poll.
+        if (e instanceof DeviceFlowError && e.retryable) {
+            throw new GitHubApiError(
+                429,
+                `GitHub couldn't refresh the access token right now — transient failure (${e.code}); will retry.`,
+            );
+        }
+        // A real rejection (bad/expired/revoked refresh token) → reconnect.
         markReauthNeeded();
         throw new GitHubAuthError();
     }

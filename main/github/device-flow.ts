@@ -77,28 +77,57 @@ function toTokenResponse(res: Record<string, string>): TokenResponse {
  * Exchange a refresh token for a fresh access (+ refresh) token. Used by the
  * API client when an 8h access token has expired but the ~6-month refresh
  * token is still good — the user never sees a reconnect prompt. No client
- * secret: GitHub waives it for device-flow grants. Throws DeviceFlowError when
- * the refresh token is itself expired/revoked (`error` in the body), so the
- * caller can fall back to a reconnect.
+ * secret: GitHub waives it for device-flow grants.
+ *
+ * Two failure shapes, distinguished for the caller via DeviceFlowError.retryable:
+ *   - TRANSIENT (retryable=true): a non-2xx HTTP (429 secondary rate limit, 5xx)
+ *     or a network error. The refresh token is NOT rejected — a retry may
+ *     succeed, so the caller must back off rather than force a reconnect.
+ *   - REJECTED (retryable=false): a 200 with an `error` body means the refresh
+ *     token itself is bad/expired/revoked → the caller must re-authenticate.
  */
 export async function refreshUserToken(
     clientId: string,
     refreshToken: string,
 ): Promise<TokenResponse> {
-    const res = await postForm(TOKEN_URL, {
-        client_id: clientId,
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-    });
+    let res: Record<string, string>;
+    try {
+        res = await postForm(TOKEN_URL, {
+            client_id: clientId,
+            grant_type: 'refresh_token',
+            refresh_token: refreshToken,
+        });
+    } catch (e) {
+        // postForm already tags its HTTP (429/5xx) errors retryable; a raw
+        // net.fetch rejection (network) is transient too — surface both as
+        // retryable so the caller doesn't nuke a good refresh token on a blip.
+        if (e instanceof DeviceFlowError) throw e;
+        throw new DeviceFlowError(
+            'network',
+            `Network error refreshing GitHub token: ${(e as Error).message}`,
+            true,
+        );
+    }
     if (res.access_token) return toTokenResponse(res);
+    // A 200 carrying an `error` = the refresh token is bad/expired/revoked. NOT
+    // retryable — the caller falls back to a reconnect.
     throw new DeviceFlowError(
         res.error ?? 'refresh_failed',
         res.error_description ?? 'Refresh token rejected — reconnect required.',
+        false,
     );
 }
 
 export class DeviceFlowError extends Error {
-    constructor(public code: string, message: string) {
+    constructor(
+        public code: string,
+        message: string,
+        /** True for TRANSIENT failures (HTTP 429/5xx, network) where a retry may
+         *  succeed — the caller must NOT treat these as a rejected credential.
+         *  False (the default) = a definitive rejection (bad/expired/revoked
+         *  refresh token, denied device flow) that requires re-auth. */
+        public retryable = false,
+    ) {
         super(message);
         this.name = 'DeviceFlowError';
     }
@@ -119,9 +148,13 @@ async function postForm(
     });
     if (!res.ok) {
         const text = await res.text().catch(() => '');
+        // A non-2xx from the token endpoints (429 secondary rate limit, 5xx) is a
+        // TRANSPORT/transient failure, not a rejected credential — tag it retryable
+        // so a token refresh backs off instead of forcing a reconnect.
         throw new DeviceFlowError(
             `http_${res.status}`,
             `GitHub returned ${res.status}: ${text || res.statusText}`,
+            true,
         );
     }
     return (await res.json()) as Record<string, string>;
