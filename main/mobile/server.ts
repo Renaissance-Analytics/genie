@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { detectTailnetIp } from './tailnet';
-import { handleApi, type MobileDataDeps } from './api';
+import { handleApi, terminalServable, type MobileDataDeps } from './api';
 import { setEventSockets, mobileEmit } from './bus';
 import {
     attachTerminalSocket,
@@ -225,6 +225,7 @@ async function handle(
         await handleApi(req, res, pathname, deps.data, {
             ip: clientIp(req),
             ua: String(req.headers['user-agent'] ?? ''),
+            serverVersion: deps.serverVersion,
         });
         return;
     }
@@ -292,6 +293,14 @@ function attachWebSocket(srv: http.Server): void {
             const terminalId = url.searchParams.get('terminal');
             if (!terminalId) {
                 socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+                socket.destroy();
+                return;
+            }
+            // Headless (genie-cloud): never bridge a terminal outside a served
+            // workspace — the System workspace (and any null-workspace pty) is
+            // unreachable even by a known/guessed id. Fail-closed. Desktop: allow.
+            if (!deps || !terminalServable(deps.data, terminalId)) {
+                socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
                 socket.destroy();
                 return;
             }

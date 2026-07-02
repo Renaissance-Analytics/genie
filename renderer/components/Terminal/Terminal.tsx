@@ -5,8 +5,9 @@ import {
     type ShellProfile,
 } from '@particle-academy/fancy-term';
 import { SerializeAddon } from '@xterm/addon-serialize';
-import { api, ulid } from '../../lib/genie';
+import { api, isRemoteWindow, ulid } from '../../lib/genie';
 import { buildClipboardMenu, handleOsc52 } from '../../lib/terminal-clipboard';
+import { parseImageDataUrl, PASTE_TRIGGER_CTRL_V } from '../../lib/terminal-image-paste';
 import { findUrls } from '../../lib/terminal-links';
 import '@xterm/xterm/css/xterm.css';
 
@@ -125,17 +126,79 @@ export default function Terminal({
     const copyText = useCallback((text: string) => {
         if (text) void api().clipboard.write(text).catch(() => {});
     }, []);
+
+    // Whether this terminal runs on a REMOTE host (a host window over the bridge).
+    // Constant per window; drives the extra Ctrl+V image interception below.
+    const remote = isRemoteWindow();
+
+    // Image-first paste. A copied IMAGE can't ride the stdin/keystroke path (that's
+    // text-only), so if the LOCAL clipboard holds one we sync it to the clipboard of
+    // the machine THIS terminal runs on — locally that's this machine; in a host
+    // window `clipboard.writeImage` is re-pointed to the HOST clipboard over the
+    // authed bridge — then deliver the Ctrl+V trigger to the pty so Claude Code reads
+    // it exactly like a native local paste (inline [Image] chip). Ordering matters:
+    // we AWAIT the (host) clipboard write before the trigger so the image is in place
+    // when the CLI reads it. Returns true when an image was handled (caller must NOT
+    // also paste text/forward the raw key); false ⇒ no image, fall through.
+    const tryPasteImage = useCallback(async (): Promise<boolean> => {
+        const id = ptyIdRef.current;
+        if (!id) return false;
+        let image: ReturnType<typeof parseImageDataUrl>;
+        try {
+            image = parseImageDataUrl(await api().clipboard.readImage());
+        } catch {
+            return false; // clipboard-image read failed — let the caller fall back
+        }
+        if (!image) return false; // no image → the caller handles it as text/raw
+        try {
+            const res = await api().clipboard.writeImage(image.base64);
+            // supported:false ⇒ the target has no OS clipboard (a headless host):
+            // no-op the image gracefully — never send a trigger for an empty
+            // clipboard, never break text paste. Still "handled" so the caller
+            // doesn't fall through and paste stale text.
+            if (res.supported && res.ok) {
+                await api().terminal.write(id, PASTE_TRIGGER_CTRL_V);
+            }
+        } catch {
+            /* host write / trigger failed — swallow; the image was still handled */
+        }
+        return true;
+    }, []);
+
+    // Explicit paste gesture (winmac Ctrl/Cmd+V, the context-menu Paste item, and
+    // linux right/middle-click): image first, else the EXISTING text paste unchanged.
     const pasteFromClipboard = useCallback(() => {
         const handle = handleRef.current;
         if (!handle) return;
-        void api()
-            .clipboard.read()
-            .then((t) => {
-                if (t) handle.paste(t);
-            })
-            .catch(() => {})
-            .finally(() => handle.focus());
-    }, []);
+        void (async () => {
+            const handledImage = await tryPasteImage();
+            if (!handledImage) {
+                try {
+                    const text = await api().clipboard.read();
+                    if (text) handle.paste(text);
+                } catch {
+                    /* clipboard unavailable — nothing to paste */
+                }
+            }
+            handle.focus();
+        })();
+    }, [tryPasteImage]);
+
+    // A raw Ctrl+V on a REMOTE host in contextmenu/linux mode: normally Ctrl+V is a
+    // raw ^V byte to the pty (not a paste), but a copied image can't reach the HOST
+    // that way — its clipboard is empty. So intercept, sync any image to the host
+    // FIRST, else forward the raw byte so the mode's normal behavior is preserved.
+    // Only wired for remote windows; a LOCAL Ctrl+V already reads the local clipboard.
+    const pasteCtrlVRaw = useCallback(() => {
+        const id = ptyIdRef.current;
+        if (!id) return;
+        void (async () => {
+            const handledImage = await tryPasteImage();
+            if (!handledImage) {
+                await api().terminal.write(id, PASTE_TRIGGER_CTRL_V).catch(() => {});
+            }
+        })();
+    }, [tryPasteImage]);
 
     // The right-click menu for 'contextmenu' mode — Copy/Paste routed through the
     // IPC clipboard (not fancy-term's navigator default). Disabled in the other
@@ -186,6 +249,16 @@ export default function Terminal({
                     return false;
                 }
             }
+            // Remote host + contextmenu/linux mode: Ctrl/Cmd+V is normally a raw ^V
+            // to the pty, but a copied image can't reach the HOST that way — its
+            // clipboard is empty. Intercept to sync the image to the host first, else
+            // forward the raw byte (pasteCtrlVRaw). winmac already handled Ctrl+V
+            // above; a LOCAL window keeps its native raw Ctrl+V (the pty is here, so
+            // the CLI reads the local clipboard with no help needed).
+            if (remote && copyPaste !== 'winmac' && mod && !e.shiftKey && !e.altKey && k === 'v') {
+                pasteCtrlVRaw();
+                return false;
+            }
             return true;
         });
         disposers.push(() => live.attachCustomKeyEventHandler(() => true));
@@ -224,7 +297,7 @@ export default function Terminal({
         // xtermReady: re-run once fancy-term has mounted the live xterm, so the
         // keybindings, highlight-to-copy, and (linux) right-click-paste actually
         // attach even when handle.xterm was null on the first run.
-    }, [copyPaste, copyText, pasteFromClipboard, xtermReady]);
+    }, [copyPaste, copyText, pasteFromClipboard, pasteCtrlVRaw, remote, xtermReady]);
 
     useEffect(() => {
         const handle = handleRef.current;

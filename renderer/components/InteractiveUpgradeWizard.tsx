@@ -11,6 +11,7 @@ import {
 } from '@particle-academy/react-fancy';
 import {
     api,
+    ulid,
     type AnalyseKnowledgeCandidate,
     type AnalyseRepoCandidate,
     type AnalyseResult,
@@ -491,7 +492,7 @@ export default function InteractiveUpgradeWizard({
     const planValid =
         slug.trim().length > 0 &&
         parentFolder.trim().length > 0 &&
-        projectId.length > 0 &&
+        // Project association is optional — Tynn is never required.
         repoNamesValid &&
         hostValid &&
         // GitHub is needed when the envelope is auto-created on GitHub OR
@@ -527,8 +528,10 @@ export default function InteractiveUpgradeWizard({
         setError(null);
         setBusyStep(null);
         try {
+            // Project association is optional (Tynn is never required). Fall back
+            // to the slug for the envelope name / display when none is chosen.
             const project = projects.find((p) => p.id === projectId);
-            if (!project) throw new Error('Pick a Tynn project.');
+            const envelopeName = project?.name || slug.trim();
 
             // Fork any repos set to 'fork' FIRST — the fork's clone URL
             // becomes the submodule source. Forks land under the chosen
@@ -576,7 +579,7 @@ export default function InteractiveUpgradeWizard({
                     ownerId: ghOwner
                         ? account.installations.find((i) => i.login === ghOwner)?.id ?? null
                         : null,
-                    description: `Aionima envelope for ${project.name}`,
+                    description: `Aionima envelope for ${envelopeName}`,
                     private: ghPrivate,
                 });
                 remote = { kind: 'paste', url: created.clone_url };
@@ -585,7 +588,7 @@ export default function InteractiveUpgradeWizard({
 
             const plan: ConvertPlanOpts = {
                 slug: slug.trim(),
-                name: project.name,
+                name: envelopeName,
                 parent_path: parentFolder.trim(),
                 repos: repoRows
                     .filter((r) => r.included)
@@ -661,17 +664,17 @@ export default function InteractiveUpgradeWizard({
             setBusyStep('Registering workspace…');
             const settings = await api().settings.get();
             const row: WorkspaceRow = {
-                id: project.id,
-                backend: project.backend ?? 'tynn',
-                project_id: project.id,
-                project_name: project.name,
-                tynn_project_id: project.id,
-                tynn_project_name: project.name,
+                id: project?.id ?? ulid(),
+                backend: project?.backend ?? 'tynn',
+                project_id: project?.id ?? '',
+                project_name: project?.name ?? '',
+                tynn_project_id: project?.id ?? '',
+                tynn_project_name: project?.name ?? '',
                 shape: 'agi',
                 path: result.path,
                 editor: null,
                 editor_cmd: null,
-                start_cmd: settings.default_start_cmd ?? null,
+                start_cmd: null,
                 env_file: settings.default_env_file ?? '.env',
                 last_opened_at: null,
                 created_by_genie: 1,
@@ -1530,13 +1533,19 @@ function EnvelopeStep({
             ) : (
                 <div>
                     <Text size="xs" style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
-                        Tynn project
+                        Project{' '}
+                        <span style={{ fontWeight: 400, color: 'var(--zinc-500)' }}>
+                            (optional)
+                        </span>
                     </Text>
                     <Select
                         value={projectId}
                         onValueChange={setProjectId}
-                        list={projects.map((p) => ({ value: p.id, label: p.name }))}
-                        placeholder="Choose a project…"
+                        list={[
+                            { value: '', label: '— No project (just a folder) —' },
+                            ...projects.map((p) => ({ value: p.id, label: p.name })),
+                        ]}
+                        placeholder="— No project (just a folder) —"
                     />
                 </div>
             )}

@@ -341,17 +341,6 @@ export default function SettingsPage() {
                     />
                 </SettingRow>
                 <SettingRow
-                    label="Start command"
-                    desc="Default start command pre-filled for new workspaces."
-                    keywords="start command default new workspace run"
-                    vertical
-                >
-                    <Input
-                        value={s.default_start_cmd ?? ''}
-                        onValueChange={(v) => patch({ default_start_cmd: v })}
-                    />
-                </SettingRow>
-                <SettingRow
                     label="Env file name"
                     desc="Default environment file name for new workspaces."
                     keywords="env file name environment default new workspace dotenv"

@@ -1,6 +1,10 @@
 import React from 'react';
 import { Action, Badge, Card, Heading, Icon, Text } from '@particle-academy/react-fancy';
-import type { WorkspaceRow } from '../lib/genie';
+import {
+    hasProjectAssociation,
+    workspaceDisplayName,
+    type WorkspaceRow,
+} from '../lib/genie';
 
 interface Props {
     rows: WorkspaceRow[];
@@ -77,23 +81,27 @@ export default function WorkspaceList({ rows, onOpen, onRemove, onAdd }: Props) 
                                             whiteSpace: 'nowrap',
                                         }}
                                     >
-                                        {w.project_name ?? w.tynn_project_name}
+                                        {workspaceDisplayName(w)}
                                     </Text>
                                     {w.shape === 'agi' && (
                                         <Badge color="amber" size="sm" variant="soft">
                                             .agi
                                         </Badge>
                                     )}
-                                    {(w.backend ?? 'tynn') === 'aionima' && (
-                                        <Badge color="emerald" size="sm" variant="soft">
-                                            Aionima
-                                        </Badge>
-                                    )}
-                                    {(w.backend ?? 'tynn') === 'tynn' && (
-                                        <Badge color="blue" size="sm" variant="soft">
-                                            Tynn
-                                        </Badge>
-                                    )}
+                                    {/* Backend badge only when a project is actually
+                                        associated — a project-less workspace shows none. */}
+                                    {hasProjectAssociation(w) &&
+                                        (w.backend ?? 'tynn') === 'aionima' && (
+                                            <Badge color="emerald" size="sm" variant="soft">
+                                                Aionima
+                                            </Badge>
+                                        )}
+                                    {hasProjectAssociation(w) &&
+                                        (w.backend ?? 'tynn') === 'tynn' && (
+                                            <Badge color="blue" size="sm" variant="soft">
+                                                Tynn
+                                            </Badge>
+                                        )}
                                 </div>
                                 <Text
                                     size="xs"
@@ -123,7 +131,7 @@ export default function WorkspaceList({ rows, onOpen, onRemove, onAdd }: Props) 
                                 size="sm"
                                 icon="trash-2"
                                 onClick={() => {
-                                    const name = w.project_name ?? w.tynn_project_name;
+                                    const name = workspaceDisplayName(w);
                                     if (
                                         confirm(
                                             `Remove "${name}" from Genie? The folder on disk is NOT deleted.`,

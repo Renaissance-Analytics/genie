@@ -32,6 +32,7 @@ import {
     forgetProcess,
     recordProcessOutput,
     getProcessLog,
+    clearProcessLog,
 } from './process-supervisor';
 import {
     registerTerminalEndpoint,
@@ -549,6 +550,10 @@ export function registerTerminalIpc(): void {
     });
     ipcMain.handle('process:statuses', () => getProcessStatuses());
     ipcMain.handle('process:log', (_e, id: string) => getProcessLog(id));
+    ipcMain.handle('process:clear-log', (_e, id: string) => {
+        clearProcessLog(id);
+        return { ok: true };
+    });
     // Task Manager: every process across every workspace (+ System), each row
     // tagged with the workspace that spawned it.
     ipcMain.handle('process:list', () => listAllProcesses());

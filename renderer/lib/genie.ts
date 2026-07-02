@@ -163,6 +163,20 @@ export interface IssuewatchGranularity {
     upstream: 'none' | 'issues' | 'issues+prs';
 }
 
+/** How an agent acts on an IssueWatch bucket: 'surface' (report only / hold),
+ *  'fix' (fix the root cause, report before shipping), or 'fix-and-ship'
+ *  (remediate + ship right away). Mirrors `IssuewatchPolicy` in main/db.ts. */
+export type IssuewatchPolicy = 'surface' | 'fix' | 'fix-and-ship';
+
+/** Per-bucket IssueWatch remediation policy (mirrors main/db.ts). The three count
+ *  buckets — security (dependabot + code-scanning + secret-scanning), issue, pr —
+ *  each carry their own policy. */
+export interface IssuewatchPolicyBuckets {
+    security: IssuewatchPolicy;
+    issue: IssuewatchPolicy;
+    pr: IssuewatchPolicy;
+}
+
 /** Issue Watch: the surfaced per-workspace status (why the feed is what it is). */
 export interface WorkspaceWatchStatus {
     connected: boolean;
@@ -274,7 +288,6 @@ export interface Settings {
     /** Collapsed sidebar workspace rows — JSON-encoded string[] of workspace
      *  ids. Persists the expand/collapse state across restarts. */
     collapsed_workspaces?: string;
-    default_start_cmd?: string;
     default_env_file?: string;
     global_hotkey?: string;
     tynn_host?: string;
@@ -471,6 +484,10 @@ export interface RemoteLinkState {
     hostVersion?: number;
     localVersion?: number;
     reason?: 'upgrade' | 'dropped';
+    /** Soft, non-blocking nudge (phase 'connected' only): host is on an older
+     *  RELEASE build than this client, but still wire-compatible. `hostVersion`
+     *  is null when the host is provably older but reports no version. */
+    hostBuildBehind?: { hostVersion: string | null; localVersion: string };
 }
 
 /** A host remembered in the Hosts picker (persisted; survives discovery gaps). */
@@ -1028,6 +1045,21 @@ export interface GenieApi {
     clipboard: {
         write: (text: string) => Promise<{ ok: boolean }>;
         read: () => Promise<string>;
+        /**
+         * The LOCAL clipboard image as a PNG data-URL, or null when there's no
+         * image. NOT re-pointed by the remote bridge, so in a host window this
+         * still reads the LOCAL clipboard (the machine the user copied on) — the
+         * source of a remote image paste.
+         */
+        readImage: () => Promise<string | null>;
+        /**
+         * Write a PNG (base64, no data-URL prefix) to the clipboard of the machine
+         * the terminal runs on: locally that's this machine; in a host window the
+         * remote bridge re-points it to the HOST clipboard over the authed bridge.
+         * `supported:false` ⇒ the target has no OS clipboard (a headless host) —
+         * the caller no-ops the image gracefully and never breaks text paste.
+         */
+        writeImage: (dataBase64: string) => Promise<{ ok: boolean; supported: boolean }>;
     };
     /** Built-in editor — reply to a main `editor:open-file` request
      *  (openFileForUser MCP tool), keyed by the request id main awaits. */
@@ -1074,10 +1106,13 @@ export interface GenieApi {
             id: string,
             require: boolean,
         ) => Promise<{ ok: boolean }>;
-        /** Set this workspace's IssueWatch remediation policy. */
+        /** This workspace's resolved per-bucket IssueWatch remediation policy
+         *  (legacy single value applied to all buckets as the fallback). */
+        getIssuewatchPolicy: (id: string) => Promise<IssuewatchPolicyBuckets>;
+        /** Persist this workspace's per-bucket IssueWatch remediation policy. */
         setIssuewatchPolicy: (
             id: string,
-            policy: 'surface' | 'fix' | 'fix-and-ship',
+            buckets: IssuewatchPolicyBuckets,
         ) => Promise<{ ok: boolean }>;
         /** This workspace's resolved IssueWatch granularity (defaults applied). */
         getIssuewatchGranularity: (id: string) => Promise<IssuewatchGranularity>;
@@ -1279,6 +1314,8 @@ export interface GenieApi {
         statuses: () => Promise<Record<string, ProcessStatus>>;
         /** Recent output tail for a Process (ANSI-stripped) — the hover log. */
         log: (id: string) => Promise<string>;
+        /** Drop a Process's recorded output tail (the log popover's "Clear log"). */
+        clearLog: (id: string) => Promise<{ ok: boolean }>;
         /** Every process across every workspace (+ System) for the Task Manager. */
         list: () => Promise<ProcessListItem[]>;
     };
@@ -1321,45 +1358,53 @@ export interface GenieApi {
     files: {
         listTree: (
             workspacePath: string,
-            opts?: { maxDepth?: number; maxEntries?: number; root?: string },
+            opts?: { maxDepth?: number; maxEntries?: number; root?: string; system?: boolean },
         ) => Promise<TreeNodeData[]>;
         read: (
             workspacePath: string,
             relPath: string,
+            system?: boolean,
         ) => Promise<{ content: string; truncated: boolean }>;
         write: (
             workspacePath: string,
             relPath: string,
             content: string,
+            system?: boolean,
         ) => Promise<{ ok: boolean }>;
         createFile: (
             workspacePath: string,
             relPath: string,
+            system?: boolean,
         ) => Promise<{ ok: boolean }>;
         createFolder: (
             workspacePath: string,
             relPath: string,
+            system?: boolean,
         ) => Promise<{ ok: boolean }>;
         rename: (
             workspacePath: string,
             fromRel: string,
             toRel: string,
+            system?: boolean,
         ) => Promise<{ ok: boolean }>;
         duplicate: (
             workspacePath: string,
             relPath: string,
+            system?: boolean,
         ) => Promise<{ ok: boolean; relPath: string }>;
         /** Copy an external OS path into a workspace folder; returns the new rel path. */
         importExternal: (
             workspacePath: string,
             srcAbs: string,
             destFolderRel: string,
+            system?: boolean,
         ) => Promise<{ ok: boolean; relPath: string }>;
         /** OS path of a File from an external drag (webUtils.getPathForFile). */
         pathForFile: (file: File) => string;
         delete: (
             workspacePath: string,
             relPath: string,
+            system?: boolean,
         ) => Promise<{ ok: boolean }>;
         gitStatus: (
             workspacePath: string,
@@ -1681,6 +1726,17 @@ function ensureRemoteBinding(local: GenieApi): void {
         .catch(() => {});
 }
 
+/**
+ * True when THIS window is a remote HOST window (opened by the host-window factory
+ * with `?host=<connKey>`), driving another machine over the bridge. The same
+ * synchronous URL signal `ensureRemoteBinding` seeds `api()` from — so callers can
+ * cheaply decide "is the terminal here running on a remote host?" without an async
+ * `myBinding()` round-trip.
+ */
+export function isRemoteWindow(): boolean {
+    return typeof window !== 'undefined' && /[?&]host=/.test(window.location?.search ?? '');
+}
+
 export function api(): GenieApi {
     if (typeof window === 'undefined' || !window.genie) {
         throw new Error(
@@ -1715,6 +1771,26 @@ export const SYSTEM_WORKSPACE_ID = '__system__';
 /** True for the synthetic System Workspace row (see {@link SYSTEM_WORKSPACE_ID}). */
 export function isSystemWorkspace(ws: { id: string }): boolean {
     return ws.id === SYSTEM_WORKSPACE_ID;
+}
+
+/**
+ * A workspace does NOT require a Tynn/Aionima project — associating one is
+ * optional. When absent, `project_id`/`project_name` are empty, so display the
+ * folder's leaf name instead of a blank. (The System Workspace keeps its own
+ * non-empty project fields, so this only ever fills in for project-less rows.)
+ */
+export function workspaceDisplayName(
+    ws: Pick<WorkspaceRow, 'project_name' | 'tynn_project_name' | 'path'>,
+): string {
+    const name = (ws.project_name || ws.tynn_project_name || '').trim();
+    if (name) return name;
+    const leaf = (ws.path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+    return leaf || 'Workspace';
+}
+
+/** True when a workspace has no associated project (project association is optional). */
+export function hasProjectAssociation(ws: Pick<WorkspaceRow, 'project_id'>): boolean {
+    return !!ws.project_id && ws.project_id !== SYSTEM_WORKSPACE_ID;
 }
 
 /**

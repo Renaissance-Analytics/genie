@@ -8,6 +8,7 @@ type RemoteLinkStatePayload = {
     hostVersion?: number;
     localVersion?: number;
     reason?: 'upgrade' | 'dropped';
+    hostBuildBehind?: { hostVersion: string | null; localVersion: string };
 };
 
 /**
@@ -323,6 +324,17 @@ const api = {
         write: (text: string) =>
             ipcRenderer.invoke('clipboard:write', text) as Promise<{ ok: boolean }>,
         read: () => ipcRenderer.invoke('clipboard:read') as Promise<string>,
+        /** LOCAL clipboard image as a PNG data-URL, or null when there's no image. */
+        readImage: () =>
+            ipcRenderer.invoke('clipboard:read-image') as Promise<string | null>,
+        /** Write a PNG (base64, no data-URL prefix) to this machine's clipboard.
+         *  `supported:false` ⇒ no OS clipboard on the target (a headless host —
+         *  only reachable via the remote-bridge override, never this local path). */
+        writeImage: (dataBase64: string) =>
+            ipcRenderer.invoke('clipboard:write-image', dataBase64) as Promise<{
+                ok: boolean;
+                supported: boolean;
+            }>,
     },
     // Built-in editor — the renderer's reply to a main `editor:open-file` request
     // (openFileForUser MCP tool): reports whether it reused an open panel or
@@ -377,10 +389,10 @@ const api = {
             ipcRenderer.invoke('workspaces:set-process-approval', id, require),
         setTerminalApproval: (id: string, require: boolean) =>
             ipcRenderer.invoke('workspaces:set-terminal-approval', id, require),
-        setIssuewatchPolicy: (
-            id: string,
-            policy: 'surface' | 'fix' | 'fix-and-ship',
-        ) => ipcRenderer.invoke('workspaces:set-issuewatch-policy', id, policy),
+        getIssuewatchPolicy: (id: string) =>
+            ipcRenderer.invoke('workspaces:get-issuewatch-policy', id),
+        setIssuewatchPolicy: (id: string, buckets: unknown) =>
+            ipcRenderer.invoke('workspaces:set-issuewatch-policy', id, buckets),
         getIssuewatchGranularity: (id: string) =>
             ipcRenderer.invoke('workspaces:get-issuewatch-granularity', id),
         setIssuewatchGranularity: (id: string, granularity: unknown) =>
@@ -575,6 +587,8 @@ const api = {
             >,
         log: (id: string) =>
             ipcRenderer.invoke('process:log', id) as Promise<string>,
+        clearLog: (id: string) =>
+            ipcRenderer.invoke('process:clear-log', id) as Promise<{ ok: boolean }>,
         list: () => ipcRenderer.invoke('process:list'),
     },
 
@@ -614,46 +628,46 @@ const api = {
     files: {
         listTree: (
             workspacePath: string,
-            opts?: { maxDepth?: number; maxEntries?: number; root?: string },
+            opts?: { maxDepth?: number; maxEntries?: number; root?: string; system?: boolean },
         ) => ipcRenderer.invoke('files:list-tree', workspacePath, opts),
-        read: (workspacePath: string, relPath: string) =>
-            ipcRenderer.invoke('files:read', workspacePath, relPath) as Promise<{
+        read: (workspacePath: string, relPath: string, system?: boolean) =>
+            ipcRenderer.invoke('files:read', workspacePath, relPath, system) as Promise<{
                 content: string;
                 truncated: boolean;
             }>,
-        write: (workspacePath: string, relPath: string, content: string) =>
-            ipcRenderer.invoke('files:write', workspacePath, relPath, content) as Promise<{
+        write: (workspacePath: string, relPath: string, content: string, system?: boolean) =>
+            ipcRenderer.invoke('files:write', workspacePath, relPath, content, system) as Promise<{
                 ok: boolean;
             }>,
-        createFile: (workspacePath: string, relPath: string) =>
-            ipcRenderer.invoke('files:create-file', workspacePath, relPath) as Promise<{
+        createFile: (workspacePath: string, relPath: string, system?: boolean) =>
+            ipcRenderer.invoke('files:create-file', workspacePath, relPath, system) as Promise<{
                 ok: boolean;
             }>,
-        createFolder: (workspacePath: string, relPath: string) =>
-            ipcRenderer.invoke('files:create-folder', workspacePath, relPath) as Promise<{
+        createFolder: (workspacePath: string, relPath: string, system?: boolean) =>
+            ipcRenderer.invoke('files:create-folder', workspacePath, relPath, system) as Promise<{
                 ok: boolean;
             }>,
-        rename: (workspacePath: string, fromRel: string, toRel: string) =>
-            ipcRenderer.invoke('files:rename', workspacePath, fromRel, toRel) as Promise<{
+        rename: (workspacePath: string, fromRel: string, toRel: string, system?: boolean) =>
+            ipcRenderer.invoke('files:rename', workspacePath, fromRel, toRel, system) as Promise<{
                 ok: boolean;
             }>,
-        duplicate: (workspacePath: string, relPath: string) =>
-            ipcRenderer.invoke('files:duplicate', workspacePath, relPath) as Promise<{
+        duplicate: (workspacePath: string, relPath: string, system?: boolean) =>
+            ipcRenderer.invoke('files:duplicate', workspacePath, relPath, system) as Promise<{
                 ok: boolean;
                 relPath: string;
             }>,
         /** Copy an external OS path (e.g. dragged from Explorer/Finder) into a
          *  workspace folder ('' = root). Returns the new workspace-relative path. */
-        importExternal: (workspacePath: string, srcAbs: string, destFolderRel: string) =>
-            ipcRenderer.invoke('files:import-external', workspacePath, srcAbs, destFolderRel) as Promise<{
+        importExternal: (workspacePath: string, srcAbs: string, destFolderRel: string, system?: boolean) =>
+            ipcRenderer.invoke('files:import-external', workspacePath, srcAbs, destFolderRel, system) as Promise<{
                 ok: boolean;
                 relPath: string;
             }>,
         /** Resolve the OS path of a File from an external drag. Electron 42 removed
          *  File.path; webUtils.getPathForFile is the supported replacement. */
         pathForFile: (file: File): string => webUtils.getPathForFile(file),
-        delete: (workspacePath: string, relPath: string) =>
-            ipcRenderer.invoke('files:delete', workspacePath, relPath) as Promise<{
+        delete: (workspacePath: string, relPath: string, system?: boolean) =>
+            ipcRenderer.invoke('files:delete', workspacePath, relPath, system) as Promise<{
                 ok: boolean;
             }>,
         gitStatus: (workspacePath: string, opts?: { ignored?: boolean }) =>

@@ -84,6 +84,12 @@ export function getProcessLog(id: string): string {
     return stripControl(procLogs.get(id) ?? '');
 }
 
+/** Drop a process's recorded output tail (the "Clear log" action). The buffer
+ *  refills from new pty output as the process keeps running. */
+export function clearProcessLog(id: string): void {
+    procLogs.delete(id);
+}
+
 function ensure(id: string): ProcState {
     let st = procs.get(id);
     if (!st) {

@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
     compareBridgeVersion,
     linkStateForVersions,
+    computeHostBuildBehind,
+    linkStateForPing,
     nextReconnectDelayMs,
     limboExpired,
     decideOnDisconnect,
@@ -29,6 +31,55 @@ describe('linkStateForVersions', () => {
     });
     it('mismatch the other way → update this Genie', () => {
         expect(linkStateForVersions(1, 2)).toMatchObject({ phase: 'mismatch', direction: 'client-behind' });
+    });
+});
+
+describe('computeHostBuildBehind (soft release-version nudge)', () => {
+    it('nudges when the host build is older than the client', () => {
+        expect(computeHostBuildBehind('0.7.0-beta.98', '0.7.0-beta.80')).toEqual({
+            hostVersion: '0.7.0-beta.80',
+            localVersion: '0.7.0-beta.98',
+        });
+    });
+    it('no nudge when host is same or newer', () => {
+        expect(computeHostBuildBehind('0.7.0-beta.98', '0.7.0-beta.98')).toBeUndefined();
+        expect(computeHostBuildBehind('0.7.0-beta.80', '0.7.0-beta.98')).toBeUndefined();
+    });
+    it('no nudge when either version is unknown (never nag on an unknown build)', () => {
+        expect(computeHostBuildBehind('0.7.0-beta.98', undefined)).toBeUndefined();
+        expect(computeHostBuildBehind(undefined, '0.7.0-beta.80')).toBeUndefined();
+    });
+});
+
+describe('linkStateForPing (protocol handshake + soft nudge)', () => {
+    it('connected + nudge when protocol matches but host build is older', () => {
+        expect(
+            linkStateForPing(1, '0.7.0-beta.98', { protocolVersion: 1, appVersion: '0.7.0-beta.80' }),
+        ).toEqual({
+            phase: 'connected',
+            hostBuildBehind: { hostVersion: '0.7.0-beta.80', localVersion: '0.7.0-beta.98' },
+        });
+    });
+    it('connected with no nudge when versions match', () => {
+        expect(
+            linkStateForPing(1, '0.7.0-beta.98', { protocolVersion: 1, appVersion: '0.7.0-beta.98' }),
+        ).toEqual({ phase: 'connected' });
+    });
+    it('a hard protocol mismatch takes precedence — no soft nudge decoration', () => {
+        expect(
+            linkStateForPing(1, '0.7.0-beta.98', { protocolVersion: 0, appVersion: '0.7.0-beta.80' }),
+        ).toEqual({ phase: 'mismatch', direction: 'host-behind', hostVersion: 0, localVersion: 1 });
+    });
+    it('missing appVersion (host predates version reporting) → connected + unknown-older nudge', () => {
+        expect(linkStateForPing(1, '0.7.0-beta.98', { protocolVersion: 1, appVersion: null })).toEqual({
+            phase: 'connected',
+            hostBuildBehind: { hostVersion: null, localVersion: '0.7.0-beta.98' },
+        });
+    });
+    it('no local version → no nudge even if host omits appVersion', () => {
+        expect(linkStateForPing(1, undefined, { protocolVersion: 1, appVersion: null })).toEqual({
+            phase: 'connected',
+        });
     });
 });
 

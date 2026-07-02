@@ -7,6 +7,8 @@ import type {
     EnvelopeRepoView,
     KnowledgeFolderView,
     IssuewatchGranularity,
+    IssuewatchPolicy,
+    IssuewatchPolicyBuckets,
 } from '../../lib/genie';
 import { api } from '../../lib/genie';
 
@@ -16,6 +18,21 @@ const DEFAULT_GRANULARITY: IssuewatchGranularity = {
     own: { issues: true, pulls: true, security: true },
     upstream: 'issues+prs',
 };
+
+/** Report-only for every bucket — the optimistic value shown until the stored
+ *  per-bucket remediation policy loads (and the fallback on a read error). */
+const DEFAULT_POLICY: IssuewatchPolicyBuckets = {
+    security: 'surface',
+    issue: 'surface',
+    pr: 'surface',
+};
+
+/** The remediation choices offered for each bucket (shared by all three selects). */
+const POLICY_OPTIONS = [
+    { value: 'surface', label: 'Surface only — report, wait for me (default)' },
+    { value: 'fix', label: 'Fix when idle — fix the root cause, report before shipping' },
+    { value: 'fix-and-ship', label: 'Fix & ship when idle — remediate and ship right away' },
+];
 
 /**
  * Per-workspace settings, opened from the workspace context menu. The single
@@ -42,10 +59,9 @@ export default function WorkspaceSettingsModal({
     // Per-workspace "require approval before an agent spawns a terminal /
     // launches a coding agent" (the higher-power manageTerminals / runAgent gate).
     const [terminalApproval, setTerminalApproval] = useState<boolean | null>(null);
-    // Per-workspace IssueWatch remediation policy (moved here from global Settings).
-    const [iwPolicy, setIwPolicy] = useState<'surface' | 'fix' | 'fix-and-ship'>(
-        workspace.issuewatch_policy ?? 'surface',
-    );
+    // Per-workspace IssueWatch remediation policy, PER BUCKET (security/issue/pr).
+    // Null until the resolved value loads; we render the defaults optimistically.
+    const [iwPolicy, setIwPolicy] = useState<IssuewatchPolicyBuckets | null>(null);
     // Per-workspace IssueWatch granularity (what to watch + ping about). Null
     // until the resolved value loads; we render the defaults optimistically.
     const [granularity, setGranularity] = useState<IssuewatchGranularity | null>(null);
@@ -75,13 +91,18 @@ export default function WorkspaceSettingsModal({
                 if (alive) {
                     setProcessApproval(ws ? ws.process_approval !== 0 : true);
                     setTerminalApproval(ws ? ws.terminal_approval !== 0 : true);
-                    if (ws?.issuewatch_policy) setIwPolicy(ws.issuewatch_policy);
                 }
             } catch {
                 if (alive) {
                     setProcessApproval(true);
                     setTerminalApproval(true);
                 }
+            }
+            try {
+                const p = await api().workspaces.getIssuewatchPolicy(workspace.id);
+                if (alive) setIwPolicy(p);
+            } catch {
+                if (alive) setIwPolicy(DEFAULT_POLICY);
             }
             try {
                 const g = await api().workspaces.getIssuewatchGranularity(workspace.id);
@@ -113,11 +134,18 @@ export default function WorkspaceSettingsModal({
         }
     };
 
-    const changeIwPolicy = async (policy: 'surface' | 'fix' | 'fix-and-ship') => {
-        const prev = iwPolicy;
-        setIwPolicy(policy); // optimistic
+    // Persist ONE bucket's remediation policy optimistically, reverting on
+    // failure. Sends the FULL next buckets object (mirrors saveGranularity), so a
+    // single-bucket edit never drops the other two buckets' stored values.
+    const changeIwPolicy = async (
+        bucket: keyof IssuewatchPolicyBuckets,
+        mode: IssuewatchPolicy,
+    ) => {
+        const prev = iwPolicy ?? DEFAULT_POLICY;
+        const next = { ...prev, [bucket]: mode };
+        setIwPolicy(next); // optimistic
         try {
-            await api().workspaces.setIssuewatchPolicy(workspace.id, policy);
+            await api().workspaces.setIssuewatchPolicy(workspace.id, next);
         } catch {
             setIwPolicy(prev); // revert
         }
@@ -137,6 +165,8 @@ export default function WorkspaceSettingsModal({
 
     // The granularity shown while the stored value loads (and the safe fallback).
     const g = granularity ?? DEFAULT_GRANULARITY;
+    // The per-bucket remediation policy shown while the stored value loads.
+    const pol = iwPolicy ?? DEFAULT_POLICY;
     const setOwnKind = (kind: 'issues' | 'pulls' | 'security', on: boolean) =>
         void saveGranularity({ ...g, own: { ...g.own, [kind]: on } });
 
@@ -203,20 +233,45 @@ export default function WorkspaceSettingsModal({
 
                 <Section title="Agent behavior">
                     <Row
-                        label="IssueWatch remediation"
-                        sub="How agents act on this workspace's IssueWatch pings"
+                        label="Remediation — Security alerts"
+                        sub="How agents act on Dependabot / code-scanning / secret-scanning pings"
                         vertical
                     >
                         <Select
-                            value={iwPolicy}
+                            value={pol.security}
+                            disabled={iwPolicy === null}
                             onValueChange={(v) =>
-                                void changeIwPolicy(v as 'surface' | 'fix' | 'fix-and-ship')
+                                void changeIwPolicy('security', v as IssuewatchPolicy)
                             }
-                            list={[
-                                { value: 'surface', label: 'Surface only — report the counts, wait for me (default)' },
-                                { value: 'fix', label: 'Fix when idle — fix the root cause, then report before shipping' },
-                                { value: 'fix-and-ship', label: 'Fix & ship when idle — remediate and ship right away' },
-                            ]}
+                            list={POLICY_OPTIONS}
+                        />
+                    </Row>
+                    <Row
+                        label="Remediation — Issues"
+                        sub="How agents act on open-issue pings"
+                        vertical
+                    >
+                        <Select
+                            value={pol.issue}
+                            disabled={iwPolicy === null}
+                            onValueChange={(v) =>
+                                void changeIwPolicy('issue', v as IssuewatchPolicy)
+                            }
+                            list={POLICY_OPTIONS}
+                        />
+                    </Row>
+                    <Row
+                        label="Remediation — Pull requests"
+                        sub="How agents act on open-PR pings"
+                        vertical
+                    >
+                        <Select
+                            value={pol.pr}
+                            disabled={iwPolicy === null}
+                            onValueChange={(v) =>
+                                void changeIwPolicy('pr', v as IssuewatchPolicy)
+                            }
+                            list={POLICY_OPTIONS}
                         />
                     </Row>
                     <Row

@@ -683,26 +683,27 @@ describe('handleMcpMessage', () => {
             workspaceResolved: true,
             counts: { issue: 0, pr: 0, security: 2 },
             items: [],
-            policy: 'fix-and-ship',
+            policy: { security: 'fix-and-ship', issue: 'fix-and-ship', pr: 'fix-and-ship' },
         });
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 60, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
             ctx({ checkIssues }),
         );
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
-        // Base counts plus a root-cause / ship-now directive (no bandaids).
+        // Base counts plus a root-cause / ship-now directive (no bandaids) for the
+        // only open bucket (security).
         expect(text).toContain('IssueWatch — issues:0, PR:0, sec:2');
-        expect(text).toContain('ROOT CAUSE');
+        expect(text).toContain('security: fix at the ROOT CAUSE');
         expect(text).toContain('ship right away');
     });
 
-    it('imDone leaves the counts line bare when policy is surface/unset', async () => {
+    it('imDone leaves the counts line bare when every open bucket is surface', async () => {
         const checkIssues = vi.fn().mockResolvedValue({
             connected: true,
             workspaceResolved: true,
             counts: { issue: 1, pr: 0, security: 0 },
             items: [],
-            policy: 'surface',
+            policy: { security: 'surface', issue: 'surface', pr: 'surface' },
         });
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 61, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
@@ -711,6 +712,27 @@ describe('handleMcpMessage', () => {
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
         expect(text).toContain('IssueWatch — issues:1, PR:0, sec:0');
         expect(text).not.toContain('ROOT CAUSE');
+    });
+
+    it('imDone gives a PER-BUCKET directive (security fix-and-ship, issues held)', async () => {
+        const checkIssues = vi.fn().mockResolvedValue({
+            connected: true,
+            workspaceResolved: true,
+            counts: { issue: 3, pr: 0, security: 2 },
+            items: [],
+            policy: { security: 'fix-and-ship', issue: 'surface', pr: 'fix' },
+        });
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 62, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
+            ctx({ checkIssues }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('IssueWatch — issues:3, PR:0, sec:2');
+        // Security: fix + ship now. Issues: explicitly held. PRs have 0 open, so no
+        // PR directive appears even though its policy is 'fix'.
+        expect(text).toContain('security: fix at the ROOT CAUSE (NO bandaids) and ship right away');
+        expect(text).toContain('issues: surface only (hold)');
+        expect(text).not.toContain('PRs:');
     });
 
     it('imDone omits the counts line when there is nothing open', async () => {

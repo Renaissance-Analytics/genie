@@ -10,7 +10,7 @@ import { shouldForwardToDriver } from './forward-decision';
 import {
     BRIDGE_PROTOCOL_VERSION,
     LIMBO_TIMEOUT_MS,
-    linkStateForVersions,
+    linkStateForPing,
     nextReconnectDelayMs,
     decideOnDisconnect,
     type LinkState,
@@ -520,27 +520,40 @@ function setConnLinkState(conn: RemoteConnection, state: LinkState): void {
     emitToConn(conn, 'remote:link', state);
 }
 
-/** Read the host's bridge protocol version from its unauthed `/api/ping`. Null
- *  when unreachable; a host predating versioning reports none → 0 (→ behind). */
-async function fetchHostProtocolVersion(host: RemoteHost): Promise<number | null> {
+/** Read the host's `/api/ping`: bridge protocol version + release app version.
+ *  Null when unreachable; a host predating protocol versioning reports none → 0
+ *  (→ hard "behind"), and one predating appVersion reports null (→ no soft
+ *  nudge — we never nudge on an unknown host build). */
+async function fetchHostPing(
+    host: RemoteHost,
+): Promise<{ protocolVersion: number; appVersion: string | null } | null> {
     try {
         const res = await fetch(`http://${host.ip}:${host.port}/api/ping`);
         if (!res.ok) return null;
-        const data = (await res.json()) as { protocolVersion?: number };
-        return typeof data?.protocolVersion === 'number' ? data.protocolVersion : 0;
+        const data = (await res.json()) as {
+            protocolVersion?: number;
+            appVersion?: string | null;
+        };
+        return {
+            protocolVersion:
+                typeof data?.protocolVersion === 'number' ? data.protocolVersion : 0,
+            appVersion: typeof data?.appVersion === 'string' ? data.appVersion : null,
+        };
     } catch {
         return null;
     }
 }
 
 /** Re-check the host's version after a (re)connect and set the matching link
- *  state (connected / mismatch). Unreachable ping → assume connected (the bridge
- *  itself just reopened, so the host is up). */
+ *  state (connected / mismatch / soft older-build nudge). Unreachable ping →
+ *  assume connected (the bridge itself just reopened, so the host is up). */
 async function revalidateAndSetLinkState(conn: RemoteConnection): Promise<void> {
-    const v = await fetchHostProtocolVersion(conn.host);
+    const ping = await fetchHostPing(conn.host);
     setConnLinkState(
         conn,
-        v == null ? { phase: 'connected' } : linkStateForVersions(BRIDGE_PROTOCOL_VERSION, v),
+        ping == null
+            ? { phase: 'connected' }
+            : linkStateForPing(BRIDGE_PROTOCOL_VERSION, app.getVersion(), ping),
     );
 }
 
@@ -1118,9 +1131,9 @@ async function connectRemoteInner(
     // work), but its linkState steers the window to the mismatch overlay instead
     // of rendering the (incompatible) dashboard. The window binds AFTER this
     // returns and reads remoteLinkStateFor() on mount, so we just seed the state.
-    const hostVersion = await fetchHostProtocolVersion(host);
-    if (hostVersion != null) {
-        conn.linkState = linkStateForVersions(BRIDGE_PROTOCOL_VERSION, hostVersion);
+    const ping = await fetchHostPing(host);
+    if (ping != null) {
+        conn.linkState = linkStateForPing(BRIDGE_PROTOCOL_VERSION, app.getVersion(), ping);
     }
     connections.set(connKey, conn);
     recordKnownHost(host);

@@ -131,6 +131,20 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             ).map,
     };
 
+    // Clipboard: `read`/`readImage` stay LOCAL (spread from local) — the copied
+    // image lives on the machine the user is on, so a host window still reads the
+    // LOCAL clipboard, exactly like text paste already does. Only `writeImage` is
+    // re-pointed to the HOST clipboard over the authed bridge, so a synced image
+    // lands where the CLI (running on the host) will read it.
+    const clipboard: GenieApi['clipboard'] = {
+        ...local.clipboard,
+        writeImage: async (dataBase64: string) =>
+            (await req('/api/clipboard/image', {
+                method: 'POST',
+                json: { dataBase64 },
+            })) as { ok: boolean; supported: boolean },
+    };
+
     // The host's background processes.
     const process: GenieApi['process'] = {
         list: async () =>
@@ -154,8 +168,10 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             for (const p of list) out[p.id] = p.status as ProcessStatus;
             return out;
         },
-        // No host log endpoint yet — the hover log is empty in remote mode.
+        // No host log endpoint yet — the hover log is empty in remote mode, so
+        // clearing it is a no-op (nothing is buffered on the client side).
         log: async () => '',
+        clearLog: async () => ({ ok: true }),
     };
 
     // xterm forwards the host app's mouse-tracking (CSI M / CSI < … M|m) as input.
@@ -192,5 +208,5 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             ),
     };
 
-    return { ...local, workspaces, terminalSpec, files, process, terminal };
+    return { ...local, workspaces, terminalSpec, files, process, terminal, clipboard };
 }

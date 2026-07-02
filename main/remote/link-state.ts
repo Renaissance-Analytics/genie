@@ -5,6 +5,8 @@
  * pushes the resulting LinkState to the host window.
  */
 
+import { isNewer } from '../updater/semver';
+
 /**
  * The bridge PROTOCOL/schema version — an integer bumped ONLY when the `/api` +
  * `/ws` data shapes between a remote client and a host change INCOMPATIBLY.
@@ -29,6 +31,16 @@ export interface LinkState {
     localVersion?: number;
     /** reconnecting: an upgrade WE triggered, or an unexpected drop. */
     reason?: 'upgrade' | 'dropped';
+    /**
+     * SOFT, non-blocking nudge (only meaningful when phase === 'connected'): the
+     * host is on an OLDER RELEASE build than this client but still wire-compatible
+     * (same protocol). Distinct from the hard `mismatch` phase — the link works;
+     * this just informs the user their host could be updated. `hostVersion` is
+     * `null` when the host is provably older but doesn't report a version (a build
+     * predating version reporting). `undefined` (field absent) when the host is
+     * same-or-newer.
+     */
+    hostBuildBehind?: { hostVersion: string | null; localVersion: string };
 }
 
 /** Compare the local bridge version against the host's. */
@@ -45,6 +57,48 @@ export function linkStateForVersions(local: number, remote: number): LinkState {
     const cmp = compareBridgeVersion(local, remote);
     if (cmp === 'match') return { phase: 'connected' };
     return { phase: 'mismatch', direction: cmp, hostVersion: remote, localVersion: local };
+}
+
+/**
+ * The soft "host is on an older build" nudge, or undefined when the host is
+ * same-or-newer / either version unknown. This is a RELEASE-version (semver)
+ * comparison, deliberately separate from the protocol handshake above — patch/
+ * feature betas stay wire-compatible (no hard mismatch) but can still be nudged.
+ */
+export function computeHostBuildBehind(
+    localAppVersion: string | undefined,
+    hostAppVersion: string | undefined,
+): { hostVersion: string; localVersion: string } | undefined {
+    if (!localAppVersion || !hostAppVersion) return undefined;
+    if (localAppVersion === hostAppVersion) return undefined;
+    return isNewer(localAppVersion, hostAppVersion)
+        ? { hostVersion: hostAppVersion, localVersion: localAppVersion }
+        : undefined;
+}
+
+/**
+ * Full link state for a freshly-read host `/api/ping`: the protocol handshake
+ * (which drives the hard upgrade/mismatch overlay) PLUS, only when the link is
+ * otherwise healthy, the soft older-build nudge. A hard mismatch takes
+ * precedence — we don't decorate an overlay state with a nudge.
+ */
+export function linkStateForPing(
+    localProtocol: number,
+    localAppVersion: string | undefined,
+    ping: { protocolVersion: number; appVersion?: string | null },
+): LinkState {
+    const state = linkStateForVersions(localProtocol, ping.protocolVersion);
+    if (state.phase !== 'connected') return state;
+    const nudge = computeHostBuildBehind(localAppVersion, ping.appVersion ?? undefined);
+    if (nudge) return { ...state, hostBuildBehind: nudge };
+    // Host responded + is wire-compatible but reports NO appVersion → it predates
+    // version reporting, so it's provably older than this client (which does report
+    // one). Nudge with an unknown version rather than staying silent — otherwise the
+    // very first stale host you connect to (pre-this-feature) would never surface.
+    if (localAppVersion && ping.appVersion == null) {
+        return { ...state, hostBuildBehind: { hostVersion: null, localVersion: localAppVersion } };
+    }
+    return state;
 }
 
 /** Gentle reconnect backoff: 2s, 3s, then 5s capped — fast enough to catch a

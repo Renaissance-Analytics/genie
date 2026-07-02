@@ -1,5 +1,6 @@
 import type { HostBootOptions, HostCorePorts, HostHandle, HostCore } from './ports';
 import type { BackendSelection } from './backend-selection';
+import { markHeadlessRuntime } from '../runtime-mode';
 
 export * from './ports';
 export { runBackendSelection } from './backend-selection';
@@ -53,6 +54,12 @@ export type HostCoreStepsFactory = (
 export function createHostCore(makeSteps: HostCoreStepsFactory): HostCore {
     return {
         async boot(opts: HostBootOptions, ports: HostCorePorts): Promise<HostHandle> {
+            // This is the ONLY headless (genie-cloud) boot path. Mark the runtime
+            // so the System-workspace full-FS capability is refused and the
+            // member-facing surface excludes the System workspace + confines
+            // terminals. (Detection already reports headless under plain Node;
+            // this makes it explicit and independent of process introspection.)
+            markHeadlessRuntime();
             const steps = makeSteps(opts, ports);
             steps.initDatabase(opts.dataDir);
             steps.wireTerminalAdapter();

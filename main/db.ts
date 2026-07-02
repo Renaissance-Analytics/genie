@@ -408,6 +408,25 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v18: per-workspace IssueWatch remediation policy PER BUCKET. A JSON
+            // blob { security, issue, pr } → 'surface'|'fix'|'fix-and-ship' each,
+            // so the user can (e.g.) fix-and-ship security immediately but hold
+            // regular issues. NULL/absent falls back to the legacy single
+            // `issuewatch_policy` column for ALL three buckets (see
+            // parsePolicyBuckets), so existing per-workspace settings survive
+            // untouched. Stored as TEXT JSON (one structured setting), resolved +
+            // defaulted by getWorkspaceIssuewatchPolicyBuckets. Idempotent ADD COLUMN.
+            version: 18,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('issuewatch_policy_buckets')) {
+                    db.exec(
+                        `ALTER TABLE workspaces ADD COLUMN issuewatch_policy_buckets TEXT`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -444,7 +463,6 @@ export interface Settings {
     primary_workspace?: string;
     /** Last-activated workspace id in the master view; seeds the active workspace on launch. */
     active_workspace?: string;
-    default_start_cmd?: string;
     default_env_file?: string;
     global_hotkey?: string;
     tynn_host?: string;
@@ -578,7 +596,6 @@ export function getAllSettings(): Settings {
         ...out,
         primary_workspace: out['primary_workspace'],
         active_workspace: out['active_workspace'],
-        default_start_cmd: out['default_start_cmd'] ?? 'npm run dev',
         default_env_file: out['default_env_file'] ?? '.env',
         global_hotkey:
             out['global_hotkey'] ??
@@ -669,9 +686,15 @@ export interface WorkspaceRow {
      *  agent. 1=require approval (default), 0=auto-run. Higher-power sibling of
      *  process_approval. */
     terminal_approval: number;
-    /** Per-workspace IssueWatch remediation policy surfaced to agents on the
-     *  imDone count line. NULL/absent reads as the 'surface' default. */
+    /** LEGACY per-workspace IssueWatch remediation policy (single value for all
+     *  kinds). Superseded by `issuewatch_policy_buckets`; still read as the
+     *  per-bucket fallback for backward compat. NULL/absent reads as 'surface'. */
     issuewatch_policy?: 'surface' | 'fix' | 'fix-and-ship' | null;
+    /** Per-workspace IssueWatch remediation policy PER BUCKET, JSON-encoded
+     *  ({security,issue,pr} → policy). NULL/absent falls back to the legacy
+     *  `issuewatch_policy` value for every bucket — resolve it via
+     *  {@link getWorkspaceIssuewatchPolicyBuckets}, never parse here. */
+    issuewatch_policy_buckets?: string | null;
     /** Per-workspace IssueWatch granularity, JSON-encoded (what to watch + ping
      *  about). NULL/absent reads as the all-on + upstream-issues+prs defaults —
      *  resolve it via {@link getWorkspaceIssuewatchGranularity}, never parse here. */
@@ -880,29 +903,84 @@ export function workspaceTerminalApproval(id: string): boolean {
 
 export type IssuewatchPolicy = 'surface' | 'fix' | 'fix-and-ship';
 
-/** Set this workspace's IssueWatch remediation policy. */
-export function setWorkspaceIssuewatchPolicy(
-    id: string,
-    policy: IssuewatchPolicy,
-): void {
-    getDb()
-        .prepare('UPDATE workspaces SET issuewatch_policy = ? WHERE id = ?')
-        .run(policy, id);
+/**
+ * The three IssueWatch buckets (mirrors `WatchTypeCounts` in issue-watch/index.ts):
+ * `security` collapses dependabot + code-scanning + secret-scanning. Each bucket
+ * carries its OWN remediation policy, so a workspace can (e.g.) fix-and-ship
+ * security immediately while holding regular issues.
+ */
+export interface IssuewatchPolicyBuckets {
+    security: IssuewatchPolicy;
+    issue: IssuewatchPolicy;
+    pr: IssuewatchPolicy;
+}
+
+/** The conservative default every bucket reads as when unset: report only. */
+export const DEFAULT_ISSUEWATCH_POLICY: IssuewatchPolicy = 'surface';
+
+/** Coerce an arbitrary value to a valid IssuewatchPolicy, else `fallback`. */
+function coercePolicy(v: unknown, fallback: IssuewatchPolicy): IssuewatchPolicy {
+    return v === 'surface' || v === 'fix' || v === 'fix-and-ship' ? v : fallback;
 }
 
 /**
- * This workspace's IssueWatch remediation policy (how agents act on its
- * IssueWatch pings). Defaults to 'surface' when unset / unknown — the same
- * conservative default the old global setting used.
+ * Resolve the per-bucket remediation policy from storage. `bucketsRaw` is the JSON
+ * blob in `issuewatch_policy_buckets`; `legacyRaw` is the pre-per-bucket single
+ * `issuewatch_policy` value, applied as the fallback for EVERY bucket so an
+ * existing single setting keeps working (backward compat). Per-bucket precedence:
+ * the JSON value → the legacy single value → 'surface'. Robust to NULL, corrupt
+ * JSON, and partial objects. Always returns a fresh object (never a shared ref).
  */
-export function getWorkspaceIssuewatchPolicy(id: string): IssuewatchPolicy {
+export function parsePolicyBuckets(
+    bucketsRaw: string | null | undefined,
+    legacyRaw?: string | null,
+): IssuewatchPolicyBuckets {
+    const fallback = coercePolicy(legacyRaw, DEFAULT_ISSUEWATCH_POLICY);
+    let j: Record<string, unknown> | null = null;
+    if (bucketsRaw) {
+        try {
+            const parsed = JSON.parse(bucketsRaw);
+            if (parsed && typeof parsed === 'object') j = parsed as Record<string, unknown>;
+        } catch {
+            j = null;
+        }
+    }
+    return {
+        security: coercePolicy(j?.security, fallback),
+        issue: coercePolicy(j?.issue, fallback),
+        pr: coercePolicy(j?.pr, fallback),
+    };
+}
+
+/**
+ * This workspace's resolved per-bucket IssueWatch remediation policy (how agents
+ * act on its IssueWatch pings, per bucket). Falls back to the legacy single
+ * `issuewatch_policy` value for every bucket, then to 'surface' — the same
+ * conservative default the old single setting used.
+ */
+export function getWorkspaceIssuewatchPolicyBuckets(id: string): IssuewatchPolicyBuckets {
     const row = getDb()
-        .prepare<[string], { issuewatch_policy: string | null } | undefined>(
-            'SELECT issuewatch_policy FROM workspaces WHERE id = ?',
+        .prepare<
+            [string],
+            { issuewatch_policy_buckets: string | null; issuewatch_policy: string | null } | undefined
+        >(
+            'SELECT issuewatch_policy_buckets, issuewatch_policy FROM workspaces WHERE id = ?',
         )
         .get(id);
-    const p = row?.issuewatch_policy;
-    return p === 'fix' || p === 'fix-and-ship' ? p : 'surface';
+    return parsePolicyBuckets(
+        row?.issuewatch_policy_buckets ?? null,
+        row?.issuewatch_policy ?? null,
+    );
+}
+
+/** Persist this workspace's per-bucket IssueWatch remediation policy (JSON). */
+export function setWorkspaceIssuewatchPolicyBuckets(
+    id: string,
+    buckets: IssuewatchPolicyBuckets,
+): void {
+    getDb()
+        .prepare('UPDATE workspaces SET issuewatch_policy_buckets = ? WHERE id = ?')
+        .run(JSON.stringify(buckets), id);
 }
 
 // IssueWatch granularity ------------------------------------------------

@@ -29,6 +29,11 @@ import type { MobileDataDeps } from '../api';
 
 let appDir: string;
 const written: Array<{ id: string; data: string }> = [];
+// Captures PNGs the clipboard-image route wrote to the (mock) host clipboard.
+const clipboardImages: Buffer[] = [];
+// 'desktop' wires writeClipboardImage (has an OS clipboard); 'headless' leaves it
+// UNWIRED so the route reports supported:false (the Aionima Virtual Workstation).
+let clipboardMode: 'desktop' | 'headless' = 'desktop';
 // Drives the mock updater deps: flip to true to simulate a staged build so the
 // install endpoint returns 200; left false it reports not-ready (→ 409).
 let updateReady = false;
@@ -70,6 +75,16 @@ const deps = (): MobileDataDeps => ({
     readTerminalOutput: () => ({ data: '', cursor: 0, dropped: false }),
     getScrollback: () => 'catch-up-scrollback',
     resize: () => true,
+    // Desktop wires the host-clipboard write (records the PNG); headless omits it
+    // entirely so the route hits its `!deps.writeClipboardImage` fail-safe branch.
+    ...(clipboardMode === 'desktop'
+        ? {
+              writeClipboardImage: (png: Buffer) => {
+                  clipboardImages.push(png);
+                  return { ok: true, supported: true };
+              },
+          }
+        : {}),
     listPendingQuestions: () => [],
     answerPendingQuestion: () => true,
     updateStatus: () => ({
@@ -169,6 +184,8 @@ beforeEach(() => {
     _resetBridgeForTest();
     written.length = 0;
     updateReady = false;
+    clipboardImages.length = 0;
+    clipboardMode = 'desktop';
 });
 
 afterEach(() => {
@@ -399,6 +416,62 @@ describe('mobile server (integration, 127.0.0.1)', () => {
             body: { name: 'x.txt', dataBase64: 'eA==' },
         });
         expect(r.status).toBe(404);
+    });
+
+    it('POST /api/clipboard/image writes the PNG to the host clipboard', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const png = Buffer.from('fake-png-bytes');
+        const r = await req(port, 'POST', '/api/clipboard/image', {
+            token,
+            body: { dataBase64: png.toString('base64') },
+        });
+        expect(r.status).toBe(200);
+        expect(r.json).toEqual({ ok: true, supported: true });
+        // The route decoded the base64 and handed the raw PNG to the host dep.
+        expect(clipboardImages).toHaveLength(1);
+        expect(clipboardImages[0].equals(png)).toBe(true);
+    });
+
+    it('POST /api/clipboard/image: 401 without a token, 423 while locked', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const noTok = await req(port, 'POST', '/api/clipboard/image', {
+            body: { dataBase64: Buffer.from('x').toString('base64') },
+        });
+        expect(noTok.status).toBe(401);
+        setLocked(true);
+        const locked = await req(port, 'POST', '/api/clipboard/image', {
+            token,
+            body: { dataBase64: Buffer.from('x').toString('base64') },
+        });
+        expect(locked.status).toBe(423);
+        setLocked(false);
+        expect(clipboardImages).toHaveLength(0);
+    });
+
+    it('POST /api/clipboard/image: 400 on an empty image', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/clipboard/image', {
+            token,
+            body: { dataBase64: '' },
+        });
+        expect(r.status).toBe(400);
+        expect(clipboardImages).toHaveLength(0);
+    });
+
+    it('POST /api/clipboard/image: headless host reports supported:false (graceful no-op)', async () => {
+        clipboardMode = 'headless'; // writeClipboardImage left unwired
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/clipboard/image', {
+            token,
+            body: { dataBase64: Buffer.from('fake-png-bytes').toString('base64') },
+        });
+        expect(r.status).toBe(200);
+        expect(r.json).toEqual({ ok: false, supported: false });
+        expect(clipboardImages).toHaveLength(0);
     });
 
     it('does not bind when disabled (opt-in)', async () => {

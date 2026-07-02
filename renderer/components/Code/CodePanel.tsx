@@ -19,6 +19,7 @@ import { closeTab as closeTabState, openTab as openTabState, reconcileTabs } fro
 import { onOpenInPanel, resolveCursorLine, type RevealTarget } from '../../lib/editor-open';
 import {
     api,
+    isSystemWorkspace,
     type TerminalSpec,
     type TreeNodeData,
     type ViewMeta,
@@ -120,6 +121,11 @@ export default function CodePanel({
     style,
 }: Props) {
     const workspacePath = workspace?.path ?? spec.cwd;
+    // The System workspace (desktop only) browses the WHOLE machine — its file
+    // ops resolve any absolute path, unconfined. Every real workspace stays
+    // strictly confined. `system` rides along on each files.* call; main
+    // additionally requires the desktop runtime (headless can never full-FS).
+    const system = !!workspace && isSystemWorkspace(workspace);
 
     const [nodes, setNodes] = useState<TreeNodeData[]>([]);
     const [treeVisible, setTreeVisible] = useState(true);
@@ -208,12 +214,12 @@ export default function CodePanel({
 
     /** (Re)load the tree, rooting at the locked subfolder when locked. */
     const reloadTree = useCallback(() => {
-        const opts = locked && lockedRoot ? { root: lockedRoot } : undefined;
+        const opts = { system, ...(locked && lockedRoot ? { root: lockedRoot } : {}) };
         return api()
             .files.listTree(workspacePath, opts)
             .then((t) => setNodes(t))
             .catch(() => setNodes([]));
-    }, [workspacePath, locked, lockedRoot]);
+    }, [workspacePath, locked, lockedRoot, system]);
 
     // Latest reloadTree for the fs-watch subscription, so a lock/root change
     // doesn't churn (unwatch/rewatch) the watcher.
@@ -223,7 +229,7 @@ export default function CodePanel({
     // Load the tree on mount and whenever the root (workspace or lock) shifts.
     useEffect(() => {
         let alive = true;
-        const opts = locked && lockedRoot ? { root: lockedRoot } : undefined;
+        const opts = { system, ...(locked && lockedRoot ? { root: lockedRoot } : {}) };
         void api()
             .files.listTree(workspacePath, opts)
             .then((t) => alive && setNodes(t))
@@ -231,7 +237,7 @@ export default function CodePanel({
         return () => {
             alive = false;
         };
-    }, [workspacePath, locked, lockedRoot]);
+    }, [workspacePath, locked, lockedRoot, system]);
 
     // Live-refresh: watch the workspace on disk so files created, renamed, or
     // deleted OUTSIDE the editor (an agent, a git checkout, an MCP tool) appear
@@ -262,6 +268,7 @@ export default function CodePanel({
                     const { content: text } = await api().files.read(
                         workspacePath,
                         relPath,
+                        system,
                     );
                     setFiles((m) => ({
                         ...m,
@@ -280,7 +287,7 @@ export default function CodePanel({
                 setLoadError(e instanceof Error ? e.message : String(e));
             }
         },
-        [workspacePath, persistTabs],
+        [workspacePath, persistTabs, system],
     );
 
     // External "open this file" requests targeting THIS live panel (the
@@ -317,6 +324,7 @@ export default function CodePanel({
                     const { content: text } = await api().files.read(
                         workspacePath,
                         rel,
+                        system,
                     );
                     loaded[rel] = {
                         content: text,
@@ -362,7 +370,7 @@ export default function CodePanel({
         const st = filesRef.current[file];
         if (!st) return;
         try {
-            await api().files.write(workspacePath, file, st.content);
+            await api().files.write(workspacePath, file, st.content, system);
             setFiles((m) =>
                 m[file] ? { ...m, [file]: { ...m[file], dirty: false } } : m,
             );
@@ -371,7 +379,7 @@ export default function CodePanel({
         } catch (e) {
             setLoadError(e instanceof Error ? e.message : String(e));
         }
-    }, [workspacePath]);
+    }, [workspacePath, system]);
 
     // Ctrl/Cmd+S → save active tab. Bound once; reads live refs.
     useEffect(() => {
@@ -652,6 +660,7 @@ export default function CodePanel({
                             nodes={nodes}
                             selectedId={activeFile ?? undefined}
                             workspacePath={workspacePath}
+                            system={system}
                             expandedIds={expandedIds}
                             onExpandedChange={setExpandedIds}
                             onSelectFile={(rel) => void selectFile(rel)}

@@ -10,6 +10,13 @@ interface Props {
     selectedId?: string;
     /** Workspace root — every file op is path-guarded to it in main. */
     workspacePath: string;
+    /**
+     * System workspace (desktop only): node ids are ABSOLUTE paths and file ops
+     * resolve unconfined. Passed through to every files.* call so main applies
+     * the same full-FS resolution as the tree. False/undefined for every real
+     * workspace (strictly confined).
+     */
+    system?: boolean;
     /** Fires only for file (leaf) selections — folders just expand/collapse. */
     onSelectFile: (relPath: string) => void;
     /** Re-run after any mutating op so the tree reflects the new shape. */
@@ -86,6 +93,7 @@ export default function FileTree({
     nodes,
     selectedId,
     workspacePath,
+    system,
     onSelectFile,
     onTreeChanged,
     onOpenCreatedFile,
@@ -240,7 +248,7 @@ export default function FileTree({
         if (!name) return;
         const rel = joinRel(dir, name.trim());
         try {
-            await api().files.createFile(workspacePath, rel);
+            await api().files.createFile(workspacePath, rel, system);
             if (dir && !expandedIds.includes(dir))
                 onExpandedChange([...expandedIds, dir]);
             await onTreeChanged();
@@ -265,7 +273,7 @@ export default function FileTree({
         if (!name) return;
         const rel = joinRel(dir, name.trim());
         try {
-            await api().files.createFolder(workspacePath, rel);
+            await api().files.createFolder(workspacePath, rel, system);
             if (!expandedIds.includes(rel)) onExpandedChange([...expandedIds, rel]);
             await onTreeChanged();
         } catch (e) {
@@ -288,7 +296,7 @@ export default function FileTree({
         if (!trimmed || trimmed === node.label) return;
         const toRel = joinRel(parentOf(node.id), trimmed);
         try {
-            await api().files.rename(workspacePath, node.id, toRel);
+            await api().files.rename(workspacePath, node.id, toRel, system);
             await onTreeChanged();
             // Re-open under the new path if the renamed node was the open file.
             if (node.type !== 'folder' && node.id === selectedId) {
@@ -315,7 +323,7 @@ export default function FileTree({
         });
         if (ok === null) return;
         try {
-            await api().files.delete(workspacePath, node.id);
+            await api().files.delete(workspacePath, node.id, system);
             await onTreeChanged();
         } catch (e) {
             await showPrompt({
@@ -329,7 +337,7 @@ export default function FileTree({
     const handleDuplicate = async (node: TreeNodeData) => {
         if (node.type === 'folder') return; // file-only op
         try {
-            const { relPath } = await api().files.duplicate(workspacePath, node.id);
+            const { relPath } = await api().files.duplicate(workspacePath, node.id, system);
             await onTreeChanged();
             onOpenCreatedFile(relPath); // select + open the new copy
         } catch (e) {
@@ -387,7 +395,7 @@ export default function FileTree({
         });
         if (ok === null) return;
         try {
-            await api().files.rename(workspacePath, sourceId, newRel);
+            await api().files.rename(workspacePath, sourceId, newRel, system);
             if (destFolder && !expandedIds.includes(destFolder)) {
                 onExpandedChange([...expandedIds, destFolder]);
             }
@@ -418,7 +426,7 @@ export default function FileTree({
             try {
                 const srcAbs = api().files.pathForFile(file);
                 if (!srcAbs) continue;
-                await api().files.importExternal(workspacePath, srcAbs, destFolder);
+                await api().files.importExternal(workspacePath, srcAbs, destFolder, system);
             } catch (e) {
                 errors.push(`${file.name}: ${e instanceof Error ? e.message : String(e)}`);
             }

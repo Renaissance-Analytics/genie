@@ -472,6 +472,14 @@ export default function Chooser({
             procLogHideRef.current = null;
         }
     };
+    // The popover displays only the last N lines (tail) — a chatty process would
+    // otherwise render tens of thousands of lines into one <pre>. Copy/Download
+    // still fetch the FULL buffer separately, so nothing is lost by capping the view.
+    const LOG_TAIL_LINES = 500;
+    const tailLines = (text: string): string => {
+        const lines = text.split('\n');
+        return lines.length > LOG_TAIL_LINES ? lines.slice(-LOG_TAIL_LINES).join('\n') : text;
+    };
     const showProcLog = (e: React.MouseEvent, s: TerminalSpec) => {
         cancelProcLogHide();
         const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -486,7 +494,9 @@ export default function Chooser({
         void api()
             .process.log(s.id)
             .then((text) =>
-                setProcLog((cur) => (cur && cur.id === s.id ? { ...cur, text } : cur)),
+                setProcLog((cur) =>
+                    cur && cur.id === s.id ? { ...cur, text: tailLines(text) } : cur,
+                ),
             )
             .catch(() => {});
     };
@@ -516,6 +526,34 @@ export default function Chooser({
             })
             .catch(() => {});
     };
+    // Clear a process's recorded output — drop the backing buffer (main) AND the
+    // displayed text. New output refills as the process keeps running (next poll).
+    const clearProcLog = (id: string) => {
+        void api().process.clearLog(id).catch(() => {});
+        setProcLog((cur) => (cur && cur.id === id ? { ...cur, text: '' } : cur));
+    };
+
+    // Keep the open popover LIVE: while it's showing a process, re-fetch its tail
+    // on a short interval so output appears in place (the buffer only refreshed on
+    // hover before). Keyed on the open process id — NOT the whole procLog object,
+    // which changes each poll — so the interval isn't torn down and recreated every
+    // tick. Cleared on close/unmount / when a different row opens.
+    const openProcLogId = procLog?.id ?? null;
+    useEffect(() => {
+        if (!openProcLogId) return;
+        const iv = setInterval(() => {
+            void api()
+                .process.log(openProcLogId)
+                .then((text) =>
+                    setProcLog((cur) =>
+                        cur && cur.id === openProcLogId ? { ...cur, text: tailLines(text) } : cur,
+                    ),
+                )
+                .catch(() => {});
+        }, 1000);
+        return () => clearInterval(iv);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [openProcLogId]);
 
     const byWorkspace = new Map<string, TerminalSpec[]>();
     for (const ws of workspaces) byWorkspace.set(ws.id, []);
@@ -1190,6 +1228,14 @@ export default function Chooser({
                             onClick={() => downloadProcLog(procLog.id, procLog.label)}
                         >
                             Download log
+                        </button>
+                        <button
+                            type="button"
+                            className="proc-log-btn"
+                            onClick={() => clearProcLog(procLog.id)}
+                            disabled={!procLog.text.trim()}
+                        >
+                            Clear log
                         </button>
                     </div>
                 </div>,

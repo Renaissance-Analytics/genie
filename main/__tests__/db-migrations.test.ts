@@ -1,6 +1,11 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { runMigrations, parseGranularity, DEFAULT_ISSUEWATCH_GRANULARITY } from '../db';
+import {
+    runMigrations,
+    parseGranularity,
+    DEFAULT_ISSUEWATCH_GRANULARITY,
+    parsePolicyBuckets,
+} from '../db';
 
 /**
  * Schema migrations are exercised against a real in-memory better-sqlite3
@@ -563,6 +568,151 @@ describe('parseGranularity (defaulting + robustness)', () => {
 
     it('survives corrupt JSON by returning the defaults', () => {
         expect(parseGranularity('{not json')).toEqual(DEFAULT_ISSUEWATCH_GRANULARITY);
+    });
+});
+
+describe('db migration v18 (per-bucket IssueWatch remediation policy)', () => {
+    const insertWs = (db: Database.Database, id: string) =>
+        db.prepare(
+            `INSERT INTO workspaces
+               (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, last_opened_at, created_by_genie)
+             VALUES (@id, 'tynn', 'p', 'P', 'p', 'P', 'simple', @path, NULL, 0)`,
+        ).run({ id, path: `/tmp/${id}` });
+
+    it('adds the issuewatch_policy_buckets column to workspaces', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(cols(db, 'workspaces').has('issuewatch_policy_buckets')).toBe(true);
+    });
+
+    it('a pre-existing workspace row (both columns NULL) resolves to all-surface', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        insertWs(db, 'w-iwp');
+        const row = db
+            .prepare<
+                [string],
+                { issuewatch_policy_buckets: string | null; issuewatch_policy: string | null }
+            >(
+                'SELECT issuewatch_policy_buckets, issuewatch_policy FROM workspaces WHERE id = ?',
+            )
+            .get('w-iwp');
+        expect(row?.issuewatch_policy_buckets).toBeNull();
+        expect(
+            parsePolicyBuckets(row?.issuewatch_policy_buckets ?? null, row?.issuewatch_policy ?? null),
+        ).toEqual({ security: 'surface', issue: 'surface', pr: 'surface' });
+    });
+
+    it('BACKWARD COMPAT: a legacy single issuewatch_policy applies to all buckets', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        insertWs(db, 'w-legacy');
+        // A row set under the OLD single-value scheme, with no per-bucket blob.
+        db.prepare('UPDATE workspaces SET issuewatch_policy = ? WHERE id = ?').run(
+            'fix-and-ship',
+            'w-legacy',
+        );
+        const row = db
+            .prepare<
+                [string],
+                { issuewatch_policy_buckets: string | null; issuewatch_policy: string | null }
+            >(
+                'SELECT issuewatch_policy_buckets, issuewatch_policy FROM workspaces WHERE id = ?',
+            )
+            .get('w-legacy');
+        expect(row?.issuewatch_policy_buckets).toBeNull();
+        expect(
+            parsePolicyBuckets(row?.issuewatch_policy_buckets ?? null, row?.issuewatch_policy ?? null),
+        ).toEqual({ security: 'fix-and-ship', issue: 'fix-and-ship', pr: 'fix-and-ship' });
+    });
+
+    it('round-trips a stored per-bucket policy JSON blob (wins over legacy)', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        insertWs(db, 'w-iwp2');
+        db.prepare(
+            'UPDATE workspaces SET issuewatch_policy = ?, issuewatch_policy_buckets = ? WHERE id = ?',
+        ).run(
+            'surface', // legacy value present — the per-bucket blob must override it
+            JSON.stringify({ security: 'fix-and-ship', issue: 'surface', pr: 'fix' }),
+            'w-iwp2',
+        );
+        const row = db
+            .prepare<
+                [string],
+                { issuewatch_policy_buckets: string | null; issuewatch_policy: string | null }
+            >(
+                'SELECT issuewatch_policy_buckets, issuewatch_policy FROM workspaces WHERE id = ?',
+            )
+            .get('w-iwp2');
+        expect(
+            parsePolicyBuckets(row?.issuewatch_policy_buckets ?? null, row?.issuewatch_policy ?? null),
+        ).toEqual({ security: 'fix-and-ship', issue: 'surface', pr: 'fix' });
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'workspaces').has('issuewatch_policy_buckets')).toBe(true);
+    });
+});
+
+describe('parsePolicyBuckets (defaulting + backward compat + robustness)', () => {
+    it('defaults NULL/empty (no legacy) to surface for every bucket', () => {
+        expect(parsePolicyBuckets(null)).toEqual({
+            security: 'surface',
+            issue: 'surface',
+            pr: 'surface',
+        });
+        expect(parsePolicyBuckets('', null)).toEqual({
+            security: 'surface',
+            issue: 'surface',
+            pr: 'surface',
+        });
+    });
+
+    it('applies a legacy single value to all buckets when no blob is stored', () => {
+        expect(parsePolicyBuckets(null, 'fix')).toEqual({
+            security: 'fix',
+            issue: 'fix',
+            pr: 'fix',
+        });
+    });
+
+    it('reads a full per-bucket blob and ignores the legacy value', () => {
+        expect(
+            parsePolicyBuckets(
+                JSON.stringify({ security: 'fix-and-ship', issue: 'surface', pr: 'fix' }),
+                'fix',
+            ),
+        ).toEqual({ security: 'fix-and-ship', issue: 'surface', pr: 'fix' });
+    });
+
+    it('fills a partial blob’s missing buckets from the legacy fallback', () => {
+        // Only `security` set → issue/pr fall back to the legacy 'fix-and-ship'.
+        expect(
+            parsePolicyBuckets(JSON.stringify({ security: 'surface' }), 'fix-and-ship'),
+        ).toEqual({ security: 'surface', issue: 'fix-and-ship', pr: 'fix-and-ship' });
+    });
+
+    it('coerces invalid enum values to the fallback', () => {
+        expect(
+            parsePolicyBuckets(JSON.stringify({ security: 'nuke', issue: 'fix', pr: 42 }), null),
+        ).toEqual({ security: 'surface', issue: 'fix', pr: 'surface' });
+    });
+
+    it('survives corrupt JSON by falling back (to legacy, else surface)', () => {
+        expect(parsePolicyBuckets('{not json', 'fix')).toEqual({
+            security: 'fix',
+            issue: 'fix',
+            pr: 'fix',
+        });
+        expect(parsePolicyBuckets('{not json')).toEqual({
+            security: 'surface',
+            issue: 'surface',
+            pr: 'surface',
+        });
     });
 });
 

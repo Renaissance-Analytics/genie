@@ -275,8 +275,10 @@ function SimpleWizard({
         setSubmitting(true);
         setError(null);
         try {
+            // Associating a project is OPTIONAL — Tynn is never required to add a
+            // workspace. When none is picked the workspace gets its own id and
+            // empty project fields (folder name is used for display).
             const project = projects.find((p) => p.id === projectId);
-            if (!project) throw new Error('Pick a project to associate.');
 
             // Resolve the source folder: a local pick, or a fresh clone of a remote repo.
             let sourceFolder = folder;
@@ -292,6 +294,12 @@ function SimpleWizard({
             if (!sourceFolder) throw new Error('Pick a folder.');
             const settings = await api().settings.get();
 
+            // Name for the .agi envelope / display when no project is chosen:
+            // the project name, else the slug, else the source folder's leaf.
+            const folderLeaf =
+                sourceFolder.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'workspace';
+            const envelopeName = project?.name || agiSlug.trim() || folderLeaf;
+
             let workspacePath = sourceFolder;
             let shape: WorkspaceRow['shape'] = 'simple';
             let createdByGenie = 0;
@@ -302,7 +310,7 @@ function SimpleWizard({
                 if (!agiSubName.trim()) throw new Error('Submodule directory name is required.');
                 const res = await api().agi.convert({
                     slug: agiSlug.trim(),
-                    name: project.name,
+                    name: envelopeName,
                     parent_path: agiParent.trim(),
                     source: { kind: 'local', path: sourceFolder },
                     sub_name: agiSubName.trim(),
@@ -313,17 +321,17 @@ function SimpleWizard({
             }
 
             const row: WorkspaceRow = {
-                id: project.id,
-                backend: project.backend ?? 'tynn',
-                project_id: project.id,
-                project_name: project.name,
-                tynn_project_id: project.id,
-                tynn_project_name: project.name,
+                id: project?.id ?? ulid(),
+                backend: project?.backend ?? 'tynn',
+                project_id: project?.id ?? '',
+                project_name: project?.name ?? '',
+                tynn_project_id: project?.id ?? '',
+                tynn_project_name: project?.name ?? '',
                 shape,
                 path: workspacePath,
                 editor: null,
                 editor_cmd: null,
-                start_cmd: settings.default_start_cmd ?? null,
+                start_cmd: null,
                 env_file: settings.default_env_file ?? '.env',
                 last_opened_at: null,
                 created_by_genie: createdByGenie,
@@ -408,7 +416,6 @@ function SimpleWizard({
                     (sourceMode === 'local'
                         ? !folder
                         : !sourceUrl.trim() || !cloneParent.trim()) ||
-                    !projectId ||
                     (upgradeToAgi && (!agiSlug.trim() || !agiParent.trim() || !agiSubName.trim()))
                 }
             />
@@ -659,8 +666,8 @@ function AgiConvertWizard({
         setSubmitting(true);
         setError(null);
         try {
+            // Project association is optional (Tynn is never required).
             const project = projects.find((p) => p.id === projectId);
-            if (!project) throw new Error('Pick a Tynn project to associate.');
             if (!slug) throw new Error('Slug is required.');
             if (!parentFolder) throw new Error('Pick a destination parent folder.');
             const source =
@@ -686,7 +693,7 @@ function AgiConvertWizard({
 
             const res = await api().agi.convert({
                 slug,
-                name: project.name,
+                name: project?.name || slug,
                 parent_path: parentFolder,
                 source,
                 sub_name: subName || undefined,
@@ -695,17 +702,17 @@ function AgiConvertWizard({
 
             const settings = await api().settings.get();
             const row: WorkspaceRow = {
-                id: project.id,
-                backend: project.backend ?? 'tynn',
-                project_id: project.id,
-                project_name: project.name,
-                tynn_project_id: project.id,
-                tynn_project_name: project.name,
+                id: project?.id ?? ulid(),
+                backend: project?.backend ?? 'tynn',
+                project_id: project?.id ?? '',
+                project_name: project?.name ?? '',
+                tynn_project_id: project?.id ?? '',
+                tynn_project_name: project?.name ?? '',
                 shape: 'agi',
                 path: res.path,
                 editor: null,
                 editor_cmd: null,
-                start_cmd: settings.default_start_cmd ?? null,
+                start_cmd: null,
                 env_file: settings.default_env_file ?? '.env',
                 last_opened_at: null,
                 created_by_genie: 1,
@@ -720,7 +727,6 @@ function AgiConvertWizard({
     };
 
     const disabled =
-        !projectId ||
         !slug ||
         !parentFolder ||
         (sourceMode === 'local' ? !sourcePath : !sourceUrl.trim());
@@ -899,8 +905,8 @@ function AgiCreateWizard({
         setSubmitting(true);
         setError(null);
         try {
+            // Project association is optional (Tynn is never required).
             const project = projects.find((p) => p.id === projectId);
-            if (!project) throw new Error('Pick a Tynn project.');
             if (!slug) throw new Error('Slug is required.');
             if (!parentFolder) throw new Error('Pick the parent folder.');
 
@@ -929,7 +935,7 @@ function AgiCreateWizard({
                     ownerId: remoteOwner
                         ? account.installations.find((i) => i.login === remoteOwner)?.id ?? null
                         : null,
-                    description: `Aionima envelope for ${project.name}`,
+                    description: `Aionima envelope for ${project?.name || slug}`,
                     private: true,
                 });
                 remote = { kind: 'paste', url: created.clone_url };
@@ -938,7 +944,7 @@ function AgiCreateWizard({
 
             const res = await api().agi.create({
                 slug,
-                name: project.name,
+                name: project?.name || slug,
                 parent_path: parentFolder,
                 remote,
             });
@@ -955,17 +961,17 @@ function AgiCreateWizard({
 
             const settings = await api().settings.get();
             const row: WorkspaceRow = {
-                id: project.id,
-                backend: project.backend ?? 'tynn',
-                project_id: project.id,
-                project_name: project.name,
-                tynn_project_id: project.id,
-                tynn_project_name: project.name,
+                id: project?.id ?? ulid(),
+                backend: project?.backend ?? 'tynn',
+                project_id: project?.id ?? '',
+                project_name: project?.name ?? '',
+                tynn_project_id: project?.id ?? '',
+                tynn_project_name: project?.name ?? '',
                 shape: 'agi',
                 path: res.path,
                 editor: null,
                 editor_cmd: null,
-                start_cmd: settings.default_start_cmd ?? null,
+                start_cmd: null,
                 env_file: settings.default_env_file ?? '.env',
                 last_opened_at: null,
                 created_by_genie: 1,
@@ -1075,7 +1081,7 @@ function AgiCreateWizard({
                 onSubmit={submit}
                 submitting={submitting}
                 label="Create envelope"
-                disabled={!projectId || !slug || !parentFolder}
+                disabled={!slug || !parentFolder}
             />
         </div>
     );
@@ -1169,23 +1175,23 @@ function AgiImportWizard({
         setSubmitting(true);
         setError(null);
         try {
+            // Project association is optional (Tynn is never required).
             const project = projects.find((p) => p.id === projectId);
-            if (!project) throw new Error('Pick a project.');
             if (!folder) throw new Error('Pick a folder.');
 
             const settings = await api().settings.get();
             const row: WorkspaceRow = {
-                id: project.id,
-                backend: project.backend ?? 'tynn',
-                project_id: project.id,
-                project_name: project.name,
-                tynn_project_id: project.id,
-                tynn_project_name: project.name,
+                id: project?.id ?? ulid(),
+                backend: project?.backend ?? 'tynn',
+                project_id: project?.id ?? '',
+                project_name: project?.name ?? '',
+                tynn_project_id: project?.id ?? '',
+                tynn_project_name: project?.name ?? '',
                 shape: 'agi',
                 path: folder,
                 editor: null,
                 editor_cmd: null,
-                start_cmd: settings.default_start_cmd ?? null,
+                start_cmd: null,
                 env_file: settings.default_env_file ?? '.env',
                 last_opened_at: null,
                 created_by_genie: 0,
@@ -1300,7 +1306,7 @@ function AgiImportWizard({
                 onSubmit={submit}
                 submitting={submitting}
                 label="Register"
-                disabled={!projectId || !folder}
+                disabled={!folder}
             />
         </div>
     );
@@ -1354,8 +1360,12 @@ function ProjectPicker({
 }) {
     const [mode, setMode] = useState<'select' | 'create'>('select');
     const options = useMemo(
-        () =>
-            projects.map((p) => {
+        () => [
+            // Associating a project is OPTIONAL — Tynn is never required to add a
+            // workspace. An explicit "no project" entry lets the user pick (or
+            // clear back to) none.
+            { value: '', label: '— No project (just a folder) —' },
+            ...projects.map((p) => {
                 const tag = (p.backend ?? 'tynn').toUpperCase();
                 const owner = p.owner_name ?? '';
                 return {
@@ -1363,6 +1373,7 @@ function ProjectPicker({
                     label: `[${tag}] ${p.name}${owner ? ' · ' + owner : ''}`,
                 };
             }),
+        ],
         [projects],
     );
 
@@ -1382,7 +1393,7 @@ function ProjectPicker({
         <div>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
                 <Text size="xs" style={{ fontWeight: 600 }}>
-                    Project
+                    Project <span style={{ fontWeight: 400, color: 'var(--zinc-500)' }}>(optional)</span>
                 </Text>
                 {onProjectCreated && (
                     <Action
@@ -1396,12 +1407,15 @@ function ProjectPicker({
                 )}
             </div>
             <Select
-                description={loading ? 'Loading projects…' : 'Workspace associates with this project (Tynn or Aionima).'}
+                description={
+                    loading
+                        ? 'Loading projects…'
+                        : 'Optionally associate this workspace with a Tynn/Aionima project. Not required — leave as “No project” to add a plain folder.'
+                }
                 value={value}
                 onValueChange={onChange}
                 list={options}
-                placeholder="Choose a project…"
-                required
+                placeholder="— No project (just a folder) —"
             />
         </div>
     );

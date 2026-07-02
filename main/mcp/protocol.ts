@@ -152,10 +152,15 @@ export interface IssueWatchSnapshot {
     workspaceResolved: boolean;
     counts: IssueWatchCounts;
     items: IssueWatchItem[];
-    /** The user's remediation preference (Settings → Agent MCP), folded into the
-     *  imDone count line so the agent knows how to act on these. Omitted/`surface`
-     *  reports only; `fix` / `fix-and-ship` ask the agent to remediate when idle. */
-    policy?: 'surface' | 'fix' | 'fix-and-ship';
+    /** The user's PER-BUCKET remediation preference (workspace settings), folded
+     *  into the imDone count line so the agent knows how to act on EACH bucket.
+     *  Omitted (or every OPEN bucket 'surface') reports only; 'fix' /
+     *  'fix-and-ship' ask the agent to remediate that bucket when idle. */
+    policy?: {
+        security: 'surface' | 'fix' | 'fix-and-ship';
+        issue: 'surface' | 'fix' | 'fix-and-ship';
+        pr: 'surface' | 'fix' | 'fix-and-ship';
+    };
 }
 
 export interface McpContext {
@@ -983,18 +988,27 @@ export function formatIssueCountsLine(snap: IssueWatchSnapshot): string | null {
     const { issue, pr, security } = snap.counts;
     if (!issue && !pr && !security) return null;
     const base = `IssueWatch — issues:${issue}, PR:${pr}, sec:${security}`;
-    // Fold the user's remediation preference in so the count line actually
-    // steers the agent. `surface` (or unset) keeps the bare counts — backward
-    // compatible. `fix` / `fix-and-ship` append a directive (security first,
-    // root-cause only — NO bandaids).
-    if (snap.policy === 'fix' || snap.policy === 'fix-and-ship') {
-        const tail =
-            snap.policy === 'fix-and-ship'
-                ? 'and ship right away'
-                : 'then report before shipping';
-        return `${base} · the user wants these fixed at the ROOT CAUSE (security first, NO bandaids) ${tail} when no other work is in progress.`;
-    }
-    return base;
+    // Fold the user's PER-BUCKET remediation preference in so the count line
+    // actually steers the agent per bucket. Only buckets with something OPEN get a
+    // directive; security is listed first (fix it first — NO bandaids). When every
+    // OPEN bucket is 'surface' (or there's no policy at all) the bare counts are
+    // kept — backward compatible with the old single-'surface' behaviour.
+    const policy = snap.policy;
+    if (!policy) return base;
+    const active = [
+        { label: 'security', count: security, mode: policy.security },
+        { label: 'issues', count: issue, mode: policy.issue },
+        { label: 'PRs', count: pr, mode: policy.pr },
+    ].filter((b) => b.count > 0);
+    if (active.every((b) => b.mode === 'surface')) return base;
+    const describe = (mode: 'surface' | 'fix' | 'fix-and-ship'): string =>
+        mode === 'fix-and-ship'
+            ? 'fix at the ROOT CAUSE (NO bandaids) and ship right away'
+            : mode === 'fix'
+                ? 'fix at the ROOT CAUSE (NO bandaids), then report before shipping'
+                : 'surface only (hold)';
+    const parts = active.map((b) => `${b.label}: ${describe(b.mode)}`);
+    return `${base} · remediation — ${parts.join('; ')} (act on these when no other work is in progress).`;
 }
 
 /** Human label for a feed item kind (used in the grouped checkIssues list). */

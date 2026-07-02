@@ -13,6 +13,7 @@ import TerminalGrid, {
 import AddWorkspaceModal from '../components/AddWorkspaceModal';
 import BootScreen from '../components/Master/BootScreen';
 import HostUpgradeOverlay from '../components/Master/HostUpgradeOverlay';
+import HostBuildNudge from '../components/Master/HostBuildNudge';
 import DocsFlyout from '../components/Master/DocsFlyout';
 import IssueWatchFlyout from '../components/Master/IssueWatchFlyout';
 import TaskManagerFlyout from '../components/Master/TaskManagerFlyout';
@@ -132,6 +133,9 @@ export default function MasterPage() {
             {showBoot && !blockDashboard && <BootScreen fadingOut={ready} />}
             {isHostWindow && link.phase !== 'connected' && (
                 <HostUpgradeOverlay link={link} />
+            )}
+            {isHostWindow && link.phase === 'connected' && link.hostBuildBehind && (
+                <HostBuildNudge build={link.hostBuildBehind} />
             )}
         </>
     );

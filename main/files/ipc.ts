@@ -4,6 +4,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { REGENERABLE_NAMES, SKIP_NAMES } from '../workspace/ignore';
+import { isDesktop } from '../runtime-mode';
 import { unwatchWorkspace, watchWorkspace } from './watch';
 
 const execFileAsync = promisify(execFile);
@@ -50,8 +51,19 @@ interface ListTreeOpts {
      * Guard-resolved under `workspacePath` — a `..`/absolute escape throws.
      * Node ids stay relative to `workspacePath` so reads still path-guard
      * against the workspace root, never the locked subroot.
+     *
+     * For a SYSTEM-workspace request (`system: true`, desktop only) `root` is
+     * instead an ABSOLUTE path to drill into (a tree node id like `C:/Users/x`
+     * or `/home/x`).
      */
     root?: string;
+    /**
+     * SYSTEM-workspace full-filesystem browse. When true AND this is the desktop
+     * (never headless), the tree roots at the machine's filesystem root(s) —
+     * drive letters on Windows, `/` on POSIX — with ABSOLUTE node ids, and
+     * reads/writes accept any absolute path. Fail-closed everywhere else.
+     */
+    system?: boolean;
 }
 
 /**
@@ -66,6 +78,34 @@ function guardedResolve(workspacePath: string, relPath: string): string | null {
     if (abs === root) return abs;
     if (abs.startsWith(root + path.sep)) return abs;
     return null;
+}
+
+/**
+ * Whether a request may use UNCONFINED full-filesystem access. TRUE only for a
+ * System-workspace request (`system === true`) ON THE DESKTOP. Fail-closed: the
+ * headless genie-cloud host is ALWAYS false — so a headless build can never
+ * resolve outside a workspace root, even if a caller set `system`. The System
+ * workspace is a desktop-only concept (the user's own trusted local machine);
+ * headless serves ONLY confined, real workspaces.
+ */
+function fullFsAllowed(system: boolean | undefined): boolean {
+    return system === true && isDesktop();
+}
+
+/**
+ * Resolve a path for a request, honouring the System-workspace full-FS bypass.
+ *   - Full-FS (system + desktop): `relPath` is either an absolute path (a system
+ *     tree node id) or relative to `workspacePath` (the home dir). No confinement
+ *     — this is the user's own machine. Returns the resolved absolute path.
+ *   - Otherwise: the confined {@link guardedResolve} (null on escape).
+ */
+function resolvePath(
+    workspacePath: string,
+    relPath: string,
+    system: boolean | undefined,
+): string | null {
+    if (fullFsAllowed(system)) return path.resolve(workspacePath, relPath);
+    return guardedResolve(workspacePath, relPath);
 }
 
 /** A NUL byte in the first chunk is the cheap, reliable binary signal. */
@@ -141,6 +181,106 @@ async function walk(
     return [...folders, ...files];
 }
 
+/**
+ * Walk `dir` into TreeNodeData[] with ABSOLUTE, forward-slashed node ids (for
+ * the System-workspace full-FS browse). Same skip/symlink/budget rules as
+ * {@link walk}, but each node's id is its absolute path so a read/write can
+ * round-trip it directly (the System resolver treats an absolute relPath as-is).
+ */
+async function walkAbs(
+    dir: string,
+    depth: number,
+    maxDepth: number,
+    budget: { remaining: number },
+): Promise<TreeNodeData[]> {
+    if (depth > maxDepth || budget.remaining <= 0) return [];
+
+    let entries: import('node:fs').Dirent[];
+    try {
+        entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+        return [];
+    }
+
+    const folders: TreeNodeData[] = [];
+    const files: TreeNodeData[] = [];
+
+    for (const entry of entries) {
+        if (budget.remaining <= 0) break;
+        const name = entry.name;
+        // Hide the same regenerable/noise dirs as a workspace so the machine
+        // tree stays usable (read/write of ANY absolute path is unaffected —
+        // that is the full-FS capability; the tree is only navigation).
+        if (SKIP_NAMES.has(name) || REGENERABLE_NAMES.has(name.toLowerCase())) {
+            continue;
+        }
+        const abs = path.join(dir, name);
+        const id = abs.replace(/\\/g, '/');
+
+        if (entry.isSymbolicLink()) {
+            budget.remaining--;
+            files.push({ id, label: name, type: 'file', ext: extOf(name) });
+            continue;
+        }
+        if (entry.isDirectory()) {
+            budget.remaining--;
+            const children = await walkAbs(abs, depth + 1, maxDepth, budget);
+            folders.push({ id, label: name, type: 'folder', children });
+        } else if (entry.isFile()) {
+            budget.remaining--;
+            files.push({ id, label: name, type: 'file', ext: extOf(name) });
+        }
+    }
+
+    folders.sort((a, b) => a.label.localeCompare(b.label));
+    files.sort((a, b) => a.label.localeCompare(b.label));
+    return [...folders, ...files];
+}
+
+/** Existing drive roots on Windows (A:..Z: that respond to access). */
+async function listWindowsDrives(): Promise<string[]> {
+    const out: string[] = [];
+    for (let c = 65 /* A */; c <= 90 /* Z */; c++) {
+        const letter = String.fromCharCode(c);
+        try {
+            await fsp.access(`${letter}:\\`);
+            out.push(`${letter}:`);
+        } catch {
+            /* no such drive */
+        }
+    }
+    return out;
+}
+
+/**
+ * The System-workspace full-filesystem tree (desktop only). With no `root`, the
+ * top level is the machine's filesystem root(s): drive letters on Windows, `/`
+ * on POSIX. With `root` (an absolute path the UI drilled into) it walks there.
+ */
+async function listSystemTree(
+    opts: ListTreeOpts,
+    maxDepth: number,
+    budget: { remaining: number },
+): Promise<TreeNodeData[]> {
+    const sub = (opts.root ?? '').trim();
+    if (sub) {
+        return walkAbs(path.resolve(sub), 0, maxDepth, budget);
+    }
+    if (process.platform === 'win32') {
+        const drives = await listWindowsDrives();
+        const out: TreeNodeData[] = [];
+        for (const d of drives) {
+            if (budget.remaining <= 0) break;
+            budget.remaining--;
+            const children = await walkAbs(`${d}\\`, 1, maxDepth, budget);
+            // Drive node id ends with '/' so joinRel/reads resolve under it.
+            out.push({ id: `${d}/`, label: d, type: 'folder', children });
+        }
+        return out;
+    }
+    return walkAbs('/', 0, maxDepth, budget);
+}
+
 export async function listTree(
     workspacePath: string,
     opts: ListTreeOpts = {},
@@ -148,6 +288,12 @@ export async function listTree(
     const maxDepth = opts.maxDepth ?? DEFAULT_MAX_DEPTH;
     const maxEntries = opts.maxEntries ?? DEFAULT_MAX_ENTRIES;
     const budget = { remaining: maxEntries };
+
+    // System workspace, desktop only: browse the WHOLE machine (drive roots / /)
+    // with absolute node ids. Fail-closed — headless never reaches this.
+    if (fullFsAllowed(opts.system)) {
+        return listSystemTree(opts, maxDepth, budget);
+    }
 
     // A locked code view roots the walk at a workspace-relative subfolder.
     // Guard-resolve it against the workspace so it can't escape; the id
@@ -167,8 +313,9 @@ export async function listTree(
 export async function readFile(
     workspacePath: string,
     relPath: string,
+    system?: boolean,
 ): Promise<{ content: string; truncated: boolean }> {
-    const abs = guardedResolve(workspacePath, relPath);
+    const abs = resolvePath(workspacePath, relPath, system);
     if (!abs) throw new Error('Path escapes workspace');
     const stat = await fsp.stat(abs);
     if (!stat.isFile()) throw new Error('Not a file');
@@ -183,8 +330,9 @@ export async function writeFile(
     workspacePath: string,
     relPath: string,
     content: string,
+    system?: boolean,
 ): Promise<{ ok: boolean }> {
-    const abs = guardedResolve(workspacePath, relPath);
+    const abs = resolvePath(workspacePath, relPath, system);
     if (!abs) throw new Error('Path escapes workspace');
     const bytes = Buffer.byteLength(content, 'utf8');
     if (bytes > MAX_FILE_BYTES) throw new Error('Content exceeds size limit');
@@ -205,8 +353,9 @@ export async function writeFile(
 export async function createFile(
     workspacePath: string,
     relPath: string,
+    system?: boolean,
 ): Promise<{ ok: boolean }> {
-    const abs = guardedResolve(workspacePath, relPath);
+    const abs = resolvePath(workspacePath, relPath, system);
     if (!abs) throw new Error('Path escapes workspace');
     // The root itself is never a valid create target.
     if (abs === path.resolve(workspacePath)) throw new Error('Invalid path');
@@ -228,8 +377,9 @@ export async function createFile(
 export async function createFolder(
     workspacePath: string,
     relPath: string,
+    system?: boolean,
 ): Promise<{ ok: boolean }> {
-    const abs = guardedResolve(workspacePath, relPath);
+    const abs = resolvePath(workspacePath, relPath, system);
     if (!abs) throw new Error('Path escapes workspace');
     if (abs === path.resolve(workspacePath)) throw new Error('Invalid path');
     await fsp.mkdir(abs, { recursive: true });
@@ -245,9 +395,10 @@ export async function renamePath(
     workspacePath: string,
     fromRel: string,
     toRel: string,
+    system?: boolean,
 ): Promise<{ ok: boolean }> {
-    const from = guardedResolve(workspacePath, fromRel);
-    const to = guardedResolve(workspacePath, toRel);
+    const from = resolvePath(workspacePath, fromRel, system);
+    const to = resolvePath(workspacePath, toRel, system);
     if (!from || !to) throw new Error('Path escapes workspace');
     const root = path.resolve(workspacePath);
     if (from === root || to === root) throw new Error('Invalid path');
@@ -284,8 +435,9 @@ function copyName(name: string, n: number): string {
 export async function duplicatePath(
     workspacePath: string,
     relPath: string,
+    system?: boolean,
 ): Promise<{ ok: boolean; relPath: string }> {
-    const from = guardedResolve(workspacePath, relPath);
+    const from = resolvePath(workspacePath, relPath, system);
     if (!from) throw new Error('Path escapes workspace');
     if (from === path.resolve(workspacePath)) throw new Error('Invalid path');
     const stat = await fsp.stat(from);
@@ -302,9 +454,10 @@ export async function duplicatePath(
         const candidate = copyName(name, n);
         const toAbs = path.join(dir, candidate);
         // Keep the destination inside the workspace (defensive — the source
-        // already is, so a sibling is too, but guard anyway).
+        // already is, so a sibling is too, but guard anyway). System full-FS
+        // duplicates alongside the source (same dir), so the sibling resolves.
         const toRel = relDir ? `${relDir}/${candidate}` : candidate;
-        if (!guardedResolve(workspacePath, toRel)) continue;
+        if (!resolvePath(workspacePath, toRel, system)) continue;
         const taken = await fsp
             .access(toAbs)
             .then(() => true)
@@ -329,6 +482,7 @@ export async function importExternalPath(
     workspacePath: string,
     srcAbs: string,
     destFolderRel: string,
+    system?: boolean,
 ): Promise<{ ok: boolean; relPath: string }> {
     if (!srcAbs) throw new Error('No source path');
     const stat = await fsp.stat(srcAbs); // throws if the source is gone
@@ -337,7 +491,7 @@ export async function importExternalPath(
 
     const dir = (destFolderRel ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
     const baseRel = dir ? `${dir}/${leaf}` : leaf;
-    const baseAbs = guardedResolve(workspacePath, baseRel);
+    const baseAbs = resolvePath(workspacePath, baseRel, system);
     if (!baseAbs) throw new Error('Destination escapes workspace');
 
     // No-clobber: pick the first free `-copy` name in the destination folder.
@@ -348,7 +502,7 @@ export async function importExternalPath(
         finalRel = '';
         for (let n = 1; n <= 1000; n++) {
             const candRel = dir ? `${dir}/${copyName(leaf, n)}` : copyName(leaf, n);
-            const candAbs = guardedResolve(workspacePath, candRel);
+            const candAbs = resolvePath(workspacePath, candRel, system);
             if (!candAbs) continue;
             const taken = await fsp.access(candAbs).then(() => true).catch(() => false);
             if (taken) continue;
@@ -375,8 +529,9 @@ export async function importExternalPath(
 export async function deletePath(
     workspacePath: string,
     relPath: string,
+    system?: boolean,
 ): Promise<{ ok: boolean }> {
-    const abs = guardedResolve(workspacePath, relPath);
+    const abs = resolvePath(workspacePath, relPath, system);
     if (!abs) throw new Error('Path escapes workspace');
     if (abs === path.resolve(workspacePath)) throw new Error('Invalid path');
     await fsp.rm(abs, { recursive: true, force: true });
@@ -502,44 +657,46 @@ export function registerFilesIpc(): void {
         (_e, workspacePath: string, opts?: ListTreeOpts) =>
             listTree(workspacePath, opts ?? {}),
     );
-    ipcMain.handle('files:read', (_e, workspacePath: string, relPath: string) =>
-        readFile(workspacePath, relPath),
+    ipcMain.handle(
+        'files:read',
+        (_e, workspacePath: string, relPath: string, system?: boolean) =>
+            readFile(workspacePath, relPath, system),
     );
     ipcMain.handle(
         'files:write',
-        (_e, workspacePath: string, relPath: string, content: string) =>
-            writeFile(workspacePath, relPath, content),
+        (_e, workspacePath: string, relPath: string, content: string, system?: boolean) =>
+            writeFile(workspacePath, relPath, content, system),
     );
     ipcMain.handle(
         'files:create-file',
-        (_e, workspacePath: string, relPath: string) =>
-            createFile(workspacePath, relPath),
+        (_e, workspacePath: string, relPath: string, system?: boolean) =>
+            createFile(workspacePath, relPath, system),
     );
     ipcMain.handle(
         'files:create-folder',
-        (_e, workspacePath: string, relPath: string) =>
-            createFolder(workspacePath, relPath),
+        (_e, workspacePath: string, relPath: string, system?: boolean) =>
+            createFolder(workspacePath, relPath, system),
     );
     ipcMain.handle(
         'files:rename',
-        (_e, workspacePath: string, fromRel: string, toRel: string) =>
-            renamePath(workspacePath, fromRel, toRel),
+        (_e, workspacePath: string, fromRel: string, toRel: string, system?: boolean) =>
+            renamePath(workspacePath, fromRel, toRel, system),
     );
     ipcMain.handle(
         'files:duplicate',
-        (_e, workspacePath: string, relPath: string) =>
-            duplicatePath(workspacePath, relPath),
+        (_e, workspacePath: string, relPath: string, system?: boolean) =>
+            duplicatePath(workspacePath, relPath, system),
     );
     // Copy an external OS path (Explorer/Finder drag) into a workspace folder.
     ipcMain.handle(
         'files:import-external',
-        (_e, workspacePath: string, srcAbs: string, destFolderRel: string) =>
-            importExternalPath(workspacePath, srcAbs, destFolderRel ?? ''),
+        (_e, workspacePath: string, srcAbs: string, destFolderRel: string, system?: boolean) =>
+            importExternalPath(workspacePath, srcAbs, destFolderRel ?? '', system),
     );
     ipcMain.handle(
         'files:delete',
-        (_e, workspacePath: string, relPath: string) =>
-            deletePath(workspacePath, relPath),
+        (_e, workspacePath: string, relPath: string, system?: boolean) =>
+            deletePath(workspacePath, relPath, system),
     );
     ipcMain.handle(
         'files:git-status',

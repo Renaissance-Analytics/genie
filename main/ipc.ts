@@ -1,4 +1,4 @@
-import { app, clipboard, dialog, ipcMain, shell, BrowserWindow } from 'electron';
+import { app, clipboard, dialog, ipcMain, nativeImage, shell, BrowserWindow } from 'electron';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -12,8 +12,9 @@ import {
     setWorkspaceMcp,
     setWorkspaceProcessApproval,
     setWorkspaceTerminalApproval,
-    setWorkspaceIssuewatchPolicy,
-    type IssuewatchPolicy,
+    getWorkspaceIssuewatchPolicyBuckets,
+    setWorkspaceIssuewatchPolicyBuckets,
+    type IssuewatchPolicyBuckets,
     getWorkspaceIssuewatchGranularity,
     setWorkspaceIssuewatchGranularity,
     type IssuewatchGranularity,
@@ -232,6 +233,30 @@ export function registerIpcHandlers(): void {
         return { ok: true };
     });
     ipcMain.handle('clipboard:read', () => clipboard.readText());
+    // Image clipboard — the terminal's image-paste path. `read-image` returns the
+    // LOCAL clipboard image as a PNG data-URL (null when there's no image), so the
+    // renderer can detect a copied image and sync it to the clipboard of the machine
+    // the terminal runs on. `write-image` writes a PNG (base64) back to THIS
+    // machine's clipboard; in a host window the remote bridge re-points the write to
+    // the HOST clipboard over the authed bridge, so this local handler only ever
+    // serves the local case (a desktop, which always has an OS clipboard →
+    // supported:true).
+    ipcMain.handle('clipboard:read-image', () => {
+        const img = clipboard.readImage();
+        return img.isEmpty() ? null : img.toDataURL();
+    });
+    ipcMain.handle('clipboard:write-image', (_e, dataBase64: unknown) => {
+        const b64 = typeof dataBase64 === 'string' ? dataBase64 : '';
+        if (!b64) return { ok: false, supported: true };
+        try {
+            const img = nativeImage.createFromBuffer(Buffer.from(b64, 'base64'));
+            if (img.isEmpty()) return { ok: false, supported: true };
+            clipboard.writeImage(img);
+            return { ok: true, supported: true };
+        } catch {
+            return { ok: false, supported: true };
+        }
+    });
     ipcMain.handle(
         'settings:choose-folder',
         async (_e, label?: string, defaultPath?: string) => {
@@ -347,10 +372,13 @@ export function registerIpcHandlers(): void {
             return { ok: true };
         },
     );
+    ipcMain.handle('workspaces:get-issuewatch-policy', (_e, id: string) =>
+        getWorkspaceIssuewatchPolicyBuckets(id),
+    );
     ipcMain.handle(
         'workspaces:set-issuewatch-policy',
-        (_e, id: string, policy: IssuewatchPolicy) => {
-            setWorkspaceIssuewatchPolicy(id, policy);
+        (_e, id: string, buckets: IssuewatchPolicyBuckets) => {
+            setWorkspaceIssuewatchPolicyBuckets(id, buckets);
             return { ok: true };
         },
     );

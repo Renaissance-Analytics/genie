@@ -6,6 +6,7 @@ import type { ForceAnswer } from '../mcp/protocol';
 import type { PendingQuestion } from '../ask/force-question';
 import { sessionFromAuthHeader, attemptPair } from './auth';
 import { audit, isLocked } from './audit';
+import { isHeadless } from '../runtime-mode';
 import { BRIDGE_PROTOCOL_VERSION } from '../remote/link-state';
 import {
     listTree,
@@ -182,6 +183,16 @@ export interface MobileDataDeps {
     /** Force a full-screen TUI to repaint (SIGWINCH nudge) after the bridge
      *  dropped a frame, so the client resyncs. Optional — a no-op if unwired. */
     repaint?: (id: string) => void;
+    /**
+     * Write a PNG to the HOST's OS clipboard so a REMOTE paste lands an image
+     * exactly like a local one: the driving client ships its LOCAL clipboard image
+     * here, we put it on the host clipboard, and the client then delivers the paste
+     * trigger to the pty (the CLI reads the host clipboard). Optional + fail-safe:
+     * a HEADLESS host (the Aionima Virtual Workstation) has no OS clipboard, so it
+     * leaves this UNWIRED and the route reports `supported:false` — the client
+     * no-ops the image gracefully and never breaks text paste. `supported:true,
+     * ok:false` means the host had a clipboard but the PNG was unusable. */
+    writeClipboardImage?: (png: Buffer) => { ok: boolean; supported: boolean };
 
     // --- force-question ---
     listPendingQuestions: () => PendingQuestion[];
@@ -214,6 +225,74 @@ export interface MobileDataDeps {
         latestVersion: string | null;
         readyToInstall: boolean;
     }>;
+}
+
+// --- headless (genie-cloud) System-workspace exclusion + terminal confinement --
+//
+// On the DESKTOP mobile server (the owner's own phone over their tailnet) every
+// terminal/process is servable, unchanged. On the HEADLESS host (genie-cloud)
+// the synthetic System workspace — and any unattached, null-workspace spec — is
+// NEVER served or reachable, and every spawned pty is confined to the workspace
+// folder. All checks below fail CLOSED: an unknown/uncertain target is denied.
+
+/** Real (DB-backed) workspace ids the surface serves. The synthetic System
+ *  workspace has NO row, so its id is never here — it is never served. */
+function servedWorkspaceIds(deps: MobileDataDeps): Set<string> {
+    return new Set(deps.listWorkspaces().map((w) => w.id));
+}
+
+/** A workspace-bound target belongs to a real served workspace. A null/absent
+ *  or unknown workspace (System / unattached) is NOT served (fail-closed). */
+function boundToServedWorkspace(
+    workspaceId: string | null,
+    served: Set<string>,
+): boolean {
+    return !!workspaceId && served.has(workspaceId);
+}
+
+/**
+ * Whether a terminal may be served on the member-facing surface. Desktop: always
+ * (unchanged). Headless: only when it belongs to a real served workspace — the
+ * System workspace (and any null-workspace spec) is never reachable, so a member
+ * cannot attach/view/drive it even by a known/guessed id. Fail-closed.
+ */
+export function terminalServable(deps: MobileDataDeps, terminalId: string): boolean {
+    if (!isHeadless()) return true;
+    const served = servedWorkspaceIds(deps);
+    const spec = deps.listTerminalSpecs().find((s) => s.id === terminalId);
+    return !!spec && boundToServedWorkspace(spec.workspace_id, served);
+}
+
+/** The process list as served: headless drops System / null-workspace rows. */
+function servedProcesses(deps: MobileDataDeps): ReturnType<MobileDataDeps['listAllProcesses']> {
+    const list = deps.listAllProcesses();
+    if (!isHeadless()) return list;
+    const served = servedWorkspaceIds(deps);
+    return list.filter((p) => boundToServedWorkspace(p.workspaceId, served));
+}
+
+/** Process-control analogue of {@link terminalServable} (keyed on the process
+ *  list's workspaceId; null = System/unattached → denied headless). */
+export function processServable(deps: MobileDataDeps, processId: string): boolean {
+    if (!isHeadless()) return true;
+    const served = servedWorkspaceIds(deps);
+    return deps
+        .listAllProcesses()
+        .some((p) => p.id === processId && boundToServedWorkspace(p.workspaceId, served));
+}
+
+/**
+ * Resolve a requested terminal cwd, CONFINED to the workspace root. The
+ * host-side scope for the Virtual Genie Workstation: every terminal starts
+ * INSIDE the workspace folder. A member-supplied absolute path or a `..` escape
+ * falls back to the workspace root — a pty is never spawned outside it.
+ */
+export function confineCwdToWorkspace(workspaceRoot: string, requested?: string): string {
+    const root = path.resolve(workspaceRoot);
+    const want = (requested ?? '').trim();
+    if (!want || path.isAbsolute(want)) return root;
+    const abs = path.resolve(root, want);
+    return abs === root || abs.startsWith(root + path.sep) ? abs : root;
 }
 
 /** A small JSON response helper (CORS-free — same-origin from the served app). */
@@ -292,6 +371,12 @@ function actorOf(token: string): string {
  */
 function buildState(deps: MobileDataDeps) {
     const live = new Set(deps.liveTerminalIds());
+    // Headless: drop every System / null-workspace task so the member never sees
+    // (or can address) a workspace outside their served set. Desktop: unchanged.
+    const headless = isHeadless();
+    const served = servedWorkspaceIds(deps);
+    const serves = (workspaceId: string | null) =>
+        !headless || boundToServedWorkspace(workspaceId, served);
     return {
         workspaces: deps.listWorkspaces().map((w) => ({
             id: w.id,
@@ -301,6 +386,7 @@ function buildState(deps: MobileDataDeps) {
         terminals: deps
             .listTerminalSpecs()
             .filter((s) => s.type !== 'code' && s.type !== 'process')
+            .filter((s) => serves(s.workspace_id))
             .map((s) => ({
                 id: s.id,
                 workspaceId: s.workspace_id,
@@ -308,7 +394,7 @@ function buildState(deps: MobileDataDeps) {
                 cwd: s.live_cwd ?? s.cwd,
                 running: live.has(s.id),
             })),
-        processes: deps.listAllProcesses(),
+        processes: deps.listAllProcesses().filter((p) => serves(p.workspaceId)),
         questions: deps.listPendingQuestions(),
     };
 }
@@ -323,7 +409,7 @@ export async function handleApi(
     res: http.ServerResponse,
     pathname: string,
     deps: MobileDataDeps,
-    info: { ip: string; ua: string },
+    info: { ip: string; ua: string; serverVersion?: string },
 ): Promise<boolean> {
     const method = req.method ?? 'GET';
 
@@ -357,12 +443,15 @@ export async function handleApi(
     // reports the bridge PROTOCOL version so a connecting/ reconnecting remote
     // client can detect an incompatible peer (and the limbo poll can re-check it
     // after the host upgrades) — an integer, not the app version, so patch betas
-    // don't force upgrades.
+    // don't force upgrades. It ALSO reports the RELEASE `appVersion` so a client
+    // can show a soft, non-blocking "host is on an older build" nudge (distinct
+    // from the hard protocol mismatch) — omitted when unknown.
     if (pathname === '/api/ping') {
         sendJson(res, 200, {
             genie: true,
             hostname: os.hostname(),
             protocolVersion: BRIDGE_PROTOCOL_VERSION,
+            appVersion: info.serverVersion ?? null,
         });
         return true;
     }
@@ -394,7 +483,7 @@ export async function handleApi(
         return true;
     }
     if (pathname === '/api/processes' && method === 'GET') {
-        sendJson(res, 200, { processes: deps.listAllProcesses() });
+        sendJson(res, 200, { processes: servedProcesses(deps) });
         return true;
     }
     if (pathname === '/api/terminals' && method === 'GET') {
@@ -450,12 +539,17 @@ export async function handleApi(
         }
         if (guardLocked()) return true;
         const id = decodeURIComponent(proc[1]);
+        // Headless: refuse to drive a System / unattached process (fail-closed).
+        if (!processServable(deps, id)) {
+            sendJson(res, 404, { error: 'unknown process' });
+            return true;
+        }
         const action = proc[2] as 'start' | 'stop' | 'restart';
         if (action === 'start') deps.startProcess(id);
         else if (action === 'stop') deps.stopProcess(id);
         else deps.restartProcess(id);
         audit(`process.${action}`, id, actor);
-        sendJson(res, 200, { ok: true, processes: deps.listAllProcesses() });
+        sendJson(res, 200, { ok: true, processes: servedProcesses(deps) });
         return true;
     }
 
@@ -476,7 +570,8 @@ export async function handleApi(
         }
         const created = deps.createAgentTerminal({
             workspaceId: ws.id,
-            cwd: body.cwd?.trim() || ws.path,
+            // Confine the pty cwd to the workspace folder — never spawn outside it.
+            cwd: confineCwdToWorkspace(ws.path, body.cwd),
             label: body.label?.trim() || 'Mobile terminal',
         });
         audit('terminal.create', `${created.id} in ${ws.project_name}`, actor);
@@ -493,6 +588,11 @@ export async function handleApi(
         }
         if (guardLocked()) return true;
         const id = decodeURIComponent(killT[1]);
+        // Headless: never let a member kill a System / unattached terminal.
+        if (!terminalServable(deps, id)) {
+            sendJson(res, 404, { ok: false });
+            return true;
+        }
         const ok = deps.killTerminalById(id);
         audit('terminal.kill', id, actor);
         sendJson(res, ok ? 200 : 404, { ok });
@@ -562,6 +662,56 @@ export async function handleApi(
         return true;
     }
 
+    // --- host-clipboard image sync: POST /api/clipboard/image ------------
+    // Remote image paste: the driving client ships its LOCAL clipboard PNG here and
+    // we write it to the HOST's OS clipboard, so the paste trigger it then sends to
+    // the pty makes the CLI read the image exactly like a native local paste. Authed
+    // + kill-switch-gated like every mutation, and body-capped like the upload route
+    // (base64 inflates the JSON). A HEADLESS host leaves `writeClipboardImage`
+    // unwired → `supported:false`, and the client no-ops the image (never breaking
+    // text paste).
+    if (pathname === '/api/clipboard/image' && method === 'POST') {
+        if (guardLocked()) return true;
+        if (!deps.writeClipboardImage) {
+            // No clipboard on this host (headless) — tell the client to no-op.
+            sendJson(res, 200, { ok: false, supported: false });
+            return true;
+        }
+        let body: { dataBase64?: string };
+        try {
+            body = await readJsonBodyCapped(req, Math.ceil(MAX_UPLOAD_BYTES * 1.4) + 1024);
+        } catch (e) {
+            const tooLarge = e instanceof Error && e.message === 'payload too large';
+            sendJson(res, tooLarge ? 413 : 400, {
+                error: tooLarge ? 'image too large' : 'invalid body',
+            });
+            return true;
+        }
+        let buf: Buffer;
+        try {
+            buf = Buffer.from(String(body.dataBase64 ?? ''), 'base64');
+        } catch {
+            sendJson(res, 400, { error: 'invalid image data' });
+            return true;
+        }
+        if (buf.length === 0) {
+            sendJson(res, 400, { error: 'empty image' });
+            return true;
+        }
+        if (buf.length > MAX_UPLOAD_BYTES) {
+            sendJson(res, 413, { error: 'image too large' });
+            return true;
+        }
+        const result = deps.writeClipboardImage(buf);
+        audit(
+            'clipboard.image',
+            `${buf.length}b ${result.supported ? (result.ok ? 'ok' : 'failed') : 'unsupported'}`,
+            actor,
+        );
+        sendJson(res, 200, result);
+        return true;
+    }
+
     // --- answer a question: POST /api/questions/:id/answer ---------------
     const ansQ = /^\/api\/questions\/([^/]+)\/answer$/.exec(pathname);
     if (ansQ) {
@@ -612,9 +762,13 @@ export async function handleApi(
             sendJson(res, 400, { error: 'invalid body' });
             return true;
         }
-        // Verify the path is one of THIS host's workspaces (a remote can't point
-        // file ops at an arbitrary host path). The desktop carries the real path
-        // in the WorkspaceRow it got from /api/desktop/workspaces.
+        // Verify the path is one of THIS host's REAL workspaces (a remote can't
+        // point file ops at an arbitrary host path). The desktop carries the real
+        // path in the WorkspaceRow it got from /api/desktop/workspaces. The
+        // synthetic System workspace has NO db row, so it is never matched here —
+        // file/editor access to it is impossible on the headless surface. Full-FS
+        // is desktop-only regardless: this route never sets the `system` flag on
+        // the files/ipc ops, so every request stays confined to the workspace.
         const wsRow = deps.listWorkspaces().find((w) => w.path === f.workspacePath);
         if (!wsRow) {
             sendJson(res, 404, { error: 'unknown workspace' });

@@ -1,6 +1,7 @@
 import {
     app,
     BrowserWindow,
+    clipboard,
     ipcMain,
     nativeImage,
     Notification,
@@ -24,7 +25,6 @@ import {
     createTerminalSpec,
     workspaceProcessApproval,
     workspaceTerminalApproval,
-    getWorkspaceIssuewatchPolicy,
     removeWorkspace,
 } from './db';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
@@ -154,6 +154,7 @@ import {
 import { registerOpenFile } from './editor/open-file';
 import { registerHostTools } from './mcp/host-tools';
 import { isQuittingForUpdate } from './updater/quit-state';
+import { markDesktopRuntime } from './runtime-mode';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
 import {
@@ -792,6 +793,10 @@ process.on('unhandledRejection', (reason) => {
 });
 
 app.whenReady().then(async () => {
+    // Mark this as the DESKTOP runtime (Electron main). Gates the System
+    // workspace's full-filesystem access (files/ipc.ts) — impossible headless.
+    markDesktopRuntime();
+
     // Persistent session under "persist:tynn" so cookies survive restarts.
     // tynn-api.ts uses this session for all outbound calls.
     session.fromPartition('persist:tynn');
@@ -1125,6 +1130,22 @@ app.whenReady().then(async () => {
                     mgr.resize(id, s.cols, s.rows);
                 } catch {
                     /* pty gone / resize unsupported — best-effort */
+                }
+            },
+            // Host-clipboard image sync (remote image paste): write the client's
+            // shipped PNG to THIS machine's OS clipboard so the paste trigger it
+            // then sends makes the CLI read the image. Desktop always has a
+            // clipboard → supported:true; the headless genie-cloud host leaves this
+            // dep unwired (see MobileDataDeps.writeClipboardImage) so its route
+            // reports supported:false and the client no-ops the image.
+            writeClipboardImage: (png) => {
+                try {
+                    const img = nativeImage.createFromBuffer(png);
+                    if (img.isEmpty()) return { ok: false, supported: true };
+                    clipboard.writeImage(img);
+                    return { ok: true, supported: true };
+                } catch {
+                    return { ok: false, supported: true };
                 }
             },
             listPendingQuestions: () => listPendingQuestions(),

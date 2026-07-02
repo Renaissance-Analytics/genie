@@ -261,7 +261,7 @@ export async function applyOpsProvision(
                 path: wsPath,
                 editor: null,
                 editor_cmd: null,
-                start_cmd: settings.default_start_cmd ?? null,
+                start_cmd: null,
                 env_file: settings.default_env_file ?? '.env',
                 last_opened_at: null,
                 created_by_genie: 1,
