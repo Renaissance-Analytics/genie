@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { resolveShortcut, type ShortcutKeyEvent } from '../master-shortcuts';
 
 /**
- * Unit tests for the pure keyboard-shortcut intent resolver that backs the
- * master footer hint ("⌘1–9 focus · ⌘\ pin tree · ⌘W close panel"). The
- * master.tsx effect maps each resolved intent to a state mutation; here we just
- * assert the key→intent mapping (focus/pin/close) and the modifier guards.
+ * Unit tests for the pure keyboard-shortcut intent resolver behind the master
+ * view's one remaining global shortcut: ⌘/Ctrl + , → open Settings. The
+ * master.tsx effect maps the resolved intent to a state mutation; here we assert
+ * the key→intent mapping and the modifier guards, plus that the removed
+ * focus/pin/close shortcuts (⌘1–9 / ⌘\ / ⌘W — a focused terminal swallowed them)
+ * no longer resolve.
  */
 
 const ev = (over: Partial<ShortcutKeyEvent>): ShortcutKeyEvent => ({
@@ -18,68 +20,34 @@ const ev = (over: Partial<ShortcutKeyEvent>): ShortcutKeyEvent => ({
 });
 
 describe('resolveShortcut', () => {
-    it('maps ⌘/Ctrl + 1–9 to a 0-based focus intent', () => {
-        expect(resolveShortcut(ev({ key: '1', metaKey: true }))).toEqual({
-            kind: 'focus',
-            index: 0,
-        });
-        expect(resolveShortcut(ev({ key: '9', ctrlKey: true }))).toEqual({
-            kind: 'focus',
-            index: 8,
-        });
-        // Both meta (mac) and ctrl (win/linux) trigger it.
-        expect(resolveShortcut(ev({ key: '3', ctrlKey: true }))).toEqual({
-            kind: 'focus',
-            index: 2,
-        });
-    });
-
-    it('maps ⌘/Ctrl + \\ to a pin (toggle tree) intent', () => {
-        expect(resolveShortcut(ev({ key: '\\', metaKey: true }))).toEqual({
-            kind: 'pin',
-        });
-        expect(resolveShortcut(ev({ key: '\\', ctrlKey: true }))).toEqual({
-            kind: 'pin',
-        });
-    });
-
-    it('maps ⌘/Ctrl + W (either case) to a close intent', () => {
-        expect(resolveShortcut(ev({ key: 'w', metaKey: true }))).toEqual({
-            kind: 'close',
-        });
-        expect(resolveShortcut(ev({ key: 'W', ctrlKey: true }))).toEqual({
-            kind: 'close',
-        });
-    });
-
     it('maps ⌘/Ctrl + , to a settings intent', () => {
         expect(resolveShortcut(ev({ key: ',', metaKey: true }))).toEqual({
             kind: 'settings',
         });
+        // Both meta (mac) and ctrl (win/linux) trigger it.
         expect(resolveShortcut(ev({ key: ',', ctrlKey: true }))).toEqual({
             kind: 'settings',
         });
     });
 
-    it('requires the ⌘/Ctrl modifier — bare keys are ignored', () => {
-        expect(resolveShortcut(ev({ key: '1' }))).toBeNull();
-        expect(resolveShortcut(ev({ key: '\\' }))).toBeNull();
-        expect(resolveShortcut(ev({ key: 'w' }))).toBeNull();
+    it('requires the ⌘/Ctrl modifier — bare , is ignored', () => {
         expect(resolveShortcut(ev({ key: ',' }))).toBeNull();
     });
 
-    it('ignores the combo when Alt is held (avoid clobbering OS/app combos)', () => {
-        expect(resolveShortcut(ev({ key: '1', metaKey: true, altKey: true }))).toBeNull();
-        expect(resolveShortcut(ev({ key: 'w', ctrlKey: true, altKey: true }))).toBeNull();
+    it('ignores ⌘/Ctrl + , when Alt is held (avoid clobbering OS/app combos)', () => {
+        expect(resolveShortcut(ev({ key: ',', metaKey: true, altKey: true }))).toBeNull();
     });
 
-    it('ignores Shift+number and Shift+W (reserved for other combos)', () => {
-        expect(resolveShortcut(ev({ key: '1', metaKey: true, shiftKey: true }))).toBeNull();
-        expect(resolveShortcut(ev({ key: 'W', ctrlKey: true, shiftKey: true }))).toBeNull();
+    it('no longer maps the removed focus/pin/close shortcuts (⌘1–9 / ⌘\\ / ⌘W)', () => {
+        expect(resolveShortcut(ev({ key: '1', metaKey: true }))).toBeNull();
+        expect(resolveShortcut(ev({ key: '9', ctrlKey: true }))).toBeNull();
+        expect(resolveShortcut(ev({ key: '\\', metaKey: true }))).toBeNull();
+        expect(resolveShortcut(ev({ key: 'w', metaKey: true }))).toBeNull();
+        expect(resolveShortcut(ev({ key: 'W', ctrlKey: true }))).toBeNull();
     });
 
     it('returns null for keys that map to no shortcut', () => {
-        expect(resolveShortcut(ev({ key: '0', metaKey: true }))).toBeNull();
         expect(resolveShortcut(ev({ key: 'a', ctrlKey: true }))).toBeNull();
+        expect(resolveShortcut(ev({ key: '0', metaKey: true }))).toBeNull();
     });
 });

@@ -1144,21 +1144,21 @@ function MasterInner() {
     const atMaxViews = selectedSpecs.length >= maxViews;
     const maxViewsReason = `Max views reached (${maxViews}) — raise it in Settings`;
 
-    // Global keyboard shortcuts (advertised in the footer hint):
-    //   ⌘/Ctrl + 1–9  → focus the Nth visible panel of the active workspace.
-    //   ⌘/Ctrl + \\   → toggle the pinned tree/chooser.
-    //   ⌘/Ctrl + W    → close the currently focused panel (same as its X).
+    // Global keyboard shortcut: ⌘/Ctrl + , opens Settings. Fires on a WINDOW
+    // keydown listener, so it works anywhere — including while a terminal is
+    // focused (xterm doesn't claim this combo). The old focus/pin/close shortcuts
+    // (⌘1–9 / ⌘\ / ⌘W) were removed: a focused terminal swallowed them, so they
+    // were unreliable and their status-bar hint misled.
     //
-    // Guard against stealing keystrokes while the user is typing in a real text
+    // Guard against stealing the keystroke while the user is typing in a real text
     // input — the in-app prompt modal, the editor's fields, any <input>/<textarea>/
     // contenteditable. The xterm surface uses a hidden `.xterm-helper-textarea`;
-    // that one is fine to act over (the shortcuts aren't terminal keystrokes), so
-    // it's explicitly exempt from the guard.
+    // that one is exempt so ⌘, still opens Settings from a focused terminal.
     useEffect(() => {
         const isTextEntry = (el: Element | null): boolean => {
             if (!el || !(el instanceof HTMLElement)) return false;
             // xterm's hidden input is a textarea but is NOT a real text field for
-            // our purposes — shortcuts should still work while a terminal is focused.
+            // our purposes — ⌘, should still open Settings from a focused terminal.
             if (
                 el.classList.contains('xterm-helper-textarea') ||
                 el.closest('.xterm')
@@ -1174,48 +1174,20 @@ function MasterInner() {
         };
 
         const onKeyDown = (e: KeyboardEvent) => {
-            // Never steal keystrokes from a real text field (the in-app prompt,
+            // Never steal the keystroke from a real text field (the in-app prompt,
             // the editor, any input). The xterm helper textarea is exempt.
             if (isTextEntry(document.activeElement)) return;
 
             const intent = resolveShortcut(e);
-            if (!intent) return;
-
-            if (intent.kind === 'close') {
-                // Close the focused panel (NOT the window). No-op + DON'T
-                // preventDefault when nothing is focused, so ⌘W stays inert
-                // rather than swallowed.
-                if (focusId) {
-                    e.preventDefault();
-                    closeSelected(focusId);
-                }
-                return;
-            }
-
-            if (intent.kind === 'pin') {
-                e.preventDefault();
-                setChooserPinned((p) => !p);
-                return;
-            }
-
-            if (intent.kind === 'settings') {
+            if (intent?.kind === 'settings') {
                 e.preventDefault();
                 api().app.showSettings().catch(() => {});
-                return;
-            }
-
-            // focus: index into the visible grid order (selectedSpecs).
-            // Out-of-range → no-op (and don't preventDefault).
-            const target = selectedSpecs[intent.index];
-            if (target) {
-                e.preventDefault();
-                setFocusId(target.id);
             }
         };
 
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [selectedSpecs, focusId, closeSelected]);
+    }, []);
 
     if (authChecked && !signedIn) {
         return (
@@ -2521,8 +2493,6 @@ function StatusBar({ panelCount, projectCount, activeCount }: StatusBarProps) {
                 <span className="sdot" style={{ background: '#10b981' }} />
                 {activeCount} live
             </span>
-            <span className="spacer" />
-            <span className="si mono">⌘1–9 focus · ⌘\ pin tree · ⌘W close panel</span>
         </div>
     );
 }
