@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     FIREWALL_RULE_NAME,
     TAILNET_CIDR,
@@ -18,8 +18,26 @@ import {
  * Covers the PURE builders/parsers + the injected-exec wiring of the mobile
  * firewall helper. The real netsh subprocess + UAC elevation are runtime-only
  * (manual-verify): every test injects a fake exec so no admin prompt / process is
- * spawned. These run on win32 (the sandbox), so the win32-guarded paths execute.
+ * spawned. The win32-guarded functions (firewallRuleExists / ensureFirewallRule)
+ * are pinned to platform 'win32' per-block via withWin32() so their guarded logic
+ * runs on ANY runner — the local sandbox is Windows but CI is Linux.
  */
+
+const ORIGINAL_PLATFORM = process.platform;
+
+/** Pin process.platform to 'win32' for the enclosing describe so the win32-guarded
+ *  firewall paths execute regardless of the host OS (restored after each test). */
+function withWin32(): void {
+    beforeEach(() =>
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true }),
+    );
+    afterEach(() =>
+        Object.defineProperty(process, 'platform', {
+            value: ORIGINAL_PLATFORM,
+            configurable: true,
+        }),
+    );
+}
 
 describe('buildAddRuleArgs', () => {
     it('builds the tailnet-scoped inbound TCP allow rule for the port', () => {
@@ -95,6 +113,7 @@ RemoteIP:                             100.64.0.0/10
 });
 
 describe('firewallRuleExists (injected netsh exec)', () => {
+    withWin32();
     it('true when the show output matches the port', async () => {
         const run = vi.fn().mockResolvedValue({ stdout: 'LocalPort: 51718', code: 0 });
         expect(await firewallRuleExists(51718, run)).toBe(true);
@@ -159,6 +178,7 @@ describe('interpretElevationExit', () => {
 });
 
 describe('ensureFirewallRule (injected elevation exec)', () => {
+    withWin32();
     it('maps a 0 exit to ok and feeds the exec an elevation command with our port', async () => {
         const run = vi.fn().mockResolvedValue(0);
         expect(await ensureFirewallRule(51718, run)).toEqual({ ok: true });
