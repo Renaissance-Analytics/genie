@@ -299,7 +299,19 @@ export async function listTree(
     // Guard-resolve it against the workspace so it can't escape; the id
     // prefix keeps node ids relative to the WORKSPACE root, so file
     // reads/writes still path-guard against the workspace, not the subroot.
-    const sub = (opts.root ?? '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    // An ABSOLUTE root is never a confined subfolder — the Code view's
+    // normaliseRoot only ever produces a bare workspace-RELATIVE path. Reject it
+    // consistently on EVERY platform: a POSIX absolute (`/x`) AND a Windows
+    // drive/UNC absolute (`C:\x`, `\\srv`) both escape confinement. Do this BEFORE
+    // the leading-slash strip below — without it, `.replace(/^\/+/…)` turns a POSIX
+    // absolute into a relative subpath, silently confining it to a nonexistent
+    // subdir (→ []) on Linux while Windows correctly threw (guardedResolve). That
+    // cross-platform inconsistency is the failing CI test (system-fs :115).
+    const raw = (opts.root ?? '').replace(/\\/g, '/');
+    if (path.posix.isAbsolute(raw) || path.win32.isAbsolute(raw)) {
+        throw new Error('Path escapes workspace');
+    }
+    const sub = raw.replace(/^\/+|\/+$/g, '');
     if (sub) {
         const start = guardedResolve(workspacePath, sub);
         if (!start) throw new Error('Path escapes workspace');
