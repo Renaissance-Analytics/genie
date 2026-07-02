@@ -25,6 +25,14 @@ import {
     type UpdaterConfig,
     type UpdaterStatus,
 } from '../lib/genie';
+import {
+    NAV_GROUPS,
+    filterNavGroups,
+    isSectionVisible,
+    isRestrictedSettings,
+    defaultSection,
+    type SectionId,
+} from '../lib/settings-nav';
 
 /** Hard cap on the Ai.System instruction set (mirrors main's AI_SYSTEM_MAX).
  *  Enforced here in the UI (`maxLength` + slice) and again server-side in the
@@ -40,8 +48,11 @@ export default function SettingsPage() {
     const [cliShipped, setCliShipped] = useState<boolean | null>(null);
     const [cliBusy, setCliBusy] = useState(false);
     const [cliMsg, setCliMsg] = useState<string | null>(null);
+    // Opened FROM a remote/host window? Then restrict to the connection-relevant
+    // subset (see settings-nav.ts). Constant per window (reads the ?remote=1 flag).
+    const restricted = isRestrictedSettings();
     // New IA: which sidebar section is showing + the cross-row search filter.
-    const [section, setSection] = useState<SectionId>('general');
+    const [section, setSection] = useState<SectionId>(defaultSection(restricted));
     const [filter, setFilter] = useState('');
 
     useEffect(() => {
@@ -84,6 +95,11 @@ export default function SettingsPage() {
     // mounted (so matches surface from any tab), each under its tab's group
     // label; CSS collapses tabs/sections with no matching `.set-row`.
     const searching = filter.trim().length > 0;
+    // A section renders when it's the active tab (or a search is on) AND it's not
+    // hidden by the remote-window restriction — so cross-section search also only
+    // surfaces the KEEP rows in a remote window.
+    const show = (id: SectionId): boolean =>
+        (searching || section === id) && isSectionVisible(id, restricted);
     const activeLabel = searching
         ? 'Search results'
         : NAV_GROUPS.flatMap((g) => g.items).find((i) => i.id === section)?.label ??
@@ -97,7 +113,7 @@ export default function SettingsPage() {
                         <Icon name="settings" size="sm" className="text-zinc-500" />
                         Settings
                     </div>
-                    {NAV_GROUPS.map((g) => (
+                    {filterNavGroups(NAV_GROUPS, restricted).map((g) => (
                         <div className="set-nav-group" key={g.label}>
                             <div className="set-nav-group-label">{g.label}</div>
                             {g.items.map((it) => (
@@ -133,7 +149,7 @@ export default function SettingsPage() {
                     </div>
 
                     <div className={`set-body${searching ? ' set-searching' : ''}`}>
-                        {(searching || section === 'general') && (
+                        {show('general') && (
                             <SearchGroup label="General" searching={searching}>
 
             <SetSection title="General" desc="Core defaults for new projects and panels">
@@ -229,7 +245,7 @@ export default function SettingsPage() {
 
                             </SearchGroup>
                         )}
-                        {(searching || section === 'tools') && (
+                        {show('tools') && (
                             <SearchGroup label="Tools" searching={searching}>
 
             <SetSection title="Tools" desc="The bundled tynn-cli toolkit in Genie terminals">
@@ -314,7 +330,7 @@ export default function SettingsPage() {
 
                             </SearchGroup>
                         )}
-                        {(searching || section === 'workspaces') && (
+                        {show('workspaces') && (
                             <SearchGroup label="Workspaces" searching={searching}>
 
             <SetSection title="Defaults" desc="Applied to newly-created workspaces">
@@ -355,7 +371,7 @@ export default function SettingsPage() {
 
                             </SearchGroup>
                         )}
-                        {(searching || section === 'customization') && (
+                        {show('customization') && (
                             <SearchGroup label="Customization" searching={searching}>
 
             <AppearanceCard />
@@ -411,35 +427,42 @@ export default function SettingsPage() {
                 </SettingRow>
             </SetSection>
 
-            <SetSection title="Startup" desc="What Genie does on launch">
-                <SettingRow
-                    label="Start minimized to the tray"
-                    desc="Off by default — Genie opens its window on launch. Turn on to start in the tray only; the window opens on the first tray click or the quick-capture hotkey."
-                    keywords="startup start minimized tray launch window boot"
-                >
-                    <Switch
-                        checked={s.start_minimized === 'on'}
-                        onCheckedChange={(on: boolean) =>
-                            patch({ start_minimized: on ? 'on' : 'off' })
-                        }
-                    />
-                </SettingRow>
-            </SetSection>
+            {/* Startup + the quick-capture hotkey configure THIS machine's app
+                launch — hidden in a remote window (wrong-scoped when driving another
+                machine). */}
+            {!restricted && (
+                <SetSection title="Startup" desc="What Genie does on launch">
+                    <SettingRow
+                        label="Start minimized to the tray"
+                        desc="Off by default — Genie opens its window on launch. Turn on to start in the tray only; the window opens on the first tray click or the quick-capture hotkey."
+                        keywords="startup start minimized tray launch window boot"
+                    >
+                        <Switch
+                            checked={s.start_minimized === 'on'}
+                            onCheckedChange={(on: boolean) =>
+                                patch({ start_minimized: on ? 'on' : 'off' })
+                            }
+                        />
+                    </SettingRow>
+                </SetSection>
+            )}
 
-            <SetSection title="Quick capture hotkey" desc="Global shortcut to pop the capture window">
-                <SettingRow
-                    label="Accelerator"
-                    desc="Electron accelerator string, e.g. CommandOrControl+Shift+W"
-                    keywords="quick capture hotkey accelerator global shortcut keybinding"
-                    vertical
-                >
-                    <Input
-                        value={s.global_hotkey ?? ''}
-                        onValueChange={(v) => patch({ global_hotkey: v })}
-                        placeholder="CommandOrControl+Shift+W"
-                    />
-                </SettingRow>
-            </SetSection>
+            {!restricted && (
+                <SetSection title="Quick capture hotkey" desc="Global shortcut to pop the capture window">
+                    <SettingRow
+                        label="Accelerator"
+                        desc="Electron accelerator string, e.g. CommandOrControl+Shift+W"
+                        keywords="quick capture hotkey accelerator global shortcut keybinding"
+                        vertical
+                    >
+                        <Input
+                            value={s.global_hotkey ?? ''}
+                            onValueChange={(v) => patch({ global_hotkey: v })}
+                            placeholder="CommandOrControl+Shift+W"
+                        />
+                    </SettingRow>
+                </SetSection>
+            )}
 
             <SetSection title="Terminal copy & paste" desc="How copy and paste work inside terminals">
                 <SettingRow
@@ -462,32 +485,36 @@ export default function SettingsPage() {
                 </SettingRow>
             </SetSection>
 
-            <SetSection title="Ai.System" desc="Instructions Genie injects into every workspace's AGENTS.md">
-                <SettingRow
-                    label="Workspace instructions"
-                    desc="Injected into every workspace's AGENTS.md, inside the auto-managed Genie Protocol block, so every agent in every workspace reads it. Keep it tight — capped at 2000 characters."
-                    keywords="ai system instructions agents.md genie protocol customization prompt workspace"
-                    vertical
-                >
-                    <textarea
-                        className="input"
-                        value={s.ai_system ?? ''}
-                        onChange={(e) => patch({ ai_system: e.target.value.slice(0, AI_SYSTEM_MAX) })}
-                        maxLength={AI_SYSTEM_MAX}
-                        rows={6}
-                        placeholder="e.g. Prefer TypeScript. Never edit files under /vendor. Ask before force-pushing."
-                    />
-                    <div style={{ marginTop: 4, textAlign: 'right' }}>
-                        <Text size="xs" className="text-zinc-500">
-                            {(s.ai_system ?? '').length} / {AI_SYSTEM_MAX}
-                        </Text>
-                    </div>
-                </SettingRow>
-            </SetSection>
+            {/* Ai.System injects into every workspace's AGENTS.md on THIS machine —
+                a host/workspace config, hidden in a remote window. */}
+            {!restricted && (
+                <SetSection title="Ai.System" desc="Instructions Genie injects into every workspace's AGENTS.md">
+                    <SettingRow
+                        label="Workspace instructions"
+                        desc="Injected into every workspace's AGENTS.md, inside the auto-managed Genie Protocol block, so every agent in every workspace reads it. Keep it tight — capped at 2000 characters."
+                        keywords="ai system instructions agents.md genie protocol customization prompt workspace"
+                        vertical
+                    >
+                        <textarea
+                            className="input"
+                            value={s.ai_system ?? ''}
+                            onChange={(e) => patch({ ai_system: e.target.value.slice(0, AI_SYSTEM_MAX) })}
+                            maxLength={AI_SYSTEM_MAX}
+                            rows={6}
+                            placeholder="e.g. Prefer TypeScript. Never edit files under /vendor. Ask before force-pushing."
+                        />
+                        <div style={{ marginTop: 4, textAlign: 'right' }}>
+                            <Text size="xs" className="text-zinc-500">
+                                {(s.ai_system ?? '').length} / {AI_SYSTEM_MAX}
+                            </Text>
+                        </div>
+                    </SettingRow>
+                </SetSection>
+            )}
 
                             </SearchGroup>
                         )}
-                        {(searching || section === 'agent-mcp') && (
+                        {show('agent-mcp') && (
                             <SearchGroup label="Agent MCP" searching={searching}>
 
             <AgentMcpSection
@@ -503,7 +530,7 @@ export default function SettingsPage() {
 
                             </SearchGroup>
                         )}
-                        {(searching || section === 'mobile') && (
+                        {show('mobile') && (
                             <SearchGroup label="Work Mode" searching={searching}>
 
             <WorkModeModeCard
@@ -525,7 +552,7 @@ export default function SettingsPage() {
 
                             </SearchGroup>
                         )}
-                        {(searching || section === 'connections') && (
+                        {show('connections') && (
                             <SearchGroup label="Connections" searching={searching}>
 
             <TynnSection
@@ -539,14 +566,14 @@ export default function SettingsPage() {
 
                             </SearchGroup>
                         )}
-                        {(searching || section === 'devices') && (
+                        {show('devices') && (
                             <SearchGroup label="Devices" searching={searching}>
 
             <DevicesSection />
 
                             </SearchGroup>
                         )}
-                        {(searching || section === 'updates') && (
+                        {show('updates') && (
                             <SearchGroup label="Updates" searching={searching}>
 
             <UpdaterSection />
@@ -580,17 +607,6 @@ export default function SettingsPage() {
  *  Action / Icon).
  * ===================================================================== */
 
-type SectionId =
-    | 'general'
-    | 'tools'
-    | 'workspaces'
-    | 'customization'
-    | 'agent-mcp'
-    | 'mobile'
-    | 'connections'
-    | 'devices'
-    | 'updates';
-
 /**
  * The settings search box publishes its (lowercased, trimmed) query here.
  * Dense `SettingRow`s read it and hide themselves when they don't match;
@@ -598,39 +614,6 @@ type SectionId =
  * list. Legacy card-based panes don't consume it yet (see migration plan).
  */
 const SettingsFilterCtx = createContext('');
-
-/**
- * Left-sidebar information architecture. Every former top-tab is still here,
- * now grouped so the whole surface is visible at a glance with no wrapping.
- * `icon` values are kebab-case lucide names resolved by react-fancy's <Icon>.
- */
-const NAV_GROUPS: Array<{
-    label: string;
-    items: Array<{ id: SectionId; label: string; icon: string }>;
-}> = [
-    {
-        label: 'Workspace',
-        items: [
-            { id: 'general', label: 'General', icon: 'settings' },
-            { id: 'tools', label: 'Tools', icon: 'terminal' },
-            { id: 'workspaces', label: 'Workspaces', icon: 'layout-grid' },
-            { id: 'customization', label: 'Customization', icon: 'palette' },
-        ],
-    },
-    {
-        label: 'Agents & network',
-        items: [
-            { id: 'agent-mcp', label: 'Agent MCP', icon: 'plug' },
-            { id: 'mobile', label: 'Work Mode', icon: 'monitor' },
-            { id: 'connections', label: 'Connections', icon: 'link' },
-            { id: 'devices', label: 'Devices', icon: 'smartphone' },
-        ],
-    },
-    {
-        label: 'System',
-        items: [{ id: 'updates', label: 'Updates', icon: 'download' }],
-    },
-];
 
 /**
  * Per-tab wrapper for the body. In normal browsing it's a transparent

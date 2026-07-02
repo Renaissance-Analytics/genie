@@ -10,7 +10,12 @@ import TerminalPanel from './TerminalPanel';
 import CodePanel from '../Code/CodePanel';
 import ErrorBoundary from '../ErrorBoundary';
 import { IconCode, IconPlus } from './icons';
-import { api, type TerminalSpec, type WorkspaceRow } from '../../lib/genie';
+import {
+    api,
+    currentConnKey,
+    type TerminalSpec,
+    type WorkspaceRow,
+} from '../../lib/genie';
 import {
     buildPanelList,
     cellArea,
@@ -205,7 +210,9 @@ const ResizableGrid = ({
     const count = ordered.length;
     const { cols, rows } = dims(mode, count);
     const sig = signature(mode, count);
-    const storageKey = `${activeWorkspaceId ?? 'none'}|${sig}`;
+    // Scope track sizes per window (local vs a driven host) so a host window's
+    // grid dimensions don't overwrite the local window's for the same workspace.
+    const storageKey = `${currentConnKey()}|${activeWorkspaceId ?? 'none'}|${sig}`;
 
     const wrapRef = useRef<HTMLDivElement>(null);
     const [tracks, setTracks] = useState<FrTracks>(() => ({

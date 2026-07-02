@@ -3,7 +3,15 @@ import {
     computeLaunchSelection,
     effectiveWorkspaceId,
 } from '../launch-restore';
+import { writeWorkspaceView, type ViewStateStore } from '../view-state';
 import type { TerminalSpec, WorkspaceRow } from '../genie';
+
+const emptyView = {
+    visibleIds: [] as string[],
+    focusId: null,
+    maximizedId: null,
+    layoutMode: 'auto' as const,
+};
 
 /**
  * Unit tests for the launch-restore brain that decides which workspace fills
@@ -172,6 +180,73 @@ describe('computeLaunchSelection', () => {
         // is synthetic), so it falls back to workspaces[0]=A → nothing selected.
         expect(result.activeWorkspaceId).toBe('A');
         expect(result.selectedIds).toEqual([]);
+    });
+
+    it('restores THIS window\'s saved visible set over the enabled default (X-button hide survives a relaunch)', () => {
+        // A2 was closed with the X button in this window → it persisted a
+        // visible set of just [a1]. Both specs are still enabled on the host, but
+        // the restore must honour the client-local hide, not resurrect a2.
+        const store = writeWorkspaceView({}, 'local', 'A', {
+            ...emptyView,
+            visibleIds: ['a1'],
+        });
+        const result = computeLaunchSelection({
+            specs: [spec('a1', 'A'), spec('a2', 'A')],
+            workspaces: [ws('A')],
+            savedActiveWorkspace: 'A',
+            stageSeedWorkspace: null,
+            systemWorkspaceId: SYSTEM,
+            viewStore: store,
+            connKey: 'local',
+        });
+        expect(result.selectedIds).toEqual(['a1']);
+    });
+
+    it('drops a stored id whose spec was since deleted', () => {
+        const store = writeWorkspaceView({}, 'local', 'A', {
+            ...emptyView,
+            visibleIds: ['a1', 'gone'],
+        });
+        const result = computeLaunchSelection({
+            specs: [spec('a1', 'A')],
+            workspaces: [ws('A')],
+            savedActiveWorkspace: 'A',
+            stageSeedWorkspace: null,
+            systemWorkspaceId: SYSTEM,
+            viewStore: store,
+            connKey: 'local',
+        });
+        expect(result.selectedIds).toEqual(['a1']);
+    });
+
+    it('first run for a (connKey, workspace) with no saved view falls back to enabled specs', () => {
+        const result = computeLaunchSelection({
+            specs: [spec('a1', 'A'), spec('a2', 'A', { enabled: false })],
+            workspaces: [ws('A')],
+            savedActiveWorkspace: 'A',
+            stageSeedWorkspace: null,
+            systemWorkspaceId: SYSTEM,
+            viewStore: {},
+            connKey: 'local',
+        });
+        expect(result.selectedIds).toEqual(['a1']);
+    });
+
+    it('a host window and the local window read independent saved views (no collision)', () => {
+        let store: ViewStateStore = {};
+        store = writeWorkspaceView(store, 'local', 'A', { ...emptyView, visibleIds: ['a1'] });
+        store = writeWorkspaceView(store, 'host-x', 'A', { ...emptyView, visibleIds: ['a2'] });
+        const specs = [spec('a1', 'A'), spec('a2', 'A')];
+        const common = {
+            specs,
+            workspaces: [ws('A')],
+            savedActiveWorkspace: 'A',
+            stageSeedWorkspace: null,
+            systemWorkspaceId: SYSTEM,
+            viewStore: store,
+        };
+        expect(computeLaunchSelection({ ...common, connKey: 'local' }).selectedIds).toEqual(['a1']);
+        expect(computeLaunchSelection({ ...common, connKey: 'host-x' }).selectedIds).toEqual(['a2']);
     });
 
     it('returns no selection when there are no workspaces (no crash)', () => {

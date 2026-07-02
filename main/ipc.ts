@@ -911,8 +911,10 @@ export function registerIpcHandlers(): void {
     // terminals/editors here, and the directory picker for system processes
     // defaults to it. Surfaced from main (renderer has no `os` access).
     ipcMain.handle('app:home-dir', () => os.homedir());
-    ipcMain.handle('app:show-settings', () => {
-        showSettingsWindow();
+    ipcMain.handle('app:show-settings', (_e, fromRemote?: boolean) => {
+        // fromRemote = the caller is a remote/host window → restrict Settings to the
+        // connection-relevant subset. The tray/menu callers pass nothing (local).
+        showSettingsWindow(!!fromRemote);
         return { ok: true };
     });
     ipcMain.handle('app:show-docs', () => {

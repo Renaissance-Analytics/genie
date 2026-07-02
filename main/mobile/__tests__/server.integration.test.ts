@@ -474,6 +474,33 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         expect(clipboardImages).toHaveLength(0);
     });
 
+    it('host IssueWatch: scope-filters an unserved workspace to 404 (GET repos)', async () => {
+        const port = await start();
+        const token = await pair(port);
+        // 'ws-1' is the only served workspace; any other id is rejected by the
+        // scope guard BEFORE any DB / GitHub read.
+        const r = await req(port, 'GET', '/api/desktop/issue-watch/repos?workspaceId=nope', {
+            token,
+        });
+        expect(r.status).toBe(404);
+    });
+
+    it('host IssueWatch: scope-filters an unserved workspace to 404 (POST mark-seen)', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/desktop/issue-watch/mark-seen', {
+            token,
+            body: { workspaceId: 'nope' },
+        });
+        expect(r.status).toBe(404);
+    });
+
+    it('host IssueWatch: 401s without a token', async () => {
+        const port = await start();
+        const noTok = await req(port, 'GET', '/api/desktop/issue-watch/repos?workspaceId=ws-1');
+        expect(noTok.status).toBe(401);
+    });
+
     it('does not bind when disabled (opt-in)', async () => {
         appDir = buildAppDir();
         await startMobileServer({

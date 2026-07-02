@@ -1,4 +1,5 @@
 import type { TerminalSpec, WorkspaceRow } from './genie';
+import { readWorkspaceView, type ViewStateStore } from './view-state';
 
 /**
  * The EFFECTIVE workspace id a spec belongs to. Mirrors master.tsx's
@@ -41,10 +42,20 @@ export interface LaunchSelection {
  *   2. the persisted `active_workspace` setting, when it still exists;
  *   3. the most-recent workspace (the caller passes `workspaces` pre-sorted).
  *
- * Selection = that workspace's ENABLED specs. A suspended (disabled) terminal
- * stays out of the grid until explicitly re-enabled. Process specs are included
- * here exactly as the original seed did — they're harmless in `selected` because
- * the grid memo filters `type === 'process'` out on its own.
+ * Selection precedence for the target workspace:
+ *   1. THIS window's CLIENT-LOCAL saved view (`viewStore`, keyed by
+ *      `connKey|workspaceId`) when present — so a panel the user HID in this
+ *      window stays hidden across a relaunch, and a host window's layout is its
+ *      own rather than dictated by the host's `enabled` flags. Stored ids whose
+ *      spec no longer exists are dropped.
+ *   2. FIRST RUN for that `(connKey, workspace)` — no saved view — falls back to
+ *      the workspace's ENABLED specs (today's behaviour), so nothing that was
+ *      visible disappears on upgrade. A suspended (disabled) terminal stays out
+ *      of the grid until explicitly re-enabled.
+ *
+ * Process specs are included here exactly as the original seed did — they're
+ * harmless in `selected` because the grid memo filters `type === 'process'` out
+ * on its own.
  */
 export function computeLaunchSelection(args: {
     specs: TerminalSpec[];
@@ -52,6 +63,10 @@ export function computeLaunchSelection(args: {
     savedActiveWorkspace: string | null;
     stageSeedWorkspace: string | null;
     systemWorkspaceId: string;
+    /** This window's client-local view store (parsed `view_state_json`). */
+    viewStore?: ViewStateStore;
+    /** This window's connection key (`'local'` or a host key). */
+    connKey?: string;
 }): LaunchSelection {
     const {
         specs,
@@ -59,6 +74,8 @@ export function computeLaunchSelection(args: {
         savedActiveWorkspace,
         stageSeedWorkspace,
         systemWorkspaceId,
+        viewStore = {},
+        connKey = 'local',
     } = args;
 
     let target: string | null = null;
@@ -75,13 +92,20 @@ export function computeLaunchSelection(args: {
 
     if (!target) return { activeWorkspaceId: null, selectedIds: [] };
 
-    const selectedIds = specs
-        .filter(
-            (s) =>
-                effectiveWorkspaceId(s, systemWorkspaceId) === target &&
-                s.enabled !== false,
-        )
-        .map((s) => s.id);
+    const inTarget = specs.filter(
+        (s) => effectiveWorkspaceId(s, systemWorkspaceId) === target,
+    );
 
+    const saved = readWorkspaceView(viewStore, connKey, target);
+    if (saved) {
+        // Restore THIS window's saved visible set, dropping any stored id whose
+        // spec was since deleted.
+        const present = new Set(inTarget.map((s) => s.id));
+        const selectedIds = saved.visibleIds.filter((id) => present.has(id));
+        return { activeWorkspaceId: target, selectedIds };
+    }
+
+    // First run for (connKey, target): seed from the host's enabled specs.
+    const selectedIds = inTarget.filter((s) => s.enabled !== false).map((s) => s.id);
     return { activeWorkspaceId: target, selectedIds };
 }

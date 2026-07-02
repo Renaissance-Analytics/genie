@@ -666,6 +666,9 @@ const PASSTHROUGH_EVENTS = new Set([
     'process:status',
     'terminal-spec:changed',
     'workspaces:changed',
+    // Host IssueWatch pushes its per-workspace counts/errors here; re-emitting it
+    // keeps a host window's rail pill / flyout / badge live with the HOST's data.
+    'issue-watch:update',
 ]);
 
 /**

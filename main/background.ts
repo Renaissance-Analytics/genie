@@ -268,6 +268,9 @@ if (!gotLock) {
 let mainWindow: BrowserWindow | null = null;
 let captureWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
+/** The restriction the current settingsWindow was built for (the ?remote=1 URL
+ *  flag is fixed at load, so a mode change needs a fresh window). */
+let settingsRestricted = false;
 let docsWindow: BrowserWindow | null = null;
 let masterWindow: BrowserWindow | null = null;
 const terminalWindows = new Set<BrowserWindow>();
@@ -529,9 +532,14 @@ export function showMainWindow(): void {
     showMasterWindow();
 }
 
-export function showSettingsWindow(): void {
-    if (!settingsWindow || settingsWindow.isDestroyed()) {
-        settingsWindow = createSettingsWindow();
+export function showSettingsWindow(restricted = false): void {
+    // `restricted` = opened FROM a remote/host window → show only the connection-
+    // relevant subset. It's baked into the window URL (?remote=1) at load, so a
+    // mode change vs the reused window needs a fresh one (recreate, don't reload).
+    if (!settingsWindow || settingsWindow.isDestroyed() || settingsRestricted !== restricted) {
+        if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.destroy();
+        settingsRestricted = restricted;
+        settingsWindow = createSettingsWindow(restricted);
         // createSettingsWindow defers .show() to 'ready-to-show'; just
         // wait for it. focus() also no-ops until the window is visible.
         settingsWindow.once('ready-to-show', () => settingsWindow?.focus());
@@ -607,7 +615,7 @@ function createMainWindow(): BrowserWindow {
     return win;
 }
 
-function createSettingsWindow(): BrowserWindow {
+function createSettingsWindow(restricted = false): BrowserWindow {
     const win = new BrowserWindow({
         width: 860,
         height: 680,
@@ -625,10 +633,16 @@ function createSettingsWindow(): BrowserWindow {
         },
     });
 
+    // ?remote=1 tells the settings page it was opened from a remote/host window →
+    // show only the connection-relevant subset. It is NOT `?host=` on purpose: this
+    // window stays LOCAL (api() edits the CLIENT's own settings — the KEEP rows).
     if (isDev) {
-        win.loadURL('http://localhost:8888/settings');
+        win.loadURL(`http://localhost:8888/settings${restricted ? '?remote=1' : ''}`);
     } else {
-        win.loadFile(path.join(__dirname, 'settings.html'));
+        win.loadFile(
+            path.join(__dirname, 'settings.html'),
+            restricted ? { search: 'remote=1' } : undefined,
+        );
     }
 
     // Defer showing until the page has actually painted. Without this, the

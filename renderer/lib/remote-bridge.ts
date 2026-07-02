@@ -6,6 +6,10 @@ import type {
     ProcessStatus,
     TreeNodeData,
     GitStatusMap,
+    WatchTypeCounts,
+    WatchRepoView,
+    WatchFeedItem,
+    WorkspaceWatchStatus,
 } from './genie';
 
 /**
@@ -35,6 +39,41 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         ...local.workspaces,
         list: async () =>
             ((await req('/api/desktop/workspaces')) as { workspaces: WorkspaceRow[] }).workspaces,
+    };
+
+    // Host-sourced IssueWatch: the rail pill / flyout / badge reflect the HOST's
+    // repos + counts (via the HOST's GitHub token) — the host serves these at
+    // /api/desktop/issue-watch/*. The live `on.issueWatchUpdate` push arrives on
+    // the SAME local channel (main re-emits the host's /ws/events issue-watch:update),
+    // so the spread's `on.*` subscriptions need no change.
+    const wsQ = (id: string) => `?workspaceId=${encodeURIComponent(id)}`;
+    const issueWatch: GenieApi['issueWatch'] = {
+        counts: async () =>
+            ((await req('/api/desktop/issue-watch/counts')) as {
+                counts: Record<string, WatchTypeCounts>;
+            }).counts,
+        repos: async (workspaceId) =>
+            ((await req(`/api/desktop/issue-watch/repos${wsQ(workspaceId)}`)) as {
+                repos: WatchRepoView[];
+            }).repos,
+        feed: async (workspaceId) =>
+            ((await req(`/api/desktop/issue-watch/feed${wsQ(workspaceId)}`)) as {
+                feed: WatchFeedItem[];
+            }).feed,
+        status: async (workspaceId) =>
+            ((await req(`/api/desktop/issue-watch/status${wsQ(workspaceId)}`)) as {
+                status: WorkspaceWatchStatus;
+            }).status,
+        markSeen: async (workspaceId) =>
+            (await req('/api/desktop/issue-watch/mark-seen', {
+                method: 'POST',
+                json: { workspaceId },
+            })) as { ok: boolean },
+        set: async (workspaceId, owner, repo, enabled) =>
+            (await req('/api/desktop/issue-watch/set', {
+                method: 'POST',
+                json: { workspaceId, owner, repo, enabled },
+            })) as { ok: boolean },
     };
 
     // The host's terminal-spec model (the grid's backbone) — pass-through.
@@ -208,5 +247,5 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             ),
     };
 
-    return { ...local, workspaces, terminalSpec, files, process, terminal, clipboard };
+    return { ...local, workspaces, terminalSpec, files, process, terminal, clipboard, issueWatch };
 }

@@ -299,8 +299,13 @@ export interface Settings {
     terminal_custom_cmd?: string;
     /** Max panels visible at once per workspace. String-encoded; default '4'. */
     max_views?: string;
-    /** Per-workspace draggable-grid track sizes, JSON-encoded. */
+    /** Per-workspace draggable-grid track sizes, JSON-encoded. Keyed per window
+     *  (`${connKey}|${workspaceId}|${signature}`). */
     layout_json?: string;
+    /** CLIENT-LOCAL panel view state (visible set, focus, maximize, layout) per
+     *  `${connKey}|${workspaceId}`, JSON-encoded. Local-only (never bridged to a
+     *  host). See `renderer/lib/view-state.ts`. */
+    view_state_json?: string;
     /** Tier 3: keep terminals running in a detached host so they survive a full
      *  quit. Defaults 'off' (in-process). 'on' opts in. */
     detached_terminals?: 'on' | 'off';
@@ -1287,7 +1292,9 @@ export interface GenieApi {
         getCurrentProject: () => Promise<{ id: string; name: string } | null>;
         /** The user's home directory (roots the synthetic System Workspace). */
         homeDir: () => Promise<string>;
-        showSettings: () => Promise<{ ok: boolean }>;
+        /** Open Settings. `fromRemote:true` (a remote/host window) restricts it to
+         *  the connection-relevant subset (Appearance / Notifications / copy-paste). */
+        showSettings: (fromRemote?: boolean) => Promise<{ ok: boolean }>;
         showDocs: () => Promise<{ ok: boolean }>;
         showMain: () => Promise<{ ok: boolean }>;
         openStage: (workspaceId?: string) => Promise<{ ok: boolean }>;
@@ -1747,6 +1754,20 @@ function ensureRemoteBinding(local: GenieApi): void {
  */
 export function isRemoteWindow(): boolean {
     return typeof window !== 'undefined' && /[?&]host=/.test(window.location?.search ?? '');
+}
+
+/**
+ * The connection key that scopes THIS window's CLIENT-LOCAL per-device state
+ * (panel view layout — see `renderer/lib/view-state.ts`). A host window
+ * (`?host=<connKey>`) uses that host's key; the local desktop window uses the
+ * `'local'` sentinel. Derived SYNCHRONOUSLY from the same URL signal `api()`
+ * binds from, so callers never need an async `remote.myBinding()` round-trip to
+ * decide which layout bucket to read/write.
+ */
+export function currentConnKey(): string {
+    if (typeof window === 'undefined') return 'local';
+    const m = /[?&]host=([^&]*)/.exec(window.location?.search ?? '');
+    return m && m[1] ? decodeURIComponent(m[1]) : 'local';
 }
 
 export function api(): GenieApi {

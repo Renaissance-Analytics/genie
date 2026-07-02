@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from 'electron';
+import { ipcMain } from 'electron';
 import path from 'node:path';
 import simpleGit from 'simple-git';
 import {
@@ -26,6 +26,8 @@ import {
     type ParsedRepoRef,
 } from '../github/api';
 import { getToken, needsReauth } from '../github/storage';
+import { broadcastLocal } from '../remote';
+import { mobileEmit } from '../mobile/bus';
 
 /**
  * Issue Watch — per-workspace watching of GitHub Issues, PRs, and Dependabot
@@ -566,10 +568,16 @@ async function broadcastUpdate(): Promise<void> {
     const reauth =
         needsReauth() ||
         Object.values(errors).some((d) => d.error === 'unauthenticated');
-    for (const win of BrowserWindow.getAllWindows()) {
-        if (!win.isDestroyed())
-            win.webContents.send('issue-watch:update', { counts, errors, needsReauth: reauth });
-    }
+    const payload = { counts, errors, needsReauth: reauth };
+    // LOCAL-only: a HOST window's IssueWatch reflects the HOST (fed via its
+    // /ws/events, below), so the client poller must NOT clobber host windows with
+    // the client's counts. broadcastLocal skips remote-bound windows.
+    broadcastLocal('issue-watch:update', payload);
+    // Push to any connected remote desktop over /ws/events (no-op when the mobile
+    // server is off / nothing is connected). The remote's bridge re-emits it onto
+    // its host window's `issue-watch:update` channel (see PASSTHROUGH_EVENTS), so a
+    // host window's rail pill / flyout / badge stay live with the HOST's counts.
+    mobileEmit('issue-watch:update', payload);
 }
 
 /**
@@ -582,6 +590,44 @@ export async function broadcastIssueWatchUpdate(): Promise<void> {
     await broadcastUpdate();
 }
 
+/**
+ * Toggle a repo's watch in a workspace, poll it once when enabling, then
+ * broadcast. Shared by the renderer IPC (`issue-watch:set`) AND the host endpoint
+ * (`/api/desktop/issue-watch/set`), so a remote desktop drives the HOST's config.
+ */
+export async function setWorkspaceWatch(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    enabled: boolean,
+): Promise<void> {
+    setIssueWatch(workspaceId, owner, repo, enabled);
+    if (enabled) {
+        await pollRepo(owner, repo, getWorkspaceIssuewatchGranularity(workspaceId)).catch(
+            () => [],
+        );
+    }
+    await broadcastUpdate();
+}
+
+/**
+ * Mark every watched + auto-detected repo in a workspace as seen (clears the
+ * unread pills), then broadcast. Shared by the renderer IPC (`issue-watch:mark-
+ * seen`) AND the host endpoint (`/api/desktop/issue-watch/mark-seen`).
+ */
+export async function markWorkspaceSeen(workspaceId: string): Promise<void> {
+    const now = new Date().toISOString();
+    for (const r of listIssueWatches(workspaceId)) {
+        markIssueWatchSeen(workspaceId, r.owner, r.repo, now);
+    }
+    // Seed seen_at for auto-detected repos with no row yet, so opening the flyout
+    // doesn't leave them perpetually "unread".
+    for (const v of await getWorkspaceRepoViews(workspaceId)) {
+        markIssueWatchSeen(workspaceId, v.owner, v.repo, now);
+    }
+    await broadcastUpdate();
+}
+
 /** Register IPC + start the background poller. Idempotent. */
 export function registerIssueWatchIpc(): void {
     ipcMain.handle('issue-watch:repos', async (_e, workspaceId: string) => {
@@ -591,33 +637,15 @@ export function registerIssueWatchIpc(): void {
     ipcMain.handle(
         'issue-watch:set',
         async (_e, workspaceId: string, owner: string, repo: string, enabled: boolean) => {
-            setIssueWatch(workspaceId, owner, repo, enabled);
-            if (enabled)
-                await pollRepo(
-                    owner,
-                    repo,
-                    getWorkspaceIssuewatchGranularity(workspaceId),
-                ).catch(() => []);
-            await broadcastUpdate();
+            await setWorkspaceWatch(workspaceId, owner, repo, enabled);
             return { ok: true };
         },
     );
     ipcMain.handle('issue-watch:feed', async (_e, workspaceId: string) =>
         getWorkspaceFeed(workspaceId),
     );
-    ipcMain.handle('issue-watch:mark-seen', (_e, workspaceId: string) => {
-        const now = new Date().toISOString();
-        for (const r of listIssueWatches(workspaceId)) {
-            markIssueWatchSeen(workspaceId, r.owner, r.repo, now);
-        }
-        // Also seed seen_at for auto-detected repos with no row yet, so opening
-        // the flyout doesn't leave them perpetually "unread".
-        void (async () => {
-            for (const v of await getWorkspaceRepoViews(workspaceId)) {
-                markIssueWatchSeen(workspaceId, v.owner, v.repo, now);
-            }
-            await broadcastUpdate();
-        })();
+    ipcMain.handle('issue-watch:mark-seen', async (_e, workspaceId: string) => {
+        await markWorkspaceSeen(workspaceId);
         return { ok: true };
     });
     ipcMain.handle('issue-watch:counts', () => getOpenCounts());

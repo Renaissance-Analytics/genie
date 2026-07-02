@@ -28,6 +28,15 @@ import {
     deleteTerminalSpec,
     touchTerminalSpec,
 } from '../db';
+import {
+    getOpenCounts,
+    getWorkspaceRepoViews,
+    getWorkspaceFeed,
+    getWorkspaceStatus,
+    markWorkspaceSeen,
+    setWorkspaceWatch,
+    pollWorkspace,
+} from '../issue-watch';
 
 /**
  * REST surface for the mobile remote-control server. Pure routing over the
@@ -832,6 +841,86 @@ export async function handleApi(
     // Serves the host's OWN data model (full WorkspaceRow / TerminalSpecRow) so
     // the remote desktop's bridge is a THIN pass-through, not a lossy adaptation
     // of the mobile subset. Authed; spec mutations also honour the kill-switch.
+
+    // --- host-sourced IssueWatch — for a remote DESKTOP driving this host -------
+    // A host window's rail pill / flyout / badge reflect the HOST's repos + counts
+    // (via the HOST's GitHub token), not the client's. Reads are authed; the
+    // mark-seen / set mutations also honour the kill-switch. SCOPE-FILTERED to
+    // served workspaces (servedWorkspaceIds) so a scoped grant only sees — or
+    // mutates — its own workspaces' issues (consistency + security).
+    if (pathname.startsWith('/api/desktop/issue-watch/')) {
+        const served = servedWorkspaceIds(deps);
+        // GET routes carry ?workspaceId=<id>; POST routes carry it in the body.
+        const queryWs = (): string => {
+            try {
+                return new URL(req.url ?? '', 'http://x').searchParams.get('workspaceId') ?? '';
+            } catch {
+                return '';
+            }
+        };
+        const denyUnserved = (id: string): boolean => {
+            if (served.has(id)) return false;
+            sendJson(res, 404, { error: 'unknown workspace' });
+            return true;
+        };
+
+        // Reads (GET) — auth only.
+        if (pathname === '/api/desktop/issue-watch/counts' && method === 'GET') {
+            const all = await getOpenCounts();
+            const counts: Record<string, unknown> = {};
+            for (const [id, c] of Object.entries(all)) if (served.has(id)) counts[id] = c;
+            sendJson(res, 200, { counts });
+            return true;
+        }
+        if (pathname === '/api/desktop/issue-watch/repos' && method === 'GET') {
+            const id = queryWs();
+            if (denyUnserved(id)) return true;
+            await pollWorkspace(id).catch(() => {}); // refresh on view, like the IPC
+            sendJson(res, 200, { repos: await getWorkspaceRepoViews(id) });
+            return true;
+        }
+        if (pathname === '/api/desktop/issue-watch/feed' && method === 'GET') {
+            const id = queryWs();
+            if (denyUnserved(id)) return true;
+            sendJson(res, 200, { feed: await getWorkspaceFeed(id) });
+            return true;
+        }
+        if (pathname === '/api/desktop/issue-watch/status' && method === 'GET') {
+            const id = queryWs();
+            if (denyUnserved(id)) return true;
+            sendJson(res, 200, { status: await getWorkspaceStatus(id) });
+            return true;
+        }
+
+        // Mutations (POST) — kill-switch-gated.
+        if (method !== 'POST') {
+            sendJson(res, 405, { error: 'method not allowed' });
+            return true;
+        }
+        if (guardLocked()) return true;
+        let iw: { workspaceId?: string; owner?: string; repo?: string; enabled?: boolean };
+        try {
+            iw = await readJsonBody(req);
+        } catch {
+            sendJson(res, 400, { error: 'invalid body' });
+            return true;
+        }
+        const id = String(iw.workspaceId ?? '');
+        if (denyUnserved(id)) return true;
+        if (pathname === '/api/desktop/issue-watch/mark-seen') {
+            await markWorkspaceSeen(id);
+            sendJson(res, 200, { ok: true });
+            return true;
+        }
+        if (pathname === '/api/desktop/issue-watch/set') {
+            await setWorkspaceWatch(id, String(iw.owner ?? ''), String(iw.repo ?? ''), !!iw.enabled);
+            sendJson(res, 200, { ok: true });
+            return true;
+        }
+        sendJson(res, 404, { error: 'unknown issue-watch route' });
+        return true;
+    }
+
     if (pathname.startsWith('/api/desktop/')) {
         if (pathname === '/api/desktop/workspaces' && method === 'GET') {
             sendJson(res, 200, { workspaces: dbListWorkspaces() });

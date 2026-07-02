@@ -23,6 +23,13 @@ import SignInPrompt from '../components/SignInPrompt';
 import type { BackendUser, ViewType } from '../lib/genie';
 import { resolveShortcut } from '../lib/master-shortcuts';
 import { computeLaunchSelection } from '../lib/launch-restore';
+import {
+    parseViewStateStore,
+    readWorkspaceView,
+    writeWorkspaceView,
+    type ViewStateStore,
+    type WorkspaceViewState,
+} from '../lib/view-state';
 import { shouldDriveRestart } from '../lib/updater-flow';
 import { pickReusePanel, emitOpenInPanel } from '../lib/editor-open';
 import {
@@ -43,7 +50,9 @@ import {
 } from '../components/Master/icons';
 import {
     api,
+    currentConnKey,
     hasGenieBridge,
+    isRemoteWindow,
     isSystemWorkspace,
     makeSystemWorkspace,
     SYSTEM_WORKSPACE_ID,
@@ -172,6 +181,16 @@ function MasterInner() {
     // Guards the one-time seed so a later refresh() doesn't reset the user's
     // active workspace back to most-recent.
     const seededActiveRef = useRef(false);
+    // CLIENT-LOCAL panel view store for THIS window (see lib/view-state.ts):
+    // `${connKey}|${workspaceId}` → { visibleIds, focusId, maximizedId,
+    // layoutMode }. Warmed from `view_state_json` in refresh(), read on workspace
+    // switch to restore this window's layout, and written back debounced. Kept in
+    // a ref (not state) so reads/writes are synchronous and never re-render.
+    const viewCacheRef = useRef<ViewStateStore>({});
+    const viewFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Gate persistence until the launch restore has run, so the pre-restore
+    // render (activeWorkspaceId still null) can't overwrite a saved layout.
+    const viewRestoredRef = useRef(false);
     const [activeIds, setActiveIds] = useState<Set<string>>(() => new Set());
     // Agent-integration MCP: terminals that called imDone and want attention.
     // Cleared when the terminal gets focus.
@@ -466,6 +485,10 @@ function MasterInner() {
         ]);
         setWorkspaces(ws);
         setSpecs(sp);
+        // Warm THIS window's client-local view store from the (local) settings
+        // so the launch restore + subsequent switches read a settled cache.
+        const connKey = currentConnKey();
+        viewCacheRef.current = parseViewStateStore(settings?.view_state_json);
         // Restore the launch grid ONCE, computed from the FRESHLY-FETCHED arrays
         // (not React state read through an effect closure). The previous seed
         // effect fired on `[workspaces.length]` but read `specs` via closure and
@@ -481,14 +504,26 @@ function MasterInner() {
                 savedActiveWorkspace: settings?.active_workspace ?? null,
                 stageSeedWorkspace,
                 systemWorkspaceId: SYSTEM_WORKSPACE_ID,
+                viewStore: viewCacheRef.current,
+                connKey,
             });
             if (target) {
                 setActiveWorkspaceId(target);
                 // A Stage window's `?stage=` seed may already have populated the
                 // selection — don't clobber it.
                 setSelected((prev) => (prev.size > 0 ? prev : new Set(selectedIds)));
+                // Restore this window's focus/maximize/layout for the launch
+                // workspace too (activateWorkspace does the same on later switches).
+                const saved = readWorkspaceView(viewCacheRef.current, connKey, target);
+                if (saved) {
+                    setFocusId(saved.focusId);
+                    setMaximizedId(saved.maximizedId);
+                    setLayoutMode(saved.layoutMode);
+                }
             }
         }
+        // The launch restore has run — subsequent view changes may now persist.
+        viewRestoredRef.current = true;
     }, [stageSeedWorkspace]);
 
     /**
@@ -900,29 +935,51 @@ function MasterInner() {
     }, []);
 
     /**
-     * Activate a workspace: it becomes the grid's focus. Its views are
-     * selected (so they fill the grid) WITHOUT clearing selections in other
-     * workspaces — those stay mounted-hidden so their PTYs keep running
-     * (Decision 1: keep-alive). The choice is persisted so the next launch
-     * reopens here.
+     * Activate a workspace: it becomes the grid's focus. Its visible panels come
+     * from THIS window's client-local saved view (restore-on-switch) so a panel
+     * hidden here stays hidden — and, in a host window, the layout is this
+     * device's, not the host's `enabled` flags. Selections in OTHER workspaces
+     * are left intact so their PTYs keep running mounted-hidden (Decision 1:
+     * keep-alive). FIRST RUN for a `(connKey, workspace)` with no saved view
+     * seeds from today's behaviour (every enabled terminal visible). The choice
+     * is persisted so the next launch reopens here.
      */
     const activateWorkspace = useCallback(
         (workspaceId: string) => {
+            const connKey = currentConnKey();
+            const saved = readWorkspaceView(viewCacheRef.current, connKey, workspaceId);
             setActiveWorkspaceId(workspaceId);
             setSelected((prev) => {
                 const next = new Set(prev);
-                for (const s of specs) {
-                    // Disabled (suspended) terminals stay out of the grid until
-                    // explicitly re-enabled — activating a workspace doesn't
-                    // resurrect them.
-                    if (specWorkspaceId(s) === workspaceId && s.enabled !== false) {
-                        next.add(s.id);
+                if (saved) {
+                    // Restore exactly this window's saved visible set for the
+                    // workspace: drop all of its specs first, then re-add only the
+                    // saved ones, so a previously-hidden panel STAYS hidden.
+                    const savedSet = new Set(saved.visibleIds);
+                    for (const s of specs) {
+                        if (specWorkspaceId(s) !== workspaceId) continue;
+                        if (savedSet.has(s.id)) next.add(s.id);
+                        else next.delete(s.id);
+                    }
+                } else {
+                    // First run: every enabled (live) terminal is visible.
+                    // Disabled (suspended) terminals stay out until re-enabled.
+                    for (const s of specs) {
+                        if (specWorkspaceId(s) === workspaceId && s.enabled !== false) {
+                            next.add(s.id);
+                        }
                     }
                 }
                 return next;
             });
-            setFocusId(null);
-            setMaximizedId(null);
+            if (saved) {
+                setFocusId(saved.focusId);
+                setMaximizedId(saved.maximizedId);
+                setLayoutMode(saved.layoutMode);
+            } else {
+                setFocusId(null);
+                setMaximizedId(null);
+            }
             // Don't persist the synthetic System Workspace as the active one —
             // it isn't a real workspace and shouldn't be reopened on launch.
             if (workspaceId !== SYSTEM_WORKSPACE_ID) {
@@ -933,6 +990,78 @@ function MasterInner() {
         },
         [specs],
     );
+
+    /**
+     * Record this window's view of a workspace: update the in-memory cache
+     * synchronously (so a switch reads the settled value at once) and flush the
+     * whole store to the LOCAL settings table debounced — coalescing the
+     * transient intermediate renders of a workspace switch into ONE write,
+     * exactly like `layout_json`. `api().settings` is never bridged to a host,
+     * so a host window's writes stay client-local.
+     */
+    const persistView = useCallback(
+        (connKey: string, workspaceId: string, state: WorkspaceViewState) => {
+            viewCacheRef.current = writeWorkspaceView(
+                viewCacheRef.current,
+                connKey,
+                workspaceId,
+                state,
+            );
+            if (viewFlushRef.current) clearTimeout(viewFlushRef.current);
+            viewFlushRef.current = setTimeout(() => {
+                viewFlushRef.current = null;
+                void api()
+                    .settings.set({ view_state_json: JSON.stringify(viewCacheRef.current) })
+                    .catch(() => {});
+            }, 150);
+        },
+        [],
+    );
+
+    // Persist THIS window's panel VIEW state (visible set, focus, maximize,
+    // layout) for the active workspace whenever any of it changes — this single
+    // effect is the write-back for every trigger (closeSelected, toggleSpec,
+    // toggleMaximize, onFocus, setLayoutMode, disable/enable), since they all
+    // mutate one of these. The debounce settles the last state of a switch.
+    useEffect(() => {
+        if (!viewRestoredRef.current || !activeWorkspaceId) return;
+        const visibleIds = specs
+            .filter(
+                (s) =>
+                    s.type !== 'process' &&
+                    specWorkspaceId(s) === activeWorkspaceId &&
+                    selected.has(s.id),
+            )
+            .map((s) => s.id);
+        persistView(currentConnKey(), activeWorkspaceId, {
+            visibleIds,
+            focusId,
+            maximizedId,
+            layoutMode,
+        });
+    }, [
+        activeWorkspaceId,
+        specs,
+        selected,
+        focusId,
+        maximizedId,
+        layoutMode,
+        persistView,
+    ]);
+
+    // Flush a pending view-state write on unmount (window close) so the last
+    // change within the debounce window isn't lost.
+    useEffect(() => {
+        return () => {
+            if (viewFlushRef.current) {
+                clearTimeout(viewFlushRef.current);
+                viewFlushRef.current = null;
+                void api()
+                    .settings.set({ view_state_json: JSON.stringify(viewCacheRef.current) })
+                    .catch(() => {});
+            }
+        };
+    }, []);
 
     // Open-workspace from the tray / native menu / MCP just FOCUSES the workspace
     // in Genie (replacing the removed "launch an external editor" flow). It does
@@ -1181,7 +1310,7 @@ function MasterInner() {
             const intent = resolveShortcut(e);
             if (intent?.kind === 'settings') {
                 e.preventDefault();
-                api().app.showSettings().catch(() => {});
+                api().app.showSettings(isRemoteWindow()).catch(() => {});
             }
         };
 
@@ -1874,7 +2003,7 @@ function TitleBar({
                 type="button"
                 className="gicon"
                 title="Settings"
-                onClick={() => api().app.showSettings().catch(() => {})}
+                onClick={() => api().app.showSettings(isRemoteWindow()).catch(() => {})}
             >
                 <IconSettings />
             </button>

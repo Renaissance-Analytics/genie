@@ -537,7 +537,8 @@ const api = {
         getCurrentProject: () => ipcRenderer.invoke('app:get-current-project'),
         /** The user's home directory (for the synthetic System Workspace). */
         homeDir: () => ipcRenderer.invoke('app:home-dir') as Promise<string>,
-        showSettings: () => ipcRenderer.invoke('app:show-settings'),
+        showSettings: (fromRemote?: boolean) =>
+            ipcRenderer.invoke('app:show-settings', fromRemote),
         showDocs: () => ipcRenderer.invoke('app:show-docs'),
         showMain: () => ipcRenderer.invoke('app:show-main'),
         openStage: (workspaceId?: string) =>

@@ -474,8 +474,16 @@ export interface Settings {
     terminal_custom_cmd?: string;
     /** Max panels visible at once per workspace. String-encoded (settings are k/v text). Default '4'. */
     max_views?: string;
-    /** Per-workspace draggable-grid track sizes, JSON-encoded. Keyed by `${workspaceId}:${signature}`. */
+    /** Per-workspace draggable-grid track sizes, JSON-encoded. Keyed by
+     *  `${connKey}|${workspaceId}|${signature}` — connKey scopes it per window
+     *  (local vs a driven host) so different hosts don't collide. */
     layout_json?: string;
+    /** CLIENT-LOCAL panel VIEW state (visible set, focus, maximize, layout mode)
+     *  per `${connKey}|${workspaceId}`, JSON-encoded. Deliberately local (NOT
+     *  bridged to a host): it's how THIS device lays out a workspace's panels,
+     *  distinct from the host-owned `terminal_specs` identity/`enabled`. See
+     *  `renderer/lib/view-state.ts`. Default '{}'. */
+    view_state_json?: string;
     /** Inject a per-shell OSC-7 prompt hook so resumed terminals start in the
      *  right cwd. 'off' disables it; anything else (incl. unset) is ON. */
     track_cwd?: 'on' | 'off';
@@ -609,6 +617,7 @@ export function getAllSettings(): Settings {
         terminal_custom_cmd: out['terminal_custom_cmd'] ?? '',
         max_views: out['max_views'] ?? '4',
         layout_json: out['layout_json'] ?? '{}',
+        view_state_json: out['view_state_json'] ?? '{}',
         track_cwd: (out['track_cwd'] as 'on' | 'off') ?? 'on',
         detached_terminals: (out['detached_terminals'] as 'on' | 'off') ?? 'on',
         start_minimized: (out['start_minimized'] as 'on' | 'off') ?? 'off',
