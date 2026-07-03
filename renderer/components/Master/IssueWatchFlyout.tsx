@@ -3,6 +3,8 @@ import { IconX, IconAlert } from './icons';
 import {
     api,
     hasGenieBridge,
+    isRemoteWindow,
+    type GithubCapabilityKey,
     type WatchErrorDetail,
     type WatchFeedItem,
     type WatchFetchError,
@@ -12,7 +14,7 @@ import {
     useGithubCapabilities,
     CAPABILITY_LABEL,
 } from '../../lib/githubCapabilities';
-import { openCountForRepo } from '../../lib/issuewatch';
+import { issueWatchGate, openCountForRepo } from '../../lib/issuewatch';
 import {
     useGitHubReconnect,
     type GitHubReconnectState,
@@ -95,15 +97,6 @@ function repoReason(error: WatchFetchError): string {
     }
 }
 
-/** The Issue Watch capabilities, in the order shown in the gate banner. */
-const IW_CAPABILITIES = [
-    'issue-watch.issues',
-    'issue-watch.pulls',
-    'issue-watch.dependabot',
-    'issue-watch.code-scanning',
-    'issue-watch.secret-scanning',
-] as const;
-
 export default function IssueWatchFlyout({
     open,
     workspaceId,
@@ -116,13 +109,16 @@ export default function IssueWatchFlyout({
     /** Open the GitHub permissions resolve flyout (from the gate banner). */
     onResolveGithub?: () => void;
 }) {
+    // A remote (Work-Mode host) window's GitHub gate must reflect the HOST — the
+    // host is the machine that's authed and whose App grants the reads. This is
+    // a stable per-window URL signal, so it never flips mid-session.
+    const remote = isRemoteWindow();
     // Proactive gate: when the GitHub App is missing Issues/PR/Dependabot
     // permissions, those reads are guaranteed to fail — surface a needs-
-    // permission banner with a Resolve affordance instead of polling blind.
+    // permission banner with a Resolve affordance instead of polling blind. In a
+    // remote window the missing set is host-sourced (via the status read below);
+    // a local window uses the client's own live capabilities.
     const { caps } = useGithubCapabilities();
-    const gatedIw = caps.connected
-        ? IW_CAPABILITIES.filter((k) => caps.missing.includes(k))
-        : [];
     const [repos, setRepos] = useState<WatchRepoView[]>([]);
     const [feed, setFeed] = useState<WatchFeedItem[]>([]);
     const [connected, setConnected] = useState(true);
@@ -141,11 +137,13 @@ export default function IssueWatchFlyout({
      * "reconnect GitHub" state. While `!loaded` we show a neutral loading line.
      */
     const [loaded, setLoaded] = useState(false);
-
-    // An auth failure (dead session / a 401 read) is its own state: the App
-    // permissions are fine, so the fix is a reconnect, not Settings. It takes
-    // priority over both the not-connected copy and the per-repo error copy.
-    const authFailed = needsReauth || error === 'unauthenticated';
+    /**
+     * REMOTE ONLY: the Issue Watch capabilities the HOST's GitHub App is missing,
+     * host-sourced from the status read. Drives the capability gate in a remote
+     * window so it reflects the HOST's grants, not the client's. Untouched (and
+     * unused) in a local window — there the gate keys off `useGithubCapabilities`.
+     */
+    const [hostMissingCaps, setHostMissingCaps] = useState<GithubCapabilityKey[]>([]);
 
     const refresh = async () => {
         if (!workspaceId || !hasGenieBridge()) return;
@@ -173,11 +171,16 @@ export default function IssueWatchFlyout({
                     error: null,
                     detail: null,
                     needsReauth: false,
+                    missingCapabilities: [],
                 }));
             setConnected(!!st.connected);
             setError(st.error ?? null);
             setDetail(st.detail ?? null);
             setNeedsReauth(!!st.needsReauth);
+            // Remote only: the host-sourced missing-capability set feeds the gate
+            // (a local window uses its own useGithubCapabilities instead, so
+            // leaving this untouched keeps local render behavior identical).
+            if (remote) setHostMissingCaps(st.missingCapabilities ?? []);
         } finally {
             setLoading(false);
             setLoaded(true);
@@ -267,6 +270,17 @@ export default function IssueWatchFlyout({
         await refresh();
     };
 
+    // The GitHub-auth gate for THIS window: host-sourced in a remote window (all
+    // flags come from the host's status), client-local otherwise — the SINGLE
+    // decision the render below keys off, so local behavior is byte-for-byte the
+    // prior logic and a remote window never runs the client's device flow.
+    const gate = issueWatchGate({
+        remote,
+        status: { connected, needsReauth, error, missingCapabilities: hostMissingCaps },
+        localCaps: caps,
+    });
+    const gatedIw = gate.view === 'feed' ? gate.gatedCaps : [];
+
     return (
         <div className={`docs-flyout-root${open ? ' open' : ''}`} aria-hidden={!open}>
             <div className="docs-scrim" onClick={onClose} />
@@ -298,22 +312,36 @@ export default function IssueWatchFlyout({
                         // workspace — stay neutral instead of flashing the
                         // disconnected/Reconnect UI during the load race.
                         <div className="iw-muted">Loading…</div>
-                    ) : authFailed ? (
-                        // The stored session is dead (expired/revoked token) —
-                        // the App permissions are FINE; the fix is a one-click
-                        // reconnect. Show the precise error + a Reconnect CTA
-                        // instead of the generic "connect in Settings" copy.
-                        <ReconnectBanner
-                            detail={detail}
-                            reconnect={reconnectState}
-                            onReconnect={() => void startReconnect()}
-                            onCancel={cancelReconnect}
-                        />
-                    ) : !connected ? (
-                        <div className="iw-muted">
-                            Connect GitHub in Settings → Connections to watch issues,
-                            PRs, and Dependabot alerts.
-                        </div>
+                    ) : gate.view === 'reconnect' ? (
+                        gate.scope === 'host' ? (
+                            // Remote window: the HOST's GitHub session is dead.
+                            // The re-mint must happen on the HOST — running the
+                            // client's device flow here would auth the CLIENT's
+                            // GitHub and do nothing for the host's reads. So point
+                            // the user at the host; NO local Reconnect CTA.
+                            <RemoteHostGithubNotice kind="reauth" detail={detail} />
+                        ) : (
+                            // Local window: the stored session is dead (expired/
+                            // revoked token) — the App permissions are FINE; the
+                            // fix is a one-click device-flow reconnect. Show the
+                            // precise error + a Reconnect CTA.
+                            <ReconnectBanner
+                                detail={detail}
+                                reconnect={reconnectState}
+                                onReconnect={() => void startReconnect()}
+                                onCancel={cancelReconnect}
+                            />
+                        )
+                    ) : gate.view === 'connect' ? (
+                        gate.scope === 'host' ? (
+                            // Remote window: connect GitHub on the HOST, not here.
+                            <RemoteHostGithubNotice kind="disconnected" detail={null} />
+                        ) : (
+                            <div className="iw-muted">
+                                Connect GitHub in Settings → Connections to watch issues,
+                                PRs, and Dependabot alerts.
+                            </div>
+                        )
                     ) : (
                         <>
                             {gatedIw.length > 0 && (
@@ -321,9 +349,9 @@ export default function IssueWatchFlyout({
                                     <div className="iw-gate-head">
                                         <IconAlert size={13} />
                                         <span>
-                                            Genie's GitHub App is missing
-                                            permissions, so some watching is
-                                            disabled:
+                                            {remote
+                                                ? "The host's GitHub App is missing permissions, so some watching is disabled:"
+                                                : "Genie's GitHub App is missing permissions, so some watching is disabled:"}
                                         </span>
                                     </div>
                                     <ul className="iw-gate-list">
@@ -331,14 +359,23 @@ export default function IssueWatchFlyout({
                                             <li key={k}>{CAPABILITY_LABEL[k] ?? k}</li>
                                         ))}
                                     </ul>
-                                    {onResolveGithub && (
-                                        <button
-                                            type="button"
-                                            className="ghcap-btn ghcap-btn-primary"
-                                            onClick={onResolveGithub}
-                                        >
-                                            Resolve…
-                                        </button>
+                                    {remote ? (
+                                        // Resolving App permissions is a HOST action —
+                                        // the local resolve flow would touch the
+                                        // client's GitHub, which is the wrong machine.
+                                        <span className="iw-muted">
+                                            Resolve these on the host machine.
+                                        </span>
+                                    ) : (
+                                        onResolveGithub && (
+                                            <button
+                                                type="button"
+                                                className="ghcap-btn ghcap-btn-primary"
+                                                onClick={onResolveGithub}
+                                            >
+                                                Resolve…
+                                            </button>
+                                        )
                                     )}
                                 </div>
                             )}
@@ -480,6 +517,44 @@ function FeedList({ items }: { items: WatchFeedItem[] }) {
                 </li>
             ))}
         </ul>
+    );
+}
+
+/**
+ * REMOTE-window notice for the HOST's GitHub state. A host window's Issue Watch
+ * reflects the HOST's GitHub, so when the host's session is dead (`reauth`) or
+ * disconnected we must NOT run the client's device-flow reconnect — that would
+ * auth the wrong machine. Instead we tell the user to act ON THE HOST. Purely
+ * informational: no Reconnect/Connect button (there is nothing local to do).
+ */
+function RemoteHostGithubNotice({
+    kind,
+    detail,
+}: {
+    kind: 'reauth' | 'disconnected';
+    detail: WatchErrorDetail | null;
+}) {
+    if (kind === 'disconnected') {
+        return (
+            <div className="iw-muted">
+                Connect GitHub on the host machine to watch issues, PRs, and
+                Dependabot alerts. Issue Watch in a remote window reflects the
+                host's GitHub connection.
+            </div>
+        );
+    }
+    const precise = preciseError(detail);
+    return (
+        <div className="iw-reauth" role="alert">
+            <div className="iw-reauth-head">
+                <IconAlert size={14} />
+                <span>
+                    The host's GitHub session expired — reconnect GitHub on the
+                    host machine to restore Issue Watch.
+                </span>
+            </div>
+            {precise && <div className="iw-reauth-detail">{precise}</div>}
+        </div>
     );
 }
 

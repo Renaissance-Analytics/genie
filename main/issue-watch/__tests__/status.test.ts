@@ -67,6 +67,22 @@ vi.mock('../../github/storage', () => ({
     getToken: () => TOKEN,
     needsReauth: () => NEEDS_REAUTH,
 }));
+// The capability SNAPSHOT the surfaced status folds in as `missingCapabilities`
+// (host-sourced in a remote window). Mutable so a test can drive "connected with
+// a missing IW capability" without dragging the real (network) capability service
+// in. Mirrors the getCapabilities() shape the index reads (connected + missing).
+let CAPS: { connected: boolean; missing: string[] } = { connected: true, missing: [] };
+vi.mock('../../github/capability-service', () => ({
+    getCapabilities: () => ({
+        connected: CAPS.connected,
+        satisfiedFeatures: [],
+        missing: CAPS.missing,
+        missingPermissions: [],
+        missingByPermission: [],
+        appPermissionsUrl: '',
+        checked: true,
+    }),
+}));
 
 import {
     getWorkspaceStatus,
@@ -80,6 +96,7 @@ beforeEach(() => {
     FETCH_RESULT = { items: [], error: null, detail: null };
     TOKEN = 'tok';
     NEEDS_REAUTH = false;
+    CAPS = { connected: true, missing: [] };
 });
 
 describe('getWorkspaceStatus', () => {
@@ -90,6 +107,7 @@ describe('getWorkspaceStatus', () => {
             error: null,
             detail: null,
             needsReauth: false,
+            missingCapabilities: [],
         });
     });
 
@@ -101,6 +119,7 @@ describe('getWorkspaceStatus', () => {
             error: null,
             detail: null,
             needsReauth: true,
+            missingCapabilities: [],
         });
     });
 
@@ -112,7 +131,34 @@ describe('getWorkspaceStatus', () => {
             error: null,
             detail: null,
             needsReauth: false,
+            missingCapabilities: [],
         });
+    });
+
+    it('carries the App\'s missing Issue Watch capabilities (host-sourced for a remote gate)', async () => {
+        // Connected, but the App lacks Dependabot + secret-scanning grants, plus
+        // a NON-IW capability (github.provision) that must NOT leak into the set.
+        CAPS = {
+            connected: true,
+            missing: ['issue-watch.dependabot', 'github.provision', 'issue-watch.secret-scanning'],
+        };
+        await pollWorkspace('ws-1');
+        const st = await getWorkspaceStatus('ws-1');
+        expect(st.connected).toBe(true);
+        // Only the issue-watch.* keys survive, in the canonical display order.
+        expect(st.missingCapabilities).toEqual([
+            'issue-watch.dependabot',
+            'issue-watch.secret-scanning',
+        ]);
+    });
+
+    it('reports no missing capabilities while GitHub is disconnected (gate inert)', async () => {
+        // A stale snapshot could still list missing keys; connected:false must
+        // zero them so a not-connected machine never gates anything.
+        CAPS = { connected: false, missing: ['issue-watch.issues'] };
+        await pollWorkspace('ws-1');
+        const st = await getWorkspaceStatus('ws-1');
+        expect(st.missingCapabilities).toEqual([]);
     });
 
     it('surfaces a forbidden read WITH its precise status/message', async () => {
@@ -127,6 +173,7 @@ describe('getWorkspaceStatus', () => {
             error: 'forbidden',
             detail: { error: 'forbidden', status: 403, message: 'Resource not accessible' },
             needsReauth: false,
+            missingCapabilities: [],
         });
     });
 
@@ -155,6 +202,7 @@ describe('getWorkspaceStatus', () => {
             error: 'unauthenticated',
             detail: { error: 'unauthenticated', status: 401, message: 'Bad credentials' },
             needsReauth: true,
+            missingCapabilities: [],
         });
     });
 

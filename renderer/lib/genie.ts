@@ -185,6 +185,15 @@ export interface WorkspaceWatchStatus {
     detail: WatchErrorDetail | null;
     /** True when the stored GitHub session is dead — show a Reconnect CTA. */
     needsReauth: boolean;
+    /**
+     * The Issue Watch capabilities the SERVING machine's GitHub App is missing
+     * (the `issue-watch.*` keys the flyout gates on). Host-sourced in a remote
+     * window (via the bridge's `/api/desktop/issue-watch/status`) so the gate
+     * reflects the HOST's App grants, not the client's. Optional so an older
+     * host that predates the field degrades to "nothing gated" instead of
+     * breaking. Empty when GitHub isn't connected.
+     */
+    missingCapabilities?: GithubCapabilityKey[];
 }
 
 /** Issue Watch: one feed item (issue / PR / security alert). */
