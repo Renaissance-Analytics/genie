@@ -91,6 +91,31 @@ const api = {
             ipcRenderer.invoke('mcp:repair-docs', workspaceId),
     },
 
+    // Plugin System (Settings → Plugins). Install / enable / grant + marketplaces.
+    plugins: {
+        list: () => ipcRenderer.invoke('plugins:list'),
+        installRepo: (url: string, ref?: string) =>
+            ipcRenderer.invoke('plugins:install-repo', url, ref),
+        installFolder: (folder?: string) =>
+            ipcRenderer.invoke('plugins:install-folder', folder),
+        enable: (id: string, enabled: boolean) =>
+            ipcRenderer.invoke('plugins:enable', id, enabled),
+        setGrant: (id: string, category: string, key: string, granted: boolean) =>
+            ipcRenderer.invoke('plugins:set-grant', id, category, key, granted),
+        uninstall: (id: string) => ipcRenderer.invoke('plugins:uninstall', id),
+        marketplaces: () => ipcRenderer.invoke('plugins:marketplaces'),
+        addMarketplace: (url: string, ref?: string) =>
+            ipcRenderer.invoke('plugins:add-marketplace', url, ref),
+        refreshMarketplace: (id: string) =>
+            ipcRenderer.invoke('plugins:refresh-marketplace', id),
+        removeMarketplace: (id: string) =>
+            ipcRenderer.invoke('plugins:remove-marketplace', id),
+        installMarketplacePlugin: (marketplaceId: string, pluginId: string) =>
+            ipcRenderer.invoke('plugins:install-marketplace-plugin', marketplaceId, pluginId),
+        official: () => ipcRenderer.invoke('plugins:official'),
+        installBundledExample: () => ipcRenderer.invoke('plugins:install-bundled-example'),
+    },
+
     // Mobile remote-control server (Settings → Mobile). Desktop-only — the phone
     // talks to the tailnet HTTP/WS server directly, never through this bridge.
     mobile: {

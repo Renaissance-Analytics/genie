@@ -24,6 +24,9 @@ import {
     type ShellDetection,
     type UpdaterConfig,
     type UpdaterStatus,
+    type InstalledPluginView,
+    type MarketplaceView,
+    type OfficialPluginsResult,
 } from '../lib/genie';
 import {
     NAV_GROUPS,
@@ -542,6 +545,13 @@ export default function SettingsPage() {
                     patch({ [`mcp_sync_${target}`]: on ? 'on' : 'off' })
                 }
             />
+
+                            </SearchGroup>
+                        )}
+                        {show('plugins') && (
+                            <SearchGroup label="Plugins" searching={searching}>
+
+            <PluginsSection />
 
                             </SearchGroup>
                         )}
@@ -2255,6 +2265,399 @@ function AgentMcpSection({
                 </SettingRow>
             ))}
         </SetSection>
+    );
+}
+
+/**
+ * Settings → Plugins. The Plugin System manager (Phase 0):
+ *   - An "Installed" block: every installed plugin with enable/disable, its
+ *     namespaced tools, DECLARED editor mappings (§12.2), and a per-permission
+ *     toggle for each granular grant (§12.1), plus uninstall. Install a single
+ *     plugin by pasting its REPO URL (the primary path) or from a local folder
+ *     (dev convenience).
+ *   - Two discovery tabs: OFFICIAL (curated, Genie-maintained — signing lands in
+ *     Phase 3) and MARKETPLACES (a git repo that INDEXES many plugins; add one
+ *     by URL, browse its members, install each individually).
+ */
+function PluginsSection() {
+    const [installed, setInstalled] = useState<InstalledPluginView[]>([]);
+    const [marketplaces, setMarketplaces] = useState<MarketplaceView[]>([]);
+    const [official, setOfficial] = useState<OfficialPluginsResult | null>(null);
+    const [tab, setTab] = useState<'official' | 'marketplaces'>('official');
+    const [repoUrl, setRepoUrl] = useState('');
+    const [marketUrl, setMarketUrl] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+    const refresh = async () => {
+        try {
+            const [ins, mk, off] = await Promise.all([
+                api().plugins.list(),
+                api().plugins.marketplaces(),
+                api().plugins.official(),
+            ]);
+            setInstalled(ins);
+            setMarketplaces(mk);
+            setOfficial(off);
+        } catch {
+            /* leave prior state */
+        }
+    };
+
+    useEffect(() => {
+        void refresh();
+    }, []);
+
+    /** Run an action, surface ok/err, then refresh the lists. */
+    const run = async (
+        fn: () => Promise<{ ok: boolean; error?: string }>,
+        okText: string,
+    ) => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            const r = await fn();
+            if (r.ok) setMsg({ kind: 'ok', text: okText });
+            else setMsg({ kind: 'err', text: r.error ?? 'Failed.' });
+        } catch (e) {
+            setMsg({ kind: 'err', text: (e as Error).message });
+        } finally {
+            setBusy(false);
+            await refresh();
+        }
+    };
+
+    return (
+        <>
+            <SetSection
+                title="Installed plugins"
+                desc="Extend Genie with agent tools + (soon) file-type editors — installed from git repos, never bundled"
+            >
+                {msg && (
+                    <div className={`set-note${msg.kind === 'err' ? ' warn' : ''}`}>{msg.text}</div>
+                )}
+
+                <SettingRow
+                    label="Install from a repo URL"
+                    desc="Paste a plugin's git repo URL — Genie clones it, validates its genie-plugin.json, and installs it (disabled until you enable it)."
+                    keywords="install plugin repo url git clone genie-plugin.json"
+                    grow
+                >
+                    <div className="set-actions" style={{ width: '100%' }}>
+                        <Input
+                            value={repoUrl}
+                            onValueChange={setRepoUrl}
+                            placeholder="https://github.com/owner/my-genie-plugin.git"
+                        />
+                        <Action
+                            icon="download"
+                            disabled={busy || !repoUrl.trim()}
+                            onClick={() =>
+                                run(() => api().plugins.installRepo(repoUrl.trim()), 'Plugin installed — enable it below.').then(
+                                    () => setRepoUrl(''),
+                                )
+                            }
+                        >
+                            Install
+                        </Action>
+                        <Action
+                            variant="ghost"
+                            icon="folder"
+                            disabled={busy}
+                            onClick={() => run(() => api().plugins.installFolder(), 'Plugin installed from folder.')}
+                        >
+                            From folder…
+                        </Action>
+                    </div>
+                </SettingRow>
+
+                {installed.length === 0 ? (
+                    <Text size="xs" className="text-zinc-500">
+                        No plugins installed yet. Install one from a repo URL above, or from the Official / Marketplaces tabs below.
+                    </Text>
+                ) : (
+                    installed.map((p) => (
+                        <PluginCard
+                            key={p.id}
+                            plugin={p}
+                            busy={busy}
+                            onEnable={(on) =>
+                                run(() => api().plugins.enable(p.id, on), on ? `Enabled ${p.name}.` : `Disabled ${p.name}.`)
+                            }
+                            onToggleGrant={(perm, granted) =>
+                                run(
+                                    () => api().plugins.setGrant(p.id, perm.category, perm.key, granted),
+                                    `${granted ? 'Granted' : 'Revoked'} ${perm.label}.`,
+                                )
+                            }
+                            onUninstall={() => run(() => api().plugins.uninstall(p.id), `Uninstalled ${p.name}.`)}
+                        />
+                    ))
+                )}
+            </SetSection>
+
+            <SetSection title="Discover plugins" desc="Official curated plugins, or 3rd-party marketplaces you add by URL">
+                <div className="set-seg" role="tablist" style={{ marginBottom: 8 }}>
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={tab === 'official'}
+                        className={tab === 'official' ? 'active' : ''}
+                        onClick={() => setTab('official')}
+                    >
+                        Official
+                    </button>
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={tab === 'marketplaces'}
+                        className={tab === 'marketplaces' ? 'active' : ''}
+                        onClick={() => setTab('marketplaces')}
+                    >
+                        Marketplaces
+                    </button>
+                </div>
+
+                {tab === 'official' ? (
+                    <div className="plugin-list">
+                        <Text size="xs" className="text-zinc-500">
+                            Curated, Genie-maintained plugins. Signing + integrity verification for this
+                            channel lands in Phase 3.
+                        </Text>
+                        {(official?.curated ?? []).length === 0 && (
+                            <Text size="xs" className="text-zinc-500">
+                                No curated plugins published yet.
+                            </Text>
+                        )}
+                        {(official?.curated ?? []).map((c) => (
+                            <div className="plugin-row" key={c.id}>
+                                <div className="set-row-main">
+                                    <span className="set-row-label">{c.name}</span>
+                                    <span className="set-row-desc">{c.description}</span>
+                                </div>
+                                <Action
+                                    icon="download"
+                                    disabled={busy}
+                                    onClick={() => run(() => api().plugins.installRepo(c.repo), `Installing ${c.name}…`)}
+                                >
+                                    Install
+                                </Action>
+                            </div>
+                        ))}
+                        {official?.bundledExample && (
+                            <div className="plugin-row">
+                                <div className="set-row-main">
+                                    <span className="set-row-label">
+                                        {official.bundledExample.name}{' '}
+                                        <span className="text-zinc-500">(dev example)</span>
+                                    </span>
+                                    <span className="set-row-desc">{official.bundledExample.description}</span>
+                                </div>
+                                <Action
+                                    variant="ghost"
+                                    icon="download"
+                                    disabled={busy}
+                                    onClick={() =>
+                                        run(() => api().plugins.installBundledExample(), 'Hello World installed — enable it above.')
+                                    }
+                                >
+                                    Install example
+                                </Action>
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <div className="plugin-list">
+                        <SettingRow
+                            label="Add a marketplace"
+                            desc="Paste a marketplace repo URL (a git repo whose genie-marketplace.json indexes many plugins)."
+                            keywords="add marketplace repo url genie-marketplace.json index"
+                            grow
+                        >
+                            <div className="set-actions" style={{ width: '100%' }}>
+                                <Input
+                                    value={marketUrl}
+                                    onValueChange={setMarketUrl}
+                                    placeholder="https://github.com/owner/my-genie-marketplace.git"
+                                />
+                                <Action
+                                    icon="plus"
+                                    disabled={busy || !marketUrl.trim()}
+                                    onClick={() =>
+                                        run(() => api().plugins.addMarketplace(marketUrl.trim()), 'Marketplace added.').then(() =>
+                                            setMarketUrl(''),
+                                        )
+                                    }
+                                >
+                                    Add
+                                </Action>
+                            </div>
+                        </SettingRow>
+
+                        {marketplaces.length === 0 && (
+                            <Text size="xs" className="text-zinc-500">
+                                No marketplaces added. Paste a marketplace repo URL above to browse its plugins.
+                            </Text>
+                        )}
+                        {marketplaces.map((m) => (
+                            <div className="plugin-market" key={m.id}>
+                                <div className="plugin-market-head">
+                                    <span className="set-row-label">{m.name}</span>
+                                    <span className="set-row-desc">{m.url}</span>
+                                    <div className="set-actions">
+                                        <Action
+                                            variant="ghost"
+                                            icon="refresh-cw"
+                                            disabled={busy}
+                                            onClick={() => run(() => api().plugins.refreshMarketplace(m.id), 'Refreshed.')}
+                                        >
+                                            Refresh
+                                        </Action>
+                                        <Action
+                                            variant="ghost"
+                                            color="red"
+                                            icon="trash-2"
+                                            disabled={busy}
+                                            onClick={() => run(() => api().plugins.removeMarketplace(m.id), 'Marketplace removed.')}
+                                        >
+                                            Remove
+                                        </Action>
+                                    </div>
+                                </div>
+                                {m.plugins.length === 0 ? (
+                                    <Text size="xs" className="text-zinc-500">
+                                        This marketplace lists no plugins (or its index hasn&apos;t been fetched).
+                                    </Text>
+                                ) : (
+                                    m.plugins.map((mp) => (
+                                        <div className="plugin-row" key={mp.id}>
+                                            <div className="set-row-main">
+                                                <span className="set-row-label">{mp.name}</span>
+                                                {mp.description && <span className="set-row-desc">{mp.description}</span>}
+                                            </div>
+                                            {mp.installed ? (
+                                                <Text size="xs" className="text-zinc-500">
+                                                    Installed
+                                                </Text>
+                                            ) : (
+                                                <Action
+                                                    icon="download"
+                                                    disabled={busy}
+                                                    onClick={() =>
+                                                        run(
+                                                            () => api().plugins.installMarketplacePlugin(m.id, mp.id),
+                                                            `Installing ${mp.name}…`,
+                                                        )
+                                                    }
+                                                >
+                                                    Install
+                                                </Action>
+                                            )}
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </SetSection>
+        </>
+    );
+}
+
+/** One installed-plugin card: enable, tools, editors, granular permissions, uninstall. */
+function PluginCard({
+    plugin,
+    busy,
+    onEnable,
+    onToggleGrant,
+    onUninstall,
+}: {
+    plugin: InstalledPluginView;
+    busy: boolean;
+    onEnable: (on: boolean) => void;
+    onToggleGrant: (perm: InstalledPluginView['permissions'][number], granted: boolean) => void;
+    onUninstall: () => void;
+}) {
+    return (
+        <div className="plugin-card">
+            <div className="plugin-card-head">
+                <div className="set-row-main">
+                    <span className="set-row-label">
+                        {plugin.name}{' '}
+                        <span className="text-zinc-500">
+                            v{plugin.version} · {plugin.namespace}
+                            {plugin.signed ? ' · signed' : ''}
+                        </span>
+                    </span>
+                    {plugin.description && <span className="set-row-desc">{plugin.description}</span>}
+                    <span className="set-row-desc">
+                        Source: {plugin.sourceType}
+                        {plugin.sourceUrl ? ` — ${plugin.sourceUrl}` : ''}
+                    </span>
+                </div>
+                <div className="set-actions">
+                    <Switch checked={plugin.enabled} onCheckedChange={onEnable} />
+                    <Action variant="ghost" color="red" icon="trash-2" disabled={busy} onClick={onUninstall}>
+                        Uninstall
+                    </Action>
+                </div>
+            </div>
+
+            {plugin.tools.length > 0 && (
+                <>
+                    <SetSubhead>Agent tools</SetSubhead>
+                    {plugin.tools.map((t) => (
+                        <div className="plugin-row" key={t.name}>
+                            <div className="set-row-main">
+                                <span className="set-row-label">
+                                    <code>{t.name}</code>
+                                </span>
+                                <span className="set-row-desc">{t.description}</span>
+                            </div>
+                        </div>
+                    ))}
+                </>
+            )}
+
+            {plugin.editors.length > 0 && (
+                <>
+                    <SetSubhead>Editors (declared)</SetSubhead>
+                    {plugin.editors.map((e) => (
+                        <div className="plugin-row" key={e.id}>
+                            <div className="set-row-main">
+                                <span className="set-row-label">
+                                    {e.title} — {e.extensions.join(', ')}
+                                </span>
+                                <span className="set-row-desc">
+                                    <code>{e.fancyEditor}</code>
+                                </span>
+                            </div>
+                        </div>
+                    ))}
+                </>
+            )}
+
+            <SetSubhead>Permissions</SetSubhead>
+            {plugin.permissions.length === 0 ? (
+                <Text size="xs" className="text-zinc-500">
+                    This plugin declares no capabilities.
+                </Text>
+            ) : (
+                plugin.permissions.map((perm) => (
+                    <SettingRow
+                        key={`${perm.category}:${perm.key}`}
+                        label={perm.label}
+                        keywords={`permission grant ${perm.category} ${perm.key}`}
+                    >
+                        <Switch
+                            checked={perm.granted}
+                            onCheckedChange={(v: boolean) => onToggleGrant(perm, v)}
+                        />
+                    </SettingRow>
+                ))
+            )}
+        </div>
     );
 }
 

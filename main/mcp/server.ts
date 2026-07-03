@@ -26,6 +26,8 @@ import {
     type CheckEnvResult,
     type WorkspaceMap,
     type IssueWatchSnapshot,
+    type McpToolDescriptor,
+    type McpToolCallResult,
 } from './protocol';
 
 /**
@@ -116,6 +118,15 @@ export interface ServerDeps {
     /** True when the caller's workspace is an Ops project. Gates the ops-only
      *  `provisionWorkspaces` tool OUT of tools/list for non-Ops workspaces. */
     isOpsProject: (terminalId: string) => Promise<boolean>;
+    /** Namespaced tool descriptors from enabled plugins (Plugin System seam).
+     *  Optional + fail-closed — see McpContext.pluginTools. */
+    pluginTools?: () => McpToolDescriptor[];
+    /** Dispatch a namespaced plugin tool call (Plugin System seam). */
+    dispatchPluginTool?: (
+        name: string,
+        args: Record<string, unknown>,
+        terminalId: string,
+    ) => Promise<McpToolCallResult>;
 }
 
 let server: http.Server | null = null;
@@ -423,6 +434,8 @@ async function handle(
         setEnv: deps.setEnv,
         checkEnv: deps.checkEnv,
         isOpsProject: deps.isOpsProject,
+        pluginTools: deps.pluginTools,
+        dispatchPluginTool: deps.dispatchPluginTool,
     };
 
     // A blocking call (ForceTheQuestion) can sit pending indefinitely while the

@@ -157,6 +157,7 @@ import { isQuittingForUpdate } from './updater/quit-state';
 import { markDesktopRuntime } from './runtime-mode';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
+import { registerPluginsIpc } from './plugins/ipc';
 import {
     registerCapabilityIpc,
     runBootCapabilityCheck,
@@ -950,6 +951,8 @@ app.whenReady().then(async () => {
     }, 8000).unref?.();
     registerFilesIpc();
     registerGithubIpc();
+    // Plugin System (Settings → Plugins): install / enable / grant / marketplace.
+    registerPluginsIpc();
     // GitHub capability gating: detect which features the App's granted
     // permissions allow + expose the gate to the renderer.
     registerCapabilityIpc();

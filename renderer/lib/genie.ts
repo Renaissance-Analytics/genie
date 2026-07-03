@@ -933,6 +933,67 @@ export interface ConvertPlanOpts {
         | { kind: 'auto'; owner: string };
 }
 
+// --- Plugin System (Settings → Plugins) -------------------------------------
+
+/** One toggleable granular permission grant (§12.1). */
+export interface PluginPermissionView {
+    category: 'fs' | 'network' | 'genieApi';
+    key: string;
+    label: string;
+    granted: boolean;
+}
+
+/** An installed plugin as Settings → Plugins renders it. */
+export interface InstalledPluginView {
+    id: string;
+    name: string;
+    version: string;
+    namespace: string;
+    description: string | null;
+    enabled: boolean;
+    sourceType: 'repo' | 'folder' | 'marketplace';
+    sourceUrl: string | null;
+    marketplaceId: string | null;
+    publisher: string | null;
+    tools: Array<{ name: string; description: string }>;
+    editors: Array<{ id: string; title: string; extensions: string[]; fancyEditor: string }>;
+    permissions: PluginPermissionView[];
+    integrity: string | null;
+    signed: boolean;
+}
+
+/** A 3rd-party marketplace + its indexed member plugins. */
+export interface MarketplaceView {
+    id: string;
+    name: string;
+    url: string;
+    official: boolean;
+    plugins: Array<{ id: string; name: string; description: string | null; installed: boolean }>;
+}
+
+export interface OfficialPluginEntry {
+    id: string;
+    name: string;
+    description: string;
+    repo: string;
+}
+
+export interface BundledExample {
+    id: string;
+    name: string;
+    description: string;
+    path: string;
+}
+
+export interface OfficialPluginsResult {
+    curated: OfficialPluginEntry[];
+    bundledExample: BundledExample | null;
+}
+
+export type PluginActionResult<T = { id: string; name: string; version: string }> =
+    | { ok: true; value: T }
+    | { ok: false; error: string };
+
 export interface GenieApi {
     auth: {
         startSignIn: (kind?: BackendKind) => Promise<{
@@ -966,6 +1027,31 @@ export interface GenieApi {
         restart: () => Promise<McpServerState>;
         docHealth: (workspaceId: string) => Promise<WorkspaceDocHealth | null>;
         repairDocs: (workspaceId: string) => Promise<RepairDocsResult | null>;
+    };
+    /** Plugin System (Settings → Plugins). Install from a repo URL / folder /
+     *  marketplace; enable/disable; toggle granular permissions; uninstall. */
+    plugins: {
+        list: () => Promise<InstalledPluginView[]>;
+        installRepo: (url: string, ref?: string) => Promise<PluginActionResult>;
+        installFolder: (folder?: string) => Promise<PluginActionResult>;
+        enable: (id: string, enabled: boolean) => Promise<PluginActionResult<boolean>>;
+        setGrant: (
+            id: string,
+            category: 'fs' | 'network' | 'genieApi',
+            key: string,
+            granted: boolean,
+        ) => Promise<PluginActionResult<boolean>>;
+        uninstall: (id: string) => Promise<PluginActionResult<boolean>>;
+        marketplaces: () => Promise<MarketplaceView[]>;
+        addMarketplace: (url: string, ref?: string) => Promise<PluginActionResult>;
+        refreshMarketplace: (id: string) => Promise<PluginActionResult>;
+        removeMarketplace: (id: string) => Promise<PluginActionResult<boolean>>;
+        installMarketplacePlugin: (
+            marketplaceId: string,
+            pluginId: string,
+        ) => Promise<PluginActionResult>;
+        official: () => Promise<OfficialPluginsResult>;
+        installBundledExample: () => Promise<PluginActionResult>;
     };
     /**
      * Mobile remote-control server (Settings → Mobile). Desktop-only namespace —

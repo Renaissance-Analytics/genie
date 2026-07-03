@@ -716,6 +716,40 @@ describe('parsePolicyBuckets (defaulting + backward compat + robustness)', () =>
     });
 });
 
+describe('db migration v19 (Plugin System tables)', () => {
+    it('creates plugins + plugin_marketplaces with their key columns', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const p = cols(db, 'plugins');
+        for (const c of ['id', 'namespace', 'source_type', 'enabled', 'manifest_json', 'granted_json', 'marketplace_id', 'integrity']) {
+            expect(p.has(c)).toBe(true);
+        }
+        const m = cols(db, 'plugin_marketplaces');
+        for (const c of ['id', 'name', 'url', 'official', 'manifest_json']) {
+            expect(m.has(c)).toBe(true);
+        }
+    });
+
+    it('enforces the source_type CHECK constraint', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const insert = (type: string) =>
+            db.prepare(
+                `INSERT INTO plugins (id, namespace, name, version, source_type, install_path, manifest_json, installed_at, updated_at)
+                 VALUES ('p','n','N','1.0.0', ?, '/tmp/p', '{}', '', '')`,
+            ).run(type);
+        expect(() => insert('nonsense')).toThrow();
+        expect(() => insert('repo')).not.toThrow();
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'plugins').has('granted_json')).toBe(true);
+    });
+});
+
 describe('db migration v10 (reclassify mis-stored process specs)', () => {
     const insertSpec = (
         db: Database.Database,

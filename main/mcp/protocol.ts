@@ -163,6 +163,19 @@ export interface IssueWatchSnapshot {
     };
 }
 
+/** An MCP tool descriptor as `tools/list` returns it (core + plugin tools). */
+export interface McpToolDescriptor {
+    name: string;
+    description: string;
+    inputSchema: unknown;
+}
+
+/** The MCP `content` result of a `tools/call` (used by the plugin fall-through). */
+export interface McpToolCallResult {
+    content: Array<{ type: 'text'; text: string }>;
+    isError?: boolean;
+}
+
 export interface McpContext {
     /** The terminal id this endpoint is bound to (from the URL token). */
     terminalId: string;
@@ -270,6 +283,25 @@ export interface McpContext {
     /** Presence/value lookup of a key in the workspace (default) or a repo `.env`
      *  (the `checkEnv` tool), with secret obfuscation by default. */
     checkEnv: (terminalId: string, req: CheckEnvRequest) => CheckEnvResult;
+    /**
+     * The namespaced tool descriptors contributed by ENABLED plugins (the
+     * Plugin System seam, §5.1). Concatenated into `tools/list` AFTER the core
+     * tools. Optional + FAIL-CLOSED: absent, or throwing, contributes nothing —
+     * a bad/erroring plugin can never remove or corrupt a core tool. Each name
+     * is already namespaced (`${namespace}.${tool}`).
+     */
+    pluginTools?: () => McpToolDescriptor[];
+    /**
+     * The fall-through for a namespaced plugin tool call (§5.1): resolve the
+     * owning enabled plugin, run its handler in the plugin's configured process,
+     * and return the MCP result. Contained — it returns an `isError` result
+     * rather than throwing, so a bad plugin never sinks the JSON-RPC transport.
+     */
+    dispatchPluginTool?: (
+        name: string,
+        args: Record<string, unknown>,
+        terminalId: string,
+    ) => Promise<McpToolCallResult>;
 }
 
 /** A managed background process as the manageProcess tool reports it. */
@@ -1205,6 +1237,15 @@ export async function handleMcpMessage(
             // List it ONLY for an Ops caller — fail CLOSED (omit it) on any error
             // so a non-Ops / uncertain workspace never sees the ops tool.
             const isOps = await ctx.isOpsProject(ctx.terminalId).catch(() => false);
+            // Enabled-plugin tools ride the SAME list, namespaced, AFTER the core
+            // tools. Fail CLOSED: a throwing plugin registry contributes nothing
+            // (never poisons the core surface — same discipline as the ops gate).
+            let pluginTools: McpToolDescriptor[] = [];
+            try {
+                pluginTools = ctx.pluginTools?.() ?? [];
+            } catch {
+                pluginTools = [];
+            }
             return ok(msg.id, {
                 tools: [
                     IMDONE_TOOL,
@@ -1219,6 +1260,7 @@ export async function handleMcpMessage(
                     SET_ENV_TOOL,
                     CHECK_ENV_TOOL,
                     GUIDE_TOOL,
+                    ...pluginTools,
                 ],
             });
         }
@@ -1604,6 +1646,27 @@ export async function handleMcpMessage(
                         },
                     ],
                 });
+            }
+            // Plugin fall-through (§5.1): a NAMESPACED name (`namespace.tool`)
+            // routes to the plugin registry. A non-namespaced miss stays a core
+            // "unknown tool" error (a plugin name always carries its namespace
+            // dot), so a typo'd core tool still reports -32602. dispatchPluginTool
+            // is contained (returns an isError result); the try/catch is a final
+            // backstop so a bad plugin can never break the transport.
+            if (ctx.dispatchPluginTool && typeof params.name === 'string' && params.name.includes('.')) {
+                try {
+                    const args = (params.arguments ?? {}) as Record<string, unknown>;
+                    const result = await ctx.dispatchPluginTool(params.name, args, ctx.terminalId);
+                    return ok(msg.id, { content: result.content, isError: result.isError });
+                } catch (e) {
+                    return err(
+                        msg.id,
+                        -32603,
+                        `Plugin tool "${String(params.name)}" failed: ${
+                            e instanceof Error ? e.message : String(e)
+                        }`,
+                    );
+                }
             }
             return err(msg.id, -32602, `Unknown tool: ${String(params.name)}`);
         }

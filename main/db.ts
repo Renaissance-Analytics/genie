@@ -427,6 +427,59 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v19 — the Plugin System (Phase 0). Two fresh tables (so CHECK
+            // constraints are safe here — unlike an ALTER ADD COLUMN):
+            //   - `plugin_marketplaces` — a git repo that INDEXES many plugins.
+            //     The user adds one by pasting its repo URL; Genie caches the
+            //     parsed `genie-marketplace.json` index in `manifest_json`.
+            //   - `plugins` — one installed plugin. Tracks its SOURCE (repo URL +
+            //     pinned ref, or a local dev folder), which marketplace it came
+            //     from (nullable), the ENABLED flag (fail-closed default 0), the
+            //     validated manifest snapshot, and the GRANULAR granted
+            //     permissions blob (§12.1 — each fs scope / network host / Genie
+            //     API is an independent, user-toggleable grant). `integrity` +
+            //     `signature` + `publisher_key_id` are signing-ready columns
+            //     (populated for the curated/Official path in Phase 3; NULL on
+            //     the dev repo-URL/folder path).
+            version: 19,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS plugin_marketplaces (
+                        id            TEXT PRIMARY KEY,
+                        name          TEXT NOT NULL,
+                        url           TEXT NOT NULL,
+                        ref           TEXT,
+                        official      INTEGER NOT NULL DEFAULT 0,
+                        manifest_json TEXT,
+                        added_at      TEXT NOT NULL,
+                        updated_at    TEXT NOT NULL
+                    );
+
+                    CREATE TABLE IF NOT EXISTS plugins (
+                        id                TEXT PRIMARY KEY,
+                        namespace         TEXT NOT NULL,
+                        name              TEXT NOT NULL,
+                        version           TEXT NOT NULL,
+                        source_type       TEXT NOT NULL CHECK (source_type IN ('repo','folder','marketplace')),
+                        source_url        TEXT,
+                        source_ref        TEXT,
+                        install_path      TEXT NOT NULL,
+                        marketplace_id    TEXT,
+                        enabled           INTEGER NOT NULL DEFAULT 0,
+                        manifest_json     TEXT NOT NULL,
+                        granted_json      TEXT NOT NULL DEFAULT '{}',
+                        integrity         TEXT,
+                        signature         TEXT,
+                        publisher_key_id  TEXT,
+                        installed_at      TEXT NOT NULL,
+                        updated_at        TEXT NOT NULL,
+                        FOREIGN KEY (marketplace_id) REFERENCES plugin_marketplaces(id) ON DELETE SET NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_plugins_enabled ON plugins(enabled);
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1477,4 +1530,309 @@ export function markIssueWatchSeen(
              ON CONFLICT(workspace_id, owner, repo) DO UPDATE SET seen_at = excluded.seen_at`,
         )
         .run(workspaceId, owner, repo, seenAt);
+}
+
+// Plugins (Plugin System, Phase 0) --------------------------------------------
+
+/** Where a plugin was installed from. */
+export type PluginSourceType = 'repo' | 'folder' | 'marketplace';
+
+/**
+ * The GRANULAR granted-permission map (§12.1). Each key under a category is an
+ * INDEPENDENT grant the user can toggle on/off in Settings → Plugins:
+ *   - fs:       scope id (e.g. 'workspace') → granted?
+ *   - network:  host        → granted?
+ *   - genieApi: api name    → granted?
+ * A permission the manifest never declared is simply absent (unreachable).
+ */
+export interface PluginGrants {
+    fs: Record<string, boolean>;
+    network: Record<string, boolean>;
+    genieApi: Record<string, boolean>;
+}
+
+export function emptyPluginGrants(): PluginGrants {
+    return { fs: {}, network: {}, genieApi: {} };
+}
+
+/** Parse a stored granted_json blob into a well-formed grants object. */
+export function parsePluginGrants(raw: string | null | undefined): PluginGrants {
+    const out = emptyPluginGrants();
+    if (!raw) return out;
+    try {
+        const j = JSON.parse(raw) as Partial<PluginGrants>;
+        for (const cat of ['fs', 'network', 'genieApi'] as const) {
+            const src = j[cat];
+            if (src && typeof src === 'object') {
+                for (const [k, v] of Object.entries(src)) out[cat][k] = v === true;
+            }
+        }
+    } catch {
+        /* corrupt → all-denied (fail-closed) */
+    }
+    return out;
+}
+
+export interface PluginRow {
+    id: string;
+    namespace: string;
+    name: string;
+    version: string;
+    source_type: PluginSourceType;
+    source_url: string | null;
+    source_ref: string | null;
+    install_path: string;
+    marketplace_id: string | null;
+    enabled: boolean;
+    /** The validated manifest snapshot (JSON string, as stored). */
+    manifest_json: string;
+    grants: PluginGrants;
+    integrity: string | null;
+    signature: string | null;
+    publisher_key_id: string | null;
+    installed_at: string;
+    updated_at: string;
+}
+
+interface PluginRecord {
+    id: string;
+    namespace: string;
+    name: string;
+    version: string;
+    source_type: string;
+    source_url: string | null;
+    source_ref: string | null;
+    install_path: string;
+    marketplace_id: string | null;
+    enabled: number;
+    manifest_json: string;
+    granted_json: string | null;
+    integrity: string | null;
+    signature: string | null;
+    publisher_key_id: string | null;
+    installed_at: string;
+    updated_at: string;
+}
+
+function pluginRowFrom(r: PluginRecord): PluginRow {
+    const source_type: PluginSourceType =
+        r.source_type === 'folder' ? 'folder' : r.source_type === 'marketplace' ? 'marketplace' : 'repo';
+    return {
+        id: r.id,
+        namespace: r.namespace,
+        name: r.name,
+        version: r.version,
+        source_type,
+        source_url: r.source_url,
+        source_ref: r.source_ref,
+        install_path: r.install_path,
+        marketplace_id: r.marketplace_id,
+        enabled: r.enabled !== 0,
+        manifest_json: r.manifest_json,
+        grants: parsePluginGrants(r.granted_json),
+        integrity: r.integrity,
+        signature: r.signature,
+        publisher_key_id: r.publisher_key_id,
+        installed_at: r.installed_at,
+        updated_at: r.updated_at,
+    };
+}
+
+export function listPlugins(): PluginRow[] {
+    return getDb()
+        .prepare<[], PluginRecord>('SELECT * FROM plugins ORDER BY name COLLATE NOCASE')
+        .all()
+        .map(pluginRowFrom);
+}
+
+/** Only the ENABLED plugins — the set the MCP registry surfaces (fail-closed). */
+export function listEnabledPlugins(): PluginRow[] {
+    return getDb()
+        .prepare<[], PluginRecord>('SELECT * FROM plugins WHERE enabled = 1 ORDER BY name COLLATE NOCASE')
+        .all()
+        .map(pluginRowFrom);
+}
+
+export function getPlugin(id: string): PluginRow | null {
+    const r = getDb()
+        .prepare<[string], PluginRecord>('SELECT * FROM plugins WHERE id = ?')
+        .get(id);
+    return r ? pluginRowFrom(r) : null;
+}
+
+export interface UpsertPluginInput {
+    id: string;
+    namespace: string;
+    name: string;
+    version: string;
+    source_type: PluginSourceType;
+    source_url?: string | null;
+    source_ref?: string | null;
+    install_path: string;
+    marketplace_id?: string | null;
+    enabled?: boolean;
+    manifest_json: string;
+    grants?: PluginGrants;
+    integrity?: string | null;
+    signature?: string | null;
+    publisher_key_id?: string | null;
+}
+
+/** Install (or re-install/update) a plugin row. Idempotent per id. */
+export function upsertPlugin(input: UpsertPluginInput): PluginRow {
+    const now = new Date().toISOString();
+    getDb()
+        .prepare(
+            `INSERT INTO plugins
+               (id, namespace, name, version, source_type, source_url, source_ref, install_path,
+                marketplace_id, enabled, manifest_json, granted_json, integrity, signature,
+                publisher_key_id, installed_at, updated_at)
+             VALUES
+               (@id, @namespace, @name, @version, @source_type, @source_url, @source_ref, @install_path,
+                @marketplace_id, @enabled, @manifest_json, @granted_json, @integrity, @signature,
+                @publisher_key_id, @now, @now)
+             ON CONFLICT(id) DO UPDATE SET
+                namespace        = excluded.namespace,
+                name             = excluded.name,
+                version          = excluded.version,
+                source_type      = excluded.source_type,
+                source_url       = excluded.source_url,
+                source_ref       = excluded.source_ref,
+                install_path     = excluded.install_path,
+                marketplace_id   = excluded.marketplace_id,
+                enabled          = excluded.enabled,
+                manifest_json    = excluded.manifest_json,
+                granted_json     = excluded.granted_json,
+                integrity        = excluded.integrity,
+                signature        = excluded.signature,
+                publisher_key_id = excluded.publisher_key_id,
+                updated_at       = excluded.updated_at`,
+        )
+        .run({
+            id: input.id,
+            namespace: input.namespace,
+            name: input.name,
+            version: input.version,
+            source_type: input.source_type,
+            source_url: input.source_url ?? null,
+            source_ref: input.source_ref ?? null,
+            install_path: input.install_path,
+            marketplace_id: input.marketplace_id ?? null,
+            enabled: input.enabled ? 1 : 0,
+            manifest_json: input.manifest_json,
+            granted_json: JSON.stringify(input.grants ?? emptyPluginGrants()),
+            integrity: input.integrity ?? null,
+            signature: input.signature ?? null,
+            publisher_key_id: input.publisher_key_id ?? null,
+            now,
+        });
+    return getPlugin(input.id)!;
+}
+
+/** Flip a plugin's enabled flag (disable = instant fail-closed revoke). */
+export function setPluginEnabled(id: string, enabled: boolean): void {
+    getDb()
+        .prepare('UPDATE plugins SET enabled = ?, updated_at = ? WHERE id = ?')
+        .run(enabled ? 1 : 0, new Date().toISOString(), id);
+}
+
+/** Replace a plugin's granular granted-permission map. */
+export function setPluginGrants(id: string, grants: PluginGrants): void {
+    getDb()
+        .prepare('UPDATE plugins SET granted_json = ?, updated_at = ? WHERE id = ?')
+        .run(JSON.stringify(grants), new Date().toISOString(), id);
+}
+
+export function deletePlugin(id: string): void {
+    getDb().prepare('DELETE FROM plugins WHERE id = ?').run(id);
+}
+
+export interface PluginMarketplaceRow {
+    id: string;
+    name: string;
+    url: string;
+    ref: string | null;
+    official: boolean;
+    /** Cached, validated marketplace index (JSON string), or null before a fetch. */
+    manifest_json: string | null;
+    added_at: string;
+    updated_at: string;
+}
+
+interface PluginMarketplaceRecord {
+    id: string;
+    name: string;
+    url: string;
+    ref: string | null;
+    official: number;
+    manifest_json: string | null;
+    added_at: string;
+    updated_at: string;
+}
+
+function marketplaceRowFrom(r: PluginMarketplaceRecord): PluginMarketplaceRow {
+    return {
+        id: r.id,
+        name: r.name,
+        url: r.url,
+        ref: r.ref,
+        official: r.official !== 0,
+        manifest_json: r.manifest_json,
+        added_at: r.added_at,
+        updated_at: r.updated_at,
+    };
+}
+
+export function listPluginMarketplaces(): PluginMarketplaceRow[] {
+    return getDb()
+        .prepare<[], PluginMarketplaceRecord>('SELECT * FROM plugin_marketplaces ORDER BY official DESC, name COLLATE NOCASE')
+        .all()
+        .map(marketplaceRowFrom);
+}
+
+export function getPluginMarketplace(id: string): PluginMarketplaceRow | null {
+    const r = getDb()
+        .prepare<[string], PluginMarketplaceRecord>('SELECT * FROM plugin_marketplaces WHERE id = ?')
+        .get(id);
+    return r ? marketplaceRowFrom(r) : null;
+}
+
+export interface UpsertMarketplaceInput {
+    id: string;
+    name: string;
+    url: string;
+    ref?: string | null;
+    official?: boolean;
+    manifest_json?: string | null;
+}
+
+/** Add (or refresh) a marketplace. Idempotent per id. */
+export function upsertPluginMarketplace(input: UpsertMarketplaceInput): PluginMarketplaceRow {
+    const now = new Date().toISOString();
+    getDb()
+        .prepare(
+            `INSERT INTO plugin_marketplaces (id, name, url, ref, official, manifest_json, added_at, updated_at)
+             VALUES (@id, @name, @url, @ref, @official, @manifest_json, @now, @now)
+             ON CONFLICT(id) DO UPDATE SET
+                name          = excluded.name,
+                url           = excluded.url,
+                ref           = excluded.ref,
+                official      = excluded.official,
+                manifest_json = excluded.manifest_json,
+                updated_at    = excluded.updated_at`,
+        )
+        .run({
+            id: input.id,
+            name: input.name,
+            url: input.url,
+            ref: input.ref ?? null,
+            official: input.official ? 1 : 0,
+            manifest_json: input.manifest_json ?? null,
+            now,
+        });
+    return getPluginMarketplace(input.id)!;
+}
+
+export function deletePluginMarketplace(id: string): void {
+    getDb().prepare('DELETE FROM plugin_marketplaces WHERE id = ?').run(id);
 }
