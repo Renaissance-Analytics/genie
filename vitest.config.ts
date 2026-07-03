@@ -29,8 +29,13 @@ export default defineConfig({
         // buys little and risks flakes from racing temp directories.
         pool: 'forks',
         poolOptions: { forks: { singleFork: true } },
-        testTimeout: 20_000,
-        hookTimeout: 20_000,
+        // The workspace suite spawns many git subprocesses (clone, submodule
+        // add, commit). On Windows under machine load these routinely exceed a
+        // 20s budget even though they pass on Linux CI — 60s reflects the real
+        // cost without masking a hang (create-agi's submodule-explode overrides
+        // higher still). Fast tests finish in ms regardless.
+        testTimeout: 60_000,
+        hookTimeout: 60_000,
         // Inline the terminal backend package so vitest TRANSFORMS it instead of
         // loading it as a pre-bundled external. Genie's adapter tests (e.g.
         // retained-ipc) `vi.mock('node-pty')` to spawn fake ptys; that mock only

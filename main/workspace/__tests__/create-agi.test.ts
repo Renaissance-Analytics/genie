@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { simpleGit } from 'simple-git';
 import {
     addStructureDocs,
@@ -20,6 +20,12 @@ import {
 } from '../create-agi';
 import { readProjectJson } from '../project-json';
 import { cleanupTmpRoot, makeTmpDir, seedGitRepo } from '../../../test/helpers';
+
+// These tests spawn many git subprocesses (envelope conversion, submodule
+// explode). On Windows that overhead routinely exceeds the global 20s timeout
+// even though the same tests pass comfortably on Linux CI — give the whole file
+// headroom so local Windows runs don't flake.
+vi.setConfig({ testTimeout: 120_000 });
 
 afterAll(() => cleanupTmpRoot());
 
