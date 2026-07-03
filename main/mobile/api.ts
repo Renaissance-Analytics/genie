@@ -193,15 +193,22 @@ export interface MobileDataDeps {
      *  dropped a frame, so the client resyncs. Optional — a no-op if unwired. */
     repaint?: (id: string) => void;
     /**
-     * Write a PNG to the HOST's OS clipboard so a REMOTE paste lands an image
+     * Place a PNG where the HOST's CLI reads it so a REMOTE paste lands an image
      * exactly like a local one: the driving client ships its LOCAL clipboard image
-     * here, we put it on the host clipboard, and the client then delivers the paste
-     * trigger to the pty (the CLI reads the host clipboard). Optional + fail-safe:
-     * a HEADLESS host (the Aionima Virtual Workstation) has no OS clipboard, so it
-     * leaves this UNWIRED and the route reports `supported:false` — the client
-     * no-ops the image gracefully and never breaks text paste. `supported:true,
-     * ok:false` means the host had a clipboard but the PNG was unusable. */
-    writeClipboardImage?: (png: Buffer) => { ok: boolean; supported: boolean };
+     * here. On a Windows/macOS host we put it on the OS clipboard and the client
+     * then delivers the paste trigger to the pty; on a LINUX host the OS image
+     * clipboard is unreliable for Claude Code, so we write a temp FILE and return
+     * its `path`, which the client pastes instead (the CLI attaches an image from
+     * the path). Optional + fail-safe: a legacy caller may leave this UNWIRED and
+     * the route reports `supported:false` — the client no-ops the image gracefully
+     * and never breaks text paste. `supported:true, ok:false` means the host could
+     * accept an image but the PNG was unusable. */
+    writeClipboardImage?: (png: Buffer) => {
+        ok: boolean;
+        supported: boolean;
+        /** Absolute HOST path to a temp PNG the client should paste (Linux). */
+        path?: string;
+    };
 
     // --- force-question ---
     listPendingQuestions: () => PendingQuestion[];
@@ -712,11 +719,14 @@ export async function handleApi(
             return true;
         }
         const result = deps.writeClipboardImage(buf);
-        audit(
-            'clipboard.image',
-            `${buf.length}b ${result.supported ? (result.ok ? 'ok' : 'failed') : 'unsupported'}`,
-            actor,
-        );
+        const how = result.supported
+            ? result.ok
+                ? result.path
+                    ? 'file'
+                    : 'clipboard'
+                : 'failed'
+            : 'unsupported';
+        audit('clipboard.image', `${buf.length}b ${how}`, actor);
         sendJson(res, 200, result);
         return true;
     }

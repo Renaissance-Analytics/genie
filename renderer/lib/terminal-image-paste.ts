@@ -33,6 +33,30 @@ export const PASTE_TRIGGER_CTRL_V = '\x16';
  */
 export const PASTE_TRIGGER_ALT_V = '\x1bv';
 
+/**
+ * Bracketed-paste markers (xterm DEC 2004). A TUI treats everything between them
+ * as pasted literal text, so wrapping a file path in them delivers it exactly like
+ * a terminal file-drop — which is how Claude Code recognises an image-from-path.
+ */
+export const BRACKETED_PASTE_START = '\x1b[200~';
+export const BRACKETED_PASTE_END = '\x1b[201~';
+
+/**
+ * Build the pty bytes that hand the CLI an image FILE by PATH (the Linux/headless
+ * delivery). Claude Code can't reliably read a Linux clipboard image, but it
+ * attaches an image from a pasted file path — so on a Linux host we write the PNG
+ * to a temp file and paste its path here instead of sending a clipboard trigger.
+ *
+ * The path is single-quoted (matching what a terminal file-drop pastes, so the CLI
+ * parses it as one argument) and wrapped in bracketed-paste markers so it lands as
+ * pasted content, not typed keystrokes. No trailing Enter: the path attaches as an
+ * image chip and the user types their prompt after it. The host generates the path
+ * (tmpdir + `paste-…​.png`), so it never contains a single quote to escape.
+ */
+export function buildImagePathPaste(filePath: string): string {
+    return `${BRACKETED_PASTE_START}'${filePath}'${BRACKETED_PASTE_END}`;
+}
+
 /** A parsed image clipboard payload: the mime type + the raw base64 (no data-URL
  *  prefix, whitespace stripped), ready to ship to a clipboard writer. */
 export interface ParsedClipboardImage {

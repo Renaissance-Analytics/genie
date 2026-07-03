@@ -173,15 +173,17 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
     // Clipboard: `read`/`readImage` stay LOCAL (spread from local) — the copied
     // image lives on the machine the user is on, so a host window still reads the
     // LOCAL clipboard, exactly like text paste already does. Only `writeImage` is
-    // re-pointed to the HOST clipboard over the authed bridge, so a synced image
-    // lands where the CLI (running on the host) will read it.
+    // re-pointed to the HOST over the authed bridge, so a synced image lands where
+    // the CLI (running on the host) will read it — the HOST OS clipboard on
+    // Windows/macOS, or a HOST temp file whose `path` comes back on Linux (the
+    // client then pastes the path, since the CLI can't read a Linux clipboard image).
     const clipboard: GenieApi['clipboard'] = {
         ...local.clipboard,
         writeImage: async (dataBase64: string) =>
             (await req('/api/clipboard/image', {
                 method: 'POST',
                 json: { dataBase64 },
-            })) as { ok: boolean; supported: boolean },
+            })) as { ok: boolean; supported: boolean; path?: string },
     };
 
     // The host's background processes.

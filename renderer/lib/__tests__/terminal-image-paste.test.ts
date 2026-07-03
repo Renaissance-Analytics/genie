@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+    BRACKETED_PASTE_START,
+    BRACKETED_PASTE_END,
+    buildImagePathPaste,
     PASTE_TRIGGER_CTRL_V,
     PASTE_TRIGGER_ALT_V,
     parseImageDataUrl,
@@ -24,6 +27,28 @@ describe('PASTE_TRIGGER_ALT_V', () => {
         expect(PASTE_TRIGGER_ALT_V).toBe('\x1bv');
         expect(PASTE_TRIGGER_ALT_V.charCodeAt(0)).toBe(0x1b);
         expect(PASTE_TRIGGER_ALT_V.charCodeAt(1)).toBe(0x76); // 'v'
+    });
+});
+
+describe('buildImagePathPaste', () => {
+    it('wraps a single-quoted path in bracketed-paste markers (the Linux delivery)', () => {
+        const out = buildImagePathPaste('/tmp/genie-clipboard/paste-123-abc.png');
+        expect(out).toBe(
+            "\x1b[200~'/tmp/genie-clipboard/paste-123-abc.png'\x1b[201~",
+        );
+    });
+
+    it('uses the DEC 2004 bracketed-paste markers (start 200~, end 201~)', () => {
+        expect(BRACKETED_PASTE_START).toBe('\x1b[200~');
+        expect(BRACKETED_PASTE_END).toBe('\x1b[201~');
+        const out = buildImagePathPaste('/x.png');
+        expect(out.startsWith(BRACKETED_PASTE_START)).toBe(true);
+        expect(out.endsWith(BRACKETED_PASTE_END)).toBe(true);
+    });
+
+    it('sends NO trailing Enter — the path attaches as a chip, the user types after', () => {
+        expect(buildImagePathPaste('/x.png').endsWith('\r')).toBe(false);
+        expect(buildImagePathPaste('/x.png').endsWith('\n')).toBe(false);
     });
 });
 

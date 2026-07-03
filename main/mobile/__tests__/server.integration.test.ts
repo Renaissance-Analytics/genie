@@ -31,9 +31,12 @@ let appDir: string;
 const written: Array<{ id: string; data: string }> = [];
 // Captures PNGs the clipboard-image route wrote to the (mock) host clipboard.
 const clipboardImages: Buffer[] = [];
-// 'desktop' wires writeClipboardImage (has an OS clipboard); 'headless' leaves it
-// UNWIRED so the route reports supported:false (the Aionima Virtual Workstation).
-let clipboardMode: 'desktop' | 'headless' = 'desktop';
+// 'desktop' wires writeClipboardImage returning a clipboard write (Windows/macOS);
+// 'linux' returns a temp-file `path` (the CLI reads the file, not the clipboard);
+// 'headless' leaves it UNWIRED so the route reports supported:false (a legacy host).
+let clipboardMode: 'desktop' | 'linux' | 'headless' = 'desktop';
+// The temp-file path a 'linux' host returns for a pasted image.
+const LINUX_PASTE_PATH = '/tmp/genie-clipboard/paste-123-abc.png';
 // Drives the mock updater deps: flip to true to simulate a staged build so the
 // install endpoint returns 200; left false it reports not-ready (→ 409).
 let updateReady = false;
@@ -75,16 +78,19 @@ const deps = (): MobileDataDeps => ({
     readTerminalOutput: () => ({ data: '', cursor: 0, dropped: false }),
     getScrollback: () => 'catch-up-scrollback',
     resize: () => true,
-    // Desktop wires the host-clipboard write (records the PNG); headless omits it
+    // Desktop/linux wire the host write (recording the PNG); headless omits it
     // entirely so the route hits its `!deps.writeClipboardImage` fail-safe branch.
-    ...(clipboardMode === 'desktop'
-        ? {
+    // 'linux' additionally returns the temp-file `path` the route must pass back.
+    ...(clipboardMode === 'headless'
+        ? {}
+        : {
               writeClipboardImage: (png: Buffer) => {
                   clipboardImages.push(png);
-                  return { ok: true, supported: true };
+                  return clipboardMode === 'linux'
+                      ? { ok: true, supported: true, path: LINUX_PASTE_PATH }
+                      : { ok: true, supported: true };
               },
-          }
-        : {}),
+          }),
     listPendingQuestions: () => [],
     answerPendingQuestion: () => true,
     updateStatus: () => ({
@@ -429,6 +435,23 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         expect(r.status).toBe(200);
         expect(r.json).toEqual({ ok: true, supported: true });
         // The route decoded the base64 and handed the raw PNG to the host dep.
+        expect(clipboardImages).toHaveLength(1);
+        expect(clipboardImages[0].equals(png)).toBe(true);
+    });
+
+    it('POST /api/clipboard/image: a LINUX host returns the temp-file path to paste', async () => {
+        clipboardMode = 'linux'; // dep writes a temp file + returns its path
+        const port = await start();
+        const token = await pair(port);
+        const png = Buffer.from('fake-png-bytes');
+        const r = await req(port, 'POST', '/api/clipboard/image', {
+            token,
+            body: { dataBase64: png.toString('base64') },
+        });
+        expect(r.status).toBe(200);
+        // The route passes the host path straight back so the client pastes it
+        // (the CLI attaches the image from the path, not the OS clipboard).
+        expect(r.json).toEqual({ ok: true, supported: true, path: LINUX_PASTE_PATH });
         expect(clipboardImages).toHaveLength(1);
         expect(clipboardImages[0].equals(png)).toBe(true);
     });

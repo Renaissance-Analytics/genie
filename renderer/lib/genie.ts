@@ -1070,13 +1070,19 @@ export interface GenieApi {
          */
         readImage: () => Promise<string | null>;
         /**
-         * Write a PNG (base64, no data-URL prefix) to the clipboard of the machine
-         * the terminal runs on: locally that's this machine; in a host window the
-         * remote bridge re-points it to the HOST clipboard over the authed bridge.
-         * `supported:false` ⇒ the target has no OS clipboard (a headless host) —
-         * the caller no-ops the image gracefully and never breaks text paste.
+         * Place a PNG (base64, no data-URL prefix) where the CLI on the machine the
+         * terminal runs on will read it: locally that's this machine; in a host
+         * window the remote bridge re-points it to the HOST over the authed bridge.
+         * On Windows/macOS it lands on the OS clipboard; on a LINUX host it's written
+         * to a temp file and `path` is its absolute HOST path — the caller pastes the
+         * path instead of a clipboard trigger (Claude Code can't reliably read a Linux
+         * clipboard image). `supported:false` ⇒ the target can't accept an image (a
+         * legacy unwired host) — the caller no-ops gracefully and never breaks text
+         * paste.
          */
-        writeImage: (dataBase64: string) => Promise<{ ok: boolean; supported: boolean }>;
+        writeImage: (
+            dataBase64: string,
+        ) => Promise<{ ok: boolean; supported: boolean; path?: string }>;
     };
     /** Built-in editor — reply to a main `editor:open-file` request
      *  (openFileForUser MCP tool), keyed by the request id main awaits. */

@@ -1,6 +1,7 @@
-import { app, clipboard, dialog, ipcMain, nativeImage, shell, BrowserWindow } from 'electron';
+import { app, clipboard, dialog, ipcMain, shell, BrowserWindow } from 'electron';
 import os from 'node:os';
 import path from 'node:path';
+import { writeClipboardImagePng } from './clipboard-image';
 import {
     addWorkspace,
     AI_SYSTEM_MAX,
@@ -236,12 +237,13 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('clipboard:read', () => clipboard.readText());
     // Image clipboard — the terminal's image-paste path. `read-image` returns the
     // LOCAL clipboard image as a PNG data-URL (null when there's no image), so the
-    // renderer can detect a copied image and sync it to the clipboard of the machine
-    // the terminal runs on. `write-image` writes a PNG (base64) back to THIS
-    // machine's clipboard; in a host window the remote bridge re-points the write to
-    // the HOST clipboard over the authed bridge, so this local handler only ever
-    // serves the local case (a desktop, which always has an OS clipboard →
-    // supported:true).
+    // renderer can detect a copied image and sync it to the machine the terminal
+    // runs on. `write-image` places a PNG (base64) where the local CLI reads it; in
+    // a host window the remote bridge re-points this to the HOST over the authed
+    // bridge. On Windows/macOS that's the OS clipboard (Ctrl+V reads it); on Linux
+    // it's a temp FILE whose `path` comes back so the caller pastes the path
+    // instead (Claude Code can't reliably read a Linux clipboard image). Shared
+    // with the bridge route via `writeClipboardImagePng`.
     ipcMain.handle('clipboard:read-image', () => {
         const img = clipboard.readImage();
         return img.isEmpty() ? null : img.toDataURL();
@@ -249,14 +251,7 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('clipboard:write-image', (_e, dataBase64: unknown) => {
         const b64 = typeof dataBase64 === 'string' ? dataBase64 : '';
         if (!b64) return { ok: false, supported: true };
-        try {
-            const img = nativeImage.createFromBuffer(Buffer.from(b64, 'base64'));
-            if (img.isEmpty()) return { ok: false, supported: true };
-            clipboard.writeImage(img);
-            return { ok: true, supported: true };
-        } catch {
-            return { ok: false, supported: true };
-        }
+        return writeClipboardImagePng(Buffer.from(b64, 'base64'));
     });
     ipcMain.handle(
         'settings:choose-folder',

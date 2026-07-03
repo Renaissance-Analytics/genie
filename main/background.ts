@@ -1,7 +1,6 @@
 import {
     app,
     BrowserWindow,
-    clipboard,
     ipcMain,
     nativeImage,
     Notification,
@@ -13,6 +12,7 @@ import { createTray, rebuildMenu } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { launchedFromAutostart } from './autostart';
 import { registerIpcHandlers } from './ipc';
+import { writeClipboardImagePng } from './clipboard-image';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import {
@@ -1146,22 +1146,14 @@ app.whenReady().then(async () => {
                     /* pty gone / resize unsupported — best-effort */
                 }
             },
-            // Host-clipboard image sync (remote image paste): write the client's
-            // shipped PNG to THIS machine's OS clipboard so the paste trigger it
-            // then sends makes the CLI read the image. Desktop always has a
-            // clipboard → supported:true; the headless genie-cloud host leaves this
-            // dep unwired (see MobileDataDeps.writeClipboardImage) so its route
-            // reports supported:false and the client no-ops the image.
-            writeClipboardImage: (png) => {
-                try {
-                    const img = nativeImage.createFromBuffer(png);
-                    if (img.isEmpty()) return { ok: false, supported: true };
-                    clipboard.writeImage(img);
-                    return { ok: true, supported: true };
-                } catch {
-                    return { ok: false, supported: true };
-                }
-            },
+            // Host-clipboard image sync (remote image paste): place the client's
+            // shipped PNG where THIS host's CLI reads it. On Windows/macOS that's
+            // the OS clipboard (the client then sends the paste trigger); on a Linux
+            // host it's a temp FILE and the returned `path` is what the client
+            // pastes, because Claude Code can't reliably read a Linux clipboard
+            // image (headless has none; headed needs xclip/wl-paste). Shared with
+            // the local IPC handler via `writeClipboardImagePng`.
+            writeClipboardImage: (png) => writeClipboardImagePng(png),
             listPendingQuestions: () => listPendingQuestions(),
             answerPendingQuestion: (id, answers) => answerPendingQuestion(id, answers),
             // Self-update ("Upgrade Genie" tool) — backed by the SAME updater

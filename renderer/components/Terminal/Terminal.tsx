@@ -8,6 +8,7 @@ import { SerializeAddon } from '@xterm/addon-serialize';
 import { api, isRemoteWindow, ulid } from '../../lib/genie';
 import { buildClipboardMenu, handleOsc52 } from '../../lib/terminal-clipboard';
 import {
+    buildImagePathPaste,
     parseImageDataUrl,
     PASTE_TRIGGER_CTRL_V,
     PASTE_TRIGGER_ALT_V,
@@ -193,13 +194,22 @@ export default function Terminal({
             if (!image) return false; // no image → the caller handles it as text/raw
             try {
                 const res = await api().clipboard.writeImage(image.base64);
-                // supported:false ⇒ the target has no OS clipboard (a headless host):
-                // no-op the image gracefully — never send a trigger for an empty
-                // clipboard, never break text paste. Still "handled" so the caller
-                // doesn't fall through and paste stale text.
-                if (res.supported && res.ok && trigger) {
+                if (res.path) {
+                    // Linux/headless host: the PNG was written to a temp FILE there
+                    // (the OS image clipboard is unreliable for Claude Code on Linux).
+                    // Deliver the host FILE PATH to the pty as a bracketed paste so
+                    // the CLI attaches the image from the path (drag-drop semantics) —
+                    // no clipboard trigger, which would find an empty clipboard.
+                    await api().terminal.write(id, buildImagePathPaste(res.path));
+                } else if (res.supported && res.ok && trigger) {
+                    // Windows/macOS host: the image is on the OS clipboard — send the
+                    // trigger so the CLI reads it exactly like a native local paste.
                     await api().terminal.write(id, trigger);
                 }
+                // supported:false ⇒ the target can't accept an image (a legacy
+                // unwired host): no-op gracefully — never send a trigger for an empty
+                // clipboard, never break text paste. Still "handled" (returns true) so
+                // the caller doesn't fall through and paste stale text.
             } catch {
                 /* host write / trigger failed — swallow; the image was still handled */
             }
@@ -243,23 +253,22 @@ export default function Terminal({
         })();
     }, [tryPasteImage]);
 
-    // Alt/Meta+V on a REMOTE host — the owner's image-paste gesture. Claude Code (in
-    // this build) reads the OS clipboard of the machine it runs ON when it sees
-    // Meta+V; on a host that clipboard is empty/stale, so a raw Alt+V pastes stale
-    // text (the reported bug). Intercept it: sync any LOCAL clipboard image to the
-    // HOST clipboard FIRST (awaited — the host write lands before we send anything),
-    // then forward the Alt+V bytes so the CLI's own Meta+V handler reads the
-    // now-populated host clipboard and inlines the image. No image ⇒ we still forward
-    // Alt+V unchanged, so the gesture's native behaviour is preserved. We deliberately
-    // sync with an EMPTY trigger (no \x16) and forward the Alt+V bytes ourselves so
-    // the CLI sees exactly ONE Meta+V, after the image is in place. Remote-only: a
-    // LOCAL window's Alt+V already reads the local clipboard natively — no help needed.
+    // Alt/Meta+V on a REMOTE host — the owner's image-paste gesture. Sync any LOCAL
+    // clipboard image to the host FIRST, then let tryPasteImage deliver it: on a
+    // Linux host it pastes the temp-file PATH (the durable Claude-Code delivery); on
+    // a Windows/macOS host it forwards the Alt+V bytes so the CLI's own Meta+V handler
+    // reads the now-populated host clipboard. Either way the CLI sees exactly one
+    // delivery, after the image is in place. No image ⇒ tryPasteImage returns false
+    // and we forward the raw Alt+V bytes, preserving the gesture's native behaviour.
+    // Remote-only: a LOCAL window's Alt+V already reads the local clipboard natively.
     const pasteAltV = useCallback(() => {
         const id = ptyIdRef.current;
         if (!id) return;
         void (async () => {
-            await tryPasteImage('');
-            await api().terminal.write(id, PASTE_TRIGGER_ALT_V).catch(() => {});
+            const handledImage = await tryPasteImage(PASTE_TRIGGER_ALT_V);
+            if (!handledImage) {
+                await api().terminal.write(id, PASTE_TRIGGER_ALT_V).catch(() => {});
+            }
         })();
     }, [tryPasteImage]);
 

@@ -337,13 +337,16 @@ const api = {
         /** LOCAL clipboard image as a PNG data-URL, or null when there's no image. */
         readImage: () =>
             ipcRenderer.invoke('clipboard:read-image') as Promise<string | null>,
-        /** Write a PNG (base64, no data-URL prefix) to this machine's clipboard.
-         *  `supported:false` ⇒ no OS clipboard on the target (a headless host —
-         *  only reachable via the remote-bridge override, never this local path). */
+        /** Place a PNG (base64, no data-URL prefix) where this machine's CLI reads
+         *  it: Windows/macOS → OS clipboard; Linux → a temp file whose `path` comes
+         *  back so the caller pastes the path (the CLI can't read a Linux clipboard
+         *  image). `supported:false` ⇒ the target can't accept an image (a legacy
+         *  unwired host, only reachable via the remote-bridge override). */
         writeImage: (dataBase64: string) =>
             ipcRenderer.invoke('clipboard:write-image', dataBase64) as Promise<{
                 ok: boolean;
                 supported: boolean;
+                path?: string;
             }>,
     },
     // Built-in editor — the renderer's reply to a main `editor:open-file` request
