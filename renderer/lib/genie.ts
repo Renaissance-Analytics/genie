@@ -978,7 +978,8 @@ export interface OfficialPluginEntry {
     repo: string;
 }
 
-export interface BundledExample {
+/** A bundled first-party plugin Genie ships in the box (Hello World / Presentation / Spreadsheet). */
+export interface BundledPlugin {
     id: string;
     name: string;
     description: string;
@@ -987,7 +988,7 @@ export interface BundledExample {
 
 export interface OfficialPluginsResult {
     curated: OfficialPluginEntry[];
-    bundledExample: BundledExample | null;
+    bundled: BundledPlugin[];
 }
 
 export type PluginActionResult<T = { id: string; name: string; version: string }> =
@@ -1051,7 +1052,7 @@ export interface GenieApi {
             pluginId: string,
         ) => Promise<PluginActionResult>;
         official: () => Promise<OfficialPluginsResult>;
-        installBundledExample: () => Promise<PluginActionResult>;
+        installBundled: (id: string) => Promise<PluginActionResult>;
     };
     /**
      * Mobile remote-control server (Settings → Mobile). Desktop-only namespace —

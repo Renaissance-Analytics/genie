@@ -61,16 +61,6 @@ function installDirFor(id: string): string {
     return path.join(pluginsRoot(), safe);
 }
 
-/** Grant EVERY declared capability by default (the user toggles each off later). */
-export function deriveGrantsFromManifest(manifest: PluginManifest): PluginGrants {
-    const grants = emptyPluginGrants();
-    const caps = manifest.capabilities;
-    if (caps?.fs && caps.fs.scope !== 'none') grants.fs[caps.fs.scope] = true;
-    for (const host of caps?.network?.hosts ?? []) grants.network[host] = true;
-    for (const api of caps?.genieApi ?? []) grants.genieApi[api] = true;
-    return grants;
-}
-
 function readManifestFrom(dir: string): PluginManifest {
     const file = path.join(dir, PLUGIN_MANIFEST_FILENAME);
     if (!fs.existsSync(file)) {
@@ -134,9 +124,10 @@ function summaryOf(manifest: PluginManifest): InstalledPluginSummary {
 
 /**
  * Record a validated, materialised plugin in the DB. Installed DISABLED
- * (fail-closed) — the user enables it explicitly (Phase 1 adds the install-time
- * consent modal). Grants default to every declared capability so the user has a
- * per-permission surface to toggle in Settings → Plugins.
+ * (fail-closed) — the user enables it explicitly, and the install-time CONSENT
+ * modal (§5.3, `consent.ts`) is where declared capabilities are GRANTED. A NEW
+ * install therefore starts with NO grants (declared ≠ granted); a re-install /
+ * update preserves the grants the user already made.
  */
 function record(
     manifest: PluginManifest,
@@ -163,7 +154,10 @@ function record(
         // starts DISABLED.
         enabled: prior?.enabled ?? false,
         manifest_json: JSON.stringify(manifest),
-        grants: prior?.grants ?? deriveGrantsFromManifest(manifest),
+        // Declared ≠ granted: a new install grants NOTHING (fail-closed); consent
+        // at enable-time (consent.ts) records the user-chosen subset. A re-install
+        // keeps the grants already made.
+        grants: prior?.grants ?? emptyPluginGrants(),
         integrity: manifest.integrity ?? null,
         publisher_key_id: manifest.publisher?.keyId ?? null,
     });

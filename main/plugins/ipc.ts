@@ -26,7 +26,8 @@ import {
     marketplacePlugins,
 } from './install';
 import { disposePlugin } from './registry';
-import { OFFICIAL_PLUGINS, materialiseBundledExample } from './official';
+import { OFFICIAL_PLUGINS, listBundledPlugins, materialiseBundled } from './official';
+import { consentAndEnablePlugin } from './consent';
 
 /** One toggleable granular permission for the Settings UI (§12.1). */
 export interface PluginPermissionView {
@@ -183,12 +184,19 @@ export function registerPluginsIpc(): void {
         }
     });
 
-    ipcMain.handle('plugins:enable', (_e, id: string, enabled: boolean) => {
+    ipcMain.handle('plugins:enable', async (_e, id: string, enabled: boolean) => {
         try {
             const row = getPlugin(String(id));
             if (!row) return fail('unknown plugin');
-            setPluginEnabled(row.id, enabled === true);
-            if (!enabled) disposePlugin(row.id); // disable = instant fail-closed revoke
+            if (enabled === true) {
+                // Enabling routes through the install-time CONSENT gate (§5.3): it
+                // presents the plugin's DECLARED capabilities, records only the
+                // GRANTED subset, and enables. A dismissed modal enables nothing.
+                const r = await consentAndEnablePlugin(row.id);
+                return r.ok ? ok(true) : fail(r.error ?? 'Enabling was cancelled.');
+            }
+            setPluginEnabled(row.id, false);
+            disposePlugin(row.id); // disable = instant fail-closed revoke
             return ok(true);
         } catch (e) {
             return fail((e as Error).message);
@@ -268,21 +276,22 @@ export function registerPluginsIpc(): void {
 
     // --- official (curated) tab ---------------------------------------------
     ipcMain.handle('plugins:official', () => {
-        // Curated + signed production list is Phase 3; Phase 0 surfaces the
-        // (empty) curated set plus a bundled dev example to prove the seam.
-        let example: ReturnType<typeof materialiseBundledExample> | null = null;
+        // The curated + signed remote list is Phase 3 (empty until then); what
+        // Genie ships in the box are the BUNDLED plugins (Hello World +
+        // Presentation + Spreadsheet), materialised on demand.
+        let bundled: ReturnType<typeof listBundledPlugins> = [];
         try {
-            example = materialiseBundledExample();
+            bundled = listBundledPlugins();
         } catch {
-            example = null;
+            bundled = [];
         }
-        return { curated: OFFICIAL_PLUGINS, bundledExample: example };
+        return { curated: OFFICIAL_PLUGINS, bundled };
     });
 
-    ipcMain.handle('plugins:install-bundled-example', async () => {
+    ipcMain.handle('plugins:install-bundled', async (_e, id: string) => {
         try {
-            const example = materialiseBundledExample();
-            const s = await installPluginFromFolder(example.path);
+            const src = materialiseBundled(String(id));
+            const s = await installPluginFromFolder(src.path);
             return ok(s);
         } catch (e) {
             return fail((e as Error).message);

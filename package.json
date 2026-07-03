@@ -31,10 +31,12 @@
     "postcss": "$postcss"
   },
   "dependencies": {
+    "@particle-academy/dark-slide": "^0.5.2",
     "@particle-academy/fancy-code": "^0.7.0",
     "@particle-academy/fancy-features": "^0.1.0",
     "@particle-academy/fancy-term": "^0.3.0",
     "@particle-academy/fancy-term-host": "^0.2.3",
+    "@particle-academy/holy-sheet": "^1.0.0",
     "@types/ws": "^8.18.1",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-serialize": "^0.14.0",

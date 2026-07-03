@@ -2444,27 +2444,29 @@ function PluginsSection() {
                                 </Action>
                             </div>
                         ))}
-                        {official?.bundledExample && (
-                            <div className="plugin-row">
+                        {(official?.bundled ?? []).length > 0 && (
+                            <Text size="xs" className="text-zinc-500">
+                                Bundled first-party plugins (shipped with Genie).
+                            </Text>
+                        )}
+                        {(official?.bundled ?? []).map((b) => (
+                            <div className="plugin-row" key={b.id}>
                                 <div className="set-row-main">
-                                    <span className="set-row-label">
-                                        {official.bundledExample.name}{' '}
-                                        <span className="text-zinc-500">(dev example)</span>
-                                    </span>
-                                    <span className="set-row-desc">{official.bundledExample.description}</span>
+                                    <span className="set-row-label">{b.name}</span>
+                                    <span className="set-row-desc">{b.description}</span>
                                 </div>
                                 <Action
                                     variant="ghost"
                                     icon="download"
                                     disabled={busy}
                                     onClick={() =>
-                                        run(() => api().plugins.installBundledExample(), 'Hello World installed — enable it above.')
+                                        run(() => api().plugins.installBundled(b.id), `${b.name} installed — enable it above.`)
                                     }
                                 >
-                                    Install example
+                                    Install
                                 </Action>
                             </div>
-                        )}
+                        ))}
                     </div>
                 ) : (
                     <div className="plugin-list">

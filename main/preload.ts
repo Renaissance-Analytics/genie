@@ -113,7 +113,7 @@ const api = {
         installMarketplacePlugin: (marketplaceId: string, pluginId: string) =>
             ipcRenderer.invoke('plugins:install-marketplace-plugin', marketplaceId, pluginId),
         official: () => ipcRenderer.invoke('plugins:official'),
-        installBundledExample: () => ipcRenderer.invoke('plugins:install-bundled-example'),
+        installBundled: (id: string) => ipcRenderer.invoke('plugins:install-bundled', id),
     },
 
     // Mobile remote-control server (Settings → Mobile). Desktop-only — the phone

@@ -23,6 +23,7 @@
 
 import crypto from 'crypto';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { app, utilityProcess, type UtilityProcess } from 'electron';
 import type {
@@ -30,16 +31,86 @@ import type {
     PluginToolExecution,
     PluginToolResult,
 } from './registry';
-import type { PluginRow } from '../db';
+import { getWorkspace, type PluginRow } from '../db';
+import { workspaceIdOfTerminal, SYSTEM_WORKSPACE_ID } from '../terminal/workspace-of-terminal';
+import { runPluginFsOp, isPluginFsOp } from './fs-bridge';
 import type { PluginManifest } from './manifest';
 
 /** How long a single tool call may run before the worker is treated as hung. */
 const CALL_TIMEOUT_MS = 30_000;
 
+/**
+ * Resolve a call's AUTHORITATIVE workspace root from its terminal id — computed
+ * host-side (trusted), NEVER supplied by the worker. A real workspace → its
+ * path; the synthetic System workspace → the home directory (mirroring
+ * openFileForUser / the env tools); unresolved → null (fs ops fail closed).
+ */
+function rootForTerminal(terminalId: string): string | null {
+    const wsId = terminalId ? workspaceIdOfTerminal(terminalId) : null;
+    if (!wsId) return null;
+    if (wsId === SYSTEM_WORKSPACE_ID) return os.homedir();
+    return getWorkspace(wsId)?.path ?? null;
+}
+
+/**
+ * Genie's node_modules root — passed to the worker so a bundled first-party
+ * plugin can resolve Genie-provided libs (dark-slide / holy-sheet). Prefers the
+ * resolver (dev/test), falling back to the app path (packaged). Null when
+ * neither resolves (the plugin's require then fails, contained as a tool error).
+ */
+function genieNodeModulesDir(): string | null {
+    try {
+        const entry = require.resolve('@particle-academy/dark-slide');
+        const marker = `${path.sep}node_modules${path.sep}`;
+        const i = entry.lastIndexOf(marker);
+        if (i !== -1) return entry.slice(0, i + marker.length - 1);
+    } catch {
+        /* fall through to the app-path fallback */
+    }
+    try {
+        return path.join(app.getAppPath(), 'node_modules');
+    } catch {
+        return null;
+    }
+}
+
+/** The child env: inherit the host's, plus the plugin module-resolution fallback. */
+function workerEnv(): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+        if (typeof v === 'string') env[k] = v;
+    }
+    const nm = genieNodeModulesDir();
+    if (nm) env.GENIE_PLUGIN_NODE_PATH = nm;
+    return env;
+}
+
 /** The embedded worker bootstrap (CommonJS). Materialised to disk + forked. */
 const WORKER_ENTRY_SOURCE = `'use strict';
 // Genie plugin worker — loads a plugin's tools module and runs handlers with a
 // capability-scoped bridge. Communicates with the host over process.parentPort.
+
+// Module resolution fallback: a bundled first-party plugin (Presentation /
+// Spreadsheet) requires Genie-provided libs (@particle-academy/dark-slide /
+// holy-sheet) that live in GENIE's node_modules, not under the plugin's own dir.
+// The host passes that node_modules root in GENIE_PLUGIN_NODE_PATH; add it to the
+// global module search path so bare requires resolve it. Best-effort — a plugin
+// that bundles its own deps resolves them the normal way regardless.
+(function seedModulePaths() {
+    try {
+        const extra = String(process.env.GENIE_PLUGIN_NODE_PATH || '').trim();
+        if (!extra) return;
+        const Module = require('module');
+        const path = require('path');
+        const parts = extra.split(path.delimiter).filter(Boolean);
+        for (const p of parts) if (!Module.globalPaths.includes(p)) Module.globalPaths.push(p);
+        process.env.NODE_PATH = [process.env.NODE_PATH, ...parts].filter(Boolean).join(path.delimiter);
+        Module._initPaths();
+    } catch (e) {
+        /* resolution fallback is best-effort */
+    }
+})();
+
 const port = process.parentPort;
 const required = new Map();
 const pending = new Map();
@@ -53,16 +124,36 @@ function bridgeCall(op, params) {
     });
 }
 
+/** Coerce a handler-supplied byte value (Uint8Array / ArrayBuffer / number[]) to Uint8Array. */
+function toU8(bytes) {
+    if (bytes instanceof Uint8Array) return bytes;
+    if (bytes instanceof ArrayBuffer) return new Uint8Array(bytes);
+    if (Array.isArray(bytes)) return Uint8Array.from(bytes);
+    return new Uint8Array(0);
+}
+
 function makeBridge(ctx) {
+    // Every bridge request carries the host-issued callId so the host can resolve
+    // it against the AUTHORITATIVE per-call workspace root (the worker never
+    // supplies a root/terminal itself — that would let a plugin target another
+    // workspace).
+    const callId = ctx.callId;
+    const withId = (p) => Object.assign({ callId: callId }, p || {});
     return {
         tool: ctx.toolName,
         terminalId: ctx.terminalId,
         fs: {
-            readFile: (rel) => bridgeCall('fs.readFile', { rel: String(rel) }),
-            writeFile: (rel, data) => bridgeCall('fs.writeFile', { rel: String(rel), data: String(data) }),
+            readFile: (rel) => bridgeCall('fs.readFile', withId({ rel: String(rel) })),
+            writeFile: (rel, data) => bridgeCall('fs.writeFile', withId({ rel: String(rel), data: String(data) })),
+            readBytes: async (rel) => {
+                const res = await bridgeCall('fs.readBytes', withId({ rel: String(rel) }));
+                return Buffer.from(String(res && res.base64 != null ? res.base64 : ''), 'base64');
+            },
+            writeBytes: (rel, bytes) =>
+                bridgeCall('fs.writeBytes', withId({ rel: String(rel), base64: Buffer.from(toU8(bytes)).toString('base64') })),
         },
         net: {
-            fetch: (url, init) => bridgeCall('net.fetch', { url: String(url), init: init || null }),
+            fetch: (url, init) => bridgeCall('net.fetch', withId({ url: String(url), init: init || null })),
         },
         log: (msg) => port.postMessage({ t: 'log', msg: String(msg) }),
     };
@@ -129,6 +220,14 @@ interface PluginWorker {
     proc: UtilityProcess;
     ready: Promise<void>;
     calls: Map<number, PendingCall>;
+    /**
+     * callId → the AUTHORITATIVE workspace root for that in-flight call (host-
+     * computed from the trusted terminal id). A bridge fs op is guard-resolved
+     * against the root of the call whose id it carries — never a worker-supplied
+     * path — so a plugin can only ever write inside a workspace it was legitimately
+     * invoked in.
+     */
+    callRoots: Map<number, string | null>;
 }
 
 /** Resolve (once) the materialised worker-entry path, writing it if stale. */
@@ -159,8 +258,10 @@ export function createWorkerExecutor(): PluginToolExecutor {
         const proc = utilityProcess.fork(workerEntryPath(), [], {
             serviceName: `genie-plugin-${plugin.namespace}`,
             stdio: ['ignore', 'pipe', 'pipe'],
+            env: workerEnv(),
         });
         const calls = new Map<number, PendingCall>();
+        const callRoots = new Map<number, string | null>();
         let markReady: () => void = () => {};
         const ready = new Promise<void>((res) => {
             markReady = res;
@@ -173,13 +274,14 @@ export function createWorkerExecutor(): PluginToolExecutor {
                 markReady();
             } else if (m.t === 'call-result' && typeof m.callId === 'number') {
                 const pc = calls.get(m.callId);
-                if (!pc) return;
                 calls.delete(m.callId);
+                callRoots.delete(m.callId); // the call is done — drop its scope
+                if (!pc) return;
                 clearTimeout(pc.timer);
                 if (m.ok && m.result) pc.resolve(m.result);
                 else pc.reject(new Error(m.error ?? 'plugin tool failed'));
             } else if (m.t === 'bridge' && typeof m.reqId === 'number') {
-                void handleBridge(plugin, proc, m);
+                void handleBridge(plugin, proc, callRoots, m);
             }
             // 'log' messages are intentionally dropped in Phase 0.
         });
@@ -190,11 +292,12 @@ export function createWorkerExecutor(): PluginToolExecutor {
                 pc.reject(new Error('plugin worker exited'));
             }
             calls.clear();
+            callRoots.clear();
             if (workers.get(plugin.id)?.proc === proc) workers.delete(plugin.id);
         };
         proc.on('exit', onGone);
 
-        return { proc, ready, calls };
+        return { proc, ready, calls, callRoots };
     }
 
     function workerFor(plugin: PluginRow): PluginWorker {
@@ -224,9 +327,14 @@ export function createWorkerExecutor(): PluginToolExecutor {
             const w = workerFor(plugin);
             await w.ready;
             const callId = ++callSeq;
+            // Bind this call's AUTHORITATIVE workspace root NOW (host-side, from the
+            // trusted terminal id) so bridge fs ops resolve against it — not against
+            // anything the worker reports.
+            w.callRoots.set(callId, rootForTerminal(terminalId));
             return await new Promise<PluginToolResult>((resolve, reject) => {
                 const timer = setTimeout(() => {
                     w.calls.delete(callId);
+                    w.callRoots.delete(callId);
                     reject(new Error(`plugin tool "${toolName}" timed out after ${CALL_TIMEOUT_MS}ms`));
                 }, CALL_TIMEOUT_MS);
                 w.calls.set(callId, { resolve, reject, timer });
@@ -248,45 +356,43 @@ export function createWorkerExecutor(): PluginToolExecutor {
 
 /**
  * Host-side capability bridge. Every request is enforced against the plugin's
- * GRANTED permissions and fails CLOSED: an ungranted capability is refused, and
- * the worker gets an error result it can surface to the agent.
+ * GRANTED permissions and fails CLOSED: an ungranted or undeclared capability is
+ * refused, and the worker gets an error result it can surface to the agent.
  *
- * Phase 0 scope: the grant GATE is live (a plugin can only reach a capability it
- * was granted), but the actual fs/net EGRESS is intentionally not performed yet
- * — the path-guarded fs bridge lands with the generation tools (Phase 1, which
- * threads the caller's per-terminal workspace root through `guardedResolve`), and
- * network egress lands with egress enforcement (Phase 3). The hello-world plugin
- * declares no capabilities, so it exercises the seam without needing either.
+ * Phase 1 lands the path-guarded, extension-limited, workspace-scoped FS bridge
+ * (deliverable #2): an fs op is delegated to {@link runPluginFsOp}, which checks
+ * the manifest declaration + the granular grant + the AUTHORITATIVE per-call
+ * workspace root (looked up from `callRoots` by the callId the worker echoed —
+ * the worker never supplies a root), then guard-resolves the write under that
+ * root against the plugin's extension allow-list (`guardedResolve` in
+ * `files/ipc.ts`). NETWORK egress remains gated-but-not-performed until Phase 3.
  */
 async function handleBridge(
     plugin: PluginRow,
     proc: UtilityProcess,
+    callRoots: Map<number, string | null>,
     m: HostMessage,
 ): Promise<void> {
     const reply = (ok: boolean, value?: unknown, error?: string) =>
         proc.postMessage({ t: 'bridge-result', reqId: m.reqId, ok, value, error });
     try {
-        const grants = plugin.grants;
-        const manifest = JSON.parse(plugin.manifest_json) as PluginManifest;
-        if (m.op === 'fs.readFile' || m.op === 'fs.writeFile') {
-            const fsCap = manifest.capabilities?.fs;
-            if (!fsCap || fsCap.scope === 'none' || grants.fs[fsCap.scope] !== true) {
-                return reply(false, undefined, 'fs access is not granted to this plugin');
-            }
-            return reply(
-                false,
-                undefined,
-                'the path-guarded fs bridge is enabled with the generation tools in Phase 1',
-            );
+        const params = (m.params ?? {}) as Record<string, unknown>;
+        const op = m.op ?? '';
+        if (isPluginFsOp(op)) {
+            const manifest = JSON.parse(plugin.manifest_json) as PluginManifest;
+            const callId = typeof params.callId === 'number' ? params.callId : -1;
+            const root = callRoots.get(callId) ?? null;
+            const r = await runPluginFsOp(manifest, plugin.grants, root, op, params);
+            return reply(r.ok, r.value, r.error);
         }
-        if (m.op === 'net.fetch') {
-            const host = safeHost(String(m.params?.url ?? ''));
-            if (!host || grants.network[host] !== true) {
+        if (op === 'net.fetch') {
+            const host = safeHost(String(params.url ?? ''));
+            if (!host || plugin.grants.network[host] !== true) {
                 return reply(false, undefined, `network access to "${host ?? '?'}" is not granted`);
             }
             return reply(false, undefined, 'network egress is enabled in Phase 3');
         }
-        return reply(false, undefined, `unknown bridge op "${m.op}"`);
+        return reply(false, undefined, `unknown bridge op "${op}"`);
     } catch (e) {
         reply(false, undefined, e instanceof Error ? e.message : String(e));
     }
