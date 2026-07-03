@@ -1203,7 +1203,7 @@ export function setAionimaConfig(patch: BackendConfig): BackendConfig {
 // Terminal spec helpers -------------------------------------------------
 
 /** A view spec is a terminal, a fancy-code editor, or a background process runner. */
-export type TerminalSpecType = 'terminal' | 'code' | 'process';
+export type TerminalSpecType = 'terminal' | 'code' | 'process' | 'plugin';
 
 /** Per-type metadata. Code views persist the open file's workspace-relative path. */
 export interface TerminalSpecMeta {
@@ -1226,6 +1226,17 @@ export interface TerminalSpecMeta {
      * user opts into); this tracks live state.
      */
     was_running?: boolean;
+    /** Plugin editor view: the owning plugin id (§6.1). */
+    plugin_id?: string;
+    /** Plugin editor view: the plugin's editor id from its manifest. */
+    editor_id?: string;
+    /** Plugin editor view: the workspace-relative file the editor is bound to. */
+    file?: string;
+    /** Plugin editor view: the declared first-party Fancy component export. */
+    fancy_export?: string;
+    /** Plugin editor view: the declared Fancy package + version (provenance). */
+    fancy_package?: string;
+    fancy_version?: string;
     /**
      * System Workspace tag: the spec belongs to the synthetic System Workspace
      * (which has no `workspaces` row), so it persists with `workspace_id: null`
@@ -1304,7 +1315,13 @@ function rowFromRecord(r: TerminalSpecRecord): TerminalSpecRow {
     try { env = JSON.parse(r.env_json); } catch { env = {}; }
     try { meta = r.meta_json ? JSON.parse(r.meta_json) : {}; } catch { meta = {}; }
     const type: TerminalSpecType =
-        r.type === 'code' ? 'code' : r.type === 'process' ? 'process' : 'terminal';
+        r.type === 'code'
+            ? 'code'
+            : r.type === 'process'
+              ? 'process'
+              : r.type === 'plugin'
+                ? 'plugin'
+                : 'terminal';
     return {
         id: r.id,
         workspace_id: r.workspace_id,
@@ -1380,7 +1397,9 @@ export function createTerminalSpec(input: {
                     ? 'code'
                     : input.type === 'process'
                       ? 'process'
-                      : 'terminal',
+                      : input.type === 'plugin'
+                        ? 'plugin'
+                        : 'terminal',
             meta_json: JSON.stringify(input.meta ?? {}),
             sort_order: nextOrder,
             created_at: now,

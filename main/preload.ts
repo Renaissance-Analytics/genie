@@ -114,6 +114,11 @@ const api = {
             ipcRenderer.invoke('plugins:install-marketplace-plugin', marketplaceId, pluginId),
         official: () => ipcRenderer.invoke('plugins:official'),
         installBundled: (id: string) => ipcRenderer.invoke('plugins:install-bundled', id),
+        // Capability-scoped binary bridge for a granted plugin's editor (§6.2).
+        editorRead: (pluginId: string, root: string, relPath: string) =>
+            ipcRenderer.invoke('plugins:editor-read', pluginId, root, relPath),
+        editorWrite: (pluginId: string, root: string, relPath: string, base64: string) =>
+            ipcRenderer.invoke('plugins:editor-write', pluginId, root, relPath, base64),
     },
 
     // Mobile remote-control server (Settings → Mobile). Desktop-only — the phone
@@ -950,6 +955,13 @@ const api = {
                 root: string;
                 relPath: string;
                 line?: number;
+                pluginEditor?: {
+                    pluginId: string;
+                    editorId: string;
+                    fancyExport: string;
+                    fancyPackage: string;
+                    fancyVersion: string;
+                };
             }) => void,
         ) => {
             const handler = (
@@ -960,6 +972,13 @@ const api = {
                     root: string;
                     relPath: string;
                     line?: number;
+                    pluginEditor?: {
+                        pluginId: string;
+                        editorId: string;
+                        fancyExport: string;
+                        fancyPackage: string;
+                        fancyVersion: string;
+                    };
                 },
             ) => cb(payload);
             ipcRenderer.on('editor:open-file', handler);

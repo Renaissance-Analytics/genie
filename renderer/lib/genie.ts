@@ -620,7 +620,7 @@ export interface Changelog {
 }
 
 /** A view spec is a terminal, a fancy-code editor, or a background process runner. */
-export type ViewType = 'terminal' | 'code' | 'process';
+export type ViewType = 'terminal' | 'code' | 'process' | 'plugin';
 
 /** Lifecycle status of a background Process service runner. */
 export type ProcessStatus =
@@ -680,7 +680,34 @@ export interface ViewMeta {
     /** Process view: persisted "was running" intent — restores the process on
      *  next launch if Genie went down while it was running (service-like). */
     was_running?: boolean;
+    /** System Workspace tag (unattached spec grouped under the System Workspace). */
+    system?: boolean;
+    /** Plugin editor view: the owning plugin id (§6.1). */
+    plugin_id?: string;
+    /** Plugin editor view: the plugin's editor id from its manifest. */
+    editor_id?: string;
+    /** Plugin editor view: the workspace-relative file the editor is bound to. */
+    file?: string;
+    /** Plugin editor view: the declared first-party Fancy component export. */
+    fancy_export?: string;
+    /** Plugin editor view: the declared Fancy package + version (provenance). */
+    fancy_package?: string;
+    fancy_version?: string;
     [key: string]: unknown;
+}
+
+/** Result of a plugin-editor binary read (base64 payload) (§6.2). */
+export interface PluginEditorReadResult {
+    ok: boolean;
+    value?: { base64: string; bytes: number; relPath: string };
+    error?: string;
+}
+
+/** Result of a plugin-editor binary write (§6.2). */
+export interface PluginEditorWriteResult {
+    ok: boolean;
+    value?: { relPath: string; bytes: number };
+    error?: string;
 }
 
 export interface TerminalSpec {
@@ -1053,6 +1080,18 @@ export interface GenieApi {
         ) => Promise<PluginActionResult>;
         official: () => Promise<OfficialPluginsResult>;
         installBundled: (id: string) => Promise<PluginActionResult>;
+        /** Capability-scoped binary read/write for a granted plugin editor (§6.2). */
+        editorRead: (
+            pluginId: string,
+            root: string,
+            relPath: string,
+        ) => Promise<PluginEditorReadResult>;
+        editorWrite: (
+            pluginId: string,
+            root: string,
+            relPath: string,
+            base64: string,
+        ) => Promise<PluginEditorWriteResult>;
     };
     /**
      * Mobile remote-control server (Settings → Mobile). Desktop-only namespace —
@@ -1764,6 +1803,13 @@ export interface GenieApi {
                 root: string;
                 relPath: string;
                 line?: number;
+                pluginEditor?: {
+                    pluginId: string;
+                    editorId: string;
+                    fancyExport: string;
+                    fancyPackage: string;
+                    fancyVersion: string;
+                };
             }) => void,
         ) => () => void;
         /** A background Process changed status. */

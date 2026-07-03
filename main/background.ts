@@ -158,6 +158,8 @@ import { markDesktopRuntime } from './runtime-mode';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
 import { registerPluginsIpc } from './plugins/ipc';
+import { registerPluginEditorBridge } from './plugins/editor-bridge';
+import { resolvePluginEditor } from './plugins/editor-routing';
 import {
     registerCapabilityIpc,
     runBootCapabilityCheck,
@@ -953,6 +955,7 @@ app.whenReady().then(async () => {
     registerGithubIpc();
     // Plugin System (Settings → Plugins): install / enable / grant / marketplace.
     registerPluginsIpc();
+    registerPluginEditorBridge();
     // GitHub capability gating: detect which features the App's granted
     // permissions allow + expose the gate to the renderer.
     registerCapabilityIpc();
@@ -1022,6 +1025,8 @@ app.whenReady().then(async () => {
         workspaceIdOfTerminal,
         getWorkspaceRoot: (wsId) => getWorkspace(wsId)?.path ?? null,
         homeDir: () => os.homedir(),
+        // Route a claimed extension to its plugin editor (§6.1); null = code editor.
+        resolvePluginEditor: (relPath) => resolvePluginEditor(relPath),
         sendOpenFile: (payload) => {
             // Surface the master window so the file is actually visible, then push
             // the request (after its content has loaded, on a cold open).

@@ -8,6 +8,7 @@ import {
 } from 'react';
 import TerminalPanel from './TerminalPanel';
 import CodePanel from '../Code/CodePanel';
+import PluginEditorHost from '../Plugins/PluginEditorHost';
 import ErrorBoundary from '../ErrorBoundary';
 import { IconCode, IconPlus } from './icons';
 import {
@@ -599,7 +600,8 @@ interface PanelForProps {
 
 /**
  * Dispatch a spec to the right panel component by `spec.type`. A 'code'
- * spec renders the fancy-code editor view; everything else is a terminal.
+ * spec renders the fancy-code editor; a 'plugin' spec renders a first-party
+ * Fancy editor via PluginEditorHost (§6.1); everything else is a terminal.
  */
 function PanelFor({
     spec,
@@ -623,6 +625,22 @@ function PanelFor({
     if (spec.type === 'code') {
         return (
             <CodePanel
+                spec={spec}
+                workspace={workspace}
+                focused={focused}
+                attention={attention}
+                maximized={maximized}
+                style={style}
+                onClose={onClose}
+                onMaximize={onMaximize}
+                onMinimize={onMinimize}
+            />
+        );
+    }
+
+    if (spec.type === 'plugin') {
+        return (
+            <PluginEditorHost
                 spec={spec}
                 workspace={workspace}
                 focused={focused}
