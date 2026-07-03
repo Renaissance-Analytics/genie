@@ -71,6 +71,10 @@ export interface WorkspaceRow {
      *  all-on + upstream-issues+prs defaults). Resolve via the dedicated
      *  `workspaces.getIssuewatchGranularity` IPC rather than parsing here. */
     issuewatch_granularity?: string | null;
+    /** Per-workspace local-site tunnel settings (serve-local-sites), JSON-encoded
+     *  ({ [siteId]: { enabled, genName, scheme, port } }) — the allowlist. Resolve
+     *  via the `sites.*` IPC rather than parsing here. */
+    tunnel_sites?: string | null;
 }
 
 export interface DetectResult {
@@ -167,6 +171,37 @@ export interface IssuewatchGranularity {
  *  'fix' (fix the root cause, report before shipping), or 'fix-and-ship'
  *  (remediate + ship right away). Mirrors `IssuewatchPolicy` in main/db.ts. */
 export type IssuewatchPolicy = 'surface' | 'fix' | 'fix-and-ship';
+
+/** The scheme a discovered local site is served under on loopback. */
+export type SiteScheme = 'http' | 'https';
+
+/** A discovered local dev site merged with its tunnel settings (mirrors
+ *  `SiteView` in main/mobile/hosts.ts) — one `sites.list` row. */
+export interface SiteView {
+    /** Loopback-mapped hostname from the hosts file (e.g. `tynn.test`). */
+    hostname: string;
+    /** Measured (or overridden/convention-default) scheme. */
+    scheme: SiteScheme;
+    /** Measured (or overridden/convention-default) port. */
+    port: number;
+    /** `'site'` (a real dev vhost) or `'infra'` (docker/minikube/WSL helper). */
+    kind: 'site' | 'infra';
+    /** Whether this site is tunnelled (the allowlist toggle; default OFF). */
+    enabled: boolean;
+    /** The assigned `*.gen` name (stored override, else derived from hostname). */
+    genName: string;
+    /** Opaque, stable allowlist key — pass it to `sites.set`. */
+    siteId: string;
+}
+
+/** A per-site tunnel-config patch (mirrors `TunnelSiteConfig` in
+ *  main/mobile/hosts.ts). Every field optional — send only what changed. */
+export interface TunnelSiteConfig {
+    enabled?: boolean;
+    genName?: string;
+    scheme?: SiteScheme;
+    port?: number;
+}
 
 /** Per-bucket IssueWatch remediation policy (mirrors main/db.ts). The three count
  *  buckets — security (dependabot + code-scanning + secret-scanning), issue, pr —
@@ -348,6 +383,10 @@ export interface Settings {
     /** Fixed port for the mobile server (bound on the Tailscale IP). String-
      *  encoded; default '51718'. Changing it requires restarting the server. */
     mobile_port?: string;
+    /** Serve-local-sites master switch (serve-local-sites). Opt-in: 'off'
+     *  (default) | 'on'. Distinct from mobile_enabled — exposing your dev sites
+     *  is a separate, deliberate decision. Per-repo `.gen` enables sit on top. */
+    local_sites_enabled?: 'on' | 'off';
     /** Work Mode: 'host' (default) or 'remote' (connect to a host Genie). */
     work_mode?: 'host' | 'remote';
     /** Keep the Genie endpoint synced into each workspace's Claude `.mcp.json`.
@@ -983,6 +1022,27 @@ export interface GenieApi {
         counts: () => Promise<Record<string, WatchTypeCounts>>;
         /** Why this workspace's feed is what it is (connected + worst read error). */
         status: (workspaceId: string) => Promise<WorkspaceWatchStatus>;
+    };
+    /**
+     * Serve-local-sites (Phase B). HOST-SOURCED content: discovery reads the
+     * HOST's hosts file + probes the HOST's loopback, and the per-site enable set
+     * is the allowlist the HOST serves from — so in a remote window these route
+     * through the bridge to the host (remote-bridge.ts), like the IssueWatch rail.
+     *   - `list(workspaceId, {refresh})` — discovered sites merged with the
+     *     workspace's stored tunnel settings; `refresh` re-probes scheme/port.
+     *   - `set(workspaceId, siteId, patch)` — persist one site's config (enable /
+     *     `.gen` name / scheme+port), keyed by the opaque siteId.
+     */
+    sites: {
+        list: (
+            workspaceId: string,
+            opts?: { refresh?: boolean },
+        ) => Promise<SiteView[]>;
+        set: (
+            workspaceId: string,
+            siteId: string,
+            patch: TunnelSiteConfig,
+        ) => Promise<{ ok: boolean }>;
     };
     mcp: {
         status: () => Promise<McpServerState>;

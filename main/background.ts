@@ -26,7 +26,10 @@ import {
     workspaceProcessApproval,
     workspaceTerminalApproval,
     removeWorkspace,
+    getWorkspaceTunnelSites,
+    setWorkspaceTunnelSite,
 } from './db';
+import { discoverSites } from './mobile/hosts';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import { resolveAlertSound, deliverAlertSound } from './notify-sound';
 import { demandWindowAttention, resolveAttentionWindow } from './attention-flash';
@@ -1190,6 +1193,18 @@ app.whenReady().then(async () => {
             updateStatus: () => mobileUpdateStatus(),
             installUpdate: () => mobileInstallUpdate(),
             checkUpdate: () => mobileCheckUpdate(),
+            // Serve-local-sites (Phase B): the host's discovered loopback dev
+            // sites merged with a workspace's per-site tunnel settings (the §5
+            // allowlist). Same discovery the local IPC (`sites:list`) uses — this
+            // exposes it to a remote/programmatic caller over /api/sites.
+            listSites: (workspaceId, opts) => {
+                const settings = workspaceId ? getWorkspaceTunnelSites(workspaceId) : {};
+                return discoverSites(settings, opts);
+            },
+            setSiteConfig: (workspaceId, siteId, patch) => {
+                setWorkspaceTunnelSite(workspaceId, siteId, patch);
+                return { ok: true };
+            },
         },
     }).catch((e) => console.error('[mobile] failed to start', e));
     // Docs viewer IPC (docs:list / docs:read). __dirname is the compiled main

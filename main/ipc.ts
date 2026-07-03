@@ -19,6 +19,8 @@ import {
     getWorkspaceIssuewatchGranularity,
     setWorkspaceIssuewatchGranularity,
     type IssuewatchGranularity,
+    getWorkspaceTunnelSites,
+    setWorkspaceTunnelSite,
     setSettings,
     touchWorkspace,
     updateWorkspace,
@@ -49,6 +51,7 @@ import {
     repairWorkspaceDocs,
 } from './workspace/create-agi';
 import { analyseFolder } from './workspace/analyse';
+import { discoverSites, type TunnelSiteConfig } from './mobile/hosts';
 import { validateSimpleWorkspace } from './workspace/create-simple';
 import { openWorkspace } from './workspace/open';
 import { cloneRepo } from './workspace/clone';
@@ -391,6 +394,26 @@ export function registerIpcHandlers(): void {
             // Refresh the rail pills immediately — the read paths gate on the live
             // granularity, so a re-broadcast reflects the new setting without a poll.
             await broadcastIssueWatchUpdate().catch(() => {});
+            return { ok: true };
+        },
+    );
+
+    // --- serve-local-sites (Phase B): discovery + the per-repo `.gen` allowlist.
+    // `sites:list` discovers THIS host's loopback dev sites (hosts-file parse +
+    // loopback probe) merged with the workspace's stored tunnel settings; the
+    // per-workspace map is the allowlist. `sites:set` persists ONE site's config
+    // keyed by the opaque siteId. Same discovery a remote reaches over /api/sites.
+    ipcMain.handle(
+        'sites:list',
+        (_e, workspaceId?: string, opts?: { refresh?: boolean }) => {
+            const settings = workspaceId ? getWorkspaceTunnelSites(workspaceId) : {};
+            return discoverSites(settings, opts);
+        },
+    );
+    ipcMain.handle(
+        'sites:set',
+        (_e, workspaceId: string, siteId: string, patch: TunnelSiteConfig) => {
+            setWorkspaceTunnelSite(workspaceId, siteId, patch);
             return { ok: true };
         },
     );

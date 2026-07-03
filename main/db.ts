@@ -1,6 +1,12 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import {
+    parseTunnelSites,
+    sanitizeTunnelPatch,
+    type TunnelSites,
+    type TunnelSiteConfig,
+} from './mobile/hosts';
 
 /**
  * Local SQLite store. Two tables:
@@ -427,6 +433,25 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v19: per-workspace LOCAL-SITE TUNNEL settings (serve-local-sites
+            // Phase B). A JSON blob mapping an opaque per-site id → its tunnel
+            // config: { [siteId]: { enabled, genName, scheme, port } }. This IS
+            // the §5 allowlist — nothing is tunnelled until a site's `enabled` is
+            // set true; discovery + probing (the hosts-file scheme/port) supply
+            // the rest. NULL/absent reads as {} (nothing enabled), so existing
+            // workspaces gain the column with the safe default. Stored as TEXT
+            // JSON (one structured setting), resolved by getWorkspaceTunnelSites —
+            // never parsed here. Mirrors the issuewatch_granularity pattern.
+            // Idempotent ADD COLUMN.
+            version: 19,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('tunnel_sites')) {
+                    db.exec(`ALTER TABLE workspaces ADD COLUMN tunnel_sites TEXT`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -530,6 +555,13 @@ export interface Settings {
      *  encoded; default '51718' (obscure, beside the MCP port). Same Integer/
      *  range guard as mcp_port. Changing it requires restarting the server. */
     mobile_port?: string;
+    /** Serve-local-sites master switch (serve-local-sites Phase B). Opt-in:
+     *  'off' (default) discovers/serves nothing; 'on' allows the host to expose
+     *  its loopback dev sites over Work Mode. DISTINCT from mobile_enabled /
+     *  Work-Mode host enable — exposing your dev environment is a separate,
+     *  deliberate decision. Per-repo `.gen` enables (tunnel_sites) are the
+     *  second opt-in on top of this. */
+    local_sites_enabled?: 'on' | 'off';
     /** Work Mode: 'host' (default) — this Genie hosts; phones / other Genies
      *  connect to it. 'remote' — this Genie connects to a host Genie over the
      *  tailnet. The desktop-to-desktop remote client is Phase 2; the setting +
@@ -633,6 +665,8 @@ export function getAllSettings(): Settings {
         mcp_port: out['mcp_port'] ?? '51717',
         mobile_enabled: (out['mobile_enabled'] as 'on' | 'off') ?? 'off',
         mobile_port: out['mobile_port'] ?? '51718',
+        local_sites_enabled:
+            (out['local_sites_enabled'] as 'on' | 'off') ?? 'off',
         work_mode: (out['work_mode'] as 'host' | 'remote') ?? 'host',
         mcp_sync_claude: (out['mcp_sync_claude'] as 'on' | 'off') ?? 'on',
         mcp_sync_cursor: (out['mcp_sync_cursor'] as 'on' | 'off') ?? 'on',
@@ -708,6 +742,11 @@ export interface WorkspaceRow {
      *  about). NULL/absent reads as the all-on + upstream-issues+prs defaults —
      *  resolve it via {@link getWorkspaceIssuewatchGranularity}, never parse here. */
     issuewatch_granularity?: string | null;
+    /** Per-workspace LOCAL-SITE tunnel settings (serve-local-sites Phase B),
+     *  JSON-encoded ({ [siteId]: { enabled, genName, scheme, port } }). This IS
+     *  the §5 allowlist. NULL/absent reads as {} (nothing enabled) — resolve it
+     *  via {@link getWorkspaceTunnelSites}, never parse here. */
+    tunnel_sites?: string | null;
 }
 
 export function listWorkspaces(): WorkspaceRow[] {
@@ -1062,6 +1101,44 @@ export function setWorkspaceIssuewatchGranularity(
     getDb()
         .prepare('UPDATE workspaces SET issuewatch_granularity = ? WHERE id = ?')
         .run(JSON.stringify(granularity), id);
+}
+
+// Local-site tunnel settings (serve-local-sites Phase B) ----------------
+//
+// The §5 per-repo ALLOWLIST, stored per-workspace as a JSON blob keyed by the
+// opaque siteId (mirrors the issuewatch_granularity single-column pattern).
+// Nothing is tunnelled until a site's `enabled` is set true. Re-exported types
+// live in main/mobile/hosts.ts (the feature module); the parse/sanitize helpers
+// are pure so a corrupt blob or hostile patch can't poison the store.
+
+/** This workspace's stored per-site tunnel settings (NULL/absent ⇒ {} = nothing
+ *  enabled). Keyed by the opaque siteId (see main/mobile/hosts.ts). */
+export function getWorkspaceTunnelSites(id: string): TunnelSites {
+    const row = getDb()
+        .prepare<[string], { tunnel_sites: string | null } | undefined>(
+            'SELECT tunnel_sites FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    return parseTunnelSites(row?.tunnel_sites ?? null);
+}
+
+/** Replace this workspace's whole tunnel-settings map (JSON-encoded). */
+export function setWorkspaceTunnelSites(id: string, sites: TunnelSites): void {
+    getDb()
+        .prepare('UPDATE workspaces SET tunnel_sites = ? WHERE id = ?')
+        .run(JSON.stringify(sites), id);
+}
+
+/** Merge ONE site's tunnel config into this workspace's map (the write behind
+ *  the workspace-settings toggles). The patch is sanitized before it lands. */
+export function setWorkspaceTunnelSite(
+    id: string,
+    siteId: string,
+    patch: TunnelSiteConfig,
+): void {
+    const current = getWorkspaceTunnelSites(id);
+    const merged = { ...(current[siteId] ?? {}), ...sanitizeTunnelPatch(patch) };
+    setWorkspaceTunnelSites(id, { ...current, [siteId]: merged });
 }
 
 // Fork → upstream cache -------------------------------------------------

@@ -559,6 +559,10 @@ export default function SettingsPage() {
                     onEnabledChange={(on) => patch({ mobile_enabled: on ? 'on' : 'off' })}
                     port={s.mobile_port ?? '51718'}
                     onPortChange={(v) => patch({ mobile_port: v })}
+                    localSitesEnabled={s.local_sites_enabled === 'on'}
+                    onLocalSitesChange={(on) =>
+                        patch({ local_sites_enabled: on ? 'on' : 'off' })
+                    }
                     persistSettings={save}
                 />
             ) : (
@@ -2672,12 +2676,16 @@ function MobileSection({
     onEnabledChange,
     port,
     onPortChange,
+    localSitesEnabled,
+    onLocalSitesChange,
     persistSettings,
 }: {
     enabled: boolean;
     onEnabledChange: (on: boolean) => void;
     port: string;
     onPortChange: (v: string) => void;
+    localSitesEnabled: boolean;
+    onLocalSitesChange: (on: boolean) => void;
     persistSettings: () => Promise<void>;
 }) {
     const [status, setStatus] = useState<MobileStatus | null>(null);
@@ -2843,6 +2851,21 @@ function MobileSection({
                         placeholder="51718"
                     />
                 </div>
+            </SettingRow>
+
+            <SettingRow
+                label="Serve local dev sites"
+                keywords="local sites serve tunnel gen herd valet loopback dev site work mode"
+                desc="Off by default. Lets this host expose its loopback dev sites (e.g. tynn.test, served by Herd/Valet) to a remote Genie as *.gen. A separate opt-in from mobile remote control — and each repo's site is still individually enabled in that workspace's settings before anything is tunnelled."
+            >
+                <Switch
+                    checked={localSitesEnabled}
+                    disabled={busy}
+                    onCheckedChange={(on: boolean) => {
+                        onLocalSitesChange(on);
+                        void persistSettings();
+                    }}
+                />
             </SettingRow>
 
             {status?.tailnetNotDetected && (

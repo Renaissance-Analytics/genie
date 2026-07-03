@@ -11,6 +11,7 @@ import type {
     WatchRepoView,
     WatchFeedItem,
     WorkspaceWatchStatus,
+    SiteView,
 } from './genie';
 import { isHostSourcedSettingKey } from './settings-nav';
 
@@ -91,6 +92,27 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             (await req('/api/desktop/issue-watch/set', {
                 method: 'POST',
                 json: { workspaceId, owner, repo, enabled },
+            })) as { ok: boolean },
+    };
+
+    // Serve-local-sites (Phase B). Discovery reads the HOST's hosts file + probes
+    // the HOST's loopback, and the per-site enable set is the allowlist the HOST
+    // serves from — so this is HOST-SOURCED: a remote window resolves `.gen`
+    // config against the host over /api/sites (read) + /api/sites/set (write),
+    // exactly like the IssueWatch rail. The bearer token stays in main.
+    const sites: GenieApi['sites'] = {
+        list: async (workspaceId, opts) =>
+            (
+                (await req(
+                    `/api/sites?workspaceId=${encodeURIComponent(workspaceId)}${
+                        opts?.refresh ? '&refresh=1' : ''
+                    }`,
+                )) as { sites: SiteView[] }
+            ).sites,
+        set: async (workspaceId, siteId, patch) =>
+            (await req('/api/sites/set', {
+                method: 'POST',
+                json: { workspaceId, siteId, patch },
             })) as { ok: boolean },
     };
 
@@ -361,6 +383,7 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         terminal,
         clipboard,
         issueWatch,
+        sites,
         settings,
     };
 }

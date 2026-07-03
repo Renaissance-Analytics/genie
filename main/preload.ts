@@ -458,6 +458,14 @@ const api = {
             }>,
     },
 
+    // Serve-local-sites (Phase B): discovery + the per-repo `.gen` allowlist.
+    sites: {
+        list: (workspaceId: string, opts?: { refresh?: boolean }) =>
+            ipcRenderer.invoke('sites:list', workspaceId, opts),
+        set: (workspaceId: string, siteId: string, patch: unknown) =>
+            ipcRenderer.invoke('sites:set', workspaceId, siteId, patch),
+    },
+
     agi: {
         detect: (path: string) => ipcRenderer.invoke('agi:detect', path),
         create: (opts: Record<string, unknown>) =>
