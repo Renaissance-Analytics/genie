@@ -1426,6 +1426,11 @@ export interface GenieApi {
         ) => Promise<{ ok: boolean; relPath: string }>;
         /** OS path of a File from an external drag (webUtils.getPathForFile). */
         pathForFile: (file: File) => string;
+        /** Read a LOCAL absolute file's bytes (base64) — the client half of a remote
+         *  external-file drop (bytes shipped to the host to write into a folder). */
+        readExternalBytes: (
+            absPath: string,
+        ) => Promise<{ name: string; base64: string }>;
         delete: (
             workspacePath: string,
             relPath: string,

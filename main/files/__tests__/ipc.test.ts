@@ -6,7 +6,9 @@ import {
     createFolder,
     deletePath,
     duplicatePath,
+    importExternalBytes,
     listTree,
+    readExternalBytes,
     readFile,
     renamePath,
     writeFile,
@@ -359,5 +361,71 @@ describe('files:duplicate', () => {
     it('refuses to duplicate the workspace root', async () => {
         const dir = makeTmpDir('dup-root');
         await expect(duplicatePath(dir, '.')).rejects.toThrow(/Invalid path/);
+    });
+});
+
+describe('files:import-external (bytes)', () => {
+    it('writes bytes into a subfolder and returns the new rel path', async () => {
+        const dir = makeTmpDir('imp-bytes');
+        fs.mkdirSync(path.join(dir, 'assets'));
+        const r = await importExternalBytes(
+            dir,
+            'logo.png',
+            Buffer.from('PNGDATA'),
+            'assets',
+        );
+        expect(r.ok).toBe(true);
+        expect(r.relPath).toBe('assets/logo.png');
+        expect(fs.readFileSync(path.join(dir, 'assets', 'logo.png'), 'utf8')).toBe('PNGDATA');
+    });
+
+    it('no-clobbers a colliding name to a -copy sibling', async () => {
+        const dir = makeTmpDir('imp-collide');
+        fs.writeFileSync(path.join(dir, 'a.txt'), 'existing');
+        const r = await importExternalBytes(dir, 'a.txt', Buffer.from('new'), '');
+        expect(r.relPath).toBe('a-copy.txt');
+        // The pre-existing file is never overwritten.
+        expect(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8')).toBe('existing');
+        expect(fs.readFileSync(path.join(dir, 'a-copy.txt'), 'utf8')).toBe('new');
+    });
+
+    it('reduces a traversal filename to its basename (never escapes)', async () => {
+        const dir = makeTmpDir('imp-leaf');
+        const r = await importExternalBytes(dir, '../escape.txt', Buffer.from('x'), '');
+        expect(r.relPath).toBe('escape.txt');
+        expect(fs.existsSync(path.join(dir, 'escape.txt'))).toBe(true);
+        // Nothing written to the parent.
+        expect(fs.existsSync(path.join(path.dirname(dir), 'escape.txt'))).toBe(false);
+    });
+
+    it('rejects a destination folder that escapes the workspace', async () => {
+        const dir = makeTmpDir('imp-dest-escape');
+        await expect(
+            importExternalBytes(dir, 'x.txt', Buffer.from('x'), '../..'),
+        ).rejects.toThrow(/escapes workspace/);
+    });
+});
+
+describe('files:read-external-bytes', () => {
+    it('reads a local absolute file as base64 with its basename', async () => {
+        const dir = makeTmpDir('read-ext');
+        const src = path.join(dir, 'photo.jpg');
+        fs.writeFileSync(src, 'JPEGBYTES');
+        const r = await readExternalBytes(src);
+        expect(r.name).toBe('photo.jpg');
+        expect(Buffer.from(r.base64, 'base64').toString('utf8')).toBe('JPEGBYTES');
+    });
+
+    it('refuses a folder (single-file only over a remote link)', async () => {
+        const dir = makeTmpDir('read-ext-dir');
+        fs.mkdirSync(path.join(dir, 'pkg'));
+        await expect(readExternalBytes(path.join(dir, 'pkg'))).rejects.toThrow(
+            /Folder drops are not supported/,
+        );
+    });
+
+    it('throws on a missing source path', async () => {
+        const dir = makeTmpDir('read-ext-missing');
+        await expect(readExternalBytes(path.join(dir, 'nope.txt'))).rejects.toThrow();
     });
 });

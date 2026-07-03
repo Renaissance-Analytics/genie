@@ -18,6 +18,7 @@ import {
     duplicatePath,
     deletePath,
     gitStatus,
+    importExternalBytes,
 } from '../files/ipc';
 import {
     listWorkspaces as dbListWorkspaces,
@@ -786,6 +787,66 @@ export async function handleApi(
         // the phone treats it as "already handled" rather than an error.
         sendJson(res, 200, { ok: true, answered });
         return true;
+    }
+
+    // --- import an external file into a workspace folder: POST /api/files/import-external
+    // A remote/host window's OS-file drop: the driving client reads its OWN local
+    // file bytes (the host can't see the client's disk) and ships them here to be
+    // written into a workspace folder. Authed + kill-switch-gated + body-capped
+    // (base64 inflates the JSON), and SCOPE-FILTERED — the dest workspace must be
+    // one THIS host SERVES (listWorkspaces), else 404. The write is path-guarded to
+    // the workspace root in files/ipc.ts, with the same `-copy` no-clobber behaviour
+    // as a local drop. The `system` flag is never set here, so it stays confined.
+    // MUST precede the generic `/api/files/` block below (that one reads an uncapped
+    // JSON body and has no `dataBase64` field).
+    if (pathname === '/api/files/import-external' && method === 'POST') {
+        if (guardLocked()) return true;
+        let ib: {
+            workspacePath?: string;
+            destFolder?: string;
+            filename?: string;
+            dataBase64?: string;
+        };
+        try {
+            ib = await readJsonBodyCapped(req, Math.ceil(MAX_UPLOAD_BYTES * 1.4) + 1024);
+        } catch (e) {
+            const tooLarge = e instanceof Error && e.message === 'payload too large';
+            sendJson(res, tooLarge ? 413 : 400, {
+                error: tooLarge ? 'file too large' : 'invalid body',
+            });
+            return true;
+        }
+        // Scope filter: the dest must be one of THIS host's served workspaces.
+        const wsRow = deps.listWorkspaces().find((w) => w.path === ib.workspacePath);
+        if (!wsRow) {
+            sendJson(res, 404, { error: 'unknown workspace' });
+            return true;
+        }
+        let buf: Buffer;
+        try {
+            buf = Buffer.from(String(ib.dataBase64 ?? ''), 'base64');
+        } catch {
+            sendJson(res, 400, { error: 'invalid file data' });
+            return true;
+        }
+        if (buf.length > MAX_UPLOAD_BYTES) {
+            sendJson(res, 413, { error: 'file too large' });
+            return true;
+        }
+        try {
+            const r = await importExternalBytes(
+                wsRow.path,
+                String(ib.filename ?? ''),
+                buf,
+                String(ib.destFolder ?? ''),
+            );
+            audit('files.import-external', `${ib.filename} → ${wsRow.project_name}`, actor);
+            sendJson(res, 200, r);
+            return true;
+        } catch (e) {
+            sendJson(res, 400, { error: e instanceof Error ? e.message : 'import failed' });
+            return true;
+        }
     }
 
     // --- files (editor) — for the remote DESKTOP driving this host ----------

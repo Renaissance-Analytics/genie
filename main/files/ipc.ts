@@ -481,26 +481,26 @@ export async function duplicatePath(
     throw new Error('Too many copies');
 }
 
+/** Ceiling for an external-file import shipped over a remote link (client reads
+ *  its own local file to POST the bytes to the host). Matches the mobile server's
+ *  MAX_UPLOAD_BYTES so a file the host will accept is exactly one the client will
+ *  read. */
+export const MAX_IMPORT_BYTES = 25 * 1024 * 1024;
+
 /**
- * Copy an EXTERNAL file/folder (an arbitrary OS path, e.g. dragged in from
- * Windows Explorer / Finder) INTO a workspace folder. The SOURCE is an arbitrary
- * disk path (must exist); the DESTINATION is guard-resolved against the workspace
- * root, so a drop from outside can never write outside the workspace. On a name
- * collision a `-copy` sibling is chosen rather than clobbering. Returns the new
- * workspace-relative path. (Internal moves use renamePath — copy is for external
- * sources only.)
+ * Resolve the DESTINATION for an external import — `<destFolder>/<leaf>`,
+ * guard-resolved against the workspace root, with the no-clobber `-copy` fallback.
+ * Shared by the src-path importer ({@link importExternalPath}) and the bytes
+ * importer ({@link importExternalBytes}); the guard here is the single point that
+ * keeps an outside drop from ever writing outside the workspace.
  */
-export async function importExternalPath(
+async function resolveImportDest(
     workspacePath: string,
-    srcAbs: string,
+    leaf: string,
     destFolderRel: string,
     system?: boolean,
-): Promise<{ ok: boolean; relPath: string }> {
-    if (!srcAbs) throw new Error('No source path');
-    const stat = await fsp.stat(srcAbs); // throws if the source is gone
-    const leaf = path.basename(srcAbs);
+): Promise<{ finalAbs: string; finalRel: string }> {
     if (!leaf) throw new Error('Invalid source path');
-
     const dir = (destFolderRel ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
     const baseRel = dir ? `${dir}/${leaf}` : leaf;
     const baseAbs = resolvePath(workspacePath, baseRel, system);
@@ -524,6 +524,34 @@ export async function importExternalPath(
         }
         if (!finalRel) throw new Error('Too many copies — clear some out first.');
     }
+    return { finalAbs, finalRel };
+}
+
+/**
+ * Copy an EXTERNAL file/folder (an arbitrary OS path, e.g. dragged in from
+ * Windows Explorer / Finder) INTO a workspace folder. The SOURCE is an arbitrary
+ * disk path (must exist); the DESTINATION is guard-resolved against the workspace
+ * root, so a drop from outside can never write outside the workspace. On a name
+ * collision a `-copy` sibling is chosen rather than clobbering. Returns the new
+ * workspace-relative path. (Internal moves use renamePath — copy is for external
+ * sources only.) LOCAL drops only — the host reads a client's disk path it can't
+ * see, so a remote window uses {@link importExternalBytes} instead.
+ */
+export async function importExternalPath(
+    workspacePath: string,
+    srcAbs: string,
+    destFolderRel: string,
+    system?: boolean,
+): Promise<{ ok: boolean; relPath: string }> {
+    if (!srcAbs) throw new Error('No source path');
+    const stat = await fsp.stat(srcAbs); // throws if the source is gone
+    const leaf = path.basename(srcAbs);
+    const { finalAbs, finalRel } = await resolveImportDest(
+        workspacePath,
+        leaf,
+        destFolderRel,
+        system,
+    );
 
     await fsp.mkdir(path.dirname(finalAbs), { recursive: true });
     if (stat.isDirectory()) {
@@ -532,6 +560,58 @@ export async function importExternalPath(
         await fsp.copyFile(srcAbs, finalAbs);
     }
     return { ok: true, relPath: finalRel };
+}
+
+/**
+ * Copy an external file into a workspace folder from raw BYTES. Used by a remote
+ * (Work-Mode host) window: the FILE lives on the CLIENT's disk (the host can't
+ * read it), so the client reads its own dropped file and ships the bytes to the
+ * host, which writes them here. Destination is guard-resolved against the
+ * workspace root and no-clobbers to a `-copy` sibling — the same path-guard +
+ * no-clobber behaviour as a LOCAL drop. `filename` is reduced to its basename so a
+ * `../evil` leaf can't escape. Files only: a folder can't be a single buffer, so
+ * remote folder imports fall back to per-file drops on the client.
+ */
+export async function importExternalBytes(
+    workspacePath: string,
+    filename: string,
+    bytes: Buffer,
+    destFolderRel: string,
+    system?: boolean,
+): Promise<{ ok: boolean; relPath: string }> {
+    const leaf = path.basename(filename ?? '');
+    const { finalAbs, finalRel } = await resolveImportDest(
+        workspacePath,
+        leaf,
+        destFolderRel,
+        system,
+    );
+    await fsp.mkdir(path.dirname(finalAbs), { recursive: true });
+    await fsp.writeFile(finalAbs, bytes);
+    return { ok: true, relPath: finalRel };
+}
+
+/**
+ * Read an arbitrary LOCAL absolute file as raw bytes (base64) — the CLIENT half of
+ * a remote external-file drop. A host window has no access to the client's disk, so
+ * the client reads its own just-dropped file here and ships the bytes to the host's
+ * `/api/files/import-external`. This is a LOCAL read of a user-chosen path (a
+ * drag-drop the user just performed on THIS machine), never a workspace-confined op,
+ * so it takes no workspace root. Files only; capped at {@link MAX_IMPORT_BYTES}.
+ */
+export async function readExternalBytes(
+    absPath: string,
+): Promise<{ name: string; base64: string }> {
+    if (!absPath) throw new Error('No source path');
+    const stat = await fsp.stat(absPath); // throws if the source is gone
+    if (stat.isDirectory()) {
+        throw new Error('Folder drops are not supported over a remote link');
+    }
+    if (stat.size > MAX_IMPORT_BYTES) {
+        throw new Error('File too large to copy over a remote link');
+    }
+    const buf = await fsp.readFile(absPath);
+    return { name: path.basename(absPath), base64: buf.toString('base64') };
 }
 
 /**
@@ -704,6 +784,11 @@ export function registerFilesIpc(): void {
         'files:import-external',
         (_e, workspacePath: string, srcAbs: string, destFolderRel: string, system?: boolean) =>
             importExternalPath(workspacePath, srcAbs, destFolderRel ?? '', system),
+    );
+    // Read a LOCAL absolute file's bytes (base64) — the client half of a remote
+    // external-file drop (the bytes are POSTed to the host to write into a folder).
+    ipcMain.handle('files:read-external-bytes', (_e, absPath: string) =>
+        readExternalBytes(String(absPath ?? '')),
     );
     ipcMain.handle(
         'files:delete',

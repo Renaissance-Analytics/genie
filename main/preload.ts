@@ -680,6 +680,14 @@ const api = {
         /** Resolve the OS path of a File from an external drag. Electron 42 removed
          *  File.path; webUtils.getPathForFile is the supported replacement. */
         pathForFile: (file: File): string => webUtils.getPathForFile(file),
+        /** Read a LOCAL absolute file's bytes (base64) — the client half of a remote
+         *  external-file drop: the bytes are shipped to the host to write into a
+         *  workspace folder (the host can't read the client's disk). */
+        readExternalBytes: (absPath: string) =>
+            ipcRenderer.invoke('files:read-external-bytes', absPath) as Promise<{
+                name: string;
+                base64: string;
+            }>,
         delete: (workspacePath: string, relPath: string, system?: boolean) =>
             ipcRenderer.invoke('files:delete', workspacePath, relPath, system) as Promise<{
                 ok: boolean;

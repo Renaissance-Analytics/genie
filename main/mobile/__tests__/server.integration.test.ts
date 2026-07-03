@@ -497,6 +497,90 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         expect(clipboardImages).toHaveLength(0);
     });
 
+    it('POST /api/files/import-external writes the bytes into the workspace folder', async () => {
+        const port = await start();
+        const token = await pair(port);
+        fs.mkdirSync(path.join(wsRoot, 'assets'));
+        const bytes = Buffer.from('remote-dropped-bytes');
+        const r = await req(port, 'POST', '/api/files/import-external', {
+            token,
+            body: {
+                workspacePath: wsRoot,
+                destFolder: 'assets',
+                filename: 'drop.bin',
+                dataBase64: bytes.toString('base64'),
+            },
+        });
+        expect(r.status).toBe(200);
+        expect(r.json).toEqual({ ok: true, relPath: 'assets/drop.bin' });
+        expect(fs.readFileSync(path.join(wsRoot, 'assets', 'drop.bin'))).toEqual(bytes);
+    });
+
+    it('POST /api/files/import-external: path-guard reduces a traversal filename to its basename', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/files/import-external', {
+            token,
+            body: {
+                workspacePath: wsRoot,
+                destFolder: '',
+                filename: '../escape.bin',
+                dataBase64: Buffer.from('x').toString('base64'),
+            },
+        });
+        // basename `escape.bin` lands inside the workspace root, never the parent.
+        expect(r.status).toBe(200);
+        expect(r.json.relPath).toBe('escape.bin');
+        expect(fs.existsSync(path.join(path.dirname(wsRoot), 'escape.bin'))).toBe(false);
+    });
+
+    it('POST /api/files/import-external: rejects a destFolder that escapes the workspace (400)', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/files/import-external', {
+            token,
+            body: {
+                workspacePath: wsRoot,
+                destFolder: '../..',
+                filename: 'x.bin',
+                dataBase64: Buffer.from('x').toString('base64'),
+            },
+        });
+        expect(r.status).toBe(400);
+        expect(String(r.json.error)).toMatch(/escapes workspace/);
+    });
+
+    it('POST /api/files/import-external: scope-filters an unserved workspace to 404', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/files/import-external', {
+            token,
+            body: {
+                workspacePath: '/some/other/host/path',
+                destFolder: '',
+                filename: 'x.bin',
+                dataBase64: Buffer.from('x').toString('base64'),
+            },
+        });
+        expect(r.status).toBe(404);
+    });
+
+    it('POST /api/files/import-external: 401 without a token, 423 while locked', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const noTok = await req(port, 'POST', '/api/files/import-external', {
+            body: { workspacePath: wsRoot, filename: 'x.bin', dataBase64: 'eA==' },
+        });
+        expect(noTok.status).toBe(401);
+        setLocked(true);
+        const locked = await req(port, 'POST', '/api/files/import-external', {
+            token,
+            body: { workspacePath: wsRoot, filename: 'x.bin', dataBase64: 'eA==' },
+        });
+        expect(locked.status).toBe(423);
+        setLocked(false);
+    });
+
     it('host IssueWatch: scope-filters an unserved workspace to 404 (GET repos)', async () => {
         const port = await start();
         const token = await pair(port);

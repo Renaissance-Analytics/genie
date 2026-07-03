@@ -458,6 +458,19 @@ export default function FileTree({
                 selectedId={selectedId}
                 expandedIds={expandedIds}
                 onExpandedChange={onExpandedChange}
+                // Enable drag-drop: internal drag → MOVE (handleNodeMove), and
+                // accept OS-file drops from Explorer/Finder → COPY into the folder
+                // (handleExternalDrop). react-fancy gates BOTH drag-over
+                // (preventDefault) and node `draggable` on these props — omitting
+                // them leaves the browser showing the no-drop cursor.
+                draggable
+                acceptExternalDrops
+                onNodeMove={(sourceId, targetId, position) =>
+                    void handleNodeMove(sourceId, targetId, position)
+                }
+                onExternalDrop={(e, target, position) =>
+                    void handleExternalDrop(e, target, position)
+                }
                 onSelect={(id) => {
                     if (folderIds.has(id)) return; // folder → expand/collapse only
                     onSelectFile(id);

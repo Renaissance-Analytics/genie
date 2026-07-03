@@ -158,6 +158,29 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 method: 'POST',
                 json: { workspacePath, relPath },
             })) as { ok: boolean; relPath: string },
+        // External OS-file drop in a HOST window. The FILE lives on the CLIENT's
+        // disk (`srcAbs` is a client-local path, resolved by the LOCAL pathForFile,
+        // which stays spread-from-local), but the dest workspace is on the HOST.
+        // So read the bytes LOCALLY here, then POST them to the host to write into
+        // the dest folder there. (`system` is meaningless remotely — the host never
+        // serves the System workspace.) `pathForFile` is intentionally NOT
+        // overridden: it must resolve the CLIENT's local path so this read works.
+        importExternal: async (
+            workspacePath: string,
+            srcAbs: string,
+            destFolderRel: string,
+        ) => {
+            const { name, base64 } = await local.files.readExternalBytes(srcAbs);
+            return (await req('/api/files/import-external', {
+                method: 'POST',
+                json: {
+                    workspacePath,
+                    destFolder: destFolderRel,
+                    filename: name,
+                    dataBase64: base64,
+                },
+            })) as { ok: boolean; relPath: string };
+        },
         delete: async (workspacePath: string, relPath: string) =>
             (await req('/api/files/delete', {
                 method: 'POST',
