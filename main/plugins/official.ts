@@ -43,7 +43,7 @@ const HELLO_MANIFEST = `{
   "mcpTools": [
     {
       "name": "greet",
-      "description": "Return a friendly greeting. Pass an optional \`name\` to personalise it.",
+      "description": "Return a friendly greeting. Pass an optional name to personalise it.",
       "inputSchema": { "type": "object", "properties": { "name": { "type": "string" } }, "additionalProperties": false },
       "run": "tools",
       "process": "worker",
