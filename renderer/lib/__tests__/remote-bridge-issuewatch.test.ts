@@ -17,6 +17,8 @@ function fakeLocal(request: ReturnType<typeof vi.fn>): GenieApi {
             terminalInput: vi.fn(),
             terminalResize: vi.fn(),
             terminalDetach: vi.fn(),
+            controlState: vi.fn().mockResolvedValue({ locked: false }),
+            onControl: vi.fn(),
         },
         // Namespaces the bridge spreads/rebuilds at construction (empty is fine).
         workspaces: {},

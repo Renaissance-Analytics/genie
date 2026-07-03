@@ -20,6 +20,8 @@ function fakeLocal(
             terminalInput: vi.fn(),
             terminalResize: vi.fn(),
             terminalDetach: vi.fn(),
+            controlState: vi.fn().mockResolvedValue({ locked: false }),
+            onControl: vi.fn(),
         },
         settings: {
             ...settings,

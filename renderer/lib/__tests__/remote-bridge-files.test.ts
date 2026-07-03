@@ -22,6 +22,8 @@ function fakeLocal(
             terminalInput: vi.fn(),
             terminalResize: vi.fn(),
             terminalDetach: vi.fn(),
+            controlState: vi.fn().mockResolvedValue({ locked: false }),
+            onControl: vi.fn(),
         },
         // pathForFile stays LOCAL (spread) and readExternalBytes is the client-side
         // local read the override relies on.
