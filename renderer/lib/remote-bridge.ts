@@ -36,6 +36,22 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
     const req = local.remote.request;
     const r = local.remote;
 
+    // Live "view-only" flag: when the host TAKES CONTROL (its kill-switch), this
+    // driver must stop writing to the host pty. Main already drops such keystrokes
+    // authoritatively, but gating here too avoids a pointless round-trip and keeps
+    // the client's behaviour consistent with the banner it shows. Seeded async then
+    // kept live via the host's `control:changed` push (bridge lives for the window).
+    let controlLocked = false;
+    void local.remote
+        .controlState()
+        .then((s) => {
+            controlLocked = s.locked;
+        })
+        .catch(() => {});
+    local.remote.onControl((s) => {
+        controlLocked = s.locked;
+    });
+
     // The host's rail — full WorkspaceRow pass-through.
     const workspaces: GenieApi['workspaces'] = {
         ...local.workspaces,
@@ -260,8 +276,12 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             await r.terminalAttach(opts.id);
             return { id: opts.id, pid: 0, shell: opts.shell ?? '', existing: true, scrollback: '' };
         },
-        write: (id: string, data: string) =>
-            r.terminalInput(id, isMouseReport(data) ? '' : data),
+        write: (id: string, data: string) => {
+            // View-only (host has control): swallow the keystroke locally.
+            if (controlLocked) return Promise.resolve(false);
+            return r.terminalInput(id, isMouseReport(data) ? '' : data);
+        },
+
         resize: (id: string, cols: number, rows: number) => r.terminalResize(id, cols, rows),
         detach: async (id: string) => (await r.terminalDetach(id)).ok,
         kill: async (id: string) =>

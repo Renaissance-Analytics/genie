@@ -428,11 +428,19 @@ function buildState(deps: MobileDataDeps) {
     const serves = (workspaceId: string | null) =>
         !headless || boundToServedWorkspace(workspaceId, served);
     return {
+        // The global kill-switch state -- the SINGLE source of truth for "who
+        // holds control". locked:true => the host has taken control (a remote/
+        // phone is view-only); locked:false => the remote may drive. A connecting/
+        // reconnecting remote seeds + re-reads this here, and live toggles arrive
+        // via the control:changed push (see audit.setLocked), so the two never
+        // diverge.
+        locked: isLocked(),
         workspaces: deps.listWorkspaces().map((w) => ({
             id: w.id,
             name: w.project_name,
             path: w.path,
         })),
+
         terminals: deps
             .listTerminalSpecs()
             .filter((s) => s.type !== 'code' && s.type !== 'process')

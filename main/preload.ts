@@ -208,6 +208,17 @@ const api = {
             ipcRenderer.on('remote:link', handler);
             return () => ipcRenderer.off('remote:link', handler);
         },
+        // Control state (who holds WRITE control of the host): `locked:true` ⇒ the
+        // host took control and this driver is view-only. Read on mount + live via
+        // `remote:control`.
+        controlState: () =>
+            ipcRenderer.invoke('remote:control-state') as Promise<{ locked: boolean }>,
+        onControl: (cb: (s: { locked: boolean }) => void) => {
+            const handler = (_e: unknown, payload: { locked: boolean }) => cb(payload);
+            ipcRenderer.on('remote:control', handler);
+            return () => ipcRenderer.off('remote:control', handler);
+        },
+
         terminalAttach: (id: string) =>
             ipcRenderer.invoke('remote:terminal-attach', id) as Promise<{ ok: boolean }>,
         terminalInput: (id: string, data: string) =>

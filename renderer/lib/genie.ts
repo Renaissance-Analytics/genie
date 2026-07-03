@@ -1032,7 +1032,13 @@ export interface GenieApi {
         /** Manually restart the bridge after the limbo auto-retry gave up ('lost'). */
         reconnect: () => Promise<{ ok: boolean; error?: string }>;
         onLink: (cb: (s: RemoteLinkState) => void) => () => void;
+        /** Control state: `locked:true` ⇒ the host has taken control and this
+         *  driver is view-only. Read on mount; live changes arrive via `onControl`.
+         *  Drives the view-only banner + the remote-bridge input gate. */
+        controlState: () => Promise<{ locked: boolean }>;
+        onControl: (cb: (s: { locked: boolean }) => void) => () => void;
         terminalAttach: (id: string) => Promise<{ ok: boolean }>;
+
         terminalInput: (id: string, data: string) => Promise<boolean>;
         terminalResize: (id: string, cols: number, rows: number) => Promise<boolean>;
         terminalDetach: (id: string) => Promise<{ ok: boolean }>;

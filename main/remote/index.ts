@@ -95,7 +95,26 @@ interface RemoteConnection {
     eventsFailures: number;
     /** Host terminal id → its `/ws/term` socket (viewer-only; never kills host pty). */
     termWs: Map<string, WebSocket>;
+    /**
+     * Terminal ids the RENDERER wants attached (attach INTENT), distinct from
+     * `termWs` (the live sockets, which drop on a host restart/upgrade/network
+     * blip). On a bridge recovery we reconcile `termWs` against THIS set so the
+     * reconnect restores every terminal's live stream — without it the panels stay
+     * frozen with dead input after the host returns. Only a deliberate
+     * `remoteDetachTerminal` clears an id from here.
+     */
+    attachedTerminals: Set<string>;
+    /**
+     * The host has TAKEN CONTROL (its kill-switch is engaged) => this driver is
+     * VIEW-ONLY. The single source of truth for "who holds control", mirrored from
+     * the host's `locked` flag: seeded on connect from `/api/state`, re-read on
+     * every reconnect, and updated live by the host's `control:changed` push. Gates
+     * `remoteTerminalInput` (keystrokes dropped at the source, not silently eaten
+     * host-side) and drives the window's view-only banner via `remote:control`.
+     */
+    controlLocked: boolean;
     // --- link health (version match + upgrade/limbo reconnect) ---
+
     /** The events bridge has reached `open` at least once (a healthy session). */
     everConnected: boolean;
     /** We triggered a host upgrade → a bridge drop is EXPECTED (limbo, not error). */
@@ -527,6 +546,41 @@ function setConnLinkState(conn: RemoteConnection, state: LinkState): void {
     emitToConn(conn, 'remote:link', state);
 }
 
+// --- control state: who holds WRITE control of this host --------------------
+// The host's kill-switch (`locked`) is the single source of truth. `locked:true`
+// ⇒ the host has taken control and this driver is VIEW-ONLY; `locked:false` ⇒ the
+// driver may write. We seed it on connect, re-read it on every reconnect, and take
+// live deltas from the host's `control:changed` push — so the rendered control
+// state can never drift from the host's actual gate across handoff/upgrade/reconnect.
+
+/** The control state for the host a window is bound to (read on mount by the
+ *  view-only banner; live changes arrive via the `remote:control` event). */
+export function remoteControlStateFor(wcId: number): { locked: boolean } {
+    const conn = connForWebContents(wcId);
+    return { locked: conn?.controlLocked ?? false };
+}
+
+/** Store + push a connection's control state to its bound window(s). Pushes only
+ *  on an actual CHANGE, so a reconnect that re-reads the same value is a no-op. */
+function setConnControl(conn: RemoteConnection, locked: boolean): void {
+    if (conn.controlLocked === locked) return;
+    conn.controlLocked = locked;
+    emitToConn(conn, 'remote:control', { locked });
+}
+
+/** Re-read the host's current control (kill-switch) state over the authed bridge
+ *  and reconcile ours to it. Called on every (re)connect so a lock toggled while
+ *  we were disconnected — or reset by a host restart/upgrade — is restored to the
+ *  truth, not left stale. Best-effort: a transient failure keeps the last state. */
+async function refreshControlState(conn: RemoteConnection): Promise<void> {
+    try {
+        const st = (await connRequest(conn, '/api/state')) as { locked?: boolean };
+        if (typeof st?.locked === 'boolean') setConnControl(conn, st.locked);
+    } catch {
+        /* host briefly unreachable — keep the last known control state */
+    }
+}
+
 /** Read the host's `/api/ping`: bridge protocol version + release app version.
  *  Null when unreachable; a host predating protocol versioning reports none → 0
  *  (→ hard "behind"), and one predating appVersion reports null (→ no soft
@@ -705,11 +759,18 @@ function handleBridgeMessage(conn: RemoteConnection, raw: string): void {
         // Host alerts/prompts forwarded to the driving member (handled in MAIN,
         // not re-emitted to the renderer): mirror the host's ForceTheQuestion
         // modal locally + carry the imDone chime/toast.
-        if (msg.type === 'question:changed') {
+        if (msg.type === 'control:changed') {
+            // The host took or released control (kill-switch toggled). Mirror it so
+            // this driver flips to/from view-only immediately — the handoff the
+            // owner does from the host's "Take control" overlay.
+            const locked = !!(msg.payload as { locked?: boolean } | null)?.locked;
+            setConnControl(conn, locked);
+        } else if (msg.type === 'question:changed') {
             void syncForwardedQuestions(conn);
         } else if (msg.type === 'notify:imdone') {
             forwardImDoneToDriver(conn, msg.payload as { label?: string } | null);
         }
+
     } catch {
         /* ignore malformed frames */
     }
@@ -732,6 +793,10 @@ function startRelayEventsBridge(conn: RemoteConnection): void {
     // Pick up any questions the host already had pending before we attached (the
     // `question:changed` push only fires on a CHANGE, not on connect).
     void syncForwardedQuestions(conn);
+    // NOTE: control state on the relay path is driven purely by the live
+    // `control:changed` push (handleBridgeMessage), not proactively seeded — relay
+    // reconnect/re-seed is a later increment (mirrors the events-bridge comment).
+
 }
 
 /** Connect a connection's host /ws/events and re-emit onto the local channels
@@ -767,6 +832,11 @@ function startEventsBridge(conn: RemoteConnection): void {
         // a forwarded modal isn't missed (the `question:changed` push only fires
         // on a CHANGE, not on connect).
         ws.on('open', () => {
+            // A REOPEN (we were connected before) means we recovered a dropped
+            // bridge — restore the per-terminal streams + re-read control below.
+            // The FIRST connect seeds those separately (empty attach set; control
+            // seeded in connectRemoteInner), so this stays a no-op then.
+            const reopened = conn.everConnected;
             conn.eventsFailures = 0;
             conn.everConnected = true;
             conn.reconnectAttempt = 0;
@@ -782,8 +852,18 @@ function startEventsBridge(conn: RemoteConnection): void {
                 }
                 void revalidateAndSetLinkState(conn);
             }
+            if (reopened) {
+                // The host is back: re-attach every terminal the renderer still
+                // wants (their /ws/term sockets died with the bridge) and reconcile
+                // control — which may have changed, or reset on a host restart,
+                // while we were away. THIS is what makes the panels live again after
+                // a reconnect/upgrade instead of staying frozen with dead input.
+                reattachTerminals(conn);
+                void refreshControlState(conn);
+            }
             void syncForwardedQuestions(conn);
         });
+
         ws.on('message', (raw) => handleBridgeMessage(conn, String(raw)));
         ws.on('close', () => {
             if (conn.eventsWs === ws) conn.eventsWs = null;
@@ -898,16 +978,14 @@ function relayAttachTerminal(conn: RemoteConnection, id: string): void {
     );
 }
 
-/** Attach to a host terminal's pty stream and re-emit terminal:data/exit onto the
- *  calling window's channels (keyed by id). Idempotent per id. */
-export function remoteAttachTerminal(wcId: number, id: string): void {
-    const conn = connForWebContents(wcId);
-    if (!conn) return;
-    if (conn.transport === 'relay') {
-        relayAttachTerminal(conn, id);
-        return;
-    }
+/** Open one host `/ws/term` socket (tailnet) and wire its data/close/error. The
+ *  socket's `close` only drops it from `termWs` (the LIVE map) — never from
+ *  `attachedTerminals` (the INTENT), so a drop stays re-attachable on recovery.
+ *  `replayReset` clears the frozen viewport first (a re-attach after a drop) so the
+ *  host's scrollback catch-up repaints cleanly instead of stacking a duplicate. */
+function openHostTermSocket(conn: RemoteConnection, id: string, replayReset: boolean): void {
     if (conn.termWs.has(id)) return;
+    if (replayReset) emitToConn(conn, 'terminal:data', { id, data: '\x1bc' });
     const url = `ws://${conn.host.ip}:${conn.host.port}/ws/term?terminal=${encodeURIComponent(id)}&token=${encodeURIComponent(conn.token)}`;
     let ws: WebSocket;
     try {
@@ -929,13 +1007,43 @@ export function remoteAttachTerminal(wcId: number, id: string): void {
     });
 }
 
+/** Re-open a `/ws/term` for every terminal the renderer still wants but whose
+ *  socket dropped while the host was away (a reconnect/upgrade recovery). Tailnet
+ *  only — the relay carries a single term stream re-established by its own path. */
+function reattachTerminals(conn: RemoteConnection): void {
+    if (conn.transport === 'relay') return;
+    for (const id of conn.attachedTerminals) {
+        if (!conn.termWs.has(id)) openHostTermSocket(conn, id, true);
+    }
+}
+
+/** Attach to a host terminal's pty stream and re-emit terminal:data/exit onto the
+ *  calling window's channels (keyed by id). Idempotent per id. Records the attach
+ *  INTENT so a bridge recovery can restore the stream. */
+export function remoteAttachTerminal(wcId: number, id: string): void {
+    const conn = connForWebContents(wcId);
+    if (!conn) return;
+    conn.attachedTerminals.add(id);
+    if (conn.transport === 'relay') {
+        relayAttachTerminal(conn, id);
+        return;
+    }
+    openHostTermSocket(conn, id, false);
+}
+
 /** Forward the renderer's keystrokes to the host pty. Both transports speak the
  *  same `{type:'input', data}` wire — tailnet over the term WS, relay as a term
  *  `data` frame. */
 export function remoteTerminalInput(wcId: number, id: string, data: string): void {
     const conn = connForWebContents(wcId);
     if (!conn) return;
+    // View-only: the host has taken control — drop keystrokes at the SOURCE rather
+    // than shipping them for the host to silently discard (which left the remote
+    // typing into a void with no feedback). The renderer also gates + shows a
+    // banner; this is the authoritative main-side enforcement (readonly can't write).
+    if (conn.controlLocked) return;
     if (conn.transport === 'relay') {
+
         try {
             conn.relayTerms.get(id)?.send(JSON.stringify({ type: 'input', data }));
         } catch {
@@ -979,7 +1087,11 @@ export function remoteTerminalResize(wcId: number, id: string, cols: number, row
 export function remoteDetachTerminal(wcId: number, id: string): void {
     const conn = connForWebContents(wcId);
     if (!conn) return;
+    // Drop the attach INTENT so a later bridge recovery doesn't resurrect a
+    // terminal the renderer deliberately closed.
+    conn.attachedTerminals.delete(id);
     if (conn.transport === 'relay') {
+
         const stream = conn.relayTerms.get(id);
         if (stream) {
             try {
@@ -1100,6 +1212,7 @@ async function connectRemoteInner(
     // Validate before entering remote mode (a cheap authed call). A 401 means a
     // saved token is dead (host re-paired / forgot the device) → forget it + ask
     // for the PIN rather than failing opaquely.
+    let seedLocked = false;
     try {
         const res = await fetch(`http://${host.ip}:${host.port}/api/state`, {
             headers: { Authorization: `Bearer ${token}` },
@@ -1110,6 +1223,17 @@ async function connectRemoteInner(
         }
         if (!res.ok && res.status !== 423) {
             return { ok: false, error: `Host returned HTTP ${res.status}.` };
+        }
+        // Seed control from the host's kill-switch: a remote that connects while the
+        // host ALREADY has control opens view-only, never falsely writable. A 423
+        // (some routes lock) also implies control is held. Best-effort — an older
+        // host omits `locked` and defaults to writable.
+        if (res.status === 423) seedLocked = true;
+        try {
+            const st = (await res.json()) as { locked?: boolean };
+            if (typeof st?.locked === 'boolean') seedLocked = st.locked;
+        } catch {
+            /* older host / non-JSON body — leave the default */
         }
     } catch (e) {
         return { ok: false, error: `Couldn't reach ${host.hostname}: ${(e as Error).message}` };
@@ -1129,6 +1253,9 @@ async function connectRemoteInner(
         eventsRetry: null,
         eventsFailures: 0,
         termWs: new Map(),
+        attachedTerminals: new Set(),
+        controlLocked: seedLocked,
+
         everConnected: false,
         upgrading: false,
         linkState: { phase: 'connected' },
@@ -1246,6 +1373,9 @@ async function connectWorkstationInner(
         eventsRetry: null,
         eventsFailures: 0,
         termWs: new Map(),
+        attachedTerminals: new Set(),
+        controlLocked: false,
+
         everConnected: false,
         upgrading: false,
         linkState: { phase: 'connected' },

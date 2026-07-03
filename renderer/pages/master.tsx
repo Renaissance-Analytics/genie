@@ -128,6 +128,25 @@ export default function MasterPage() {
             off();
         };
     }, [isHostWindow, ready]);
+    // Host-window CONTROL state: when the host owner takes control (its kill-switch),
+    // this remote driver becomes VIEW-ONLY — the remote-bridge stops forwarding
+    // keystrokes and we show a banner so it's obvious WHY typing does nothing. Read
+    // on mount + live via `onControl`, so a control handoff reflects immediately and
+    // is restored correctly across reconnect/upgrade (main re-reads it on recovery).
+    const [viewOnly, setViewOnly] = useState(false);
+    useEffect(() => {
+        if (!isHostWindow || !ready) return;
+        let alive = true;
+        api()
+            .remote.controlState()
+            .then((s) => alive && setViewOnly(s.locked))
+            .catch(() => {});
+        const off = api().remote.onControl((s) => setViewOnly(s.locked));
+        return () => {
+            alive = false;
+            off();
+        };
+    }, [isHostWindow, ready]);
     // A VERSION mismatch must NOT render the (incompatible) host dashboard — the
     // overlay replaces it. 'reconnecting'/'lost' keep the floor mounted
     // underneath (session restores on recovery); the overlay just covers it.
@@ -146,7 +165,9 @@ export default function MasterPage() {
             {isHostWindow && link.phase === 'connected' && link.hostBuildBehind && (
                 <HostBuildNudge build={link.hostBuildBehind} />
             )}
+            {isHostWindow && viewOnly && <RemoteViewOnlyBanner />}
         </>
+
     );
 }
 
@@ -2329,12 +2350,50 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
 }
 
 /**
+ * Remote-side VIEW-ONLY banner. Shown in a host window when the HOST owner has
+ * taken control (its kill-switch). It's the mirror of the host's HostSessionOverlay
+ * "Take control" state: it makes it obvious WHY keystrokes do nothing here (the
+ * remote-bridge drops them), so control never silently diverges from what's shown.
+ * Clears the instant the host resumes the remote (the `control:changed` push).
+ */
+function RemoteViewOnlyBanner() {
+    return (
+        <div
+            style={{
+                position: 'fixed',
+                top: 40,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 9999,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '7px 13px',
+                borderRadius: 10,
+                background: 'rgba(180,83,9,0.96)',
+                color: '#fff',
+                fontSize: 12,
+                fontWeight: 700,
+                boxShadow: '0 6px 20px rgba(0,0,0,0.4)',
+                pointerEvents: 'none',
+            }}
+        >
+            <span
+                style={{ width: 8, height: 8, borderRadius: 999, background: '#fbbf24' }}
+            />
+            <span>View only — the host has taken control</span>
+        </div>
+    );
+}
+
+/**
  * Host-side remote-session overlay. When a REMOTE is currently controlling THIS
  * machine, a loud banner makes that obvious + shows where it's from, and lets the
  * host TAKE BACK CONTROL (pauses the remote's input via the kill-switch — the
  * session stays CONNECTED, not killed) or END the session outright.
  */
 function HostSessionOverlay() {
+
     const [peers, setPeers] = useState<MobilePeer[]>([]);
     const [locked, setLocked] = useState(false);
     const [busy, setBusy] = useState(false);

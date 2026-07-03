@@ -108,6 +108,8 @@ import {
     remoteBindingFor,
     connKeyForWindow,
     remoteLinkStateFor,
+    remoteControlStateFor,
+
     remoteUpgradeHost,
     remoteReconnect,
     remoteRequest,
@@ -547,6 +549,10 @@ export function registerIpcHandlers(): void {
     // Link health (version match + upgrade/limbo): read on mount + push via
     // `remote:link`. "Upgrade host" triggers the host's updater over the bridge.
     ipcMain.handle('remote:link-state', (e) => remoteLinkStateFor(e.sender.id));
+    // Control state (who holds WRITE control): read on mount + pushed live via
+    // `remote:control`. Drives the host window's view-only banner + input gate.
+    ipcMain.handle('remote:control-state', (e) => remoteControlStateFor(e.sender.id));
+
     ipcMain.handle('remote:upgrade-host', (e) => remoteUpgradeHost(e.sender.id));
     ipcMain.handle('remote:reconnect', (e) => remoteReconnect(e.sender.id));
     ipcMain.handle(
