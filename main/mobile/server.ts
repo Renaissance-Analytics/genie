@@ -6,6 +6,12 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { detectTailnetIp } from './tailnet';
 import { ensureCert, buildMobileUrl, shouldRenew, type MobileCert } from './tls';
 import { handleApi, terminalServable, type MobileDataDeps } from './api';
+import {
+    handleSiteProxy,
+    handleSiteProxyUpgrade,
+    SITE_PROXY_PREFIX,
+    type SiteProxyDeps,
+} from './site-proxy';
 import { setEventSockets, mobileEmit } from './bus';
 import {
     attachTerminalSocket,
@@ -59,6 +65,13 @@ export interface MobileServerDeps {
     configuredPort: () => number;
     /** Reused terminal/process/workspace/question functions (built in background.ts). */
     data: MobileDataDeps;
+    /**
+     * Serve-local-sites (Phase C) — the host reverse proxy's settings/allowlist
+     * accessors (master switch + opaque-siteId → loopback-target resolver).
+     * Optional: a host that predates the feature leaves it UNWIRED and the
+     * `/api/site/*` proxy route + its WS upgrade are simply not served.
+     */
+    siteProxy?: SiteProxyDeps;
     /** Desktop one-time pairing confirm (reuses forceQuestion/dialog). */
     confirmPair: ConfirmPairHook;
     /**
@@ -213,6 +226,18 @@ function clientIp(req: http.IncomingMessage): string {
     return req.socket.remoteAddress ?? 'unknown';
 }
 
+/**
+ * The remote-facing origin the site-proxy is served on (for `Location`
+ * rewrites): `https://<magic-dns>:<port>` over a Tailscale cert, else
+ * `http://<ip>:<port>`. The scheme here is what a rewritten `Location` inherits,
+ * so it also drives the http-fallback downgrade.
+ */
+function proxyOriginString(): string {
+    const scheme = boundSecure ? 'https' : 'http';
+    const host = boundSecure && boundDnsName ? boundDnsName : boundIp ?? '127.0.0.1';
+    return `${scheme}://${host}:${boundPort ?? 0}`;
+}
+
 async function handle(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -229,6 +254,19 @@ async function handle(
     if (pathname === '/') {
         res.writeHead(302, { Location: '/m/' });
         res.end();
+        return;
+    }
+
+    // Serve-local-sites (Phase C): the host reverse proxy. MUST precede the
+    // generic /api/ handler — its path `/api/site/<id>/…` is under /api/. Only
+    // routed when wired (a host that predates the feature leaves siteProxy off,
+    // and /api/site/* falls through to handleApi's 404). It runs its OWN gate
+    // (token + kill-switch + both opt-ins + SSRF allowlist) and streams the
+    // loopback upstream itself.
+    if (deps.siteProxy && pathname.startsWith(SITE_PROXY_PREFIX)) {
+        await handleSiteProxy(req, res, deps.siteProxy, {
+            proxyOrigin: proxyOriginString(),
+        });
         return;
     }
 
@@ -288,6 +326,17 @@ function attachWebSocket(srv: http.Server | https.Server): void {
     srv.on('upgrade', (req, socket, head) => {
         const url = new URL(req.url ?? '/', `http://${boundIp ?? '127.0.0.1'}`);
         const pathname = url.pathname;
+
+        // Serve-local-sites (Phase C): a site's WS upgrade (HMR / Vite / Reverb /
+        // Echo) is proxied to loopback. It runs its OWN gate (origin +
+        // Bearer/`?__genie_token=` + kill-switch + both opt-ins + allowlist),
+        // accepting a Bearer that the shared `?token=` gate below can't, so it
+        // must branch FIRST. Only when wired.
+        if (deps?.siteProxy && pathname.startsWith(SITE_PROXY_PREFIX)) {
+            void handleSiteProxyUpgrade(req, socket, head, deps.siteProxy, { originAllowed });
+            return;
+        }
+
         const token = url.searchParams.get('token');
 
         // DNS-rebinding + token gate BEFORE we accept the socket.

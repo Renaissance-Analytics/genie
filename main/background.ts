@@ -1115,6 +1115,26 @@ app.whenReady().then(async () => {
             if (result.cancelled) return false; // dismissed = deny
             return (result.answers[0]?.selected ?? []).includes('Pair');
         },
+        // Serve-local-sites (Phase C): the host reverse proxy's settings/allowlist
+        // accessors. `localSitesEnabled` finally HOST-ENFORCES the master switch
+        // Phase B only stored; `resolveSite` maps an opaque siteId → its loopback
+        // target STRICTLY from the discovered + per-site-`enabled` + served set
+        // (the SSRF/open-proxy guard — the remote can never supply a raw target).
+        siteProxy: {
+            localSitesEnabled: () =>
+                (getAllSettings() as Record<string, string>)['local_sites_enabled'] === 'on',
+            resolveSite: async (siteId) => {
+                // Scope to THIS host's served workspaces (like /api/sites/set): a
+                // site is servable if ANY served workspace enabled it. discoverSites
+                // caches probes, so repeated resolves only re-parse the hosts file.
+                for (const ws of listWorkspaces()) {
+                    const views = await discoverSites(getWorkspaceTunnelSites(ws.id));
+                    const hit = views.find((v) => v.siteId === siteId && v.enabled);
+                    if (hit) return { hostname: hit.hostname, scheme: hit.scheme, port: hit.port };
+                }
+                return null;
+            },
+        },
         data: {
             listWorkspaces: () =>
                 listWorkspaces().map((w) => ({
