@@ -248,7 +248,11 @@ export default function SettingsPage() {
                         {show('tools') && (
                             <SearchGroup label="Tools" searching={searching}>
 
-            <SetSection title="Tools" desc="The bundled tynn-cli toolkit in Genie terminals">
+            <SetSection
+                title="Tools"
+                desc="The bundled tynn-cli toolkit in Genie terminals"
+                host={restricted}
+            >
                 <SettingRow
                     label="Make tynn-cli tools available in terminals"
                     desc={
@@ -277,55 +281,61 @@ export default function SettingsPage() {
                     />
                 </SettingRow>
 
-                <SettingRow
-                    label="Install system-wide"
-                    desc={
-                        <>
-                            Copies the toolkit to <code>~/.genie/tynn-cli</code> and adds
-                            it to your <code>~/.bashrc</code> — so <code>resetme</code>{' '}
-                            works in any terminal, not just Genie&apos;s.
-                        </>
-                    }
-                    keywords="install system-wide cli tools bashrc global terminal"
-                    grow
-                >
-                    <div
-                        style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 12,
-                            flexWrap: 'wrap',
-                            justifyContent: 'flex-end',
-                        }}
+                {/* Install system-wide runs on THIS machine's ~/.bashrc via
+                    api().cli.install() (not bridged) — hidden in a remote window,
+                    where it would install on the client, not the host. The toggle
+                    above is host-sourced and configures the host's terminals. */}
+                {!restricted && (
+                    <SettingRow
+                        label="Install system-wide"
+                        desc={
+                            <>
+                                Copies the toolkit to <code>~/.genie/tynn-cli</code> and adds
+                                it to your <code>~/.bashrc</code> — so <code>resetme</code>{' '}
+                                works in any terminal, not just Genie&apos;s.
+                            </>
+                        }
+                        keywords="install system-wide cli tools bashrc global terminal"
+                        grow
                     >
-                        {cliMsg && (
-                            <Text size="xs" className="text-zinc-500">
-                                {cliMsg}
-                            </Text>
-                        )}
-                        <Action
-                            variant="ghost"
-                            icon="download"
-                            disabled={cliBusy || cliShipped === false}
-                            onClick={async () => {
-                                setCliBusy(true);
-                                setCliMsg(null);
-                                try {
-                                    const r = await api().cli.install();
-                                    setCliMsg(
-                                        r.ok
-                                            ? 'Installed system-wide. Open a new Git Bash session to use the tools everywhere.'
-                                            : `Install failed: ${r.output}`,
-                                    );
-                                } finally {
-                                    setCliBusy(false);
-                                }
+                        <div
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 12,
+                                flexWrap: 'wrap',
+                                justifyContent: 'flex-end',
                             }}
                         >
-                            {cliBusy ? 'Installing…' : 'Install system-wide…'}
-                        </Action>
-                    </div>
-                </SettingRow>
+                            {cliMsg && (
+                                <Text size="xs" className="text-zinc-500">
+                                    {cliMsg}
+                                </Text>
+                            )}
+                            <Action
+                                variant="ghost"
+                                icon="download"
+                                disabled={cliBusy || cliShipped === false}
+                                onClick={async () => {
+                                    setCliBusy(true);
+                                    setCliMsg(null);
+                                    try {
+                                        const r = await api().cli.install();
+                                        setCliMsg(
+                                            r.ok
+                                                ? 'Installed system-wide. Open a new Git Bash session to use the tools everywhere.'
+                                                : `Install failed: ${r.output}`,
+                                        );
+                                    } finally {
+                                        setCliBusy(false);
+                                    }
+                                }}
+                            >
+                                {cliBusy ? 'Installing…' : 'Install system-wide…'}
+                            </Action>
+                        </div>
+                    </SettingRow>
+                )}
             </SetSection>
 
                             </SearchGroup>
@@ -485,12 +495,17 @@ export default function SettingsPage() {
                 </SettingRow>
             </SetSection>
 
-            {/* Ai.System injects into every workspace's AGENTS.md on THIS machine —
-                a host/workspace config, hidden in a remote window. */}
-            {!restricted && (
-                <SetSection title="Ai.System" desc="Instructions Genie injects into every workspace's AGENTS.md">
-                    <SettingRow
-                        label="Workspace instructions"
+            {/* Ai.System is the workspace-instructions injected into every workspace's
+                AGENTS.md, read by the agents that run there. In a remote window the
+                agent runs on the HOST, so this is HOST-sourced (bucket 2) — the
+                settings bridge routes ai_system to the host — and badged accordingly. */}
+            <SetSection
+                title="Ai.System"
+                desc="Instructions Genie injects into every workspace's AGENTS.md"
+                host={restricted}
+            >
+                <SettingRow
+                    label="Workspace instructions"
                         desc="Injected into every workspace's AGENTS.md, inside the auto-managed Genie Protocol block, so every agent in every workspace reads it. Keep it tight — capped at 2000 characters."
                         keywords="ai system instructions agents.md genie protocol customization prompt workspace"
                         vertical
@@ -510,7 +525,6 @@ export default function SettingsPage() {
                         </div>
                     </SettingRow>
                 </SetSection>
-            )}
 
                             </SearchGroup>
                         )}
@@ -518,6 +532,7 @@ export default function SettingsPage() {
                             <SearchGroup label="Agent MCP" searching={searching}>
 
             <AgentMcpSection
+                restricted={restricted}
                 port={s.mcp_port ?? '51717'}
                 onPortChange={(v) => patch({ mcp_port: v })}
                 syncClaude={s.mcp_sync_claude !== 'off'}
@@ -640,9 +655,40 @@ function SearchGroup({
 }
 
 /**
+ * A small "On the host" chip. Marks a section whose VALUES are sourced from — and
+ * written to — the HOST this window is driving (a remote/host window), so it's clear
+ * the control edits the AGENT's environment on the host, not this device. See the
+ * bucket-2 split in settings-nav.ts. Inline-styled (with token fallbacks) so it
+ * needs no CSS change.
+ */
+function HostBadge() {
+    return (
+        <span
+            title="This lives on the host you're connected to — it configures the agent's workspace environment there, not this device."
+            style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                fontSize: 11,
+                fontWeight: 500,
+                padding: '2px 8px',
+                borderRadius: 999,
+                color: 'var(--blue-600, #2563eb)',
+                background: 'var(--blue-50, rgba(37,99,235,0.10))',
+                border: '1px solid var(--blue-200, rgba(37,99,235,0.25))',
+                whiteSpace: 'nowrap',
+            }}
+        >
+            <Icon name="monitor" size="xs" /> On the host
+        </span>
+    );
+}
+
+/**
  * A settings section — a slim heading (+ optional one-line description and a
  * right-aligned status pill) over a stack of dense rows. Replaces the old
- * heavy padded <Card> per section.
+ * heavy padded <Card> per section. `host` badges it "On the host" (bucket-2,
+ * host-sourced) — used in a remote window.
  */
 function SetSection({
     title,
@@ -650,6 +696,7 @@ function SetSection({
     status,
     statusColor,
     statusIcon,
+    host,
     children,
 }: {
     title: string;
@@ -657,12 +704,14 @@ function SetSection({
     status?: ReactNode;
     statusColor?: string;
     statusIcon?: string;
+    host?: boolean;
     children: ReactNode;
 }) {
     return (
         <section className="set-section">
             <div className="set-section-head">
                 <h2>{title}</h2>
+                {host && <HostBadge />}
                 {desc && <span className="set-section-desc">{desc}</span>}
                 {status != null && (
                     <span className="set-section-status" style={{ color: statusColor }}>
@@ -2038,6 +2087,7 @@ function StartupSection() {
  * server on the configured port and rewrites enabled workspaces' .mcp.json.
  */
 function AgentMcpSection({
+    restricted,
     port,
     onPortChange,
     syncClaude,
@@ -2045,6 +2095,10 @@ function AgentMcpSection({
     syncAgents,
     onSyncChange,
 }: {
+    /** Remote/host window — the Agent-MCP CONFIG (port + sync toggles) is the
+     *  host's (host-sourced via the settings bridge), but the live server
+     *  status + restart are the HOST's own process controls, hidden here. */
+    restricted: boolean;
     port: string;
     onPortChange: (v: string) => void;
     syncClaude: boolean;
@@ -2064,9 +2118,11 @@ function AgentMcpSection({
     };
 
     useEffect(() => {
-        void refresh();
+        // In a remote window api().mcp.status() would report the CLIENT's own
+        // server, not the host's — so skip it and don't show a misleading pill.
+        if (!restricted) void refresh();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [restricted]);
 
     const restart = async () => {
         setBusy(true);
@@ -2104,13 +2160,22 @@ function AgentMcpSection({
         <SetSection
             title="Agent MCP server"
             desc="Loopback server that lets agents call imDone / ForceTheQuestion"
-            status={statusLabel}
+            host={restricted}
+            // In a remote window there's no host status pill (host process control),
+            // so leave it off; locally it shows the live server state.
+            status={restricted ? undefined : statusLabel}
             statusColor={statusColor}
             statusIcon={
-                state?.conflict ? 'alert-triangle' : state?.running ? 'check' : 'circle'
+                restricted
+                    ? undefined
+                    : state?.conflict
+                        ? 'alert-triangle'
+                        : state?.running
+                            ? 'check'
+                            : 'circle'
             }
         >
-            {state?.conflict && (
+            {!restricted && state?.conflict && (
                 <div className="set-note warn">
                     The configured port {state.configuredPort} was in use, so the
                     server bound a temporary port instead. Workspace{' '}
@@ -2140,21 +2205,32 @@ function AgentMcpSection({
                 />
             </SettingRow>
 
-            <div className="set-actions">
-                <Action
-                    color={needsRestart ? 'blue' : undefined}
-                    variant={needsRestart ? 'default' : 'ghost'}
-                    icon="refresh-cw"
-                    onClick={restart}
-                    disabled={busy}
-                >
-                    {busy ? 'Restarting…' : 'Restart MCP server'}
-                </Action>
+            {/* Restart is a host PROCESS control and api().mcp.restart() isn't
+                bridged, so in a remote window it would restart the CLIENT's server.
+                Hide it there; the port change is saved to the host and takes effect
+                when the host's MCP server restarts. */}
+            {restricted ? (
                 <Text size="xs" className="text-zinc-500">
-                    Save the page first if you changed the port, then restart to
-                    rebind and rewrite workspace configs.
+                    Saved to the host. A port change takes effect when the host&apos;s
+                    Agent MCP server restarts.
                 </Text>
-            </div>
+            ) : (
+                <div className="set-actions">
+                    <Action
+                        color={needsRestart ? 'blue' : undefined}
+                        variant={needsRestart ? 'default' : 'ghost'}
+                        icon="refresh-cw"
+                        onClick={restart}
+                        disabled={busy}
+                    >
+                        {busy ? 'Restarting…' : 'Restart MCP server'}
+                    </Action>
+                    <Text size="xs" className="text-zinc-500">
+                        Save the page first if you changed the port, then restart to
+                        rebind and rewrite workspace configs.
+                    </Text>
+                </div>
+            )}
 
             <SetSubhead>Config sync</SetSubhead>
             <Text size="xs" className="text-zinc-500" style={{ marginBottom: 2 }}>

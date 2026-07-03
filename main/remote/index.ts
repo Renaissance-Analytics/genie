@@ -266,6 +266,13 @@ export function isRemoteBoundWindow(wcId: number): boolean {
     return bindings.has(wcId);
 }
 
+/** The connKey a window is bound to, or null when it's LOCAL. Lets a NEW window
+ *  (e.g. Settings opened from a host window) inherit its opener's host so its
+ *  bridge drives the SAME machine. */
+export function connKeyForWindow(wcId: number): string | null {
+    return bindings.get(wcId) ?? null;
+}
+
 /**
  * Broadcast a LOCAL-machine IPC event to every window EXCEPT host windows (those
  * bound to a remote connection). A host window's UI reflects the HOST, so a

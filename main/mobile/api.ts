@@ -27,6 +27,10 @@ import {
     updateTerminalSpec,
     deleteTerminalSpec,
     touchTerminalSpec,
+    getAllSettings,
+    setSettings,
+    AI_SYSTEM_MAX,
+    type Settings,
 } from '../db';
 import {
     getOpenCounts,
@@ -54,6 +58,35 @@ import {
 
 /** Hard cap on an uploaded file's decoded size (25 MiB). */
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+/**
+ * WORKSPACE / AGENT-ENVIRONMENT settings a remote DESKTOP may read + write on THIS
+ * host (bucket 2). The agent runs on the host, so these govern how it runs there:
+ * the Ai.System workspace-instructions injected into the host's AGENTS.md, the
+ * Agent-MCP config the host binds + syncs into its workspaces, and the host terminal
+ * toolkit env. This is a STRICT allow-list — the settings table also holds
+ * host-machine + secret keys (github_token_enc, updater_repo, the client's own
+ * tynn_host, …) that a remote must NEVER read or set. MIRRORS
+ * `HOST_SOURCED_SETTINGS_KEYS` in renderer/lib/settings-nav.ts (the client-side
+ * split); keep the two in sync.
+ */
+export const HOST_SOURCED_SETTINGS_KEYS = [
+    'ai_system',
+    'cli_tools_in_terminals',
+    'mcp_port',
+    'mcp_sync_claude',
+    'mcp_sync_cursor',
+    'mcp_sync_agents',
+] as const satisfies readonly (keyof Settings)[];
+
+/** The bucket-2 subset of the host's settings a remote may see (allow-list filter). */
+export function pickHostSettings(all: Settings): Partial<Settings> {
+    const out: Record<string, unknown> = {};
+    for (const k of HOST_SOURCED_SETTINGS_KEYS) {
+        if (all[k] !== undefined) out[k] = all[k];
+    }
+    return out as Partial<Settings>;
+}
 
 /**
  * Resolve where an uploaded file lands inside a workspace's `.ai/` directory,
@@ -851,6 +884,47 @@ export async function handleApi(
     // Serves the host's OWN data model (full WorkspaceRow / TerminalSpecRow) so
     // the remote desktop's bridge is a THIN pass-through, not a lossy adaptation
     // of the mobile subset. Authed; spec mutations also honour the kill-switch.
+
+    // --- host-sourced settings — for a remote DESKTOP driving this host --------
+    // A remote window's WORKSPACE / AGENT-ENVIRONMENT settings are the HOST's (the
+    // agent runs here): the Ai.System workspace-instructions, the Agent-MCP config,
+    // the host terminal toolkit env. GET returns the bucket-2 subset; POST applies a
+    // patch FILTERED to the SAME allow-list — a remote can never read or set a
+    // host-machine / secret key (github token, updater repo, …). Reads are authed;
+    // the write also honours the kill-switch. Must precede the generic
+    // `/api/desktop/` block below (which would 404 this as an unknown desktop route).
+    if (pathname === '/api/desktop/settings') {
+        if (method === 'GET') {
+            sendJson(res, 200, { settings: pickHostSettings(getAllSettings()) });
+            return true;
+        }
+        if (method !== 'POST') {
+            sendJson(res, 405, { error: 'method not allowed' });
+            return true;
+        }
+        if (guardLocked()) return true;
+        let body: { patch?: Record<string, unknown> };
+        try {
+            body = await readJsonBody(req);
+        } catch {
+            sendJson(res, 400, { error: 'invalid body' });
+            return true;
+        }
+        // Allow-list the incoming patch to the bucket-2 keys — never trust the client
+        // to send only host-scoped keys.
+        const allowed = new Set<string>(HOST_SOURCED_SETTINGS_KEYS);
+        const patch: Record<string, string> = {};
+        for (const [k, v] of Object.entries(body.patch ?? {})) {
+            if (!allowed.has(k) || v === undefined || v === null) continue;
+            // Ai.System is injected verbatim into every workspace's AGENTS.md — cap
+            // it server-side (mirrors the settings:set IPC handler) so it can't bloat.
+            patch[k] = k === 'ai_system' ? String(v).slice(0, AI_SYSTEM_MAX) : String(v);
+        }
+        setSettings(patch);
+        audit('settings.set', Object.keys(patch).join(',') || '(none)', actor);
+        sendJson(res, 200, { settings: pickHostSettings(getAllSettings()) });
+        return true;
+    }
 
     // --- host-sourced IssueWatch — for a remote DESKTOP driving this host -------
     // A host window's rail pill / flyout / badge reflect the HOST's repos + counts

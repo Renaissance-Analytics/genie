@@ -271,6 +271,10 @@ let settingsWindow: BrowserWindow | null = null;
 /** The restriction the current settingsWindow was built for (the ?remote=1 URL
  *  flag is fixed at load, so a mode change needs a fresh window). */
 let settingsRestricted = false;
+/** The host connKey the current settingsWindow is bound to (null = local). Baked
+ *  into the URL + the window binding at load, so opening Settings for a DIFFERENT
+ *  host (or for local) needs a fresh window. */
+let settingsConnKey: string | null = null;
 let docsWindow: BrowserWindow | null = null;
 let masterWindow: BrowserWindow | null = null;
 const terminalWindows = new Set<BrowserWindow>();
@@ -532,14 +536,22 @@ export function showMainWindow(): void {
     showMasterWindow();
 }
 
-export function showSettingsWindow(restricted = false): void {
+export function showSettingsWindow(restricted = false, connKey: string | null = null): void {
     // `restricted` = opened FROM a remote/host window → show only the connection-
-    // relevant subset. It's baked into the window URL (?remote=1) at load, so a
-    // mode change vs the reused window needs a fresh one (recreate, don't reload).
-    if (!settingsWindow || settingsWindow.isDestroyed() || settingsRestricted !== restricted) {
+    // relevant subset. `connKey` = the caller's bound host, so the Settings window's
+    // api() bridge reads/writes THAT host's workspace/agent settings (bucket 2). Both
+    // are baked into the window URL + binding at load, so a change vs the reused
+    // window needs a fresh one (recreate, don't reload).
+    if (
+        !settingsWindow ||
+        settingsWindow.isDestroyed() ||
+        settingsRestricted !== restricted ||
+        settingsConnKey !== connKey
+    ) {
         if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.destroy();
         settingsRestricted = restricted;
-        settingsWindow = createSettingsWindow(restricted);
+        settingsConnKey = connKey;
+        settingsWindow = createSettingsWindow(restricted, connKey);
         // createSettingsWindow defers .show() to 'ready-to-show'; just
         // wait for it. focus() also no-ops until the window is visible.
         settingsWindow.once('ready-to-show', () => settingsWindow?.focus());
@@ -615,7 +627,7 @@ function createMainWindow(): BrowserWindow {
     return win;
 }
 
-function createSettingsWindow(restricted = false): BrowserWindow {
+function createSettingsWindow(restricted = false, connKey: string | null = null): BrowserWindow {
     const win = new BrowserWindow({
         width: 860,
         height: 680,
@@ -634,14 +646,30 @@ function createSettingsWindow(restricted = false): BrowserWindow {
     });
 
     // ?remote=1 tells the settings page it was opened from a remote/host window →
-    // show only the connection-relevant subset. It is NOT `?host=` on purpose: this
-    // window stays LOCAL (api() edits the CLIENT's own settings — the KEEP rows).
+    // show only the connection-relevant subset (device Customization + the
+    // host-sourced workspace/agent groups).
+    //
+    // When opened from a bound HOST window we ALSO carry `?host=<connKey>` and bind
+    // THIS window to that connection BEFORE load, so its api() routes over the remote
+    // bridge — the DEVICE prefs (theme/notifications/copy-paste) stay client-local via
+    // the bridge's settings split, while the WORKSPACE / AGENT-ENVIRONMENT settings
+    // (Ai.System, Agent-MCP config, host terminal toolkit env) read/write the HOST.
+    // Without a connKey the window stays LOCAL exactly as before.
+    const wcId = win.webContents.id;
+    let search = restricted ? 'remote=1' : '';
+    if (connKey) {
+        bindWindowToConnection(wcId, connKey);
+        search = `host=${encodeURIComponent(connKey)}${search ? `&${search}` : ''}`;
+        // Drop only THIS window's binding on close — never tear the shared host
+        // connection down (the host window that opened us still drives it).
+        win.on('closed', () => unbindWindow(wcId));
+    }
     if (isDev) {
-        win.loadURL(`http://localhost:8888/settings${restricted ? '?remote=1' : ''}`);
+        win.loadURL(`http://localhost:8888/settings${search ? `?${search}` : ''}`);
     } else {
         win.loadFile(
             path.join(__dirname, 'settings.html'),
-            restricted ? { search: 'remote=1' } : undefined,
+            search ? { search } : undefined,
         );
     }
 

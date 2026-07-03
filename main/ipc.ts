@@ -106,6 +106,7 @@ import {
     disconnectRemote,
     remoteStatusFor,
     remoteBindingFor,
+    connKeyForWindow,
     remoteLinkStateFor,
     remoteUpgradeHost,
     remoteReconnect,
@@ -906,10 +907,14 @@ export function registerIpcHandlers(): void {
     // terminals/editors here, and the directory picker for system processes
     // defaults to it. Surfaced from main (renderer has no `os` access).
     ipcMain.handle('app:home-dir', () => os.homedir());
-    ipcMain.handle('app:show-settings', (_e, fromRemote?: boolean) => {
+    ipcMain.handle('app:show-settings', (e, fromRemote?: boolean) => {
         // fromRemote = the caller is a remote/host window → restrict Settings to the
         // connection-relevant subset. The tray/menu callers pass nothing (local).
-        showSettingsWindow(!!fromRemote);
+        // When the caller is a bound HOST window, inherit ITS connKey so the Settings
+        // window's api() bridge reads/writes the HOST's workspace/agent settings
+        // (bucket 2) — not this client's. A local caller resolves to null → local.
+        const connKey = fromRemote ? connKeyForWindow(e.sender.id) : null;
+        showSettingsWindow(!!fromRemote, connKey);
         return { ok: true };
     });
     ipcMain.handle('app:show-docs', () => {

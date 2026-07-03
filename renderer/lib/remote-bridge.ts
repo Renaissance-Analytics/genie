@@ -1,5 +1,6 @@
 import type {
     GenieApi,
+    Settings,
     WorkspaceRow,
     TerminalSpec,
     ProcessListItem,
@@ -11,6 +12,7 @@ import type {
     WatchFeedItem,
     WorkspaceWatchStatus,
 } from './genie';
+import { isHostSourcedSettingKey } from './settings-nav';
 
 /**
  * The remote-desktop bridge — a `GenieApi` backed by a HOST Genie over Tailscale.
@@ -249,5 +251,73 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             ),
     };
 
-    return { ...local, workspaces, terminalSpec, files, process, terminal, clipboard, issueWatch };
+    // Host-sourced WORKSPACE / AGENT-ENVIRONMENT settings. The agent runs on the
+    // HOST, so the settings that govern how it runs there — the Ai.System
+    // workspace-instructions injected into the host's AGENTS.md, the Agent-MCP config
+    // the host binds + syncs into its workspaces, and the host terminal toolkit env —
+    // are read from and written to the HOST (allow-listed by HOST_SOURCED_SETTINGS_KEYS,
+    // enforced again server-side at /api/desktop/settings). Every OTHER key is a
+    // per-device UI pref (theme, notifications, copy-paste, panel layout) and stays
+    // CLIENT-LOCAL — the picker/file/sound/shell helpers spread from `local`.
+    const settings: GenieApi['settings'] = {
+        ...local.settings,
+        get: async () => {
+            const localS = await local.settings.get();
+            try {
+                const host = (
+                    (await req('/api/desktop/settings')) as { settings: Partial<Settings> }
+                ).settings;
+                // Overlay the host's bucket-2 values on the client's own settings.
+                return { ...localS, ...host };
+            } catch {
+                // Link blip — fall back to the local view so Settings still opens.
+                return localS;
+            }
+        },
+        set: async (patch: Partial<Settings>) => {
+            // Split the patch: host-sourced keys → the HOST, everything else stays
+            // client-local. settings.tsx saves the WHOLE object, so both halves are
+            // usually present; each is routed to the right store (idempotent).
+            const hostPatch: Record<string, unknown> = {};
+            const localPatch: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(patch)) {
+                (isHostSourcedSettingKey(k) ? hostPatch : localPatch)[k] = v;
+            }
+            const [hostSettings, localResult] = await Promise.all([
+                // Resolve the host's current bucket-2 values: POST the change when
+                // there is one, else a plain GET — so the returned Settings always
+                // reflects the HOST for host keys, never the client's stale copy.
+                (async (): Promise<Partial<Settings>> => {
+                    try {
+                        const r =
+                            Object.keys(hostPatch).length > 0
+                                ? await req('/api/desktop/settings', {
+                                      method: 'POST',
+                                      json: { patch: hostPatch },
+                                  })
+                                : await req('/api/desktop/settings');
+                        return (r as { settings: Partial<Settings> }).settings;
+                    } catch {
+                        return {};
+                    }
+                })(),
+                Object.keys(localPatch).length > 0
+                    ? local.settings.set(localPatch as Partial<Settings>)
+                    : local.settings.get(),
+            ]);
+            return { ...localResult, ...hostSettings };
+        },
+    };
+
+    return {
+        ...local,
+        workspaces,
+        terminalSpec,
+        files,
+        process,
+        terminal,
+        clipboard,
+        issueWatch,
+        settings,
+    };
 }
