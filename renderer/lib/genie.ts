@@ -476,6 +476,12 @@ export interface GenieHost {
     peerName: string;
     ip: string;
     port: number;
+    /** Stable per-install identity (from the beacon); absent for an old host. */
+    hostId?: string;
+    /** MagicDNS dial address advertised by the beacon. */
+    dnsName?: string;
+    /** `host:<hostId>` once identified, else `ip:port` — the merge/connect key. */
+    connKey: string;
 }
 
 /** The host this Genie is driving in remote mode (no token — main holds that). */
@@ -483,6 +489,10 @@ export interface RemoteHost {
     ip: string;
     port: number;
     hostname: string;
+    /** Stable per-install identity (survives IP changes); absent for an old host. */
+    hostId?: string;
+    /** MagicDNS dial address. */
+    dnsName?: string;
 }
 
 /** Remote-mode status surfaced to the renderer (titlebar indicator + bridge). */
@@ -518,7 +528,11 @@ export interface KnownHost {
     hostname: string;
     /** User-chosen label; the UI falls back to hostname. */
     name?: string;
-    /** `ip:port` — the registry/persistence key. */
+    /** Stable per-install identity (when known); the record is keyed by it. */
+    hostId?: string;
+    /** Last-seen MagicDNS dial address. */
+    dnsName?: string;
+    /** `host:<hostId>` once identified, else `ip:port` — the registry key. */
     connKey: string;
     /** Whether this host currently has a live connection (a host window open). */
     connected: boolean;

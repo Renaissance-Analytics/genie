@@ -2135,6 +2135,8 @@ interface HostRow {
     port: number;
     hostname: string;
     name?: string;
+    hostId?: string;
+    dnsName?: string;
     connKey: string;
     /** Known (persisted, can Forget) vs only just discovered on the tailnet. */
     known: boolean;
@@ -2167,6 +2169,8 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                     port: k.port,
                     hostname: k.hostname,
                     name: k.name,
+                    hostId: k.hostId,
+                    dnsName: k.dnsName,
                     connKey: k.connKey,
                     known: true,
                     connected: k.connected,
@@ -2174,15 +2178,25 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                 });
             }
             for (const d of discovered) {
-                const key = `${d.ip}:${d.port}`;
-                const existing = byKey.get(key);
-                if (existing) existing.online = true;
-                else
-                    byKey.set(key, {
+                // Merge on the stable connKey (host:<hostId> when identified, else
+                // ip:port) so a discovered host already remembered — even at a new
+                // IP — updates its row instead of showing as a duplicate.
+                const existing = byKey.get(d.connKey);
+                if (existing) {
+                    existing.online = true;
+                    // Refresh the dial address from the live beacon.
+                    existing.ip = d.ip;
+                    existing.port = d.port;
+                    if (d.hostId) existing.hostId = d.hostId;
+                    if (d.dnsName) existing.dnsName = d.dnsName;
+                } else
+                    byKey.set(d.connKey, {
                         ip: d.ip,
                         port: d.port,
                         hostname: d.hostname,
-                        connKey: key,
+                        hostId: d.hostId,
+                        dnsName: d.dnsName,
+                        connKey: d.connKey,
                         known: false,
                         connected: false,
                         online: true,
@@ -2203,7 +2217,13 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
         setBusy(row.connKey);
         try {
             const res = await api().remote.open(
-                { ip: row.ip, port: row.port, hostname: row.hostname },
+                {
+                    ip: row.ip,
+                    port: row.port,
+                    hostname: row.hostname,
+                    hostId: row.hostId,
+                    dnsName: row.dnsName,
+                },
                 withPin,
             );
             if (res.ok) {

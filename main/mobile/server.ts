@@ -17,6 +17,7 @@ import {
 import { initAuth, validateSession, type ConfirmPairHook } from './auth';
 import { initAudit, setLocked, isLocked, audit } from './audit';
 import { onQuestionsChanged } from '../ask/force-question';
+import { hostInstallId } from '../host-identity';
 
 /**
  * Genie's mobile remote-control server — a THIRD local server alongside the MCP
@@ -236,6 +237,12 @@ async function handle(
             ip: clientIp(req),
             ua: String(req.headers['user-agent'] ?? ''),
             serverVersion: deps.serverVersion,
+            // Stable, carrier-independent host identity for the `/api/ping` beacon
+            // (the discriminator between hosts + the migration-safe pairing key).
+            hostId: hostInstallId(deps.userDataDir),
+            // The MagicDNS name we're serving HTTPS under (null over http), carried
+            // as a stable DIAL ADDRESS alongside the mutable IP — not identity.
+            dnsName: boundDnsName,
         });
         return;
     }

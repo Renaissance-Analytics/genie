@@ -2478,7 +2478,13 @@ function RemoteHostCard() {
     }, []);
 
     const connect = async (
-        host: { ip: string; port: number; hostname: string },
+        host: {
+            ip: string;
+            port: number;
+            hostname: string;
+            hostId?: string;
+            dnsName?: string;
+        },
         pin?: string,
     ) => {
         const key = `${host.ip}:${host.port}`;
@@ -2488,6 +2494,8 @@ function RemoteHostCard() {
             // Open the host in its OWN native Floor window (the local window
             // stays local). No PIN → reconnect with the remembered token; the
             // host answers needsPin only for a first-time pair (or a dead token).
+            // The discovered host's stable hostId/dnsName ride along so pairing
+            // keys on identity, not the mutable ip:port.
             const r = await api().remote.open(host, pin?.trim() || undefined);
             if (r.ok) {
                 setPinNeeded((p) => ({ ...p, [key]: false }));

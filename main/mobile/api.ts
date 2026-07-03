@@ -467,7 +467,17 @@ export async function handleApi(
     res: http.ServerResponse,
     pathname: string,
     deps: MobileDataDeps,
-    info: { ip: string; ua: string; serverVersion?: string },
+    info: {
+        ip: string;
+        ua: string;
+        serverVersion?: string;
+        /** Stable per-install identity advertised on `/api/ping` (the primary
+         *  host discriminator + migration-safe pairing key). */
+        hostId?: string;
+        /** Tailscale MagicDNS name we're reachable at (a stable DIAL address);
+         *  null/absent over http or off a tailnet. */
+        dnsName?: string | null;
+    },
 ): Promise<boolean> {
     const method = req.method ?? 'GET';
 
@@ -497,17 +507,28 @@ export async function handleApi(
 
     // --- /api/ping — unauthed Genie-host beacon, for tailnet discovery -----
     // Lets another Genie probing the tailnet identify this node as a Genie host
-    // (and read its hostname) WITHOUT a token. Carries no sensitive data. Also
-    // reports the bridge PROTOCOL version so a connecting/ reconnecting remote
-    // client can detect an incompatible peer (and the limbo poll can re-check it
-    // after the host upgrades) — an integer, not the app version, so patch betas
-    // don't force upgrades. It ALSO reports the RELEASE `appVersion` so a client
-    // can show a soft, non-blocking "host is on an older build" nudge (distinct
-    // from the hard protocol mismatch) — omitted when unknown.
+    // WITHOUT a token. Carries no sensitive data. The fields:
+    //   - `hostId`   — the STABLE per-install identity (carrier-independent). It,
+    //     not the mutable IP, is the discriminator between hosts and the key a
+    //     saved pairing/token survives an IP change under. Null on a host that
+    //     predates this (an old client then falls back to ip:port keying).
+    //   - `name` / `hostname` — the display name (os.hostname()). `hostname` is
+    //     kept for back-compat with clients that read the original field.
+    //   - `dnsName` — the Tailscale MagicDNS name: a stable DIAL address (what the
+    //     TLS cert covers), distinct from identity. Null over http / off-tailnet.
+    //   - `protocolVersion` — bridge protocol (an integer, not the app version, so
+    //     patch betas don't force upgrades); lets a client detect an incompatible
+    //     peer (and the limbo poll re-check it after a host upgrade).
+    //   - `appVersion` — the RELEASE version, for a soft "host is on an older
+    //     build" nudge (distinct from the hard protocol mismatch); null when
+    //     unknown.
     if (pathname === '/api/ping') {
         sendJson(res, 200, {
             genie: true,
+            hostId: info.hostId ?? null,
+            name: os.hostname(),
             hostname: os.hostname(),
+            dnsName: info.dnsName ?? null,
             protocolVersion: BRIDGE_PROTOCOL_VERSION,
             appVersion: info.serverVersion ?? null,
         });

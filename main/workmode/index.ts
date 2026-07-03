@@ -1,5 +1,6 @@
 import { BrowserWindow } from 'electron';
 import { getTailscaleStatus } from '../tailscale';
+import { connKeyOf } from '../remote';
 
 /**
  * Work Mode — remote (Phase 2). A Genie in remote mode connects to a HOST Genie
@@ -14,12 +15,21 @@ import { getTailscaleStatus } from '../tailscale';
 
 /** A Genie host discovered on the tailnet (answered the `/api/ping` beacon). */
 export interface GenieHost {
-    /** The host's own `os.hostname()` (from the beacon). */
+    /** The host's display name (`name`/`hostname` from the beacon). */
     hostname: string;
     /** The tailnet peer name (from `tailscale status`). */
     peerName: string;
     ip: string;
     port: number;
+    /** The host's STABLE per-install identity (from the beacon) — the merge/
+     *  connect discriminator. Absent for an old host (→ ip:port keying). */
+    hostId?: string;
+    /** MagicDNS dial address advertised by the beacon (stable; cert-covered). */
+    dnsName?: string;
+    /** The registry/connect key: `host:<hostId>` once identified, else `ip:port`.
+     *  The picker merges known + discovered on this, so a host at a changed IP
+     *  isn't a duplicate and matches its persisted entry. */
+    connKey: string;
 }
 
 /** The default mobile/Work-Mode server port (mirrors db.ts mobile_port default). */
@@ -38,10 +48,21 @@ async function probe(
         const res = await fetch(`http://${ip}:${port}/api/ping`, { signal: ctrl.signal });
         if (!res.ok) return null;
         const data = (await res.json().catch(() => null)) as
-            | { genie?: boolean; hostname?: string }
+            | { genie?: boolean; hostname?: string; name?: string; hostId?: string; dnsName?: string }
             | null;
         if (!data?.genie) return null;
-        return { hostname: data.hostname || peerName, peerName, ip, port };
+        const hostId = typeof data.hostId === 'string' && data.hostId ? data.hostId : undefined;
+        const dnsName = typeof data.dnsName === 'string' && data.dnsName ? data.dnsName : undefined;
+        return {
+            hostname: data.name || data.hostname || peerName,
+            peerName,
+            ip,
+            port,
+            hostId,
+            dnsName,
+            // Same scheme the remote registry uses, so known + discovered merge.
+            connKey: connKeyOf({ ip, port, hostId }),
+        };
     } catch {
         return null; // unreachable / not a Genie host / timed out
     } finally {
@@ -54,6 +75,13 @@ async function probe(
  * port for the `/api/ping` beacon. A host only answers when its Work Mode (host /
  * mobile remote control) is ENABLED. Hosts on a non-default port aren't
  * auto-found — the UI offers manual host:port entry for those.
+ *
+ * Results are MERGED by stable identity (`connKey` = `host:<hostId>` when the
+ * beacon carries one, else `ip:port`): the same host reachable at two addresses,
+ * or observed just after an IP reassignment, collapses to ONE entry instead of
+ * appearing as a duplicate. Each entry records its own `port`, so identity — not
+ * the port — is the discriminator. An old host with no `hostId` stays keyed by
+ * `ip:port` (unchanged behaviour).
  */
 export async function discoverHosts(): Promise<GenieHost[]> {
     const status = await getTailscaleStatus();
@@ -62,7 +90,14 @@ export async function discoverHosts(): Promise<GenieHost[]> {
     const found = await Promise.all(
         peers.map((p) => probe(p.ip as string, DEFAULT_PORT, p.hostname || (p.ip as string))),
     );
-    return found.filter((h): h is GenieHost => h !== null);
+    const byKey = new Map<string, GenieHost>();
+    for (const h of found) {
+        if (!h) continue;
+        // First observation wins; identity (not the address) is the discriminator,
+        // so a second IP for the same hostId isn't a separate host.
+        if (!byKey.has(h.connKey)) byKey.set(h.connKey, h);
+    }
+    return [...byKey.values()];
 }
 
 // Track open remote windows by host so re-connecting focuses the existing one.

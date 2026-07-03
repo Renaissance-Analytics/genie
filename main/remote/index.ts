@@ -50,6 +50,17 @@ export interface RemoteHost {
     ip: string;
     port: number;
     hostname: string;
+    /**
+     * The host's STABLE per-install identity (from `/api/ping`). This — not the
+     * mutable `ip:port` — is the connKey / token / known-host key once known, so a
+     * saved pairing survives a Tailscale IP reassignment and a recycled IP can't
+     * match a stale token. Absent for an old host (no `hostId` in ping) or before
+     * the first ping → identity falls back to `ip:port` (back-compat).
+     */
+    hostId?: string;
+    /** Tailscale MagicDNS name — a stable DIAL address (what the TLS cert covers),
+     *  recorded alongside the IP. Not identity; may be absent. */
+    dnsName?: string;
 }
 
 /** After this many consecutive `/ws/events` reconnects that never reach `open`
@@ -134,7 +145,20 @@ const connections = new Map<string, RemoteConnection>();
 /** webContents.id → connKey. Absent ⇒ the window is LOCAL. */
 const bindings = new Map<number, string>();
 
-function connKeyOf(host: RemoteHost): string {
+/**
+ * The registry / persistence key for a tailnet host. `host:<hostId>` once the
+ * host's stable install identity is known (so the key survives IP changes —
+ * mirroring the relay's `ws:<workstationId>`), else the legacy `ip:port` for an
+ * old host that advertises no `hostId` (back-compat). Exported so identity-first
+ * discovery (`workmode`) derives the SAME key.
+ */
+export function connKeyOf(host: { ip: string; port: number; hostId?: string }): string {
+    return host.hostId ? `host:${host.hostId}` : `${host.ip}:${host.port}`;
+}
+
+/** The legacy address-based key (`ip:port`) — the pre-hostId scheme a stored
+ *  pairing is migrated FROM when the host's `hostId` first becomes known. */
+function ipPortKey(host: { ip: string; port: number }): string {
     return `${host.ip}:${host.port}`;
 }
 
@@ -196,6 +220,11 @@ export interface KnownHost {
     hostname: string;
     /** User-chosen label; falls back to hostname in the UI. */
     name?: string;
+    /** The host's stable install identity (when known) — the record is keyed by
+     *  `host:<hostId>`, and `ip`/`port`/`dnsName` are refreshed dial fields. */
+    hostId?: string;
+    /** Last-seen MagicDNS dial address (refreshed on connect). */
+    dnsName?: string;
 }
 
 function knownHostsPath(): string {
@@ -217,11 +246,19 @@ function writeKnownHosts(store: Record<string, KnownHost>): void {
 }
 
 /** Remember a host in the picker list (called on a successful connect). Keeps any
- *  existing friendly name; refreshes ip/hostname in case they changed. */
+ *  existing friendly name; refreshes the DIAL fields (ip/port/hostname/dnsName) in
+ *  case they changed — identity (the key) stays put. */
 export function recordKnownHost(host: RemoteHost): void {
     const store = readKnownHosts();
     const key = connKeyOf(host);
-    store[key] = { ...store[key], ip: host.ip, port: host.port, hostname: host.hostname };
+    store[key] = {
+        ...store[key],
+        ip: host.ip,
+        port: host.port,
+        hostname: host.hostname,
+        hostId: host.hostId,
+        dnsName: host.dnsName,
+    };
     writeKnownHosts(store);
 }
 
@@ -581,24 +618,41 @@ async function refreshControlState(conn: RemoteConnection): Promise<void> {
     }
 }
 
-/** Read the host's `/api/ping`: bridge protocol version + release app version.
- *  Null when unreachable; a host predating protocol versioning reports none → 0
- *  (→ hard "behind"), and one predating appVersion reports null (→ no soft
- *  nudge — we never nudge on an unknown host build). */
-async function fetchHostPing(
-    host: RemoteHost,
-): Promise<{ protocolVersion: number; appVersion: string | null } | null> {
+/** Read the host's `/api/ping`: stable identity (hostId/name/dnsName) + bridge
+ *  protocol version + release app version. Null when unreachable; a host predating
+ *  protocol versioning reports none → 0 (→ hard "behind"), one predating
+ *  appVersion reports null (→ no soft nudge), and one predating `hostId` reports
+ *  null (→ identity falls back to ip:port). */
+async function fetchHostPing(host: RemoteHost): Promise<{
+    protocolVersion: number;
+    appVersion: string | null;
+    hostId: string | null;
+    name: string | null;
+    dnsName: string | null;
+} | null> {
     try {
         const res = await fetch(`http://${host.ip}:${host.port}/api/ping`);
         if (!res.ok) return null;
         const data = (await res.json()) as {
             protocolVersion?: number;
             appVersion?: string | null;
+            hostId?: string | null;
+            name?: string | null;
+            hostname?: string | null;
+            dnsName?: string | null;
         };
         return {
             protocolVersion:
                 typeof data?.protocolVersion === 'number' ? data.protocolVersion : 0,
             appVersion: typeof data?.appVersion === 'string' ? data.appVersion : null,
+            hostId: typeof data?.hostId === 'string' && data.hostId ? data.hostId : null,
+            name:
+                typeof data?.name === 'string'
+                    ? data.name
+                    : typeof data?.hostname === 'string'
+                        ? data.hostname
+                        : null,
+            dnsName: typeof data?.dnsName === 'string' && data.dnsName ? data.dnsName : null,
         };
     } catch {
         return null;
@@ -1147,8 +1201,66 @@ type ConnectResult = { ok: boolean; connKey?: string; error?: string; needsPin?:
  *  orphan the winner's eventsWs, which reconnects forever with no owner). */
 const connectInFlight = new Map<string, Promise<ConnectResult>>();
 
+/**
+ * One-time, IDEMPOTENT migration of the pre-hostId (IP-keyed) stores to the stable
+ * `host:<hostId>` key, so upgrading to identity-keyed pairing does NOT force a
+ * paired host back to PIN. When the host's `hostId` first becomes known we move any
+ * `ip:port`-keyed saved token + known-host entry (from the current dial address) to
+ * the new key, preserving the user's friendly name. We ALWAYS delete the old
+ * IP-keyed token once identity is known — leaving it behind is exactly the
+ * recycled-IP → stale-token → wrong-host bug this change fixes.
+ */
+function migrateIpKeyedIdentity(host: RemoteHost, newKey: string): void {
+    const oldKey = ipPortKey(host);
+    if (oldKey === newKey) return; // no hostId → still ip:port-keyed, nothing to move
+
+    const tokens = readTokenStore();
+    if (tokens[oldKey]) {
+        if (!tokens[newKey]) tokens[newKey] = tokens[oldKey];
+        delete tokens[oldKey];
+        writeTokenStore(tokens);
+    }
+
+    const known = readKnownHosts();
+    if (known[oldKey]) {
+        if (!known[newKey]) known[newKey] = { ...known[oldKey] };
+        delete known[oldKey];
+        writeKnownHosts(known);
+    }
+}
+
+/**
+ * Resolve a host's STABLE identity before we key anything off it. If the caller
+ * didn't already carry a `hostId` (a manual `ip:port` connect, or a first pairing),
+ * ping `/api/ping` to learn it. Once known, migrate the IP-keyed stores to
+ * `host:<hostId>` (idempotent). An old host (no `hostId`) or an unreachable ping
+ * returns the host unchanged → identity stays `ip:port` (back-compat / graceful
+ * fallback: old↔new still connects). Returns a host augmented with hostId/dnsName.
+ */
+async function resolveHostIdentity(host: RemoteHost): Promise<RemoteHost> {
+    let hostId = host.hostId;
+    let dnsName = host.dnsName;
+    if (!hostId) {
+        const ping = await fetchHostPing(host);
+        if (ping?.hostId) {
+            hostId = ping.hostId;
+            dnsName = dnsName ?? ping.dnsName ?? undefined;
+        }
+    }
+    if (!hostId) return host; // old host / unreachable → ip:port fallback
+    const identified: RemoteHost = { ...host, hostId, dnsName };
+    migrateIpKeyedIdentity(host, connKeyOf(identified));
+    return identified;
+}
+
 export async function connectRemote(host: RemoteHost, pin?: string): Promise<ConnectResult> {
-    const connKey = connKeyOf(host);
+    // Resolve the STABLE identity FIRST so the connKey + token/known-host lookups
+    // key on `hostId`, not the mutable `ip:port` (and migrate any legacy IP-keyed
+    // pairing). The single `await` before the dedup checks below yields once; the
+    // connKey→inFlight critical section that follows runs without an await, so two
+    // concurrent connects for the same host still collapse to one attempt.
+    const identified = await resolveHostIdentity(host);
+    const connKey = connKeyOf(identified);
 
     // Already connected to this host → reuse it (a host window re-open / a second
     // request for the same host shares the one connection).
@@ -1157,7 +1269,7 @@ export async function connectRemote(host: RemoteHost, pin?: string): Promise<Con
     const inFlight = connectInFlight.get(connKey);
     if (inFlight) return inFlight;
 
-    const run = connectRemoteInner(host, pin, connKey);
+    const run = connectRemoteInner(identified, pin, connKey);
     connectInFlight.set(connKey, run);
     try {
         return await run;

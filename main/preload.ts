@@ -147,7 +147,15 @@ const api = {
     workmode: {
         discoverHosts: () =>
             ipcRenderer.invoke('workmode:discover-hosts') as Promise<
-                Array<{ hostname: string; peerName: string; ip: string; port: number }>
+                Array<{
+                    hostname: string;
+                    peerName: string;
+                    ip: string;
+                    port: number;
+                    hostId?: string;
+                    dnsName?: string;
+                    connKey: string;
+                }>
             >,
         openRemote: (host: { ip: string; port: number; hostname: string }) =>
             ipcRenderer.invoke('workmode:open-remote', host) as Promise<{ ok: boolean }>,
@@ -229,7 +237,16 @@ const api = {
             ipcRenderer.invoke('remote:terminal-detach', id) as Promise<{ ok: boolean }>,
         // Hosts picker (local window): open a host's OWN native Floor window
         // (connecting + handling the PIN), and manage the known-hosts list.
-        open: (host: { ip: string; port: number; hostname: string }, pin?: string) =>
+        open: (
+            host: {
+                ip: string;
+                port: number;
+                hostname: string;
+                hostId?: string;
+                dnsName?: string;
+            },
+            pin?: string,
+        ) =>
             ipcRenderer.invoke('host:open', host, pin) as Promise<{
                 ok: boolean;
                 connKey?: string;
@@ -243,6 +260,8 @@ const api = {
                     port: number;
                     hostname: string;
                     name?: string;
+                    hostId?: string;
+                    dnsName?: string;
                     connKey: string;
                     connected: boolean;
                 }>
