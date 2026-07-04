@@ -17,10 +17,10 @@ import {
 import { showPrompt } from '../Master/Prompt';
 import { closeTab as closeTabState, openTab as openTabState, reconcileTabs } from '../../lib/editor-tabs';
 import { onOpenInPanel, resolveCursorLine, type RevealTarget } from '../../lib/editor-open';
+import PluginEditorBody from '../Plugins/PluginEditorBody';
 import {
     api,
     isSystemWorkspace,
-    SYSTEM_WORKSPACE_ID,
     type TerminalSpec,
     type TreeNodeData,
     type ViewMeta,
@@ -40,11 +40,16 @@ interface Props {
     style?: CSSProperties;
 }
 
-/** Per-tab editor state: the file's text, its language, and unsaved flag. */
+/** Per-tab editor state: the file's text, its language, and unsaved flag.
+ *  A PLUGIN tab (kind 'plugin') is rendered by the claiming plugin's Fancy
+ *  editor instead of the text editor — it carries no text content here (the
+ *  body owns its model); dirty mirrors the body's flag. */
 interface FileState {
     content: string;
     language: string;
     dirty: boolean;
+    kind?: 'text' | 'plugin';
+    plugin?: { pluginId: string; fancyExport: string };
 }
 
 /**
@@ -260,29 +265,58 @@ export default function CodePanel({
         };
     }, [workspacePath]);
 
-    /** Open (or focus) a file as a tab. Reads from disk only if not already
-     *  open. Returns whether the file actually opened — a failed read (e.g. a
-     *  binary format) sets loadError instead, and the caller must NOT act as if
-     *  a tab appeared (hiding the tree on a failed open left the user staring
-     *  at an empty panel). */
+    // Per-plugin-tab save handlers, registered by each PluginEditorBody so the
+    // panel's save button / Ctrl+S can drive the ACTIVE plugin tab's save.
+    const pluginSaves = useRef(new Map<string, () => Promise<void>>());
+
+    const setFileDirty = useCallback((rel: string, dirty: boolean) => {
+        setFiles((m) => (m[rel] ? { ...m, [rel]: { ...m[rel], dirty } } : m));
+    }, []);
+
+    /** Open (or focus) a file as a tab. A plugin-claimed extension opens as a
+     *  PLUGIN TAB in THIS panel (rendered by the plugin's Fancy editor — §6.1);
+     *  everything else reads from disk as text. Returns whether the file
+     *  actually opened — a failed read sets loadError instead, and the caller
+     *  must NOT act as if a tab appeared (hiding the tree on a failed open left
+     *  the user staring at an empty panel). */
     const openTab = useCallback(
         async (relPath: string): Promise<boolean> => {
             setLoadError(null);
             try {
                 if (!filesRef.current[relPath]) {
-                    const { content: text } = await api().files.read(
-                        workspacePath,
-                        relPath,
-                        system,
-                    );
-                    setFiles((m) => ({
-                        ...m,
-                        [relPath]: {
-                            content: text,
-                            language: languageFor(relPath),
-                            dirty: false,
-                        },
-                    }));
+                    const plugin = await api()
+                        .plugins.editorFor(relPath)
+                        .catch(() => null);
+                    if (plugin) {
+                        setFiles((m) => ({
+                            ...m,
+                            [relPath]: {
+                                content: '',
+                                language: '',
+                                dirty: false,
+                                kind: 'plugin',
+                                plugin: {
+                                    pluginId: plugin.pluginId,
+                                    fancyExport: plugin.fancyExport,
+                                },
+                            },
+                        }));
+                    } else {
+                        const { content: text } = await api().files.read(
+                            workspacePath,
+                            relPath,
+                            system,
+                        );
+                        setFiles((m) => ({
+                            ...m,
+                            [relPath]: {
+                                content: text,
+                                language: languageFor(relPath),
+                                dirty: false,
+                                kind: 'text',
+                            },
+                        }));
+                    }
                 }
                 const next = openTabState(openFilesRef.current, relPath);
                 setOpenFiles(next.open);
@@ -329,6 +363,25 @@ export default function CodePanel({
             const ok: string[] = [];
             for (const rel of seedOpen) {
                 try {
+                    // Plugin-claimed tabs re-resolve on reopen (the body reads
+                    // the file itself through the guarded bridge).
+                    const plugin = await api()
+                        .plugins.editorFor(rel)
+                        .catch(() => null);
+                    if (plugin) {
+                        loaded[rel] = {
+                            content: '',
+                            language: '',
+                            dirty: false,
+                            kind: 'plugin',
+                            plugin: {
+                                pluginId: plugin.pluginId,
+                                fancyExport: plugin.fancyExport,
+                            },
+                        };
+                        ok.push(rel);
+                        continue;
+                    }
                     const { content: text } = await api().files.read(
                         workspacePath,
                         rel,
@@ -338,6 +391,7 @@ export default function CodePanel({
                         content: text,
                         language: languageFor(rel),
                         dirty: false,
+                        kind: 'text',
                     };
                     ok.push(rel);
                 } catch {
@@ -377,6 +431,13 @@ export default function CodePanel({
         if (!file) return;
         const st = filesRef.current[file];
         if (!st) return;
+        // A plugin tab saves through ITS body (the model lives there); the
+        // body clears the dirty flag via onDirtyChange.
+        if (st.kind === 'plugin') {
+            await pluginSaves.current.get(file)?.();
+            setGitRefreshKey((k) => k + 1);
+            return;
+        }
         try {
             await api().files.write(workspacePath, file, st.content, system);
             setFiles((m) =>
@@ -429,6 +490,7 @@ export default function CodePanel({
                 relPath,
             );
             setOpenFiles(next.open);
+            pluginSaves.current.delete(relPath);
             setFiles((m) => {
                 const c = { ...m };
                 delete c[relPath];
@@ -442,32 +504,13 @@ export default function CodePanel({
 
     const selectFile = useCallback(
         async (relPath: string) => {
-            // §6.1 applies to the TREENAV too: a file whose extension an enabled
-            // plugin claims opens in its plugin editor PANEL — routed through the
-            // same main-side open-file flow the MCP path uses. The text reader
-            // below chokes on claimed binary formats (.pptx/.xlsx), which used to
-            // fail silently while still hiding the tree.
-            try {
-                const plugin = await api().plugins.editorFor(relPath);
-                if (plugin) {
-                    const res = await api().editor.requestOpen({
-                        workspaceId: spec.workspace_id ?? SYSTEM_WORKSPACE_ID,
-                        root: workspacePath,
-                        relPath,
-                    });
-                    if (res.ok) {
-                        if (!treePinnedRef.current) setTreeVisible(false);
-                        return;
-                    }
-                }
-            } catch {
-                /* plugin routing unavailable — fall through to the text path */
-            }
+            // openTab routes plugin-claimed files to a PLUGIN TAB in this panel
+            // (§6.1) — the file always opens exactly where the user clicked it.
             const opened = await openTab(relPath);
             // A failed open keeps the tree up so the error stays visible.
             if (opened && !treePinnedRef.current) setTreeVisible(false);
         },
-        [openTab, workspacePath, spec.workspace_id],
+        [openTab],
     );
 
     const handleClose = useCallback(async () => {
@@ -706,7 +749,33 @@ export default function CodePanel({
                     </div>
                 )}
                 <div className="code-editor-col">
-                    {activeFile && active ? (
+                    {/* Plugin tabs stay MOUNTED while other tabs are active —
+                        their editor model (unsaved edits included) lives inside
+                        the body, so unmounting on a tab switch would discard it. */}
+                    {openFiles
+                        .filter((p) => files[p]?.kind === 'plugin' && files[p]?.plugin)
+                        .map((p) => (
+                            <div
+                                key={p}
+                                className="code-plugin-tab"
+                                style={{
+                                    display: p === activeFile ? 'flex' : 'none',
+                                    flexDirection: 'column',
+                                    flex: 1,
+                                    minHeight: 0,
+                                }}
+                            >
+                                <PluginEditorBody
+                                    pluginId={files[p]!.plugin!.pluginId}
+                                    fancyExport={files[p]!.plugin!.fancyExport}
+                                    root={workspacePath}
+                                    file={p}
+                                    onDirtyChange={(d) => setFileDirty(p, d)}
+                                    registerSave={(fn) => pluginSaves.current.set(p, fn)}
+                                />
+                            </div>
+                        ))}
+                    {activeFile && active && active.kind !== 'plugin' ? (
                         <CodeEditor
                             key={activeFile}
                             className="cv-editor"
@@ -735,7 +804,7 @@ export default function CodePanel({
                             <EditorWand />
                             <WordWrapSync wrap={wordWrap} />
                         </CodeEditor>
-                    ) : (
+                    ) : activeFile && active?.kind === 'plugin' ? null : (
                         <div className="code-empty">
                             {loadError ? (
                                 <span className="code-empty-err">{loadError}</span>

@@ -1,12 +1,23 @@
+import { useState } from 'react';
+import { marked } from 'marked';
 import { Editor } from '@particle-academy/react-fancy';
 
 /**
  * The Document plugin's editor surface — react-fancy's compound `Editor`
- * (WYSIWYG over a MARKDOWN string model) with a document-shaped toolbar.
- * Wrapped in its own module (instead of lazy-importing `Editor` directly in
- * PluginEditorHost) because the compound's statics (Editor.Toolbar /
+ * (WYSIWYG whose OUTPUT model is a MARKDOWN string) with a document-shaped
+ * toolbar. Wrapped in its own module (instead of lazy-importing `Editor`
+ * directly in the host) because the compound's statics (Editor.Toolbar /
  * Editor.Content) aren't reachable through a React.lazy wrapper — this whole
  * module is what the host lazy-loads.
+ *
+ * The incoming value's format is KNOWN (markdown — the file type says so), so
+ * we convert it to HTML for the contentEditable OURSELVES at mount instead of
+ * letting Editor's `detectFormat` sniff it: real-world dev markdown routinely
+ * contains HTML-ish snippets (a literal `<code>`, `<table`, …) that flip the
+ * sniff to 'html' and render the raw markdown as a single collapsed wall.
+ * Editor takes an html-shaped value as-is, sanitizes it, and — with
+ * `outputFormat="markdown"` — its onChange still emits markdown.
+ * (Upstream ask: an explicit value-format prop on Editor.)
  */
 
 const ACTIONS = [
@@ -26,12 +37,20 @@ export default function DocumentEditor({
     value,
     onChange,
 }: {
+    /** The document as MARKDOWN (the model both .md and .docx open into). */
     value: string;
     onChange: (v: string) => void;
 }) {
+    // Converted ONCE at mount — the contentEditable is uncontrolled after that
+    // (Editor only reads the value again when re-entering edit mode), and every
+    // onChange hands back markdown, so the parent keeps a markdown model.
+    const [initialHtml] = useState(() =>
+        (marked.parse(value ?? '', { async: false }) as string).trim(),
+    );
+
     return (
         <Editor
-            value={value}
+            value={initialHtml}
             onChange={onChange}
             outputFormat="markdown"
             className="h-full flex flex-col rounded-none border-0"

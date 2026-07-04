@@ -33,7 +33,6 @@ import {
 } from '../lib/view-state';
 import { planCommitStep, shouldDriveRestart } from '../lib/updater-flow';
 import { pickReusePanel, emitOpenInPanel } from '../lib/editor-open';
-import { pickReusePluginPanel, pluginSpecMeta } from '../lib/panel-routing';
 import {
     IconBox,
     IconChevronDown,
@@ -1140,48 +1139,11 @@ function MasterInner() {
     const activateWorkspaceRef = useRef(activateWorkspace);
     activateWorkspaceRef.current = activateWorkspace;
     useEffect(() => {
-        return api().on.editorOpenFile?.(({ requestId, workspaceId, root, relPath, line, pluginEditor }) => {
+        return api().on.editorOpenFile?.(({ requestId, workspaceId, root, relPath, line }) => {
             const system = workspaceId === SYSTEM_WORKSPACE_ID;
-            // §6.1: a file whose extension a plugin claims opens in a plugin
-            // editor panel (type:'plugin' -> PluginEditorHost) instead of code.
-            if (pluginEditor) {
-                const reusePlugin = pickReusePluginPanel(
-                    specsRef.current,
-                    { pluginId: pluginEditor.pluginId, file: relPath },
-                    selectedRef.current,
-                );
-                if (reusePlugin) {
-                    if (system) setSystemRevealed(true);
-                    activateWorkspaceRef.current(workspaceId);
-                    setFocusId(reusePlugin);
-                    void api().editor.openFileResult(requestId, { reused: true, opened: false });
-                    return;
-                }
-                void (async () => {
-                    try {
-                        const wsRow = workspacesByIdRef.current.get(workspaceId);
-                        const base = (wsRow?.project_name ?? 'plugin')
-                            .toLowerCase()
-                            .replace(/\s+/g, '-');
-                        const created = await api().terminalSpec.create({
-                            id: ulid(),
-                            workspace_id: system ? null : workspaceId,
-                            label: `${base}-${pluginEditor.editorId}`,
-                            cwd: root,
-                            type: 'plugin',
-                            meta: pluginSpecMeta(pluginEditor, relPath, system),
-                        });
-                        setSpecs((prev) => [...prev, created]);
-                        setSelected((prev) => new Set(prev).add(created.id));
-                        if (system) setSystemRevealed(true);
-                        activateWorkspaceRef.current(workspaceId);
-                        void api().editor.openFileResult(requestId, { reused: false, opened: true });
-                    } catch {
-                        void api().editor.openFileResult(requestId, { reused: false, opened: false });
-                    }
-                })();
-                return;
-            }
+            // Every file — plugin-claimed included — opens as a TAB in a code
+            // Editor panel; CodePanel routes claimed extensions to a plugin tab
+            // itself (§6.1), so there is exactly ONE open path here.
             const reuseId = pickReusePanel(
                 specsRef.current,
                 { workspaceId, root },

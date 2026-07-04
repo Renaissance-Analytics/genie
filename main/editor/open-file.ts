@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { SYSTEM_WORKSPACE_ID } from '../terminal/workspace-of-terminal';
 import type { OpenFileRequest, OpenFileResult } from '../mcp/protocol';
-import type { ResolvedPluginEditor } from '../plugins/editor-routing';
 
 /**
  * Backs the `openFileForUser` MCP tool: resolve the caller's workspace + the
@@ -82,20 +81,16 @@ export interface OpenFileDeps {
     getWorkspaceRoot: (workspaceId: string) => string | null;
     /** The user's home dir (System root + relative-path base). */
     homeDir: () => string;
-    /**
-     * Resolve the plugin editor that claims a file's extension (§6.1), or null
-     * for the default code editor. Injected so open-file stays db-free + testable.
-     */
-    resolvePluginEditor?: (relPath: string) => ResolvedPluginEditor | null;
-    /** Surface the master Floor and push it the open-file request. */
+    /** Surface the master Floor and push it the open-file request. The Floor
+     *  always opens into a code Editor panel — CodePanel itself routes a
+     *  plugin-claimed extension to a plugin TAB (§6.1), so there is exactly one
+     *  open path and no editor decision rides this payload. */
     sendOpenFile: (payload: {
         requestId: string;
         workspaceId: string;
         root: string;
         relPath: string;
         line?: number;
-        /** Set when the extension routes to a plugin editor instead of code. */
-        pluginEditor?: ResolvedPluginEditor;
     }) => void;
 }
 
@@ -113,37 +108,6 @@ export function registerOpenFile(d: OpenFileDeps): void {
                 pending.delete(requestId);
                 p.resolve({ reused: !!result?.reused, opened: !!result?.opened });
             }
-            return { ok: true };
-        },
-    );
-    // Renderer-initiated open (the CODE PANEL'S TREENAV clicking a file whose
-    // extension a plugin claims): resolve the plugin editor authoritatively here
-    // and push the SAME open-file request the MCP path uses, so plugin-panel
-    // reuse/creation lives in exactly one master handler. Fire-and-forget — no
-    // pending entry; the master's openFileResult reply just no-ops.
-    ipcMain.handle(
-        'editor:request-open',
-        (
-            _e,
-            payload: { workspaceId?: unknown; root?: unknown; relPath?: unknown },
-        ): { ok: boolean; error?: string } => {
-            if (!deps) return { ok: false, error: 'Editor not ready.' };
-            const workspaceId = typeof payload?.workspaceId === 'string' ? payload.workspaceId : '';
-            const root = typeof payload?.root === 'string' ? payload.root : '';
-            const relPath = typeof payload?.relPath === 'string' ? payload.relPath : '';
-            if (!workspaceId || !root || !relPath) {
-                return { ok: false, error: 'workspaceId, root and relPath are required.' };
-            }
-            const pluginEditor = deps.resolvePluginEditor
-                ? deps.resolvePluginEditor(relPath)
-                : null;
-            deps.sendOpenFile({
-                requestId: crypto.randomUUID(),
-                workspaceId,
-                root,
-                relPath,
-                ...(pluginEditor ? { pluginEditor } : {}),
-            });
             return { ok: true };
         },
     );
@@ -186,16 +150,12 @@ export async function openFileForUserForMcp(
         }, REPLY_TIMEOUT_MS);
         if (typeof timer.unref === 'function') timer.unref();
         pending.set(requestId, { resolve, timer });
-        const pluginEditor = deps!.resolvePluginEditor
-            ? deps!.resolvePluginEditor(relPath)
-            : null;
         deps!.sendOpenFile({
             requestId,
             workspaceId,
             root,
             relPath,
             ...(typeof req.line === 'number' ? { line: req.line } : {}),
-            ...(pluginEditor ? { pluginEditor } : {}),
         });
     });
 

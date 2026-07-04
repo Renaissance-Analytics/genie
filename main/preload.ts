@@ -503,13 +503,6 @@ const api = {
             ipcRenderer.invoke('editor:open-file-result', requestId, result) as Promise<{
                 ok: boolean;
             }>,
-        /** Renderer-initiated open (treenav → plugin editor): main resolves the
-         *  claiming plugin and pushes the same open-file request the MCP uses. */
-        requestOpen: (payload: { workspaceId: string; root: string; relPath: string }) =>
-            ipcRenderer.invoke('editor:request-open', payload) as Promise<{
-                ok: boolean;
-                error?: string;
-            }>,
     },
     settings: {
         get: () => ipcRenderer.invoke('settings:get'),

@@ -163,7 +163,8 @@ import { registerGithubIpc } from './github/ipc';
 import { registerPluginsIpc } from './plugins/ipc';
 import { registerPluginEditorBridge } from './plugins/editor-bridge';
 import { registerDocumentConvert } from './plugins/document-convert';
-import { resolvePluginEditor } from './plugins/editor-routing';
+// (plugin editor-routing is consumed via the plugins:editor-for IPC in
+// editor-bridge.ts — CodePanel asks it per tab open.)
 import { revalidateAllPluginTrust } from './plugins/install';
 import {
     registerCapabilityIpc,
@@ -1038,8 +1039,6 @@ app.whenReady().then(async () => {
         workspaceIdOfTerminal,
         getWorkspaceRoot: (wsId) => getWorkspace(wsId)?.path ?? null,
         homeDir: () => os.homedir(),
-        // Route a claimed extension to its plugin editor (§6.1); null = code editor.
-        resolvePluginEditor: (relPath) => resolvePluginEditor(relPath),
         sendOpenFile: (payload) => {
             // Surface the master window so the file is actually visible, then push
             // the request (after its content has loaded, on a cold open).

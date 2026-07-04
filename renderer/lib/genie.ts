@@ -1400,13 +1400,6 @@ export interface GenieApi {
             requestId: string,
             result: { reused: boolean; opened: boolean },
         ) => Promise<{ ok: boolean }>;
-        /** Renderer-initiated open (treenav → plugin editor): main resolves the
-         *  claiming plugin and pushes the same open-file flow the MCP uses. */
-        requestOpen: (payload: {
-            workspaceId: string;
-            root: string;
-            relPath: string;
-        }) => Promise<{ ok: boolean; error?: string }>;
     };
     settings: {
         get: () => Promise<Settings>;
@@ -1997,13 +1990,6 @@ export interface GenieApi {
                 root: string;
                 relPath: string;
                 line?: number;
-                pluginEditor?: {
-                    pluginId: string;
-                    editorId: string;
-                    fancyExport: string;
-                    fancyPackage: string;
-                    fancyVersion: string;
-                };
             }) => void,
         ) => () => void;
         /** A background Process changed status. */
