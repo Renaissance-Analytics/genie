@@ -262,6 +262,99 @@ describe('computeLaunchSelection', () => {
     });
 });
 
+/**
+ * The two owner-reported symptoms as launch-restore invariants:
+ *  1. RECONNECT to a host — the client-local view is keyed by the host's STABLE
+ *     `host:<hostId>` connKey (Work Mode Phase A), which does NOT change between
+ *     reconnects, so a panel closed in a host window stays closed on the next
+ *     reconnect (the saved view is FOUND under the same key, never re-seeded).
+ *  2. LOCAL restart / upgrade — connKey is the stable `'local'` sentinel, so the
+ *     `local|<ws>` view survives; closed panels stay closed.
+ * Both reduce to: the saved view is found under a STABLE key and honoured over the
+ * host's `enabled` default. The counter-case shows the failure mode a key CHANGE
+ * would cause (why the key must be stable).
+ */
+describe('closed panels survive reconnect + restart (stable-connKey restore)', () => {
+    // A host with three enabled specs; b was CLOSED in this window → the saved view
+    // holds just [a, c] under the stable host key.
+    const HOST_KEY = 'host:2f9c-uuid';
+    const hostSpecs = [spec('a', 'A'), spec('b', 'A'), spec('c', 'A')];
+    const savedHostView = writeWorkspaceView({}, HOST_KEY, 'A', {
+        ...emptyView,
+        visibleIds: ['a', 'c'],
+    });
+
+    it('a RECONNECT with the same stable host key keeps the closed panel closed', () => {
+        const result = computeLaunchSelection({
+            specs: hostSpecs,
+            workspaces: [ws('A')],
+            savedActiveWorkspace: 'A',
+            stageSeedWorkspace: null,
+            systemWorkspaceId: SYSTEM,
+            viewStore: savedHostView,
+            connKey: HOST_KEY,
+        });
+        // b stays hidden even though it is still `enabled` on the host.
+        expect(result.selectedIds.sort()).toEqual(['a', 'c']);
+        expect(result.selectedIds).not.toContain('b');
+    });
+
+    it('a CHANGED connKey (the pre-Phase-A / unstable-key bug) loses the view → re-seeds ALL', () => {
+        // If the window's connKey drifted (e.g. an old ip:port that Tailscale
+        // recycled), the saved `host:<hostId>|A` entry is not found and every
+        // enabled spec — including the closed b — is re-seeded. This documents WHY
+        // the connKey must be the stable identity, not a mutable address.
+        const result = computeLaunchSelection({
+            specs: hostSpecs,
+            workspaces: [ws('A')],
+            savedActiveWorkspace: 'A',
+            stageSeedWorkspace: null,
+            systemWorkspaceId: SYSTEM,
+            viewStore: savedHostView,
+            connKey: '100.64.0.7:51717', // a different key than the view was saved under
+        });
+        expect(result.selectedIds.sort()).toEqual(['a', 'b', 'c']);
+    });
+
+    it('a LOCAL restart/upgrade keeps the local|<ws> view (closed stays closed)', () => {
+        const savedLocalView = writeWorkspaceView({}, 'local', 'A', {
+            ...emptyView,
+            visibleIds: ['a'],
+        });
+        const result = computeLaunchSelection({
+            specs: [spec('a', 'A'), spec('b', 'A')],
+            workspaces: [ws('A')],
+            savedActiveWorkspace: 'A',
+            stageSeedWorkspace: null,
+            systemWorkspaceId: SYSTEM,
+            viewStore: savedLocalView,
+            connKey: 'local',
+        });
+        expect(result.selectedIds).toEqual(['a']);
+    });
+
+    it('reloaded EXISTING specs never override the saved closed set; only the saved ids open', () => {
+        // The host gains a spec `d` that was created+persisted-open earlier: it is
+        // part of the saved view, so it opens. `b`/`e` are enabled but absent from
+        // the saved view (closed) → they stay closed. Restore honours the view, not
+        // the enabled flags — so a reload can't resurrect a closed panel.
+        const store = writeWorkspaceView({}, 'local', 'A', {
+            ...emptyView,
+            visibleIds: ['a', 'd'],
+        });
+        const result = computeLaunchSelection({
+            specs: [spec('a', 'A'), spec('b', 'A'), spec('d', 'A'), spec('e', 'A')],
+            workspaces: [ws('A')],
+            savedActiveWorkspace: 'A',
+            stageSeedWorkspace: null,
+            systemWorkspaceId: SYSTEM,
+            viewStore: store,
+            connKey: 'local',
+        });
+        expect(result.selectedIds.sort()).toEqual(['a', 'd']);
+    });
+});
+
 describe('effectiveWorkspaceId', () => {
     it('maps an unattached system spec to the system workspace id', () => {
         expect(

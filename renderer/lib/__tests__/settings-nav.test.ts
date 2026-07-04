@@ -3,13 +3,17 @@ import {
     NAV_GROUPS,
     HOST_SOURCED_SETTINGS_KEYS,
     HOST_SOURCED_SECTIONS,
+    RUNTIME_OWNED_SETTINGS_KEYS,
     defaultSection,
     filterNavGroups,
     isHostSourcedSection,
     isHostSourcedSettingKey,
+    isRuntimeOwnedSettingKey,
     isSectionVisible,
+    withoutRuntimeOwnedSettings,
     type SectionId,
 } from '../settings-nav';
+import type { Settings } from '../genie';
 
 /**
  * The remote-window Settings split: in a remote/host window Settings shows the
@@ -111,5 +115,68 @@ describe('host-sourced (bucket 2) classification', () => {
         ]) {
             expect(isHostSourcedSettingKey(k)).toBe(false);
         }
+    });
+});
+
+/**
+ * The Settings window loads the WHOLE Settings object once and writes it back on
+ * Save. The master Floor + its grid own a handful of runtime keys (panel view
+ * state, grid sizes, active workspace, sidebar collapse) that they persist
+ * continuously as the user works. Those MUST be stripped from the Settings save,
+ * or the wholesale write reverts them to the stale open-time snapshot — reopening
+ * closed panels and resetting sizes for the local AND every host window. This is
+ * the root-cause guard for that clobber.
+ */
+describe('runtime-owned (Settings-never-writes) classification', () => {
+    it('the runtime-owned key list is exactly the master/grid session keys', () => {
+        expect([...RUNTIME_OWNED_SETTINGS_KEYS].sort()).toEqual(
+            ['active_workspace', 'collapsed_workspaces', 'layout_json', 'view_state_json'].sort(),
+        );
+    });
+
+    it('classifies the master/grid keys as runtime-owned, ordinary prefs as not', () => {
+        for (const k of ['view_state_json', 'layout_json', 'active_workspace', 'collapsed_workspaces']) {
+            expect(isRuntimeOwnedSettingKey(k)).toBe(true);
+        }
+        for (const k of ['max_views', 'terminal_copy_paste', 'ai_system', 'notify_sound', 'work_mode']) {
+            expect(isRuntimeOwnedSettingKey(k)).toBe(false);
+        }
+    });
+
+    it('a runtime key is NEVER also host-sourced (the two classes are disjoint)', () => {
+        for (const k of RUNTIME_OWNED_SETTINGS_KEYS) {
+            expect(isHostSourcedSettingKey(k)).toBe(false);
+        }
+    });
+
+    it('withoutRuntimeOwnedSettings drops exactly the runtime keys, keeps the rest', () => {
+        const snapshot: Partial<Settings> = {
+            max_views: '4',
+            terminal_copy_paste: 'winmac',
+            ai_system: 'be nice',
+            // Runtime keys carrying a STALE snapshot the Save must not write back.
+            view_state_json: '{"local|ws1":{"visibleIds":["a","b"],"focusId":null,"maximizedId":null,"layoutMode":"auto"}}',
+            layout_json: '{"local|ws1|2":{"cols":[1,2],"rows":[1]}}',
+            active_workspace: 'ws-stale',
+            collapsed_workspaces: '["ws1"]',
+        };
+        const out = withoutRuntimeOwnedSettings(snapshot);
+        expect(out).toEqual({
+            max_views: '4',
+            terminal_copy_paste: 'winmac',
+            ai_system: 'be nice',
+        });
+        // The runtime keys are absent — the master/grid keep ownership.
+        expect('view_state_json' in out).toBe(false);
+        expect('layout_json' in out).toBe(false);
+        expect('active_workspace' in out).toBe(false);
+        expect('collapsed_workspaces' in out).toBe(false);
+    });
+
+    it('is immutable — the input snapshot is untouched', () => {
+        const snapshot: Partial<Settings> = { max_views: '4', view_state_json: '{}' };
+        const out = withoutRuntimeOwnedSettings(snapshot);
+        expect(snapshot.view_state_json).toBe('{}');
+        expect(out).not.toBe(snapshot);
     });
 });

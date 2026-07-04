@@ -108,6 +108,61 @@ export function isHostSourcedSettingKey(key: string): key is HostSourcedSettingK
 }
 
 /**
+ * RUNTIME/SESSION-owned settings keys — written CONTINUOUSLY by the master Floor
+ * (and its grid) as the user works, NOT by the Settings UI. They live in the same
+ * k/v `settings` table only because it's the single local key/value store, but the
+ * Settings window has NO control that edits them:
+ *
+ *  - `view_state_json`  — this window's panel VIEW state (which panels are open/
+ *    closed, focus, maximize, layout mode) per `${connKey}|${workspace}` (see
+ *    view-state.ts). The master persists it debounced on every open/close/focus.
+ *  - `layout_json`      — the draggable-grid track SIZES per `${connKey}|${ws}|${sig}`
+ *    (TerminalGrid). The master persists it on every gutter drag.
+ *  - `active_workspace` — which workspace fills the grid (master).
+ *  - `collapsed_workspaces` — sidebar expand/collapse state (master).
+ *
+ * The Settings window loads the WHOLE Settings object ONCE on open and writes it
+ * back wholesale on Save. Without excluding these, that write-back REVERTS them to
+ * the stale snapshot taken at Settings-open (or the defaults on a fresh install) —
+ * so a panel the user closed after opening Settings reopens, panel sizes reset, and
+ * because `view_state_json` is one blob spanning every connKey, it clobbers the
+ * saved layout of the local window AND every host window at once (closed panels
+ * reappear on the next reconnect / restart). They are STRIPPED from the Settings
+ * save so only the master/grid — which always writes them with targeted patches —
+ * ever owns them.
+ */
+export const RUNTIME_OWNED_SETTINGS_KEYS = [
+    'view_state_json',
+    'layout_json',
+    'active_workspace',
+    'collapsed_workspaces',
+] as const satisfies readonly (keyof Settings)[];
+
+export type RuntimeOwnedSettingKey = (typeof RUNTIME_OWNED_SETTINGS_KEYS)[number];
+
+const RUNTIME_KEY_SET: ReadonlySet<string> = new Set(RUNTIME_OWNED_SETTINGS_KEYS);
+
+/** Whether a settings key is master/grid runtime-owned (never written by Settings). */
+export function isRuntimeOwnedSettingKey(key: string): key is RuntimeOwnedSettingKey {
+    return RUNTIME_KEY_SET.has(key);
+}
+
+/**
+ * Drop the RUNTIME-owned keys from a Settings snapshot so the Settings window's
+ * whole-object Save can't clobber the master/grid's live panel view + layout state.
+ * Returns a new object; the input is untouched.
+ */
+export function withoutRuntimeOwnedSettings(s: Partial<Settings>): Partial<Settings> {
+    const out: Partial<Settings> = {};
+    for (const key of Object.keys(s) as (keyof Settings)[]) {
+        if (!isRuntimeOwnedSettingKey(key)) {
+            (out as Record<string, unknown>)[key] = s[key];
+        }
+    }
+    return out;
+}
+
+/**
  * Sections whose content survives when Settings is opened FROM a remote/host window.
  * Two kinds (see the 3-way split above):
  *  - DEVICE-LOCAL: `customization` — theme / notifications / copy-paste; edits the

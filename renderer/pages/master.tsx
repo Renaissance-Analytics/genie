@@ -24,6 +24,7 @@ import type { BackendUser, ViewType } from '../lib/genie';
 import { resolveShortcut } from '../lib/master-shortcuts';
 import { computeLaunchSelection } from '../lib/launch-restore';
 import {
+    overlayOwnConnKey,
     parseViewStateStore,
     readWorkspaceView,
     writeWorkspaceView,
@@ -1024,6 +1025,31 @@ function MasterInner() {
      * exactly like `layout_json`. `api().settings` is never bridged to a host,
      * so a host window's writes stay client-local.
      */
+    // Flush this window's view slice to the LOCAL settings, MERGING onto a fresh
+    // read so a CONCURRENT window (local + host windows share one `view_state_json`
+    // blob) that edited a different connKey isn't clobbered by our snapshot. We own
+    // only our `${currentConnKey()}|…` entries; every other window's slice is
+    // preserved from the freshly-read store. Best-effort: a read/link blip just
+    // skips this flush (the next view change re-flushes) rather than writing a
+    // possibly-stale full blob.
+    const flushViewState = useCallback(async () => {
+        const connKey = currentConnKey();
+        let latest: ViewStateStore;
+        try {
+            const s = await api().settings.get();
+            latest = parseViewStateStore(s.view_state_json);
+        } catch {
+            return;
+        }
+        const merged = overlayOwnConnKey(latest, viewCacheRef.current, connKey);
+        // Keep the cache consistent with disk for OTHER connKeys so a later restore
+        // (workspace switch) reads their up-to-date values, not our stale mount seed.
+        viewCacheRef.current = merged;
+        await api()
+            .settings.set({ view_state_json: JSON.stringify(merged) })
+            .catch(() => {});
+    }, []);
+
     const persistView = useCallback(
         (connKey: string, workspaceId: string, state: WorkspaceViewState) => {
             viewCacheRef.current = writeWorkspaceView(
@@ -1035,12 +1061,10 @@ function MasterInner() {
             if (viewFlushRef.current) clearTimeout(viewFlushRef.current);
             viewFlushRef.current = setTimeout(() => {
                 viewFlushRef.current = null;
-                void api()
-                    .settings.set({ view_state_json: JSON.stringify(viewCacheRef.current) })
-                    .catch(() => {});
+                void flushViewState();
             }, 150);
         },
-        [],
+        [flushViewState],
     );
 
     // Persist THIS window's panel VIEW state (visible set, focus, maximize,
@@ -1075,15 +1099,18 @@ function MasterInner() {
     ]);
 
     // Flush a pending view-state write on unmount (window close) so the last
-    // change within the debounce window isn't lost.
+    // change within the debounce window isn't lost. Same merge-onto-fresh-read as
+    // the debounced flush, so closing this window can't clobber another window's
+    // slice (best-effort — a window teardown may not await the async round-trip,
+    // but every earlier change already flushed during the session).
+    const flushViewStateRef = useRef(flushViewState);
+    flushViewStateRef.current = flushViewState;
     useEffect(() => {
         return () => {
             if (viewFlushRef.current) {
                 clearTimeout(viewFlushRef.current);
                 viewFlushRef.current = null;
-                void api()
-                    .settings.set({ view_state_json: JSON.stringify(viewCacheRef.current) })
-                    .catch(() => {});
+                void flushViewStateRef.current();
             }
         };
     }, []);

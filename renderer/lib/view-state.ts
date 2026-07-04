@@ -82,3 +82,30 @@ export function writeWorkspaceView(
 ): ViewStateStore {
     return { ...store, [viewStateKey(connKey, workspaceId)]: state };
 }
+
+/**
+ * Overlay THIS window's `connKey` slice from a local cache onto a FRESHLY-READ
+ * persisted store, returning the store to persist.
+ *
+ * `view_state_json` is a SINGLE blob spanning every window's connKey (the local
+ * window's `local|*` plus each host window's `host:<id>|*`). Each window holds its
+ * own in-memory cache seeded from the blob at mount, so writing that cache back
+ * wholesale would revert a CONCURRENT window's edits to OTHER connKeys (a
+ * last-writer-wins clobber — close a panel in a host window, then any view change
+ * in the local window resurrects it). A window OWNS only its own `${connKey}|…`
+ * entries, so before writing we re-read the authoritative store (`latest`) and copy
+ * over ONLY our own slice; every other window's slice is preserved as-is. The `|`
+ * delimiter makes the prefix test exact (`host:ab` never matches `host:abc|…`).
+ */
+export function overlayOwnConnKey(
+    latest: ViewStateStore,
+    cache: ViewStateStore,
+    connKey: string,
+): ViewStateStore {
+    const prefix = `${connKey}|`;
+    const out: ViewStateStore = { ...latest };
+    for (const [key, value] of Object.entries(cache)) {
+        if (key.startsWith(prefix)) out[key] = value;
+    }
+    return out;
+}

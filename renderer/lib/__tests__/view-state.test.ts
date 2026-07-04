@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+    overlayOwnConnKey,
     parseViewStateStore,
     readWorkspaceView,
     viewStateKey,
@@ -55,6 +56,54 @@ describe('connKey isolation', () => {
         store = writeWorkspaceView(store, 'host-x', 'ws1', view({ visibleIds: ['a2'] }));
         expect(readWorkspaceView(store, 'local', 'ws1')?.visibleIds).toEqual(['a1']);
         expect(readWorkspaceView(store, 'host-x', 'ws1')?.visibleIds).toEqual(['a2']);
+    });
+});
+
+describe('overlayOwnConnKey (cross-window merge, no clobber)', () => {
+    // A host window closed a panel → its `host:h1|A` slice on disk is fresh ['a'].
+    // The LOCAL window still holds a STALE `host:h1|A` = ['a','b'] from its mount
+    // seed, plus its own edited `local|A` = ['x']. Persisting the local window must
+    // write its `local|*` slice but keep the host's FRESH slice from disk.
+    it('writes only OUR connKey slice; preserves a concurrent window\'s slice from disk', () => {
+        const latest: ViewStateStore = {
+            'local|A': view({ visibleIds: ['old-local'] }),
+            'host:h1|A': view({ visibleIds: ['a'] }), // fresh (host just closed b)
+        };
+        const cache: ViewStateStore = {
+            'local|A': view({ visibleIds: ['x'] }), // our edit
+            'host:h1|A': view({ visibleIds: ['a', 'b'] }), // our STALE mount seed
+        };
+        const merged = overlayOwnConnKey(latest, cache, 'local');
+        expect(merged['local|A'].visibleIds).toEqual(['x']); // our slice written
+        expect(merged['host:h1|A'].visibleIds).toEqual(['a']); // host's fresh slice kept
+    });
+
+    it('a new workspace entry we own is added; a disk entry for another conn is untouched', () => {
+        const latest: ViewStateStore = { 'host:h1|A': view({ visibleIds: ['a'] }) };
+        const cache: ViewStateStore = { 'local|B': view({ visibleIds: ['b'] }) };
+        const merged = overlayOwnConnKey(latest, cache, 'local');
+        expect(merged).toEqual({
+            'host:h1|A': view({ visibleIds: ['a'] }),
+            'local|B': view({ visibleIds: ['b'] }),
+        });
+    });
+
+    it('the prefix test is exact — a connKey that is a string-prefix of another does not leak', () => {
+        const latest: ViewStateStore = {};
+        const cache: ViewStateStore = {
+            'host:ab|A': view({ visibleIds: ['own'] }),
+            'host:abc|A': view({ visibleIds: ['other'] }),
+        };
+        const merged = overlayOwnConnKey(latest, cache, 'host:ab');
+        expect(merged['host:ab|A'].visibleIds).toEqual(['own']);
+        expect('host:abc|A' in merged).toBe(false); // not our slice → not written
+    });
+
+    it('is immutable — returns a new store, leaves latest untouched', () => {
+        const latest: ViewStateStore = { 'host:h1|A': view({ visibleIds: ['a'] }) };
+        const merged = overlayOwnConnKey(latest, { 'local|A': view({ visibleIds: ['x'] }) }, 'local');
+        expect(merged).not.toBe(latest);
+        expect('local|A' in latest).toBe(false);
     });
 });
 

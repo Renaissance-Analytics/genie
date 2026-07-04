@@ -31,6 +31,7 @@ import {
     isSectionVisible,
     isRestrictedSettings,
     defaultSection,
+    withoutRuntimeOwnedSettings,
     type SectionId,
 } from '../lib/settings-nav';
 
@@ -76,7 +77,14 @@ export default function SettingsPage() {
         if (!s) return;
         setSaving(true);
         try {
-            await api().settings.set(s);
+            // Persist the WHOLE Settings object MINUS the master/grid runtime-owned
+            // keys (panel view + grid sizes + active workspace + sidebar collapse).
+            // `s` is snapshotted at open time; writing those back wholesale would
+            // REVERT the live panel layout to that stale snapshot — reopening panels
+            // the user closed, resetting sizes, and (since `view_state_json` is one
+            // blob across every connKey) wiping the saved layout of the local AND
+            // every host window at once. The master owns them via targeted patches.
+            await api().settings.set(withoutRuntimeOwnedSettings(s));
             setSavedAt(Date.now());
             setTimeout(() => setSavedAt(null), 1800);
         } finally {
