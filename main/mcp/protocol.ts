@@ -350,11 +350,22 @@ export interface OpsChildInfo {
     status: 'present' | 'missing';
     /** For a missing child: the `*.agi` URL Genie would clone (null if unresolvable). */
     cloneUrl: string | null;
+    /**
+     * For a missing child with a cloneUrl: whether that repo actually EXISTS on
+     * the remote (probed). 'exists' → provisionable; 'not-found' → the envelope
+     * was never published — use action 'scaffold'; 'auth-required' → reachable
+     * but this Genie's git credentials can't see it; 'unknown' → probe was
+     * inconclusive (still attempted on provision). Null when not probed.
+     */
+    remote?: 'exists' | 'not-found' | 'auth-required' | 'unknown' | null;
+    /** The child's registered SOURCE repo (what scaffold builds around), if any. */
+    sourceRepoUrl?: string | null;
 }
 
 export interface ProvisionWorkspacesRequest {
-    /** `status` = read-only list of children; `provision` = create the missing ones. */
-    action: 'status' | 'provision';
+    /** `status` = read-only list; `provision` = clone existing envelopes;
+     *  `scaffold` = CREATE missing envelopes from each child's source repo. */
+    action: 'status' | 'provision' | 'scaffold';
 }
 
 export interface ProvisionWorkspacesResult {
@@ -363,11 +374,13 @@ export interface ProvisionWorkspacesResult {
     error?: string;
     /** True only when the caller's workspace is an Ops project. */
     isOps: boolean;
-    /** Every governed child + its local status (status + provision both return it). */
+    /** Every governed child + its local status (all actions return it). */
     children: OpsChildInfo[];
     /** provision: the children whose workspace was cloned + registered (by name). */
     provisioned?: string[];
-    /** provision: per-child failures (best-effort — one bad child doesn't abort). */
+    /** scaffold: the children whose envelope was created + published (by name). */
+    scaffolded?: string[];
+    /** provision/scaffold: per-child failures (best-effort — one bad child doesn't abort). */
     errors?: string[];
 }
 
@@ -728,16 +741,16 @@ const MANAGE_PROCESS_TOOL = {
 const PROVISION_WORKSPACES_TOOL = {
     name: 'provisionWorkspaces',
     description:
-        "Provision Genie workspaces for the child projects this Ops project governs. ONLY usable from an Ops project's workspace (returns an error elsewhere). An Ops project governs other (child) projects, each with its own `*.agi` envelope repo; this tool stands up a local Genie workspace for any governed child that doesn't have one yet. Actions: `status` (read-only — list every governed child with status `present` (a local workspace exists) or `missing` (none yet), plus the `*.agi` URL that would be cloned for each missing one); `provision` (clone + register a workspace for every missing child, then surface it in Genie). It's provision-only — it never removes extra or un-governed workspaces. Approval depends on the `ops_auto_provision_workspaces` setting (Settings → per-workspace): when OFF (default) `provision` blocks until you approve the plan in Genie; when ON it provisions directly. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; omit to use the most-recently-active terminal.",
+        "Provision Genie workspaces for the child projects this Ops project governs. ONLY usable from an Ops project's workspace (returns an error elsewhere). An Ops project governs other (child) projects, each with its own `*.agi` envelope repo; this tool stands up a local Genie workspace for any governed child that doesn't have one yet. Actions: `status` (read-only — every governed child with status `present`/`missing`, the `*.agi` URL for each missing one, and `remote` — whether that repo actually EXISTS: `exists` → provisionable, `not-found` → the envelope was never published (use `scaffold`), `auth-required` → this Genie's git credentials can't reach it); `provision` (clone + register a workspace for every missing child whose envelope exists); `scaffold` (for each `remote:'not-found'` child with a registered source repo: build its `<slug>.agi` envelope locally around that source repo, CREATE the GitHub repo, push, and register the workspace — always blocks on your approval in Genie). It's provision-only — it never removes extra or un-governed workspaces. `provision` approval honours the `ops_auto_provision_workspaces` setting; `scaffold` ALWAYS asks. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; omit to use the most-recently-active terminal.",
     inputSchema: {
         type: 'object',
         properties: {
             ...TERMINAL_ID_PROP,
             action: {
                 type: 'string',
-                enum: ['status', 'provision'],
+                enum: ['status', 'provision', 'scaffold'],
                 description:
-                    'status: list governed children + each one\'s workspace status. provision: create the missing child workspaces (honouring the approval toggle).',
+                    "status: list governed children + workspace status + whether each missing envelope exists remotely. provision: clone the missing child workspaces whose envelopes exist (honouring the approval toggle). scaffold: create + publish the envelopes that DON'T exist yet from each child's source repo (always approval-gated).",
             },
         },
         required: ['action'],
@@ -1365,11 +1378,11 @@ export async function handleMcpMessage(
             if (params.name === 'provisionWorkspaces') {
                 const a = params.arguments ?? {};
                 const action = (a as Partial<ProvisionWorkspacesRequest>).action;
-                if (action !== 'status' && action !== 'provision') {
+                if (action !== 'status' && action !== 'provision' && action !== 'scaffold') {
                     return err(
                         msg.id,
                         -32602,
-                        'provisionWorkspaces requires `action`: status | provision.',
+                        'provisionWorkspaces requires `action`: status | provision | scaffold.',
                     );
                 }
                 const result = await ctx.provisionWorkspaces(ctx.terminalId, {
@@ -1384,15 +1397,26 @@ export async function handleMcpMessage(
                 } else {
                     const missing = result.children.filter((c) => c.status === 'missing').length;
                     const present = result.children.length - missing;
+                    const unscaffolded = result.children.filter(
+                        (c) => c.status === 'missing' && c.remote === 'not-found',
+                    ).length;
                     const head = `${result.children.length} governed child project${
                         result.children.length === 1 ? '' : 'ren'
-                    } — ${present} present, ${missing} missing.`;
+                    } — ${present} present, ${missing} missing${
+                        unscaffolded
+                            ? ` (${unscaffolded} with NO published envelope — needs action:"scaffold")`
+                            : ''
+                    }.`;
                     const tail =
                         action === 'provision'
                             ? ` Provisioned ${result.provisioned?.length ?? 0}${
                                   result.errors?.length ? `, ${result.errors.length} error(s)` : ''
                               }.`
-                            : '';
+                            : action === 'scaffold'
+                              ? ` Scaffolded ${result.scaffolded?.length ?? 0}${
+                                    result.errors?.length ? `, ${result.errors.length} error(s)` : ''
+                                }.`
+                              : '';
                     summary = head + tail;
                 }
                 return ok(msg.id, {

@@ -44,9 +44,14 @@ import { TynnBackend } from '../backend/tynn';
 import {
     computeOpsProvisionPlan,
     applyOpsProvision,
+    applyOpsScaffold,
     provisionTargets,
+    scaffoldTargets,
+    parseEnvelopeUrl,
     opsAutoProvisionEnabled,
+    type OpsScaffoldTarget,
 } from '../tynn/ops-provision';
+import { createRepo, getViewer } from '../github/api';
 import { broadcastWorkspacesChanged } from '../ipc';
 import type {
     WorkspaceMap,
@@ -468,11 +473,76 @@ async function approveOpsProvision(
 }
 
 /**
+ * The scaffold gate — ALWAYS raised (the auto-provision toggle never bypasses
+ * it): scaffolding CREATES GitHub repos and pushes, a bigger footprint than
+ * cloning. Shows exactly which envelopes would be created and from which
+ * source repos.
+ */
+async function approveOpsScaffold(
+    ws: { project_name: string },
+    targets: OpsScaffoldTarget[],
+): Promise<boolean> {
+    const list = targets
+        .map((t) => `- **${t.name}** — creates \`${t.envelopeUrl}\` around \`${t.sourceRepoUrl}\``)
+        .join('\n');
+    const result = await forceQuestion(
+        [
+            {
+                header: 'Scaffold?',
+                question:
+                    `An Ops agent wants to SCAFFOLD ${targets.length} missing \`*.agi\` envelope${targets.length === 1 ? '' : 's'} — for each child below the agent builds the envelope locally around the child's source repo, **creates the GitHub repo**, pushes it, and registers the workspace:\n\n${list}`,
+                options: [
+                    {
+                        label: 'Approve',
+                        description: 'Agent: creates + publishes these envelope repos and registers the workspaces.',
+                    },
+                    {
+                        label: 'Deny',
+                        description: 'You: nothing is created — handle the envelopes yourself.',
+                    },
+                ],
+            },
+        ],
+        ws.project_name,
+    );
+    if (result.cancelled) return false; // dismissed = deny
+    return (result.answers[0]?.selected ?? []).includes('Approve');
+}
+
+/**
+ * The GitHub half of scaffold, kept out of ops-provision.ts: create the
+ * envelope repo under the URL's owner — as a PERSONAL repo when that owner is
+ * the authenticated user, else under the org (createRepo handles both + reuses
+ * an existing empty repo from a previously failed run).
+ */
+async function createEnvelopeRepo(opts: {
+    owner: string;
+    name: string;
+    description: string;
+}): Promise<{ clone_url: string }> {
+    let viewerLogin = '';
+    try {
+        viewerLogin = (await getViewer()).login;
+    } catch {
+        /* not signed in to GitHub — createRepo will surface the real error */
+    }
+    const personal = viewerLogin.toLowerCase() === opts.owner.toLowerCase();
+    return createRepo({
+        name: opts.name,
+        owner: personal ? undefined : opts.owner,
+        description: opts.description,
+        private: true,
+    });
+}
+
+/**
  * Back the provisionWorkspaces MCP tool. Resolves the Ops workspace from the
  * (already terminal-resolved) caller, computes the governed-children plan, and
  * for `provision` clones + registers the missing child workspaces — honouring
  * the ops_auto_provision_workspaces toggle: OFF blocks on the approval modal
- * (like manageProcess), ON provisions directly. Gated to Ops workspaces.
+ * (like manageProcess), ON provisions directly. `scaffold` CREATES the
+ * envelopes that don't exist remotely (genie#6) and is ALWAYS approval-gated.
+ * Gated to Ops workspaces.
  */
 export async function provisionWorkspacesForMcp(
     terminalId: string,
@@ -523,17 +593,62 @@ export async function provisionWorkspacesForMcp(
         name: c.name,
         status: c.status,
         cloneUrl: c.cloneUrl,
+        remote: c.remote,
+        sourceRepoUrl: c.sourceRepoUrl,
     }));
 
     if (req.action === 'status') {
         return { ok: true, isOps: true, children };
     }
 
+    if (req.action === 'scaffold') {
+        const targets = scaffoldTargets(plan);
+        if (targets.length === 0) {
+            return {
+                ok: true,
+                isOps: true,
+                children,
+                scaffolded: [],
+                errors: [],
+            };
+        }
+        // Bad-URL targets never reach the apply step half-parsed.
+        const parseable = targets.filter((t) => parseEnvelopeUrl(t.envelopeUrl));
+        // Scaffold ALWAYS gates — it creates GitHub repos, never auto-approved.
+        const approved = await approveOpsScaffold(ws, parseable);
+        if (!approved) {
+            return {
+                ok: false,
+                error: 'Denied by user — no envelopes were scaffolded.',
+                isOps: true,
+                children,
+            };
+        }
+        const result = await applyOpsScaffold(ws.path, parseable, createEnvelopeRepo);
+        if (result.scaffolded.length > 0) {
+            broadcastWorkspacesChanged();
+            deps.rebuildMenu();
+        }
+        const scaffoldedIds = new Set(result.scaffolded.map((p) => p.workspaceId));
+        return {
+            ok: true,
+            isOps: true,
+            children: children.map((c) =>
+                scaffoldedIds.has(c.projectId)
+                    ? { ...c, status: 'present' as const, cloneUrl: null, remote: null }
+                    : c,
+            ),
+            scaffolded: result.scaffolded.map((p) => p.name),
+            errors: result.errors,
+        };
+    }
+
     // action === 'provision'
     const targets = provisionTargets(plan);
     if (targets.length === 0) {
         // Nothing to do — every governed child already has a workspace (or the
-        // missing ones can't be resolved to a clone URL, surfaced in children).
+        // missing ones can't be resolved to a clone URL / don't exist remotely,
+        // surfaced per-child in `children` (remote: 'not-found' → scaffold).
         return { ok: true, isOps: true, children, provisioned: [], errors: [] };
     }
 

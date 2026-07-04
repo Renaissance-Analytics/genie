@@ -66,12 +66,19 @@ projects, each with its own \`*.agi\` envelope repo. This tool stands up a local
 Genie workspace for any governed child that doesn't have one yet. Actions
 (\`action\` arg):
 - \`status\` — read-only: every governed child + whether it's \`present\` (a local
-  workspace exists) or \`missing\` (none yet), plus the \`*.agi\` URL that would be
-  cloned for each missing one.
-- \`provision\` — clone + register a workspace for every missing child, then
-  surface it in Genie's rail. Provision-only — never removes anything.
-Approval honours the \`ops_auto_provision_workspaces\` setting: OFF (default)
-blocks \`provision\` on your approval modal; ON provisions directly. Called from a
+  workspace exists) or \`missing\` (none yet), the \`*.agi\` URL for each missing
+  one, and \`remote\` — whether that repo actually EXISTS on GitHub: \`exists\`
+  (clonable), \`not-found\` (the envelope was never published — use \`scaffold\`),
+  \`auth-required\` (this Genie's git credentials can't reach it).
+- \`provision\` — clone + register a workspace for every missing child whose
+  envelope exists, then surface it in Genie's rail. Provision-only — never
+  removes anything.
+- \`scaffold\` — for each \`remote:'not-found'\` child that has a registered
+  SOURCE repo: build its \`<slug>.agi\` envelope locally around that repo,
+  CREATE the GitHub repo, push, and register the workspace. ALWAYS blocks on
+  the user's approval (it creates repos), regardless of the toggle.
+\`provision\` approval honours the \`ops_auto_provision_workspaces\` setting: OFF
+(default) blocks on your approval modal; ON provisions directly. Called from a
 non-Ops workspace it returns a clear "not an ops project" message. Pass
 \`terminalId\` (your \`GENIE_TERMINAL_ID\`) for exact workspace resolution; optional.
 
