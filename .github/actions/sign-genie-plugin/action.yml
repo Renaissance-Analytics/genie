@@ -26,8 +26,8 @@ description: >-
 inputs:
   signing-key:
     description: >-
-      The Ed25519 PRIVATE key PEM. Pass ${{ secrets.GENIE_PLUGIN_SIGNING_KEY }};
-      NEVER hardcode it.
+      The Ed25519 PRIVATE key PEM. Wire it to the GENIE_PLUGIN_SIGNING_KEY
+      secret in the calling workflow (do NOT hardcode it).
     required: true
   plugin-dir:
     description: Directory holding genie-plugin.json.
