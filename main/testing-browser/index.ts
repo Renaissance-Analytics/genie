@@ -14,7 +14,13 @@ import {
     type GenTarget,
     type SiteShim,
 } from '../remote/site-proxy';
-import { getSiteCarrier, remoteListEnabledGenSites, type EnabledGenSite } from '../remote';
+import {
+    getSiteCarrier,
+    connectionKind,
+    isRelaySiteTunnelingEnabled,
+    remoteListEnabledGenSites,
+    type EnabledGenSite,
+} from '../remote';
 import { DEVICE_PRESETS, devicePreset, initialGenUrl, normalizeNavUrl } from './chrome';
 
 /**
@@ -118,6 +124,18 @@ export async function openTestingBrowser(
     }
     const carrier = getSiteCarrier(connKey);
     if (!carrier) {
+        // A relay connection with the carrier gated off (owner decision #4) is a
+        // distinct, non-error case — the connection is live, relay site-tunneling
+        // just isn't shipped yet. Say so precisely instead of "no connection".
+        if (connectionKind(connKey) === 'relay' && !isRelaySiteTunnelingEnabled()) {
+            return {
+                ok: false,
+                error:
+                    'Relay site-tunneling is pending end-to-end encryption hardening (owner-gated). ' +
+                    'Open the Testing Browser over a tailnet connection, or enable it once the ' +
+                    'blind-relay path ships.',
+            };
+        }
         return {
             ok: false,
             error: 'No live host connection for the Testing Browser.',

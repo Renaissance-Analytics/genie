@@ -1607,12 +1607,34 @@ export interface EnabledGenSite {
     port: number;
 }
 
+// Owner-gated (design §8 decision #4): the RELAY site-tunneling carrier is built
+// and tested (Phase E) but MUST NOT ship enabled until the Phase-F blind-relay
+// E2E rung exists — its baseline has Tynn terminate TLS and see the site-proxy
+// plaintext, which the owner declined to ship. The tailnet carrier (WireGuard-E2E)
+// is unaffected. Default OFF; the relay plumbing tests flip it on to exercise the
+// built path. Flip to on only once the blind-relay (WebRTC / app-layer-E2E) carrier
+// ships (or the owner explicitly accepts the plaintext baseline).
+let relaySiteTunnelingEnabled = false;
+export function setRelaySiteTunnelingEnabled(v: boolean): void {
+    relaySiteTunnelingEnabled = v;
+}
+export function isRelaySiteTunnelingEnabled(): boolean {
+    return relaySiteTunnelingEnabled;
+}
+
+/** The transport kind of a live connection (for transport-aware messaging), or
+ *  null when no such connection is live. */
+export function connectionKind(connKey: string): 'tailnet' | 'relay' | null {
+    return connections.get(connKey)?.transport ?? null;
+}
+
 /**
  * The {@link SiteCarrier} for a connection's Testing-Browser shim — chosen by the
  * connection KIND so the shim + `.gen` + session-CA stack is carrier-agnostic:
  *   - `tailnet` → a direct-dial carrier (`http://<ip>:<port>` + lazy Bearer),
  *   - `relay`   → a frame carrier over the connection's `RelayMemberClient`.
- * Null for an unknown connection (or a relay conn whose client is gone). Auth is
+ * Null for an unknown connection, a relay conn whose client is gone, OR a relay
+ * conn while relay site-tunneling is owner-gated off (see the flag above). Auth is
  * injected by the carrier IN MAIN — the token/grant never reaches a renderer.
  */
 export function getSiteCarrier(connKey: string): SiteCarrier | null {
@@ -1622,6 +1644,7 @@ export function getSiteCarrier(connKey: string): SiteCarrier | null {
         return createTailnetSiteCarrier(`http://${conn.host.ip}:${conn.host.port}`, () => conn.token);
     }
     if (conn.transport === 'relay' && conn.relay) {
+        if (!relaySiteTunnelingEnabled) return null; // owner-gated until Phase-F E2E
         return createRelaySiteCarrier(conn.relay);
     }
     return null;

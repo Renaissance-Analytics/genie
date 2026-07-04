@@ -15,6 +15,7 @@ import {
     connectRemote,
     disconnectConnKey,
     getSiteCarrier,
+    setRelaySiteTunnelingEnabled,
 } from '../index';
 import { createSiteShim, type GenTarget, type SiteShim } from '../site-proxy';
 import { SessionCa } from '../site-ca';
@@ -346,6 +347,9 @@ beforeEach(async () => {
     masterEnabled = true;
     enabledSites.clear();
     lastHttpAuth = undefined;
+    // The relay carrier is owner-gated OFF in production (pending Phase-F E2E);
+    // enable it here to exercise the built relay plumbing this suite validates.
+    setRelaySiteTunnelingEnabled(true);
     await startUpstreams();
     mobilePort = await startMobile();
     hostToken = await pair(mobilePort);
@@ -356,6 +360,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+    setRelaySiteTunnelingEnabled(false); // restore the production-default gate
     disconnectConnKey(RELAY_CONN_KEY);
     if (tailnetConnKey) disconnectConnKey(tailnetConnKey);
     tailnetConnKey = null;
