@@ -31,7 +31,7 @@ import {
     type ViewStateStore,
     type WorkspaceViewState,
 } from '../lib/view-state';
-import { shouldDriveRestart } from '../lib/updater-flow';
+import { planCommitStep, shouldDriveRestart } from '../lib/updater-flow';
 import { pickReusePanel, emitOpenInPanel } from '../lib/editor-open';
 import { pickReusePluginPanel, pluginSpecMeta } from '../lib/panel-routing';
 import {
@@ -1761,16 +1761,43 @@ function UpdatePill() {
 
     // After the user commits (one Upgrade click), carry the whole sequence
     // through hands-free: download the update, then auto-restart once it's
-    // staged. The refs guard each step to a single fire.
+    // staged. The refs guard each step to a single fire; planCommitStep decides
+    // the step — including 'reset', which disarms a commit whose update died
+    // (errored download / now up-to-date) so the pill can't wedge committed.
     useEffect(() => {
         if (!committed || !status) return;
-        // A manual-download update (manualDownloadUrl set) must NOT auto-apply —
-        // electron-updater can't download/install it on this build. The pill shows
-        // a Download button instead (handled in the render).
-        if (status.state === 'available' && !status.manualDownloadUrl && !appliedRef.current) {
+        const step = planCommitStep({
+            state: status.state,
+            committed,
+            applied: appliedRef.current,
+            restarted: restartedRef.current,
+            // A manual-download update must NOT auto-apply — electron-updater
+            // can't install it on this build. The pill shows a Download button
+            // instead (handled in the render).
+            manualDownloadUrl: status.manualDownloadUrl ?? null,
+        });
+        if (step === 'reset') {
+            appliedRef.current = false;
+            restartedRef.current = false;
+            setCommitted(false);
+        } else if (step === 'apply') {
             appliedRef.current = true;
-            void api().updater.apply(); // downloadUpdate
-        } else if (status.state === 'ready-to-restart' && !restartedRef.current) {
+            void (async () => {
+                const r = await api()
+                    .updater.apply() // downloadUpdate
+                    .catch((e) => ({
+                        ok: false,
+                        error: e instanceof Error ? e.message : String(e),
+                    }));
+                // A refused apply must hand the pill back, not wedge it: with
+                // the ref left armed and committed still true, the pill showed
+                // "Upgrading…" with no driver and no button forever.
+                if (!r.ok) {
+                    appliedRef.current = false;
+                    setCommitted(false);
+                }
+            })();
+        } else if (step === 'restart') {
             restartedRef.current = true;
             // Only drive the restart when the backend WON'T auto-restart itself.
             // On a fresh phase-2 apply, downloadAndInstall() armed installWhenReady

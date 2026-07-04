@@ -239,6 +239,68 @@ describe('auto-updater one-click hands-free apply', () => {
         expect(mockAuto.downloadUpdate).not.toHaveBeenCalled();
     });
 
+    it('an Upgrade click that races a background re-check WAITS it out and downloads (the wedged-pill bug)', async () => {
+        // The wedge: the window-show / poll re-check flips state to 'checking'
+        // for the second the user's click lands. Refusing there ("No update
+        // available") left the pill committed with nothing driving it —
+        // "Upgrading…" forever. The click must instead wait for the check to
+        // settle and proceed off its fresh verdict.
+        const u = await fresh();
+        // Surface the update so the user has an Upgrade button to click.
+        mockAuto.checkForUpdates.mockResolvedValue({
+            updateInfo: { version: '2.0.0' },
+        });
+        await u.checkForUpdate();
+        expect(u.getStatus().state).toBe('available');
+
+        // A background re-check goes in flight (held pending), exactly when the
+        // user clicks Upgrade.
+        let releaseCheck!: () => void;
+        mockAuto.checkForUpdates.mockReturnValueOnce(
+            new Promise((resolve) => {
+                releaseCheck = () =>
+                    resolve({ updateInfo: { version: '2.0.0' } });
+            }),
+        );
+        const recheck = u.checkForUpdate();
+        expect(u.getStatus().state).toBe('checking');
+
+        const clicked = u.downloadAndInstall();
+        // Still checking — the click is waiting, not refused.
+        expect(mockAuto.downloadUpdate).not.toHaveBeenCalled();
+
+        releaseCheck();
+        await recheck;
+        await clicked;
+
+        expect(mockAuto.downloadUpdate).toHaveBeenCalledTimes(1);
+        expect(u.getStatus().state).toBe('downloading');
+    });
+
+    it('the raced click still throws if the settled check finds nothing to install', async () => {
+        const u = await fresh();
+        mockAuto.checkForUpdates.mockResolvedValue({
+            updateInfo: { version: '2.0.0' },
+        });
+        await u.checkForUpdate();
+
+        // The re-check the click races concludes we're already current.
+        let releaseCheck!: () => void;
+        mockAuto.checkForUpdates.mockReturnValueOnce(
+            new Promise((resolve) => {
+                releaseCheck = () =>
+                    resolve({ updateInfo: { version: '1.0.0' } });
+            }),
+        );
+        const recheck = u.checkForUpdate();
+        const clicked = u.downloadAndInstall();
+        releaseCheck();
+        await recheck;
+
+        await expect(clicked).rejects.toThrow();
+        expect(mockAuto.downloadUpdate).not.toHaveBeenCalled();
+    });
+
     it('the check → in-flight download → concurrent check flow leaks no unhandled rejection', async () => {
         // Reproduce the exact flow that went red on CI, under an unhandled-
         // rejection sentinel: if any promise in this path is ever left unhandled

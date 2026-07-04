@@ -26,3 +26,35 @@ export function shouldDriveRestart(opts: {
     const backendAutoRestarts = opts.mode === 'phase2' && opts.appliedThisCommit;
     return !backendAutoRestarts;
 }
+
+/** What the UpdatePill's post-commit driver should do on this status tick. */
+export type CommitStep = 'apply' | 'restart' | 'reset' | 'none';
+
+/**
+ * One tick of the pill's post-commit state machine. The one-shot refs make each
+ * step fire at most once per commit — but a commit whose update DIES (the
+ * download errors, or a re-check concludes we're already current) must hand the
+ * pill BACK: without 'reset', those refs stayed armed forever and the next
+ * 'available' rendered a committed pill with no button and no driver — wedged
+ * on "Upgrading…" until Genie restarted.
+ */
+export function planCommitStep(opts: {
+    state: string;
+    committed: boolean;
+    /** appliedRef — updater.apply() already fired this commit. */
+    applied: boolean;
+    /** restartedRef — the restart step already fired this commit. */
+    restarted: boolean;
+    /** Set when auto-apply can't run on this build (manual download only). */
+    manualDownloadUrl: string | null;
+}): CommitStep {
+    if (!opts.committed) return 'none';
+    // The update this commit was riding is gone — failed ('error') or moot
+    // ('up-to-date'). Disarm so a future 'available' starts a fresh cycle.
+    if (opts.state === 'error' || opts.state === 'up-to-date') return 'reset';
+    if (opts.state === 'available' && !opts.manualDownloadUrl && !opts.applied) {
+        return 'apply';
+    }
+    if (opts.state === 'ready-to-restart' && !opts.restarted) return 'restart';
+    return 'none';
+}

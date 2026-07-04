@@ -73,6 +73,12 @@ class AutoUpdater extends EventEmitter {
      * until that click — see bind().)
      */
     private installWhenReady = false;
+    /**
+     * The check currently running, if any. downloadAndInstall() awaits it
+     * instead of refusing: the Upgrade click routinely races the window-show /
+     * poll re-check (state 'checking'), and refusing there wedged the pill.
+     */
+    private inflightCheck: Promise<void> | null = null;
 
     constructor() {
         super();
@@ -136,6 +142,16 @@ class AutoUpdater extends EventEmitter {
         ) {
             return;
         }
+        const run = this.runCheck();
+        this.inflightCheck = run;
+        try {
+            await run;
+        } finally {
+            if (this.inflightCheck === run) this.inflightCheck = null;
+        }
+    }
+
+    private async runCheck(): Promise<void> {
         // What (if anything) is already downloaded and waiting to apply. Lets us
         // tell "the staged build is still the latest" (keep it) apart from "a
         // newer build now exists" (supersede it).
@@ -226,6 +242,13 @@ class AutoUpdater extends EventEmitter {
      * is always the newest one — never a stale previously-staged version.
      */
     async downloadAndInstall(): Promise<void> {
+        // The Upgrade click can land while a background re-check is in flight
+        // (window-show / poll both call checkForUpdate). The update the user
+        // clicked is still real — wait for the check to settle rather than
+        // refusing, then proceed off its fresh verdict.
+        if (this.status.state === 'checking' && this.inflightCheck) {
+            await this.inflightCheck.catch(() => {});
+        }
         if (this.status.state !== 'available') {
             throw new Error('No update available to install.');
         }
