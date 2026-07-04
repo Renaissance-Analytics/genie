@@ -1,6 +1,6 @@
 /**
- * Type declarations for the dep-free CommonJS bundle-file walk (`bundle-files.js`).
- * The runtime lives in `bundle-files.js` (Node `fs`/`path` only) so the app's
+ * Type declarations for the dep-free ESM bundle-file walk (`bundle-files.mjs`).
+ * The runtime lives in `bundle-files.mjs` (Node `fs`/`path` only) so the app's
  * installer and the CI signer collect the identical signed surface.
  */
 

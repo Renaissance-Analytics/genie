@@ -159,7 +159,13 @@ export type ValidationResult<T> =
 const REVERSE_DNS = /^[a-z0-9]+(?:[.-][a-z0-9]+)+$/i;
 const NAMESPACE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const TOOL_SLUG = /^[a-zA-Z][a-zA-Z0-9_]*$/;
-const SEMVER = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)*$/;
+// Linear, semver-canonical: MAJOR.MINOR.PATCH, then an OPTIONAL `-prerelease`
+// and an OPTIONAL `+build`. The previous `(?:[-+][0-9A-Za-z.-]+)*` form nested a
+// `[-+]`-led group whose body ALSO matched `-`, so an attacker-supplied manifest
+// `version` (e.g. `9.9.9+` then many `-`) backtracked exponentially (ReDoS,
+// CodeQL high). Splitting into two independent optional groups removes the
+// ambiguity and runs in linear time.
+const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
     return typeof v === 'object' && v !== null && !Array.isArray(v);

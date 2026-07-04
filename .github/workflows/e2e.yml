@@ -1,0 +1,80 @@
+name: E2E (per-OS, isolated)
+
+# FULL end-to-end gate, run in a CLEAN VM per OS. Unlike a developer's machine,
+# these runners have NO live Genie, so the suite boots the REAL compiled app
+# (app/background.js) via Playwright's Electron support without colliding with
+# anything — which is exactly what catches BOOT-time regressions (e.g. a CJS
+# `module.exports` core bundled into the ESM main output throwing at launch)
+# that a webpack-compile-only check (`build:e2e`) sails straight past.
+#
+# This is a TEST gate only. It builds the app with `nextron build --no-pack`
+# (webpack compile, no installer) and never packages, publishes, tags, or
+# touches the auto-update feed. The RELEASE build stays SEPARATE — see
+# release.yml (publishing) and test-build.yml (non-publishing installer smoke).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Least-privilege: this workflow only reads the repo — checkout, install, build,
+# and run the Electron E2E suite. No PR writes, releases, or SARIF uploads.
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: E2E (${{ matrix.os }})
+    strategy:
+      # Every OS runs on its OWN isolated runner; one OS failing must not cancel
+      # the others — we want to see the boot result on all three.
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        env:
+          CI: true
+        run: npm ci
+
+      # Linux runners are headless: Electron/Chromium need a virtual display AND
+      # Chromium's shared libraries. `playwright install-deps chromium` installs
+      # the apt packages Electron shares with Chromium; xvfb provides the display
+      # (the run step below wraps the suite in `xvfb-run`). macOS/Windows runners
+      # already have a display + the needed libraries, so this is Linux-only.
+      - name: Install Linux display + Electron system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          npx playwright install-deps chromium
+
+      # Refresh better-sqlite3's ELECTRON prebuild before the suite (Electron's
+      # Node ABI differs from the host Node). This is `pretest:e2e`, run
+      # explicitly so its output is visible even if `test:e2e`'s pre-hook is
+      # skipped; it uses prebuild-install (no node-gyp / VS Build Tools), so it
+      # works on a clean runner across all three OSes.
+      - name: Prepare native modules for Electron (better-sqlite3 prebuild)
+        run: npm run pretest:e2e
+
+      - name: Run E2E (Linux, under xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" npm run test:e2e
+
+      - name: Run E2E (macOS / Windows)
+        if: runner.os != 'Linux'
+        run: npm run test:e2e

@@ -30,6 +30,21 @@ module.exports = {
             runtimeChunk: false,
         };
 
+        // Resolve `.mjs` so extensionless imports of the DEP-FREE plugin cores
+        // (`./signing-core`, `./bundle-files`) find the `.mjs` files. Those cores
+        // are shared VERBATIM with the plain-Node CI signer (`sign-plugin.mjs`)
+        // and vitest, so they MUST be authored as native ESM (`.mjs`): a CJS
+        // `module.exports = …` core bundled into the ESM main output makes the
+        // Electron loader throw at boot ("ES Modules may not assign
+        // module.exports"). Nextron's base config replaces webpack's default
+        // `resolve.extensions` (dropping `.mjs`), so re-add it here — appended
+        // last, a pure fallback that only fires when no `.js/.ts` match exists.
+        config.resolve = config.resolve ?? {};
+        config.resolve.extensions = [
+            ...(config.resolve.extensions ?? []),
+            '.mjs',
+        ];
+
         // Tier 3 host: Genie no longer builds its own detached pty-host. The host
         // script now ships INSIDE @particle-academy/fancy-term-host
         // (dist/pty-host.js + its chunk). HostSpawner.resolveHostScript() locates

@@ -1,8 +1,8 @@
 /**
  * Plugin SIGNING primitives — the DEP-FREE, SHARED core (Plugin System, Phase 3).
  *
- * This is the SINGLE SOURCE OF TRUTH for the sign/verify algorithm. It is plain
- * CommonJS using only Node's built-in `crypto` — NO Electron, NO fs, NO
+ * This is the SINGLE SOURCE OF TRUTH for the sign/verify algorithm. It is a plain
+ * ESM module (`.mjs`) using only Node's built-in `crypto` — NO Electron, NO fs, NO
  * TypeScript — so the EXACT SAME bytes back three very different consumers:
  *
  *   1. the desktop app  — `main/plugins/signing.ts` re-exports this module, so the
@@ -15,6 +15,13 @@
  *
  * Because all three share this one file, there is no duplication to drift and no
  * "the signer and the verifier disagree on a byte" class of bug.
+ *
+ * **Why ESM (`.mjs`), not CommonJS.** nextron/webpack bundles the Electron MAIN
+ * process into an ES-Module `background.js`; a bundled `module.exports = …` core
+ * makes the ESM loader throw at boot ("ES Modules may not assign module.exports").
+ * Authoring this shared core as native ESM (real `export` bindings, `.mjs` so it
+ * loads as ESM regardless of the package `type`) keeps it valid in ALL of: the
+ * webpack main bundle, plain-Node `import` (`sign-plugin.mjs`), and vitest.
  *
  * The scheme (see `signing.ts` for the full rationale):
  *   - identity is Ed25519 (publisher holds the private key; the public key +
@@ -29,9 +36,7 @@
  * @typedef {{ path: string, bytes: Uint8Array }} BundleFile
  */
 
-'use strict';
-
-const crypto = require('crypto');
+import crypto from 'node:crypto';
 
 /**
  * Deterministic JSON: object keys sorted recursively, arrays order-preserved,
@@ -40,7 +45,7 @@ const crypto = require('crypto');
  * @param {unknown} value
  * @returns {string}
  */
-function canonicalJson(value) {
+export function canonicalJson(value) {
     return JSON.stringify(sortDeep(value));
 }
 
@@ -76,13 +81,13 @@ function base64url(bytes) {
  * @param {string} publicKeyPem
  * @returns {string}
  */
-function keyIdForPublicKey(publicKeyPem) {
+export function keyIdForPublicKey(publicKeyPem) {
     const der = crypto.createPublicKey(publicKeyPem).export({ type: 'spki', format: 'der' });
     return `ed25519-${base64url(crypto.createHash('sha256').update(der).digest())}`;
 }
 
 /** Generate a fresh Ed25519 keypair (+ its keyId). For owner tooling + tests. @returns {Ed25519KeyPair} */
-function generateSigningKeyPair() {
+export function generateSigningKeyPair() {
     const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
     const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
     const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
@@ -98,7 +103,7 @@ function generateSigningKeyPair() {
  * @param {BundleFile[]} files
  * @returns {string}
  */
-function computeBundleIntegrity(files) {
+export function computeBundleIntegrity(files) {
     const lines = files
         .map((f) => ({ path: f.path.replace(/\\/g, '/'), bytes: f.bytes }))
         .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
@@ -113,7 +118,7 @@ function computeBundleIntegrity(files) {
  * @param {Record<string, unknown>} manifest
  * @returns {string}
  */
-function signingPayload(manifest) {
+export function signingPayload(manifest) {
     const { signature: _drop, ...rest } = manifest;
     return canonicalJson(rest);
 }
@@ -126,7 +131,7 @@ function signingPayload(manifest) {
  * @param {string} privateKeyPem
  * @returns {Record<string, unknown> & { signature: string }}
  */
-function signManifest(manifest, privateKeyPem) {
+export function signManifest(manifest, privateKeyPem) {
     const payload = signingPayload(manifest);
     const sig = crypto.sign(null, Buffer.from(payload, 'utf8'), crypto.createPrivateKey(privateKeyPem));
     return { ...manifest, signature: sig.toString('base64') };
@@ -140,7 +145,7 @@ function signManifest(manifest, privateKeyPem) {
  * @param {string} publicKeyPem
  * @returns {boolean}
  */
-function verifyDetached(payload, signatureB64, publicKeyPem) {
+export function verifyDetached(payload, signatureB64, publicKeyPem) {
     try {
         if (!signatureB64) return false;
         return crypto.verify(
@@ -153,13 +158,3 @@ function verifyDetached(payload, signatureB64, publicKeyPem) {
         return false;
     }
 }
-
-module.exports = {
-    canonicalJson,
-    keyIdForPublicKey,
-    generateSigningKeyPair,
-    computeBundleIntegrity,
-    signingPayload,
-    signManifest,
-    verifyDetached,
-};

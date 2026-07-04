@@ -4,7 +4,7 @@
  *
  * Dep-free Node (built-in `crypto` / `fs` / `path` only). It REUSES the app's own
  * signing algorithm by importing the SHARED dep-free core
- * (`../main/plugins/signing-core.js`) — the exact same `computeBundleIntegrity` /
+ * (`../main/plugins/signing-core.mjs`) — the exact same `computeBundleIntegrity` /
  * `signingPayload` / `canonicalJson` / `keyIdForPublicKey` / `signManifest` that
  * `main/plugins/signing.ts` re-exports and the app's `verifyDetached` checks
  * against. So a signature this script writes VERIFIES under the app by
@@ -15,7 +15,7 @@
  *      NEVER a file in the repo);
  *   2. derive the public key + its `keyId` fingerprint from the private key;
  *   3. collect the plugin's CODE files via the SHARED `collectBundleFiles`
- *      (`../main/plugins/bundle-files.js`, the same walk `install.ts` uses):
+ *      (`../main/plugins/bundle-files.mjs`, the same walk `install.ts` uses):
  *      every file EXCEPT `.git/`, `node_modules/`, the manifest, and any `*.sig`;
  *   4. compute the `sha256-…` bundle integrity over those files;
  *   5. set `integrity` + `publisher.keyId` on the manifest, then write a detached
@@ -46,8 +46,8 @@ import {
     computeBundleIntegrity,
     keyIdForPublicKey,
     signManifest,
-} from '../main/plugins/signing-core.js';
-import { collectBundleFiles, PLUGIN_MANIFEST_FILENAME } from '../main/plugins/bundle-files.js';
+} from '../main/plugins/signing-core.mjs';
+import { collectBundleFiles, PLUGIN_MANIFEST_FILENAME } from '../main/plugins/bundle-files.mjs';
 
 /** @param {string} msg */
 function fail(msg) {

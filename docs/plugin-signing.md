@@ -5,7 +5,7 @@ Genie trusts an **official** plugin when its `genie-plugin.json` carries a valid
 bundle. This page covers how official plugins get signed **in CI** and how a
 plugin repo wires it up.
 
-- The signing **algorithm** lives in `main/plugins/signing-core.js` (the app's
+- The signing **algorithm** lives in `main/plugins/signing-core.mjs` (the app's
   `main/plugins/signing.ts` re-exports it; the app's verifier
   `main/plugins/trust.ts` checks against it).
 - The **CI signer** is `scripts/sign-plugin.mjs` (dep-free Node — built-in
@@ -34,7 +34,7 @@ it is a GitHub secret used only by CI.
 1. **Integrity** — the signer hashes every CODE file in the plugin (recursively,
    excluding `.git/`, `node_modules/`, the manifest itself, and any `*.sig`) into
    `integrity: "sha256-…"`. This is the *same* walk the app runs at install
-   (`collectBundleFiles` in `main/plugins/bundle-files.js`), so signer and
+   (`collectBundleFiles` in `main/plugins/bundle-files.mjs`), so signer and
    verifier hash the identical bytes.
 2. **Signature** — the signer writes `publisher.keyId` (derived from the key) and
    a detached Ed25519 `signature` over the canonical manifest (its own
@@ -54,7 +54,7 @@ official plugin repo can sign without ever storing the key.
    fresh one:
 
    ```bash
-   node -e "const {generateSigningKeyPair}=require('./main/plugins/signing-core.js');const k=generateSigningKeyPair();console.log(k.keyId);require('fs').writeFileSync('genie-signing.key',k.privateKeyPem);console.log('public:\n'+require('crypto').createPublicKey(k.privateKeyPem).export({type:'spki',format:'pem'}).toString());"
+   node -e "import('./main/plugins/signing-core.mjs').then(({generateSigningKeyPair})=>{const k=generateSigningKeyPair();console.log(k.keyId);require('fs').writeFileSync('genie-signing.key',k.privateKeyPem);console.log('public:\n'+require('crypto').createPublicKey(k.privateKeyPem).export({type:'spki',format:'pem'}).toString());})"
    ```
 
    Embed the **public** key in `BUNDLED_TRUSTED_KEYS`; keep the **private** key

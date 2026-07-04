@@ -1,7 +1,7 @@
 /**
- * Type declarations for the dep-free CommonJS signing core (`signing-core.js`).
+ * Type declarations for the dep-free ESM signing core (`signing-core.mjs`).
  *
- * The runtime lives in `signing-core.js` (plain Node `crypto`, no Electron) so
+ * The runtime lives in `signing-core.mjs` (plain Node `crypto`, no Electron) so
  * the desktop app, the CI signer (`scripts/sign-plugin.mjs`), and the unit tests
  * all execute the identical bytes. These declarations give the TypeScript side
  * (`signing.ts`, which re-exports this module) full types over that runtime.

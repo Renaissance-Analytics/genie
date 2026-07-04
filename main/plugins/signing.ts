@@ -22,8 +22,8 @@
  * This module supplies the crypto; the trust decision + key resolution is
  * `trust.ts`, and the enforcement points are install / enable / surface.
  *
- * **Single source of truth.** The algorithm itself lives in the dep-free
- * CommonJS `./signing-core` (Node `crypto` only — no Electron, no TypeScript) so
+ * **Single source of truth.** The algorithm itself lives in the dep-free ESM
+ * `./signing-core` (`.mjs`, Node `crypto` only — no Electron, no TypeScript) so
  * the EXACT SAME bytes back the desktop app (this re-export), the CI signer
  * (`scripts/sign-plugin.mjs`, which imports `signing-core` directly), and the
  * unit tests. A signature the CI script produces therefore verifies here by
