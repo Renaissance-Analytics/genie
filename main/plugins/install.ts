@@ -33,6 +33,8 @@ import {
     upsertPlugin,
     getPlugin,
     deletePlugin,
+    setPluginTrust,
+    setPluginEnabled,
     upsertPluginMarketplace,
     getPluginMarketplace,
     deletePluginMarketplace,
@@ -40,8 +42,17 @@ import {
     emptyPluginGrants,
     type PluginGrants,
     type PluginSourceType,
+    type PluginTrustStatus,
 } from '../db';
 import { disposePlugin } from './registry';
+import { computeBundleIntegrity, type BundleFile } from './signing';
+import {
+    productionTrustStore,
+    evaluateManifestTrust,
+    evaluateMarketplaceTrust,
+    pluginRowIsSurfaceable,
+    type TrustVerdict,
+} from './trust';
 
 function pluginsRoot(): string {
     const dir = path.join(app.getPath('userData'), 'plugins');
@@ -85,6 +96,50 @@ function materialise(id: string, from: string): string {
     fs.rmSync(dest, { recursive: true, force: true });
     fs.cpSync(from, dest, { recursive: true });
     return dest;
+}
+
+/**
+ * Collect the plugin's CODE files (for integrity hashing) from an install dir:
+ * every file recursively EXCEPT the manifest (covered by the signature instead),
+ * `.git`, and any detached `.sig`. Paths are forward-slashed + bundle-relative so
+ * signer and verifier agree byte-for-byte.
+ */
+function collectBundleFiles(dir: string): BundleFile[] {
+    const out: BundleFile[] = [];
+    const root = path.resolve(dir);
+    const walk = (abs: string) => {
+        for (const ent of fs.readdirSync(abs, { withFileTypes: true })) {
+            if (ent.name === '.git' || ent.name === 'node_modules') continue;
+            const child = path.join(abs, ent.name);
+            if (ent.isDirectory()) {
+                walk(child);
+                continue;
+            }
+            if (!ent.isFile()) continue;
+            const rel = path.relative(root, child).replace(/\\/g, '/');
+            if (rel === PLUGIN_MANIFEST_FILENAME || rel.endsWith('.sig')) continue;
+            out.push({ path: rel, bytes: fs.readFileSync(child) });
+        }
+    };
+    walk(root);
+    return out;
+}
+
+/**
+ * Evaluate a materialised plugin's PROVENANCE: recompute the code integrity and
+ * verify the signature against the live trust store. `firstParty` (bundled
+ * plugins materialised from Genie's own signed app) short-circuits to trusted.
+ */
+function evaluateInstalledTrust(manifest: PluginManifest, installPath: string, firstParty: boolean): {
+    verdict: TrustVerdict;
+    integrity: string;
+} {
+    const integrity = computeBundleIntegrity(collectBundleFiles(installPath));
+    const verdict = evaluateManifestTrust(manifest, productionTrustStore(), {
+        recomputedIntegrity: integrity,
+        firstParty,
+    });
+    return { verdict, integrity };
 }
 
 /** Shallow-clone a repo into a fresh temp dir; checkout `ref` when given. */
@@ -138,8 +193,21 @@ function record(
         ref?: string | null;
         marketplaceId?: string | null;
     },
+    firstParty = false,
 ): InstalledPluginSummary {
+    // Provenance FIRST: recompute integrity + evaluate the signature/trust. A
+    // signed-but-tampered / wrong-key / bad-signature bundle is UNTRUSTED — refuse
+    // to record it at all (fail-closed; a red flag has no legitimate install).
+    const { verdict, integrity } = evaluateInstalledTrust(manifest, installPath, firstParty);
+    if (verdict.status === 'untrusted') {
+        fs.rmSync(installPath, { recursive: true, force: true });
+        throw new Error(`Refused to install "${manifest.name}": ${verdict.reason}`);
+    }
+
     const prior = getPlugin(manifest.id);
+    // A re-install that changes the trust verdict must NOT silently keep a stale
+    // dev-approval: only carry it forward while the plugin is still unsigned.
+    const devApproved = verdict.status === 'unsigned' ? (prior?.dev_approved ?? false) : false;
     upsertPlugin({
         id: manifest.id,
         namespace: manifest.namespace,
@@ -158,8 +226,12 @@ function record(
         // at enable-time (consent.ts) records the user-chosen subset. A re-install
         // keeps the grants already made.
         grants: prior?.grants ?? emptyPluginGrants(),
-        integrity: manifest.integrity ?? null,
+        // Store the RECOMPUTED integrity (authoritative) + the provenance/trust.
+        integrity,
+        signature: manifest.signature ?? null,
         publisher_key_id: manifest.publisher?.keyId ?? null,
+        trust: verdict.status,
+        dev_approved: devApproved,
     });
     // A re-install may change the code path — drop any stale worker.
     disposePlugin(manifest.id);
@@ -187,14 +259,59 @@ export async function installPluginFromRepo(
     }
 }
 
-/** Install one plugin from a local folder (a cheap DEV convenience). */
-export async function installPluginFromFolder(folder: string): Promise<InstalledPluginSummary> {
+/**
+ * Install one plugin from a local folder. Used both for the DEV convenience path
+ * (unsigned/developer plugins) and, with `firstParty`, for Genie's own BUNDLED
+ * plugins materialised from the signed app — which are trusted by construction.
+ */
+export async function installPluginFromFolder(
+    folder: string,
+    firstParty = false,
+): Promise<InstalledPluginSummary> {
     if (!folder?.trim() || !fs.existsSync(folder)) {
         throw new Error('Choose an existing plugin folder.');
     }
     const manifest = readManifestFrom(folder);
     const installPath = materialise(manifest.id, folder);
-    return record(manifest, installPath, { type: 'folder', url: folder });
+    return record(manifest, installPath, { type: 'folder', url: folder }, firstParty);
+}
+
+/**
+ * Re-evaluate EVERY installed plugin's trust against the CURRENT trust store and
+ * update its cached verdict. This is how revocation propagates: remove a signing
+ * key (or an unsigned plugin loses its dev-approval) → any plugin that no longer
+ * verifies flips to `untrusted`/blocked and is auto-DISABLED (fail-closed). Called
+ * at startup and whenever the trust store or Developer Mode changes.
+ */
+export function revalidateAllPluginTrust(): void {
+    const store = productionTrustStore();
+    for (const row of listPlugins()) {
+        try {
+            const parsed = validatePluginManifest(JSON.parse(row.manifest_json));
+            if (!parsed.ok) {
+                // A now-invalid manifest can no longer be trusted — disable it.
+                if (row.trust !== 'untrusted') setPluginTrust(row.id, 'untrusted', false);
+                if (row.enabled) { setPluginEnabled(row.id, false); disposePlugin(row.id); }
+                continue;
+            }
+            // Signature-only re-check (code unchanged since install; skip re-hash).
+            // First-party bundled plugins stay trusted.
+            const firstParty = row.trust === 'trusted' && !row.signature && !row.publisher_key_id;
+            const verdict = evaluateManifestTrust(parsed.manifest, store, { firstParty });
+            const devApproved = verdict.status === 'unsigned' ? row.dev_approved : false;
+            if (verdict.status !== row.trust || devApproved !== row.dev_approved) {
+                setPluginTrust(row.id, verdict.status, devApproved);
+            }
+            // If it can no longer surface, disable it now (instant revoke).
+            const refreshed = getPlugin(row.id);
+            if (refreshed && refreshed.enabled && !pluginRowIsSurfaceable(refreshed)) {
+                setPluginEnabled(row.id, false);
+                disposePlugin(row.id);
+            }
+        } catch {
+            /* skip a row that can't be evaluated — leave it as-is (still gated) */
+        }
+    }
 }
 
 /** Uninstall a plugin: tear down its worker, drop the row, delete the bundle. */
@@ -242,6 +359,15 @@ export async function addMarketplace(
     const { dir } = await cloneToTemp(url, ref);
     try {
         const manifest = readMarketplaceFrom(dir);
+        // Verify the index signature (provenance). An OFFICIAL marketplace MUST be
+        // validly signed by a trusted key; a bad signature is refused outright.
+        const verdict = evaluateMarketplaceTrust(manifest, productionTrustStore());
+        if (verdict.status === 'untrusted') {
+            throw new Error(`Refused to add marketplace "${manifest.name}": ${verdict.reason}`);
+        }
+        if (official && verdict.status !== 'trusted') {
+            throw new Error(`Marketplace "${manifest.name}" cannot be OFFICIAL: ${verdict.reason}`);
+        }
         upsertPluginMarketplace({
             id: manifest.id,
             name: manifest.name,
@@ -249,6 +375,8 @@ export async function addMarketplace(
             ref: ref ?? null,
             official,
             manifest_json: JSON.stringify(manifest),
+            signature: manifest.signature ?? null,
+            publisher_key_id: manifest.publisher?.keyId ?? null,
         });
         return { id: manifest.id, name: manifest.name, url, pluginCount: manifest.plugins.length };
     } finally {

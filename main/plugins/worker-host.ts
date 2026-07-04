@@ -34,10 +34,18 @@ import type {
 import { getWorkspace, type PluginRow } from '../db';
 import { workspaceIdOfTerminal, SYSTEM_WORKSPACE_ID } from '../terminal/workspace-of-terminal';
 import { runPluginFsOp, isPluginFsOp } from './fs-bridge';
+import { buildMinimalEnv, DENIED_BUILTINS } from './worker-sandbox';
 import type { PluginManifest } from './manifest';
 
 /** How long a single tool call may run before the worker is treated as hung. */
 const CALL_TIMEOUT_MS = 30_000;
+
+/** Per-worker V8 heap cap — bounds a runaway/abusive plugin's memory. */
+const WORKER_MAX_OLD_SPACE_MB = 256;
+
+/** Ceilings for a plugin's mediated network egress (only to granted hosts). */
+const NET_TIMEOUT_MS = 15_000;
+const NET_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 
 /**
  * Resolve a call's AUTHORITATIVE workspace root from its terminal id — computed
@@ -74,15 +82,15 @@ function genieNodeModulesDir(): string | null {
     }
 }
 
-/** The child env: inherit the host's, plus the plugin module-resolution fallback. */
+/**
+ * The child env (Phase 3 hardening): a MINIMAL, secret-free allowlist — NOT the
+ * host's full `process.env`. Genie's env carries GitHub tokens, signing secrets,
+ * Reverb keys, `GENIE_MCP_URL`, etc.; a plugin worker must never see them. Only
+ * module-resolution/locale vars survive, plus the explicit node-path fallback.
+ */
 function workerEnv(): Record<string, string> {
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-        if (typeof v === 'string') env[k] = v;
-    }
     const nm = genieNodeModulesDir();
-    if (nm) env.GENIE_PLUGIN_NODE_PATH = nm;
-    return env;
+    return buildMinimalEnv(process.env, nm ? { GENIE_PLUGIN_NODE_PATH: nm } : {});
 }
 
 /** The embedded worker bootstrap (CommonJS). Materialised to disk + forked. */
@@ -109,6 +117,32 @@ const WORKER_ENTRY_SOURCE = `'use strict';
     } catch (e) {
         /* resolution fallback is best-effort */
     }
+})();
+
+// --- Sandbox lockdown (Phase 3): deny ambient-authority built-ins ------------
+// Runs AFTER the bootstrap's own require()s (module/path above) and BEFORE any
+// plugin code loads, so a plugin (or its deps) can never require fs / net / http
+// / child_process / etc. Its ONLY I/O is the mediated capability bridge. The
+// generators are pure in-memory byte APIs (verified: no built-in imports), so
+// this costs them nothing. NOTE: covers require() + static import (→require in
+// CJS); a deliberate dynamic import('node:fs') is the documented residual.
+(function lockdownSandbox() {
+    var DENIED = ${JSON.stringify(DENIED_BUILTINS)};
+    var Module = require('module');
+    var origLoad = Module._load;
+    Module._load = function (request, parent, isMain) {
+        var r = String(request);
+        if (r.indexOf('node:') === 0) r = r.slice(5);
+        var root = r.split('/')[0];
+        if (DENIED.indexOf(root) !== -1) {
+            throw new Error('Plugin sandbox: module "' + request + '" is blocked. Plugins have no ambient filesystem/network/process access; use the capability bridge instead.');
+        }
+        return origLoad.apply(this, arguments);
+    };
+    // Neuter native-addon + internal-binding escape hatches (RCE vectors).
+    try { delete process.dlopen; } catch (e) {}
+    try { delete process.binding; } catch (e) {}
+    try { delete process._linkedBinding; } catch (e) {}
 })();
 
 const port = process.parentPort;
@@ -254,11 +288,32 @@ function toolEntryFile(plugin: PluginRow, manifest: PluginManifest, runKey: stri
 export function createWorkerExecutor(): PluginToolExecutor {
     const workers = new Map<string, PluginWorker>();
 
+    /** Kill a worker + reject its in-flight calls (misbehaving/hung/tampered). */
+    function killWorker(pluginId: string, reason: string): void {
+        const w = workers.get(pluginId);
+        if (!w) return;
+        workers.delete(pluginId);
+        for (const pc of w.calls.values()) {
+            clearTimeout(pc.timer);
+            pc.reject(new Error(reason));
+        }
+        w.calls.clear();
+        w.callRoots.clear();
+        try {
+            w.proc.kill();
+        } catch {
+            /* already gone */
+        }
+    }
+
     function spawn(plugin: PluginRow): PluginWorker {
         const proc = utilityProcess.fork(workerEntryPath(), [], {
             serviceName: `genie-plugin-${plugin.namespace}`,
             stdio: ['ignore', 'pipe', 'pipe'],
             env: workerEnv(),
+            // Bound the worker's heap so a runaway/abusive plugin can't exhaust
+            // host memory (fail-closed: it OOM-crashes → its calls reject).
+            execArgv: [`--max-old-space-size=${WORKER_MAX_OLD_SPACE_MB}`],
         });
         const calls = new Map<number, PendingCall>();
         const callRoots = new Map<number, string | null>();
@@ -333,9 +388,10 @@ export function createWorkerExecutor(): PluginToolExecutor {
             w.callRoots.set(callId, rootForTerminal(terminalId));
             return await new Promise<PluginToolResult>((resolve, reject) => {
                 const timer = setTimeout(() => {
-                    w.calls.delete(callId);
-                    w.callRoots.delete(callId);
-                    reject(new Error(`plugin tool "${toolName}" timed out after ${CALL_TIMEOUT_MS}ms`));
+                    // A hung/misbehaving worker is TORN DOWN (not just abandoned) so
+                    // it can't keep running or hold resources — fail-closed. The next
+                    // call respawns a fresh worker.
+                    killWorker(plugin.id, `plugin tool "${toolName}" timed out after ${CALL_TIMEOUT_MS}ms`);
                 }, CALL_TIMEOUT_MS);
                 w.calls.set(callId, { resolve, reject, timer });
                 w.proc.postMessage({ t: 'call', callId, entryFile, toolName, args, terminalId });
@@ -365,7 +421,8 @@ export function createWorkerExecutor(): PluginToolExecutor {
  * workspace root (looked up from `callRoots` by the callId the worker echoed —
  * the worker never supplies a root), then guard-resolves the write under that
  * root against the plugin's extension allow-list (`guardedResolve` in
- * `files/ipc.ts`). NETWORK egress remains gated-but-not-performed until Phase 3.
+ * `files/ipc.ts`). NETWORK egress (Phase 3) is performed MAIN-side, ONLY to a
+ * host on the plugin's granted allow-list, over http(s) only, time- + size-capped.
  */
 async function handleBridge(
     plugin: PluginRow,
@@ -386,15 +443,82 @@ async function handleBridge(
             return reply(r.ok, r.value, r.error);
         }
         if (op === 'net.fetch') {
-            const host = safeHost(String(params.url ?? ''));
+            const url = String(params.url ?? '');
+            const host = safeHost(url);
+            // Fail-closed: only http(s) to a host on the granted allow-list. An
+            // unsigned plugin holds NO network grants (stripped at consent), so
+            // this denies before any request leaves the box.
             if (!host || plugin.grants.network[host] !== true) {
                 return reply(false, undefined, `network access to "${host ?? '?'}" is not granted`);
             }
-            return reply(false, undefined, 'network egress is enabled in Phase 3');
+            const r = await performPluginFetch(url, params.init as PluginFetchInit | null);
+            return reply(r.ok, r.value, r.error);
         }
         return reply(false, undefined, `unknown bridge op "${op}"`);
     } catch (e) {
         reply(false, undefined, e instanceof Error ? e.message : String(e));
+    }
+}
+
+/** The worker-supplied fetch options the host honours (constrained). */
+interface PluginFetchInit {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+}
+
+/**
+ * Perform a plugin's GRANTED network request, MAIN-side. The host — never the
+ * sandboxed worker — makes the call, so egress is fully mediated: http(s) only,
+ * time-capped, and response size-capped. Returns a contained result (status +
+ * headers + base64 body) the worker gets back over the bridge.
+ */
+async function performPluginFetch(
+    url: string,
+    init: PluginFetchInit | null,
+): Promise<{ ok: boolean; value?: unknown; error?: string }> {
+    let parsed: URL;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return { ok: false, error: 'invalid URL' };
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return { ok: false, error: `protocol "${parsed.protocol}" is not allowed (http/https only)` };
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), NET_TIMEOUT_MS);
+    try {
+        const method = (init?.method ?? 'GET').toUpperCase();
+        const res = await fetch(url, {
+            method,
+            headers: init?.headers && typeof init.headers === 'object' ? init.headers : undefined,
+            body: init?.body != null ? String(init.body) : undefined,
+            redirect: 'follow',
+            signal: controller.signal,
+        });
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.length > NET_MAX_RESPONSE_BYTES) {
+            return { ok: false, error: `response exceeds ${NET_MAX_RESPONSE_BYTES} byte cap` };
+        }
+        const headers: Record<string, string> = {};
+        res.headers.forEach((v, k) => {
+            headers[k] = v;
+        });
+        return {
+            ok: true,
+            value: {
+                status: res.status,
+                statusText: res.statusText,
+                ok: res.ok,
+                headers,
+                base64: buf.toString('base64'),
+            },
+        };
+    } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    } finally {
+        clearTimeout(timer);
     }
 }
 

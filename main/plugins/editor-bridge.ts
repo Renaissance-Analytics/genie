@@ -18,6 +18,7 @@ import { ipcMain } from 'electron';
 import { getPlugin } from '../db';
 import { validatePluginManifest, type PluginManifest } from './manifest';
 import { runPluginFsOp, type PluginFsResult } from './fs-bridge';
+import { pluginRowIsSurfaceable } from './trust';
 
 function deny(error: string): PluginFsResult {
     return { ok: false, error };
@@ -45,7 +46,9 @@ export async function runPluginEditorFs(
 ): Promise<PluginFsResult> {
     const row = getPlugin(String(pluginId));
     if (!row) return deny('unknown plugin');
-    if (!row.enabled) return deny('plugin is not enabled');
+    // Trust gate (Phase 3): a disabled, untrusted, or unapproved plugin gets NO
+    // binary file access — even if it once had an editor open.
+    if (!pluginRowIsSurfaceable(row)) return deny('plugin is not enabled or not trusted');
     const manifest = manifestOf(row.manifest_json);
     if (!manifest) return deny('invalid plugin manifest');
     const params: Record<string, unknown> = { rel: String(relPath) };

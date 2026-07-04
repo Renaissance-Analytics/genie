@@ -26,6 +26,8 @@ function row(id: string, namespace: string, manifest: Record<string, unknown>): 
         integrity: null,
         signature: null,
         publisher_key_id: null,
+        trust: 'trusted',
+        dev_approved: false,
         installed_at: '2026-01-01T00:00:00.000Z',
         updated_at: '2026-01-01T00:00:00.000Z',
     };

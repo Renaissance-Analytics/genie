@@ -506,6 +506,38 @@ export function runMigrations(d: Database.Database): void {
                 `);
             },
         },
+        {
+            // v21 — Plugin System Phase 3 (signed registry + trust). Adds the
+            // provenance/trust cache columns to the (unshipped) v20 tables via
+            // idempotent guarded ALTERs, so a dev DB already at v20 converges:
+            //   - plugins.trust        — last evaluated verdict
+            //                            ('trusted'|'unsigned'|'untrusted'); the
+            //                            fail-closed default is 'unsigned'.
+            //   - plugins.dev_approved — the user knowingly enabled an UNSIGNED
+            //                            plugin under Developer Mode (default 0).
+            //   - plugin_marketplaces.signature / .publisher_key_id — a signed
+            //                            marketplace index's provenance.
+            // The columns are a CACHE: trust is still re-evaluated against the live
+            // trust store at enable + on a revalidation sweep (removing a key
+            // revokes). The runtime surface gate reads these columns (fail-closed).
+            version: 21,
+            runner: (db) => {
+                const p = tableColumns(db, 'plugins');
+                if (!p.has('trust')) {
+                    db.exec(`ALTER TABLE plugins ADD COLUMN trust TEXT NOT NULL DEFAULT 'unsigned'`);
+                }
+                if (!p.has('dev_approved')) {
+                    db.exec(`ALTER TABLE plugins ADD COLUMN dev_approved INTEGER NOT NULL DEFAULT 0`);
+                }
+                const m = tableColumns(db, 'plugin_marketplaces');
+                if (!m.has('signature')) {
+                    db.exec(`ALTER TABLE plugin_marketplaces ADD COLUMN signature TEXT`);
+                }
+                if (!m.has('publisher_key_id')) {
+                    db.exec(`ALTER TABLE plugin_marketplaces ADD COLUMN publisher_key_id TEXT`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -525,6 +557,14 @@ export function runMigrations(d: Database.Database): void {
 function workspaceColumns(d: Database.Database): Set<string> {
     const rows = d
         .prepare<[], { name: string }>(`PRAGMA table_info(workspaces)`)
+        .all();
+    return new Set(rows.map((r) => r.name));
+}
+
+/** Column-name set for an arbitrary table (idempotent-ALTER guards). */
+function tableColumns(d: Database.Database, table: string): Set<string> {
+    const rows = d
+        .prepare<[], { name: string }>(`PRAGMA table_info(${table})`)
         .all();
     return new Set(rows.map((r) => r.name));
 }
@@ -661,6 +701,11 @@ export interface Settings {
      *  No default — the agent must pass an explicit `command`, or this is used
      *  when set. Empty means "no preset; require an explicit command". */
     agent_command_custom?: string;
+    /** Plugin System Developer Mode. When 'on', the user may install/enable
+     *  UNSIGNED plugins (with escalated consent + restricted runtime) and manage
+     *  developer-trusted signing keys. Default 'off' — the signed registry is the
+     *  production path (§12.3). */
+    plugins_developer_mode?: 'on' | 'off';
 }
 
 /** Hard cap on the Ai.System instruction set. Enforced BOTH in the Settings UI
@@ -734,6 +779,8 @@ export function getAllSettings(): Settings {
         agent_command_claude: out['agent_command_claude'] ?? 'claude',
         agent_command_codex: out['agent_command_codex'] ?? 'codex',
         agent_command_custom: out['agent_command_custom'] ?? '',
+        plugins_developer_mode:
+            (out['plugins_developer_mode'] as 'on' | 'off') ?? 'off',
     };
 }
 
@@ -1634,6 +1681,14 @@ export function markIssueWatchSeen(
 /** Where a plugin was installed from. */
 export type PluginSourceType = 'repo' | 'folder' | 'marketplace';
 
+/** A plugin's evaluated provenance verdict (Plugin System Phase 3). */
+export type PluginTrustStatus = 'trusted' | 'unsigned' | 'untrusted';
+
+/** Coerce a stored trust string to a valid status (fail-closed to 'unsigned'). */
+function parseTrustStatus(raw: string | null | undefined): PluginTrustStatus {
+    return raw === 'trusted' || raw === 'untrusted' ? raw : 'unsigned';
+}
+
 /**
  * The GRANULAR granted-permission map (§12.1). Each key under a category is an
  * INDEPENDENT grant the user can toggle on/off in Settings → Plugins:
@@ -1687,6 +1742,10 @@ export interface PluginRow {
     integrity: string | null;
     signature: string | null;
     publisher_key_id: string | null;
+    /** Last evaluated trust verdict (§12.3 Phase 3). */
+    trust: PluginTrustStatus;
+    /** User knowingly enabled an UNSIGNED plugin under Developer Mode. */
+    dev_approved: boolean;
     installed_at: string;
     updated_at: string;
 }
@@ -1707,6 +1766,8 @@ interface PluginRecord {
     integrity: string | null;
     signature: string | null;
     publisher_key_id: string | null;
+    trust: string | null;
+    dev_approved: number | null;
     installed_at: string;
     updated_at: string;
 }
@@ -1730,6 +1791,8 @@ function pluginRowFrom(r: PluginRecord): PluginRow {
         integrity: r.integrity,
         signature: r.signature,
         publisher_key_id: r.publisher_key_id,
+        trust: parseTrustStatus(r.trust),
+        dev_approved: r.dev_approved === 1,
         installed_at: r.installed_at,
         updated_at: r.updated_at,
     };
@@ -1773,6 +1836,8 @@ export interface UpsertPluginInput {
     integrity?: string | null;
     signature?: string | null;
     publisher_key_id?: string | null;
+    trust?: PluginTrustStatus;
+    dev_approved?: boolean;
 }
 
 /** Install (or re-install/update) a plugin row. Idempotent per id. */
@@ -1783,11 +1848,11 @@ export function upsertPlugin(input: UpsertPluginInput): PluginRow {
             `INSERT INTO plugins
                (id, namespace, name, version, source_type, source_url, source_ref, install_path,
                 marketplace_id, enabled, manifest_json, granted_json, integrity, signature,
-                publisher_key_id, installed_at, updated_at)
+                publisher_key_id, trust, dev_approved, installed_at, updated_at)
              VALUES
                (@id, @namespace, @name, @version, @source_type, @source_url, @source_ref, @install_path,
                 @marketplace_id, @enabled, @manifest_json, @granted_json, @integrity, @signature,
-                @publisher_key_id, @now, @now)
+                @publisher_key_id, @trust, @dev_approved, @now, @now)
              ON CONFLICT(id) DO UPDATE SET
                 namespace        = excluded.namespace,
                 name             = excluded.name,
@@ -1803,6 +1868,8 @@ export function upsertPlugin(input: UpsertPluginInput): PluginRow {
                 integrity        = excluded.integrity,
                 signature        = excluded.signature,
                 publisher_key_id = excluded.publisher_key_id,
+                trust            = excluded.trust,
+                dev_approved     = excluded.dev_approved,
                 updated_at       = excluded.updated_at`,
         )
         .run({
@@ -1821,9 +1888,22 @@ export function upsertPlugin(input: UpsertPluginInput): PluginRow {
             integrity: input.integrity ?? null,
             signature: input.signature ?? null,
             publisher_key_id: input.publisher_key_id ?? null,
+            trust: input.trust ?? 'unsigned',
+            dev_approved: input.dev_approved ? 1 : 0,
             now,
         });
     return getPlugin(input.id)!;
+}
+
+/** Update a plugin's evaluated trust verdict + dev-approval (Phase 3). */
+export function setPluginTrust(
+    id: string,
+    trust: PluginTrustStatus,
+    devApproved: boolean,
+): void {
+    getDb()
+        .prepare('UPDATE plugins SET trust = ?, dev_approved = ?, updated_at = ? WHERE id = ?')
+        .run(trust, devApproved ? 1 : 0, new Date().toISOString(), id);
 }
 
 /** Flip a plugin's enabled flag (disable = instant fail-closed revoke). */
@@ -1852,6 +1932,9 @@ export interface PluginMarketplaceRow {
     official: boolean;
     /** Cached, validated marketplace index (JSON string), or null before a fetch. */
     manifest_json: string | null;
+    /** A signed index's detached signature + the trusted key it verifies against. */
+    signature: string | null;
+    publisher_key_id: string | null;
     added_at: string;
     updated_at: string;
 }
@@ -1863,6 +1946,8 @@ interface PluginMarketplaceRecord {
     ref: string | null;
     official: number;
     manifest_json: string | null;
+    signature: string | null;
+    publisher_key_id: string | null;
     added_at: string;
     updated_at: string;
 }
@@ -1875,6 +1960,8 @@ function marketplaceRowFrom(r: PluginMarketplaceRecord): PluginMarketplaceRow {
         ref: r.ref,
         official: r.official !== 0,
         manifest_json: r.manifest_json,
+        signature: r.signature,
+        publisher_key_id: r.publisher_key_id,
         added_at: r.added_at,
         updated_at: r.updated_at,
     };
@@ -1901,6 +1988,8 @@ export interface UpsertMarketplaceInput {
     ref?: string | null;
     official?: boolean;
     manifest_json?: string | null;
+    signature?: string | null;
+    publisher_key_id?: string | null;
 }
 
 /** Add (or refresh) a marketplace. Idempotent per id. */
@@ -1908,15 +1997,17 @@ export function upsertPluginMarketplace(input: UpsertMarketplaceInput): PluginMa
     const now = new Date().toISOString();
     getDb()
         .prepare(
-            `INSERT INTO plugin_marketplaces (id, name, url, ref, official, manifest_json, added_at, updated_at)
-             VALUES (@id, @name, @url, @ref, @official, @manifest_json, @now, @now)
+            `INSERT INTO plugin_marketplaces (id, name, url, ref, official, manifest_json, signature, publisher_key_id, added_at, updated_at)
+             VALUES (@id, @name, @url, @ref, @official, @manifest_json, @signature, @publisher_key_id, @now, @now)
              ON CONFLICT(id) DO UPDATE SET
-                name          = excluded.name,
-                url           = excluded.url,
-                ref           = excluded.ref,
-                official      = excluded.official,
-                manifest_json = excluded.manifest_json,
-                updated_at    = excluded.updated_at`,
+                name             = excluded.name,
+                url              = excluded.url,
+                ref              = excluded.ref,
+                official         = excluded.official,
+                manifest_json    = excluded.manifest_json,
+                signature        = excluded.signature,
+                publisher_key_id = excluded.publisher_key_id,
+                updated_at       = excluded.updated_at`,
         )
         .run({
             id: input.id,
@@ -1925,6 +2016,8 @@ export function upsertPluginMarketplace(input: UpsertMarketplaceInput): PluginMa
             ref: input.ref ?? null,
             official: input.official ? 1 : 0,
             manifest_json: input.manifest_json ?? null,
+            signature: input.signature ?? null,
+            publisher_key_id: input.publisher_key_id ?? null,
             now,
         });
     return getPluginMarketplace(input.id)!;

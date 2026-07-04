@@ -10,6 +10,8 @@ import {
     getPlugin,
     setPluginEnabled,
     setPluginGrants,
+    setSettings,
+    getAllSettings,
     listPluginMarketplaces,
     type PluginRow,
     type PluginGrants,
@@ -24,10 +26,12 @@ import {
     removeMarketplace,
     refreshMarketplace,
     marketplacePlugins,
+    revalidateAllPluginTrust,
 } from './install';
 import { disposePlugin } from './registry';
 import { OFFICIAL_PLUGINS, listBundledPlugins, materialiseBundled } from './official';
 import { consentAndEnablePlugin } from './consent';
+import { userTrustedKeys, addUserTrustedKey, removeUserTrustedKey } from './trust';
 
 /** One toggleable granular permission for the Settings UI (§12.1). */
 export interface PluginPermissionView {
@@ -58,6 +62,12 @@ export interface InstalledPluginView {
     /** Signing-ready provenance surfaced in the UI. */
     integrity: string | null;
     signed: boolean;
+    /** Trust verdict (Phase 3): trusted / unsigned / untrusted. */
+    trust: PluginRow['trust'];
+    /** The signing key id this plugin's signature verifies against (if any). */
+    publisherKeyId: string | null;
+    /** User knowingly enabled this UNSIGNED plugin under Developer Mode. */
+    devApproved: boolean;
 }
 
 function manifestOf(row: PluginRow): PluginManifest | null {
@@ -115,7 +125,10 @@ function toView(row: PluginRow): InstalledPluginView {
         })),
         permissions: manifest ? permissionViews(manifest, row.grants) : [],
         integrity: row.integrity,
-        signed: !!row.integrity && !!row.publisher_key_id,
+        signed: !!row.signature && !!row.publisher_key_id,
+        trust: row.trust,
+        publisherKeyId: row.publisher_key_id,
+        devApproved: row.dev_approved,
     };
 }
 
@@ -291,8 +304,50 @@ export function registerPluginsIpc(): void {
     ipcMain.handle('plugins:install-bundled', async (_e, id: string) => {
         try {
             const src = materialiseBundled(String(id));
-            const s = await installPluginFromFolder(src.path);
+            // Bundled plugins are FIRST-PARTY (materialised from Genie's own signed
+            // app bundle) → trusted by construction.
+            const s = await installPluginFromFolder(src.path, true);
             return ok(s);
+        } catch (e) {
+            return fail((e as Error).message);
+        }
+    });
+
+    // --- Developer Mode + trusted signing keys (Phase 3) --------------------
+    ipcMain.handle('plugins:developer-mode', () => ({
+        enabled: getAllSettings().plugins_developer_mode === 'on',
+        keys: userTrustedKeys().map((k) => ({ keyId: k.keyId, label: k.label })),
+    }));
+
+    ipcMain.handle('plugins:set-developer-mode', (_e, enabled: boolean) => {
+        try {
+            setSettings({ plugins_developer_mode: enabled === true ? 'on' : 'off' });
+            // A trust-policy change re-evaluates every plugin (turning dev mode OFF
+            // must instantly stop unsigned plugins surfacing — fail-closed).
+            revalidateAllPluginTrust();
+            return ok(true);
+        } catch (e) {
+            return fail((e as Error).message);
+        }
+    });
+
+    ipcMain.handle('plugins:add-trusted-key', (_e, publicKeyPem: string, label?: string) => {
+        try {
+            const keyId = addUserTrustedKey(String(publicKeyPem ?? ''), label?.toString());
+            revalidateAllPluginTrust(); // a newly-trusted key may promote plugins
+            return ok({ keyId });
+        } catch (e) {
+            return fail((e as Error).message);
+        }
+    });
+
+    ipcMain.handle('plugins:remove-trusted-key', (_e, keyId: string) => {
+        try {
+            removeUserTrustedKey(String(keyId));
+            // Removing a key REVOKES: any plugin that verified against it flips to
+            // untrusted + is auto-disabled.
+            revalidateAllPluginTrust();
+            return ok(true);
         } catch (e) {
             return fail((e as Error).message);
         }

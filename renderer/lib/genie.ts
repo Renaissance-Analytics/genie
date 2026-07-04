@@ -1062,6 +1062,9 @@ export interface PluginPermissionView {
     granted: boolean;
 }
 
+/** A plugin's evaluated provenance verdict (Plugin System Phase 3). */
+export type PluginTrustStatus = 'trusted' | 'unsigned' | 'untrusted';
+
 /** An installed plugin as Settings → Plugins renders it. */
 export interface InstalledPluginView {
     id: string;
@@ -1079,6 +1082,16 @@ export interface InstalledPluginView {
     permissions: PluginPermissionView[];
     integrity: string | null;
     signed: boolean;
+    /** Trust verdict: trusted / unsigned / untrusted (Phase 3). */
+    trust: PluginTrustStatus;
+    publisherKeyId: string | null;
+    devApproved: boolean;
+}
+
+/** Developer Mode state + the user's developer-trusted signing keys. */
+export interface PluginDeveloperModeState {
+    enabled: boolean;
+    keys: Array<{ keyId: string; label: string }>;
 }
 
 /** A 3rd-party marketplace + its indexed member plugins. */
@@ -1205,6 +1218,14 @@ export interface GenieApi {
             relPath: string,
             base64: string,
         ) => Promise<PluginEditorWriteResult>;
+        /** Developer Mode + trusted signing keys (Phase 3). */
+        developerMode: () => Promise<PluginDeveloperModeState>;
+        setDeveloperMode: (enabled: boolean) => Promise<PluginActionResult<boolean>>;
+        addTrustedKey: (
+            publicKeyPem: string,
+            label?: string,
+        ) => Promise<PluginActionResult<{ keyId: string }>>;
+        removeTrustedKey: (keyId: string) => Promise<PluginActionResult<boolean>>;
     };
     /**
      * Mobile remote-control server (Settings → Mobile). Desktop-only namespace —

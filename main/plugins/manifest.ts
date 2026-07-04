@@ -109,8 +109,17 @@ export interface PluginManifest {
     capabilities?: PluginCapabilities;
     /** npm deps the plugin needs (audited/pinned downstream). */
     dependencies?: Record<string, string>;
-    /** Signing-ready: integrity hash of the bundle (set by install/registry). */
+    /**
+     * Integrity hash of the plugin's CODE files (`sha256-<hex>`, §12.3). Bound by
+     * `signature` so tampering the code invalidates the signature.
+     */
     integrity?: string;
+    /**
+     * Detached base64 Ed25519 signature over the canonical manifest with this
+     * field removed (Phase 3, §5.5). Verified against the trusted publisher key
+     * (`publisher.keyId`) at install/enable. Absent ⇒ the plugin is UNSIGNED.
+     */
+    signature?: string;
 }
 
 /** One member plugin listed by a marketplace index. */
@@ -134,6 +143,11 @@ export interface MarketplaceManifest {
     description?: string;
     publisher?: PluginPublisher;
     plugins: MarketplacePluginEntry[];
+    /**
+     * Detached base64 Ed25519 signature over the canonical index with this field
+     * removed (Phase 3). An OFFICIAL marketplace must be signed by a trusted key.
+     */
+    signature?: string;
 }
 
 export type ValidationResult<T> =
@@ -315,6 +329,9 @@ export function validatePluginManifest(raw: unknown): ValidationResult<PluginMan
     if (raw.integrity !== undefined && !isStr(raw.integrity))
         errors.push('`integrity` must be a string when present');
 
+    if (raw.signature !== undefined && !isStr(raw.signature))
+        errors.push('`signature` must be a string when present');
+
     if (errors.length > 0) return { ok: false, errors };
     return { ok: true, manifest: raw as unknown as PluginManifest };
 }
@@ -370,6 +387,9 @@ export function validateMarketplaceManifest(raw: unknown): ValidationResult<Mark
             if (p.ref !== undefined && !isStr(p.ref)) errors.push(`${at}.ref must be a string when present`);
         });
     }
+
+    if (raw.signature !== undefined && !isStr(raw.signature))
+        errors.push('`signature` must be a string when present');
 
     if (errors.length > 0) return { ok: false, errors };
     return { ok: true, manifest: raw as unknown as MarketplaceManifest };

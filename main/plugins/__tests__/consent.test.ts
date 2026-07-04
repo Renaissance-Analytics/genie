@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { initDatabase, getPlugin, upsertPlugin, deletePlugin, emptyPluginGrants } from '../../db';
+import { initDatabase, getPlugin, upsertPlugin, deletePlugin, emptyPluginGrants, setSettings } from '../../db';
 import { consentAndEnablePlugin } from '../consent';
 import { setQuestionTransport } from '../../ask/force-question';
 import type { ForceQuestion, ForceQuestionResult } from '../../mcp/protocol';
@@ -48,6 +48,9 @@ function seed(id: string, over: Partial<Parameters<typeof upsertPlugin>[0]> = {}
         enabled: false,
         manifest_json: JSON.stringify(MANIFEST),
         grants: emptyPluginGrants(),
+        // Default the GRANT-FLOW scenarios to a trusted plugin so they exercise the
+        // capability consent (not the trust gate); the trust-gate tests override.
+        trust: 'trusted',
         ...over,
     });
 }
@@ -78,6 +81,7 @@ afterEach(() => {
         } catch {
             /* ignore */
         }
+    setSettings({ plugins_developer_mode: 'off' }); // reset dev mode between tests
     asked = 0;
     lastQuestions = [];
 });
@@ -143,5 +147,66 @@ describe('consentAndEnablePlugin', () => {
         expect(r.ok).toBe(true);
         expect(asked).toBe(0); // already holds a grant → no re-prompt
         expect(getPlugin('test.consent.deck')!.enabled).toBe(true);
+    });
+
+    // --- Phase 3 trust gate --------------------------------------------------
+
+    it('TRUST GATE: refuses an UNTRUSTED plugin outright (no modal, stays off)', async () => {
+        seed('test.consent.deck', { trust: 'untrusted' });
+        const r = await consentAndEnablePlugin('test.consent.deck');
+        expect(r.ok).toBe(false);
+        expect(asked).toBe(0);
+        expect(getPlugin('test.consent.deck')!.enabled).toBe(false);
+    });
+
+    it('TRUST GATE: refuses an UNSIGNED plugin when Developer Mode is OFF', async () => {
+        setSettings({ plugins_developer_mode: 'off' });
+        seed('test.consent.deck', { trust: 'unsigned' });
+        const r = await consentAndEnablePlugin('test.consent.deck');
+        expect(r.ok).toBe(false);
+        expect(r.error).toMatch(/Developer Mode/i);
+        expect(asked).toBe(0);
+        expect(getPlugin('test.consent.deck')!.enabled).toBe(false);
+    });
+
+    it('UNSIGNED + Developer Mode: escalated consent, records dev-approval + strips network', async () => {
+        setSettings({ plugins_developer_mode: 'on' });
+        // An unsigned plugin declaring fs + a network host + a Genie API.
+        seed('test.consent.deck', {
+            trust: 'unsigned',
+            manifest_json: JSON.stringify({
+                ...MANIFEST,
+                capabilities: {
+                    fs: { scope: 'workspace', extensions: ['.pptx'] },
+                    network: { hosts: ['api.example.com'] },
+                    genieApi: ['openFileForUser'],
+                },
+            }),
+        });
+        // q0 = the UNSIGNED enable confirmation; then fs + genieApi (network is NOT
+        // offered to an unsigned/restricted plugin).
+        nextResult = answer(['Enable'], ['Grant'], ['Grant']);
+        const r = await consentAndEnablePlugin('test.consent.deck');
+
+        expect(r.ok).toBe(true);
+        expect(asked).toBe(1);
+        // First question is the loud unsigned warning; network is never asked.
+        expect(lastQuestions[0].header).toBe('Unsigned');
+        expect(lastQuestions.some((q) => q.header === 'Network')).toBe(false);
+
+        const row = getPlugin('test.consent.deck')!;
+        expect(row.enabled).toBe(true);
+        expect(row.dev_approved).toBe(true);
+        expect(row.grants.fs.workspace).toBe(true);
+        expect(row.grants.network['api.example.com']).not.toBe(true); // restricted: no network
+    });
+
+    it('UNSIGNED + Developer Mode: declining the unsigned warning enables nothing', async () => {
+        setSettings({ plugins_developer_mode: 'on' });
+        seed('test.consent.deck', { trust: 'unsigned' });
+        nextResult = answer(['Cancel'], ['Grant']); // decline the unsigned confirm
+        const r = await consentAndEnablePlugin('test.consent.deck');
+        expect(r.ok).toBe(false);
+        expect(getPlugin('test.consent.deck')!.enabled).toBe(false);
     });
 });

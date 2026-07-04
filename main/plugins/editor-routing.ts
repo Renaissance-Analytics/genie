@@ -10,6 +10,7 @@
  */
 import { listEnabledPlugins, type PluginRow } from '../db';
 import { validatePluginManifest, type PluginManifest } from './manifest';
+import { pluginRowIsSurfaceable } from './trust';
 
 /** A plugin editor resolved for a file's extension. */
 export interface ResolvedPluginEditor {
@@ -73,7 +74,10 @@ export function matchEditorForExtension(
  */
 export function resolvePluginEditor(fileName: string): ResolvedPluginEditor | null {
     try {
-        return matchEditorForExtension(listEnabledPlugins(), fileName);
+        // Trust gate (Phase 3): only trusted / dev-approved plugins may own a file
+        // type. An untrusted plugin never captures the open flow (fail-closed).
+        const surfaceable = listEnabledPlugins().filter(pluginRowIsSurfaceable);
+        return matchEditorForExtension(surfaceable, fileName);
     } catch {
         return null;
     }

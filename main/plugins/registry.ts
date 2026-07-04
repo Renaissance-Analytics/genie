@@ -28,6 +28,7 @@ import {
     type PluginManifest,
     type PluginMcpTool,
 } from './manifest';
+import { pluginRowIsSurfaceable } from './trust';
 
 /** An MCP tool descriptor as `tools/list` returns it. */
 export interface PluginToolDescriptor {
@@ -102,6 +103,9 @@ export function pluginToolDescriptors(): PluginToolDescriptor[] {
     try {
         const out: PluginToolDescriptor[] = [];
         for (const plugin of listEnabledPlugins()) {
+            // Trust gate (Phase 3): only a trusted (or dev-approved unsigned)
+            // plugin contributes tools. Untrusted/unapproved surface NOTHING.
+            if (!pluginRowIsSurfaceable(plugin)) continue;
             const manifest = manifestOf(plugin);
             if (!manifest) continue; // fail-closed: skip a malformed plugin
             for (const tool of manifest.mcpTools ?? []) {
@@ -130,6 +134,8 @@ function resolvePluginTool(
     const namespace = name.slice(0, dot);
     const bare = name.slice(dot + 1);
     for (const plugin of listEnabledPlugins()) {
+        // Trust gate: an untrusted / unapproved plugin can't be dispatched either.
+        if (!pluginRowIsSurfaceable(plugin)) continue;
         const manifest = manifestOf(plugin);
         if (!manifest || manifest.namespace !== namespace) continue;
         const tool = (manifest.mcpTools ?? []).find((t) => t.name === bare);

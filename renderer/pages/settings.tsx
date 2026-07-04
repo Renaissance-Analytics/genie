@@ -27,6 +27,7 @@ import {
     type InstalledPluginView,
     type MarketplaceView,
     type OfficialPluginsResult,
+    type PluginDeveloperModeState,
 } from '../lib/genie';
 import {
     NAV_GROUPS,
@@ -2290,19 +2291,24 @@ function PluginsSection() {
     const [tab, setTab] = useState<'official' | 'marketplaces'>('official');
     const [repoUrl, setRepoUrl] = useState('');
     const [marketUrl, setMarketUrl] = useState('');
+    const [dev, setDev] = useState<PluginDeveloperModeState>({ enabled: false, keys: [] });
+    const [pubKey, setPubKey] = useState('');
+    const [keyLabel, setKeyLabel] = useState('');
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
     const refresh = async () => {
         try {
-            const [ins, mk, off] = await Promise.all([
+            const [ins, mk, off, dm] = await Promise.all([
                 api().plugins.list(),
                 api().plugins.marketplaces(),
                 api().plugins.official(),
+                api().plugins.developerMode(),
             ]);
             setInstalled(ins);
             setMarketplaces(mk);
             setOfficial(off);
+            setDev(dm);
         } catch {
             /* leave prior state */
         }
@@ -2425,8 +2431,9 @@ function PluginsSection() {
                 {tab === 'official' ? (
                     <div className="plugin-list">
                         <Text size="xs" className="text-zinc-500">
-                            Curated, Genie-maintained plugins. Signing + integrity verification for this
-                            channel lands in Phase 3.
+                            Curated, Genie-maintained plugins. Each install is verified against Genie's
+                            trusted publisher key (signature + integrity); unsigned installs require
+                            Developer Mode below.
                         </Text>
                         {(official?.curated ?? []).length === 0 && (
                             <Text size="xs" className="text-zinc-500">
@@ -2567,7 +2574,126 @@ function PluginsSection() {
                     </div>
                 )}
             </SetSection>
+
+            <SetSection
+                title="Developer Mode"
+                desc="For plugin authors. The signed registry is the safe default; Developer Mode lets you run UNSIGNED plugins and trust your own signing keys."
+            >
+                <SettingRow
+                    label="Allow unsigned plugins"
+                    desc="When off, only plugins signed by a trusted publisher (or Genie's own bundled plugins) can be enabled. When on, you can enable UNSIGNED plugins — they run in a restricted sandbox (no network) after an explicit warning."
+                    keywords="developer mode unsigned plugin signing key trust"
+                >
+                    <Switch
+                        checked={dev.enabled}
+                        onCheckedChange={(v: boolean) =>
+                            run(() => api().plugins.setDeveloperMode(v), v ? 'Developer Mode on.' : 'Developer Mode off.')
+                        }
+                    />
+                </SettingRow>
+
+                {dev.enabled && (
+                    <>
+                        <SetSubhead>Trusted signing keys</SetSubhead>
+                        {dev.keys.length === 0 ? (
+                            <Text size="xs" className="text-zinc-500">
+                                No developer keys trusted. Paste an Ed25519 public key (PEM) below to trust plugins signed by it.
+                            </Text>
+                        ) : (
+                            dev.keys.map((k) => (
+                                <div className="plugin-row" key={k.keyId}>
+                                    <div className="set-row-main">
+                                        <span className="set-row-label">{k.label}</span>
+                                        <span className="set-row-desc">
+                                            <code>{k.keyId}</code>
+                                        </span>
+                                    </div>
+                                    <Action
+                                        variant="ghost"
+                                        color="red"
+                                        icon="trash-2"
+                                        disabled={busy}
+                                        onClick={() => run(() => api().plugins.removeTrustedKey(k.keyId), 'Key removed — plugins re-checked.')}
+                                    >
+                                        Remove
+                                    </Action>
+                                </div>
+                            ))
+                        )}
+                        <SettingRow
+                            label="Trust a signing key"
+                            desc="Paste an Ed25519 public key (PEM). Plugins signed by the matching private key will verify as Trusted."
+                            keywords="add trusted signing key ed25519 public pem"
+                            grow
+                        >
+                            <div className="set-actions" style={{ width: '100%', flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+                                <textarea
+                                    className="set-input"
+                                    value={pubKey}
+                                    onChange={(e) => setPubKey(e.target.value)}
+                                    placeholder={'-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----'}
+                                    rows={4}
+                                    style={{ fontFamily: 'monospace', fontSize: 11, width: '100%' }}
+                                />
+                                <div className="set-actions" style={{ width: '100%' }}>
+                                    <Input value={keyLabel} onValueChange={setKeyLabel} placeholder="Label (e.g. My dev key)" />
+                                    <Action
+                                        icon="plus"
+                                        disabled={busy || !pubKey.trim()}
+                                        onClick={() =>
+                                            run(
+                                                () => api().plugins.addTrustedKey(pubKey.trim(), keyLabel.trim() || undefined),
+                                                'Key trusted — plugins re-checked.',
+                                            ).then(() => {
+                                                setPubKey('');
+                                                setKeyLabel('');
+                                            })
+                                        }
+                                    >
+                                        Trust key
+                                    </Action>
+                                </div>
+                            </div>
+                        </SettingRow>
+                    </>
+                )}
+            </SetSection>
         </>
+    );
+}
+
+/** A small colour-coded provenance chip: Trusted / Unsigned / Untrusted. */
+function TrustBadge({ plugin }: { plugin: InstalledPluginView }) {
+    const map = {
+        trusted: { label: 'Trusted', bg: 'rgba(34,197,94,0.15)', fg: '#4ade80' },
+        unsigned: { label: 'Unsigned', bg: 'rgba(251,191,36,0.15)', fg: '#fbbf24' },
+        untrusted: { label: 'Untrusted', bg: 'rgba(248,113,113,0.15)', fg: '#f87171' },
+    } as const;
+    const s = map[plugin.trust];
+    const title =
+        plugin.trust === 'trusted'
+            ? plugin.signed
+                ? `Signed and verified${plugin.publisherKeyId ? ` (${plugin.publisherKeyId})` : ''}`
+                : 'First-party — bundled with Genie'
+            : plugin.trust === 'unsigned'
+              ? 'Not signed by a trusted publisher'
+              : 'Signature invalid or code tampered';
+    return (
+        <span
+            title={title}
+            style={{
+                fontSize: 10,
+                fontWeight: 600,
+                padding: '1px 6px',
+                borderRadius: 4,
+                background: s.bg,
+                color: s.fg,
+                textTransform: 'uppercase',
+                letterSpacing: 0.3,
+            }}
+        >
+            {s.label}
+        </span>
     );
 }
 
@@ -2593,14 +2719,25 @@ function PluginCard({
                         {plugin.name}{' '}
                         <span className="text-zinc-500">
                             v{plugin.version} · {plugin.namespace}
-                            {plugin.signed ? ' · signed' : ''}
-                        </span>
+                        </span>{' '}
+                        <TrustBadge plugin={plugin} />
                     </span>
                     {plugin.description && <span className="set-row-desc">{plugin.description}</span>}
                     <span className="set-row-desc">
                         Source: {plugin.sourceType}
                         {plugin.sourceUrl ? ` — ${plugin.sourceUrl}` : ''}
+                        {plugin.publisher ? ` · by ${plugin.publisher}` : ''}
                     </span>
+                    {plugin.trust === 'untrusted' && (
+                        <span className="set-row-desc" style={{ color: '#f87171' }}>
+                            Untrusted — signature invalid or code tampered. This plugin cannot be enabled.
+                        </span>
+                    )}
+                    {plugin.trust === 'unsigned' && (
+                        <span className="set-row-desc" style={{ color: '#fbbf24' }}>
+                            Unsigned — not verified by a trusted publisher. Requires Developer Mode to enable.
+                        </span>
+                    )}
                 </div>
                 <div className="set-actions">
                     <Switch checked={plugin.enabled} onCheckedChange={onEnable} />

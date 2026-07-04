@@ -134,6 +134,14 @@ const api = {
             ipcRenderer.invoke('plugins:editor-read', pluginId, root, relPath),
         editorWrite: (pluginId: string, root: string, relPath: string, base64: string) =>
             ipcRenderer.invoke('plugins:editor-write', pluginId, root, relPath, base64),
+        // Developer Mode + trusted signing keys (Phase 3).
+        developerMode: () => ipcRenderer.invoke('plugins:developer-mode'),
+        setDeveloperMode: (enabled: boolean) =>
+            ipcRenderer.invoke('plugins:set-developer-mode', enabled),
+        addTrustedKey: (publicKeyPem: string, label?: string) =>
+            ipcRenderer.invoke('plugins:add-trusted-key', publicKeyPem, label),
+        removeTrustedKey: (keyId: string) =>
+            ipcRenderer.invoke('plugins:remove-trusted-key', keyId),
     },
 
     // Mobile remote-control server (Settings → Mobile). Desktop-only — the phone

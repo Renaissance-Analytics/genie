@@ -21,6 +21,8 @@ interface PluginRowLike {
     enabled: boolean;
     manifest_json: string;
     grants: { fs: Record<string, boolean>; network: Record<string, boolean>; genieApi: Record<string, boolean> };
+    trust: 'trusted' | 'unsigned' | 'untrusted';
+    dev_approved: boolean;
 }
 
 vi.mock('../../db', () => ({
@@ -64,6 +66,8 @@ function row(over: Partial<PluginRowLike> = {}): PluginRowLike {
         enabled: true,
         manifest_json: helloManifest(),
         grants: { fs: {}, network: {}, genieApi: {} },
+        trust: 'trusted',
+        dev_approved: false,
         ...over,
     };
 }
@@ -93,6 +97,19 @@ describe('pluginToolDescriptors', () => {
         ];
         // The good one still lists; the broken one is skipped, not fatal.
         expect(pluginToolDescriptors().map((t) => t.name)).toEqual(['ok.greet']);
+    });
+
+    it('TRUST GATE: an untrusted plugin contributes nothing, even enabled', () => {
+        store.rows = [row({ trust: 'untrusted' })];
+        expect(pluginToolDescriptors()).toEqual([]);
+        expect(ownsPluginTool('hello.greet')).toBe(false);
+    });
+
+    it('TRUST GATE: an unsigned plugin surfaces ONLY when dev-approved', () => {
+        store.rows = [row({ trust: 'unsigned', dev_approved: false })];
+        expect(pluginToolDescriptors()).toEqual([]); // not approved → fail-closed
+        store.rows = [row({ trust: 'unsigned', dev_approved: true })];
+        expect(pluginToolDescriptors().map((t) => t.name)).toEqual(['hello.greet']);
     });
 });
 
