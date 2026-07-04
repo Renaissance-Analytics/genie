@@ -1152,7 +1152,8 @@ const FORCE_QUESTION_TOOL = {
                         },
                         question: {
                             type: 'string',
-                            description: 'The full question text shown to the user.',
+                            description:
+                                'The full question text shown to the user. Rendered as MARKDOWN — write a short lead sentence, then structure detail with blank-line paragraphs, bullet/numbered lists, and **bold** for the key facts. Never pack everything into one run-on paragraph.',
                         },
                         multiSelect: {
                             type: 'boolean',

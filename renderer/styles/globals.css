@@ -244,6 +244,35 @@ textarea.input {
     align-items: center;
     gap: 8px;
 }
+/* The question body — markdown prose, NOT a bold wall of text. Normal weight,
+   comfortable measure, and paragraph/list rhythm from ContentRenderer. */
+.ask-q-content {
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--text-1, #d4d4d8);
+    max-height: 40vh;
+    overflow-y: auto;
+}
+.ask-q-content p {
+    margin: 0 0 8px;
+}
+.ask-q-content p:last-child {
+    margin-bottom: 0;
+}
+.ask-q-content ul,
+.ask-q-content ol {
+    margin: 0 0 8px;
+    padding-left: 20px;
+}
+.ask-q-content li {
+    margin-bottom: 3px;
+}
+.ask-q-content strong {
+    font-weight: 600;
+}
+.ask-q-content code {
+    font-size: 12px;
+}
 .ask-chip {
     font-size: 10.5px;
     font-weight: 600;

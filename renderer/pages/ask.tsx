@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Action, Heading, Icon, Text } from '@particle-academy/react-fancy';
+import { Action, ContentRenderer, Heading, Icon, Text } from '@particle-academy/react-fancy';
 import {
     api,
     hasGenieBridge,
@@ -180,9 +180,15 @@ export default function AskPage() {
                                 </Text>
                             )}
                         </div>
-                        <Text size="sm" style={{ fontWeight: 600 }}>
-                            {q.question}
-                        </Text>
+                        {/* The question body renders as MARKDOWN prose (normal
+                            weight, real paragraphs/lists), not one bold blob —
+                            agents write multi-line, structured question text. */}
+                        <ContentRenderer
+                            value={q.question}
+                            format="markdown"
+                            lineSpacing={1.55}
+                            className="ask-q-content"
+                        />
                         <div className="ask-options">
                             {q.options.map((o) => {
                                 const on = (selected[qi] ?? []).includes(o.label);
