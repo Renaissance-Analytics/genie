@@ -51,6 +51,14 @@ jobs:
           CI: true
         run: npm ci
 
+      # Playwright ships NO browser binaries with the npm package — a clean runner
+      # must download them. The suite drives Electron, but a spec also opens a
+      # Chromium context (the mobile web UI), so the chromium build is required;
+      # without this the run fails with "Executable doesn't exist … chromium…".
+      # (A developer's machine already has these, which is why it only bit in CI.)
+      - name: Install Playwright browser (chromium)
+        run: npx playwright install chromium
+
       # Linux runners are headless: Electron/Chromium need a virtual display AND
       # Chromium's shared libraries. `playwright install-deps chromium` installs
       # the apt packages Electron shares with Chromium; xvfb provides the display
