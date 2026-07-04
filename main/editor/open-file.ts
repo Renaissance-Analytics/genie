@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { SYSTEM_WORKSPACE_ID } from '../terminal/workspace-of-terminal';
 import type { OpenFileRequest, OpenFileResult } from '../mcp/protocol';
+import type { ResolvedPluginEditor } from '../plugins/editor-routing';
 
 /**
  * Backs the `openFileForUser` MCP tool: resolve the caller's workspace + the
@@ -81,6 +82,11 @@ export interface OpenFileDeps {
     getWorkspaceRoot: (workspaceId: string) => string | null;
     /** The user's home dir (System root + relative-path base). */
     homeDir: () => string;
+    /**
+     * Resolve the plugin editor that claims a file's extension (§6.1), or null
+     * for the default code editor. Injected so open-file stays db-free + testable.
+     */
+    resolvePluginEditor?: (relPath: string) => ResolvedPluginEditor | null;
     /** Surface the master Floor and push it the open-file request. */
     sendOpenFile: (payload: {
         requestId: string;
@@ -88,6 +94,8 @@ export interface OpenFileDeps {
         root: string;
         relPath: string;
         line?: number;
+        /** Set when the extension routes to a plugin editor instead of code. */
+        pluginEditor?: ResolvedPluginEditor;
     }) => void;
 }
 
@@ -147,12 +155,16 @@ export async function openFileForUserForMcp(
         }, REPLY_TIMEOUT_MS);
         if (typeof timer.unref === 'function') timer.unref();
         pending.set(requestId, { resolve, timer });
+        const pluginEditor = deps!.resolvePluginEditor
+            ? deps!.resolvePluginEditor(relPath)
+            : null;
         deps!.sendOpenFile({
             requestId,
             workspaceId,
             root,
             relPath,
             ...(typeof req.line === 'number' ? { line: req.line } : {}),
+            ...(pluginEditor ? { pluginEditor } : {}),
         });
     });
 

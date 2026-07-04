@@ -452,6 +452,92 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v20 — the Plugin System (Phase 0). Two fresh tables (so CHECK
+            // constraints are safe here — unlike an ALTER ADD COLUMN):
+            //   - `plugin_marketplaces` — a git repo that INDEXES many plugins.
+            //     The user adds one by pasting its repo URL; Genie caches the
+            //     parsed `genie-marketplace.json` index in `manifest_json`.
+            //   - `plugins` — one installed plugin. Tracks its SOURCE (repo URL +
+            //     pinned ref, or a local dev folder), which marketplace it came
+            //     from (nullable), the ENABLED flag (fail-closed default 0), the
+            //     validated manifest snapshot, and the GRANULAR granted
+            //     permissions blob (§12.1 — each fs scope / network host / Genie
+            //     API is an independent, user-toggleable grant). `integrity` +
+            //     `signature` + `publisher_key_id` are signing-ready columns
+            //     (populated for the curated/Official path in Phase 3; NULL on
+            //     the dev repo-URL/folder path).
+            //     (Renumbered v19→v20: serve-local-sites owns v19.)
+            version: 20,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS plugin_marketplaces (
+                        id            TEXT PRIMARY KEY,
+                        name          TEXT NOT NULL,
+                        url           TEXT NOT NULL,
+                        ref           TEXT,
+                        official      INTEGER NOT NULL DEFAULT 0,
+                        manifest_json TEXT,
+                        added_at      TEXT NOT NULL,
+                        updated_at    TEXT NOT NULL
+                    );
+
+                    CREATE TABLE IF NOT EXISTS plugins (
+                        id                TEXT PRIMARY KEY,
+                        namespace         TEXT NOT NULL,
+                        name              TEXT NOT NULL,
+                        version           TEXT NOT NULL,
+                        source_type       TEXT NOT NULL CHECK (source_type IN ('repo','folder','marketplace')),
+                        source_url        TEXT,
+                        source_ref        TEXT,
+                        install_path      TEXT NOT NULL,
+                        marketplace_id    TEXT,
+                        enabled           INTEGER NOT NULL DEFAULT 0,
+                        manifest_json     TEXT NOT NULL,
+                        granted_json      TEXT NOT NULL DEFAULT '{}',
+                        integrity         TEXT,
+                        signature         TEXT,
+                        publisher_key_id  TEXT,
+                        installed_at      TEXT NOT NULL,
+                        updated_at        TEXT NOT NULL,
+                        FOREIGN KEY (marketplace_id) REFERENCES plugin_marketplaces(id) ON DELETE SET NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_plugins_enabled ON plugins(enabled);
+                `);
+            },
+        },
+        {
+            // v21 — Plugin System Phase 3 (signed registry + trust). Adds the
+            // provenance/trust cache columns to the (unshipped) v20 tables via
+            // idempotent guarded ALTERs, so a dev DB already at v20 converges:
+            //   - plugins.trust        — last evaluated verdict
+            //                            ('trusted'|'unsigned'|'untrusted'); the
+            //                            fail-closed default is 'unsigned'.
+            //   - plugins.dev_approved — the user knowingly enabled an UNSIGNED
+            //                            plugin under Developer Mode (default 0).
+            //   - plugin_marketplaces.signature / .publisher_key_id — a signed
+            //                            marketplace index's provenance.
+            // The columns are a CACHE: trust is still re-evaluated against the live
+            // trust store at enable + on a revalidation sweep (removing a key
+            // revokes). The runtime surface gate reads these columns (fail-closed).
+            version: 21,
+            runner: (db) => {
+                const p = tableColumns(db, 'plugins');
+                if (!p.has('trust')) {
+                    db.exec(`ALTER TABLE plugins ADD COLUMN trust TEXT NOT NULL DEFAULT 'unsigned'`);
+                }
+                if (!p.has('dev_approved')) {
+                    db.exec(`ALTER TABLE plugins ADD COLUMN dev_approved INTEGER NOT NULL DEFAULT 0`);
+                }
+                const m = tableColumns(db, 'plugin_marketplaces');
+                if (!m.has('signature')) {
+                    db.exec(`ALTER TABLE plugin_marketplaces ADD COLUMN signature TEXT`);
+                }
+                if (!m.has('publisher_key_id')) {
+                    db.exec(`ALTER TABLE plugin_marketplaces ADD COLUMN publisher_key_id TEXT`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -471,6 +557,14 @@ export function runMigrations(d: Database.Database): void {
 function workspaceColumns(d: Database.Database): Set<string> {
     const rows = d
         .prepare<[], { name: string }>(`PRAGMA table_info(workspaces)`)
+        .all();
+    return new Set(rows.map((r) => r.name));
+}
+
+/** Column-name set for an arbitrary table (idempotent-ALTER guards). */
+function tableColumns(d: Database.Database, table: string): Set<string> {
+    const rows = d
+        .prepare<[], { name: string }>(`PRAGMA table_info(${table})`)
         .all();
     return new Set(rows.map((r) => r.name));
 }
@@ -607,6 +701,11 @@ export interface Settings {
      *  No default — the agent must pass an explicit `command`, or this is used
      *  when set. Empty means "no preset; require an explicit command". */
     agent_command_custom?: string;
+    /** Plugin System Developer Mode. When 'on', the user may install/enable
+     *  UNSIGNED plugins (with escalated consent + restricted runtime) and manage
+     *  developer-trusted signing keys. Default 'off' — the signed registry is the
+     *  production path (§12.3). */
+    plugins_developer_mode?: 'on' | 'off';
 }
 
 /** Hard cap on the Ai.System instruction set. Enforced BOTH in the Settings UI
@@ -680,6 +779,8 @@ export function getAllSettings(): Settings {
         agent_command_claude: out['agent_command_claude'] ?? 'claude',
         agent_command_codex: out['agent_command_codex'] ?? 'codex',
         agent_command_custom: out['agent_command_custom'] ?? '',
+        plugins_developer_mode:
+            (out['plugins_developer_mode'] as 'on' | 'off') ?? 'off',
     };
 }
 
@@ -1227,7 +1328,7 @@ export function setAionimaConfig(patch: BackendConfig): BackendConfig {
 // Terminal spec helpers -------------------------------------------------
 
 /** A view spec is a terminal, a fancy-code editor, or a background process runner. */
-export type TerminalSpecType = 'terminal' | 'code' | 'process';
+export type TerminalSpecType = 'terminal' | 'code' | 'process' | 'plugin';
 
 /** Per-type metadata. Code views persist the open file's workspace-relative path. */
 export interface TerminalSpecMeta {
@@ -1250,6 +1351,17 @@ export interface TerminalSpecMeta {
      * user opts into); this tracks live state.
      */
     was_running?: boolean;
+    /** Plugin editor view: the owning plugin id (§6.1). */
+    plugin_id?: string;
+    /** Plugin editor view: the plugin's editor id from its manifest. */
+    editor_id?: string;
+    /** Plugin editor view: the workspace-relative file the editor is bound to. */
+    file?: string;
+    /** Plugin editor view: the declared first-party Fancy component export. */
+    fancy_export?: string;
+    /** Plugin editor view: the declared Fancy package + version (provenance). */
+    fancy_package?: string;
+    fancy_version?: string;
     /**
      * System Workspace tag: the spec belongs to the synthetic System Workspace
      * (which has no `workspaces` row), so it persists with `workspace_id: null`
@@ -1328,7 +1440,13 @@ function rowFromRecord(r: TerminalSpecRecord): TerminalSpecRow {
     try { env = JSON.parse(r.env_json); } catch { env = {}; }
     try { meta = r.meta_json ? JSON.parse(r.meta_json) : {}; } catch { meta = {}; }
     const type: TerminalSpecType =
-        r.type === 'code' ? 'code' : r.type === 'process' ? 'process' : 'terminal';
+        r.type === 'code'
+            ? 'code'
+            : r.type === 'process'
+              ? 'process'
+              : r.type === 'plugin'
+                ? 'plugin'
+                : 'terminal';
     return {
         id: r.id,
         workspace_id: r.workspace_id,
@@ -1404,7 +1522,9 @@ export function createTerminalSpec(input: {
                     ? 'code'
                     : input.type === 'process'
                       ? 'process'
-                      : 'terminal',
+                      : input.type === 'plugin'
+                        ? 'plugin'
+                        : 'terminal',
             meta_json: JSON.stringify(input.meta ?? {}),
             sort_order: nextOrder,
             created_at: now,
@@ -1554,4 +1674,355 @@ export function markIssueWatchSeen(
              ON CONFLICT(workspace_id, owner, repo) DO UPDATE SET seen_at = excluded.seen_at`,
         )
         .run(workspaceId, owner, repo, seenAt);
+}
+
+// Plugins (Plugin System, Phase 0) --------------------------------------------
+
+/** Where a plugin was installed from. */
+export type PluginSourceType = 'repo' | 'folder' | 'marketplace';
+
+/** A plugin's evaluated provenance verdict (Plugin System Phase 3). */
+export type PluginTrustStatus = 'trusted' | 'unsigned' | 'untrusted';
+
+/** Coerce a stored trust string to a valid status (fail-closed to 'unsigned'). */
+function parseTrustStatus(raw: string | null | undefined): PluginTrustStatus {
+    return raw === 'trusted' || raw === 'untrusted' ? raw : 'unsigned';
+}
+
+/**
+ * The GRANULAR granted-permission map (§12.1). Each key under a category is an
+ * INDEPENDENT grant the user can toggle on/off in Settings → Plugins:
+ *   - fs:       scope id (e.g. 'workspace') → granted?
+ *   - network:  host        → granted?
+ *   - genieApi: api name    → granted?
+ * A permission the manifest never declared is simply absent (unreachable).
+ */
+export interface PluginGrants {
+    fs: Record<string, boolean>;
+    network: Record<string, boolean>;
+    genieApi: Record<string, boolean>;
+}
+
+export function emptyPluginGrants(): PluginGrants {
+    return { fs: {}, network: {}, genieApi: {} };
+}
+
+/** Parse a stored granted_json blob into a well-formed grants object. */
+export function parsePluginGrants(raw: string | null | undefined): PluginGrants {
+    const out = emptyPluginGrants();
+    if (!raw) return out;
+    try {
+        const j = JSON.parse(raw) as Partial<PluginGrants>;
+        for (const cat of ['fs', 'network', 'genieApi'] as const) {
+            const src = j[cat];
+            if (src && typeof src === 'object') {
+                for (const [k, v] of Object.entries(src)) out[cat][k] = v === true;
+            }
+        }
+    } catch {
+        /* corrupt → all-denied (fail-closed) */
+    }
+    return out;
+}
+
+export interface PluginRow {
+    id: string;
+    namespace: string;
+    name: string;
+    version: string;
+    source_type: PluginSourceType;
+    source_url: string | null;
+    source_ref: string | null;
+    install_path: string;
+    marketplace_id: string | null;
+    enabled: boolean;
+    /** The validated manifest snapshot (JSON string, as stored). */
+    manifest_json: string;
+    grants: PluginGrants;
+    integrity: string | null;
+    signature: string | null;
+    publisher_key_id: string | null;
+    /** Last evaluated trust verdict (§12.3 Phase 3). */
+    trust: PluginTrustStatus;
+    /** User knowingly enabled an UNSIGNED plugin under Developer Mode. */
+    dev_approved: boolean;
+    installed_at: string;
+    updated_at: string;
+}
+
+interface PluginRecord {
+    id: string;
+    namespace: string;
+    name: string;
+    version: string;
+    source_type: string;
+    source_url: string | null;
+    source_ref: string | null;
+    install_path: string;
+    marketplace_id: string | null;
+    enabled: number;
+    manifest_json: string;
+    granted_json: string | null;
+    integrity: string | null;
+    signature: string | null;
+    publisher_key_id: string | null;
+    trust: string | null;
+    dev_approved: number | null;
+    installed_at: string;
+    updated_at: string;
+}
+
+function pluginRowFrom(r: PluginRecord): PluginRow {
+    const source_type: PluginSourceType =
+        r.source_type === 'folder' ? 'folder' : r.source_type === 'marketplace' ? 'marketplace' : 'repo';
+    return {
+        id: r.id,
+        namespace: r.namespace,
+        name: r.name,
+        version: r.version,
+        source_type,
+        source_url: r.source_url,
+        source_ref: r.source_ref,
+        install_path: r.install_path,
+        marketplace_id: r.marketplace_id,
+        enabled: r.enabled !== 0,
+        manifest_json: r.manifest_json,
+        grants: parsePluginGrants(r.granted_json),
+        integrity: r.integrity,
+        signature: r.signature,
+        publisher_key_id: r.publisher_key_id,
+        trust: parseTrustStatus(r.trust),
+        dev_approved: r.dev_approved === 1,
+        installed_at: r.installed_at,
+        updated_at: r.updated_at,
+    };
+}
+
+export function listPlugins(): PluginRow[] {
+    return getDb()
+        .prepare<[], PluginRecord>('SELECT * FROM plugins ORDER BY name COLLATE NOCASE')
+        .all()
+        .map(pluginRowFrom);
+}
+
+/** Only the ENABLED plugins — the set the MCP registry surfaces (fail-closed). */
+export function listEnabledPlugins(): PluginRow[] {
+    return getDb()
+        .prepare<[], PluginRecord>('SELECT * FROM plugins WHERE enabled = 1 ORDER BY name COLLATE NOCASE')
+        .all()
+        .map(pluginRowFrom);
+}
+
+export function getPlugin(id: string): PluginRow | null {
+    const r = getDb()
+        .prepare<[string], PluginRecord>('SELECT * FROM plugins WHERE id = ?')
+        .get(id);
+    return r ? pluginRowFrom(r) : null;
+}
+
+export interface UpsertPluginInput {
+    id: string;
+    namespace: string;
+    name: string;
+    version: string;
+    source_type: PluginSourceType;
+    source_url?: string | null;
+    source_ref?: string | null;
+    install_path: string;
+    marketplace_id?: string | null;
+    enabled?: boolean;
+    manifest_json: string;
+    grants?: PluginGrants;
+    integrity?: string | null;
+    signature?: string | null;
+    publisher_key_id?: string | null;
+    trust?: PluginTrustStatus;
+    dev_approved?: boolean;
+}
+
+/** Install (or re-install/update) a plugin row. Idempotent per id. */
+export function upsertPlugin(input: UpsertPluginInput): PluginRow {
+    const now = new Date().toISOString();
+    getDb()
+        .prepare(
+            `INSERT INTO plugins
+               (id, namespace, name, version, source_type, source_url, source_ref, install_path,
+                marketplace_id, enabled, manifest_json, granted_json, integrity, signature,
+                publisher_key_id, trust, dev_approved, installed_at, updated_at)
+             VALUES
+               (@id, @namespace, @name, @version, @source_type, @source_url, @source_ref, @install_path,
+                @marketplace_id, @enabled, @manifest_json, @granted_json, @integrity, @signature,
+                @publisher_key_id, @trust, @dev_approved, @now, @now)
+             ON CONFLICT(id) DO UPDATE SET
+                namespace        = excluded.namespace,
+                name             = excluded.name,
+                version          = excluded.version,
+                source_type      = excluded.source_type,
+                source_url       = excluded.source_url,
+                source_ref       = excluded.source_ref,
+                install_path     = excluded.install_path,
+                marketplace_id   = excluded.marketplace_id,
+                enabled          = excluded.enabled,
+                manifest_json    = excluded.manifest_json,
+                granted_json     = excluded.granted_json,
+                integrity        = excluded.integrity,
+                signature        = excluded.signature,
+                publisher_key_id = excluded.publisher_key_id,
+                trust            = excluded.trust,
+                dev_approved     = excluded.dev_approved,
+                updated_at       = excluded.updated_at`,
+        )
+        .run({
+            id: input.id,
+            namespace: input.namespace,
+            name: input.name,
+            version: input.version,
+            source_type: input.source_type,
+            source_url: input.source_url ?? null,
+            source_ref: input.source_ref ?? null,
+            install_path: input.install_path,
+            marketplace_id: input.marketplace_id ?? null,
+            enabled: input.enabled ? 1 : 0,
+            manifest_json: input.manifest_json,
+            granted_json: JSON.stringify(input.grants ?? emptyPluginGrants()),
+            integrity: input.integrity ?? null,
+            signature: input.signature ?? null,
+            publisher_key_id: input.publisher_key_id ?? null,
+            trust: input.trust ?? 'unsigned',
+            dev_approved: input.dev_approved ? 1 : 0,
+            now,
+        });
+    return getPlugin(input.id)!;
+}
+
+/** Update a plugin's evaluated trust verdict + dev-approval (Phase 3). */
+export function setPluginTrust(
+    id: string,
+    trust: PluginTrustStatus,
+    devApproved: boolean,
+): void {
+    getDb()
+        .prepare('UPDATE plugins SET trust = ?, dev_approved = ?, updated_at = ? WHERE id = ?')
+        .run(trust, devApproved ? 1 : 0, new Date().toISOString(), id);
+}
+
+/** Flip a plugin's enabled flag (disable = instant fail-closed revoke). */
+export function setPluginEnabled(id: string, enabled: boolean): void {
+    getDb()
+        .prepare('UPDATE plugins SET enabled = ?, updated_at = ? WHERE id = ?')
+        .run(enabled ? 1 : 0, new Date().toISOString(), id);
+}
+
+/** Replace a plugin's granular granted-permission map. */
+export function setPluginGrants(id: string, grants: PluginGrants): void {
+    getDb()
+        .prepare('UPDATE plugins SET granted_json = ?, updated_at = ? WHERE id = ?')
+        .run(JSON.stringify(grants), new Date().toISOString(), id);
+}
+
+export function deletePlugin(id: string): void {
+    getDb().prepare('DELETE FROM plugins WHERE id = ?').run(id);
+}
+
+export interface PluginMarketplaceRow {
+    id: string;
+    name: string;
+    url: string;
+    ref: string | null;
+    official: boolean;
+    /** Cached, validated marketplace index (JSON string), or null before a fetch. */
+    manifest_json: string | null;
+    /** A signed index's detached signature + the trusted key it verifies against. */
+    signature: string | null;
+    publisher_key_id: string | null;
+    added_at: string;
+    updated_at: string;
+}
+
+interface PluginMarketplaceRecord {
+    id: string;
+    name: string;
+    url: string;
+    ref: string | null;
+    official: number;
+    manifest_json: string | null;
+    signature: string | null;
+    publisher_key_id: string | null;
+    added_at: string;
+    updated_at: string;
+}
+
+function marketplaceRowFrom(r: PluginMarketplaceRecord): PluginMarketplaceRow {
+    return {
+        id: r.id,
+        name: r.name,
+        url: r.url,
+        ref: r.ref,
+        official: r.official !== 0,
+        manifest_json: r.manifest_json,
+        signature: r.signature,
+        publisher_key_id: r.publisher_key_id,
+        added_at: r.added_at,
+        updated_at: r.updated_at,
+    };
+}
+
+export function listPluginMarketplaces(): PluginMarketplaceRow[] {
+    return getDb()
+        .prepare<[], PluginMarketplaceRecord>('SELECT * FROM plugin_marketplaces ORDER BY official DESC, name COLLATE NOCASE')
+        .all()
+        .map(marketplaceRowFrom);
+}
+
+export function getPluginMarketplace(id: string): PluginMarketplaceRow | null {
+    const r = getDb()
+        .prepare<[string], PluginMarketplaceRecord>('SELECT * FROM plugin_marketplaces WHERE id = ?')
+        .get(id);
+    return r ? marketplaceRowFrom(r) : null;
+}
+
+export interface UpsertMarketplaceInput {
+    id: string;
+    name: string;
+    url: string;
+    ref?: string | null;
+    official?: boolean;
+    manifest_json?: string | null;
+    signature?: string | null;
+    publisher_key_id?: string | null;
+}
+
+/** Add (or refresh) a marketplace. Idempotent per id. */
+export function upsertPluginMarketplace(input: UpsertMarketplaceInput): PluginMarketplaceRow {
+    const now = new Date().toISOString();
+    getDb()
+        .prepare(
+            `INSERT INTO plugin_marketplaces (id, name, url, ref, official, manifest_json, signature, publisher_key_id, added_at, updated_at)
+             VALUES (@id, @name, @url, @ref, @official, @manifest_json, @signature, @publisher_key_id, @now, @now)
+             ON CONFLICT(id) DO UPDATE SET
+                name             = excluded.name,
+                url              = excluded.url,
+                ref              = excluded.ref,
+                official         = excluded.official,
+                manifest_json    = excluded.manifest_json,
+                signature        = excluded.signature,
+                publisher_key_id = excluded.publisher_key_id,
+                updated_at       = excluded.updated_at`,
+        )
+        .run({
+            id: input.id,
+            name: input.name,
+            url: input.url,
+            ref: input.ref ?? null,
+            official: input.official ? 1 : 0,
+            manifest_json: input.manifest_json ?? null,
+            signature: input.signature ?? null,
+            publisher_key_id: input.publisher_key_id ?? null,
+            now,
+        });
+    return getPluginMarketplace(input.id)!;
+}
+
+export function deletePluginMarketplace(id: string): void {
+    getDb().prepare('DELETE FROM plugin_marketplaces WHERE id = ?').run(id);
 }

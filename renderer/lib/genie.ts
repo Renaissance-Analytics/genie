@@ -712,7 +712,7 @@ export interface Changelog {
 }
 
 /** A view spec is a terminal, a fancy-code editor, or a background process runner. */
-export type ViewType = 'terminal' | 'code' | 'process';
+export type ViewType = 'terminal' | 'code' | 'process' | 'plugin';
 
 /** Lifecycle status of a background Process service runner. */
 export type ProcessStatus =
@@ -772,7 +772,34 @@ export interface ViewMeta {
     /** Process view: persisted "was running" intent — restores the process on
      *  next launch if Genie went down while it was running (service-like). */
     was_running?: boolean;
+    /** System Workspace tag (unattached spec grouped under the System Workspace). */
+    system?: boolean;
+    /** Plugin editor view: the owning plugin id (§6.1). */
+    plugin_id?: string;
+    /** Plugin editor view: the plugin's editor id from its manifest. */
+    editor_id?: string;
+    /** Plugin editor view: the workspace-relative file the editor is bound to. */
+    file?: string;
+    /** Plugin editor view: the declared first-party Fancy component export. */
+    fancy_export?: string;
+    /** Plugin editor view: the declared Fancy package + version (provenance). */
+    fancy_package?: string;
+    fancy_version?: string;
     [key: string]: unknown;
+}
+
+/** Result of a plugin-editor binary read (base64 payload) (§6.2). */
+export interface PluginEditorReadResult {
+    ok: boolean;
+    value?: { base64: string; bytes: number; relPath: string };
+    error?: string;
+}
+
+/** Result of a plugin-editor binary write (§6.2). */
+export interface PluginEditorWriteResult {
+    ok: boolean;
+    value?: { relPath: string; bytes: number };
+    error?: string;
 }
 
 export interface TerminalSpec {
@@ -1025,6 +1052,81 @@ export interface ConvertPlanOpts {
         | { kind: 'auto'; owner: string };
 }
 
+// --- Plugin System (Settings → Plugins) -------------------------------------
+
+/** One toggleable granular permission grant (§12.1). */
+export interface PluginPermissionView {
+    category: 'fs' | 'network' | 'genieApi';
+    key: string;
+    label: string;
+    granted: boolean;
+}
+
+/** A plugin's evaluated provenance verdict (Plugin System Phase 3). */
+export type PluginTrustStatus = 'trusted' | 'unsigned' | 'untrusted';
+
+/** An installed plugin as Settings → Plugins renders it. */
+export interface InstalledPluginView {
+    id: string;
+    name: string;
+    version: string;
+    namespace: string;
+    description: string | null;
+    enabled: boolean;
+    sourceType: 'repo' | 'folder' | 'marketplace';
+    sourceUrl: string | null;
+    marketplaceId: string | null;
+    publisher: string | null;
+    tools: Array<{ name: string; description: string }>;
+    editors: Array<{ id: string; title: string; extensions: string[]; fancyEditor: string }>;
+    permissions: PluginPermissionView[];
+    integrity: string | null;
+    signed: boolean;
+    /** Trust verdict: trusted / unsigned / untrusted (Phase 3). */
+    trust: PluginTrustStatus;
+    publisherKeyId: string | null;
+    devApproved: boolean;
+}
+
+/** Developer Mode state + the user's developer-trusted signing keys. */
+export interface PluginDeveloperModeState {
+    enabled: boolean;
+    keys: Array<{ keyId: string; label: string }>;
+}
+
+/** A 3rd-party marketplace + its indexed member plugins. */
+export interface MarketplaceView {
+    id: string;
+    name: string;
+    url: string;
+    official: boolean;
+    plugins: Array<{ id: string; name: string; description: string | null; installed: boolean }>;
+}
+
+export interface OfficialPluginEntry {
+    id: string;
+    name: string;
+    description: string;
+    repo: string;
+}
+
+/** A bundled first-party plugin Genie ships in the box (Hello World / Presentation / Spreadsheet). */
+export interface BundledPlugin {
+    id: string;
+    name: string;
+    description: string;
+    path: string;
+}
+
+export interface OfficialPluginsResult {
+    curated: OfficialPluginEntry[];
+    bundled: BundledPlugin[];
+}
+
+export type PluginActionResult<T = { id: string; name: string; version: string }> =
+    | { ok: true; value: T }
+    | { ok: false; error: string };
+
 export interface GenieApi {
     auth: {
         startSignIn: (kind?: BackendKind) => Promise<{
@@ -1079,6 +1181,51 @@ export interface GenieApi {
         restart: () => Promise<McpServerState>;
         docHealth: (workspaceId: string) => Promise<WorkspaceDocHealth | null>;
         repairDocs: (workspaceId: string) => Promise<RepairDocsResult | null>;
+    };
+    /** Plugin System (Settings → Plugins). Install from a repo URL / folder /
+     *  marketplace; enable/disable; toggle granular permissions; uninstall. */
+    plugins: {
+        list: () => Promise<InstalledPluginView[]>;
+        installRepo: (url: string, ref?: string) => Promise<PluginActionResult>;
+        installFolder: (folder?: string) => Promise<PluginActionResult>;
+        enable: (id: string, enabled: boolean) => Promise<PluginActionResult<boolean>>;
+        setGrant: (
+            id: string,
+            category: 'fs' | 'network' | 'genieApi',
+            key: string,
+            granted: boolean,
+        ) => Promise<PluginActionResult<boolean>>;
+        uninstall: (id: string) => Promise<PluginActionResult<boolean>>;
+        marketplaces: () => Promise<MarketplaceView[]>;
+        addMarketplace: (url: string, ref?: string) => Promise<PluginActionResult>;
+        refreshMarketplace: (id: string) => Promise<PluginActionResult>;
+        removeMarketplace: (id: string) => Promise<PluginActionResult<boolean>>;
+        installMarketplacePlugin: (
+            marketplaceId: string,
+            pluginId: string,
+        ) => Promise<PluginActionResult>;
+        official: () => Promise<OfficialPluginsResult>;
+        installBundled: (id: string) => Promise<PluginActionResult>;
+        /** Capability-scoped binary read/write for a granted plugin editor (§6.2). */
+        editorRead: (
+            pluginId: string,
+            root: string,
+            relPath: string,
+        ) => Promise<PluginEditorReadResult>;
+        editorWrite: (
+            pluginId: string,
+            root: string,
+            relPath: string,
+            base64: string,
+        ) => Promise<PluginEditorWriteResult>;
+        /** Developer Mode + trusted signing keys (Phase 3). */
+        developerMode: () => Promise<PluginDeveloperModeState>;
+        setDeveloperMode: (enabled: boolean) => Promise<PluginActionResult<boolean>>;
+        addTrustedKey: (
+            publicKeyPem: string,
+            label?: string,
+        ) => Promise<PluginActionResult<{ keyId: string }>>;
+        removeTrustedKey: (keyId: string) => Promise<PluginActionResult<boolean>>;
     };
     /**
      * Mobile remote-control server (Settings → Mobile). Desktop-only namespace —
@@ -1827,6 +1974,13 @@ export interface GenieApi {
                 root: string;
                 relPath: string;
                 line?: number;
+                pluginEditor?: {
+                    pluginId: string;
+                    editorId: string;
+                    fancyExport: string;
+                    fancyPackage: string;
+                    fancyVersion: string;
+                };
             }) => void,
         ) => () => void;
         /** A background Process changed status. */

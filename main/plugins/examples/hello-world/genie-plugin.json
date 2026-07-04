@@ -1,0 +1,32 @@
+{
+  "id": "ai.genie.hello-world",
+  "namespace": "hello",
+  "name": "Hello World",
+  "version": "0.1.0",
+  "description": "A trivial dev plugin that registers a single greeting tool — proves the Genie plugin loader seam end-to-end.",
+  "publisher": { "name": "Genie", "url": "https://github.com/Renaissance-Analytics/genie" },
+  "engines": { "genie": ">=0.7.0" },
+  "entry": { "tools": "tools.cjs" },
+  "mcpTools": [
+    {
+      "name": "greet",
+      "description": "Return a friendly greeting. Pass an optional `name` to personalise it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "Who to greet (defaults to \"world\")." }
+        },
+        "additionalProperties": false
+      },
+      "run": "tools",
+      "process": "worker",
+      "gated": false
+    }
+  ],
+  "editors": [],
+  "capabilities": {
+    "fs": { "scope": "none" },
+    "network": { "hosts": [] },
+    "genieApi": []
+  }
+}

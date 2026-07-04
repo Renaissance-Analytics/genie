@@ -20,6 +20,7 @@ import {
 } from '../mcp/host-tools';
 import { openFileForUserForMcp } from '../editor/open-file';
 import { applySetEnv, applyCheckEnv } from '../env-store';
+import { pluginToolDescriptors, dispatchPluginTool } from '../plugins/registry';
 import type { ServerDeps } from '../mcp/server';
 import type { HostCorePorts } from './ports';
 
@@ -103,5 +104,11 @@ export function buildHostServerDeps(
             const ws = wsId ? getWorkspace(wsId) : null;
             return ws ? isOpsProjectFor(ws.path) : false;
         },
+        // Plugin System seam: enabled-plugin tools ride the SAME MCP surface.
+        // Both are fail-closed inside the registry (a bad plugin contributes
+        // nothing / returns a contained error), so a plugin can never poison the
+        // core tool list.
+        pluginTools: () => pluginToolDescriptors(),
+        dispatchPluginTool: (name, args, terminalId) => dispatchPluginTool(name, args, terminalId),
     };
 }

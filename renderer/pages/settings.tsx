@@ -24,6 +24,10 @@ import {
     type ShellDetection,
     type UpdaterConfig,
     type UpdaterStatus,
+    type InstalledPluginView,
+    type MarketplaceView,
+    type OfficialPluginsResult,
+    type PluginDeveloperModeState,
 } from '../lib/genie';
 import {
     NAV_GROUPS,
@@ -550,6 +554,13 @@ export default function SettingsPage() {
                     patch({ [`mcp_sync_${target}`]: on ? 'on' : 'off' })
                 }
             />
+
+                            </SearchGroup>
+                        )}
+                        {show('plugins') && (
+                            <SearchGroup label="Plugins" searching={searching}>
+
+            <PluginsSection />
 
                             </SearchGroup>
                         )}
@@ -2267,6 +2278,537 @@ function AgentMcpSection({
                 </SettingRow>
             ))}
         </SetSection>
+    );
+}
+
+/**
+ * Settings → Plugins. The Plugin System manager (Phase 0):
+ *   - An "Installed" block: every installed plugin with enable/disable, its
+ *     namespaced tools, DECLARED editor mappings (§12.2), and a per-permission
+ *     toggle for each granular grant (§12.1), plus uninstall. Install a single
+ *     plugin by pasting its REPO URL (the primary path) or from a local folder
+ *     (dev convenience).
+ *   - Two discovery tabs: OFFICIAL (curated, Genie-maintained — signing lands in
+ *     Phase 3) and MARKETPLACES (a git repo that INDEXES many plugins; add one
+ *     by URL, browse its members, install each individually).
+ */
+function PluginsSection() {
+    const [installed, setInstalled] = useState<InstalledPluginView[]>([]);
+    const [marketplaces, setMarketplaces] = useState<MarketplaceView[]>([]);
+    const [official, setOfficial] = useState<OfficialPluginsResult | null>(null);
+    const [tab, setTab] = useState<'official' | 'marketplaces'>('official');
+    const [repoUrl, setRepoUrl] = useState('');
+    const [marketUrl, setMarketUrl] = useState('');
+    const [dev, setDev] = useState<PluginDeveloperModeState>({ enabled: false, keys: [] });
+    const [pubKey, setPubKey] = useState('');
+    const [keyLabel, setKeyLabel] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+    const refresh = async () => {
+        try {
+            const [ins, mk, off, dm] = await Promise.all([
+                api().plugins.list(),
+                api().plugins.marketplaces(),
+                api().plugins.official(),
+                api().plugins.developerMode(),
+            ]);
+            setInstalled(ins);
+            setMarketplaces(mk);
+            setOfficial(off);
+            setDev(dm);
+        } catch {
+            /* leave prior state */
+        }
+    };
+
+    useEffect(() => {
+        void refresh();
+    }, []);
+
+    /** Run an action, surface ok/err, then refresh the lists. */
+    const run = async (
+        fn: () => Promise<{ ok: boolean; error?: string }>,
+        okText: string,
+    ) => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            const r = await fn();
+            if (r.ok) setMsg({ kind: 'ok', text: okText });
+            else setMsg({ kind: 'err', text: r.error ?? 'Failed.' });
+        } catch (e) {
+            setMsg({ kind: 'err', text: (e as Error).message });
+        } finally {
+            setBusy(false);
+            await refresh();
+        }
+    };
+
+    return (
+        <>
+            <SetSection
+                title="Installed plugins"
+                desc="Extend Genie with agent tools + (soon) file-type editors — installed from git repos, never bundled"
+            >
+                {msg && (
+                    <div className={`set-note${msg.kind === 'err' ? ' warn' : ''}`}>{msg.text}</div>
+                )}
+
+                <SettingRow
+                    label="Install from a repo URL"
+                    desc="Paste a plugin's git repo URL — Genie clones it, validates its genie-plugin.json, and installs it (disabled until you enable it)."
+                    keywords="install plugin repo url git clone genie-plugin.json"
+                    grow
+                >
+                    <div className="set-actions" style={{ width: '100%' }}>
+                        <Input
+                            value={repoUrl}
+                            onValueChange={setRepoUrl}
+                            placeholder="https://github.com/owner/my-genie-plugin.git"
+                        />
+                        <Action
+                            icon="download"
+                            disabled={busy || !repoUrl.trim()}
+                            onClick={() =>
+                                run(() => api().plugins.installRepo(repoUrl.trim()), 'Plugin installed — enable it below.').then(
+                                    () => setRepoUrl(''),
+                                )
+                            }
+                        >
+                            Install
+                        </Action>
+                        <Action
+                            variant="ghost"
+                            icon="folder"
+                            disabled={busy}
+                            onClick={() => run(() => api().plugins.installFolder(), 'Plugin installed from folder.')}
+                        >
+                            From folder…
+                        </Action>
+                    </div>
+                </SettingRow>
+
+                {installed.length === 0 ? (
+                    <Text size="xs" className="text-zinc-500">
+                        No plugins installed yet. Install one from a repo URL above, or from the Official / Marketplaces tabs below.
+                    </Text>
+                ) : (
+                    installed.map((p) => (
+                        <PluginCard
+                            key={p.id}
+                            plugin={p}
+                            busy={busy}
+                            onEnable={(on) =>
+                                run(() => api().plugins.enable(p.id, on), on ? `Enabled ${p.name}.` : `Disabled ${p.name}.`)
+                            }
+                            onToggleGrant={(perm, granted) =>
+                                run(
+                                    () => api().plugins.setGrant(p.id, perm.category, perm.key, granted),
+                                    `${granted ? 'Granted' : 'Revoked'} ${perm.label}.`,
+                                )
+                            }
+                            onUninstall={() => run(() => api().plugins.uninstall(p.id), `Uninstalled ${p.name}.`)}
+                        />
+                    ))
+                )}
+            </SetSection>
+
+            <SetSection title="Discover plugins" desc="Official curated plugins, or 3rd-party marketplaces you add by URL">
+                <div className="set-seg" role="tablist" style={{ marginBottom: 8 }}>
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={tab === 'official'}
+                        className={tab === 'official' ? 'active' : ''}
+                        onClick={() => setTab('official')}
+                    >
+                        Official
+                    </button>
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={tab === 'marketplaces'}
+                        className={tab === 'marketplaces' ? 'active' : ''}
+                        onClick={() => setTab('marketplaces')}
+                    >
+                        Marketplaces
+                    </button>
+                </div>
+
+                {tab === 'official' ? (
+                    <div className="plugin-list">
+                        <Text size="xs" className="text-zinc-500">
+                            Curated, Genie-maintained plugins. Each install is verified against Genie's
+                            trusted publisher key (signature + integrity); unsigned installs require
+                            Developer Mode below.
+                        </Text>
+                        {(official?.curated ?? []).length === 0 && (
+                            <Text size="xs" className="text-zinc-500">
+                                No curated plugins published yet.
+                            </Text>
+                        )}
+                        {(official?.curated ?? []).map((c) => (
+                            <div className="plugin-row" key={c.id}>
+                                <div className="set-row-main">
+                                    <span className="set-row-label">{c.name}</span>
+                                    <span className="set-row-desc">{c.description}</span>
+                                </div>
+                                <Action
+                                    icon="download"
+                                    disabled={busy}
+                                    onClick={() => run(() => api().plugins.installRepo(c.repo), `Installing ${c.name}…`)}
+                                >
+                                    Install
+                                </Action>
+                            </div>
+                        ))}
+                        {(official?.bundled ?? []).length > 0 && (
+                            <Text size="xs" className="text-zinc-500">
+                                Bundled first-party plugins (shipped with Genie).
+                            </Text>
+                        )}
+                        {(official?.bundled ?? []).map((b) => (
+                            <div className="plugin-row" key={b.id}>
+                                <div className="set-row-main">
+                                    <span className="set-row-label">{b.name}</span>
+                                    <span className="set-row-desc">{b.description}</span>
+                                </div>
+                                <Action
+                                    variant="ghost"
+                                    icon="download"
+                                    disabled={busy}
+                                    onClick={() =>
+                                        run(() => api().plugins.installBundled(b.id), `${b.name} installed — enable it above.`)
+                                    }
+                                >
+                                    Install
+                                </Action>
+                            </div>
+                        ))}
+                    </div>
+                ) : (
+                    <div className="plugin-list">
+                        <SettingRow
+                            label="Add a marketplace"
+                            desc="Paste a marketplace repo URL (a git repo whose genie-marketplace.json indexes many plugins)."
+                            keywords="add marketplace repo url genie-marketplace.json index"
+                            grow
+                        >
+                            <div className="set-actions" style={{ width: '100%' }}>
+                                <Input
+                                    value={marketUrl}
+                                    onValueChange={setMarketUrl}
+                                    placeholder="https://github.com/owner/my-genie-marketplace.git"
+                                />
+                                <Action
+                                    icon="plus"
+                                    disabled={busy || !marketUrl.trim()}
+                                    onClick={() =>
+                                        run(() => api().plugins.addMarketplace(marketUrl.trim()), 'Marketplace added.').then(() =>
+                                            setMarketUrl(''),
+                                        )
+                                    }
+                                >
+                                    Add
+                                </Action>
+                            </div>
+                        </SettingRow>
+
+                        {marketplaces.length === 0 && (
+                            <Text size="xs" className="text-zinc-500">
+                                No marketplaces added. Paste a marketplace repo URL above to browse its plugins.
+                            </Text>
+                        )}
+                        {marketplaces.map((m) => (
+                            <div className="plugin-market" key={m.id}>
+                                <div className="plugin-market-head">
+                                    <span className="set-row-label">{m.name}</span>
+                                    <span className="set-row-desc">{m.url}</span>
+                                    <div className="set-actions">
+                                        <Action
+                                            variant="ghost"
+                                            icon="refresh-cw"
+                                            disabled={busy}
+                                            onClick={() => run(() => api().plugins.refreshMarketplace(m.id), 'Refreshed.')}
+                                        >
+                                            Refresh
+                                        </Action>
+                                        <Action
+                                            variant="ghost"
+                                            color="red"
+                                            icon="trash-2"
+                                            disabled={busy}
+                                            onClick={() => run(() => api().plugins.removeMarketplace(m.id), 'Marketplace removed.')}
+                                        >
+                                            Remove
+                                        </Action>
+                                    </div>
+                                </div>
+                                {m.plugins.length === 0 ? (
+                                    <Text size="xs" className="text-zinc-500">
+                                        This marketplace lists no plugins (or its index hasn&apos;t been fetched).
+                                    </Text>
+                                ) : (
+                                    m.plugins.map((mp) => (
+                                        <div className="plugin-row" key={mp.id}>
+                                            <div className="set-row-main">
+                                                <span className="set-row-label">{mp.name}</span>
+                                                {mp.description && <span className="set-row-desc">{mp.description}</span>}
+                                            </div>
+                                            {mp.installed ? (
+                                                <Text size="xs" className="text-zinc-500">
+                                                    Installed
+                                                </Text>
+                                            ) : (
+                                                <Action
+                                                    icon="download"
+                                                    disabled={busy}
+                                                    onClick={() =>
+                                                        run(
+                                                            () => api().plugins.installMarketplacePlugin(m.id, mp.id),
+                                                            `Installing ${mp.name}…`,
+                                                        )
+                                                    }
+                                                >
+                                                    Install
+                                                </Action>
+                                            )}
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </SetSection>
+
+            <SetSection
+                title="Developer Mode"
+                desc="For plugin authors. The signed registry is the safe default; Developer Mode lets you run UNSIGNED plugins and trust your own signing keys."
+            >
+                <SettingRow
+                    label="Allow unsigned plugins"
+                    desc="When off, only plugins signed by a trusted publisher (or Genie's own bundled plugins) can be enabled. When on, you can enable UNSIGNED plugins — they run in a restricted sandbox (no network) after an explicit warning."
+                    keywords="developer mode unsigned plugin signing key trust"
+                >
+                    <Switch
+                        checked={dev.enabled}
+                        onCheckedChange={(v: boolean) =>
+                            run(() => api().plugins.setDeveloperMode(v), v ? 'Developer Mode on.' : 'Developer Mode off.')
+                        }
+                    />
+                </SettingRow>
+
+                {dev.enabled && (
+                    <>
+                        <SetSubhead>Trusted signing keys</SetSubhead>
+                        {dev.keys.length === 0 ? (
+                            <Text size="xs" className="text-zinc-500">
+                                No developer keys trusted. Paste an Ed25519 public key (PEM) below to trust plugins signed by it.
+                            </Text>
+                        ) : (
+                            dev.keys.map((k) => (
+                                <div className="plugin-row" key={k.keyId}>
+                                    <div className="set-row-main">
+                                        <span className="set-row-label">{k.label}</span>
+                                        <span className="set-row-desc">
+                                            <code>{k.keyId}</code>
+                                        </span>
+                                    </div>
+                                    <Action
+                                        variant="ghost"
+                                        color="red"
+                                        icon="trash-2"
+                                        disabled={busy}
+                                        onClick={() => run(() => api().plugins.removeTrustedKey(k.keyId), 'Key removed — plugins re-checked.')}
+                                    >
+                                        Remove
+                                    </Action>
+                                </div>
+                            ))
+                        )}
+                        <SettingRow
+                            label="Trust a signing key"
+                            desc="Paste an Ed25519 public key (PEM). Plugins signed by the matching private key will verify as Trusted."
+                            keywords="add trusted signing key ed25519 public pem"
+                            grow
+                        >
+                            <div className="set-actions" style={{ width: '100%', flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+                                <textarea
+                                    className="set-input"
+                                    value={pubKey}
+                                    onChange={(e) => setPubKey(e.target.value)}
+                                    placeholder={'-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----'}
+                                    rows={4}
+                                    style={{ fontFamily: 'monospace', fontSize: 11, width: '100%' }}
+                                />
+                                <div className="set-actions" style={{ width: '100%' }}>
+                                    <Input value={keyLabel} onValueChange={setKeyLabel} placeholder="Label (e.g. My dev key)" />
+                                    <Action
+                                        icon="plus"
+                                        disabled={busy || !pubKey.trim()}
+                                        onClick={() =>
+                                            run(
+                                                () => api().plugins.addTrustedKey(pubKey.trim(), keyLabel.trim() || undefined),
+                                                'Key trusted — plugins re-checked.',
+                                            ).then(() => {
+                                                setPubKey('');
+                                                setKeyLabel('');
+                                            })
+                                        }
+                                    >
+                                        Trust key
+                                    </Action>
+                                </div>
+                            </div>
+                        </SettingRow>
+                    </>
+                )}
+            </SetSection>
+        </>
+    );
+}
+
+/** A small colour-coded provenance chip: Trusted / Unsigned / Untrusted. */
+function TrustBadge({ plugin }: { plugin: InstalledPluginView }) {
+    const map = {
+        trusted: { label: 'Trusted', bg: 'rgba(34,197,94,0.15)', fg: '#4ade80' },
+        unsigned: { label: 'Unsigned', bg: 'rgba(251,191,36,0.15)', fg: '#fbbf24' },
+        untrusted: { label: 'Untrusted', bg: 'rgba(248,113,113,0.15)', fg: '#f87171' },
+    } as const;
+    const s = map[plugin.trust];
+    const title =
+        plugin.trust === 'trusted'
+            ? plugin.signed
+                ? `Signed and verified${plugin.publisherKeyId ? ` (${plugin.publisherKeyId})` : ''}`
+                : 'First-party — bundled with Genie'
+            : plugin.trust === 'unsigned'
+              ? 'Not signed by a trusted publisher'
+              : 'Signature invalid or code tampered';
+    return (
+        <span
+            title={title}
+            style={{
+                fontSize: 10,
+                fontWeight: 600,
+                padding: '1px 6px',
+                borderRadius: 4,
+                background: s.bg,
+                color: s.fg,
+                textTransform: 'uppercase',
+                letterSpacing: 0.3,
+            }}
+        >
+            {s.label}
+        </span>
+    );
+}
+
+/** One installed-plugin card: enable, tools, editors, granular permissions, uninstall. */
+function PluginCard({
+    plugin,
+    busy,
+    onEnable,
+    onToggleGrant,
+    onUninstall,
+}: {
+    plugin: InstalledPluginView;
+    busy: boolean;
+    onEnable: (on: boolean) => void;
+    onToggleGrant: (perm: InstalledPluginView['permissions'][number], granted: boolean) => void;
+    onUninstall: () => void;
+}) {
+    return (
+        <div className="plugin-card">
+            <div className="plugin-card-head">
+                <div className="set-row-main">
+                    <span className="set-row-label">
+                        {plugin.name}{' '}
+                        <span className="text-zinc-500">
+                            v{plugin.version} · {plugin.namespace}
+                        </span>{' '}
+                        <TrustBadge plugin={plugin} />
+                    </span>
+                    {plugin.description && <span className="set-row-desc">{plugin.description}</span>}
+                    <span className="set-row-desc">
+                        Source: {plugin.sourceType}
+                        {plugin.sourceUrl ? ` — ${plugin.sourceUrl}` : ''}
+                        {plugin.publisher ? ` · by ${plugin.publisher}` : ''}
+                    </span>
+                    {plugin.trust === 'untrusted' && (
+                        <span className="set-row-desc" style={{ color: '#f87171' }}>
+                            Untrusted — signature invalid or code tampered. This plugin cannot be enabled.
+                        </span>
+                    )}
+                    {plugin.trust === 'unsigned' && (
+                        <span className="set-row-desc" style={{ color: '#fbbf24' }}>
+                            Unsigned — not verified by a trusted publisher. Requires Developer Mode to enable.
+                        </span>
+                    )}
+                </div>
+                <div className="set-actions">
+                    <Switch checked={plugin.enabled} onCheckedChange={onEnable} />
+                    <Action variant="ghost" color="red" icon="trash-2" disabled={busy} onClick={onUninstall}>
+                        Uninstall
+                    </Action>
+                </div>
+            </div>
+
+            {plugin.tools.length > 0 && (
+                <>
+                    <SetSubhead>Agent tools</SetSubhead>
+                    {plugin.tools.map((t) => (
+                        <div className="plugin-row" key={t.name}>
+                            <div className="set-row-main">
+                                <span className="set-row-label">
+                                    <code>{t.name}</code>
+                                </span>
+                                <span className="set-row-desc">{t.description}</span>
+                            </div>
+                        </div>
+                    ))}
+                </>
+            )}
+
+            {plugin.editors.length > 0 && (
+                <>
+                    <SetSubhead>Editors (declared)</SetSubhead>
+                    {plugin.editors.map((e) => (
+                        <div className="plugin-row" key={e.id}>
+                            <div className="set-row-main">
+                                <span className="set-row-label">
+                                    {e.title} — {e.extensions.join(', ')}
+                                </span>
+                                <span className="set-row-desc">
+                                    <code>{e.fancyEditor}</code>
+                                </span>
+                            </div>
+                        </div>
+                    ))}
+                </>
+            )}
+
+            <SetSubhead>Permissions</SetSubhead>
+            {plugin.permissions.length === 0 ? (
+                <Text size="xs" className="text-zinc-500">
+                    This plugin declares no capabilities.
+                </Text>
+            ) : (
+                plugin.permissions.map((perm) => (
+                    <SettingRow
+                        key={`${perm.category}:${perm.key}`}
+                        label={perm.label}
+                        keywords={`permission grant ${perm.category} ${perm.key}`}
+                    >
+                        <Switch
+                            checked={perm.granted}
+                            onCheckedChange={(v: boolean) => onToggleGrant(perm, v)}
+                        />
+                    </SettingRow>
+                ))
+            )}
+        </div>
     );
 }
 

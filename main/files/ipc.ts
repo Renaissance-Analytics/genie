@@ -357,6 +357,139 @@ export async function writeFile(
     return { ok: true };
 }
 
+// --- Capability-scoped plugin file I/O (Plugin System, §6.2 / §12.4) ---------
+//
+// A GRANTED plugin tool (running in the sandboxed worker) reaches the filesystem
+// ONLY through these helpers, brokered by the worker-host capability bridge.
+// They are STRICTLY TIGHTER than the general `files:*` surface:
+//   - always workspace-CONFINED via `guardedResolve` (never the System full-FS
+//     bypass — a plugin is not the trusted System workspace),
+//   - limited to the plugin's DECLARED, user-GRANTED extension allow-list, and
+//   - size-capped.
+// They are NOT exposed on `window.genie.files`; only the plugin bridge calls
+// them, after the grant/scope gate in `plugins/fs-bridge.ts`. Any escape,
+// disallowed extension, empty allow-list, or oversize buffer throws — fail-closed.
+
+/** Ceiling for capability-scoped plugin binary I/O (a .pptx/.xlsx can be a few MB). */
+export const MAX_PLUGIN_BINARY_BYTES = 25 * 1024 * 1024;
+
+/** Lowercased, dot-prefixed extension of a path (e.g. '.pptx'), or '' when none. */
+function extLower(p: string): string {
+    return path.extname(p).toLowerCase();
+}
+
+/** Normalise an extension allow-list to lowercased, dot-prefixed, de-duped entries. */
+function normaliseExts(exts: string[]): string[] {
+    const out = new Set<string>();
+    for (const e of exts) {
+        const s = String(e).trim().toLowerCase();
+        if (!s) continue;
+        out.add(s.startsWith('.') ? s : `.${s}`);
+    }
+    return [...out];
+}
+
+/**
+ * Guard-resolve `relPath` for a plugin under `workspaceRoot` AND enforce the
+ * declared/granted extension allow-list. Returns the absolute path or throws:
+ *   - escapes the workspace (`..`, absolute, other drive) → 'Path escapes workspace'
+ *   - resolves to the workspace root itself → 'Invalid path'
+ *   - the allow-list is empty → 'No file extensions are granted…' (fail-closed)
+ *   - the extension isn't in the allow-list → 'Extension … is not granted…'
+ * This is the single guard both the binary and text plugin helpers share.
+ */
+export function resolvePluginPath(
+    workspaceRoot: string,
+    relPath: string,
+    allowedExts: string[],
+): string {
+    const abs = guardedResolve(workspaceRoot, relPath);
+    if (!abs) throw new Error('Path escapes workspace');
+    if (abs === path.resolve(workspaceRoot)) throw new Error('Invalid path');
+    const allow = normaliseExts(allowedExts);
+    if (allow.length === 0) {
+        throw new Error('No file extensions are granted to this plugin');
+    }
+    const ext = extLower(abs);
+    if (!allow.includes(ext)) {
+        throw new Error(
+            `Extension "${ext || '(none)'}" is not in this plugin's granted list (${allow.join(', ')})`,
+        );
+    }
+    return abs;
+}
+
+/** Workspace-relative, forward-slashed path for a resolved absolute path. */
+function relOf(workspaceRoot: string, abs: string): string {
+    return path.relative(path.resolve(workspaceRoot), abs).replace(/\\/g, '/');
+}
+
+/**
+ * Write raw BYTES for a granted plugin — guard-resolved + extension-limited +
+ * size-capped. The generation tools produce in-memory bytes (dark-slide /
+ * holy-sheet `Agent.toBytes` → Uint8Array) and this is the ONLY path those bytes
+ * reach disk, so a `.pptx`/`.xlsx` can only ever land inside the granting
+ * workspace under a granted extension.
+ */
+export async function writePluginBinary(
+    workspaceRoot: string,
+    relPath: string,
+    bytes: Buffer,
+    allowedExts: string[],
+): Promise<{ ok: true; relPath: string; bytes: number }> {
+    const abs = resolvePluginPath(workspaceRoot, relPath, allowedExts);
+    if (bytes.length > MAX_PLUGIN_BINARY_BYTES) throw new Error('Content exceeds size limit');
+    await fsp.mkdir(path.dirname(abs), { recursive: true });
+    await fsp.writeFile(abs, bytes);
+    return { ok: true, relPath: relOf(workspaceRoot, abs), bytes: bytes.length };
+}
+
+/** Read raw BYTES (base64) for a granted plugin — same guard + ext + size cap. */
+export async function readPluginBinary(
+    workspaceRoot: string,
+    relPath: string,
+    allowedExts: string[],
+): Promise<{ base64: string; bytes: number; relPath: string }> {
+    const abs = resolvePluginPath(workspaceRoot, relPath, allowedExts);
+    const stat = await fsp.stat(abs);
+    if (!stat.isFile()) throw new Error('Not a file');
+    if (stat.size > MAX_PLUGIN_BINARY_BYTES) throw new Error('File exceeds size limit');
+    const buf = await fsp.readFile(abs);
+    return { base64: buf.toString('base64'), bytes: buf.length, relPath: relOf(workspaceRoot, abs) };
+}
+
+/** Write UTF-8 TEXT for a granted plugin — same guard + ext + size cap (no NUL). */
+export async function writePluginText(
+    workspaceRoot: string,
+    relPath: string,
+    content: string,
+    allowedExts: string[],
+): Promise<{ ok: true; relPath: string; bytes: number }> {
+    const abs = resolvePluginPath(workspaceRoot, relPath, allowedExts);
+    if (content.indexOf(NUL) !== -1) throw new Error('Refusing to write binary content');
+    const bytes = Buffer.byteLength(content, 'utf8');
+    if (bytes > MAX_PLUGIN_BINARY_BYTES) throw new Error('Content exceeds size limit');
+    await fsp.mkdir(path.dirname(abs), { recursive: true });
+    await fsp.writeFile(abs, content, 'utf8');
+    return { ok: true, relPath: relOf(workspaceRoot, abs), bytes };
+}
+
+/** Read UTF-8 TEXT for a granted plugin — same guard + ext + size cap. */
+export async function readPluginText(
+    workspaceRoot: string,
+    relPath: string,
+    allowedExts: string[],
+): Promise<{ content: string; truncated: boolean; relPath: string }> {
+    const abs = resolvePluginPath(workspaceRoot, relPath, allowedExts);
+    const stat = await fsp.stat(abs);
+    if (!stat.isFile()) throw new Error('Not a file');
+    const buf = await fsp.readFile(abs);
+    if (looksBinary(buf)) throw new Error('Binary file');
+    const truncated = buf.length > MAX_PLUGIN_BINARY_BYTES;
+    const slice = truncated ? buf.subarray(0, MAX_PLUGIN_BINARY_BYTES) : buf;
+    return { content: slice.toString('utf8'), truncated, relPath: relOf(workspaceRoot, abs) };
+}
+
 /**
  * Create an empty file at `relPath` under the workspace root. Fails if the
  * target already exists (so a "New file" never silently overwrites). The

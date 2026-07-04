@@ -106,6 +106,44 @@ const api = {
             ipcRenderer.invoke('mcp:repair-docs', workspaceId),
     },
 
+    // Plugin System (Settings → Plugins). Install / enable / grant + marketplaces.
+    plugins: {
+        list: () => ipcRenderer.invoke('plugins:list'),
+        installRepo: (url: string, ref?: string) =>
+            ipcRenderer.invoke('plugins:install-repo', url, ref),
+        installFolder: (folder?: string) =>
+            ipcRenderer.invoke('plugins:install-folder', folder),
+        enable: (id: string, enabled: boolean) =>
+            ipcRenderer.invoke('plugins:enable', id, enabled),
+        setGrant: (id: string, category: string, key: string, granted: boolean) =>
+            ipcRenderer.invoke('plugins:set-grant', id, category, key, granted),
+        uninstall: (id: string) => ipcRenderer.invoke('plugins:uninstall', id),
+        marketplaces: () => ipcRenderer.invoke('plugins:marketplaces'),
+        addMarketplace: (url: string, ref?: string) =>
+            ipcRenderer.invoke('plugins:add-marketplace', url, ref),
+        refreshMarketplace: (id: string) =>
+            ipcRenderer.invoke('plugins:refresh-marketplace', id),
+        removeMarketplace: (id: string) =>
+            ipcRenderer.invoke('plugins:remove-marketplace', id),
+        installMarketplacePlugin: (marketplaceId: string, pluginId: string) =>
+            ipcRenderer.invoke('plugins:install-marketplace-plugin', marketplaceId, pluginId),
+        official: () => ipcRenderer.invoke('plugins:official'),
+        installBundled: (id: string) => ipcRenderer.invoke('plugins:install-bundled', id),
+        // Capability-scoped binary bridge for a granted plugin's editor (§6.2).
+        editorRead: (pluginId: string, root: string, relPath: string) =>
+            ipcRenderer.invoke('plugins:editor-read', pluginId, root, relPath),
+        editorWrite: (pluginId: string, root: string, relPath: string, base64: string) =>
+            ipcRenderer.invoke('plugins:editor-write', pluginId, root, relPath, base64),
+        // Developer Mode + trusted signing keys (Phase 3).
+        developerMode: () => ipcRenderer.invoke('plugins:developer-mode'),
+        setDeveloperMode: (enabled: boolean) =>
+            ipcRenderer.invoke('plugins:set-developer-mode', enabled),
+        addTrustedKey: (publicKeyPem: string, label?: string) =>
+            ipcRenderer.invoke('plugins:add-trusted-key', publicKeyPem, label),
+        removeTrustedKey: (keyId: string) =>
+            ipcRenderer.invoke('plugins:remove-trusted-key', keyId),
+    },
+
     // Mobile remote-control server (Settings → Mobile). Desktop-only — the phone
     // talks to the tailnet HTTP/WS server directly, never through this bridge.
     mobile: {
@@ -1032,6 +1070,13 @@ const api = {
                 root: string;
                 relPath: string;
                 line?: number;
+                pluginEditor?: {
+                    pluginId: string;
+                    editorId: string;
+                    fancyExport: string;
+                    fancyPackage: string;
+                    fancyVersion: string;
+                };
             }) => void,
         ) => {
             const handler = (
@@ -1042,6 +1087,13 @@ const api = {
                     root: string;
                     relPath: string;
                     line?: number;
+                    pluginEditor?: {
+                        pluginId: string;
+                        editorId: string;
+                        fancyExport: string;
+                        fancyPackage: string;
+                        fancyVersion: string;
+                    };
                 },
             ) => cb(payload);
             ipcRenderer.on('editor:open-file', handler);

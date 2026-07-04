@@ -584,6 +584,50 @@ textarea.input {
     border-color: color-mix(in srgb, var(--rose-500) 35%, var(--border-1));
 }
 
+/* Settings → Plugins: installed-plugin cards + marketplace/plugin rows. */
+.plugin-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.plugin-card {
+    margin-top: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md);
+    background: var(--bg-2);
+}
+.plugin-card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+.plugin-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 0;
+    border-top: 1px solid var(--border-1);
+}
+.plugin-market {
+    margin-top: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md);
+    background: var(--bg-2);
+}
+.plugin-market-head {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-bottom: 6px;
+}
+.plugin-market-head .set-actions {
+    margin-top: 6px;
+}
+
 /* A free-standing controls strip at the foot of a section (action buttons). */
 .set-actions {
     display: flex;

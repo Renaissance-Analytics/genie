@@ -13,6 +13,7 @@ export type SectionId =
     | 'workspaces'
     | 'customization'
     | 'agent-mcp'
+    | 'plugins'
     | 'mobile'
     | 'connections'
     | 'devices'
@@ -46,6 +47,7 @@ export const NAV_GROUPS: NavGroup[] = [
         label: 'Agents & network',
         items: [
             { id: 'agent-mcp', label: 'Agent MCP', icon: 'plug' },
+            { id: 'plugins', label: 'Plugins', icon: 'puzzle' },
             { id: 'mobile', label: 'Work Mode', icon: 'monitor' },
             { id: 'connections', label: 'Connections', icon: 'link' },
             { id: 'devices', label: 'Devices', icon: 'smartphone' },
