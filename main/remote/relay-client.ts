@@ -9,7 +9,12 @@ import {
     type RestRequestPayload,
     type RestReplyPayload,
 } from './relay-protocol';
-import { RelayFrameMux } from './relay-mux';
+import {
+    RelayFrameMux,
+    type SiteStreamController,
+    type SiteStreamHandlers,
+} from './relay-mux';
+import type { SiteOpenPayload } from './relay-protocol';
 import type { PopKeypair } from './relay-pop';
 
 /**
@@ -193,6 +198,15 @@ export class RelayMemberClient {
     ): { send: (input: string) => void; close: () => void } {
         if (!this.mux) throw new Error('relay client not connected');
         return this.mux.openTerm(terminalId, onData);
+    }
+
+    /** Open a site-proxy stream over the `site` channel (serve-local-sites Phase
+     *  E) — carries the host reverse-proxy byte stream so an enabled `*.gen` site
+     *  reaches `handleSiteProxy` with NO shared tailnet. Drives the relay
+     *  {@link SiteCarrier}; satisfies its `SiteStreamOpener` shape. */
+    openSite(open: SiteOpenPayload, handlers: SiteStreamHandlers): SiteStreamController {
+        if (!this.mux) throw new Error('relay client not connected');
+        return this.mux.openSite(open, handlers);
     }
 
     close(): void {

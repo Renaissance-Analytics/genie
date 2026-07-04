@@ -23,6 +23,7 @@ import {
 } from '../ask/force-question';
 import { RelayMemberClient } from './relay-client';
 import type { PopKeypair } from './relay-pop';
+import { createTailnetSiteCarrier, createRelaySiteCarrier, type SiteCarrier } from './site-carrier';
 import type { SiteScheme, SiteView } from '../mobile/hosts';
 
 /**
@@ -1585,13 +1586,16 @@ export function disconnectConnKey(connKey: string): void {
     }
 }
 
-// --- serve-local-sites (Phase D) — the Testing Browser's carrier primitives ---
+// --- serve-local-sites — the Testing Browser's carrier primitives ------------
 // The remote forward-proxy shim (main/remote/site-proxy.ts) + Testing Browser
-// (main/testing-browser) drive a host's enabled `.gen` sites over the EXISTING
-// tailnet carrier. These accessors expose exactly what the shim needs — the host
-// dial base + the session Bearer (read lazily so the token stays in MAIN) — and
-// the enabled-`.gen` snapshot the shim resolves against. Phase D rides the tailnet
-// carrier only; a relay connection returns null here (that's Phase E).
+// (main/testing-browser) drive a host's enabled `.gen` sites over a
+// transport-agnostic SiteCarrier. `getSiteCarrier` picks the impl from the
+// connection kind: a `tailnet` conn dials the host directly (Phase D); a `relay`
+// conn carries the byte stream as frames over the RelayMemberClient (Phase E) so
+// a remote with NO shared tailnet still reaches the site. The auth stays in MAIN
+// on both — the carrier injects it, never a renderer. `remoteListEnabledGenSites`
+// (below) is the enabled-`.gen` snapshot the shim resolves against; it already
+// works over either transport (connRequest branches tailnet vs relayRest).
 
 /** An enabled `.gen` site for a connection: the browser-facing `.gen` name mapped
  *  to its opaque host-side `siteId` + the upstream loopback `.test` hostname. */
@@ -1604,20 +1608,23 @@ export interface EnabledGenSite {
 }
 
 /**
- * The tailnet carrier primitives for a connection's Testing-Browser shim: the
- * host's mobile-server base (`http://<ip>:<port>`) + a lazy Bearer getter. Null
- * for an unknown connection or a relay one (Phase D is tailnet-only; relay is
- * Phase E). The Bearer is returned via a closure so it is only ever read in MAIN.
+ * The {@link SiteCarrier} for a connection's Testing-Browser shim — chosen by the
+ * connection KIND so the shim + `.gen` + session-CA stack is carrier-agnostic:
+ *   - `tailnet` → a direct-dial carrier (`http://<ip>:<port>` + lazy Bearer),
+ *   - `relay`   → a frame carrier over the connection's `RelayMemberClient`.
+ * Null for an unknown connection (or a relay conn whose client is gone). Auth is
+ * injected by the carrier IN MAIN — the token/grant never reaches a renderer.
  */
-export function getTailnetCarrier(
-    connKey: string,
-): { hostBase: string; bearer: () => string } | null {
+export function getSiteCarrier(connKey: string): SiteCarrier | null {
     const conn = connections.get(connKey);
-    if (!conn || conn.transport !== 'tailnet') return null;
-    return {
-        hostBase: `http://${conn.host.ip}:${conn.host.port}`,
-        bearer: () => conn.token,
-    };
+    if (!conn) return null;
+    if (conn.transport === 'tailnet') {
+        return createTailnetSiteCarrier(`http://${conn.host.ip}:${conn.host.port}`, () => conn.token);
+    }
+    if (conn.transport === 'relay' && conn.relay) {
+        return createRelaySiteCarrier(conn.relay);
+    }
+    return null;
 }
 
 /**

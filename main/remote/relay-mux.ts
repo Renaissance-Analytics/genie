@@ -1,4 +1,35 @@
-import type { Frame, RestRequestPayload, RestReplyPayload } from './relay-protocol';
+import {
+    readSiteInbound,
+    type Frame,
+    type RestRequestPayload,
+    type RestReplyPayload,
+    type SiteOpenPayload,
+} from './relay-protocol';
+
+/** The callbacks a site-proxy stream owner (the relay {@link SiteCarrier}) wires
+ *  to receive the host's streamed response over the `site` channel. */
+export interface SiteStreamHandlers {
+    /** HTTP response head — status + headers, before any body chunk. */
+    onResponse?: (status: number, headers: Record<string, string | string[]>) => void;
+    /** WS `upgrade` established (101) — before bidirectional data chunks. */
+    onUpgrade?: (status: number, statusText: string, headers: Record<string, string | string[]>) => void;
+    /** A body / WS server→client chunk. */
+    onData?: (chunk: Buffer) => void;
+    /** The stream ended cleanly (response complete / socket closed). */
+    onClose?: () => void;
+    /** The stream failed (upstream error / link dropped). */
+    onError?: (message: string) => void;
+}
+
+/** The handle to drive one open site-proxy stream (request body / WS input). */
+export interface SiteStreamController {
+    /** Send a request-body / WS client→server chunk. */
+    write(chunk: Buffer): void;
+    /** Signal the request body is complete (HTTP half-close). No-op after close. */
+    end(): void;
+    /** Close the whole stream (client aborted / done). Idempotent. */
+    close(): void;
+}
 
 /**
  * Multiplexes a member session's REST + events + term traffic over the single
@@ -21,6 +52,9 @@ export class RelayFrameMux {
     >();
     private eventsHandler: ((msg: string) => void) | null = null;
     private termHandler: ((msg: string) => void) | null = null;
+    /** Concurrent site-proxy streams, keyed by reqId (Phase E). Unlike
+     *  events/term (single-stream), a page load runs many at once. */
+    private readonly siteStreams = new Map<string, SiteStreamHandlers>();
 
     constructor(
         private readonly sid: string,
@@ -70,8 +104,67 @@ export class RelayFrameMux {
         };
     }
 
+    /**
+     * Open a site-proxy stream over the `site` channel (Phase E): send the
+     * `open` (an HTTP request or a WS `upgrade`), stream request-body / WS-input
+     * via the returned controller, and receive the host's streamed response
+     * through `handlers`. Mirrors `openTerm`'s streaming shape, but keyed by a
+     * fresh `reqId` so many run concurrently.
+     */
+    openSite(open: SiteOpenPayload, handlers: SiteStreamHandlers): SiteStreamController {
+        const reqId = `s${++this.reqSeq}`;
+        this.siteStreams.set(reqId, handlers);
+        this.send({ kind: 'open', channel: 'site', sid: this.sid, reqId, payload: open });
+        let live = true;
+        return {
+            write: (chunk: Buffer) => {
+                if (!live) return;
+                this.send({
+                    kind: 'data',
+                    channel: 'site',
+                    sid: this.sid,
+                    reqId,
+                    payload: { t: 'body', data: chunk.toString('base64') },
+                });
+            },
+            end: () => {
+                if (!live) return;
+                this.send({ kind: 'data', channel: 'site', sid: this.sid, reqId, payload: { t: 'end' } });
+            },
+            close: () => {
+                if (!live) return;
+                live = false;
+                this.siteStreams.delete(reqId);
+                this.send({ kind: 'close', channel: 'site', sid: this.sid, reqId });
+            },
+        };
+    }
+
     /** Dispatch an incoming frame to its waiter/handler. */
     handle(frame: Frame): void {
+        if (frame.channel === 'site') {
+            if (!frame.reqId) return;
+            const h = this.siteStreams.get(frame.reqId);
+            if (!h) return; // unknown/closed stream — drop
+            if (frame.kind === 'error') {
+                this.siteStreams.delete(frame.reqId);
+                h.onError?.(frame.reason || frame.code || 'relay site error');
+                return;
+            }
+            if (frame.kind === 'close') {
+                this.siteStreams.delete(frame.reqId);
+                h.onClose?.();
+                return;
+            }
+            if (frame.kind === 'data') {
+                const inbound = readSiteInbound(frame);
+                if (!inbound) return;
+                if (inbound.t === 'response') h.onResponse?.(inbound.status, inbound.headers);
+                else if (inbound.t === 'upgraded') h.onUpgrade?.(inbound.status, inbound.statusText, inbound.headers);
+                else h.onData?.(inbound.chunk);
+            }
+            return;
+        }
         if (frame.channel === 'rest') {
             if (!frame.reqId) return;
             const p = this.pendingRest.get(frame.reqId);
@@ -99,10 +192,12 @@ export class RelayFrameMux {
         }
     }
 
-    /** Fail every in-flight REST request (the link dropped). */
+    /** Fail every in-flight REST request + site stream (the link dropped). */
     rejectAll(reason: string): void {
         for (const [, p] of this.pendingRest) p.reject(new Error(reason));
         this.pendingRest.clear();
+        for (const [, h] of this.siteStreams) h.onError?.(reason);
+        this.siteStreams.clear();
         this.eventsHandler = null;
         this.termHandler = null;
     }

@@ -14,7 +14,7 @@ import {
     type GenTarget,
     type SiteShim,
 } from '../remote/site-proxy';
-import { getTailnetCarrier, remoteListEnabledGenSites, type EnabledGenSite } from '../remote';
+import { getSiteCarrier, remoteListEnabledGenSites, type EnabledGenSite } from '../remote';
 import { DEVICE_PRESETS, devicePreset, initialGenUrl, normalizeNavUrl } from './chrome';
 
 /**
@@ -100,10 +100,11 @@ function enabledGenSet(inst: TestingBrowserInstance): Set<string> {
 // --- open / teardown -------------------------------------------------------
 
 /**
- * Open (or focus) the Testing Browser for a live host connection. Phase D rides
- * the TAILNET carrier only — a relay/workstation connection returns an error here
- * (that carrier is Phase E). The connection must already be live (the Hosts UI
- * connected it); we read its dial base + Bearer via `getTailnetCarrier`.
+ * Open (or focus) the Testing Browser for a live host connection. Phase E is
+ * carrier-agnostic: `getSiteCarrier` returns a DIRECT (tailnet) or a RELAY carrier
+ * per the connection kind, so a Virtual Workstation with NO shared tailnet works
+ * the same as a direct host. The connection must already be live (the Hosts UI
+ * connected it).
  */
 export async function openTestingBrowser(
     connKey: string,
@@ -115,11 +116,11 @@ export async function openTestingBrowser(
         existing.window.focus();
         return { ok: true };
     }
-    const carrier = getTailnetCarrier(connKey);
+    const carrier = getSiteCarrier(connKey);
     if (!carrier) {
         return {
             ok: false,
-            error: 'The Testing Browser needs a direct (tailnet) host connection.',
+            error: 'No live host connection for the Testing Browser.',
         };
     }
 
@@ -130,8 +131,7 @@ export async function openTestingBrowser(
 
     const shim = await createSiteShim({
         ca,
-        hostBase: carrier.hostBase,
-        bearer: carrier.bearer,
+        carrier,
         resolveGen: (genHost) => genMap.get(genHost) ?? null,
     });
 

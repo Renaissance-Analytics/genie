@@ -17,6 +17,7 @@ import {
     type GenTarget,
     type SiteShim,
 } from '../site-proxy';
+import { createTailnetSiteCarrier } from '../site-carrier';
 
 /**
  * Serve-local-sites Phase D — the REMOTE forward-proxy shim (design §4/§5). Pure
@@ -152,8 +153,9 @@ afterEach(async () => {
 function makeShim(ca: SessionCa, genMap: Map<string, GenTarget>): Promise<SiteShim> {
     return createSiteShim({
         ca,
-        hostBase: `http://127.0.0.1:${fakeHostPort}`,
-        bearer: () => 'THE_SESSION_TOKEN',
+        // The tailnet (direct-dial) carrier — injects the Bearer + `?__genie_token=`
+        // IN MAIN, so the host leg sees them exactly as in Phase D.
+        carrier: createTailnetSiteCarrier(`http://127.0.0.1:${fakeHostPort}`, () => 'THE_SESSION_TOKEN'),
         resolveGen: (h) => genMap.get(h) ?? null,
     });
 }

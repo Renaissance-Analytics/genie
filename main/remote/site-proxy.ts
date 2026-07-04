@@ -3,8 +3,9 @@ import https from 'node:https';
 import tls from 'node:tls';
 import type { Duplex } from 'node:stream';
 import type { AddressInfo } from 'node:net';
-import { SITE_PROXY_PREFIX, GENIE_TOKEN_PARAM, PRESERVE_ORIGIN_HEADER } from '../mobile/site-proxy';
+import { SITE_PROXY_PREFIX, PRESERVE_ORIGIN_HEADER } from '../mobile/site-proxy';
 import type { SessionCa } from './site-ca';
+import type { SiteCarrier } from './site-carrier';
 
 /**
  * REMOTE-side forward-proxy shim for the Testing Browser (serve-local-sites Phase
@@ -17,11 +18,14 @@ import type { SessionCa } from './site-ca';
  *      ENABLED `.gen` for this connection (the injected `resolveGen`), then
  *      MITM-TERMINATE TLS with a leaf the session CA (site-ca.ts) signs — so the
  *      browser gets a real `https://tynn.gen` with a green lock + secure context.
- *   2. FORWARDS the decrypted HTTP/WS over the EXISTING tailnet carrier to the
- *      host's Phase-C endpoint `<hostBase>/api/site/<siteId>/<path…>`, INJECTING
- *      the session Bearer IN MAIN (never in the renderer — mirrors
- *      `remoteRequest`). HTTP is streamed; WebSocket `upgrade` is passed through
- *      using Phase C's namespaced `?__genie_token=` auth.
+ *   2. FORWARDS the decrypted HTTP/WS over the injected {@link SiteCarrier}
+ *      (Phase E) to the host's `/api/site/<siteId>/<path…>` endpoint. The carrier
+ *      is transport-agnostic: `tailnet` dials the host directly (Phase D),
+ *      `relay` carries the byte stream as frames over the Tynn relay (Phase E) so
+ *      a remote with NO shared tailnet still reaches the site. Either way the auth
+ *      stays IN MAIN — the tailnet carrier injects the Bearer / `?__genie_token=`,
+ *      the relay carrier rides the grant + host self-pair — never in the renderer.
+ *      HTTP is streamed; WebSocket `upgrade` is passed through the same carrier.
  *   3. REFUSES everything not in the enabled `.gen` set — a non-`.gen` host, or a
  *      disabled/unknown `.gen`, is rejected at CONNECT (403) and again in the SNI
  *      callback + per-request. This is the §5 SSRF/allowlist boundary on the
@@ -79,11 +83,14 @@ export interface SiteShimDeps {
      * Testing Browser refreshes from the host's `/api/sites` (enabled rows only).
      */
     resolveGen: (genHost: string) => GenTarget | null;
-    /** The host's mobile-server base over the carrier: `http://<ip>:<port>`. */
-    hostBase: string;
-    /** The session Bearer, read lazily so a token rotation is picked up and the
-     *  token never has to be captured into the renderer. */
-    bearer: () => string;
+    /**
+     * The carrier that forwards the decrypted stream to the host's site-proxy —
+     * `tailnet` (direct dial) or `relay` (frames over the Tynn relay). Picked from
+     * the connection kind by `getSiteCarrier` (`main/remote/index.ts`); the shim's
+     * mechanics above are identical on either. The carrier owns per-transport auth
+     * injection (Bearer / grant), so the token never leaves MAIN.
+     */
+    carrier: SiteCarrier;
 }
 
 /** A running shim: its loopback proxy address + a clean shutdown. */
@@ -248,22 +255,7 @@ export function forwardPath(siteId: string, rawUrl: string | undefined): string 
     return `${SITE_PROXY_PREFIX}${siteId}${rest}`;
 }
 
-/** PURE. Serialize an upstream upgrade response's status line + headers verbatim
- *  (the `Sec-WebSocket-Accept` was computed from the client key we forwarded). */
-function serializeHandshake(upRes: http.IncomingMessage): string {
-    const lines = [`HTTP/1.1 ${upRes.statusCode} ${upRes.statusMessage}`];
-    const rh = upRes.rawHeaders;
-    for (let i = 0; i + 1 < rh.length; i += 2) lines.push(`${rh[i]}: ${rh[i + 1]}`);
-    return `${lines.join('\r\n')}\r\n\r\n`;
-}
-
 // --- the shim server -------------------------------------------------------
-
-/** Parse `http://host:port` into a dial `{ host, port }` (defaulting port 80). */
-function parseBase(hostBase: string): { host: string; port: number } {
-    const u = new URL(hostBase);
-    return { host: u.hostname, port: u.port ? Number(u.port) : 80 };
-}
 
 /**
  * Create + start ONE forward-proxy shim on `127.0.0.1:<ephemeral>`. Returns the
@@ -272,7 +264,6 @@ function parseBase(hostBase: string): { host: string; port: number } {
  * MAIN; the renderer never sees the token or the CA key.
  */
 export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
-    const base = parseBase(deps.hostBase);
     const liveSockets = new Set<Duplex>();
 
     // The internal MITM server: it TLS-terminates each accepted CONNECT tunnel
@@ -315,30 +306,42 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
             sendError(res, 502, 'unknown or disabled .gen site');
             return;
         }
+        // Build the forward headers (Authorization already dropped) + the
+        // preserve-origin control signal; the CARRIER injects per-transport auth
+        // (tailnet Bearer / relay grant), keeping the token in MAIN.
         const headers = buildForwardHeaders(req.headers);
-        headers['authorization'] = `Bearer ${deps.bearer()}`;
         headers[PRESERVE_ORIGIN_HEADER] = '1';
-        const upReq = http.request(
-            {
-                host: base.host,
-                port: base.port,
-                method: req.method,
-                path: forwardPath(target.siteId, req.url),
-                headers,
-            },
-            (upRes) => {
-                const outHeaders = buildForwardResponseHeaders(upRes.headers, target.hostname, genHost);
-                res.writeHead(upRes.statusCode ?? 502, outHeaders);
-                upRes.pipe(res);
-            },
-        );
-        upReq.on('error', () => {
-            if (!res.headersSent) sendError(res, 502, 'carrier error');
-            else res.destroy();
+        const call = deps.carrier.forward({
+            method: req.method ?? 'GET',
+            path: forwardPath(target.siteId, req.url),
+            headers,
+            body: req,
         });
-        req.on('aborted', () => upReq.destroy());
-        res.on('close', () => upReq.destroy());
-        req.pipe(upReq);
+        // Client gone (aborted upload / navigated away) ⇒ tear the carrier leg down.
+        req.on('aborted', () => call.abort());
+        res.on('close', () => call.abort());
+        call.response
+            .then(({ status, headers: upHeaders, body }) => {
+                const outHeaders = buildForwardResponseHeaders(upHeaders, target.hostname, genHost);
+                res.writeHead(status, outHeaders);
+                body.on('error', () => {
+                    try {
+                        res.destroy();
+                    } catch {
+                        /* already gone */
+                    }
+                });
+                body.pipe(res); // STREAM — assets, downloads, SSE never buffered
+            })
+            .catch(() => {
+                if (!res.headersSent) sendError(res, 502, 'carrier error');
+                else
+                    try {
+                        res.destroy();
+                    } catch {
+                        /* already gone */
+                    }
+            });
     }
 
     function onDecryptedUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer): void {
@@ -348,44 +351,38 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
             rejectSocket(socket, 502);
             return;
         }
-        // Phase C authenticates a browser WS with the namespaced `?__genie_token=`;
-        // append it (merging with any existing query) so the Genie Bearer carries
-        // over the carrier without ever entering a renderer.
-        const path = forwardPath(target.siteId, req.url);
-        const sep = path.includes('?') ? '&' : '?';
-        const upstreamPath = `${path}${sep}${GENIE_TOKEN_PARAM}=${encodeURIComponent(deps.bearer())}`;
-        const upReq = http.request({
-            host: base.host,
-            port: base.port,
-            method: 'GET',
-            path: upstreamPath,
+        // The carrier owns WS auth (tailnet appends `?__genie_token=`; relay rides
+        // the grant + host self-pair) so the Genie token never enters a renderer.
+        const call = deps.carrier.upgradeWs({
+            path: forwardPath(target.siteId, req.url),
             headers: buildForwardHeaders(req.headers, { keepUpgrade: true }),
         });
-        upReq.on('upgrade', (upRes, upSocket, upHead) => {
-            socket.write(serializeHandshake(upRes));
-            if (upHead && upHead.length) socket.write(upHead);
-            if (head && head.length) upSocket.write(head);
-            upSocket.pipe(socket);
-            socket.pipe(upSocket);
-            const teardown = () => {
-                try {
-                    upSocket.destroy();
-                } catch {
-                    /* gone */
-                }
-                try {
-                    socket.destroy();
-                } catch {
-                    /* gone */
-                }
-            };
-            upSocket.on('error', teardown);
-            socket.on('error', teardown);
-            upSocket.on('close', teardown);
-            socket.on('close', teardown);
-        });
-        upReq.on('error', () => rejectSocket(socket, 502));
-        upReq.end();
+        socket.on('error', () => call.abort());
+        call.upgrade
+            .then(({ handshake, socket: upSocket, head: upHead }) => {
+                socket.write(handshake);
+                if (upHead && upHead.length) socket.write(upHead);
+                if (head && head.length) upSocket.write(head);
+                upSocket.pipe(socket);
+                socket.pipe(upSocket);
+                const teardown = () => {
+                    try {
+                        upSocket.destroy();
+                    } catch {
+                        /* gone */
+                    }
+                    try {
+                        socket.destroy();
+                    } catch {
+                        /* gone */
+                    }
+                };
+                upSocket.on('error', teardown);
+                socket.on('error', teardown);
+                upSocket.on('close', teardown);
+                socket.on('close', teardown);
+            })
+            .catch(() => rejectSocket(socket, 502));
     }
 
     // The public proxy endpoint. HTTPS `.gen` navigations arrive as CONNECT; a
