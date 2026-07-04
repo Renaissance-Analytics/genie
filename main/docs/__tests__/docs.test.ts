@@ -143,3 +143,40 @@ describe('resolveDocsDir', () => {
         expect(resolved).toBe(path.join('/no/cwd', 'docs'));
     });
 });
+
+describe('docs/README.md index discipline', () => {
+    // The REAL repo docs — not a fixture. This is the guard that keeps the
+    // index current: adding an `NN-name.md` page (in-app viewer) or any other
+    // `*.md` doc without linking it from docs/README.md fails the build, so
+    // the index can never silently drift behind the docs again.
+    const repoDocs = path.resolve(__dirname, '..', '..', '..', 'docs');
+    const readme = fs.readFileSync(path.join(repoDocs, 'README.md'), 'utf8');
+
+    it('links every user-guide page (NN-name.md)', () => {
+        const pages = fs
+            .readdirSync(repoDocs)
+            .filter((n) => /^\d{2,}-[a-z0-9-]+\.md$/.test(n));
+        expect(pages.length).toBeGreaterThan(0);
+        const missing = pages.filter((n) => !readme.includes(`(${n})`));
+        expect(missing, `docs/README.md is missing links to: ${missing.join(', ')}`).toEqual([]);
+    });
+
+    it('links every developer/reference doc too', () => {
+        const devDocs = fs
+            .readdirSync(repoDocs)
+            .filter(
+                (n) =>
+                    n.endsWith('.md') &&
+                    n !== 'README.md' &&
+                    !/^\d/.test(n),
+            );
+        const missing = devDocs.filter((n) => !readme.includes(`(${n})`));
+        expect(missing, `docs/README.md is missing links to: ${missing.join(', ')}`).toEqual([]);
+    });
+
+    it('never links a page that no longer exists', () => {
+        const linked = [...readme.matchAll(/\]\(([a-z0-9-]+\.md)\)/gi)].map((m) => m[1]);
+        const gone = linked.filter((n) => !fs.existsSync(path.join(repoDocs, n)));
+        expect(gone, `docs/README.md links to missing files: ${gone.join(', ')}`).toEqual([]);
+    });
+});

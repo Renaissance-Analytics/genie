@@ -20,6 +20,11 @@ Editor** tile, or **Add Editor…** in the chooser.
 When no file is open the panel shows: *"Pick a file from the tree to start
 editing."*
 
+File types claimed by an enabled **plugin** (`.xlsx`, `.pptx`, `.md`, `.docx`
+with the bundled plugins) open as a tab in this same panel, rendered by the
+plugin's editor instead of the text editor — see
+**[Plugins & marketplaces](11-plugins.md)**.
+
 ## Lock the Editor to a folder
 
 By default the Editor is rooted at the workspace folder. You can **lock** it to

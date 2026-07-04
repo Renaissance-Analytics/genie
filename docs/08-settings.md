@@ -76,3 +76,6 @@ pages:
 
 - **[Sign in & integrations](10-sign-in-and-integrations.md)**
 - **[Updates](09-updates.md)**
+- **[Plugins & marketplaces](11-plugins.md)** — the **Plugins** section
+  (installed plugins, capability grants, the Official + Marketplaces tabs, and
+  Developer Mode).

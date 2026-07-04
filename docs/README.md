@@ -28,8 +28,29 @@ renders these same pages with a navigable sidebar.
 10. **[Updates](09-updates.md)** — how auto-update works and what to expect.
 11. **[Sign in & integrations](10-sign-in-and-integrations.md)** — Tynn,
     Aionima, GitHub, and quick capture.
+12. **[Plugins & marketplaces](11-plugins.md)** — the bundled plugins,
+    installing from the Official tab / marketplaces / a repo URL, capability
+    grants, plugin editor tabs, agent tools, signing & Developer Mode.
+
+## Developer & reference docs
+
+Not shown in the in-app viewer (no numeric prefix) — for people building on
+Genie:
+
+- **[Writing a Genie plugin](plugin-authoring.md)** — the manifest, the worker
+  contract, capabilities, and the complete `hello-world` example.
+- **[Plugin signing](plugin-signing.md)** — Ed25519 signing in CI, the trust
+  root, and signing your own plugins.
+- **[The `.agi` envelope format](agi-format.md)** — the workspace monorepo
+  format Genie creates and consumes.
+- **[Release pipeline](release-pipeline.md)** — how Genie itself is built,
+  tested, and released.
 
 ---
 
 *This guide reflects the real behaviour of the app. If something here doesn't
 match what you see, check your version under **Help → Genie vX.Y.Z**.*
+
+*Index discipline: every `NN-name.md` page in this folder must be linked above —
+a unit test (`main/docs/__tests__/docs.test.ts`) fails the build when this
+index drifts out of date.*
