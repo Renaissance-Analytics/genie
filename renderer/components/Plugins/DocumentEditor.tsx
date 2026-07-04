@@ -1,5 +1,3 @@
-import { useState } from 'react';
-import { marked } from 'marked';
 import { Editor } from '@particle-academy/react-fancy';
 
 /**
@@ -10,14 +8,11 @@ import { Editor } from '@particle-academy/react-fancy';
  * Editor.Content) aren't reachable through a React.lazy wrapper — this whole
  * module is what the host lazy-loads.
  *
- * The incoming value's format is KNOWN (markdown — the file type says so), so
- * we convert it to HTML for the contentEditable OURSELVES at mount instead of
- * letting Editor's `detectFormat` sniff it: real-world dev markdown routinely
- * contains HTML-ish snippets (a literal `<code>`, `<table`, …) that flip the
- * sniff to 'html' and render the raw markdown as a single collapsed wall.
- * Editor takes an html-shaped value as-is, sanitizes it, and — with
- * `outputFormat="markdown"` — its onChange still emits markdown.
- * (Upstream ask: an explicit value-format prop on Editor.)
+ * `valueFormat="markdown"` (react-fancy ≥4.10, shipped for Genie's ask in
+ * react-fancy#10) declares the value's format explicitly — the file type says
+ * it's markdown, so the editor must never SNIFF it: dev markdown routinely
+ * mentions `<code>`/`<table`, which used to flip the sniff to 'html' and
+ * render the raw markdown as one collapsed wall.
  */
 
 const ACTIONS = [
@@ -41,17 +36,11 @@ export default function DocumentEditor({
     value: string;
     onChange: (v: string) => void;
 }) {
-    // Converted ONCE at mount — the contentEditable is uncontrolled after that
-    // (Editor only reads the value again when re-entering edit mode), and every
-    // onChange hands back markdown, so the parent keeps a markdown model.
-    const [initialHtml] = useState(() =>
-        (marked.parse(value ?? '', { async: false }) as string).trim(),
-    );
-
     return (
         <Editor
-            value={initialHtml}
+            value={value}
             onChange={onChange}
+            valueFormat="markdown"
             outputFormat="markdown"
             className="h-full flex flex-col rounded-none border-0"
         >

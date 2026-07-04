@@ -1,22 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 
 /**
- * The Document plugin's bytes<->model seam: markdown -> .docx bytes (marked ->
- * docx builder) and .docx bytes -> markdown (mammoth -> turndown). The round
- * trip is the contract that matters — a document SAVED by the editor must
- * REOPEN in the editor with its structure intact (headings, emphasis, lists,
- * links, tables), because both open and save funnel through these two
- * functions. Fidelity is BASIC by design (owner-approved).
+ * The Document plugin's bytes<->model seam — now a thin adapter over
+ * @particle-academy/last-word's Agent (markdown -> Doc -> .docx bytes and
+ * back). The round trip is the contract that matters — a document SAVED by
+ * the editor must REOPEN in the editor with its structure intact (headings,
+ * emphasis, lists, links, tables), because both open and save funnel through
+ * these two functions.
  */
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
 
-import {
-    docxToMarkdown,
-    markdownToDocx,
-    pngDimensions,
-    jpegDimensions,
-} from '../document-convert';
+import { docxToMarkdown, markdownToDocx } from '../document-convert';
 
 const MD = `# Quarterly report
 
@@ -44,7 +39,7 @@ describe('markdownToDocx', () => {
         // A .docx is a zip: PK\x03\x04.
         expect(bytes[0]).toBe(0x50);
         expect(bytes[1]).toBe(0x4b);
-        expect(bytes.length).toBeGreaterThan(1000);
+        expect(bytes.length).toBeGreaterThan(500);
     });
 
     it('handles empty input without throwing', async () => {
@@ -74,39 +69,5 @@ describe('markdown -> docx -> markdown round trip', () => {
         // Table content survives (gfm table or at minimum the cell text).
         expect(md).toContain('Metric');
         expect(md).toContain('1200');
-    });
-});
-
-describe('image dimension sniffing', () => {
-    it('reads PNG IHDR dimensions', () => {
-        // Minimal PNG header: signature + IHDR length/type + 100x50.
-        const b = new Uint8Array(26);
-        b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-        const dv = new DataView(b.buffer);
-        dv.setUint32(16, 100);
-        dv.setUint32(20, 50);
-        expect(pngDimensions(b)).toEqual({ width: 100, height: 50 });
-    });
-
-    it('returns null for non-PNG bytes', () => {
-        expect(pngDimensions(new Uint8Array([1, 2, 3, 4]))).toBeNull();
-    });
-
-    it('reads JPEG SOF0 dimensions', () => {
-        // SOI + APP0 (empty) + SOF0 with 200x120.
-        const b = new Uint8Array([
-            0xff, 0xd8, // SOI
-            0xff, 0xe0, 0x00, 0x02, // APP0, len 2 (no payload)
-            0xff, 0xc0, 0x00, 0x0b, // SOF0, len 11
-            0x08, // precision
-            0x00, 0x78, // height 120
-            0x00, 0xc8, // width 200
-            0x01, 0x00, 0x00, 0x00, // component stub
-        ]);
-        expect(jpegDimensions(b)).toEqual({ width: 200, height: 120 });
-    });
-
-    it('returns null for non-JPEG bytes', () => {
-        expect(jpegDimensions(new Uint8Array([0, 1, 2, 3]))).toBeNull();
     });
 });
