@@ -123,118 +123,118 @@ function extOf(name: string): string | undefined {
 }
 
 /**
- * Walk `dir` into TreeNodeData[]. `idPrefix` is the workspace-relative
- * path of `dir` (forward-slashed, '' at root). `budget` is a shared
- * mutable entry counter so the whole walk stops at the cap. Symlinks are
- * surfaced as leaf nodes — never descended — so they can't escape root.
+ * BREADTH-FIRST directory walk into TreeNodeData[]. Listing every DIRECT child
+ * of a directory before descending into any of them is what stops a big early
+ * subtree (a full checkout under `.worktrees`, a repo under `repos/`) from
+ * STARVING shallow siblings: the shared `budget` truncates DEPTH, never a
+ * directory's own entries — so a workspace root ALWAYS lists all its children
+ * (the old depth-first walk `break`/`return []`-ed on budget exhaustion, which
+ * dropped later root-level entries like `repos` once earlier subtrees drained
+ * the cap). Symlinks are surfaced as leaves, never descended, so the tree can't
+ * walk outside root. `idOf` derives each node id (workspace-relative for the
+ * project tree, absolute for the System full-FS tree).
  */
-async function walk(
+async function walkBreadthFirst(
+    rootDir: string,
+    rootId: string,
+    startDepth: number,
+    maxDepth: number,
+    budget: { remaining: number },
+    idOf: (parentId: string, name: string, abs: string) => string,
+): Promise<TreeNodeData[]> {
+    const rootChildren: TreeNodeData[] = [];
+    const queue: { dir: string; id: string; depth: number; out: TreeNodeData[] }[] = [
+        { dir: rootDir, id: rootId, depth: startDepth, out: rootChildren },
+    ];
+
+    while (queue.length > 0) {
+        const { dir, id: parentId, depth, out } = queue.shift()!;
+        if (depth > maxDepth || budget.remaining <= 0) continue;
+
+        let entries: import('node:fs').Dirent[];
+        try {
+            entries = await fsp.readdir(dir, { withFileTypes: true });
+        } catch {
+            continue;
+        }
+
+        const folders: TreeNodeData[] = [];
+        const files: TreeNodeData[] = [];
+
+        for (const entry of entries) {
+            if (budget.remaining <= 0) break;
+            const name = entry.name;
+            if (SKIP_NAMES.has(name) || REGENERABLE_NAMES.has(name.toLowerCase())) {
+                continue;
+            }
+            const abs = path.join(dir, name);
+            const nodeId = idOf(parentId, name, abs);
+
+            // A symlink is listed but never followed — a leaf can't walk out of root.
+            if (entry.isSymbolicLink()) {
+                budget.remaining--;
+                files.push({ id: nodeId, label: name, type: 'file', ext: extOf(name) });
+                continue;
+            }
+            if (entry.isDirectory()) {
+                budget.remaining--;
+                const children: TreeNodeData[] = [];
+                folders.push({ id: nodeId, label: name, type: 'folder', children });
+                // Descend on a LATER pass (breadth-first) so this whole level is
+                // listed before any of its subtrees consume the budget.
+                queue.push({ dir: abs, id: nodeId, depth: depth + 1, out: children });
+            } else if (entry.isFile()) {
+                budget.remaining--;
+                files.push({ id: nodeId, label: name, type: 'file', ext: extOf(name) });
+            }
+        }
+
+        folders.sort((a, b) => a.label.localeCompare(b.label));
+        files.sort((a, b) => a.label.localeCompare(b.label));
+        // Folders first, then files (classic file-tree ordering).
+        out.push(...folders, ...files);
+    }
+
+    return rootChildren;
+}
+
+/**
+ * Walk `dir` into TreeNodeData[] with WORKSPACE-RELATIVE node ids. `idPrefix`
+ * is the workspace-relative path of `dir` ('' at root). Breadth-first (see
+ * {@link walkBreadthFirst}) so the root's direct children are never starved.
+ */
+function walk(
     dir: string,
     idPrefix: string,
     depth: number,
     maxDepth: number,
     budget: { remaining: number },
 ): Promise<TreeNodeData[]> {
-    if (depth > maxDepth || budget.remaining <= 0) return [];
-
-    let entries: import('node:fs').Dirent[];
-    try {
-        entries = await fsp.readdir(dir, { withFileTypes: true });
-    } catch {
-        return [];
-    }
-
-    const folders: TreeNodeData[] = [];
-    const files: TreeNodeData[] = [];
-
-    for (const entry of entries) {
-        if (budget.remaining <= 0) break;
-        const name = entry.name;
-        if (SKIP_NAMES.has(name) || REGENERABLE_NAMES.has(name.toLowerCase())) {
-            continue;
-        }
-        const relId = idPrefix ? `${idPrefix}/${name}` : name;
-        const abs = path.join(dir, name);
-
-        // A symlink (to a dir or file) is listed but never followed: as a
-        // leaf it carries no children, so the tree can't be used to walk
-        // outside the workspace root.
-        if (entry.isSymbolicLink()) {
-            budget.remaining--;
-            files.push({ id: relId, label: name, type: 'file', ext: extOf(name) });
-            continue;
-        }
-
-        if (entry.isDirectory()) {
-            budget.remaining--;
-            const children = await walk(abs, relId, depth + 1, maxDepth, budget);
-            folders.push({ id: relId, label: name, type: 'folder', children });
-        } else if (entry.isFile()) {
-            budget.remaining--;
-            files.push({ id: relId, label: name, type: 'file', ext: extOf(name) });
-        }
-    }
-
-    folders.sort((a, b) => a.label.localeCompare(b.label));
-    files.sort((a, b) => a.label.localeCompare(b.label));
-    // Folders first, then files (classic file-tree ordering).
-    return [...folders, ...files];
+    return walkBreadthFirst(dir, idPrefix, depth, maxDepth, budget, (parentId, name) =>
+        parentId ? `${parentId}/${name}` : name,
+    );
 }
 
 /**
  * Walk `dir` into TreeNodeData[] with ABSOLUTE, forward-slashed node ids (for
- * the System-workspace full-FS browse). Same skip/symlink/budget rules as
- * {@link walk}, but each node's id is its absolute path so a read/write can
- * round-trip it directly (the System resolver treats an absolute relPath as-is).
+ * the System-workspace full-FS browse). Same rules as {@link walk} (breadth-first
+ * via {@link walkBreadthFirst}, so shallow siblings are never starved); each
+ * node's id is its absolute path so a read/write can round-trip it directly.
  */
-async function walkAbs(
+function walkAbs(
     dir: string,
     depth: number,
     maxDepth: number,
     budget: { remaining: number },
 ): Promise<TreeNodeData[]> {
-    if (depth > maxDepth || budget.remaining <= 0) return [];
-
-    let entries: import('node:fs').Dirent[];
-    try {
-        entries = await fsp.readdir(dir, { withFileTypes: true });
-    } catch {
-        return [];
-    }
-
-    const folders: TreeNodeData[] = [];
-    const files: TreeNodeData[] = [];
-
-    for (const entry of entries) {
-        if (budget.remaining <= 0) break;
-        const name = entry.name;
-        // Hide the same regenerable/noise dirs as a workspace so the machine
-        // tree stays usable (read/write of ANY absolute path is unaffected —
-        // that is the full-FS capability; the tree is only navigation).
-        if (SKIP_NAMES.has(name) || REGENERABLE_NAMES.has(name.toLowerCase())) {
-            continue;
-        }
-        const abs = path.join(dir, name);
-        const id = abs.replace(/\\/g, '/');
-
-        if (entry.isSymbolicLink()) {
-            budget.remaining--;
-            files.push({ id, label: name, type: 'file', ext: extOf(name) });
-            continue;
-        }
-        if (entry.isDirectory()) {
-            budget.remaining--;
-            const children = await walkAbs(abs, depth + 1, maxDepth, budget);
-            folders.push({ id, label: name, type: 'folder', children });
-        } else if (entry.isFile()) {
-            budget.remaining--;
-            files.push({ id, label: name, type: 'file', ext: extOf(name) });
-        }
-    }
-
-    folders.sort((a, b) => a.label.localeCompare(b.label));
-    files.sort((a, b) => a.label.localeCompare(b.label));
-    return [...folders, ...files];
+    return walkBreadthFirst(
+        dir,
+        dir.replace(/\\/g, '/'),
+        depth,
+        maxDepth,
+        budget,
+        (_parentId, _name, abs) => abs.replace(/\\/g, '/'),
+    );
 }
 
 /** Existing drive roots on Windows (A:..Z: that respond to access). */

@@ -84,6 +84,29 @@ describe('files:list-tree', () => {
         const tree = await listTree(dir, { maxEntries: 10 });
         expect(ids(tree).length).toBe(10);
     });
+
+    it('lists ALL root children even when an early subtree would drain the budget (no sibling starvation)', async () => {
+        // Reproduces the `repos`-fell-off bug: a big, alphabetically-early
+        // subtree (a full checkout under `.worktrees`, a repo under `repos/`)
+        // used to consume the shared entry budget in a depth-first walk, so
+        // later root-level siblings were dropped. Breadth-first must list the
+        // whole root before any subtree spends the cap.
+        const dir = makeTmpDir('ft-starve');
+        fs.mkdirSync(path.join(dir, 'a_big'));
+        for (let i = 0; i < 40; i++) {
+            fs.writeFileSync(path.join(dir, 'a_big', `f${i}.txt`), '');
+        }
+        fs.mkdirSync(path.join(dir, 'z_repos'));
+        fs.writeFileSync(path.join(dir, 'z_repos', 'keep.ts'), 'export {}');
+        fs.writeFileSync(path.join(dir, 'z_top.txt'), 'top');
+
+        // A cap far smaller than a_big's subtree — the old walk dropped z_*.
+        const tree = await listTree(dir, { maxEntries: 10 });
+        const rootLabels = tree.map((n) => n.label);
+        expect(rootLabels).toContain('a_big');
+        expect(rootLabels).toContain('z_repos'); // the sibling the old walk starved
+        expect(rootLabels).toContain('z_top.txt');
+    });
 });
 
 describe('files:read path-guard', () => {
