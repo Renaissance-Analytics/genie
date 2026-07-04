@@ -19,6 +19,7 @@ import { getPlugin } from '../db';
 import { validatePluginManifest, type PluginManifest } from './manifest';
 import { runPluginFsOp, type PluginFsResult } from './fs-bridge';
 import { pluginRowIsSurfaceable } from './trust';
+import { resolvePluginEditor } from './editor-routing';
 
 function deny(error: string): PluginFsResult {
     return { ok: false, error };
@@ -67,5 +68,11 @@ export function registerPluginEditorBridge(): void {
         'plugins:editor-write',
         (_e, pluginId: string, root: string, relPath: string, base64: string) =>
             runPluginEditorFs(pluginId, root, relPath, 'fs.writeBytes', base64),
+    );
+    // Which enabled plugin's editor claims this file, if any (§6.1). The treenav
+    // asks this BEFORE text-opening a file so claimed binary formats (.pptx,
+    // .xlsx, …) route to their plugin editor panel, never the text reader.
+    ipcMain.handle('plugins:editor-for', (_e, fileName: string) =>
+        resolvePluginEditor(String(fileName ?? '')),
     );
 }

@@ -20,6 +20,7 @@ import { onOpenInPanel, resolveCursorLine, type RevealTarget } from '../../lib/e
 import {
     api,
     isSystemWorkspace,
+    SYSTEM_WORKSPACE_ID,
     type TerminalSpec,
     type TreeNodeData,
     type ViewMeta,
@@ -259,9 +260,13 @@ export default function CodePanel({
         };
     }, [workspacePath]);
 
-    /** Open (or focus) a file as a tab. Reads from disk only if not already open. */
+    /** Open (or focus) a file as a tab. Reads from disk only if not already
+     *  open. Returns whether the file actually opened — a failed read (e.g. a
+     *  binary format) sets loadError instead, and the caller must NOT act as if
+     *  a tab appeared (hiding the tree on a failed open left the user staring
+     *  at an empty panel). */
     const openTab = useCallback(
-        async (relPath: string) => {
+        async (relPath: string): Promise<boolean> => {
             setLoadError(null);
             try {
                 if (!filesRef.current[relPath]) {
@@ -283,8 +288,10 @@ export default function CodePanel({
                 setOpenFiles(next.open);
                 setActiveFile(next.active);
                 persistTabs(next.open, next.active);
+                return true;
             } catch (e) {
                 setLoadError(e instanceof Error ? e.message : String(e));
+                return false;
             }
         },
         [workspacePath, persistTabs, system],
@@ -296,9 +303,10 @@ export default function CodePanel({
     // needs this side channel.
     useEffect(() => {
         return onOpenInPanel(spec.id, (relPath, line) => {
-            void openTab(relPath);
+            void openTab(relPath).then((opened) => {
+                if (opened && !treePinnedRef.current) setTreeVisible(false);
+            });
             if (typeof line === 'number') setReveal({ file: relPath, line });
-            if (!treePinnedRef.current) setTreeVisible(false);
         });
     }, [spec.id, openTab]);
 
@@ -434,10 +442,32 @@ export default function CodePanel({
 
     const selectFile = useCallback(
         async (relPath: string) => {
-            await openTab(relPath);
-            if (!treePinnedRef.current) setTreeVisible(false);
+            // §6.1 applies to the TREENAV too: a file whose extension an enabled
+            // plugin claims opens in its plugin editor PANEL — routed through the
+            // same main-side open-file flow the MCP path uses. The text reader
+            // below chokes on claimed binary formats (.pptx/.xlsx), which used to
+            // fail silently while still hiding the tree.
+            try {
+                const plugin = await api().plugins.editorFor(relPath);
+                if (plugin) {
+                    const res = await api().editor.requestOpen({
+                        workspaceId: spec.workspace_id ?? SYSTEM_WORKSPACE_ID,
+                        root: workspacePath,
+                        relPath,
+                    });
+                    if (res.ok) {
+                        if (!treePinnedRef.current) setTreeVisible(false);
+                        return;
+                    }
+                }
+            } catch {
+                /* plugin routing unavailable — fall through to the text path */
+            }
+            const opened = await openTab(relPath);
+            // A failed open keeps the tree up so the error stays visible.
+            if (opened && !treePinnedRef.current) setTreeVisible(false);
         },
-        [openTab],
+        [openTab, workspacePath, spec.workspace_id],
     );
 
     const handleClose = useCallback(async () => {

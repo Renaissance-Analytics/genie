@@ -116,6 +116,37 @@ export function registerOpenFile(d: OpenFileDeps): void {
             return { ok: true };
         },
     );
+    // Renderer-initiated open (the CODE PANEL'S TREENAV clicking a file whose
+    // extension a plugin claims): resolve the plugin editor authoritatively here
+    // and push the SAME open-file request the MCP path uses, so plugin-panel
+    // reuse/creation lives in exactly one master handler. Fire-and-forget — no
+    // pending entry; the master's openFileResult reply just no-ops.
+    ipcMain.handle(
+        'editor:request-open',
+        (
+            _e,
+            payload: { workspaceId?: unknown; root?: unknown; relPath?: unknown },
+        ): { ok: boolean; error?: string } => {
+            if (!deps) return { ok: false, error: 'Editor not ready.' };
+            const workspaceId = typeof payload?.workspaceId === 'string' ? payload.workspaceId : '';
+            const root = typeof payload?.root === 'string' ? payload.root : '';
+            const relPath = typeof payload?.relPath === 'string' ? payload.relPath : '';
+            if (!workspaceId || !root || !relPath) {
+                return { ok: false, error: 'workspaceId, root and relPath are required.' };
+            }
+            const pluginEditor = deps.resolvePluginEditor
+                ? deps.resolvePluginEditor(relPath)
+                : null;
+            deps.sendOpenFile({
+                requestId: crypto.randomUUID(),
+                workspaceId,
+                root,
+                relPath,
+                ...(pluginEditor ? { pluginEditor } : {}),
+            });
+            return { ok: true };
+        },
+    );
 }
 
 export async function openFileForUserForMcp(

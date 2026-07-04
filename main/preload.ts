@@ -134,6 +134,9 @@ const api = {
             ipcRenderer.invoke('plugins:editor-read', pluginId, root, relPath),
         editorWrite: (pluginId: string, root: string, relPath: string, base64: string) =>
             ipcRenderer.invoke('plugins:editor-write', pluginId, root, relPath, base64),
+        // Which enabled plugin's editor claims this file's extension (§6.1).
+        editorFor: (fileName: string) =>
+            ipcRenderer.invoke('plugins:editor-for', fileName),
         // Developer Mode + trusted signing keys (Phase 3).
         developerMode: () => ipcRenderer.invoke('plugins:developer-mode'),
         setDeveloperMode: (enabled: boolean) =>
@@ -496,6 +499,13 @@ const api = {
         ) =>
             ipcRenderer.invoke('editor:open-file-result', requestId, result) as Promise<{
                 ok: boolean;
+            }>,
+        /** Renderer-initiated open (treenav → plugin editor): main resolves the
+         *  claiming plugin and pushes the same open-file request the MCP uses. */
+        requestOpen: (payload: { workspaceId: string; root: string; relPath: string }) =>
+            ipcRenderer.invoke('editor:request-open', payload) as Promise<{
+                ok: boolean;
+                error?: string;
             }>,
     },
     settings: {

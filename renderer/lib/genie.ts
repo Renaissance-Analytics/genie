@@ -1218,6 +1218,15 @@ export interface GenieApi {
             relPath: string,
             base64: string,
         ) => Promise<PluginEditorWriteResult>;
+        /** Which enabled plugin's editor claims this file's extension (§6.1),
+         *  or null when the default code editor should open it. */
+        editorFor: (fileName: string) => Promise<{
+            pluginId: string;
+            editorId: string;
+            fancyExport: string;
+            fancyPackage: string;
+            fancyVersion: string;
+        } | null>;
         /** Developer Mode + trusted signing keys (Phase 3). */
         developerMode: () => Promise<PluginDeveloperModeState>;
         setDeveloperMode: (enabled: boolean) => Promise<PluginActionResult<boolean>>;
@@ -1384,6 +1393,13 @@ export interface GenieApi {
             requestId: string,
             result: { reused: boolean; opened: boolean },
         ) => Promise<{ ok: boolean }>;
+        /** Renderer-initiated open (treenav → plugin editor): main resolves the
+         *  claiming plugin and pushes the same open-file flow the MCP uses. */
+        requestOpen: (payload: {
+            workspaceId: string;
+            root: string;
+            relPath: string;
+        }) => Promise<{ ok: boolean; error?: string }>;
     };
     settings: {
         get: () => Promise<Settings>;
