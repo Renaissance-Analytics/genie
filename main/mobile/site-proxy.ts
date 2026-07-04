@@ -432,8 +432,11 @@ function proxyHttp(
         path: upstreamPath,
         headers: buildUpstreamHeaders(req.headers, site.hostname),
         // §3(a): terminate the site's local TLS on loopback as a TLS CLIENT with
-        // SNI = the vhost name. Loopback has no MITM surface, so an untrusted
-        // (Herd) local cert is fine to accept.
+        // SNI = the vhost name. Loopback (host is LOOPBACK) has no MITM surface, so
+        // a dev proxy's self-signed .test/.gen cert (Herd/Caddy) is fine to accept —
+        // it can't be validated Herd-agnostically; cloud dev-envs use real
+        // LetsEncrypt wildcard certs (§7).
+        // codeql[js/disabling-certificate-validation]
         ...(isHttps ? { servername: site.hostname, rejectUnauthorized: false } : {}),
     };
     const agent = isHttps ? https : http;
@@ -518,6 +521,10 @@ function proxyUpgrade(
         method: req.method ?? 'GET',
         path: upstreamPath,
         headers: buildUpstreamHeaders(req.headers, site.hostname, { keepUpgrade: true }),
+        // Loopback (host is LOOPBACK=127.0.0.1) TLS-terminate for a WS upgrade — see
+        // the note above: no MITM surface, self-signed local cert, cloud dev-envs
+        // use real LetsEncrypt (§7).
+        // codeql[js/disabling-certificate-validation]
         ...(isHttps ? { servername: site.hostname, rejectUnauthorized: false } : {}),
     };
     const agent = isHttps ? https : http;

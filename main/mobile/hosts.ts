@@ -316,7 +316,10 @@ function tlsListens(hostname: string, port: number): Promise<boolean> {
                 host: '127.0.0.1',
                 port,
                 servername: hostname,
-                rejectUnauthorized: false,
+                // Loopback (127.0.0.1) probe: no MITM surface, and a dev proxy's
+                // self-signed .test cert can't be validated Herd-agnostically.
+                // (Cloud dev-envs use real LetsEncrypt wildcard certs, §7.)
+                rejectUnauthorized: false, // codeql[js/disabling-certificate-validation]
                 timeout: PROBE_TIMEOUT_MS,
             },
             () => finish(true),
