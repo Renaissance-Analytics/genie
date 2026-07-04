@@ -5,9 +5,12 @@
  * The signed, integrity-pinned production curation is Phase 3 (§12.3); the
  * curated remote list is EMPTY until then (owner to populate with real repos +
  * a signing authority). What Genie ships in the box are the BUNDLED plugins:
- *   - Hello World       — the loader-seam dev proof (Phase 0).
  *   - Presentation      — dark-slide .pptx generation (Phase 1).
  *   - Spreadsheet       — holy-sheet .xlsx generation (Phase 1).
+ *
+ * hello-world is deliberately NOT bundled or otherwise installable from here —
+ * owner decision: it is TEACHING material only, living in
+ * `main/plugins/examples/hello-world/` + `docs/plugin-authoring.md`.
  *
  * Each bundled plugin is MATERIALISED to `<userData>/plugins/.bundled/<id>/`
  * from the embedded sources below (webpack doesn't copy `main/**` non-TS assets,
@@ -47,51 +50,6 @@ export interface BundledPluginSource {
     /** The `tools.cjs` module source. */
     tools: string;
 }
-
-// --- Hello World (Phase 0 loader-seam proof) ---------------------------------
-
-const HELLO_TOOLS = `'use strict';
-module.exports = {
-    async greet(args) {
-        var who = (args && typeof args.name === 'string' && args.name.trim()) ? args.name.trim() : 'world';
-        return { content: [{ type: 'text', text: 'Hello, ' + who + '! — from the Genie Hello World plugin.' }] };
-    }
-};
-`;
-
-const HELLO_SOURCE: BundledPluginSource = {
-    id: 'ai.genie.hello-world',
-    name: 'Hello World',
-    description: 'Bundled dev example — registers one greeting tool. Proves the loader seam end to end.',
-    manifest: {
-        id: 'ai.genie.hello-world',
-        namespace: 'hello',
-        name: 'Hello World',
-        version: '0.1.0',
-        description:
-            'A trivial dev plugin that registers a single greeting tool — proves the Genie plugin loader seam end-to-end.',
-        publisher: { name: 'Genie', url: 'https://github.com/Renaissance-Analytics/genie' },
-        engines: { genie: '>=0.7.0' },
-        entry: { tools: 'tools.cjs' },
-        mcpTools: [
-            {
-                name: 'greet',
-                description: 'Return a friendly greeting. Pass an optional name to personalise it.',
-                inputSchema: {
-                    type: 'object',
-                    properties: { name: { type: 'string', description: 'Who to greet (defaults to world).' } },
-                    additionalProperties: false,
-                },
-                run: 'tools',
-                process: 'worker',
-                gated: false,
-            },
-        ],
-        editors: [],
-        capabilities: { fs: { scope: 'none' }, network: { hosts: [] }, genieApi: [] },
-    },
-    tools: HELLO_TOOLS,
-};
 
 // --- Presentation (Phase 1 — dark-slide .pptx generation) --------------------
 
@@ -355,7 +313,6 @@ const SPREADSHEET_SOURCE: BundledPluginSource = {
 
 /** Every bundled plugin Genie ships in the box. Exported for tests. */
 export const BUNDLED_PLUGIN_SOURCES: BundledPluginSource[] = [
-    HELLO_SOURCE,
     PRESENTATION_SOURCE,
     SPREADSHEET_SOURCE,
 ];

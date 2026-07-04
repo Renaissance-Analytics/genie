@@ -2305,6 +2305,13 @@ function PluginsSection() {
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
+    // The discover lists offer only what ISN'T installed yet — an Install card
+    // for a plugin you already have reads as "not installed" and confuses.
+    // Installed plugins are managed in the Installed section above instead.
+    const installedIds = new Set(installed.map((p) => p.id));
+    const curatedAvailable = (official?.curated ?? []).filter((c) => !installedIds.has(c.id));
+    const bundledAvailable = (official?.bundled ?? []).filter((b) => !installedIds.has(b.id));
+
     const refresh = async () => {
         try {
             const [ins, mk, off, dm] = await Promise.all([
@@ -2443,12 +2450,14 @@ function PluginsSection() {
                             trusted publisher key (signature + integrity); unsigned installs require
                             Developer Mode below.
                         </Text>
-                        {(official?.curated ?? []).length === 0 && (
+                        {curatedAvailable.length === 0 && bundledAvailable.length === 0 && (
                             <Text size="xs" className="text-zinc-500">
-                                No curated plugins published yet.
+                                {(official?.curated ?? []).length + (official?.bundled ?? []).length > 0
+                                    ? 'Everything here is already installed — manage it under Installed plugins above.'
+                                    : 'No curated plugins published yet.'}
                             </Text>
                         )}
-                        {(official?.curated ?? []).map((c) => (
+                        {curatedAvailable.map((c) => (
                             <div className="plugin-row" key={c.id}>
                                 <div className="set-row-main">
                                     <span className="set-row-label">{c.name}</span>
@@ -2463,12 +2472,12 @@ function PluginsSection() {
                                 </Action>
                             </div>
                         ))}
-                        {(official?.bundled ?? []).length > 0 && (
+                        {bundledAvailable.length > 0 && (
                             <Text size="xs" className="text-zinc-500">
                                 Bundled first-party plugins (shipped with Genie).
                             </Text>
                         )}
-                        {(official?.bundled ?? []).map((b) => (
+                        {bundledAvailable.map((b) => (
                             <div className="plugin-row" key={b.id}>
                                 <div className="set-row-main">
                                     <span className="set-row-label">{b.name}</span>
@@ -2549,18 +2558,20 @@ function PluginsSection() {
                                     <Text size="xs" className="text-zinc-500">
                                         This marketplace lists no plugins (or its index hasn&apos;t been fetched).
                                     </Text>
+                                ) : m.plugins.every((mp) => mp.installed) ? (
+                                    <Text size="xs" className="text-zinc-500">
+                                        All of this marketplace&apos;s plugins are installed — manage them under
+                                        Installed plugins above.
+                                    </Text>
                                 ) : (
-                                    m.plugins.map((mp) => (
-                                        <div className="plugin-row" key={mp.id}>
-                                            <div className="set-row-main">
-                                                <span className="set-row-label">{mp.name}</span>
-                                                {mp.description && <span className="set-row-desc">{mp.description}</span>}
-                                            </div>
-                                            {mp.installed ? (
-                                                <Text size="xs" className="text-zinc-500">
-                                                    Installed
-                                                </Text>
-                                            ) : (
+                                    m.plugins
+                                        .filter((mp) => !mp.installed)
+                                        .map((mp) => (
+                                            <div className="plugin-row" key={mp.id}>
+                                                <div className="set-row-main">
+                                                    <span className="set-row-label">{mp.name}</span>
+                                                    {mp.description && <span className="set-row-desc">{mp.description}</span>}
+                                                </div>
                                                 <Action
                                                     icon="download"
                                                     disabled={busy}
@@ -2573,9 +2584,8 @@ function PluginsSection() {
                                                 >
                                                     Install
                                                 </Action>
-                                            )}
-                                        </div>
-                                    ))
+                                            </div>
+                                        ))
                                 )}
                             </div>
                         ))}
