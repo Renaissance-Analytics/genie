@@ -82,17 +82,28 @@ export class RelayFrameMux {
     }
 
     /** Open a `/ws/term` stream for `terminalId`; `onData` gets each output
-     *  chunk. Returns `send` (member input) + `close`. */
+     *  chunk. Returns `send` (member input) + `close`.
+     *
+     *  `workspaceId` (optional) names the terminal's workspace so the host can
+     *  scope the term against the grant's workspaces (a workspace-scoped grant
+     *  opens ONLY its own terminals; `host:all` opens any). Additive + wire-
+     *  compatible: an old host ignores the field, and a term opened WITHOUT it
+     *  (system/unattached terminal, or an old member) fails closed to `host:all`
+     *  on the host side. */
     openTerm(
         terminalId: string,
         onData: (msg: string) => void,
+        workspaceId?: string,
     ): { send: (input: string) => void; close: () => void } {
         this.termHandler = onData;
         this.send({
             kind: 'open',
             channel: 'term',
             sid: this.sid,
-            payload: { path: `/ws/term?terminal=${encodeURIComponent(terminalId)}` },
+            payload: {
+                path: `/ws/term?terminal=${encodeURIComponent(terminalId)}`,
+                ...(workspaceId ? { workspaceId } : {}),
+            },
         });
         return {
             send: (input: string) =>

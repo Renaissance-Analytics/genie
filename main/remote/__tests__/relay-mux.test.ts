@@ -72,12 +72,27 @@ describe('RelayFrameMux — events + term', () => {
             sid: 'sid-1',
             payload: { path: '/ws/term?terminal=term-7' },
         });
+        // No workspaceId passed → the open frame omits it (fails closed to
+        // host:all on the host side; wire-compatible with old clients).
+        expect((sent[0].payload as Record<string, unknown>).workspaceId).toBeUndefined();
         mux.handle({ kind: 'data', channel: 'term', sid: 'sid-1', payload: 'hello\r\n' });
         expect(out).toEqual(['hello\r\n']);
         term.send('ls\n');
         expect(sent[1]).toMatchObject({ kind: 'data', channel: 'term', sid: 'sid-1', payload: 'ls\n' });
         term.close();
         expect(sent[2]).toMatchObject({ kind: 'close', channel: 'term', sid: 'sid-1' });
+    });
+
+    it('tags the workspaceId onto the term open frame when provided', () => {
+        const { mux, sent } = makeMux();
+        const term = mux.openTerm('term-7', () => {}, 'ws-42');
+        expect(sent[0]).toMatchObject({
+            kind: 'open',
+            channel: 'term',
+            sid: 'sid-1',
+            payload: { path: '/ws/term?terminal=term-7', workspaceId: 'ws-42' },
+        });
+        term.close();
     });
 });
 

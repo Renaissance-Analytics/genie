@@ -1141,7 +1141,7 @@ export interface GenieApi {
          *  Drives the view-only banner + the remote-bridge input gate. */
         controlState: () => Promise<{ locked: boolean }>;
         onControl: (cb: (s: { locked: boolean }) => void) => () => void;
-        terminalAttach: (id: string) => Promise<{ ok: boolean }>;
+        terminalAttach: (id: string, workspaceId?: string) => Promise<{ ok: boolean }>;
 
         terminalInput: (id: string, data: string) => Promise<boolean>;
         terminalResize: (id: string, cols: number, rows: number) => Promise<boolean>;
@@ -1707,6 +1707,10 @@ export interface GenieApi {
             cols?: number;
             rows?: number;
             env?: Record<string, string>;
+            /** The terminal's workspace id. Used only on a relay REMOTE session,
+             *  where it's tagged onto the term `open` frame so the host scopes the
+             *  terminal to the grant's workspaces; ignored for a local pty spawn. */
+            workspaceId?: string;
         }) => Promise<{
             id: string;
             pid: number;

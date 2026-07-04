@@ -211,9 +211,12 @@ describe('relay transport — bridge ops route through the relay', () => {
             win,
         ] as unknown as Electron.BrowserWindow[]);
 
-        remoteAttachTerminal(WC_ID, 't-7');
+        remoteAttachTerminal(WC_ID, 't-7', 'ws-7');
         const open = await stub.waitFor((f) => f.channel === 'term' && f.kind === 'open');
         expect((open.payload as { path: string }).path).toContain('terminal=t-7');
+        // The attach call's workspaceId is tagged onto the term open frame so the
+        // host can scope the terminal to the grant's workspaces.
+        expect((open.payload as { workspaceId?: string }).workspaceId).toBe('ws-7');
 
         stub.pushTerm({ type: 'data', data: 'hello-pty' });
         await vi.waitFor(() =>

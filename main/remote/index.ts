@@ -1018,7 +1018,7 @@ function handleTermMessage(conn: RemoteConnection, id: string, raw: string): voi
  * keys term by (sid, channel); a second concurrent open would collide). Only the
  * most-recently-attached terminal streams over the relay.
  */
-function relayAttachTerminal(conn: RemoteConnection, id: string): void {
+function relayAttachTerminal(conn: RemoteConnection, id: string, workspaceId?: string): void {
     if (!conn.relay || conn.relayTerms.has(id)) return;
     for (const [otherId, stream] of conn.relayTerms) {
         try {
@@ -1030,7 +1030,7 @@ function relayAttachTerminal(conn: RemoteConnection, id: string): void {
     }
     conn.relayTerms.set(
         id,
-        conn.relay.openTerm(id, (raw) => handleTermMessage(conn, id, raw)),
+        conn.relay.openTerm(id, (raw) => handleTermMessage(conn, id, raw), workspaceId),
     );
 }
 
@@ -1075,13 +1075,18 @@ function reattachTerminals(conn: RemoteConnection): void {
 
 /** Attach to a host terminal's pty stream and re-emit terminal:data/exit onto the
  *  calling window's channels (keyed by id). Idempotent per id. Records the attach
- *  INTENT so a bridge recovery can restore the stream. */
-export function remoteAttachTerminal(wcId: number, id: string): void {
+ *  INTENT so a bridge recovery can restore the stream.
+ *
+ *  `workspaceId` (optional) is the terminal's host workspace, tagged onto the
+ *  relay term `open` frame so genie-cloud scopes it to the grant's workspaces;
+ *  it's only meaningful on the relay transport (the tailnet path is Bearer-token
+ *  authed against the whole host). */
+export function remoteAttachTerminal(wcId: number, id: string, workspaceId?: string): void {
     const conn = connForWebContents(wcId);
     if (!conn) return;
     conn.attachedTerminals.add(id);
     if (conn.transport === 'relay') {
-        relayAttachTerminal(conn, id);
+        relayAttachTerminal(conn, id, workspaceId);
         return;
     }
     openHostTermSocket(conn, id, false);

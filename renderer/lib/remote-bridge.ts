@@ -294,8 +294,13 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             cols?: number;
             rows?: number;
             env?: Record<string, string>;
+            workspaceId?: string;
         }) => {
-            await r.terminalAttach(opts.id);
+            // Tag the terminal's workspace onto the relay term `open` frame so the
+            // host scopes it to the grant's workspaces (a workspace-scoped grant
+            // only reaches its own terminals; `host:all` reaches any). Missing →
+            // fails closed to host:all on the host side.
+            await r.terminalAttach(opts.id, opts.workspaceId);
             return { id: opts.id, pid: 0, shell: opts.shell ?? '', existing: true, scrollback: '' };
         },
         write: (id: string, data: string) => {

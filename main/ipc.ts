@@ -600,8 +600,8 @@ export function registerIpcHandlers(): void {
     // Terminal I/O bridge: the renderer's XTerm attaches to a host terminal's pty
     // (main re-emits terminal:data/exit to THIS window) and forwards keystrokes/
     // resize to it.
-    ipcMain.handle('remote:terminal-attach', (e, id: string) => {
-        remoteAttachTerminal(e.sender.id, id);
+    ipcMain.handle('remote:terminal-attach', (e, id: string, workspaceId?: string) => {
+        remoteAttachTerminal(e.sender.id, id, workspaceId);
         return { ok: true };
     });
     ipcMain.handle('remote:terminal-input', (e, id: string, data: string) => {

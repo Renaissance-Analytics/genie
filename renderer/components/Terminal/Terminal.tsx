@@ -27,6 +27,10 @@ interface TerminalProps {
     args?: string[];
     /** Extra env vars merged on top of process.env in main. */
     env?: Record<string, string>;
+    /** The terminal's workspace id. On a relay REMOTE session it's tagged onto
+     *  the term `open` frame so the host scopes the terminal to the grant's
+     *  workspaces; ignored for a local pty spawn. */
+    workspaceId?: string;
     /** Fires when the underlying pty exits, with the captured exit code. */
     onExit?: (info: { exitCode: number; signal?: number }) => void;
     /** Optional className applied to the host element (height/width should be set here). */
@@ -69,6 +73,7 @@ export default function Terminal({
     shell,
     args,
     env,
+    workspaceId,
     onExit,
     className,
     shells,
@@ -568,6 +573,7 @@ export default function Terminal({
                 shell,
                 args,
                 env,
+                workspaceId,
                 cols: sizeRef.current.cols,
                 rows: sizeRef.current.rows,
             })
