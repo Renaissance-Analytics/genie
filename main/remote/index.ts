@@ -23,6 +23,7 @@ import {
 } from '../ask/force-question';
 import { RelayMemberClient } from './relay-client';
 import type { PopKeypair } from './relay-pop';
+import type { SiteScheme, SiteView } from '../mobile/hosts';
 
 /**
  * Work Mode — remote desktop (the local-main proxy).
@@ -1582,6 +1583,68 @@ export function disconnectConnKey(connKey: string): void {
         teardownConnection(conn);
         broadcastStatus();
     }
+}
+
+// --- serve-local-sites (Phase D) — the Testing Browser's carrier primitives ---
+// The remote forward-proxy shim (main/remote/site-proxy.ts) + Testing Browser
+// (main/testing-browser) drive a host's enabled `.gen` sites over the EXISTING
+// tailnet carrier. These accessors expose exactly what the shim needs — the host
+// dial base + the session Bearer (read lazily so the token stays in MAIN) — and
+// the enabled-`.gen` snapshot the shim resolves against. Phase D rides the tailnet
+// carrier only; a relay connection returns null here (that's Phase E).
+
+/** An enabled `.gen` site for a connection: the browser-facing `.gen` name mapped
+ *  to its opaque host-side `siteId` + the upstream loopback `.test` hostname. */
+export interface EnabledGenSite {
+    genName: string;
+    siteId: string;
+    hostname: string;
+    scheme: SiteScheme;
+    port: number;
+}
+
+/**
+ * The tailnet carrier primitives for a connection's Testing-Browser shim: the
+ * host's mobile-server base (`http://<ip>:<port>`) + a lazy Bearer getter. Null
+ * for an unknown connection or a relay one (Phase D is tailnet-only; relay is
+ * Phase E). The Bearer is returned via a closure so it is only ever read in MAIN.
+ */
+export function getTailnetCarrier(
+    connKey: string,
+): { hostBase: string; bearer: () => string } | null {
+    const conn = connections.get(connKey);
+    if (!conn || conn.transport !== 'tailnet') return null;
+    return {
+        hostBase: `http://${conn.host.ip}:${conn.host.port}`,
+        bearer: () => conn.token,
+    };
+}
+
+/**
+ * Fetch the host's ENABLED `.gen` sites over the carrier (Bearer injected in MAIN
+ * by `connRequest`) — the shim's allowlist snapshot (`genName → {siteId, hostname}`).
+ * Returns [] when the connection is gone, the host predates the feature (empty
+ * `/api/sites`), or the host is locked (kill-switch — connRequest throws 423). The
+ * kill-switch + token gate stay HOST-enforced; this is just the read.
+ */
+export async function remoteListEnabledGenSites(connKey: string): Promise<EnabledGenSite[]> {
+    const conn = connections.get(connKey);
+    if (!conn) return [];
+    let data: { sites?: SiteView[] } | undefined;
+    try {
+        data = (await connRequest(conn, '/api/sites')) as { sites?: SiteView[] } | undefined;
+    } catch {
+        return []; // host unreachable / locked (423) / predates the feature
+    }
+    return (data?.sites ?? [])
+        .filter((s) => s.enabled && !!s.genName)
+        .map((s) => ({
+            genName: s.genName.toLowerCase(),
+            siteId: s.siteId,
+            hostname: s.hostname,
+            scheme: s.scheme,
+            port: s.port,
+        }));
 }
 
 /**

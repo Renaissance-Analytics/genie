@@ -65,6 +65,19 @@ export const SITE_PROXY_PREFIX = '/api/site/';
 export const GENIE_TOKEN_PARAM = '__genie_token';
 
 /**
+ * Phase-D "preserve-origin" signal. The REMOTE forward-proxy shim
+ * (`main/remote/site-proxy.ts`) sets this request header when it serves a site to
+ * the Testing Browser under its REAL `https://<name>.gen` origin. In that mode the
+ * browser already has a valid secure context, so the host proxy must NOT apply its
+ * Phase-C http-downgrade RESPONSE rewrites (Location→proxy-prefix, HSTS strip,
+ * Secure-cookie clear) — the shim does the single `.test`⇄`.gen` origin map
+ * instead. Absent (a Phase-C client) ⇒ the http-downgrade rewrites apply as
+ * before. STRIPPED from the upstream request so the Genie control header never
+ * reaches the local site.
+ */
+export const PRESERVE_ORIGIN_HEADER = 'x-genie-preserve-origin';
+
+/**
  * Hop-by-hop headers (RFC 7230 §6.1) plus the `Proxy-*` family — stripped on
  * BOTH the upstream request and the downstream response. `Upgrade`/`Connection`
  * are hop-by-hop too but MUST be preserved for a WebSocket upgrade (see the
@@ -188,6 +201,7 @@ export function buildUpstreamHeaders(
         const lk = k.toLowerCase();
         if (lk === 'host') continue; // rewritten below (the crux)
         if (lk === 'authorization') continue; // never leak the Genie token
+        if (lk === PRESERVE_ORIGIN_HEADER) continue; // Genie control header — never leaks upstream
         if (lk.startsWith('proxy-')) continue; // Proxy-* family
         if (HOP_BY_HOP.has(lk)) {
             if (opts.keepUpgrade && (lk === 'upgrade' || lk === 'connection')) {
@@ -278,6 +292,30 @@ export function rewriteResponseHeaders(
     return out;
 }
 
+/**
+ * PURE. Phase-D "preserve-origin" response headers: the shim serves the site under
+ * its REAL `https://<name>.gen` origin, so we DON'T downgrade. Strip only
+ * hop-by-hop + `Proxy-*` + `Connection`-listed headers (Node re-frames the body)
+ * and pass EVERYTHING else through verbatim — `Location`, HSTS, and `Secure`
+ * cookies are all left intact for the remote shim to map `.test`⇄`.gen`. This is
+ * the minimal host-side change that lets Phase D drop Phase C's downgrade rewrites
+ * without duplicating them.
+ */
+export function passthroughResponseHeaders(
+    upstream: http.IncomingHttpHeaders,
+): http.OutgoingHttpHeaders {
+    const out: http.OutgoingHttpHeaders = {};
+    const connTokens = connectionTokens(upstream['connection']);
+    for (const [k, v] of Object.entries(upstream)) {
+        if (v === undefined) continue;
+        const lk = k.toLowerCase();
+        if (HOP_BY_HOP.has(lk)) continue;
+        if (connTokens.has(lk)) continue;
+        out[k] = v;
+    }
+    return out;
+}
+
 /** PURE. Remove the `Secure` attribute from one `Set-Cookie` value. */
 export function clearSecureCookie(cookie: string): string {
     return cookie
@@ -360,7 +398,19 @@ export async function handleSiteProxy(
     // 5. Audit the first hit per site.
     recordOpen(parsed.siteId, site.hostname, session.token);
 
-    proxyHttp(req, res, site, parsed.siteId, stripTokenParam(parsed.upstreamPath), info.proxyOrigin);
+    // Phase D: the remote shim serves the site under its real `https://<name>.gen`
+    // origin and sets PRESERVE_ORIGIN_HEADER, so we SKIP the Phase-C http-downgrade
+    // response rewrites and pass origin-bearing headers through for the shim to map.
+    const preserveOrigin = req.headers[PRESERVE_ORIGIN_HEADER] !== undefined;
+    proxyHttp(
+        req,
+        res,
+        site,
+        parsed.siteId,
+        stripTokenParam(parsed.upstreamPath),
+        info.proxyOrigin,
+        preserveOrigin,
+    );
     return true;
 }
 
@@ -372,6 +422,7 @@ function proxyHttp(
     siteId: string,
     upstreamPath: string,
     proxyOrigin: string,
+    preserveOrigin: boolean,
 ): void {
     const isHttps = site.scheme === 'https';
     const options: https.RequestOptions = {
@@ -387,7 +438,9 @@ function proxyHttp(
     };
     const agent = isHttps ? https : http;
     const upstream = agent.request(options, (upRes) => {
-        const headers = rewriteResponseHeaders(upRes.headers, site, siteId, proxyOrigin);
+        const headers = preserveOrigin
+            ? passthroughResponseHeaders(upRes.headers)
+            : rewriteResponseHeaders(upRes.headers, site, siteId, proxyOrigin);
         res.writeHead(upRes.statusCode ?? 502, headers);
         upRes.pipe(res); // STREAM — assets, downloads, SSE never buffered
     });

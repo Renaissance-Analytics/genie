@@ -126,6 +126,20 @@ import {
     broadcastLocal,
     type RemoteHost,
 } from './remote';
+import {
+    openTestingBrowser,
+    testingBrowserState,
+    testingBrowserNavigate,
+    testingBrowserBack,
+    testingBrowserForward,
+    testingBrowserReload,
+    testingBrowserNewTab,
+    testingBrowserCloseTab,
+    testingBrowserActivateTab,
+    testingBrowserSetBounds,
+    testingBrowserSetViewport,
+    testingBrowserRefreshSites,
+} from './testing-browser';
 import QRCode from 'qrcode';
 import { tynnCliInfo, installTynnCliSystemWide } from './cli/tynn-cli';
 import { registerShortcuts } from './shortcuts';
@@ -626,6 +640,53 @@ export function registerIpcHandlers(): void {
         renameKnownHost(connKey, name);
         return { ok: true };
     });
+
+    // Serve-local-sites (Phase D): the Testing Browser. `open` spins up a
+    // per-connection session + shim + Genie CA and shows the browser window for an
+    // already-connected host; the rest are the chrome's navigation/layout drivers,
+    // each resolved by the CALLING chrome window (e.sender.id) → its instance.
+    ipcMain.handle('testing-browser:open', (_e, connKey: string, hostname: string) =>
+        openTestingBrowser(connKey, hostname),
+    );
+    ipcMain.handle('testing-browser:state', (e) => testingBrowserState(e.sender.id));
+    ipcMain.handle('testing-browser:navigate', (e, input: string) =>
+        testingBrowserNavigate(e.sender.id, input),
+    );
+    ipcMain.handle('testing-browser:back', (e) => {
+        testingBrowserBack(e.sender.id);
+        return { ok: true };
+    });
+    ipcMain.handle('testing-browser:forward', (e) => {
+        testingBrowserForward(e.sender.id);
+        return { ok: true };
+    });
+    ipcMain.handle('testing-browser:reload', (e) => {
+        testingBrowserReload(e.sender.id);
+        return { ok: true };
+    });
+    ipcMain.handle('testing-browser:new-tab', (e, input?: string) =>
+        testingBrowserNewTab(e.sender.id, input),
+    );
+    ipcMain.handle('testing-browser:close-tab', (e, tabId: string) => {
+        testingBrowserCloseTab(e.sender.id, tabId);
+        return { ok: true };
+    });
+    ipcMain.handle('testing-browser:activate-tab', (e, tabId: string) => {
+        testingBrowserActivateTab(e.sender.id, tabId);
+        return { ok: true };
+    });
+    ipcMain.handle(
+        'testing-browser:set-bounds',
+        (e, bounds: { x: number; y: number; width: number; height: number }) => {
+            testingBrowserSetBounds(e.sender.id, bounds);
+            return { ok: true };
+        },
+    );
+    ipcMain.handle('testing-browser:set-viewport', (e, presetId: string) => {
+        testingBrowserSetViewport(e.sender.id, presetId);
+        return { ok: true };
+    });
+    ipcMain.handle('testing-browser:refresh-sites', (e) => testingBrowserRefreshSites(e.sender.id));
 
     // Virtual Workstations (relay transport): the member's entitled-workstations
     // list for the Hosts picker, and opening one — mint a connect grant from Tynn,

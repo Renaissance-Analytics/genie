@@ -2459,6 +2459,9 @@ function RemoteHostCard() {
     const [pins, setPins] = useState<Record<string, string>>({});
     const [pinNeeded, setPinNeeded] = useState<Record<string, boolean>>({});
     const [busy, setBusy] = useState<string | null>(null);
+    // Live connKeys per host row (from a successful connect) → enables the
+    // Testing Browser button for serving that host's `.gen` dev sites (Phase D).
+    const [connKeys, setConnKeys] = useState<Record<string, string>>({});
     const [manualIp, setManualIp] = useState('');
     const [manualPort, setManualPort] = useState('51718');
     const [manualPin, setManualPin] = useState('');
@@ -2503,6 +2506,7 @@ function RemoteHostCard() {
             const r = await api().remote.open(host, pin?.trim() || undefined);
             if (r.ok) {
                 setPinNeeded((p) => ({ ...p, [key]: false }));
+                if (r.connKey) setConnKeys((c) => ({ ...c, [key]: r.connKey! }));
                 setMsg(`Opened ${host.hostname} in its own window.`);
             } else if (r.needsPin) {
                 setPinNeeded((p) => ({ ...p, [key]: true }));
@@ -2610,6 +2614,22 @@ function RemoteHostCard() {
                                             ? 'Pair'
                                             : 'Connect'}
                                 </Action>
+                                {connKeys[key] && (
+                                    <Action
+                                        size="sm"
+                                        color="green"
+                                        icon="globe"
+                                        title="Open the Testing Browser to view this host's local dev sites (*.gen) with a valid https lock"
+                                        onClick={() =>
+                                            void api().testingBrowser.open(
+                                                connKeys[key],
+                                                h.hostname,
+                                            )
+                                        }
+                                    >
+                                        Testing Browser
+                                    </Action>
+                                )}
                             </div>
                         );
                     })}

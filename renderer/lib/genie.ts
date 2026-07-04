@@ -523,6 +523,36 @@ export interface GenieHost {
     connKey: string;
 }
 
+/** One enabled `.gen` tunnel site shown in the Testing Browser chrome. */
+export interface TestingBrowserSite {
+    genName: string;
+    hostname: string;
+    scheme: string;
+    port: number;
+}
+
+/** One Testing Browser tab (the site content is a main-owned WebContentsView). */
+export interface TestingBrowserTab {
+    id: string;
+    url: string;
+    title: string;
+}
+
+/** The Testing Browser chrome's render state (serve-local-sites Phase D). Mirrors
+ *  `chromeState` in main/testing-browser/index.ts. */
+export interface TestingBrowserState {
+    connKey: string;
+    hostname: string;
+    tabs: TestingBrowserTab[];
+    activeTabId: string | null;
+    loading: boolean;
+    canGoBack: boolean;
+    canGoForward: boolean;
+    presetId: string;
+    presets: Array<{ id: string; label: string }>;
+    sites: TestingBrowserSite[];
+}
+
 /** The host this Genie is driving in remote mode (no token — main holds that). */
 export interface RemoteHost {
     ip: string;
@@ -1126,6 +1156,33 @@ export interface GenieApi {
         known: () => Promise<KnownHost[]>;
         forget: (connKey: string) => Promise<{ ok: boolean }>;
         rename: (connKey: string, name: string) => Promise<{ ok: boolean }>;
+    };
+    /** Serve-local-sites (Phase D): the Testing Browser. `open` shows the browser
+     *  for a connected host; the rest are driven BY the chrome window (each resolves
+     *  to that window's browser instance in main). The site content is a
+     *  main-owned WebContentsView; the chrome renders `onState`. */
+    testingBrowser: {
+        open: (connKey: string, hostname: string) => Promise<{ ok: boolean; error?: string }>;
+        state: () => Promise<TestingBrowserState | null>;
+        navigate: (input: string) => Promise<{ ok: boolean; error?: string }>;
+        back: () => Promise<{ ok: boolean }>;
+        forward: () => Promise<{ ok: boolean }>;
+        reload: () => Promise<{ ok: boolean }>;
+        newTab: (input?: string) => Promise<{ ok: boolean; error?: string }>;
+        closeTab: (tabId: string) => Promise<{ ok: boolean }>;
+        activateTab: (tabId: string) => Promise<{ ok: boolean }>;
+        setBounds: (bounds: {
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+        }) => Promise<{ ok: boolean }>;
+        setViewport: (presetId: string) => Promise<{ ok: boolean }>;
+        refreshSites: () => Promise<void>;
+        onState: (cb: (s: TestingBrowserState) => void) => () => void;
+        onLoadError: (
+            cb: (e: { tabId: string; code: number; description: string; url: string }) => void,
+        ) => () => void;
     };
     /** Virtual Workstations (relay transport): the signed-in member's entitled
      *  workstations + opening one over the Tynn relay (grant minted main-side). */

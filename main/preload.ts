@@ -11,6 +11,21 @@ type RemoteLinkStatePayload = {
     hostBuildBehind?: { hostVersion: string | null; localVersion: string };
 };
 
+/** The Testing Browser chrome's render state (serve-local-sites Phase D). Mirrors
+ *  `chromeState` in main/testing-browser/index.ts. */
+interface TestingBrowserState {
+    connKey: string;
+    hostname: string;
+    tabs: Array<{ id: string; url: string; title: string }>;
+    activeTabId: string | null;
+    loading: boolean;
+    canGoBack: boolean;
+    canGoForward: boolean;
+    presetId: string;
+    presets: Array<{ id: string; label: string }>;
+    sites: Array<{ genName: string; hostname: string; scheme: string; port: number }>;
+}
+
 /**
  * Typed contextBridge exposed to the renderer. Every channel matches a
  * handler registered in main/ipc.ts. No `nodeIntegration`, no `remote`,
@@ -270,6 +285,60 @@ const api = {
             ipcRenderer.invoke('host:forget', connKey) as Promise<{ ok: boolean }>,
         rename: (connKey: string, name: string) =>
             ipcRenderer.invoke('host:rename', connKey, name) as Promise<{ ok: boolean }>,
+    },
+
+    // Serve-local-sites (Phase D): the Testing Browser chrome. `open` is called
+    // from the Hosts UI for a connected host; the rest are called BY the chrome
+    // window itself (each resolves to that window's browser instance in main). The
+    // React chrome renders `onState`; the WebContentsView content is owned by main.
+    testingBrowser: {
+        open: (connKey: string, hostname: string) =>
+            ipcRenderer.invoke('testing-browser:open', connKey, hostname) as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
+        state: () =>
+            ipcRenderer.invoke('testing-browser:state') as Promise<TestingBrowserState | null>,
+        navigate: (input: string) =>
+            ipcRenderer.invoke('testing-browser:navigate', input) as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
+        back: () => ipcRenderer.invoke('testing-browser:back') as Promise<{ ok: boolean }>,
+        forward: () => ipcRenderer.invoke('testing-browser:forward') as Promise<{ ok: boolean }>,
+        reload: () => ipcRenderer.invoke('testing-browser:reload') as Promise<{ ok: boolean }>,
+        newTab: (input?: string) =>
+            ipcRenderer.invoke('testing-browser:new-tab', input) as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
+        closeTab: (tabId: string) =>
+            ipcRenderer.invoke('testing-browser:close-tab', tabId) as Promise<{ ok: boolean }>,
+        activateTab: (tabId: string) =>
+            ipcRenderer.invoke('testing-browser:activate-tab', tabId) as Promise<{ ok: boolean }>,
+        setBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
+            ipcRenderer.invoke('testing-browser:set-bounds', bounds) as Promise<{ ok: boolean }>,
+        setViewport: (presetId: string) =>
+            ipcRenderer.invoke('testing-browser:set-viewport', presetId) as Promise<{
+                ok: boolean;
+            }>,
+        refreshSites: () =>
+            ipcRenderer.invoke('testing-browser:refresh-sites') as Promise<void>,
+        onState: (cb: (s: TestingBrowserState) => void) => {
+            const handler = (_e: unknown, payload: TestingBrowserState) => cb(payload);
+            ipcRenderer.on('testing-browser:state', handler);
+            return () => ipcRenderer.off('testing-browser:state', handler);
+        },
+        onLoadError: (
+            cb: (e: { tabId: string; code: number; description: string; url: string }) => void,
+        ) => {
+            const handler = (
+                _e: unknown,
+                payload: { tabId: string; code: number; description: string; url: string },
+            ) => cb(payload);
+            ipcRenderer.on('testing-browser:load-error', handler);
+            return () => ipcRenderer.off('testing-browser:load-error', handler);
+        },
     },
 
     // Virtual Workstations (relay transport): the signed-in member's entitled
