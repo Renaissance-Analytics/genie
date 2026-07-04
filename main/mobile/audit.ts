@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { mobileEmit } from './bus';
 
 /**
  * Append-only audit log + the global kill-switch for the mobile remote-control
@@ -72,11 +73,17 @@ export function isLocked(): boolean {
     return locked;
 }
 
-/** Engage / release the global kill-switch. Audited. */
+/**
+ * Engage / release the global kill-switch. Audited. Also PUSHES the new control
+ * state to every live `/ws/events` client (the phone dashboard AND any Work Mode
+ * remote driving this host) so a control handoff propagates immediately -- the
+ * mobile server is off (no sockets registered).
+ */
 export function setLocked(value: boolean): void {
     if (locked === value) return;
     locked = value;
     audit(value ? 'lock.engage' : 'lock.release', undefined, 'desktop');
+    mobileEmit('control:changed', { locked: value });
 }
 
 /** Reset module state (test-only). */

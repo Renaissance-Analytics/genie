@@ -6,6 +6,7 @@ import type { ForceAnswer } from '../mcp/protocol';
 import type { PendingQuestion } from '../ask/force-question';
 import { sessionFromAuthHeader, attemptPair } from './auth';
 import { audit, isLocked } from './audit';
+import type { SiteView, TunnelSiteConfig } from './hosts';
 import { isHeadless } from '../runtime-mode';
 import { BRIDGE_PROTOCOL_VERSION } from '../remote/link-state';
 import {
@@ -275,6 +276,29 @@ export interface MobileDataDeps {
         latestVersion: string | null;
         readyToInstall: boolean;
     }>;
+
+    // --- serve-local-sites (Phase B) — discovery + the per-repo allowlist ---
+    /**
+     * Discover THIS host's loopback dev sites (hosts-file parse + loopback probe)
+     * merged with a workspace's stored tunnel settings — the `/api/sites` payload.
+     * `workspaceId` optional; absent ⇒ discovery defaults (all disabled, `.gen`
+     * names derived). `refresh` re-probes scheme/port. Optional: a host that
+     * predates the feature leaves it unwired and `/api/sites` returns an empty set.
+     */
+    listSites?: (
+        workspaceId?: string,
+        opts?: { refresh?: boolean },
+    ) => Promise<SiteView[]>;
+    /**
+     * Persist ONE site's tunnel config for a workspace — the §5 allowlist write.
+     * Keyed by the OPAQUE siteId (never a remote-supplied hostname/target), so a
+     * later proxy can only ever be pointed at an already-discovered site.
+     */
+    setSiteConfig?: (
+        workspaceId: string,
+        siteId: string,
+        patch: TunnelSiteConfig,
+    ) => { ok: boolean };
 }
 
 // --- headless (genie-cloud) System-workspace exclusion + terminal confinement --
@@ -428,11 +452,19 @@ function buildState(deps: MobileDataDeps) {
     const serves = (workspaceId: string | null) =>
         !headless || boundToServedWorkspace(workspaceId, served);
     return {
+        // The global kill-switch state -- the SINGLE source of truth for "who
+        // holds control". locked:true => the host has taken control (a remote/
+        // phone is view-only); locked:false => the remote may drive. A connecting/
+        // reconnecting remote seeds + re-reads this here, and live toggles arrive
+        // via the control:changed push (see audit.setLocked), so the two never
+        // diverge.
+        locked: isLocked(),
         workspaces: deps.listWorkspaces().map((w) => ({
             id: w.id,
             name: w.project_name,
             path: w.path,
         })),
+
         terminals: deps
             .listTerminalSpecs()
             .filter((s) => s.type !== 'code' && s.type !== 'process')
@@ -459,7 +491,17 @@ export async function handleApi(
     res: http.ServerResponse,
     pathname: string,
     deps: MobileDataDeps,
-    info: { ip: string; ua: string; serverVersion?: string },
+    info: {
+        ip: string;
+        ua: string;
+        serverVersion?: string;
+        /** Stable per-install identity advertised on `/api/ping` (the primary
+         *  host discriminator + migration-safe pairing key). */
+        hostId?: string;
+        /** Tailscale MagicDNS name we're reachable at (a stable DIAL address);
+         *  null/absent over http or off a tailnet. */
+        dnsName?: string | null;
+    },
 ): Promise<boolean> {
     const method = req.method ?? 'GET';
 
@@ -489,17 +531,28 @@ export async function handleApi(
 
     // --- /api/ping — unauthed Genie-host beacon, for tailnet discovery -----
     // Lets another Genie probing the tailnet identify this node as a Genie host
-    // (and read its hostname) WITHOUT a token. Carries no sensitive data. Also
-    // reports the bridge PROTOCOL version so a connecting/ reconnecting remote
-    // client can detect an incompatible peer (and the limbo poll can re-check it
-    // after the host upgrades) — an integer, not the app version, so patch betas
-    // don't force upgrades. It ALSO reports the RELEASE `appVersion` so a client
-    // can show a soft, non-blocking "host is on an older build" nudge (distinct
-    // from the hard protocol mismatch) — omitted when unknown.
+    // WITHOUT a token. Carries no sensitive data. The fields:
+    //   - `hostId`   — the STABLE per-install identity (carrier-independent). It,
+    //     not the mutable IP, is the discriminator between hosts and the key a
+    //     saved pairing/token survives an IP change under. Null on a host that
+    //     predates this (an old client then falls back to ip:port keying).
+    //   - `name` / `hostname` — the display name (os.hostname()). `hostname` is
+    //     kept for back-compat with clients that read the original field.
+    //   - `dnsName` — the Tailscale MagicDNS name: a stable DIAL address (what the
+    //     TLS cert covers), distinct from identity. Null over http / off-tailnet.
+    //   - `protocolVersion` — bridge protocol (an integer, not the app version, so
+    //     patch betas don't force upgrades); lets a client detect an incompatible
+    //     peer (and the limbo poll re-check it after a host upgrade).
+    //   - `appVersion` — the RELEASE version, for a soft "host is on an older
+    //     build" nudge (distinct from the hard protocol mismatch); null when
+    //     unknown.
     if (pathname === '/api/ping') {
         sendJson(res, 200, {
             genie: true,
+            hostId: info.hostId ?? null,
+            name: os.hostname(),
             hostname: os.hostname(),
+            dnsName: info.dnsName ?? null,
             protocolVersion: BRIDGE_PROTOCOL_VERSION,
             appVersion: info.serverVersion ?? null,
         });
@@ -526,6 +579,66 @@ export async function handleApi(
     // --- reads ------------------------------------------------------------
     if (pathname === '/api/state' && method === 'GET') {
         sendJson(res, 200, buildState(deps));
+        return true;
+    }
+
+    // --- serve-local-sites (Phase B) --------------------------------------
+    // GET /api/sites — the host's discovered loopback dev sites merged with a
+    // workspace's per-site tunnel settings (the §5 allowlist). Token-gated like
+    // /api/state, AND kill-switch-gated even though it's a READ: listing a local
+    // admin panel / mailcatcher / DB tool is sensitive even on GET (§5), so a
+    // locked host returns 423. `?workspaceId=` merges that workspace's settings;
+    // `?refresh=1` re-probes scheme/port.
+    if (pathname === '/api/sites' && method === 'GET') {
+        if (guardLocked()) return true;
+        if (!deps.listSites) {
+            sendJson(res, 200, { sites: [] });
+            return true;
+        }
+        let workspaceId: string | undefined;
+        let refresh = false;
+        try {
+            const q = new URL(req.url ?? '', 'http://x').searchParams;
+            workspaceId = q.get('workspaceId') ?? undefined;
+            refresh = q.get('refresh') === '1';
+        } catch {
+            /* malformed query — treat as no workspace / no refresh */
+        }
+        const sites = await deps.listSites(workspaceId, { refresh });
+        sendJson(res, 200, { sites });
+        return true;
+    }
+
+    // POST /api/sites/set — persist ONE site's tunnel config (enable / .gen name
+    // / scheme+port), keyed by the OPAQUE siteId. Kill-switch-gated + audited +
+    // SCOPE-FILTERED to served workspaces (a scoped grant can only touch its own
+    // workspaces), mirroring /api/desktop/issue-watch/set.
+    if (pathname === '/api/sites/set' && method === 'POST') {
+        if (guardLocked()) return true;
+        if (!deps.setSiteConfig) {
+            sendJson(res, 500, { error: 'sites not supported on this host' });
+            return true;
+        }
+        let body: { workspaceId?: string; siteId?: string; patch?: TunnelSiteConfig };
+        try {
+            body = await readJsonBody(req);
+        } catch {
+            sendJson(res, 400, { error: 'invalid body' });
+            return true;
+        }
+        const wsId = String(body.workspaceId ?? '');
+        if (!servedWorkspaceIds(deps).has(wsId)) {
+            sendJson(res, 404, { error: 'unknown workspace' });
+            return true;
+        }
+        const siteId = String(body.siteId ?? '');
+        if (!siteId) {
+            sendJson(res, 400, { error: 'missing siteId' });
+            return true;
+        }
+        deps.setSiteConfig(wsId, siteId, body.patch ?? {});
+        audit('site.config', `${siteId} in ${wsId}`, actor);
+        sendJson(res, 200, { ok: true });
         return true;
     }
     if (pathname === '/api/workspaces' && method === 'GET') {

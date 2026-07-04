@@ -19,6 +19,8 @@ import {
     getWorkspaceIssuewatchGranularity,
     setWorkspaceIssuewatchGranularity,
     type IssuewatchGranularity,
+    getWorkspaceTunnelSites,
+    setWorkspaceTunnelSite,
     setSettings,
     touchWorkspace,
     updateWorkspace,
@@ -49,6 +51,7 @@ import {
     repairWorkspaceDocs,
 } from './workspace/create-agi';
 import { analyseFolder } from './workspace/analyse';
+import { discoverSites, type TunnelSiteConfig } from './mobile/hosts';
 import { validateSimpleWorkspace } from './workspace/create-simple';
 import { openWorkspace } from './workspace/open';
 import { cloneRepo } from './workspace/clone';
@@ -108,6 +111,8 @@ import {
     remoteBindingFor,
     connKeyForWindow,
     remoteLinkStateFor,
+    remoteControlStateFor,
+
     remoteUpgradeHost,
     remoteReconnect,
     remoteRequest,
@@ -121,6 +126,20 @@ import {
     broadcastLocal,
     type RemoteHost,
 } from './remote';
+import {
+    openTestingBrowser,
+    testingBrowserState,
+    testingBrowserNavigate,
+    testingBrowserBack,
+    testingBrowserForward,
+    testingBrowserReload,
+    testingBrowserNewTab,
+    testingBrowserCloseTab,
+    testingBrowserActivateTab,
+    testingBrowserSetBounds,
+    testingBrowserSetViewport,
+    testingBrowserRefreshSites,
+} from './testing-browser';
 import QRCode from 'qrcode';
 import { tynnCliInfo, installTynnCliSystemWide } from './cli/tynn-cli';
 import { registerShortcuts } from './shortcuts';
@@ -393,6 +412,26 @@ export function registerIpcHandlers(): void {
         },
     );
 
+    // --- serve-local-sites (Phase B): discovery + the per-repo `.gen` allowlist.
+    // `sites:list` discovers THIS host's loopback dev sites (hosts-file parse +
+    // loopback probe) merged with the workspace's stored tunnel settings; the
+    // per-workspace map is the allowlist. `sites:set` persists ONE site's config
+    // keyed by the opaque siteId. Same discovery a remote reaches over /api/sites.
+    ipcMain.handle(
+        'sites:list',
+        (_e, workspaceId?: string, opts?: { refresh?: boolean }) => {
+            const settings = workspaceId ? getWorkspaceTunnelSites(workspaceId) : {};
+            return discoverSites(settings, opts);
+        },
+    );
+    ipcMain.handle(
+        'sites:set',
+        (_e, workspaceId: string, siteId: string, patch: TunnelSiteConfig) => {
+            setWorkspaceTunnelSite(workspaceId, siteId, patch);
+            return { ok: true };
+        },
+    );
+
     // --- Agent MCP server status / restart (Settings → Agent MCP) -------
     ipcMain.handle('mcp:status', () => mcpServerState());
     ipcMain.handle('mcp:restart', async () => {
@@ -547,6 +586,10 @@ export function registerIpcHandlers(): void {
     // Link health (version match + upgrade/limbo): read on mount + push via
     // `remote:link`. "Upgrade host" triggers the host's updater over the bridge.
     ipcMain.handle('remote:link-state', (e) => remoteLinkStateFor(e.sender.id));
+    // Control state (who holds WRITE control): read on mount + pushed live via
+    // `remote:control`. Drives the host window's view-only banner + input gate.
+    ipcMain.handle('remote:control-state', (e) => remoteControlStateFor(e.sender.id));
+
     ipcMain.handle('remote:upgrade-host', (e) => remoteUpgradeHost(e.sender.id));
     ipcMain.handle('remote:reconnect', (e) => remoteReconnect(e.sender.id));
     ipcMain.handle(
@@ -557,8 +600,8 @@ export function registerIpcHandlers(): void {
     // Terminal I/O bridge: the renderer's XTerm attaches to a host terminal's pty
     // (main re-emits terminal:data/exit to THIS window) and forwards keystrokes/
     // resize to it.
-    ipcMain.handle('remote:terminal-attach', (e, id: string) => {
-        remoteAttachTerminal(e.sender.id, id);
+    ipcMain.handle('remote:terminal-attach', (e, id: string, workspaceId?: string) => {
+        remoteAttachTerminal(e.sender.id, id, workspaceId);
         return { ok: true };
     });
     ipcMain.handle('remote:terminal-input', (e, id: string, data: string) => {
@@ -597,6 +640,53 @@ export function registerIpcHandlers(): void {
         renameKnownHost(connKey, name);
         return { ok: true };
     });
+
+    // Serve-local-sites (Phase D): the Testing Browser. `open` spins up a
+    // per-connection session + shim + Genie CA and shows the browser window for an
+    // already-connected host; the rest are the chrome's navigation/layout drivers,
+    // each resolved by the CALLING chrome window (e.sender.id) → its instance.
+    ipcMain.handle('testing-browser:open', (_e, connKey: string, hostname: string) =>
+        openTestingBrowser(connKey, hostname),
+    );
+    ipcMain.handle('testing-browser:state', (e) => testingBrowserState(e.sender.id));
+    ipcMain.handle('testing-browser:navigate', (e, input: string) =>
+        testingBrowserNavigate(e.sender.id, input),
+    );
+    ipcMain.handle('testing-browser:back', (e) => {
+        testingBrowserBack(e.sender.id);
+        return { ok: true };
+    });
+    ipcMain.handle('testing-browser:forward', (e) => {
+        testingBrowserForward(e.sender.id);
+        return { ok: true };
+    });
+    ipcMain.handle('testing-browser:reload', (e) => {
+        testingBrowserReload(e.sender.id);
+        return { ok: true };
+    });
+    ipcMain.handle('testing-browser:new-tab', (e, input?: string) =>
+        testingBrowserNewTab(e.sender.id, input),
+    );
+    ipcMain.handle('testing-browser:close-tab', (e, tabId: string) => {
+        testingBrowserCloseTab(e.sender.id, tabId);
+        return { ok: true };
+    });
+    ipcMain.handle('testing-browser:activate-tab', (e, tabId: string) => {
+        testingBrowserActivateTab(e.sender.id, tabId);
+        return { ok: true };
+    });
+    ipcMain.handle(
+        'testing-browser:set-bounds',
+        (e, bounds: { x: number; y: number; width: number; height: number }) => {
+            testingBrowserSetBounds(e.sender.id, bounds);
+            return { ok: true };
+        },
+    );
+    ipcMain.handle('testing-browser:set-viewport', (e, presetId: string) => {
+        testingBrowserSetViewport(e.sender.id, presetId);
+        return { ok: true };
+    });
+    ipcMain.handle('testing-browser:refresh-sites', (e) => testingBrowserRefreshSites(e.sender.id));
 
     // Virtual Workstations (relay transport): the member's entitled-workstations
     // list for the Hosts picker, and opening one — mint a connect grant from Tynn,

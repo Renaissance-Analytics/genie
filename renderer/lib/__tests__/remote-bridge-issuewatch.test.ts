@@ -17,6 +17,8 @@ function fakeLocal(request: ReturnType<typeof vi.fn>): GenieApi {
             terminalInput: vi.fn(),
             terminalResize: vi.fn(),
             terminalDetach: vi.fn(),
+            controlState: vi.fn().mockResolvedValue({ locked: false }),
+            onControl: vi.fn(),
         },
         // Namespaces the bridge spreads/rebuilds at construction (empty is fine).
         workspaces: {},
@@ -74,5 +76,26 @@ describe('makeRemoteBridge — host-sourced IssueWatch', () => {
         expect(await api.issueWatch.feed('w1')).toEqual([{ key: 'k' }]);
         request.mockResolvedValueOnce({ status: { connected: false } });
         expect(await api.issueWatch.status('w1')).toEqual({ connected: false });
+    });
+
+    it('passes the host status through verbatim, including the GitHub gate state', async () => {
+        // The bug: a host window falsely showed the CLIENT's unauthed GitHub gate.
+        // The fix host-sources the whole gate state through issueWatch.status —
+        // connected / needsReauth AND the host App's missing IW capabilities — so
+        // the flyout gates on the HOST. Assert the bridge forwards it untouched.
+        const request = vi.fn();
+        const api = makeRemoteBridge(fakeLocal(request));
+        const hostStatus = {
+            connected: true,
+            error: null,
+            detail: null,
+            needsReauth: false,
+            missingCapabilities: ['issue-watch.dependabot'],
+        };
+        request.mockResolvedValueOnce({ status: hostStatus });
+        expect(await api.issueWatch.status('w1')).toEqual(hostStatus);
+        expect(request).toHaveBeenLastCalledWith(
+            '/api/desktop/issue-watch/status?workspaceId=w1',
+        );
     });
 });

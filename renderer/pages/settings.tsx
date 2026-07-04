@@ -569,6 +569,10 @@ export default function SettingsPage() {
                     onEnabledChange={(on) => patch({ mobile_enabled: on ? 'on' : 'off' })}
                     port={s.mobile_port ?? '51718'}
                     onPortChange={(v) => patch({ mobile_port: v })}
+                    localSitesEnabled={s.local_sites_enabled === 'on'}
+                    onLocalSitesChange={(on) =>
+                        patch({ local_sites_enabled: on ? 'on' : 'off' })
+                    }
                     persistSettings={save}
                 />
             ) : (
@@ -2860,6 +2864,9 @@ function RemoteHostCard() {
     const [pins, setPins] = useState<Record<string, string>>({});
     const [pinNeeded, setPinNeeded] = useState<Record<string, boolean>>({});
     const [busy, setBusy] = useState<string | null>(null);
+    // Live connKeys per host row (from a successful connect) → enables the
+    // Testing Browser button for serving that host's `.gen` dev sites (Phase D).
+    const [connKeys, setConnKeys] = useState<Record<string, string>>({});
     const [manualIp, setManualIp] = useState('');
     const [manualPort, setManualPort] = useState('51718');
     const [manualPin, setManualPin] = useState('');
@@ -2883,7 +2890,13 @@ function RemoteHostCard() {
     }, []);
 
     const connect = async (
-        host: { ip: string; port: number; hostname: string },
+        host: {
+            ip: string;
+            port: number;
+            hostname: string;
+            hostId?: string;
+            dnsName?: string;
+        },
         pin?: string,
     ) => {
         const key = `${host.ip}:${host.port}`;
@@ -2893,9 +2906,12 @@ function RemoteHostCard() {
             // Open the host in its OWN native Floor window (the local window
             // stays local). No PIN → reconnect with the remembered token; the
             // host answers needsPin only for a first-time pair (or a dead token).
+            // The discovered host's stable hostId/dnsName ride along so pairing
+            // keys on identity, not the mutable ip:port.
             const r = await api().remote.open(host, pin?.trim() || undefined);
             if (r.ok) {
                 setPinNeeded((p) => ({ ...p, [key]: false }));
+                if (r.connKey) setConnKeys((c) => ({ ...c, [key]: r.connKey! }));
                 setMsg(`Opened ${host.hostname} in its own window.`);
             } else if (r.needsPin) {
                 setPinNeeded((p) => ({ ...p, [key]: true }));
@@ -3003,6 +3019,22 @@ function RemoteHostCard() {
                                             ? 'Pair'
                                             : 'Connect'}
                                 </Action>
+                                {connKeys[key] && (
+                                    <Action
+                                        size="sm"
+                                        color="green"
+                                        icon="globe"
+                                        title="Open the Testing Browser to view this host's local dev sites (*.gen) with a valid https lock"
+                                        onClick={() =>
+                                            void api().testingBrowser.open(
+                                                connKeys[key],
+                                                h.hostname,
+                                            )
+                                        }
+                                    >
+                                        Testing Browser
+                                    </Action>
+                                )}
                             </div>
                         );
                     })}
@@ -3069,12 +3101,16 @@ function MobileSection({
     onEnabledChange,
     port,
     onPortChange,
+    localSitesEnabled,
+    onLocalSitesChange,
     persistSettings,
 }: {
     enabled: boolean;
     onEnabledChange: (on: boolean) => void;
     port: string;
     onPortChange: (v: string) => void;
+    localSitesEnabled: boolean;
+    onLocalSitesChange: (on: boolean) => void;
     persistSettings: () => Promise<void>;
 }) {
     const [status, setStatus] = useState<MobileStatus | null>(null);
@@ -3240,6 +3276,21 @@ function MobileSection({
                         placeholder="51718"
                     />
                 </div>
+            </SettingRow>
+
+            <SettingRow
+                label="Serve local dev sites"
+                keywords="local sites serve tunnel gen herd valet loopback dev site work mode"
+                desc="Off by default. Lets this host expose its loopback dev sites (e.g. tynn.test, served by Herd/Valet) to a remote Genie as *.gen. A separate opt-in from mobile remote control — and each repo's site is still individually enabled in that workspace's settings before anything is tunnelled."
+            >
+                <Switch
+                    checked={localSitesEnabled}
+                    disabled={busy}
+                    onCheckedChange={(on: boolean) => {
+                        onLocalSitesChange(on);
+                        void persistSettings();
+                    }}
+                />
             </SettingRow>
 
             {status?.tailnetNotDetected && (

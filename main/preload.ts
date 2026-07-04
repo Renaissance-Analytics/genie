@@ -11,6 +11,21 @@ type RemoteLinkStatePayload = {
     hostBuildBehind?: { hostVersion: string | null; localVersion: string };
 };
 
+/** The Testing Browser chrome's render state (serve-local-sites Phase D). Mirrors
+ *  `chromeState` in main/testing-browser/index.ts. */
+interface TestingBrowserState {
+    connKey: string;
+    hostname: string;
+    tabs: Array<{ id: string; url: string; title: string }>;
+    activeTabId: string | null;
+    loading: boolean;
+    canGoBack: boolean;
+    canGoForward: boolean;
+    presetId: string;
+    presets: Array<{ id: string; label: string }>;
+    sites: Array<{ genName: string; hostname: string; scheme: string; port: number }>;
+}
+
 /**
  * Typed contextBridge exposed to the renderer. Every channel matches a
  * handler registered in main/ipc.ts. No `nodeIntegration`, no `remote`,
@@ -177,7 +192,15 @@ const api = {
     workmode: {
         discoverHosts: () =>
             ipcRenderer.invoke('workmode:discover-hosts') as Promise<
-                Array<{ hostname: string; peerName: string; ip: string; port: number }>
+                Array<{
+                    hostname: string;
+                    peerName: string;
+                    ip: string;
+                    port: number;
+                    hostId?: string;
+                    dnsName?: string;
+                    connKey: string;
+                }>
             >,
         openRemote: (host: { ip: string; port: number; hostname: string }) =>
             ipcRenderer.invoke('workmode:open-remote', host) as Promise<{ ok: boolean }>,
@@ -238,8 +261,19 @@ const api = {
             ipcRenderer.on('remote:link', handler);
             return () => ipcRenderer.off('remote:link', handler);
         },
-        terminalAttach: (id: string) =>
-            ipcRenderer.invoke('remote:terminal-attach', id) as Promise<{ ok: boolean }>,
+        // Control state (who holds WRITE control of the host): `locked:true` ⇒ the
+        // host took control and this driver is view-only. Read on mount + live via
+        // `remote:control`.
+        controlState: () =>
+            ipcRenderer.invoke('remote:control-state') as Promise<{ locked: boolean }>,
+        onControl: (cb: (s: { locked: boolean }) => void) => {
+            const handler = (_e: unknown, payload: { locked: boolean }) => cb(payload);
+            ipcRenderer.on('remote:control', handler);
+            return () => ipcRenderer.off('remote:control', handler);
+        },
+
+        terminalAttach: (id: string, workspaceId?: string) =>
+            ipcRenderer.invoke('remote:terminal-attach', id, workspaceId) as Promise<{ ok: boolean }>,
         terminalInput: (id: string, data: string) =>
             ipcRenderer.invoke('remote:terminal-input', id, data) as Promise<boolean>,
         terminalResize: (id: string, cols: number, rows: number) =>
@@ -248,7 +282,16 @@ const api = {
             ipcRenderer.invoke('remote:terminal-detach', id) as Promise<{ ok: boolean }>,
         // Hosts picker (local window): open a host's OWN native Floor window
         // (connecting + handling the PIN), and manage the known-hosts list.
-        open: (host: { ip: string; port: number; hostname: string }, pin?: string) =>
+        open: (
+            host: {
+                ip: string;
+                port: number;
+                hostname: string;
+                hostId?: string;
+                dnsName?: string;
+            },
+            pin?: string,
+        ) =>
             ipcRenderer.invoke('host:open', host, pin) as Promise<{
                 ok: boolean;
                 connKey?: string;
@@ -262,6 +305,8 @@ const api = {
                     port: number;
                     hostname: string;
                     name?: string;
+                    hostId?: string;
+                    dnsName?: string;
                     connKey: string;
                     connected: boolean;
                 }>
@@ -270,6 +315,60 @@ const api = {
             ipcRenderer.invoke('host:forget', connKey) as Promise<{ ok: boolean }>,
         rename: (connKey: string, name: string) =>
             ipcRenderer.invoke('host:rename', connKey, name) as Promise<{ ok: boolean }>,
+    },
+
+    // Serve-local-sites (Phase D): the Testing Browser chrome. `open` is called
+    // from the Hosts UI for a connected host; the rest are called BY the chrome
+    // window itself (each resolves to that window's browser instance in main). The
+    // React chrome renders `onState`; the WebContentsView content is owned by main.
+    testingBrowser: {
+        open: (connKey: string, hostname: string) =>
+            ipcRenderer.invoke('testing-browser:open', connKey, hostname) as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
+        state: () =>
+            ipcRenderer.invoke('testing-browser:state') as Promise<TestingBrowserState | null>,
+        navigate: (input: string) =>
+            ipcRenderer.invoke('testing-browser:navigate', input) as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
+        back: () => ipcRenderer.invoke('testing-browser:back') as Promise<{ ok: boolean }>,
+        forward: () => ipcRenderer.invoke('testing-browser:forward') as Promise<{ ok: boolean }>,
+        reload: () => ipcRenderer.invoke('testing-browser:reload') as Promise<{ ok: boolean }>,
+        newTab: (input?: string) =>
+            ipcRenderer.invoke('testing-browser:new-tab', input) as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
+        closeTab: (tabId: string) =>
+            ipcRenderer.invoke('testing-browser:close-tab', tabId) as Promise<{ ok: boolean }>,
+        activateTab: (tabId: string) =>
+            ipcRenderer.invoke('testing-browser:activate-tab', tabId) as Promise<{ ok: boolean }>,
+        setBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
+            ipcRenderer.invoke('testing-browser:set-bounds', bounds) as Promise<{ ok: boolean }>,
+        setViewport: (presetId: string) =>
+            ipcRenderer.invoke('testing-browser:set-viewport', presetId) as Promise<{
+                ok: boolean;
+            }>,
+        refreshSites: () =>
+            ipcRenderer.invoke('testing-browser:refresh-sites') as Promise<void>,
+        onState: (cb: (s: TestingBrowserState) => void) => {
+            const handler = (_e: unknown, payload: TestingBrowserState) => cb(payload);
+            ipcRenderer.on('testing-browser:state', handler);
+            return () => ipcRenderer.off('testing-browser:state', handler);
+        },
+        onLoadError: (
+            cb: (e: { tabId: string; code: number; description: string; url: string }) => void,
+        ) => {
+            const handler = (
+                _e: unknown,
+                payload: { tabId: string; code: number; description: string; url: string },
+            ) => cb(payload);
+            ipcRenderer.on('testing-browser:load-error', handler);
+            return () => ipcRenderer.off('testing-browser:load-error', handler);
+        },
     },
 
     // Virtual Workstations (relay transport): the signed-in member's entitled
@@ -456,6 +555,14 @@ const api = {
                 ok: boolean;
                 error?: string;
             }>,
+    },
+
+    // Serve-local-sites (Phase B): discovery + the per-repo `.gen` allowlist.
+    sites: {
+        list: (workspaceId: string, opts?: { refresh?: boolean }) =>
+            ipcRenderer.invoke('sites:list', workspaceId, opts),
+        set: (workspaceId: string, siteId: string, patch: unknown) =>
+            ipcRenderer.invoke('sites:set', workspaceId, siteId, patch),
     },
 
     agi: {

@@ -71,6 +71,10 @@ export interface WorkspaceRow {
      *  all-on + upstream-issues+prs defaults). Resolve via the dedicated
      *  `workspaces.getIssuewatchGranularity` IPC rather than parsing here. */
     issuewatch_granularity?: string | null;
+    /** Per-workspace local-site tunnel settings (serve-local-sites), JSON-encoded
+     *  ({ [siteId]: { enabled, genName, scheme, port } }) — the allowlist. Resolve
+     *  via the `sites.*` IPC rather than parsing here. */
+    tunnel_sites?: string | null;
 }
 
 export interface DetectResult {
@@ -168,6 +172,37 @@ export interface IssuewatchGranularity {
  *  (remediate + ship right away). Mirrors `IssuewatchPolicy` in main/db.ts. */
 export type IssuewatchPolicy = 'surface' | 'fix' | 'fix-and-ship';
 
+/** The scheme a discovered local site is served under on loopback. */
+export type SiteScheme = 'http' | 'https';
+
+/** A discovered local dev site merged with its tunnel settings (mirrors
+ *  `SiteView` in main/mobile/hosts.ts) — one `sites.list` row. */
+export interface SiteView {
+    /** Loopback-mapped hostname from the hosts file (e.g. `tynn.test`). */
+    hostname: string;
+    /** Measured (or overridden/convention-default) scheme. */
+    scheme: SiteScheme;
+    /** Measured (or overridden/convention-default) port. */
+    port: number;
+    /** `'site'` (a real dev vhost) or `'infra'` (docker/minikube/WSL helper). */
+    kind: 'site' | 'infra';
+    /** Whether this site is tunnelled (the allowlist toggle; default OFF). */
+    enabled: boolean;
+    /** The assigned `*.gen` name (stored override, else derived from hostname). */
+    genName: string;
+    /** Opaque, stable allowlist key — pass it to `sites.set`. */
+    siteId: string;
+}
+
+/** A per-site tunnel-config patch (mirrors `TunnelSiteConfig` in
+ *  main/mobile/hosts.ts). Every field optional — send only what changed. */
+export interface TunnelSiteConfig {
+    enabled?: boolean;
+    genName?: string;
+    scheme?: SiteScheme;
+    port?: number;
+}
+
 /** Per-bucket IssueWatch remediation policy (mirrors main/db.ts). The three count
  *  buckets — security (dependabot + code-scanning + secret-scanning), issue, pr —
  *  each carry their own policy. */
@@ -185,6 +220,15 @@ export interface WorkspaceWatchStatus {
     detail: WatchErrorDetail | null;
     /** True when the stored GitHub session is dead — show a Reconnect CTA. */
     needsReauth: boolean;
+    /**
+     * The Issue Watch capabilities the SERVING machine's GitHub App is missing
+     * (the `issue-watch.*` keys the flyout gates on). Host-sourced in a remote
+     * window (via the bridge's `/api/desktop/issue-watch/status`) so the gate
+     * reflects the HOST's App grants, not the client's. Optional so an older
+     * host that predates the field degrades to "nothing gated" instead of
+     * breaking. Empty when GitHub isn't connected.
+     */
+    missingCapabilities?: GithubCapabilityKey[];
 }
 
 /** Issue Watch: one feed item (issue / PR / security alert). */
@@ -339,6 +383,10 @@ export interface Settings {
     /** Fixed port for the mobile server (bound on the Tailscale IP). String-
      *  encoded; default '51718'. Changing it requires restarting the server. */
     mobile_port?: string;
+    /** Serve-local-sites master switch (serve-local-sites). Opt-in: 'off'
+     *  (default) | 'on'. Distinct from mobile_enabled — exposing your dev sites
+     *  is a separate, deliberate decision. Per-repo `.gen` enables sit on top. */
+    local_sites_enabled?: 'on' | 'off';
     /** Work Mode: 'host' (default) or 'remote' (connect to a host Genie). */
     work_mode?: 'host' | 'remote';
     /** Keep the Genie endpoint synced into each workspace's Claude `.mcp.json`.
@@ -467,6 +515,42 @@ export interface GenieHost {
     peerName: string;
     ip: string;
     port: number;
+    /** Stable per-install identity (from the beacon); absent for an old host. */
+    hostId?: string;
+    /** MagicDNS dial address advertised by the beacon. */
+    dnsName?: string;
+    /** `host:<hostId>` once identified, else `ip:port` — the merge/connect key. */
+    connKey: string;
+}
+
+/** One enabled `.gen` tunnel site shown in the Testing Browser chrome. */
+export interface TestingBrowserSite {
+    genName: string;
+    hostname: string;
+    scheme: string;
+    port: number;
+}
+
+/** One Testing Browser tab (the site content is a main-owned WebContentsView). */
+export interface TestingBrowserTab {
+    id: string;
+    url: string;
+    title: string;
+}
+
+/** The Testing Browser chrome's render state (serve-local-sites Phase D). Mirrors
+ *  `chromeState` in main/testing-browser/index.ts. */
+export interface TestingBrowserState {
+    connKey: string;
+    hostname: string;
+    tabs: TestingBrowserTab[];
+    activeTabId: string | null;
+    loading: boolean;
+    canGoBack: boolean;
+    canGoForward: boolean;
+    presetId: string;
+    presets: Array<{ id: string; label: string }>;
+    sites: TestingBrowserSite[];
 }
 
 /** The host this Genie is driving in remote mode (no token — main holds that). */
@@ -474,6 +558,10 @@ export interface RemoteHost {
     ip: string;
     port: number;
     hostname: string;
+    /** Stable per-install identity (survives IP changes); absent for an old host. */
+    hostId?: string;
+    /** MagicDNS dial address. */
+    dnsName?: string;
 }
 
 /** Remote-mode status surfaced to the renderer (titlebar indicator + bridge). */
@@ -509,7 +597,11 @@ export interface KnownHost {
     hostname: string;
     /** User-chosen label; the UI falls back to hostname. */
     name?: string;
-    /** `ip:port` — the registry/persistence key. */
+    /** Stable per-install identity (when known); the record is keyed by it. */
+    hostId?: string;
+    /** Last-seen MagicDNS dial address. */
+    dnsName?: string;
+    /** `host:<hostId>` once identified, else `ip:port` — the registry key. */
     connKey: string;
     /** Whether this host currently has a live connection (a host window open). */
     connected: boolean;
@@ -1050,6 +1142,27 @@ export interface GenieApi {
         /** Why this workspace's feed is what it is (connected + worst read error). */
         status: (workspaceId: string) => Promise<WorkspaceWatchStatus>;
     };
+    /**
+     * Serve-local-sites (Phase B). HOST-SOURCED content: discovery reads the
+     * HOST's hosts file + probes the HOST's loopback, and the per-site enable set
+     * is the allowlist the HOST serves from — so in a remote window these route
+     * through the bridge to the host (remote-bridge.ts), like the IssueWatch rail.
+     *   - `list(workspaceId, {refresh})` — discovered sites merged with the
+     *     workspace's stored tunnel settings; `refresh` re-probes scheme/port.
+     *   - `set(workspaceId, siteId, patch)` — persist one site's config (enable /
+     *     `.gen` name / scheme+port), keyed by the opaque siteId.
+     */
+    sites: {
+        list: (
+            workspaceId: string,
+            opts?: { refresh?: boolean },
+        ) => Promise<SiteView[]>;
+        set: (
+            workspaceId: string,
+            siteId: string,
+            patch: TunnelSiteConfig,
+        ) => Promise<{ ok: boolean }>;
+    };
     mcp: {
         status: () => Promise<McpServerState>;
         restart: () => Promise<McpServerState>;
@@ -1149,7 +1262,13 @@ export interface GenieApi {
         /** Manually restart the bridge after the limbo auto-retry gave up ('lost'). */
         reconnect: () => Promise<{ ok: boolean; error?: string }>;
         onLink: (cb: (s: RemoteLinkState) => void) => () => void;
-        terminalAttach: (id: string) => Promise<{ ok: boolean }>;
+        /** Control state: `locked:true` ⇒ the host has taken control and this
+         *  driver is view-only. Read on mount; live changes arrive via `onControl`.
+         *  Drives the view-only banner + the remote-bridge input gate. */
+        controlState: () => Promise<{ locked: boolean }>;
+        onControl: (cb: (s: { locked: boolean }) => void) => () => void;
+        terminalAttach: (id: string, workspaceId?: string) => Promise<{ ok: boolean }>;
+
         terminalInput: (id: string, data: string) => Promise<boolean>;
         terminalResize: (id: string, cols: number, rows: number) => Promise<boolean>;
         terminalDetach: (id: string) => Promise<{ ok: boolean }>;
@@ -1163,6 +1282,33 @@ export interface GenieApi {
         known: () => Promise<KnownHost[]>;
         forget: (connKey: string) => Promise<{ ok: boolean }>;
         rename: (connKey: string, name: string) => Promise<{ ok: boolean }>;
+    };
+    /** Serve-local-sites (Phase D): the Testing Browser. `open` shows the browser
+     *  for a connected host; the rest are driven BY the chrome window (each resolves
+     *  to that window's browser instance in main). The site content is a
+     *  main-owned WebContentsView; the chrome renders `onState`. */
+    testingBrowser: {
+        open: (connKey: string, hostname: string) => Promise<{ ok: boolean; error?: string }>;
+        state: () => Promise<TestingBrowserState | null>;
+        navigate: (input: string) => Promise<{ ok: boolean; error?: string }>;
+        back: () => Promise<{ ok: boolean }>;
+        forward: () => Promise<{ ok: boolean }>;
+        reload: () => Promise<{ ok: boolean }>;
+        newTab: (input?: string) => Promise<{ ok: boolean; error?: string }>;
+        closeTab: (tabId: string) => Promise<{ ok: boolean }>;
+        activateTab: (tabId: string) => Promise<{ ok: boolean }>;
+        setBounds: (bounds: {
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+        }) => Promise<{ ok: boolean }>;
+        setViewport: (presetId: string) => Promise<{ ok: boolean }>;
+        refreshSites: () => Promise<void>;
+        onState: (cb: (s: TestingBrowserState) => void) => () => void;
+        onLoadError: (
+            cb: (e: { tabId: string; code: number; description: string; url: string }) => void,
+        ) => () => void;
     };
     /** Virtual Workstations (relay transport): the signed-in member's entitled
      *  workstations + opening one over the Tynn relay (grant minted main-side). */
@@ -1687,6 +1833,10 @@ export interface GenieApi {
             cols?: number;
             rows?: number;
             env?: Record<string, string>;
+            /** The terminal's workspace id. Used only on a relay REMOTE session,
+             *  where it's tagged onto the term `open` frame so the host scopes the
+             *  terminal to the grant's workspaces; ignored for a local pty spawn. */
+            workspaceId?: string;
         }) => Promise<{
             id: string;
             pid: number;

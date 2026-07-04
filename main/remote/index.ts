@@ -23,6 +23,8 @@ import {
 } from '../ask/force-question';
 import { RelayMemberClient } from './relay-client';
 import type { PopKeypair } from './relay-pop';
+import { createTailnetSiteCarrier, createRelaySiteCarrier, type SiteCarrier } from './site-carrier';
+import type { SiteScheme, SiteView } from '../mobile/hosts';
 
 /**
  * Work Mode — remote desktop (the local-main proxy).
@@ -50,6 +52,17 @@ export interface RemoteHost {
     ip: string;
     port: number;
     hostname: string;
+    /**
+     * The host's STABLE per-install identity (from `/api/ping`). This — not the
+     * mutable `ip:port` — is the connKey / token / known-host key once known, so a
+     * saved pairing survives a Tailscale IP reassignment and a recycled IP can't
+     * match a stale token. Absent for an old host (no `hostId` in ping) or before
+     * the first ping → identity falls back to `ip:port` (back-compat).
+     */
+    hostId?: string;
+    /** Tailscale MagicDNS name — a stable DIAL address (what the TLS cert covers),
+     *  recorded alongside the IP. Not identity; may be absent. */
+    dnsName?: string;
 }
 
 /** After this many consecutive `/ws/events` reconnects that never reach `open`
@@ -95,7 +108,26 @@ interface RemoteConnection {
     eventsFailures: number;
     /** Host terminal id → its `/ws/term` socket (viewer-only; never kills host pty). */
     termWs: Map<string, WebSocket>;
+    /**
+     * Terminal ids the RENDERER wants attached (attach INTENT), distinct from
+     * `termWs` (the live sockets, which drop on a host restart/upgrade/network
+     * blip). On a bridge recovery we reconcile `termWs` against THIS set so the
+     * reconnect restores every terminal's live stream — without it the panels stay
+     * frozen with dead input after the host returns. Only a deliberate
+     * `remoteDetachTerminal` clears an id from here.
+     */
+    attachedTerminals: Set<string>;
+    /**
+     * The host has TAKEN CONTROL (its kill-switch is engaged) => this driver is
+     * VIEW-ONLY. The single source of truth for "who holds control", mirrored from
+     * the host's `locked` flag: seeded on connect from `/api/state`, re-read on
+     * every reconnect, and updated live by the host's `control:changed` push. Gates
+     * `remoteTerminalInput` (keystrokes dropped at the source, not silently eaten
+     * host-side) and drives the window's view-only banner via `remote:control`.
+     */
+    controlLocked: boolean;
     // --- link health (version match + upgrade/limbo reconnect) ---
+
     /** The events bridge has reached `open` at least once (a healthy session). */
     everConnected: boolean;
     /** We triggered a host upgrade → a bridge drop is EXPECTED (limbo, not error). */
@@ -115,7 +147,20 @@ const connections = new Map<string, RemoteConnection>();
 /** webContents.id → connKey. Absent ⇒ the window is LOCAL. */
 const bindings = new Map<number, string>();
 
-function connKeyOf(host: RemoteHost): string {
+/**
+ * The registry / persistence key for a tailnet host. `host:<hostId>` once the
+ * host's stable install identity is known (so the key survives IP changes —
+ * mirroring the relay's `ws:<workstationId>`), else the legacy `ip:port` for an
+ * old host that advertises no `hostId` (back-compat). Exported so identity-first
+ * discovery (`workmode`) derives the SAME key.
+ */
+export function connKeyOf(host: { ip: string; port: number; hostId?: string }): string {
+    return host.hostId ? `host:${host.hostId}` : `${host.ip}:${host.port}`;
+}
+
+/** The legacy address-based key (`ip:port`) — the pre-hostId scheme a stored
+ *  pairing is migrated FROM when the host's `hostId` first becomes known. */
+function ipPortKey(host: { ip: string; port: number }): string {
     return `${host.ip}:${host.port}`;
 }
 
@@ -177,6 +222,11 @@ export interface KnownHost {
     hostname: string;
     /** User-chosen label; falls back to hostname in the UI. */
     name?: string;
+    /** The host's stable install identity (when known) — the record is keyed by
+     *  `host:<hostId>`, and `ip`/`port`/`dnsName` are refreshed dial fields. */
+    hostId?: string;
+    /** Last-seen MagicDNS dial address (refreshed on connect). */
+    dnsName?: string;
 }
 
 function knownHostsPath(): string {
@@ -198,11 +248,19 @@ function writeKnownHosts(store: Record<string, KnownHost>): void {
 }
 
 /** Remember a host in the picker list (called on a successful connect). Keeps any
- *  existing friendly name; refreshes ip/hostname in case they changed. */
+ *  existing friendly name; refreshes the DIAL fields (ip/port/hostname/dnsName) in
+ *  case they changed — identity (the key) stays put. */
 export function recordKnownHost(host: RemoteHost): void {
     const store = readKnownHosts();
     const key = connKeyOf(host);
-    store[key] = { ...store[key], ip: host.ip, port: host.port, hostname: host.hostname };
+    store[key] = {
+        ...store[key],
+        ip: host.ip,
+        port: host.port,
+        hostname: host.hostname,
+        hostId: host.hostId,
+        dnsName: host.dnsName,
+    };
     writeKnownHosts(store);
 }
 
@@ -527,24 +585,76 @@ function setConnLinkState(conn: RemoteConnection, state: LinkState): void {
     emitToConn(conn, 'remote:link', state);
 }
 
-/** Read the host's `/api/ping`: bridge protocol version + release app version.
- *  Null when unreachable; a host predating protocol versioning reports none → 0
- *  (→ hard "behind"), and one predating appVersion reports null (→ no soft
- *  nudge — we never nudge on an unknown host build). */
-async function fetchHostPing(
-    host: RemoteHost,
-): Promise<{ protocolVersion: number; appVersion: string | null } | null> {
+// --- control state: who holds WRITE control of this host --------------------
+// The host's kill-switch (`locked`) is the single source of truth. `locked:true`
+// ⇒ the host has taken control and this driver is VIEW-ONLY; `locked:false` ⇒ the
+// driver may write. We seed it on connect, re-read it on every reconnect, and take
+// live deltas from the host's `control:changed` push — so the rendered control
+// state can never drift from the host's actual gate across handoff/upgrade/reconnect.
+
+/** The control state for the host a window is bound to (read on mount by the
+ *  view-only banner; live changes arrive via the `remote:control` event). */
+export function remoteControlStateFor(wcId: number): { locked: boolean } {
+    const conn = connForWebContents(wcId);
+    return { locked: conn?.controlLocked ?? false };
+}
+
+/** Store + push a connection's control state to its bound window(s). Pushes only
+ *  on an actual CHANGE, so a reconnect that re-reads the same value is a no-op. */
+function setConnControl(conn: RemoteConnection, locked: boolean): void {
+    if (conn.controlLocked === locked) return;
+    conn.controlLocked = locked;
+    emitToConn(conn, 'remote:control', { locked });
+}
+
+/** Re-read the host's current control (kill-switch) state over the authed bridge
+ *  and reconcile ours to it. Called on every (re)connect so a lock toggled while
+ *  we were disconnected — or reset by a host restart/upgrade — is restored to the
+ *  truth, not left stale. Best-effort: a transient failure keeps the last state. */
+async function refreshControlState(conn: RemoteConnection): Promise<void> {
+    try {
+        const st = (await connRequest(conn, '/api/state')) as { locked?: boolean };
+        if (typeof st?.locked === 'boolean') setConnControl(conn, st.locked);
+    } catch {
+        /* host briefly unreachable — keep the last known control state */
+    }
+}
+
+/** Read the host's `/api/ping`: stable identity (hostId/name/dnsName) + bridge
+ *  protocol version + release app version. Null when unreachable; a host predating
+ *  protocol versioning reports none → 0 (→ hard "behind"), one predating
+ *  appVersion reports null (→ no soft nudge), and one predating `hostId` reports
+ *  null (→ identity falls back to ip:port). */
+async function fetchHostPing(host: RemoteHost): Promise<{
+    protocolVersion: number;
+    appVersion: string | null;
+    hostId: string | null;
+    name: string | null;
+    dnsName: string | null;
+} | null> {
     try {
         const res = await fetch(`http://${host.ip}:${host.port}/api/ping`);
         if (!res.ok) return null;
         const data = (await res.json()) as {
             protocolVersion?: number;
             appVersion?: string | null;
+            hostId?: string | null;
+            name?: string | null;
+            hostname?: string | null;
+            dnsName?: string | null;
         };
         return {
             protocolVersion:
                 typeof data?.protocolVersion === 'number' ? data.protocolVersion : 0,
             appVersion: typeof data?.appVersion === 'string' ? data.appVersion : null,
+            hostId: typeof data?.hostId === 'string' && data.hostId ? data.hostId : null,
+            name:
+                typeof data?.name === 'string'
+                    ? data.name
+                    : typeof data?.hostname === 'string'
+                        ? data.hostname
+                        : null,
+            dnsName: typeof data?.dnsName === 'string' && data.dnsName ? data.dnsName : null,
         };
     } catch {
         return null;
@@ -705,11 +815,18 @@ function handleBridgeMessage(conn: RemoteConnection, raw: string): void {
         // Host alerts/prompts forwarded to the driving member (handled in MAIN,
         // not re-emitted to the renderer): mirror the host's ForceTheQuestion
         // modal locally + carry the imDone chime/toast.
-        if (msg.type === 'question:changed') {
+        if (msg.type === 'control:changed') {
+            // The host took or released control (kill-switch toggled). Mirror it so
+            // this driver flips to/from view-only immediately — the handoff the
+            // owner does from the host's "Take control" overlay.
+            const locked = !!(msg.payload as { locked?: boolean } | null)?.locked;
+            setConnControl(conn, locked);
+        } else if (msg.type === 'question:changed') {
             void syncForwardedQuestions(conn);
         } else if (msg.type === 'notify:imdone') {
             forwardImDoneToDriver(conn, msg.payload as { label?: string } | null);
         }
+
     } catch {
         /* ignore malformed frames */
     }
@@ -732,6 +849,10 @@ function startRelayEventsBridge(conn: RemoteConnection): void {
     // Pick up any questions the host already had pending before we attached (the
     // `question:changed` push only fires on a CHANGE, not on connect).
     void syncForwardedQuestions(conn);
+    // NOTE: control state on the relay path is driven purely by the live
+    // `control:changed` push (handleBridgeMessage), not proactively seeded — relay
+    // reconnect/re-seed is a later increment (mirrors the events-bridge comment).
+
 }
 
 /** Connect a connection's host /ws/events and re-emit onto the local channels
@@ -767,6 +888,11 @@ function startEventsBridge(conn: RemoteConnection): void {
         // a forwarded modal isn't missed (the `question:changed` push only fires
         // on a CHANGE, not on connect).
         ws.on('open', () => {
+            // A REOPEN (we were connected before) means we recovered a dropped
+            // bridge — restore the per-terminal streams + re-read control below.
+            // The FIRST connect seeds those separately (empty attach set; control
+            // seeded in connectRemoteInner), so this stays a no-op then.
+            const reopened = conn.everConnected;
             conn.eventsFailures = 0;
             conn.everConnected = true;
             conn.reconnectAttempt = 0;
@@ -782,8 +908,18 @@ function startEventsBridge(conn: RemoteConnection): void {
                 }
                 void revalidateAndSetLinkState(conn);
             }
+            if (reopened) {
+                // The host is back: re-attach every terminal the renderer still
+                // wants (their /ws/term sockets died with the bridge) and reconcile
+                // control — which may have changed, or reset on a host restart,
+                // while we were away. THIS is what makes the panels live again after
+                // a reconnect/upgrade instead of staying frozen with dead input.
+                reattachTerminals(conn);
+                void refreshControlState(conn);
+            }
             void syncForwardedQuestions(conn);
         });
+
         ws.on('message', (raw) => handleBridgeMessage(conn, String(raw)));
         ws.on('close', () => {
             if (conn.eventsWs === ws) conn.eventsWs = null;
@@ -882,7 +1018,7 @@ function handleTermMessage(conn: RemoteConnection, id: string, raw: string): voi
  * keys term by (sid, channel); a second concurrent open would collide). Only the
  * most-recently-attached terminal streams over the relay.
  */
-function relayAttachTerminal(conn: RemoteConnection, id: string): void {
+function relayAttachTerminal(conn: RemoteConnection, id: string, workspaceId?: string): void {
     if (!conn.relay || conn.relayTerms.has(id)) return;
     for (const [otherId, stream] of conn.relayTerms) {
         try {
@@ -894,20 +1030,18 @@ function relayAttachTerminal(conn: RemoteConnection, id: string): void {
     }
     conn.relayTerms.set(
         id,
-        conn.relay.openTerm(id, (raw) => handleTermMessage(conn, id, raw)),
+        conn.relay.openTerm(id, (raw) => handleTermMessage(conn, id, raw), workspaceId),
     );
 }
 
-/** Attach to a host terminal's pty stream and re-emit terminal:data/exit onto the
- *  calling window's channels (keyed by id). Idempotent per id. */
-export function remoteAttachTerminal(wcId: number, id: string): void {
-    const conn = connForWebContents(wcId);
-    if (!conn) return;
-    if (conn.transport === 'relay') {
-        relayAttachTerminal(conn, id);
-        return;
-    }
+/** Open one host `/ws/term` socket (tailnet) and wire its data/close/error. The
+ *  socket's `close` only drops it from `termWs` (the LIVE map) — never from
+ *  `attachedTerminals` (the INTENT), so a drop stays re-attachable on recovery.
+ *  `replayReset` clears the frozen viewport first (a re-attach after a drop) so the
+ *  host's scrollback catch-up repaints cleanly instead of stacking a duplicate. */
+function openHostTermSocket(conn: RemoteConnection, id: string, replayReset: boolean): void {
     if (conn.termWs.has(id)) return;
+    if (replayReset) emitToConn(conn, 'terminal:data', { id, data: '\x1bc' });
     const url = `ws://${conn.host.ip}:${conn.host.port}/ws/term?terminal=${encodeURIComponent(id)}&token=${encodeURIComponent(conn.token)}`;
     let ws: WebSocket;
     try {
@@ -929,13 +1063,48 @@ export function remoteAttachTerminal(wcId: number, id: string): void {
     });
 }
 
+/** Re-open a `/ws/term` for every terminal the renderer still wants but whose
+ *  socket dropped while the host was away (a reconnect/upgrade recovery). Tailnet
+ *  only — the relay carries a single term stream re-established by its own path. */
+function reattachTerminals(conn: RemoteConnection): void {
+    if (conn.transport === 'relay') return;
+    for (const id of conn.attachedTerminals) {
+        if (!conn.termWs.has(id)) openHostTermSocket(conn, id, true);
+    }
+}
+
+/** Attach to a host terminal's pty stream and re-emit terminal:data/exit onto the
+ *  calling window's channels (keyed by id). Idempotent per id. Records the attach
+ *  INTENT so a bridge recovery can restore the stream.
+ *
+ *  `workspaceId` (optional) is the terminal's host workspace, tagged onto the
+ *  relay term `open` frame so genie-cloud scopes it to the grant's workspaces;
+ *  it's only meaningful on the relay transport (the tailnet path is Bearer-token
+ *  authed against the whole host). */
+export function remoteAttachTerminal(wcId: number, id: string, workspaceId?: string): void {
+    const conn = connForWebContents(wcId);
+    if (!conn) return;
+    conn.attachedTerminals.add(id);
+    if (conn.transport === 'relay') {
+        relayAttachTerminal(conn, id, workspaceId);
+        return;
+    }
+    openHostTermSocket(conn, id, false);
+}
+
 /** Forward the renderer's keystrokes to the host pty. Both transports speak the
  *  same `{type:'input', data}` wire — tailnet over the term WS, relay as a term
  *  `data` frame. */
 export function remoteTerminalInput(wcId: number, id: string, data: string): void {
     const conn = connForWebContents(wcId);
     if (!conn) return;
+    // View-only: the host has taken control — drop keystrokes at the SOURCE rather
+    // than shipping them for the host to silently discard (which left the remote
+    // typing into a void with no feedback). The renderer also gates + shows a
+    // banner; this is the authoritative main-side enforcement (readonly can't write).
+    if (conn.controlLocked) return;
     if (conn.transport === 'relay') {
+
         try {
             conn.relayTerms.get(id)?.send(JSON.stringify({ type: 'input', data }));
         } catch {
@@ -979,7 +1148,11 @@ export function remoteTerminalResize(wcId: number, id: string, cols: number, row
 export function remoteDetachTerminal(wcId: number, id: string): void {
     const conn = connForWebContents(wcId);
     if (!conn) return;
+    // Drop the attach INTENT so a later bridge recovery doesn't resurrect a
+    // terminal the renderer deliberately closed.
+    conn.attachedTerminals.delete(id);
     if (conn.transport === 'relay') {
+
         const stream = conn.relayTerms.get(id);
         if (stream) {
             try {
@@ -1035,8 +1208,66 @@ type ConnectResult = { ok: boolean; connKey?: string; error?: string; needsPin?:
  *  orphan the winner's eventsWs, which reconnects forever with no owner). */
 const connectInFlight = new Map<string, Promise<ConnectResult>>();
 
+/**
+ * One-time, IDEMPOTENT migration of the pre-hostId (IP-keyed) stores to the stable
+ * `host:<hostId>` key, so upgrading to identity-keyed pairing does NOT force a
+ * paired host back to PIN. When the host's `hostId` first becomes known we move any
+ * `ip:port`-keyed saved token + known-host entry (from the current dial address) to
+ * the new key, preserving the user's friendly name. We ALWAYS delete the old
+ * IP-keyed token once identity is known — leaving it behind is exactly the
+ * recycled-IP → stale-token → wrong-host bug this change fixes.
+ */
+function migrateIpKeyedIdentity(host: RemoteHost, newKey: string): void {
+    const oldKey = ipPortKey(host);
+    if (oldKey === newKey) return; // no hostId → still ip:port-keyed, nothing to move
+
+    const tokens = readTokenStore();
+    if (tokens[oldKey]) {
+        if (!tokens[newKey]) tokens[newKey] = tokens[oldKey];
+        delete tokens[oldKey];
+        writeTokenStore(tokens);
+    }
+
+    const known = readKnownHosts();
+    if (known[oldKey]) {
+        if (!known[newKey]) known[newKey] = { ...known[oldKey] };
+        delete known[oldKey];
+        writeKnownHosts(known);
+    }
+}
+
+/**
+ * Resolve a host's STABLE identity before we key anything off it. If the caller
+ * didn't already carry a `hostId` (a manual `ip:port` connect, or a first pairing),
+ * ping `/api/ping` to learn it. Once known, migrate the IP-keyed stores to
+ * `host:<hostId>` (idempotent). An old host (no `hostId`) or an unreachable ping
+ * returns the host unchanged → identity stays `ip:port` (back-compat / graceful
+ * fallback: old↔new still connects). Returns a host augmented with hostId/dnsName.
+ */
+async function resolveHostIdentity(host: RemoteHost): Promise<RemoteHost> {
+    let hostId = host.hostId;
+    let dnsName = host.dnsName;
+    if (!hostId) {
+        const ping = await fetchHostPing(host);
+        if (ping?.hostId) {
+            hostId = ping.hostId;
+            dnsName = dnsName ?? ping.dnsName ?? undefined;
+        }
+    }
+    if (!hostId) return host; // old host / unreachable → ip:port fallback
+    const identified: RemoteHost = { ...host, hostId, dnsName };
+    migrateIpKeyedIdentity(host, connKeyOf(identified));
+    return identified;
+}
+
 export async function connectRemote(host: RemoteHost, pin?: string): Promise<ConnectResult> {
-    const connKey = connKeyOf(host);
+    // Resolve the STABLE identity FIRST so the connKey + token/known-host lookups
+    // key on `hostId`, not the mutable `ip:port` (and migrate any legacy IP-keyed
+    // pairing). The single `await` before the dedup checks below yields once; the
+    // connKey→inFlight critical section that follows runs without an await, so two
+    // concurrent connects for the same host still collapse to one attempt.
+    const identified = await resolveHostIdentity(host);
+    const connKey = connKeyOf(identified);
 
     // Already connected to this host → reuse it (a host window re-open / a second
     // request for the same host shares the one connection).
@@ -1045,7 +1276,7 @@ export async function connectRemote(host: RemoteHost, pin?: string): Promise<Con
     const inFlight = connectInFlight.get(connKey);
     if (inFlight) return inFlight;
 
-    const run = connectRemoteInner(host, pin, connKey);
+    const run = connectRemoteInner(identified, pin, connKey);
     connectInFlight.set(connKey, run);
     try {
         return await run;
@@ -1100,6 +1331,7 @@ async function connectRemoteInner(
     // Validate before entering remote mode (a cheap authed call). A 401 means a
     // saved token is dead (host re-paired / forgot the device) → forget it + ask
     // for the PIN rather than failing opaquely.
+    let seedLocked = false;
     try {
         const res = await fetch(`http://${host.ip}:${host.port}/api/state`, {
             headers: { Authorization: `Bearer ${token}` },
@@ -1110,6 +1342,17 @@ async function connectRemoteInner(
         }
         if (!res.ok && res.status !== 423) {
             return { ok: false, error: `Host returned HTTP ${res.status}.` };
+        }
+        // Seed control from the host's kill-switch: a remote that connects while the
+        // host ALREADY has control opens view-only, never falsely writable. A 423
+        // (some routes lock) also implies control is held. Best-effort — an older
+        // host omits `locked` and defaults to writable.
+        if (res.status === 423) seedLocked = true;
+        try {
+            const st = (await res.json()) as { locked?: boolean };
+            if (typeof st?.locked === 'boolean') seedLocked = st.locked;
+        } catch {
+            /* older host / non-JSON body — leave the default */
         }
     } catch (e) {
         return { ok: false, error: `Couldn't reach ${host.hostname}: ${(e as Error).message}` };
@@ -1129,6 +1372,9 @@ async function connectRemoteInner(
         eventsRetry: null,
         eventsFailures: 0,
         termWs: new Map(),
+        attachedTerminals: new Set(),
+        controlLocked: seedLocked,
+
         everConnected: false,
         upgrading: false,
         linkState: { phase: 'connected' },
@@ -1246,6 +1492,9 @@ async function connectWorkstationInner(
         eventsRetry: null,
         eventsFailures: 0,
         termWs: new Map(),
+        attachedTerminals: new Set(),
+        controlLocked: false,
+
         everConnected: false,
         upgrading: false,
         linkState: { phase: 'connected' },
@@ -1340,6 +1589,97 @@ export function disconnectConnKey(connKey: string): void {
         teardownConnection(conn);
         broadcastStatus();
     }
+}
+
+// --- serve-local-sites — the Testing Browser's carrier primitives ------------
+// The remote forward-proxy shim (main/remote/site-proxy.ts) + Testing Browser
+// (main/testing-browser) drive a host's enabled `.gen` sites over a
+// transport-agnostic SiteCarrier. `getSiteCarrier` picks the impl from the
+// connection kind: a `tailnet` conn dials the host directly (Phase D); a `relay`
+// conn carries the byte stream as frames over the RelayMemberClient (Phase E) so
+// a remote with NO shared tailnet still reaches the site. The auth stays in MAIN
+// on both — the carrier injects it, never a renderer. `remoteListEnabledGenSites`
+// (below) is the enabled-`.gen` snapshot the shim resolves against; it already
+// works over either transport (connRequest branches tailnet vs relayRest).
+
+/** An enabled `.gen` site for a connection: the browser-facing `.gen` name mapped
+ *  to its opaque host-side `siteId` + the upstream loopback `.test` hostname. */
+export interface EnabledGenSite {
+    genName: string;
+    siteId: string;
+    hostname: string;
+    scheme: SiteScheme;
+    port: number;
+}
+
+// Owner-gated (design §8 decision #4): the RELAY site-tunneling carrier is built
+// and tested (Phase E) but MUST NOT ship enabled until the Phase-F blind-relay
+// E2E rung exists — its baseline has Tynn terminate TLS and see the site-proxy
+// plaintext, which the owner declined to ship. The tailnet carrier (WireGuard-E2E)
+// is unaffected. Default OFF; the relay plumbing tests flip it on to exercise the
+// built path. Flip to on only once the blind-relay (WebRTC / app-layer-E2E) carrier
+// ships (or the owner explicitly accepts the plaintext baseline).
+let relaySiteTunnelingEnabled = false;
+export function setRelaySiteTunnelingEnabled(v: boolean): void {
+    relaySiteTunnelingEnabled = v;
+}
+export function isRelaySiteTunnelingEnabled(): boolean {
+    return relaySiteTunnelingEnabled;
+}
+
+/** The transport kind of a live connection (for transport-aware messaging), or
+ *  null when no such connection is live. */
+export function connectionKind(connKey: string): 'tailnet' | 'relay' | null {
+    return connections.get(connKey)?.transport ?? null;
+}
+
+/**
+ * The {@link SiteCarrier} for a connection's Testing-Browser shim — chosen by the
+ * connection KIND so the shim + `.gen` + session-CA stack is carrier-agnostic:
+ *   - `tailnet` → a direct-dial carrier (`http://<ip>:<port>` + lazy Bearer),
+ *   - `relay`   → a frame carrier over the connection's `RelayMemberClient`.
+ * Null for an unknown connection, a relay conn whose client is gone, OR a relay
+ * conn while relay site-tunneling is owner-gated off (see the flag above). Auth is
+ * injected by the carrier IN MAIN — the token/grant never reaches a renderer.
+ */
+export function getSiteCarrier(connKey: string): SiteCarrier | null {
+    const conn = connections.get(connKey);
+    if (!conn) return null;
+    if (conn.transport === 'tailnet') {
+        return createTailnetSiteCarrier(`http://${conn.host.ip}:${conn.host.port}`, () => conn.token);
+    }
+    if (conn.transport === 'relay' && conn.relay) {
+        if (!relaySiteTunnelingEnabled) return null; // owner-gated until Phase-F E2E
+        return createRelaySiteCarrier(conn.relay);
+    }
+    return null;
+}
+
+/**
+ * Fetch the host's ENABLED `.gen` sites over the carrier (Bearer injected in MAIN
+ * by `connRequest`) — the shim's allowlist snapshot (`genName → {siteId, hostname}`).
+ * Returns [] when the connection is gone, the host predates the feature (empty
+ * `/api/sites`), or the host is locked (kill-switch — connRequest throws 423). The
+ * kill-switch + token gate stay HOST-enforced; this is just the read.
+ */
+export async function remoteListEnabledGenSites(connKey: string): Promise<EnabledGenSite[]> {
+    const conn = connections.get(connKey);
+    if (!conn) return [];
+    let data: { sites?: SiteView[] } | undefined;
+    try {
+        data = (await connRequest(conn, '/api/sites')) as { sites?: SiteView[] } | undefined;
+    } catch {
+        return []; // host unreachable / locked (423) / predates the feature
+    }
+    return (data?.sites ?? [])
+        .filter((s) => s.enabled && !!s.genName)
+        .map((s) => ({
+            genName: s.genName.toLowerCase(),
+            siteId: s.siteId,
+            hostname: s.hostname,
+            scheme: s.scheme,
+            port: s.port,
+        }));
 }
 
 /**

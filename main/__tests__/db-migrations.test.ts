@@ -716,7 +716,7 @@ describe('parsePolicyBuckets (defaulting + backward compat + robustness)', () =>
     });
 });
 
-describe('db migration v19 (Plugin System tables)', () => {
+describe('db migration v20 (Plugin System tables)', () => {
     it('creates plugins + plugin_marketplaces with their key columns', () => {
         const db = new Database(':memory:');
         runMigrations(db);

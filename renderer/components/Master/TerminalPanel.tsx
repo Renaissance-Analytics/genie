@@ -209,6 +209,11 @@ export default function TerminalPanel({
                         shell={shell.command ?? undefined}
                         args={shell.args}
                         env={spec.env}
+                        // Relay REMOTE: tag the term `open` frame with the
+                        // terminal's workspace so the host scopes it to the
+                        // grant. Null (System/unattached) → undefined → the host
+                        // falls back to requiring host:all.
+                        workspaceId={spec.workspace_id ?? undefined}
                         onExit={onMarkInactive}
                         shells={shellOptions}
                         activeShell={shell.id ?? undefined}

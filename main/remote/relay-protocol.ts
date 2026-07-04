@@ -14,10 +14,10 @@
  * malformed throws {@link RelayProtocolError}.
  */
 
-export type Channel = 'rest' | 'events' | 'term' | 'control';
+export type Channel = 'rest' | 'events' | 'term' | 'control' | 'site';
 export type FrameKind = 'open' | 'data' | 'close' | 'error';
 
-const CHANNELS: readonly Channel[] = ['rest', 'events', 'term', 'control'];
+const CHANNELS: readonly Channel[] = ['rest', 'events', 'term', 'control', 'site'];
 const FRAME_KINDS: readonly FrameKind[] = ['open', 'data', 'close', 'error'];
 
 /** A routed frame between this member session and its workstation link. */
@@ -211,4 +211,85 @@ export function decodePopChallenge(frame: Frame): PopChallenge | null {
     // `frame.sid` is already guaranteed non-empty by decodeFrame.
     if (!isNonEmptyString(p.nonce)) throw new RelayProtocolError('malformed pop-challenge: nonce');
     return { sid: frame.sid, nonce: p.nonce };
+}
+
+// --- site-proxy channel (serve-local-sites Phase E) -------------------------
+// The `site` channel carries the HOST reverse-proxy byte stream
+// (`main/mobile/site-proxy.ts` `handleSiteProxy`) over the relay, so a remote
+// with NO shared tailnet can still reach an enabled `*.gen` site. It is
+// STREAMING + multiplexed (many concurrent requests per session, keyed by
+// `reqId` — unlike the single-stream `events`/`term`), because one page load
+// pulls many assets at once. Each direction's frames are direction-implicit:
+//
+//   member → host (this repo, via RelayFrameMux.openSite):
+//     open  {payload: SiteOpenPayload}                 begin an HTTP request / WS upgrade
+//     data  {payload: {t:'body', data:<base64>}}       request-body / WS client→server chunk
+//     data  {payload: {t:'end'}}                        request body complete (HTTP half-close)
+//     close                                            tear the stream down
+//   host → member (genie-cloud's relay-server dispatch, mirrored in tests):
+//     data  {payload: {t:'response', status, headers}}          HTTP response head
+//     data  {payload: {t:'upgraded', status, statusText, headers}}  WS 101 established
+//     data  {payload: {t:'body', data:<base64>}}                response-body / WS server→client chunk
+//     close                                                     response complete / socket closed
+//     error {code, reason}                                       upstream failed
+//
+// Wire-compatible with genie-cloud's `src/relay-server/protocol.ts`; the host
+// side hands each `open` to `handleSiteProxy` (the SAME handler as the tailnet
+// path), so token + kill-switch (423) + `siteId` allowlist + audit all apply
+// unchanged regardless of carrier. See {@link SiteOpenPayload} / {@link readSiteInbound}.
+
+/** Member→host: open a site-proxy stream (an HTTP request, or a WS `upgrade`
+ *  when `upgrade` is true). `path` is the host proxy's `/api/site/<siteId>/…`. */
+export interface SiteOpenPayload {
+    method: string;
+    path: string;
+    headers: Record<string, string | string[]>;
+    /** true → a WebSocket upgrade (HMR / Reverb / Echo), not a plain request. */
+    upgrade?: boolean;
+}
+
+/** A host→member `data` frame on the `site` channel, parsed + validated. */
+export type SiteInbound =
+    | { t: 'response'; status: number; headers: Record<string, string | string[]> }
+    | { t: 'upgraded'; status: number; statusText: string; headers: Record<string, string | string[]> }
+    | { t: 'body'; chunk: Buffer };
+
+/** Keep only well-typed header values (JSON is untrusted from the peer). */
+function normalizeHeaders(h: unknown): Record<string, string | string[]> {
+    if (typeof h !== 'object' || h === null) return {};
+    const out: Record<string, string | string[]> = {};
+    for (const [k, v] of Object.entries(h as Record<string, unknown>)) {
+        if (typeof v === 'string') out[k] = v;
+        else if (Array.isArray(v) && v.every((x) => typeof x === 'string')) out[k] = v as string[];
+    }
+    return out;
+}
+
+/**
+ * Read a host→member `site` DATA frame into its typed shape. Returns null for a
+ * non-`site`/non-`data` frame or an unrecognized payload — the mux then IGNORES
+ * it rather than tearing the session down (a bad site frame must not kill the
+ * whole member link; the carrier surfaces a dead stream via close/error). The
+ * envelope was already validated by {@link decodeFrame}; this reads the payload.
+ */
+export function readSiteInbound(frame: Frame): SiteInbound | null {
+    if (frame.channel !== 'site' || frame.kind !== 'data') return null;
+    const p = frame.payload;
+    if (typeof p !== 'object' || p === null) return null;
+    const o = p as Record<string, unknown>;
+    if (o.t === 'response' && typeof o.status === 'number') {
+        return { t: 'response', status: o.status, headers: normalizeHeaders(o.headers) };
+    }
+    if (o.t === 'upgraded' && typeof o.status === 'number') {
+        return {
+            t: 'upgraded',
+            status: o.status,
+            statusText: typeof o.statusText === 'string' ? o.statusText : '',
+            headers: normalizeHeaders(o.headers),
+        };
+    }
+    if (o.t === 'body' && typeof o.data === 'string') {
+        return { t: 'body', chunk: Buffer.from(o.data, 'base64') };
+    }
+    return null;
 }

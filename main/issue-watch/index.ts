@@ -26,6 +26,8 @@ import {
     type ParsedRepoRef,
 } from '../github/api';
 import { getToken, needsReauth } from '../github/storage';
+import { getCapabilities } from '../github/capability-service';
+import type { CapabilityKey } from '../github/capabilities';
 import { broadcastLocal } from '../remote';
 import { mobileEmit } from '../mobile/bus';
 
@@ -301,6 +303,10 @@ export async function getWorkspaceRepoViews(
  *     flyout shows the EXACT cause ("GitHub returned 401: Bad credentials").
  *   - `needsReauth` ⇒ the stored GitHub session is dead (an auth failure /
  *     second-401 flagged it). The flyout shows a one-click Reconnect CTA.
+ *   - `missingCapabilities` ⇒ the Issue Watch capabilities THIS machine's
+ *     GitHub App is missing (Issues / PRs / Dependabot / …). A REMOTE (host)
+ *     window reads these from the HOST's status so its flyout gate reflects the
+ *     HOST's App grants, not the client's. Booleans/enums only — never a token.
  *   - all falsy with items ⇒ a genuine success; the flyout shows the feed or
  *     an honest "nothing open".
  */
@@ -313,6 +319,34 @@ export interface WorkspaceWatchStatus {
     /** True when the stored GitHub session is dead and must be reconnected.
      *  Drives the flyout's "GitHub session expired — Reconnect" banner. */
     needsReauth: boolean;
+    /** The Issue Watch capability keys this machine's GitHub App does NOT grant
+     *  (a subset of {@link CapabilityKey} — the `issue-watch.*` keys). Lets a
+     *  remote window gate on the HOST's capabilities instead of the client's.
+     *  Empty when GitHub isn't connected. No token/secret — just the key list. */
+    missingCapabilities: CapabilityKey[];
+}
+
+/** The Issue Watch capability keys the flyout gates on (a subset of the full
+ *  {@link CapabilityKey} set — everything under the `issue-watch.` namespace). */
+const IW_CAPABILITY_KEYS: readonly CapabilityKey[] = [
+    'issue-watch.issues',
+    'issue-watch.pulls',
+    'issue-watch.dependabot',
+    'issue-watch.code-scanning',
+    'issue-watch.secret-scanning',
+];
+
+/**
+ * The Issue Watch capabilities THIS machine's GitHub App is currently missing —
+ * read from the live capability snapshot (never re-fetches installs, so it's
+ * cheap on every status read). Empty while GitHub is disconnected (the gate is
+ * inert then). Only the capability KEYS travel — no token, no installation
+ * secret — so it is safe to serve to a remote client over the bridge.
+ */
+function missingIssueWatchCapabilities(): CapabilityKey[] {
+    const caps = getCapabilities();
+    if (!caps.connected) return [];
+    return IW_CAPABILITY_KEYS.filter((k) => caps.missing.includes(k));
 }
 
 /** Pure: the worst read error across a set of repo views (null = all ok). */
@@ -525,7 +559,13 @@ export async function getWorkspaceStatus(
         // No token at all. A dead session (revoked / refresh exhausted) still
         // leaves the reauth flag set, so report it: the flyout shows Reconnect
         // rather than the plain "connect in Settings" copy.
-        return { connected: false, error: null, detail: null, needsReauth: needsReauth() };
+        return {
+            connected: false,
+            error: null,
+            detail: null,
+            needsReauth: needsReauth(),
+            missingCapabilities: [],
+        };
     }
     const views = await getWorkspaceRepoViews(workspaceId).catch(() => []);
     const detail = worstViewDetail(views);
@@ -538,6 +578,9 @@ export async function getWorkspaceStatus(
         error: detail?.error ?? null,
         detail,
         needsReauth: reauth,
+        // Carry the App's missing IW capabilities so a REMOTE window's flyout can
+        // gate on the HOST's grants (host-sourced via /api/desktop/issue-watch/status).
+        missingCapabilities: missingIssueWatchCapabilities(),
     };
 }
 

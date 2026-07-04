@@ -203,6 +203,11 @@ a question into a terminal they aren't looking at.
 - **Batch ALL your open questions into a single call** — never fire it repeatedly
   in a row; gather everything you need and ask once.
 - Returns each question's selected option(s) + note, or a cancellation.
+- **VERNACULAR (who-does-what):** the modal is read by the USER, so first-person
+  pronouns INVERT and confuse. By convention the **agent is \`I\`/\`the agent\`** and
+  the **user is \`you\`/\`the owner\`**; when an option is about WHO performs an action,
+  **name the actor at the front** — \`Agent: I create the repo\` vs \`You: you create
+  the repo\` — never a bare "I create it" (the user reads it as *themselves*).
 
 ## Automate imDone — set up a "finished" hook (recommended)
 Calling \`imDone\` by hand is easy to forget. If your harness can run a command

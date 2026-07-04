@@ -11,6 +11,7 @@ import type {
     WatchRepoView,
     WatchFeedItem,
     WorkspaceWatchStatus,
+    SiteView,
 } from './genie';
 import { isHostSourcedSettingKey } from './settings-nav';
 
@@ -35,6 +36,22 @@ import { isHostSourcedSettingKey } from './settings-nav';
 export function makeRemoteBridge(local: GenieApi): GenieApi {
     const req = local.remote.request;
     const r = local.remote;
+
+    // Live "view-only" flag: when the host TAKES CONTROL (its kill-switch), this
+    // driver must stop writing to the host pty. Main already drops such keystrokes
+    // authoritatively, but gating here too avoids a pointless round-trip and keeps
+    // the client's behaviour consistent with the banner it shows. Seeded async then
+    // kept live via the host's `control:changed` push (bridge lives for the window).
+    let controlLocked = false;
+    void local.remote
+        .controlState()
+        .then((s) => {
+            controlLocked = s.locked;
+        })
+        .catch(() => {});
+    local.remote.onControl((s) => {
+        controlLocked = s.locked;
+    });
 
     // The host's rail — full WorkspaceRow pass-through.
     const workspaces: GenieApi['workspaces'] = {
@@ -75,6 +92,27 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             (await req('/api/desktop/issue-watch/set', {
                 method: 'POST',
                 json: { workspaceId, owner, repo, enabled },
+            })) as { ok: boolean },
+    };
+
+    // Serve-local-sites (Phase B). Discovery reads the HOST's hosts file + probes
+    // the HOST's loopback, and the per-site enable set is the allowlist the HOST
+    // serves from — so this is HOST-SOURCED: a remote window resolves `.gen`
+    // config against the host over /api/sites (read) + /api/sites/set (write),
+    // exactly like the IssueWatch rail. The bearer token stays in main.
+    const sites: GenieApi['sites'] = {
+        list: async (workspaceId, opts) =>
+            (
+                (await req(
+                    `/api/sites?workspaceId=${encodeURIComponent(workspaceId)}${
+                        opts?.refresh ? '&refresh=1' : ''
+                    }`,
+                )) as { sites: SiteView[] }
+            ).sites,
+        set: async (workspaceId, siteId, patch) =>
+            (await req('/api/sites/set', {
+                method: 'POST',
+                json: { workspaceId, siteId, patch },
             })) as { ok: boolean },
     };
 
@@ -256,12 +294,21 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             cols?: number;
             rows?: number;
             env?: Record<string, string>;
+            workspaceId?: string;
         }) => {
-            await r.terminalAttach(opts.id);
+            // Tag the terminal's workspace onto the relay term `open` frame so the
+            // host scopes it to the grant's workspaces (a workspace-scoped grant
+            // only reaches its own terminals; `host:all` reaches any). Missing →
+            // fails closed to host:all on the host side.
+            await r.terminalAttach(opts.id, opts.workspaceId);
             return { id: opts.id, pid: 0, shell: opts.shell ?? '', existing: true, scrollback: '' };
         },
-        write: (id: string, data: string) =>
-            r.terminalInput(id, isMouseReport(data) ? '' : data),
+        write: (id: string, data: string) => {
+            // View-only (host has control): swallow the keystroke locally.
+            if (controlLocked) return Promise.resolve(false);
+            return r.terminalInput(id, isMouseReport(data) ? '' : data);
+        },
+
         resize: (id: string, cols: number, rows: number) => r.terminalResize(id, cols, rows),
         detach: async (id: string) => (await r.terminalDetach(id)).ok,
         kill: async (id: string) =>
@@ -341,6 +388,7 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         terminal,
         clipboard,
         issueWatch,
+        sites,
         settings,
     };
 }

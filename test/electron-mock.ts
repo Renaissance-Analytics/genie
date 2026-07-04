@@ -22,8 +22,10 @@ export const app = {
     isPackaged: false,
     getPath: (): string => '/tmp',
     getAppPath: (): string => '/tmp',
+    getVersion: (): string => '0.0.0-test',
     requestSingleInstanceLock: (): boolean => true,
 };
+
 
 export const ipcMain = {
     handle: noop,

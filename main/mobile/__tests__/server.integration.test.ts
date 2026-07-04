@@ -608,6 +608,35 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         expect(noTok.status).toBe(401);
     });
 
+    it('host IssueWatch status: serves the GitHub gate state (incl. missingCapabilities) with NO secret leak', async () => {
+        // A remote window's flyout gates on the HOST's GitHub via this endpoint,
+        // so the status must carry the connection/capability state over the wire
+        // AND never leak a token/secret. We init an empty DB (no GitHub token) so
+        // getWorkspaceStatus resolves to the not-connected shape — enough to prove
+        // the new `missingCapabilities` field serializes and nothing sensitive does.
+        const { initDatabase } = await import('../../db');
+        initDatabase(fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mobile-db-')));
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'GET', '/api/desktop/issue-watch/status?workspaceId=ws-1', {
+            token,
+        });
+        expect(r.status).toBe(200);
+        // Shape: the gate fields the remote flyout keys off are all present.
+        expect(r.json.status).toMatchObject({
+            connected: false,
+            needsReauth: false,
+            missingCapabilities: [],
+        });
+        expect(Array.isArray(r.json.status.missingCapabilities)).toBe(true);
+        // Scope-safety: the serialized status must be booleans/enums only — no
+        // token, refresh token, encrypted blob, or any secret-looking key.
+        const serialized = JSON.stringify(r.json.status).toLowerCase();
+        for (const banned of ['token', 'secret', '_enc', 'refresh', 'password', 'bearer']) {
+            expect(serialized).not.toContain(banned);
+        }
+    });
+
     it('does not bind when disabled (opt-in)', async () => {
         appDir = buildAppDir();
         await startMobileServer({

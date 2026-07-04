@@ -9,7 +9,12 @@ import {
     type RestRequestPayload,
     type RestReplyPayload,
 } from './relay-protocol';
-import { RelayFrameMux } from './relay-mux';
+import {
+    RelayFrameMux,
+    type SiteStreamController,
+    type SiteStreamHandlers,
+} from './relay-mux';
+import type { SiteOpenPayload } from './relay-protocol';
 import type { PopKeypair } from './relay-pop';
 
 /**
@@ -186,13 +191,25 @@ export class RelayMemberClient {
         return this.mux.openEvents(onEvent);
     }
 
-    /** Attach to a workstation terminal's `/ws/term`. */
+    /** Attach to a workstation terminal's `/ws/term`. `workspaceId` (optional)
+     *  is tagged onto the term `open` frame so the host scopes it to the grant's
+     *  workspaces; omitting it fails closed to `host:all` host-side. */
     openTerm(
         terminalId: string,
         onData: (msg: string) => void,
+        workspaceId?: string,
     ): { send: (input: string) => void; close: () => void } {
         if (!this.mux) throw new Error('relay client not connected');
-        return this.mux.openTerm(terminalId, onData);
+        return this.mux.openTerm(terminalId, onData, workspaceId);
+    }
+
+    /** Open a site-proxy stream over the `site` channel (serve-local-sites Phase
+     *  E) — carries the host reverse-proxy byte stream so an enabled `*.gen` site
+     *  reaches `handleSiteProxy` with NO shared tailnet. Drives the relay
+     *  {@link SiteCarrier}; satisfies its `SiteStreamOpener` shape. */
+    openSite(open: SiteOpenPayload, handlers: SiteStreamHandlers): SiteStreamController {
+        if (!this.mux) throw new Error('relay client not connected');
+        return this.mux.openSite(open, handlers);
     }
 
     close(): void {
