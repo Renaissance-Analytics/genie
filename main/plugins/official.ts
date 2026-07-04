@@ -7,6 +7,8 @@
  * a signing authority). What Genie ships in the box are the BUNDLED plugins:
  *   - Presentation      — dark-slide .pptx generation (Phase 1).
  *   - Spreadsheet       — holy-sheet .xlsx generation (Phase 1).
+ *   - Document          — .md/.docx WYSIWYG editing (react-fancy Editor);
+ *                         editors-only, no MCP tools.
  *
  * hello-world is deliberately NOT bundled or otherwise installable from here —
  * owner decision: it is TEACHING material only, living in
@@ -311,10 +313,54 @@ const SPREADSHEET_SOURCE: BundledPluginSource = {
     tools: SPREADSHEET_TOOLS,
 };
 
+// --- Document (Markdown + Word WYSIWYG editing — editors-only) ---------------
+
+const DOCUMENT_TOOLS = `'use strict';
+// The Document plugin is EDITORS-ONLY: it claims .md/.markdown/.docx for the
+// react-fancy Editor host. It registers no MCP tools.
+module.exports = {};
+`;
+
+const DOCUMENT_SOURCE: BundledPluginSource = {
+    id: 'ai.genie.document',
+    name: 'Document',
+    description: 'Edit Markdown and Word documents (.md, .docx) in a WYSIWYG editor.',
+    manifest: {
+        id: 'ai.genie.document',
+        namespace: 'document',
+        name: 'Document',
+        version: '0.1.0',
+        description:
+            'WYSIWYG editing for Markdown (.md) and Word (.docx) files with the react-fancy Editor. Markdown round-trips exactly; .docx opens and saves with basic fidelity (headings, lists, formatting, links, tables, embedded images) — Word-only features like tracked changes do not survive a save.',
+        publisher: { name: 'Genie', url: 'https://github.com/Renaissance-Analytics/genie' },
+        engines: { genie: '>=0.7.0' },
+        entry: { tools: 'tools.cjs' },
+        mcpTools: [],
+        editors: [
+            {
+                id: 'document',
+                title: 'Document',
+                extensions: ['.md', '.markdown', '.docx'],
+                fancyEditor: {
+                    package: '@particle-academy/react-fancy',
+                    version: '>=4.9.0',
+                    export: 'Editor',
+                },
+            },
+        ],
+        capabilities: {
+            fs: { scope: 'workspace', extensions: ['.md', '.markdown', '.docx'] },
+            network: { hosts: [] },
+        },
+    },
+    tools: DOCUMENT_TOOLS,
+};
+
 /** Every bundled plugin Genie ships in the box. Exported for tests. */
 export const BUNDLED_PLUGIN_SOURCES: BundledPluginSource[] = [
     PRESENTATION_SOURCE,
     SPREADSHEET_SOURCE,
+    DOCUMENT_SOURCE,
 ];
 
 /** A materialised bundled plugin as the Settings "Official" tab renders it. */

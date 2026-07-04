@@ -1227,6 +1227,13 @@ export interface GenieApi {
             fancyPackage: string;
             fancyVersion: string;
         } | null>;
+        /** Markdown <-> DOCX conversion for the Document editor (runs in main,
+         *  keeping mammoth/docx out of the renderer bundle). */
+        convertDocument: (req: {
+            to: 'markdown' | 'docx';
+            base64?: string;
+            markdown?: string;
+        }) => Promise<{ ok: boolean; markdown?: string; base64?: string; error?: string }>;
         /** Developer Mode + trusted signing keys (Phase 3). */
         developerMode: () => Promise<PluginDeveloperModeState>;
         setDeveloperMode: (enabled: boolean) => Promise<PluginActionResult<boolean>>;

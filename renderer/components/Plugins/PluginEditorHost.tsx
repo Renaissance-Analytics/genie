@@ -48,6 +48,7 @@ const SlideViewerLazy = lazy(() =>
 const SheetWorkbookLazy = lazy(() =>
     import('@particle-academy/fancy-sheets').then((m) => ({ default: m.SheetWorkbook })),
 );
+const DocumentEditorLazy = lazy(() => import('./DocumentEditor'));
 
 interface Props {
     spec: TerminalSpec;
@@ -61,11 +62,13 @@ interface Props {
     style?: CSSProperties;
 }
 
-/** 'sheet' for the spreadsheet editor, 'deck' for the presentation editor. */
-type EditorKind = 'deck' | 'sheet';
+/** 'sheet' = spreadsheet, 'doc' = markdown/word document, 'deck' = presentation. */
+type EditorKind = 'deck' | 'sheet' | 'doc';
 
 function kindFor(fancyExport: string): EditorKind {
-    return fancyExport === 'SheetWorkbook' ? 'sheet' : 'deck';
+    if (fancyExport === 'SheetWorkbook') return 'sheet';
+    if (fancyExport === 'Editor') return 'doc';
+    return 'deck';
 }
 
 function msg(e: unknown): string {
@@ -95,6 +98,7 @@ export default function PluginEditorHost({
 
     const [deck, setDeck] = useState<Deck | null>(null);
     const [workbook, setWorkbook] = useState<WorkbookData | null>(null);
+    const [docText, setDocText] = useState<string | null>(null);
     const [dirty, setDirty] = useState(false);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -104,6 +108,12 @@ export default function PluginEditorHost({
     deckRef.current = deck;
     const workbookRef = useRef<WorkbookData | null>(null);
     workbookRef.current = workbook;
+    const docTextRef = useRef<string | null>(null);
+    docTextRef.current = docText;
+
+    // The Document editor's model is a MARKDOWN string for both file types;
+    // .docx converts at the main-side seam (plugins:document-convert).
+    const isDocx = /\.docx$/i.test(file);
 
     // Open: guarded binary read -> reader -> model.
     useEffect(() => {
@@ -114,6 +124,23 @@ export default function PluginEditorHost({
             try {
                 const res = await api().plugins.editorRead(pluginId, root, file);
                 if (!res.ok || !res.value) throw new Error(res.error || 'Could not read the file.');
+                if (kind === 'doc') {
+                    let md: string;
+                    if (isDocx) {
+                        const conv = await api().plugins.convertDocument({
+                            to: 'markdown',
+                            base64: res.value.base64,
+                        });
+                        if (!conv.ok || conv.markdown === undefined) {
+                            throw new Error(conv.error || 'Could not convert the document.');
+                        }
+                        md = conv.markdown;
+                    } else {
+                        md = new TextDecoder('utf-8').decode(base64ToBytes(res.value.base64));
+                    }
+                    if (alive) setDocText(md);
+                    return;
+                }
                 const bytes = base64ToBytes(res.value.base64);
                 if (!alive) return;
                 if (kind === 'sheet') setWorkbook(workbookFromHolyBytes(bytes));
@@ -127,27 +154,41 @@ export default function PluginEditorHost({
         return () => {
             alive = false;
         };
-    }, [pluginId, root, file, kind]);
+    }, [pluginId, root, file, kind, isDocx]);
 
     // Save: model -> writer -> bytes -> guarded binary write.
     const save = useCallback(async () => {
         try {
-            let bytes: Uint8Array;
-            if (kind === 'sheet') {
+            let base64: string;
+            if (kind === 'doc') {
+                if (docTextRef.current === null) return;
+                if (isDocx) {
+                    const conv = await api().plugins.convertDocument({
+                        to: 'docx',
+                        markdown: docTextRef.current,
+                    });
+                    if (!conv.ok || !conv.base64) {
+                        throw new Error(conv.error || 'Could not convert the document.');
+                    }
+                    base64 = conv.base64;
+                } else {
+                    base64 = bytesToBase64(new TextEncoder().encode(docTextRef.current));
+                }
+            } else if (kind === 'sheet') {
                 if (!workbookRef.current) return;
-                bytes = holyBytesFromWorkbook(workbookRef.current);
+                base64 = bytesToBase64(holyBytesFromWorkbook(workbookRef.current));
             } else {
                 if (!deckRef.current) return;
-                bytes = deckToBytes(deckRef.current);
+                base64 = bytesToBase64(deckToBytes(deckRef.current));
             }
-            const res = await api().plugins.editorWrite(pluginId, root, file, bytesToBase64(bytes));
+            const res = await api().plugins.editorWrite(pluginId, root, file, base64);
             if (!res.ok) throw new Error(res.error || 'Could not save the file.');
             setDirty(false);
             setError(null);
         } catch (e) {
             setError(msg(e));
         }
-    }, [kind, pluginId, root, file]);
+    }, [kind, pluginId, root, file, isDocx]);
 
     // Ctrl/Cmd+S -> save (bound once; reads live refs).
     useEffect(() => {
@@ -175,6 +216,19 @@ export default function PluginEditorHost({
                     <span>Opening {baseName(file)}…</span>
                 </div>
             );
+        }
+        if (kind === 'doc') {
+            return docText !== null ? (
+                <Suspense fallback={<div className="code-empty"><span>Loading editor…</span></div>}>
+                    <DocumentEditorLazy
+                        value={docText}
+                        onChange={(v) => {
+                            setDocText(v);
+                            setDirty(true);
+                        }}
+                    />
+                </Suspense>
+            ) : null;
         }
         if (kind === 'sheet') {
             return workbook ? (

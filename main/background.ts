@@ -162,6 +162,7 @@ import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
 import { registerPluginsIpc } from './plugins/ipc';
 import { registerPluginEditorBridge } from './plugins/editor-bridge';
+import { registerDocumentConvert } from './plugins/document-convert';
 import { resolvePluginEditor } from './plugins/editor-routing';
 import { revalidateAllPluginTrust } from './plugins/install';
 import {
@@ -960,6 +961,7 @@ app.whenReady().then(async () => {
     // Plugin System (Settings → Plugins): install / enable / grant / marketplace.
     registerPluginsIpc();
     registerPluginEditorBridge();
+    registerDocumentConvert();
     // Re-evaluate plugin trust against the current trust store on boot, so a key
     // removed / Developer Mode turned off between sessions revokes fail-closed.
     try {

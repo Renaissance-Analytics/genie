@@ -137,6 +137,9 @@ const api = {
         // Which enabled plugin's editor claims this file's extension (§6.1).
         editorFor: (fileName: string) =>
             ipcRenderer.invoke('plugins:editor-for', fileName),
+        // Markdown <-> DOCX conversion for the Document editor (main-side seam).
+        convertDocument: (req: { to: 'markdown' | 'docx'; base64?: string; markdown?: string }) =>
+            ipcRenderer.invoke('plugins:document-convert', req),
         // Developer Mode + trusted signing keys (Phase 3).
         developerMode: () => ipcRenderer.invoke('plugins:developer-mode'),
         setDeveloperMode: (enabled: boolean) =>
