@@ -45,7 +45,8 @@ import {
     type PluginTrustStatus,
 } from '../db';
 import { disposePlugin } from './registry';
-import { computeBundleIntegrity, type BundleFile } from './signing';
+import { computeBundleIntegrity } from './signing';
+import { collectBundleFiles } from './bundle-files';
 import {
     productionTrustStore,
     evaluateManifestTrust,
@@ -98,32 +99,6 @@ function materialise(id: string, from: string): string {
     return dest;
 }
 
-/**
- * Collect the plugin's CODE files (for integrity hashing) from an install dir:
- * every file recursively EXCEPT the manifest (covered by the signature instead),
- * `.git`, and any detached `.sig`. Paths are forward-slashed + bundle-relative so
- * signer and verifier agree byte-for-byte.
- */
-function collectBundleFiles(dir: string): BundleFile[] {
-    const out: BundleFile[] = [];
-    const root = path.resolve(dir);
-    const walk = (abs: string) => {
-        for (const ent of fs.readdirSync(abs, { withFileTypes: true })) {
-            if (ent.name === '.git' || ent.name === 'node_modules') continue;
-            const child = path.join(abs, ent.name);
-            if (ent.isDirectory()) {
-                walk(child);
-                continue;
-            }
-            if (!ent.isFile()) continue;
-            const rel = path.relative(root, child).replace(/\\/g, '/');
-            if (rel === PLUGIN_MANIFEST_FILENAME || rel.endsWith('.sig')) continue;
-            out.push({ path: rel, bytes: fs.readFileSync(child) });
-        }
-    };
-    walk(root);
-    return out;
-}
 
 /**
  * Evaluate a materialised plugin's PROVENANCE: recompute the code integrity and
@@ -148,7 +123,21 @@ async function cloneToTemp(url: string, ref?: string): Promise<{ dir: string; co
     const dir = path.join(cacheDir(), crypto.randomBytes(8).toString('hex'));
     fs.mkdirSync(dir, { recursive: true });
     try {
-        await simpleGit({ baseDir: cacheDir() }).clone(url, dir, ['--depth', '1']);
+        // Pin `core.autocrlf=false` + `core.eol=lf` on the NEW repo (they take
+        // effect before checkout): the working tree must match the repo's
+        // canonical bytes so the integrity we recompute equals the one the CI
+        // signer produced. Without this, a Windows host with the default
+        // `autocrlf=true` would check text files out as CRLF, the hash would
+        // diverge from the signer's LF hash, and every official plugin would be
+        // (wrongly) refused as tampered on Windows.
+        await simpleGit({ baseDir: cacheDir() }).clone(url, dir, [
+            '--depth',
+            '1',
+            '-c',
+            'core.autocrlf=false',
+            '-c',
+            'core.eol=lf',
+        ]);
         const git = simpleGit(dir);
         if (ref) await git.checkout(ref);
         const commit = (await git.revparse(['HEAD'])).trim();

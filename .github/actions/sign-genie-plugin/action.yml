@@ -1,0 +1,113 @@
+name: Sign Genie plugin
+description: >-
+  Sign a Genie plugin's genie-plugin.json with the official Ed25519 signing key
+  (a CI secret) so Genie trusts it as an official plugin. Reuses Genie's own
+  signing algorithm (scripts/sign-plugin.mjs) so the signature verifies in-app by
+  construction. The private key is read ONLY from the `signing-key` input (wire it
+  to the GENIE_PLUGIN_SIGNING_KEY org secret) and is never written to disk.
+
+# Usage (in a plugin repo's release workflow):
+#
+#   permissions:
+#     contents: write            # only if `commit: true` pushes the signed manifest
+#   jobs:
+#     sign:
+#       runs-on: ubuntu-latest
+#       steps:
+#         - uses: actions/checkout@v4
+#         - uses: Renaissance-Analytics/genie/.github/actions/sign-genie-plugin@main
+#           with:
+#             signing-key: ${{ secrets.GENIE_PLUGIN_SIGNING_KEY }}
+#             expect-key-id: ed25519-bHc2Rt62EgjmpE5Fd7-QsJeNi36BsAwckJ4bEyx4BCE
+#
+# See docs/plugin-signing.md for the full setup (adding the org secret, wiring
+# the workflow, and the release-asset alternative to committing).
+
+inputs:
+  signing-key:
+    description: >-
+      The Ed25519 PRIVATE key PEM. Pass ${{ secrets.GENIE_PLUGIN_SIGNING_KEY }};
+      NEVER hardcode it.
+    required: true
+  plugin-dir:
+    description: Directory holding genie-plugin.json.
+    required: false
+    default: "."
+  expect-key-id:
+    description: >-
+      Fail unless the signing key derives to THIS keyId. Set it to the official
+      key id (ed25519-bHc2Rt62EgjmpE5Fd7-QsJeNi36BsAwckJ4bEyx4BCE) to guard
+      against a mis-set secret signing with the wrong key.
+    required: false
+    default: ""
+  publisher-name:
+    description: Set publisher.name when the manifest lacks one.
+    required: false
+    default: ""
+  publisher-url:
+    description: Set publisher.url.
+    required: false
+    default: ""
+  commit:
+    description: >-
+      Commit + push the signed manifest back to the current branch. No-ops on a
+      detached HEAD (e.g. a tag build) or when the manifest is unchanged. Needs
+      `permissions: contents: write` in the calling workflow.
+    required: false
+    default: "true"
+  commit-message:
+    description: Commit message used when `commit` is true.
+    required: false
+    default: "chore: sign genie-plugin.json"
+  node-version:
+    description: Node version used to run the signer.
+    required: false
+    default: "20"
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Sign genie-plugin.json
+      shell: bash
+      env:
+        # The private key stays in the process env — never echoed, never written.
+        GENIE_PLUGIN_SIGNING_KEY: ${{ inputs.signing-key }}
+        PLUGIN_DIR: ${{ inputs.plugin-dir }}
+        EXPECT_KEY_ID: ${{ inputs.expect-key-id }}
+        PUBLISHER_NAME: ${{ inputs.publisher-name }}
+        PUBLISHER_URL: ${{ inputs.publisher-url }}
+      run: |
+        set -euo pipefail
+        args=("$PLUGIN_DIR")
+        [ -n "$EXPECT_KEY_ID" ]  && args+=(--expect-key-id  "$EXPECT_KEY_ID")
+        [ -n "$PUBLISHER_NAME" ] && args+=(--publisher-name "$PUBLISHER_NAME")
+        [ -n "$PUBLISHER_URL" ]  && args+=(--publisher-url  "$PUBLISHER_URL")
+        node "$GITHUB_ACTION_PATH/../../../scripts/sign-plugin.mjs" "${args[@]}"
+
+    - name: Commit signed manifest
+      if: inputs.commit == 'true'
+      shell: bash
+      env:
+        PLUGIN_DIR: ${{ inputs.plugin-dir }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+      run: |
+        set -euo pipefail
+        # Skip on a detached HEAD (tag builds) — there is no branch to push to.
+        if ! git symbolic-ref -q HEAD >/dev/null; then
+          echo "Detached HEAD — skipping commit. Attach the signed manifest as a release asset instead (see docs/plugin-signing.md)."
+          exit 0
+        fi
+        git config user.name  "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add "$PLUGIN_DIR/genie-plugin.json"
+        if git diff --cached --quiet; then
+          echo "Signed manifest unchanged — nothing to commit."
+        else
+          git commit -m "$COMMIT_MESSAGE"
+          git push
+        fi

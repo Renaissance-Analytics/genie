@@ -62,20 +62,30 @@ export interface TrustStore {
 
 /**
  * BUNDLED trusted keys — the production trust ROOT that ships INSIDE Genie's
- * signed app bundle. **Owner action:** generate the production Ed25519 signing
- * keypair (`generateSigningKeyPair()`), keep the PRIVATE key in the signing
- * authority (KMS/HSM), and publish the PUBLIC key here as an OFFICIAL entry:
+ * signed app bundle. This is now LIVE: the owner has generated the production
+ * Ed25519 signing keypair, keeps the PRIVATE key OUT of the repo (a GitHub org
+ * secret, `GENIE_PLUGIN_SIGNING_KEY`, consumed only by CI — see
+ * `docs/plugin-signing.md` + `.github/actions/sign-genie-plugin/`), and the
+ * PUBLIC half is embedded below as the OFFICIAL "Genie Official" key.
  *
- *   { keyId: '<keyIdForPublicKey(pub)>', publicKeyPem: '-----BEGIN PUBLIC KEY...',
- *     label: 'Genie Official', official: true }
- *
- * Deliberately EMPTY until then — inventing a key with no matching private key
- * would be security theatre. With it empty, ONLY first-party bundled plugins and
- * user-added developer keys are trusted; every registry/marketplace plugin is
- * `unsigned`/`untrusted` and gated behind Developer Mode. This mirrors the empty
- * `OFFICIAL_PLUGINS` curation — real signing authority is an owner decision.
+ * `keyId` is DERIVED from the PEM by `keyIdForPublicKey` (the trust store never
+ * trusts a self-declared id); the value below is that derived fingerprint and is
+ * asserted against a recompute in `__tests__/trust.test.ts`. Any official plugin
+ * whose `publisher.keyId` matches this and whose signature verifies over an
+ * untampered bundle resolves to `trusted`; user-added developer keys still stack
+ * on top (see `userTrustedKeys`).
  */
-export const BUNDLED_TRUSTED_KEYS: TrustedKey[] = [];
+export const BUNDLED_TRUSTED_KEYS: TrustedKey[] = [
+    {
+        keyId: 'ed25519-bHc2Rt62EgjmpE5Fd7-QsJeNi36BsAwckJ4bEyx4BCE',
+        publicKeyPem:
+            '-----BEGIN PUBLIC KEY-----\n' +
+            'MCowBQYDK2VwAyEAlk2aBKzc/0ABrUvlJLT8ELpnzwBgJjb4yzDcBXp2qgo=\n' +
+            '-----END PUBLIC KEY-----\n',
+        label: 'Genie Official',
+        official: true,
+    },
+];
 
 /** Where the user's developer-added trusted keys are stored. */
 function userTrustedKeysFile(): string {
