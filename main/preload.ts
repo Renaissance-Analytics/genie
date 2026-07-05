@@ -577,10 +577,10 @@ const api = {
             ipcRenderer.invoke('sites:list', workspaceId, opts),
         set: (workspaceId: string, siteId: string, patch: unknown) =>
             ipcRenderer.invoke('sites:set', workspaceId, siteId, patch),
-        // The header `.gen` popover: this machine's local sites + connected hosts'.
+        // The header `.gen` popover — contextual to THIS window (local sites in a
+        // local window, the host's sites in a host window).
         all: () => ipcRenderer.invoke('sites:all'),
-        openLocal: (genName: string, label?: string) =>
-            ipcRenderer.invoke('sites:open-local', genName, label),
+        open: (genName: string) => ipcRenderer.invoke('sites:open', genName),
     },
 
     agi: {

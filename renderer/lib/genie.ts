@@ -1196,11 +1196,12 @@ export interface GenieApi {
             siteId: string,
             patch: TunnelSiteConfig,
         ) => Promise<{ ok: boolean }>;
-        /** The header `.gen` popover's data: this machine's local dev sites +
-         *  each CONNECTED host's enabled `.gen` sites. */
+        /** The header `.gen` popover's data, CONTEXTUAL to this window: a local
+         *  window's own sites, or a host window's host sites. */
         all: () => Promise<GenSitesAll>;
-        /** Open a LOCAL `.gen` site in the Testing Browser (loopback-backed). */
-        openLocal: (genName: string, label?: string) => Promise<{ ok: boolean; error?: string }>;
+        /** Open a `.gen` site in the Testing Browser (contextual: local loopback
+         *  or the host's tunnel, by which window asked). */
+        open: (genName: string) => Promise<{ ok: boolean; error?: string }>;
     };
     mcp: {
         status: () => Promise<McpServerState>;

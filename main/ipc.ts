@@ -436,37 +436,42 @@ export function registerIpcHandlers(): void {
         },
     );
 
-    // `sites:all` — the header `.gen` popover's data: THIS machine's ENABLED
-    // `.gen` sites (aggregated across workspaces — NOT the raw hosts file) PLUS
-    // every connected host's enabled `.gen` sites. Both open in the Testing
-    // Browser (local sites via the loopback carrier, host sites via the tunnel).
-    ipcMain.handle('sites:all', async () => {
-        let local: Array<{ genName: string; hostname: string }> = [];
+    // `sites:all` — the header `.gen` popover's data, CONTEXTUAL to the window it
+    // was asked from: a LOCAL Genie window lists THIS machine's enabled `.gen`
+    // sites; a HOST window (driving a remote Genie) lists THAT host's enabled
+    // sites. Never a mix — the globe always shows the sites of the machine the
+    // window represents. Enabled-only, never the raw hosts file.
+    ipcMain.handle('sites:all', async (e) => {
+        const connKey = connKeyForWindow(e.sender.id);
         try {
-            local = (await listLocalEnabledGenSites()).map((s) => ({
-                genName: s.genName,
-                hostname: s.hostname,
-            }));
+            const sites = connKey
+                ? await remoteListEnabledGenSites(connKey)
+                : await listLocalEnabledGenSites();
+            return {
+                local: sites.map((s) => ({ genName: s.genName, hostname: s.hostname })),
+                hosts: [],
+            };
         } catch {
-            local = [];
+            return { local: [], hosts: [] };
         }
-        const connected = listKnownHosts().filter((h) => h.connected);
-        const hosts = await Promise.all(
-            connected.map(async (h) => ({
-                connKey: h.connKey,
-                hostname: h.name || h.hostname,
-                sites: await remoteListEnabledGenSites(h.connKey).catch(() => []),
-            })),
-        );
-        return { local, hosts: hosts.filter((h) => h.sites.length > 0) };
     });
 
-    // Open a LOCAL `.gen` site in the (loopback-backed) Testing Browser — full
-    // browser chrome (URL bar / back / forward / reload / device presets),
-    // resolving `https://<genName>` against this machine's own loopback dial.
-    ipcMain.handle('sites:open-local', (_e, genName: string, _label?: string) =>
-        openTestingBrowser(LOCAL_CONN_KEY, 'This machine', remoteGenUrl(String(genName))),
-    );
+    // Open a `.gen` site in the Testing Browser (full chrome — URL bar / back /
+    // forward / reload / device presets), CONTEXTUAL to the calling window: a
+    // HOST window opens the site on THAT host over the tunnel; a local window
+    // opens it against this machine's loopback dial.
+    ipcMain.handle('sites:open', (e, genName: string) => {
+        const connKey = connKeyForWindow(e.sender.id);
+        if (connKey) {
+            const host = listKnownHosts().find((h) => h.connKey === connKey);
+            return openTestingBrowser(
+                connKey,
+                host?.name || host?.hostname || 'host',
+                remoteGenUrl(String(genName)),
+            );
+        }
+        return openTestingBrowser(LOCAL_CONN_KEY, 'This machine', remoteGenUrl(String(genName)));
+    });
 
     // --- Agent MCP server status / restart (Settings → Agent MCP) -------
     ipcMain.handle('mcp:status', () => mcpServerState());

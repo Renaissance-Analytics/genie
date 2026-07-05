@@ -2154,18 +2154,15 @@ function RemoteIndicator() {
 }
 
 /**
- * `.gen` sites picker — a titlebar affordance that, on hover/click, lists every
- * `.gen` dev site reachable: THIS machine's own loopback dev sites (opened
- * directly in a Genie browser window — no remote connection needed) and each
- * CONNECTED host's exposed `.gen` sites (opened in that host's Testing Browser).
- * Mirrors the Hosts button UX. Hidden inside a host window.
+ * `.gen` sites picker — a titlebar affordance that, on hover/click, lists the
+ * enabled `.gen` dev sites of the machine THIS window represents: a local Genie
+ * window shows THIS machine's own sites (loopback-backed browser); a host window
+ * shows the HOST's exposed sites (over the tunnel). Clicking opens the site in
+ * the Testing Browser. Contextual by design — never a mix.
  */
 function SitesButton() {
-    const isHostWindow =
-        typeof window !== 'undefined' && /[?&]host=/.test(window.location.search);
     const [open, setOpen] = useState(false);
     const [hovering, setHovering] = useState(false);
-    if (isHostWindow) return null;
     const show = open || hovering;
     return (
         <div
@@ -2207,26 +2204,13 @@ function SitesPanel({ onClose }: { onClose: () => void }) {
         };
     }, []);
 
-    const openLocal = (genName: string) => {
-        void api().sites.openLocal(genName).catch(() => {});
-        onClose();
-    };
-    const openHost = (connKey: string, hostname: string) => {
-        // The host's Testing Browser resolves its `.gen` sites over the tunnel.
-        void api().testingBrowser?.open(connKey, hostname).catch(() => {});
+    const openSite = (genName: string) => {
+        void api().sites.open(genName).catch(() => {});
         onClose();
     };
 
-    const empty =
-        data !== null && data.local.length === 0 && data.hosts.length === 0;
+    const empty = data !== null && data.local.length === 0;
 
-    const groupStyle: React.CSSProperties = {
-        fontSize: 10.5,
-        letterSpacing: '0.04em',
-        textTransform: 'uppercase',
-        color: '#71717a',
-        padding: '8px 6px 3px',
-    };
     const rowStyle: React.CSSProperties = {
         display: 'flex',
         flexDirection: 'column',
@@ -2300,39 +2284,19 @@ function SitesPanel({ onClose }: { onClose: () => void }) {
             ) : empty ? (
                 <div style={{ padding: '10px 6px', color: '#a1a1aa', lineHeight: 1.5 }}>
                     No enabled <code>.gen</code> sites. Enable a dev site in a workspace's
-                    settings (Serve local sites), or connect a host to see its sites.
+                    <em> Serve local sites</em> settings.
                 </div>
             ) : (
                 <>
-                    {data.local.length > 0 && (
-                        <>
-                            <div style={groupStyle}>This machine</div>
-                            {data.local.map((s) => (
-                                <Row
-                                    key={`local:${s.genName}`}
-                                    keyId={`local:${s.genName}`}
-                                    name={s.genName}
-                                    sub={s.hostname}
-                                    title={`Open ${s.genName} in the Genie browser`}
-                                    onClick={() => openLocal(s.genName)}
-                                />
-                            ))}
-                        </>
-                    )}
-                    {data.hosts.map((h) => (
-                        <div key={`host:${h.connKey}`}>
-                            <div style={groupStyle}>{h.hostname}</div>
-                            {h.sites.map((s) => (
-                                <Row
-                                    key={`${h.connKey}:${s.siteId}`}
-                                    keyId={`${h.connKey}:${s.siteId}`}
-                                    name={s.genName}
-                                    sub={`on ${h.hostname}`}
-                                    title={`Open ${s.genName} in ${h.hostname}'s Testing Browser`}
-                                    onClick={() => openHost(h.connKey, h.hostname)}
-                                />
-                            ))}
-                        </div>
+                    {data.local.map((s) => (
+                        <Row
+                            key={`site:${s.genName}`}
+                            keyId={`site:${s.genName}`}
+                            name={s.genName}
+                            sub={s.hostname}
+                            title={`Open ${s.genName} in the Genie browser`}
+                            onClick={() => openSite(s.genName)}
+                        />
                     ))}
                 </>
             )}
