@@ -194,12 +194,12 @@ export interface SiteView {
     siteId: string;
 }
 
-/** One local dev site in the header `.gen` popover — opens at its real URL. */
+/** One local dev site in the header `.gen` popover — opens in the Testing
+ *  Browser via the loopback carrier. */
 export interface LocalGenSite {
     genName: string;
+    /** The upstream loopback vhost the `.gen` maps to (e.g. tynn.test). */
     hostname: string;
-    /** The real loopback URL a Genie browser window opens (e.g. https://tynn.test). */
-    url: string;
 }
 
 /** One connected host's enabled `.gen` site in the header popover. */
@@ -1199,8 +1199,8 @@ export interface GenieApi {
         /** The header `.gen` popover's data: this machine's local dev sites +
          *  each CONNECTED host's enabled `.gen` sites. */
         all: () => Promise<GenSitesAll>;
-        /** Open a LOCAL dev site in a Genie browser window (real loopback URL). */
-        openLocal: (url: string, label: string) => Promise<{ ok: boolean; error?: string }>;
+        /** Open a LOCAL `.gen` site in the Testing Browser (loopback-backed). */
+        openLocal: (genName: string, label?: string) => Promise<{ ok: boolean; error?: string }>;
     };
     mcp: {
         status: () => Promise<McpServerState>;

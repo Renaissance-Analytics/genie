@@ -2207,8 +2207,8 @@ function SitesPanel({ onClose }: { onClose: () => void }) {
         };
     }, []);
 
-    const openLocal = (url: string, label: string) => {
-        void api().sites.openLocal(url, label).catch(() => {});
+    const openLocal = (genName: string) => {
+        void api().sites.openLocal(genName).catch(() => {});
         onClose();
     };
     const openHost = (connKey: string, hostname: string) => {
@@ -2299,8 +2299,8 @@ function SitesPanel({ onClose }: { onClose: () => void }) {
                 <div style={{ padding: '10px 6px', color: '#a1a1aa' }}>Finding .gen sites…</div>
             ) : empty ? (
                 <div style={{ padding: '10px 6px', color: '#a1a1aa', lineHeight: 1.5 }}>
-                    No <code>.gen</code> dev sites found. Local sites come from your hosts
-                    file (e.g. Herd/Valet); connect a host to see its sites.
+                    No enabled <code>.gen</code> sites. Enable a dev site in a workspace's
+                    settings (Serve local sites), or connect a host to see its sites.
                 </div>
             ) : (
                 <>
@@ -2309,12 +2309,12 @@ function SitesPanel({ onClose }: { onClose: () => void }) {
                             <div style={groupStyle}>This machine</div>
                             {data.local.map((s) => (
                                 <Row
-                                    key={`local:${s.url}`}
-                                    keyId={`local:${s.url}`}
+                                    key={`local:${s.genName}`}
+                                    keyId={`local:${s.genName}`}
                                     name={s.genName}
-                                    sub={s.url}
-                                    title={`Open ${s.url} in a Genie browser window`}
-                                    onClick={() => openLocal(s.url, s.genName)}
+                                    sub={s.hostname}
+                                    title={`Open ${s.genName} in the Genie browser`}
+                                    onClick={() => openLocal(s.genName)}
                                 />
                             ))}
                         </>

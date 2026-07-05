@@ -21,7 +21,13 @@ import {
     remoteListEnabledGenSites,
     type EnabledGenSite,
 } from '../remote';
+import { createLocalSiteCarrier, type LocalTarget } from '../sites/local-carrier';
+import { listLocalEnabledGenSites, localTargetsBySiteId } from '../sites/local-sites';
 import { DEVICE_PRESETS, devicePreset, initialGenUrl, normalizeNavUrl } from './chrome';
+
+/** The connKey the LOCAL Testing Browser instance uses (this machine's own
+ *  loopback dev sites — no host connection). */
+export const LOCAL_CONN_KEY = 'local';
 
 /**
  * The Testing Browser (serve-local-sites Phase D, design §3a/§4) — the real remote
@@ -86,6 +92,11 @@ interface TestingBrowserInstance {
     /** Active device-emulation preset id. */
     presetId: string;
     refreshTimer: NodeJS.Timeout | null;
+    /** True for the LOCAL instance (this machine's own sites, dialed loopback). */
+    isLocal: boolean;
+    /** siteId → loopback target the local carrier resolves against (local only,
+     *  refreshed alongside genMap). */
+    localTargets: Map<string, LocalTarget>;
 }
 
 /** connKey → instance (one Testing Browser per host connection). */
@@ -115,14 +126,26 @@ function enabledGenSet(inst: TestingBrowserInstance): Set<string> {
 export async function openTestingBrowser(
     connKey: string,
     hostname: string,
+    /** Open this `.gen` URL as the first tab instead of the site list's first
+     *  (the header popover clicks a SPECIFIC site). Focuses/navigates an already-
+     *  open instance to it too. */
+    initialUrl?: string,
 ): Promise<{ ok: boolean; error?: string }> {
     const existing = instances.get(connKey);
     if (existing && !existing.window.isDestroyed()) {
+        if (initialUrl) openTab(existing, initialUrl);
         existing.window.show();
         existing.window.focus();
         return { ok: true };
     }
-    const carrier = getSiteCarrier(connKey);
+    const isLocal = connKey === LOCAL_CONN_KEY;
+    // The local carrier resolves siteId → loopback target against this map, which
+    // refreshSites keeps current. Created BEFORE the carrier so the closure is
+    // stable; populated on the first refresh below.
+    const localTargets = new Map<string, LocalTarget>();
+    const carrier = isLocal
+        ? createLocalSiteCarrier((siteId) => localTargets.get(siteId) ?? null)
+        : getSiteCarrier(connKey);
     if (!carrier) {
         // A relay connection with the carrier gated off (owner decision #4) is a
         // distinct, non-error case — the connection is live, relay site-tunneling
@@ -196,6 +219,8 @@ export async function openTestingBrowser(
         contentBounds: { x: 0, y: 96, width: 1200, height: 724 },
         presetId: 'fit',
         refreshTimer: null,
+        isLocal,
+        localTargets,
     };
     instances.set(connKey, inst);
     chromeWcToConnKey.set(win.webContents.id, connKey);
@@ -220,7 +245,7 @@ export async function openTestingBrowser(
     inst.refreshTimer = setInterval(() => void refreshSites(inst), SITE_REFRESH_MS);
     inst.refreshTimer.unref?.();
 
-    const first = initialGenUrl([...inst.genMap.keys()]);
+    const first = initialUrl ?? initialGenUrl([...inst.genMap.keys()]);
     if (first) openTab(inst, first);
 
     return { ok: true };
@@ -246,13 +271,22 @@ function teardown(connKey: string): void {
 
 // --- enabled-.gen refresh --------------------------------------------------
 
-/** Re-pull the host's enabled `.gen` sites into the shim's resolver map + push the
- *  fresh list to the chrome. Silent on failure (host locked/unreachable → []). */
+/** Re-pull the enabled `.gen` sites into the shim's resolver map + push the fresh
+ *  list to the chrome. For the LOCAL instance the source is this machine's own
+ *  enabled sites (aggregated across workspaces) and the carrier's loopback-target
+ *  map is refreshed too; for a host it's the host's `/api/sites`. Silent on
+ *  failure (host locked/unreachable, or no local sites → []). */
 async function refreshSites(inst: TestingBrowserInstance): Promise<void> {
-    const sites = await remoteListEnabledGenSites(inst.connKey);
+    const sites = inst.isLocal
+        ? await listLocalEnabledGenSites().catch(() => [])
+        : await remoteListEnabledGenSites(inst.connKey);
     inst.genMap.clear();
     for (const s of sites) inst.genMap.set(s.genName, { siteId: s.siteId, hostname: s.hostname });
     inst.sites = sites;
+    if (inst.isLocal) {
+        inst.localTargets.clear();
+        for (const [id, t] of localTargetsBySiteId(sites)) inst.localTargets.set(id, t);
+    }
     pushState(inst);
 }
 

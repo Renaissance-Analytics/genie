@@ -119,6 +119,7 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         // sites and can't spawn local browser windows. Honest no-ops for the type.
         all: async () => ({ local: [], hosts: [] }),
         openLocal: async () => ({ ok: false, error: 'not available in a host window' }),
+        // (openLocal takes a genName now; the host-window stub ignores it.)
     };
 
     // The host's terminal-spec model (the grid's backbone) — pass-through.
