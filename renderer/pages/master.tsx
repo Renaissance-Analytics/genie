@@ -60,6 +60,7 @@ import {
     ulid,
     type Changelog,
     type WatchTypeCounts,
+    type GenSitesAll,
     type TerminalSpec,
     type UpdaterStatus,
     type WorkspaceRow,
@@ -2039,6 +2040,7 @@ function TitleBar({
                 <span className="ttl">{stageWorkspaceName}</span>
             )}
             <span className="spacer" />
+            <SitesButton />
             <HostsButton />
             <UpdatePill />
             {githubNeedsResolve && (
@@ -2148,6 +2150,193 @@ function RemoteIndicator() {
                 ×
             </button>
         </span>
+    );
+}
+
+/**
+ * `.gen` sites picker — a titlebar affordance that, on hover/click, lists every
+ * `.gen` dev site reachable: THIS machine's own loopback dev sites (opened
+ * directly in a Genie browser window — no remote connection needed) and each
+ * CONNECTED host's exposed `.gen` sites (opened in that host's Testing Browser).
+ * Mirrors the Hosts button UX. Hidden inside a host window.
+ */
+function SitesButton() {
+    const isHostWindow =
+        typeof window !== 'undefined' && /[?&]host=/.test(window.location.search);
+    const [open, setOpen] = useState(false);
+    const [hovering, setHovering] = useState(false);
+    if (isHostWindow) return null;
+    const show = open || hovering;
+    return (
+        <div
+            style={{ position: 'relative', display: 'inline-flex' }}
+            onMouseEnter={() => setHovering(true)}
+            onMouseLeave={() => setHovering(false)}
+        >
+            <button
+                type="button"
+                className="gicon"
+                title="Browse your .gen dev sites — local and from connected hosts"
+                aria-label=".gen sites"
+                aria-expanded={show}
+                onClick={() => setOpen((o) => !o)}
+            >
+                {/* globe glyph */}
+                <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M3 12h18" />
+                    <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18" />
+                </svg>
+            </button>
+            {show && <SitesPanel onClose={() => { setOpen(false); setHovering(false); }} />}
+        </div>
+    );
+}
+
+function SitesPanel({ onClose }: { onClose: () => void }) {
+    const [data, setData] = useState<GenSitesAll | null>(null);
+
+    useEffect(() => {
+        let alive = true;
+        void api()
+            .sites.all()
+            .then((d) => alive && setData(d))
+            .catch(() => alive && setData({ local: [], hosts: [] }));
+        return () => {
+            alive = false;
+        };
+    }, []);
+
+    const openLocal = (url: string, label: string) => {
+        void api().sites.openLocal(url, label).catch(() => {});
+        onClose();
+    };
+    const openHost = (connKey: string, hostname: string) => {
+        // The host's Testing Browser resolves its `.gen` sites over the tunnel.
+        void api().testingBrowser?.open(connKey, hostname).catch(() => {});
+        onClose();
+    };
+
+    const empty =
+        data !== null && data.local.length === 0 && data.hosts.length === 0;
+
+    const groupStyle: React.CSSProperties = {
+        fontSize: 10.5,
+        letterSpacing: '0.04em',
+        textTransform: 'uppercase',
+        color: '#71717a',
+        padding: '8px 6px 3px',
+    };
+    const rowStyle: React.CSSProperties = {
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        gap: 1,
+        width: '100%',
+        textAlign: 'left',
+        background: 'transparent',
+        border: 'none',
+        borderRadius: 7,
+        padding: '6px 8px',
+        cursor: 'pointer',
+        color: '#e4e4e7',
+    };
+
+    const Row = ({
+        keyId,
+        name,
+        sub,
+        onClick,
+        title,
+    }: {
+        keyId: string;
+        name: string;
+        sub: string;
+        onClick: () => void;
+        title: string;
+    }) => (
+        <button
+            key={keyId}
+            type="button"
+            style={rowStyle}
+            title={title}
+            onClick={onClick}
+            onMouseEnter={(e) => (e.currentTarget.style.background = '#26262e')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        >
+            <span style={{ fontWeight: 600 }}>{name}</span>
+            <span style={{ fontSize: 11, color: '#a1a1aa' }}>{sub}</span>
+        </button>
+    );
+
+    return (
+        <div
+            role="menu"
+            aria-label=".gen sites"
+            style={{
+                position: 'absolute',
+                top: 'calc(100% + 6px)',
+                right: 0,
+                zIndex: 61,
+                width: 300,
+                maxHeight: 420,
+                overflowY: 'auto',
+                background: '#141418',
+                border: '1px solid #2a2a33',
+                borderRadius: 10,
+                boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
+                padding: 8,
+                fontSize: 12,
+                color: '#e4e4e7',
+            }}
+        >
+            <div style={{ padding: '4px 6px 2px' }}>
+                <strong style={{ fontSize: 11, letterSpacing: '0.04em', color: '#a1a1aa' }}>
+                    DEV SITES
+                </strong>
+            </div>
+            {data === null ? (
+                <div style={{ padding: '10px 6px', color: '#a1a1aa' }}>Finding .gen sites…</div>
+            ) : empty ? (
+                <div style={{ padding: '10px 6px', color: '#a1a1aa', lineHeight: 1.5 }}>
+                    No <code>.gen</code> dev sites found. Local sites come from your hosts
+                    file (e.g. Herd/Valet); connect a host to see its sites.
+                </div>
+            ) : (
+                <>
+                    {data.local.length > 0 && (
+                        <>
+                            <div style={groupStyle}>This machine</div>
+                            {data.local.map((s) => (
+                                <Row
+                                    key={`local:${s.url}`}
+                                    keyId={`local:${s.url}`}
+                                    name={s.genName}
+                                    sub={s.url}
+                                    title={`Open ${s.url} in a Genie browser window`}
+                                    onClick={() => openLocal(s.url, s.genName)}
+                                />
+                            ))}
+                        </>
+                    )}
+                    {data.hosts.map((h) => (
+                        <div key={`host:${h.connKey}`}>
+                            <div style={groupStyle}>{h.hostname}</div>
+                            {h.sites.map((s) => (
+                                <Row
+                                    key={`${h.connKey}:${s.siteId}`}
+                                    keyId={`${h.connKey}:${s.siteId}`}
+                                    name={s.genName}
+                                    sub={`on ${h.hostname}`}
+                                    title={`Open ${s.genName} in ${h.hostname}'s Testing Browser`}
+                                    onClick={() => openHost(h.connKey, h.hostname)}
+                                />
+                            ))}
+                        </div>
+                    ))}
+                </>
+            )}
+        </div>
     );
 }
 

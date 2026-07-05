@@ -124,8 +124,11 @@ import {
     forgetHost,
     renameKnownHost,
     broadcastLocal,
+    remoteListEnabledGenSites,
     type RemoteHost,
 } from './remote';
+import { localSiteUrl } from './sites/gen-url';
+import { openLocalSiteWindow } from './sites/local-window';
 import {
     openTestingBrowser,
     testingBrowserState,
@@ -430,6 +433,43 @@ export function registerIpcHandlers(): void {
             setWorkspaceTunnelSite(workspaceId, siteId, patch);
             return { ok: true };
         },
+    );
+
+    // `sites:all` — the header `.gen` popover's data: THIS machine's local dev
+    // sites (browsable directly, no remote connection) PLUS every connected
+    // host's enabled `.gen` sites. Local sites open in a Genie browser window at
+    // their real loopback URL; host sites open in that host's Testing Browser.
+    ipcMain.handle('sites:all', async () => {
+        // Local: all discovered loopback dev sites (machine-wide; the per-workspace
+        // enable/genName is a REMOTE-exposure concern, irrelevant to local browsing
+        // — so we list every real `site` with a derived `.gen` label + real URL).
+        let local: Array<{ genName: string; hostname: string; url: string }> = [];
+        try {
+            local = (await discoverSites({}))
+                .filter((s) => s.kind === 'site')
+                .map((s) => ({
+                    genName: s.genName,
+                    hostname: s.hostname,
+                    url: localSiteUrl(s.scheme, s.hostname, s.port),
+                }));
+        } catch {
+            local = [];
+        }
+        // Connected hosts: each one's ENABLED `.gen` set (what it chose to expose).
+        const connected = listKnownHosts().filter((h) => h.connected);
+        const hosts = await Promise.all(
+            connected.map(async (h) => ({
+                connKey: h.connKey,
+                hostname: h.name || h.hostname,
+                sites: await remoteListEnabledGenSites(h.connKey).catch(() => []),
+            })),
+        );
+        return { local, hosts: hosts.filter((h) => h.sites.length > 0) };
+    });
+
+    // Open a LOCAL dev site in a Genie browser window (real loopback URL).
+    ipcMain.handle('sites:open-local', (_e, url: string, label: string) =>
+        openLocalSiteWindow(String(url), String(label ?? url)),
     );
 
     // --- Agent MCP server status / restart (Settings → Agent MCP) -------

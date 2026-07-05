@@ -194,6 +194,27 @@ export interface SiteView {
     siteId: string;
 }
 
+/** One local dev site in the header `.gen` popover — opens at its real URL. */
+export interface LocalGenSite {
+    genName: string;
+    hostname: string;
+    /** The real loopback URL a Genie browser window opens (e.g. https://tynn.test). */
+    url: string;
+}
+
+/** One connected host's enabled `.gen` site in the header popover. */
+export interface HostGenSite {
+    genName: string;
+    siteId: string;
+    hostname: string;
+}
+
+/** The header `.gen` popover payload: local sites + per-connected-host sites. */
+export interface GenSitesAll {
+    local: LocalGenSite[];
+    hosts: Array<{ connKey: string; hostname: string; sites: HostGenSite[] }>;
+}
+
 /** A per-site tunnel-config patch (mirrors `TunnelSiteConfig` in
  *  main/mobile/hosts.ts). Every field optional — send only what changed. */
 export interface TunnelSiteConfig {
@@ -1175,6 +1196,11 @@ export interface GenieApi {
             siteId: string,
             patch: TunnelSiteConfig,
         ) => Promise<{ ok: boolean }>;
+        /** The header `.gen` popover's data: this machine's local dev sites +
+         *  each CONNECTED host's enabled `.gen` sites. */
+        all: () => Promise<GenSitesAll>;
+        /** Open a LOCAL dev site in a Genie browser window (real loopback URL). */
+        openLocal: (url: string, label: string) => Promise<{ ok: boolean; error?: string }>;
     };
     mcp: {
         status: () => Promise<McpServerState>;

@@ -114,6 +114,11 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 method: 'POST',
                 json: { workspaceId, siteId, patch },
             })) as { ok: boolean },
+        // The header `.gen` popover is a LOCAL-window affordance (hidden inside a
+        // host window), so these never fire here — a remote window owns no local
+        // sites and can't spawn local browser windows. Honest no-ops for the type.
+        all: async () => ({ local: [], hosts: [] }),
+        openLocal: async () => ({ ok: false, error: 'not available in a host window' }),
     };
 
     // The host's terminal-spec model (the grid's backbone) — pass-through.
