@@ -22,6 +22,9 @@ export interface TailnetPeer {
     ip: string | null;
     online: boolean;
     os: string;
+    /** MagicDNS name (trailing dot stripped) — the address a peer's Tailscale
+     *  TLS certificate covers, so it's the DIAL address for an HTTPS host. */
+    dnsName: string | null;
 }
 
 export interface TailscaleStatus {
@@ -30,7 +33,7 @@ export interface TailscaleStatus {
     /** BackendState === 'Running' — the node is up + authenticated. */
     running: boolean;
     /** This node's tailnet identity (null before the first `up`). */
-    self: { ip: string | null; hostname: string; online: boolean } | null;
+    self: { ip: string | null; hostname: string; online: boolean; dnsName: string | null } | null;
     peers: TailnetPeer[];
     /** A login URL Tailscale surfaces when the node needs interactive auth. */
     authUrl?: string | null;
@@ -39,6 +42,12 @@ export interface TailscaleStatus {
 /** First IPv4 in a TailscaleIPs[] (the list also carries the IPv6 ULA). */
 function firstV4(ips?: string[]): string | null {
     return (ips ?? []).find((ip) => /^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) ?? null;
+}
+
+/** `DNSName` as the status JSON reports it ends with a dot — strip it. */
+function stripDnsDot(name?: string): string | null {
+    const n = (name ?? '').replace(/\.$/, '');
+    return n || null;
 }
 
 /** Resolve the `tailscale` CLI path for this platform, or null when not installed. */
@@ -70,8 +79,11 @@ export function parseTailscaleStatus(json: string): Omit<TailscaleStatus, 'insta
     let data: {
         BackendState?: string;
         AuthURL?: string;
-        Self?: { TailscaleIPs?: string[]; HostName?: string; Online?: boolean };
-        Peer?: Record<string, { TailscaleIPs?: string[]; HostName?: string; Online?: boolean; OS?: string }>;
+        Self?: { TailscaleIPs?: string[]; HostName?: string; Online?: boolean; DNSName?: string };
+        Peer?: Record<
+            string,
+            { TailscaleIPs?: string[]; HostName?: string; Online?: boolean; OS?: string; DNSName?: string }
+        >;
     };
     try {
         data = JSON.parse(json);
@@ -84,6 +96,7 @@ export function parseTailscaleStatus(json: string): Omit<TailscaleStatus, 'insta
               ip: firstV4(data.Self.TailscaleIPs),
               hostname: data.Self.HostName ?? '',
               online: !!data.Self.Online,
+              dnsName: stripDnsDot(data.Self.DNSName),
           }
         : null;
 
@@ -92,6 +105,7 @@ export function parseTailscaleStatus(json: string): Omit<TailscaleStatus, 'insta
         ip: firstV4(p.TailscaleIPs),
         online: !!p.Online,
         os: p.OS ?? '',
+        dnsName: stripDnsDot(p.DNSName),
     }));
 
     return {

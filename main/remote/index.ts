@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Notification } from 'electron';
 import { WebSocket } from 'ws';
 import fs from 'node:fs';
+import httpsMod from 'node:https';
 import path from 'node:path';
 import { demandWindowAttention } from '../attention-flash';
 import { encryptSecret, decryptSecret } from '../secrets/store';
@@ -63,6 +64,28 @@ export interface RemoteHost {
     /** Tailscale MagicDNS name — a stable DIAL address (what the TLS cert covers),
      *  recorded alongside the IP. Not identity; may be absent. */
     dnsName?: string;
+    /**
+     * The host serves TLS on its port (its Tailscale cert appeared and the host
+     * auto-upgraded — it then CLOSES plain-http requests). Learned/refreshed by
+     * fetchHostPing's scheme discovery and persisted per known host. TLS dials
+     * go by `dnsName` with FULL certificate validation — the cert covers the
+     * MagicDNS name, never the raw 100.x IP.
+     */
+    tls?: boolean;
+}
+
+/** The base URL for REST calls to a host (scheme + dial address + port). */
+export function hostHttpBase(host: RemoteHost): string {
+    return host.tls && host.dnsName
+        ? `https://${host.dnsName}:${host.port}`
+        : `http://${host.ip}:${host.port}`;
+}
+
+/** The base URL for WebSocket dials to a host. */
+function hostWsBase(host: RemoteHost): string {
+    return host.tls && host.dnsName
+        ? `wss://${host.dnsName}:${host.port}`
+        : `ws://${host.ip}:${host.port}`;
 }
 
 /** After this many consecutive `/ws/events` reconnects that never reach `open`
@@ -227,6 +250,8 @@ export interface KnownHost {
     hostId?: string;
     /** Last-seen MagicDNS dial address (refreshed on connect). */
     dnsName?: string;
+    /** Last-seen scheme: the host answers over TLS on its port (refreshed on connect). */
+    tls?: boolean;
 }
 
 function knownHostsPath(): string {
@@ -260,6 +285,7 @@ export function recordKnownHost(host: RemoteHost): void {
         hostname: host.hostname,
         hostId: host.hostId,
         dnsName: host.dnsName,
+        tls: host.tls,
     };
     writeKnownHosts(store);
 }
@@ -399,7 +425,7 @@ async function connRequest(
         headers['Content-Type'] = 'application/json';
         body = JSON.stringify(init.json);
     }
-    const res = await fetch(`http://${conn.host.ip}:${conn.host.port}${reqPath}`, {
+    const res = await fetch(`${hostHttpBase(conn.host)}${reqPath}`, {
         method: init?.method ?? 'GET',
         headers,
         body,
@@ -620,45 +646,137 @@ async function refreshControlState(conn: RemoteConnection): Promise<void> {
     }
 }
 
-/** Read the host's `/api/ping`: stable identity (hostId/name/dnsName) + bridge
- *  protocol version + release app version. Null when unreachable; a host predating
- *  protocol versioning reports none → 0 (→ hard "behind"), one predating
- *  appVersion reports null (→ no soft nudge), and one predating `hostId` reports
- *  null (→ identity falls back to ip:port). */
-async function fetchHostPing(host: RemoteHost): Promise<{
+interface HostPingInfo {
     protocolVersion: number;
     appVersion: string | null;
     hostId: string | null;
     name: string | null;
     dnsName: string | null;
-} | null> {
+}
+
+interface RawPing {
+    protocolVersion?: number;
+    appVersion?: string | null;
+    hostId?: string | null;
+    name?: string | null;
+    hostname?: string | null;
+    dnsName?: string | null;
+}
+
+function shapePing(data: RawPing): HostPingInfo {
+    return {
+        protocolVersion:
+            typeof data?.protocolVersion === 'number' ? data.protocolVersion : 0,
+        appVersion: typeof data?.appVersion === 'string' ? data.appVersion : null,
+        hostId: typeof data?.hostId === 'string' && data.hostId ? data.hostId : null,
+        name:
+            typeof data?.name === 'string'
+                ? data.name
+                : typeof data?.hostname === 'string'
+                    ? data.hostname
+                    : null,
+        dnsName: typeof data?.dnsName === 'string' && data.dnsName ? data.dnsName : null,
+    };
+}
+
+/** One `/api/ping` attempt against a base URL (full TLS validation on https). */
+async function pingBase(base: string): Promise<RawPing | null> {
     try {
-        const res = await fetch(`http://${host.ip}:${host.port}/api/ping`);
+        const res = await fetch(`${base}/api/ping`);
         if (!res.ok) return null;
-        const data = (await res.json()) as {
-            protocolVersion?: number;
-            appVersion?: string | null;
-            hostId?: string | null;
-            name?: string | null;
-            hostname?: string | null;
-            dnsName?: string | null;
-        };
-        return {
-            protocolVersion:
-                typeof data?.protocolVersion === 'number' ? data.protocolVersion : 0,
-            appVersion: typeof data?.appVersion === 'string' ? data.appVersion : null,
-            hostId: typeof data?.hostId === 'string' && data.hostId ? data.hostId : null,
-            name:
-                typeof data?.name === 'string'
-                    ? data.name
-                    : typeof data?.hostname === 'string'
-                        ? data.hostname
-                        : null,
-            dnsName: typeof data?.dnsName === 'string' && data.dnsName ? data.dnsName : null,
-        };
+        return (await res.json()) as RawPing;
     } catch {
         return null;
     }
+}
+
+/**
+ * The LEARNING bootstrap for a host that flipped to TLS before we ever saw its
+ * MagicDNS name: an https `/api/ping` straight at the IP with certificate
+ * validation DISABLED — the cert can't cover a raw 100.x IP, and the dial name
+ * a validated request needs is exactly what this ping returns (`dnsName`).
+ *
+ * Deliberately safe despite the disabled validation: it carries NO credentials
+ * (the beacon is unauthenticated, tailnet-public data), and its answer is only
+ * trusted enough to obtain a DIAL NAME — every subsequent call, pairing
+ * included, dials that name with FULL validation, so a spoofed beacon can only
+ * point at a host that really owns the name's certificate, and the PIN/token
+ * still authenticates the session.
+ */
+function insecurePingByIp(ip: string, port: number): Promise<RawPing | null> {
+    return new Promise((resolve) => {
+        const req = httpsMod.request(
+            {
+                host: ip,
+                port,
+                path: '/api/ping',
+                method: 'GET',
+                rejectUnauthorized: false, // codeql[js/disabling-certificate-validation] — unauthenticated name-learning beacon only; see doc comment
+                timeout: 4000,
+            },
+            (res) => {
+                if (res.statusCode !== 200) {
+                    res.resume();
+                    resolve(null);
+                    return;
+                }
+                let body = '';
+                res.on('data', (c) => (body += c));
+                res.on('end', () => {
+                    try {
+                        resolve(JSON.parse(body) as RawPing);
+                    } catch {
+                        resolve(null);
+                    }
+                });
+            },
+        );
+        req.on('error', () => resolve(null));
+        req.on('timeout', () => {
+            req.destroy();
+            resolve(null);
+        });
+        req.end();
+    });
+}
+
+/**
+ * Read the host's `/api/ping`: stable identity (hostId/name/dnsName) + bridge
+ * protocol version + release app version — AND the scheme oracle. A host
+ * auto-upgrades to TLS the moment its Tailscale cert appears (and then closes
+ * plain-http requests), and drops back when certs are disabled; this probes the
+ * last-known scheme first, then the alternative, and RECORDS the verdict on the
+ * passed host (`tls` + `dnsName`, mutated in place) so every later dial —
+ * pairing, REST, WebSockets — speaks the right protocol at the right address.
+ * Null when unreachable either way.
+ */
+async function fetchHostPing(host: RemoteHost): Promise<HostPingInfo | null> {
+    const httpsByName = host.dnsName
+        ? { base: `https://${host.dnsName}:${host.port}`, tls: true }
+        : null;
+    const httpByIp = { base: `http://${host.ip}:${host.port}`, tls: false };
+    const attempts = host.tls
+        ? [...(httpsByName ? [httpsByName] : []), httpByIp]
+        : [httpByIp, ...(httpsByName ? [httpsByName] : [])];
+
+    for (const a of attempts) {
+        const raw = await pingBase(a.base);
+        if (raw) {
+            host.tls = a.tls;
+            if (raw.dnsName) host.dnsName = raw.dnsName;
+            return shapePing(raw);
+        }
+    }
+
+    // Both dials failed. The host may be TLS-only with a name we've never seen —
+    // learn it via the (credential-free) bootstrap, then treat the host as TLS.
+    const raw = await insecurePingByIp(host.ip, host.port);
+    if (raw && typeof raw.dnsName === 'string' && raw.dnsName) {
+        host.tls = true;
+        host.dnsName = raw.dnsName;
+        return shapePing(raw);
+    }
+    return null;
 }
 
 /** Re-check the host's version after a (re)connect and set the matching link
@@ -874,7 +992,7 @@ function startEventsBridge(conn: RemoteConnection): void {
     };
     const open = () => {
         if (conn.eventsClosed) return;
-        const url = `ws://${conn.host.ip}:${conn.host.port}/ws/events?token=${encodeURIComponent(conn.token)}`;
+        const url = `${hostWsBase(conn.host)}/ws/events?token=${encodeURIComponent(conn.token)}`;
         let ws: WebSocket;
         try {
             ws = new WebSocket(url);
@@ -1042,7 +1160,7 @@ function relayAttachTerminal(conn: RemoteConnection, id: string, workspaceId?: s
 function openHostTermSocket(conn: RemoteConnection, id: string, replayReset: boolean): void {
     if (conn.termWs.has(id)) return;
     if (replayReset) emitToConn(conn, 'terminal:data', { id, data: '\x1bc' });
-    const url = `ws://${conn.host.ip}:${conn.host.port}/ws/term?terminal=${encodeURIComponent(id)}&token=${encodeURIComponent(conn.token)}`;
+    const url = `${hostWsBase(conn.host)}/ws/term?terminal=${encodeURIComponent(id)}&token=${encodeURIComponent(conn.token)}`;
     let ws: WebSocket;
     try {
         ws = new WebSocket(url);
@@ -1245,15 +1363,13 @@ function migrateIpKeyedIdentity(host: RemoteHost, newKey: string): void {
  * fallback: old↔new still connects). Returns a host augmented with hostId/dnsName.
  */
 async function resolveHostIdentity(host: RemoteHost): Promise<RemoteHost> {
-    let hostId = host.hostId;
-    let dnsName = host.dnsName;
-    if (!hostId) {
-        const ping = await fetchHostPing(host);
-        if (ping?.hostId) {
-            hostId = ping.hostId;
-            dnsName = dnsName ?? ping.dnsName ?? undefined;
-        }
-    }
+    // ALWAYS ping — beyond identity, fetchHostPing is the SCHEME oracle: it
+    // learns/refreshes `tls` + `dnsName` on the host in place, so the pairing
+    // and token-check dials that follow speak the right protocol even when a
+    // saved record predates the host flipping to (or from) Tailscale TLS.
+    const ping = await fetchHostPing(host);
+    const hostId = host.hostId ?? ping?.hostId ?? undefined;
+    const dnsName = host.dnsName ?? ping?.dnsName ?? undefined;
     if (!hostId) return host; // old host / unreachable → ip:port fallback
     const identified: RemoteHost = { ...host, hostId, dnsName };
     migrateIpKeyedIdentity(host, connKeyOf(identified));
@@ -1297,7 +1413,7 @@ async function connectRemoteInner(
         // reconnect is one click, no PIN.
         let res: Response;
         try {
-            res = await fetch(`http://${host.ip}:${host.port}/api/pair`, {
+            res = await fetch(`${hostHttpBase(host)}/api/pair`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ pin }),
@@ -1333,7 +1449,7 @@ async function connectRemoteInner(
     // for the PIN rather than failing opaquely.
     let seedLocked = false;
     try {
-        const res = await fetch(`http://${host.ip}:${host.port}/api/state`, {
+        const res = await fetch(`${hostHttpBase(host)}/api/state`, {
             headers: { Authorization: `Bearer ${token}` },
         });
         if (res.status === 401) {
@@ -1646,7 +1762,7 @@ export function getSiteCarrier(connKey: string): SiteCarrier | null {
     const conn = connections.get(connKey);
     if (!conn) return null;
     if (conn.transport === 'tailnet') {
-        return createTailnetSiteCarrier(`http://${conn.host.ip}:${conn.host.port}`, () => conn.token);
+        return createTailnetSiteCarrier(hostHttpBase(conn.host), () => conn.token);
     }
     if (conn.transport === 'relay' && conn.relay) {
         if (!relaySiteTunnelingEnabled) return null; // owner-gated until Phase-F E2E
@@ -1705,7 +1821,7 @@ export async function remoteRequest(
         body = JSON.stringify(init.json);
     }
 
-    const res = await fetch(`http://${conn.host.ip}:${conn.host.port}${reqPath}`, {
+    const res = await fetch(`${hostHttpBase(conn.host)}${reqPath}`, {
         method: init?.method ?? 'GET',
         headers,
         body,

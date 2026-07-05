@@ -26,6 +26,9 @@ export interface GenieHost {
     hostId?: string;
     /** MagicDNS dial address advertised by the beacon (stable; cert-covered). */
     dnsName?: string;
+    /** The host answers over TLS (Tailscale-cert HTTPS) on this port — dial it
+     *  `https://<dnsName>`, never plain http (the host closes plain requests). */
+    tls?: boolean;
     /** The registry/connect key: `host:<hostId>` once identified, else `ip:port`.
      *  The picker merges known + discovered on this, so a host at a changed IP
      *  isn't a duplicate and matches its persisted entry. */
@@ -35,24 +38,53 @@ export interface GenieHost {
 /** The default mobile/Work-Mode server port (mirrors db.ts mobile_port default). */
 const DEFAULT_PORT = 51718;
 
-/** Probe one peer's port for the unauthed Genie `/api/ping` beacon. */
-async function probe(
-    ip: string,
-    port: number,
-    peerName: string,
-    timeoutMs = 1500,
-): Promise<GenieHost | null> {
+/** One beacon attempt against a specific base URL. */
+async function probeBase(
+    base: string,
+    timeoutMs: number,
+): Promise<{ genie?: boolean; hostname?: string; name?: string; hostId?: string; dnsName?: string } | null> {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-        const res = await fetch(`http://${ip}:${port}/api/ping`, { signal: ctrl.signal });
+        const res = await fetch(`${base}/api/ping`, { signal: ctrl.signal });
         if (!res.ok) return null;
         const data = (await res.json().catch(() => null)) as
             | { genie?: boolean; hostname?: string; name?: string; hostId?: string; dnsName?: string }
             | null;
-        if (!data?.genie) return null;
+        return data?.genie ? data : null;
+    } catch {
+        return null; // unreachable / not a Genie host / timed out
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/**
+ * Probe one peer's port for the unauthed Genie `/api/ping` beacon — over BOTH
+ * schemes: plain http at the IP, and (when the peer's MagicDNS name is known)
+ * https at that name with full certificate validation. A host auto-upgrades to
+ * TLS the moment its Tailscale cert appears and then CLOSES plain-http
+ * requests, so an http-only probe made HTTPS hosts vanish from discovery.
+ */
+async function probe(
+    ip: string,
+    port: number,
+    peerName: string,
+    peerDnsName: string | null,
+    timeoutMs = 1500,
+): Promise<GenieHost | null> {
+    const attempts: Array<{ base: string; tls: boolean }> = [
+        { base: `http://${ip}:${port}`, tls: false },
+        ...(peerDnsName ? [{ base: `https://${peerDnsName}:${port}`, tls: true }] : []),
+    ];
+    for (const a of attempts) {
+        const data = await probeBase(a.base, timeoutMs);
+        if (!data) continue;
         const hostId = typeof data.hostId === 'string' && data.hostId ? data.hostId : undefined;
-        const dnsName = typeof data.dnsName === 'string' && data.dnsName ? data.dnsName : undefined;
+        const dnsName =
+            (typeof data.dnsName === 'string' && data.dnsName ? data.dnsName : undefined) ??
+            peerDnsName ??
+            undefined;
         return {
             hostname: data.name || data.hostname || peerName,
             peerName,
@@ -60,14 +92,12 @@ async function probe(
             port,
             hostId,
             dnsName,
+            tls: a.tls,
             // Same scheme the remote registry uses, so known + discovered merge.
             connKey: connKeyOf({ ip, port, hostId }),
         };
-    } catch {
-        return null; // unreachable / not a Genie host / timed out
-    } finally {
-        clearTimeout(timer);
     }
+    return null;
 }
 
 /**
@@ -88,7 +118,9 @@ export async function discoverHosts(): Promise<GenieHost[]> {
     if (!status.running) return [];
     const peers = status.peers.filter((p) => p.online && p.ip);
     const found = await Promise.all(
-        peers.map((p) => probe(p.ip as string, DEFAULT_PORT, p.hostname || (p.ip as string))),
+        peers.map((p) =>
+            probe(p.ip as string, DEFAULT_PORT, p.hostname || (p.ip as string), p.dnsName),
+        ),
     );
     const byKey = new Map<string, GenieHost>();
     for (const h of found) {
@@ -137,6 +169,9 @@ export function openRemoteWindow(host: {
     ip: string;
     port: number;
     hostname: string;
+    /** TLS host → load `https://<dnsName>` (the cert never covers the IP). */
+    tls?: boolean;
+    dnsName?: string;
 }): { ok: boolean } {
     const key = `${host.ip}:${host.port}`;
     const existing = remoteWindows.get(key);
@@ -170,6 +205,10 @@ export function openRemoteWindow(host: {
     w.webContents.on('did-navigate', inject);
     w.once('ready-to-show', () => w.show());
 
-    void w.loadURL(`http://${host.ip}:${host.port}/m/`);
+    void w.loadURL(
+        host.tls && host.dnsName
+            ? `https://${host.dnsName}:${host.port}/m/`
+            : `http://${host.ip}:${host.port}/m/`,
+    );
     return { ok: true };
 }
