@@ -358,7 +358,7 @@ export default function SettingsPage() {
             <SetSection title="Defaults" desc="Applied to newly-created workspaces">
                 <SettingRow
                     label="Max views"
-                    desc="Maximum panels visible at once per workspace. Reaching the limit disables the Add Terminal / Add Editor buttons until you raise it or close a view."
+                    desc="Maximum panels visible at once per workspace. Reaching the limit disables the Add Terminal / Add Files buttons until you raise it or close a view."
                     keywords="max views panels limit layout terminals editors workspace"
                     grow
                 >

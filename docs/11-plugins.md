@@ -34,11 +34,12 @@ granted silently, and you can revoke any grant later from the same list.
 
 ## Using plugin editors
 
-A file type claimed by an enabled plugin opens **as a tab in the Editor
+A file type claimed by an enabled plugin opens **as a tab in the Files
 panel**, right next to your text tabs — click a `.xlsx`, `.pptx`, `.md`, or
 `.docx` in the file tree and it opens where you clicked it, with the same
-dirty-dot, **Ctrl/Cmd+S** save, close confirmation, and session restore as any
-other tab. Unsaved plugin-tab edits survive switching tabs.
+dirty-dot, **Ctrl/Cmd+S** save, close confirmation, session restore, and
+live-refresh-on-disk-change as any other tab. Unsaved plugin-tab edits survive
+switching tabs.
 
 Plugin editors read and write files through a **capability-scoped bridge**: a
 plugin can only touch the file types it declared, inside the workspace it was

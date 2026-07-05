@@ -478,7 +478,7 @@ const ResizableGrid = ({
                                 <span className="ai">
                                     <IconCode size={18} />
                                 </span>
-                                <span className="at">Add Editor</span>
+                                <span className="at">Add Files</span>
                                 <span className="as">
                                     browse + edit files in this workspace
                                 </span>

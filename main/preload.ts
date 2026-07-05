@@ -1127,9 +1127,13 @@ const api = {
         /** A file was created/renamed/deleted on disk in a watched workspace
          *  (outside the renderer's own edits — an agent, a git op, a tool). The
          *  Code panel re-lists its tree. Debounced + ignore-filtered in main. */
-        treeChanged: (cb: (payload: { workspacePath: string }) => void) => {
-            const handler = (_e: unknown, payload: { workspacePath: string }) =>
-                cb(payload);
+        treeChanged: (
+            cb: (payload: { workspacePath: string; changed: string[] | null }) => void,
+        ) => {
+            const handler = (
+                _e: unknown,
+                payload: { workspacePath: string; changed?: string[] | null },
+            ) => cb({ workspacePath: payload.workspacePath, changed: payload.changed ?? null });
             ipcRenderer.on('files:tree-changed', handler);
             return () => ipcRenderer.off('files:tree-changed', handler);
         },

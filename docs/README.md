@@ -20,8 +20,8 @@ renders these same pages with a navigable sidebar.
    re-enable.
 6. **[Terminal session persistence](05-session-persistence.md)** — the three
    tiers, quit confirmation, update warning, cwd resume.
-7. **[Editor](06-editor.md)** — open / edit / save, lock to a folder, git-status
-   colours, the tree context menu.
+7. **[Files panel](06-files.md)** — browse / open / edit / save, live refresh on
+   disk changes, lock to a folder, git-status colours, the tree context menu.
 8. **[Keyboard shortcuts](07-keyboard-shortcuts.md)** — the keys that make Genie
    fast.
 9. **[Settings](08-settings.md)** — every setting, explained.

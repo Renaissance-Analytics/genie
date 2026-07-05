@@ -918,7 +918,7 @@ export default function Chooser({
                                         >
                                             <span className="pick" />
                                             <IconCode size={12} />
-                                            <span className="tname">Add Editor…</span>
+                                            <span className="tname">Add Files…</span>
                                         </button>
                                     </div>
                                     {expandedProcs.has(ws.id) && (
@@ -1635,7 +1635,7 @@ function SpecRow({
                 )}
             </button>
             {spec.type === 'code' ? (
-                <span className="srow-ico code" title="Editor">
+                <span className="srow-ico code" title="Files">
                     <IconCode size={12} />
                 </span>
             ) : (

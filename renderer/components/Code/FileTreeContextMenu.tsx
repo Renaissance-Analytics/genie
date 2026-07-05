@@ -160,8 +160,8 @@ export default function FileTreeContextMenu({
                                 icon={<IconLock size={14} />}
                                 label={
                                     locked && lockedRoot === node?.id
-                                        ? 'Editor locked here'
-                                        : 'Lock Editor to this folder'
+                                        ? 'Files panel locked here'
+                                        : 'Lock Files panel to this folder'
                                 }
                                 onClick={() => {
                                     if (node) onLockToFolder(node);

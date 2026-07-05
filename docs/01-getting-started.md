@@ -40,19 +40,19 @@ With a workspace active, you have several ways to open a terminal:
 The terminal opens rooted at the workspace folder, using your default shell
 (configurable in **[Settings](08-settings.md)**).
 
-## 4. Open an editor
+## 4. Open the Files panel
 
-To browse and edit files instead, open an **Editor** view:
+To browse and edit files instead, open a **Files** panel:
 
 - In the toolbar, click the chevron next to **Add Terminal** and choose **Add
-  Editor**.
-- Or click the **Add Editor** tile in the empty grid — *"browse + edit files in
+  Files**.
+- Or click the **Add Files** tile in the empty grid — *"browse + edit files in
   this workspace"*.
-- Or use **Add Editor…** under the workspace in the chooser.
+- Or use **Add Files…** under the workspace in the chooser.
 
-The editor shows a file tree on the left; click a file to open it. See the
-**[Editor](06-editor.md)** page for saving, locking to a folder, and the tree
-context menu.
+The panel shows a file tree on the left; click a file to open it. See the
+**[Files panel](06-files.md)** page for saving, live refresh, locking to a
+folder, and the tree context menu.
 
 ## 5. Sign in (optional, but recommended)
 

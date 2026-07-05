@@ -707,9 +707,9 @@ function MasterInner() {
                     : s.workspace_id === workspaceId,
             );
             const baseLabel = ws.project_name.toLowerCase().replace(/\s+/g, '-');
-            // Editor views get an `-editor` label so they read distinctly in
-            // the tree alongside terminals.
-            const root = type === 'code' ? `${baseLabel}-editor` : baseLabel;
+            // Files panels get a `-files` label so they read distinctly in the
+            // tree alongside terminals.
+            const root = type === 'code' ? `${baseLabel}-files` : baseLabel;
             const sameType = existing.filter((s) => s.type === type);
             const label = sameType.length === 0 ? root : `${root}-${sameType.length + 1}`;
             const created = await api().terminalSpec.create({
@@ -1176,7 +1176,7 @@ function MasterInner() {
                         (s) => specWorkspaceId(s) === workspaceId && s.type === 'code',
                     ).length;
                     const label =
-                        existingCode === 0 ? `${base}-editor` : `${base}-editor-${existingCode + 1}`;
+                        existingCode === 0 ? `${base}-files` : `${base}-files-${existingCode + 1}`;
                     const created = await api().terminalSpec.create({
                         id: ulid(),
                         workspace_id: system ? null : workspaceId,

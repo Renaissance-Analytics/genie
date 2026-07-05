@@ -50,6 +50,9 @@ interface FileState {
     dirty: boolean;
     kind?: 'text' | 'plugin';
     plugin?: { pluginId: string; fancyExport: string };
+    /** Bumped when the file is reloaded from disk after an EXTERNAL change, to
+     *  force the editor (text or plugin body) to remount with the fresh content. */
+    rev?: number;
 }
 
 /**
@@ -245,16 +248,83 @@ export default function CodePanel({
         };
     }, [workspacePath, locked, lockedRoot, system]);
 
+    // Paths THIS panel just wrote (Ctrl+S), so the fs-watch echo of our own save
+    // doesn't reload the tab out from under the user (losing cursor/scroll on a
+    // text tab, remounting a plugin editor). rel → timestamp; entries expire.
+    const justWrote = useRef(new Map<string, number>());
+    const SELF_WRITE_MS = 1500;
+
+    /**
+     * Reconcile OPEN tabs against disk after an external change — the core
+     * auto-refresh (an agent, a git op, a tool, or a plugin wrote the file).
+     * `changed` names the rel paths that changed (null = reconcile every open
+     * tab). A CLEAN tab reloads silently; a DIRTY tab is LEFT ALONE so unsaved
+     * edits are never clobbered. Works for text tabs (re-read + diff) and plugin
+     * tabs (bump `rev` → the body re-reads through the guarded bridge on remount)
+     * alike, so plugins get live-refresh for free.
+     */
+    const reconcileOpenTabs = useCallback(
+        async (changed: string[] | null) => {
+            const open = openFilesRef.current;
+            if (!open.length) return;
+            const targets = changed === null ? open : open.filter((p) => changed.includes(p));
+            for (const rel of targets) {
+                const st = filesRef.current[rel];
+                if (!st || st.dirty) continue; // never clobber unsaved edits
+                const wroteAt = justWrote.current.get(rel);
+                if (wroteAt && Date.now() - wroteAt < SELF_WRITE_MS) continue; // our own save
+                if (st.kind === 'plugin') {
+                    // Remount the plugin body → it re-reads the file from disk.
+                    setFiles((m) =>
+                        m[rel] ? { ...m, [rel]: { ...m[rel], rev: (m[rel].rev ?? 0) + 1 } } : m,
+                    );
+                } else {
+                    try {
+                        const { content: text } = await api().files.read(workspacePath, rel, system);
+                        const now = filesRef.current[rel];
+                        // Re-check AFTER the await: the user may have started typing
+                        // during the read (now dirty) — never clobber that. Only
+                        // apply a real change, avoiding a needless remount (cursor
+                        // reset) when disk already matches.
+                        if (now && !now.dirty && text !== now.content) {
+                            setFiles((m) =>
+                                m[rel]
+                                    ? {
+                                          ...m,
+                                          [rel]: {
+                                              ...m[rel],
+                                              content: text,
+                                              dirty: false,
+                                              rev: (m[rel].rev ?? 0) + 1,
+                                          },
+                                      }
+                                    : m,
+                            );
+                        }
+                    } catch {
+                        /* file vanished — the tree reload drops its tree node; the
+                           tab stays until the user closes it (its content is the
+                           last-read copy) */
+                    }
+                }
+            }
+        },
+        [workspacePath, system],
+    );
+    const reconcileRef = useRef(reconcileOpenTabs);
+    reconcileRef.current = reconcileOpenTabs;
+
     // Live-refresh: watch the workspace on disk so files created, renamed, or
     // deleted OUTSIDE the editor (an agent, a git checkout, an MCP tool) appear
-    // without a manual reload. Debounced in main; here we just re-list on the
-    // push. Keyed on workspacePath only — reloadTree is read via a ref so a
-    // lock/root change never churns the watcher.
+    // without a manual reload — the tree re-lists AND open tabs reload (see
+    // reconcileOpenTabs). Debounced in main. Keyed on workspacePath only —
+    // reloadTree/reconcile read via refs so a lock/root change never churns it.
     useEffect(() => {
         void api().files.watch(workspacePath);
         let t: ReturnType<typeof setTimeout> | null = null;
-        const off = api().on.treeChanged(({ workspacePath: changed }) => {
-            if (changed !== workspacePath) return;
+        const off = api().on.treeChanged(({ workspacePath: changedWs, changed }) => {
+            if (changedWs !== workspacePath) return;
+            void reconcileRef.current(changed);
             if (t) clearTimeout(t);
             t = setTimeout(() => void reloadTreeRef.current(), 120);
         });
@@ -432,13 +502,16 @@ export default function CodePanel({
         const st = filesRef.current[file];
         if (!st) return;
         // A plugin tab saves through ITS body (the model lives there); the
-        // body clears the dirty flag via onDirtyChange.
+        // body clears the dirty flag via onDirtyChange. Mark it self-written so
+        // the fs-watch echo doesn't remount the body we just saved from.
         if (st.kind === 'plugin') {
+            justWrote.current.set(file, Date.now());
             await pluginSaves.current.get(file)?.();
             setGitRefreshKey((k) => k + 1);
             return;
         }
         try {
+            justWrote.current.set(file, Date.now());
             await api().files.write(workspacePath, file, st.content, system);
             setFiles((m) =>
                 m[file] ? { ...m, [file]: { ...m[file], dirty: false } } : m,
@@ -766,6 +839,9 @@ export default function CodePanel({
                                 }}
                             >
                                 <PluginEditorBody
+                                    // rev in the key: an external change bumps it,
+                                    // remounting the body so it re-reads from disk.
+                                    key={`${p}:${files[p]?.rev ?? 0}`}
                                     pluginId={files[p]!.plugin!.pluginId}
                                     fancyExport={files[p]!.plugin!.fancyExport}
                                     root={workspacePath}
@@ -777,7 +853,9 @@ export default function CodePanel({
                         ))}
                     {activeFile && active && active.kind !== 'plugin' ? (
                         <CodeEditor
-                            key={activeFile}
+                            // rev in the key: an external change re-reads the file
+                            // and bumps rev, remounting with the fresh disk content.
+                            key={`${activeFile}:${active.rev ?? 0}`}
                             className="cv-editor"
                             value={active.content}
                             language={active.language}

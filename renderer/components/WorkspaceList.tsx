@@ -122,7 +122,7 @@ export default function WorkspaceList({ rows, onOpen, onRemove, onAdd }: Props) 
                                 size="sm"
                                 icon="arrow-right"
                                 onClick={() => onOpen(w.id)}
-                                title="Open editor + terminal"
+                                title="Open files + terminal"
                             >
                                 Open
                             </Action>

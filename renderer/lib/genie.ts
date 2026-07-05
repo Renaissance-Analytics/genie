@@ -2003,9 +2003,11 @@ export interface GenieApi {
          *  MCP-provisioned child workspaces) — re-fetch the workspace list. */
         workspacesChanged: (cb: () => void) => () => void;
         /** A file changed on disk in a watched workspace (an agent, a git op, a
-         *  tool) — the Code panel re-lists its tree. Debounced in main. */
+         *  tool) — the Files panel re-lists its tree AND reloads the open tabs
+         *  named in `changed` (forward-slashed rel paths; null = reload all open
+         *  tabs, the platform couldn't name them). Debounced in main. */
         treeChanged: (
-            cb: (payload: { workspacePath: string }) => void,
+            cb: (payload: { workspacePath: string; changed: string[] | null }) => void,
         ) => () => void;
         /** Tier 3 detached-host status — fired on fallback to in-process. */
         terminalHostStatus: (

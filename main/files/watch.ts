@@ -28,10 +28,20 @@ interface WatchEntry {
     paths: Set<string>;
     refs: number;
     timer: NodeJS.Timeout | null;
+    /** Forward-slashed workspace-relative paths changed during the debounce
+     *  window, so the renderer can reload EXACTLY the open tabs that changed. */
+    changed: Set<string>;
+    /** A change the platform couldn't name (null filename) landed → the renderer
+     *  must fall back to reconciling ALL open tabs, not a named subset. */
+    sawUnnamed: boolean;
 }
 
 const watchers = new Map<string, WatchEntry>();
 const DEBOUNCE_MS = 250;
+/** Above this many distinct changed files in one window (e.g. an npm install),
+ *  stop enumerating and signal "unknown" — the renderer reloads its open tabs,
+ *  a set bounded by what's actually open, instead of shipping a huge list. */
+const MAX_NAMED_CHANGES = 50;
 
 /** True when a change at this workspace-relative path is tree-irrelevant noise. */
 function isIgnoredPath(relPath: string): boolean {
@@ -48,10 +58,19 @@ function isIgnoredPath(relPath: string): boolean {
 
 function broadcast(entry: WatchEntry): void {
     const wins = BrowserWindow.getAllWindows();
+    // `changed` = the forward-slashed rel paths that changed this window, or null
+    // when we couldn't enumerate them (an unnamed event, or too many) → the
+    // renderer reloads all its open tabs instead of a named subset.
+    const changed =
+        entry.sawUnnamed || entry.changed.size > MAX_NAMED_CHANGES
+            ? null
+            : [...entry.changed];
+    entry.changed.clear();
+    entry.sawUnnamed = false;
     for (const original of entry.paths) {
         for (const w of wins) {
             if (!w.isDestroyed()) {
-                w.webContents.send('files:tree-changed', { workspacePath: original });
+                w.webContents.send('files:tree-changed', { workspacePath: original, changed });
             }
         }
     }
@@ -84,13 +103,18 @@ export function watchWorkspace(workspacePath: string): void {
         paths: new Set([workspacePath]),
         refs: 1,
         timer: null,
+        changed: new Set(),
+        sawUnnamed: false,
     };
 
     watcher.on('change', (_event, filename) => {
         // `filename` is workspace-relative (Buffer | string | null). Null means
-        // the platform couldn't name it — treat as a real change and reload.
+        // the platform couldn't name it — reload the tree AND fall back to
+        // reconciling all open tabs (we don't know which changed).
         const rel = filename == null ? '' : filename.toString();
         if (rel && isIgnoredPath(rel)) return;
+        if (rel) entry.changed.add(rel.replace(/\\/g, '/'));
+        else entry.sawUnnamed = true;
         if (entry.timer) clearTimeout(entry.timer);
         entry.timer = setTimeout(() => {
             entry.timer = null;
