@@ -267,7 +267,13 @@ export default function CodePanel({
         async (changed: string[] | null) => {
             const open = openFilesRef.current;
             if (!open.length) return;
-            const targets = changed === null ? open : open.filter((p) => changed.includes(p));
+            // ONLY reload a tab whose OWN file changed. An unnamed change
+            // (`changed === null` — the platform couldn't name it) reloads the
+            // TREE only, never the open viewers: reloading the file you're
+            // looking at just because a DIFFERENT file changed is exactly the
+            // spurious-reload we must not do.
+            if (changed === null) return;
+            const targets = open.filter((p) => changed.includes(p));
             for (const rel of targets) {
                 const st = filesRef.current[rel];
                 if (!st || st.dirty) continue; // never clobber unsaved edits

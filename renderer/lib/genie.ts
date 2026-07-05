@@ -2030,9 +2030,10 @@ export interface GenieApi {
          *  MCP-provisioned child workspaces) — re-fetch the workspace list. */
         workspacesChanged: (cb: () => void) => () => void;
         /** A file changed on disk in a watched workspace (an agent, a git op, a
-         *  tool) — the Files panel re-lists its tree AND reloads the open tabs
-         *  named in `changed` (forward-slashed rel paths; null = reload all open
-         *  tabs, the platform couldn't name them). Debounced in main. */
+         *  tool) — the Files panel re-lists its tree AND reloads ONLY the open
+         *  tabs whose file is named in `changed` (forward-slashed rel paths). A
+         *  null `changed` (too many, or an unnamed event) re-lists the tree only
+         *  and reloads no open viewer. Debounced in main. */
         treeChanged: (
             cb: (payload: { workspacePath: string; changed: string[] | null }) => void,
         ) => () => void;
