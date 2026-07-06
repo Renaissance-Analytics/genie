@@ -293,6 +293,33 @@ export default function SettingsPage() {
                     />
                 </SettingRow>
 
+                {/* Auto-install toggle acts on THIS machine (edits ~/.bashrc + the
+                    Windows User PATH), so hide it in a remote/host settings window
+                    where it would target the client, not the host. */}
+                {!restricted && (
+                    <SettingRow
+                        label="Install system-wide automatically"
+                        desc={
+                            <>
+                                On startup, install the toolkit to{' '}
+                                <code>~/.genie/tynn-cli</code> so its commands work in
+                                every shell — Git Bash via <code>~/.bashrc</code>, and
+                                cmd / PowerShell via generated <code>.cmd</code> shims on
+                                your User PATH. Runs once per Genie build; open a new
+                                shell to pick up PATH changes.
+                            </>
+                        }
+                        keywords="install system-wide automatic startup cli tools bashrc path powershell cmd shims global"
+                    >
+                        <Switch
+                            checked={s.cli_install_systemwide !== 'off'}
+                            onCheckedChange={(on: boolean) =>
+                                patch({ cli_install_systemwide: on ? 'on' : 'off' })
+                            }
+                        />
+                    </SettingRow>
+                )}
+
                 {/* Install system-wide runs on THIS machine's ~/.bashrc via
                     api().cli.install() (not bridged) — hidden in a remote window,
                     where it would install on the client, not the host. The toggle

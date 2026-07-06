@@ -248,6 +248,63 @@ Confirm with the user before writing into a shared/committed config; a
 local-only hook file is fine to add on your own. This complements — doesn't
 replace — calling \`imDone\` explicitly when you finish.
 
+## tynn-cli toolkit — already on your PATH
+Genie bundles a small bash dev toolkit and puts it on your PATH — in Genie
+terminals AND system-wide once installed (bash via \`~/.bashrc\`; cmd + PowerShell
+on Windows via generated \`.cmd\` shims on the User PATH). **Run these commands
+DIRECTLY in your current shell. NEVER open a new terminal — and never request
+approval to spawn one — just to run one.** They're workspace-aware: Genie injects
+\`GENIE_WORKSPACE\`, \`GENIE_REPO\`, \`GENIE_ENVELOPE_ROOT\`, and \`GENIE_CLI_HOME\` so a
+command knows which project/repo it's acting on.
+
+- \`resetme\` — reset the detected stack's DB/state (Laravel \`migrate:fresh\` or the
+  stack's equivalent). Flags: \`--seed\`, \`--demo\`, \`--dry-run\`, \`--stack\`.
+- \`puse <tool>\` — install/configure a dev tool for the detected stack
+  (e.g. \`puse pest\`, \`puse vitest\`, \`puse playwright\`, \`puse pest --browser\`).
+  \`puse --list\` / \`puse --stack\` to inspect.
+- \`sandbox <cmd>\` — run a command inside the sandbox project dir configured in
+  \`tynn.config\` (\`SANDBOX_PATH\`); bare \`sandbox\` prints the path + stack.
+- \`pkg <pkg> <cmd>\` — run a command in a monorepo \`packages/<pkg>\` dir
+  (auto-detects when there's a single package).
+- \`npmx <dir> <cmd>\` — run an npm command in a subdirectory that has its own
+  \`package.json\`.
+- \`copy-screenshots <file:folder> …\` — copy browser-extension screenshots into
+  project folders (default target \`public/screenshots\`).
+- \`genie <status|kill <id>|host …>\` — control THIS Genie's terminal host from
+  inside a terminal (list/kill terminals, restart the pty-host).
+- \`tynn\` — the toolkit's own help; \`tynn stacks\` lists supported stacks,
+  \`tynn docs\` opens the README.
+
+Supported stacks auto-detect: Laravel, Node (Prisma / Drizzle / Knex / Sequelize
+/ TypeORM), Django, Flask+Alembic, Go+Migrate. (\`resetme --seed\` is the standard
+reset-and-seed for the local dev DB.)
+
+## Local dev sites over .gen
+Genie can serve a HOST's local dev site to a remote Genie through a built-in
+Testing Browser at \`https://<name>.gen\`. The \`.gen\` proxy serves exactly **one
+origin**, so a page opened there must reference **all** of its assets, scripts,
+styles and API calls **same-origin (relative URLs)** — NOT an absolute origin
+like its real \`.test\` vhost or a separate Vite dev-server port. Anything pinned to
+another origin isn't covered by the \`.gen\` proxy, so it fails to load (blank
+styles, dead scripts, CORS/HMR errors).
+
+**Rule:** within a \`.gen\`-served page, every URL must be relative or resolve to
+the same \`.gen\` origin — never a hardcoded absolute host/port. Concrete but
+generic guidance:
+
+- **Laravel:** keep \`asset()\` / \`url()\` producing relative or same-host URLs —
+  don't pin \`APP_URL\` (or \`ASSET_URL\`) to \`https://app.test\` for dev; leave them
+  unset/relative so links follow the request host.
+- **Vite dev server:** either set \`server.origin\` to the \`.gen\` URL (so the asset
+  + HMR URLs Vite injects point at the proxied origin) OR run \`vite build\` and
+  serve the built assets statically instead of the dev server.
+- **SPA build:** use \`base: '/'\` (root-relative) so bundled asset paths aren't
+  tied to a dev host/port.
+
+This is **DEV-only** config: guard it behind a dev/env check and NEVER commit an
+absolute \`.gen\` origin into production config — it must not affect prod CI or
+deploys.
+
 ## Rule of thumb
 If you would otherwise stop and wait for the user — **finished**, **blocked**, or
 **need a decision** — reach for these tools first. In a multi-terminal,
@@ -271,6 +328,7 @@ export const GENIE_AGENTS_BRIEF = `You are running inside **Genie** — a deskto
   - **NAME THE ACTOR in every option.** The modal is read by the USER, so bare "I"/"you" invert and confuse. Convention: the agent = "Agent:"/"the agent", the user = "You:"/"you" — lead each option label with the actor (e.g. \`Agent: I create the repo and push\` vs \`You: you create the repo\`).
 - **Need a long-running background process (dev server, worker, SSR)? → \`manageProcess\`.** Don't \`&\`-background it in a terminal — Genie's Processes feature owns these so they survive and stay controllable. HOW: \`list\` / \`create\` (label + command, optional repo + autostart) / \`start\` / \`stop\` / \`restart\`.
 - **Need to run commands, read terminal output, or launch/drive another coding agent? → \`manageTerminals\` / \`runAgent\`.** \`manageTerminals\` spawns + drives real terminals (\`create\` / \`write\` / \`read\` / \`list\` / \`kill\`); \`runAgent\` launches + steers a coding agent (claude / codex / custom) — here or in a workspace this Ops project governs. These are **HIGH-POWER** (arbitrary code + autonomous agents): \`create\` / \`write\` / agent \`start\` / \`send\` are approval-gated by default. Use \`manageWorkspaces\` to list / open / activate / remove the workspaces you can act on.
+- **Dev CLI tools (\`resetme\` / \`puse\` / \`sandbox\` / …) are ALREADY on your PATH** — in Genie terminals and system-wide (bash + PowerShell/cmd). Run them DIRECTLY in your current shell; NEVER open a new terminal or request approval just to run one. Call \`genieGuide\` for the full list.
 
 **Automate \`imDone\`:** if your harness has an on-finish hook (Claude Code's \`Stop\` hook in \`.claude/settings.json\`; Codex's \`notify\`), wire it ONCE to POST a \`tools/call\` for \`imDone\` to \`$GENIE_MCP_URL\` (passing \`$GENIE_TERMINAL_ID\`) so the glow fires on every finish automatically. Configure this in YOUR harness yourself — Genie won't. Call \`genieGuide\` for the exact snippet.
 

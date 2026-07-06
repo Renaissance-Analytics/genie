@@ -379,6 +379,9 @@ export interface Settings {
     /** Prepend the bundled tynn-cli bin to terminal PATH + inject GENIE_* env.
      *  Defaults ON; 'off' disables. */
     cli_tools_in_terminals?: 'on' | 'off';
+    /** Install the bundled toolkit system-wide on startup (bash + Windows
+     *  cmd/PowerShell shims), once per build. Defaults ON; 'off' opts out. */
+    cli_install_systemwide?: 'on' | 'off';
     /** Play a chime when an agent calls imDone. Defaults 'off'. */
     notify_sound?: 'on' | 'off';
     /** Show an OS notification (tray popup) when an agent calls imDone.

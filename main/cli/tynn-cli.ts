@@ -4,6 +4,12 @@ import fs from 'fs';
 import path from 'path';
 import { detectShells } from '@particle-academy/fancy-term-host';
 import { listWorkspaces } from '../db';
+import {
+    writeWinShims,
+    ensureUserPathContains,
+    isInstallCurrent,
+    type InstallMarker,
+} from './win-shims';
 
 /**
  * Bundled tynn-cli toolkit (resetme / reload / puse / sandbox / …).
@@ -119,69 +125,177 @@ export function resolveBashExe(): string | null {
     return null;
 }
 
-/**
- * Install the toolkit system-wide (for ALL the user's bash sessions, not just
- * Genie terminals). The shipped copy lives under the app's read-only resources,
- * but install.sh writes into its own dir (.custom/, tynn.config) and edits
- * ~/.bashrc — so we first copy the toolkit to a writable, update-stable home
- * (`~/.genie/tynn-cli`) and run install.sh from there.
- *
- * Bash-only (Git Bash on Windows). Resolves with the script output; `ok:false`
- * when the toolkit isn't shipped or bash/install fails.
- */
-export function installTynnCliSystemWide(): Promise<{
-    ok: boolean;
-    output: string;
-}> {
+/** The writable, update-stable install home (`~/.genie/tynn-cli`). */
+function installDest(): string {
+    return path.join(app.getPath('home'), '.genie', 'tynn-cli');
+}
+
+/** The install marker filename inside {@link installDest}. */
+const INSTALL_MARKER = '.genie-install.json';
+
+/** Read the install marker from `dest`, or null when absent/unreadable/invalid. */
+export function readInstallMarker(dest: string): InstallMarker | null {
+    try {
+        const raw = fs.readFileSync(path.join(dest, INSTALL_MARKER), 'utf8');
+        const j = JSON.parse(raw) as Partial<InstallMarker>;
+        if (j && typeof j.version === 'string') {
+            return { version: j.version, installedAt: Number(j.installedAt) || 0 };
+        }
+    } catch {
+        /* no marker / unreadable / bad json → treat as not installed */
+    }
+    return null;
+}
+
+/** Record which Genie build installed the toolkit, so a later launch can skip
+ *  re-running install.sh / re-editing files when nothing changed. Best-effort. */
+function writeInstallMarker(dest: string, version: string): void {
+    try {
+        const marker: InstallMarker = { version, installedAt: Date.now() };
+        fs.writeFileSync(
+            path.join(dest, INSTALL_MARKER),
+            JSON.stringify(marker),
+            'utf8',
+        );
+    } catch {
+        /* a missing marker just means the next launch re-installs — harmless */
+    }
+}
+
+/** Run `install.sh` under Git Bash from `dest`. Resolves with its combined
+ *  output; `ok:false` on a non-zero exit or a spawn error. */
+function runInstallScript(
+    dest: string,
+    bashExe: string,
+): Promise<{ ok: boolean; output: string }> {
     return new Promise((resolve) => {
-        const cli = resolveShippedTynnCli();
-        if (!cli) {
-            resolve({ ok: false, output: 'tynn-cli is not bundled with this build.' });
-            return;
-        }
-        let dest: string;
-        try {
-            dest = path.join(app.getPath('home'), '.genie', 'tynn-cli');
-            fs.rmSync(dest, { recursive: true, force: true });
-            copyRecursive(cli.home, dest);
-        } catch (e) {
-            resolve({
-                ok: false,
-                output: `Could not stage tynn-cli to a writable location: ${
-                    e instanceof Error ? e.message : String(e)
-                }`,
-            });
-            return;
-        }
-        const bashExe = resolveBashExe();
-        if (!bashExe) {
-            resolve({
-                ok: false,
-                output:
-                    'Git Bash not found. The toolkit is a bash toolkit — install ' +
-                    'Git for Windows (https://git-scm.com/download/win), then try again. ' +
-                    '(Windows’ built-in `bash` is the WSL launcher and can’t run it.)',
-            });
-            return;
-        }
         const installScript = path.join(dest, 'install.sh');
-        const child = spawn(bashExe, [installScript], {
-            cwd: dest,
-            env: process.env,
-        });
+        const child = spawn(bashExe, [installScript], { cwd: dest, env: process.env });
         let out = '';
         child.stdout?.on('data', (d) => (out += d.toString()));
         child.stderr?.on('data', (d) => (out += d.toString()));
         child.on('error', (e) =>
-            resolve({
-                ok: false,
-                output: `Could not run Git Bash at ${bashExe}: ${e.message}`,
-            }),
+            resolve({ ok: false, output: `Could not run Git Bash at ${bashExe}: ${e.message}` }),
         );
         child.on('close', (code) =>
             resolve({ ok: code === 0, output: out.trim() || `exit ${code}` }),
         );
     });
+}
+
+/**
+ * Install the toolkit system-wide (for ALL the user's shells, not just Genie
+ * terminals). The shipped copy lives under the app's read-only resources, but
+ * install.sh writes into its own dir (.custom/, tynn.config) and edits
+ * ~/.bashrc — so we OVERLAY-copy the toolkit into a writable, update-stable home
+ * (`~/.genie/tynn-cli`) and run install.sh from there.
+ *
+ * The copy is an OVERLAY (no wipe) so refreshing on a Genie update preserves the
+ * user's `tynn.config` (which holds LICENSES) and their `.custom/` overrides.
+ *
+ * On Windows it ALSO generates `.cmd` shims (usable from cmd AND PowerShell) and
+ * adds the shim dir to the User PATH — so the bash toolkit is reachable from
+ * every Windows shell, not only Git Bash. `writeInstallMarker` records the build
+ * for idempotent startup re-runs.
+ *
+ * Bash-only (Git Bash on Windows). Resolves with the script output; `ok:false`
+ * when the toolkit isn't shipped or bash/install fails.
+ */
+export async function performTynnCliInstall(
+    currentVersion: string,
+): Promise<{ ok: boolean; output: string }> {
+    const cli = resolveShippedTynnCli();
+    if (!cli) return { ok: false, output: 'tynn-cli is not bundled with this build.' };
+
+    const dest = installDest();
+    try {
+        // OVERLAY (never rm): refresh toolkit files, PRESERVE tynn.config /
+        // .custom / the marker so an auto-refresh never wipes user data.
+        copyRecursive(cli.home, dest);
+    } catch (e) {
+        return {
+            ok: false,
+            output: `Could not stage tynn-cli to a writable location: ${
+                e instanceof Error ? e.message : String(e)
+            }`,
+        };
+    }
+
+    const bashExe = resolveBashExe();
+    if (!bashExe) {
+        return {
+            ok: false,
+            output:
+                'Git Bash not found. The toolkit is a bash toolkit — install ' +
+                'Git for Windows (https://git-scm.com/download/win), then try again. ' +
+                '(Windows’ built-in `bash` is the WSL launcher and can’t run it.)',
+        };
+    }
+
+    // Bash coverage: install.sh adds bin/ to ~/.bashrc + bootstraps tynn.config.
+    const result = await runInstallScript(dest, bashExe);
+    let output = result.output;
+
+    // Windows-only: make the SAME commands runnable from cmd + PowerShell via
+    // generated .cmd shims on the User PATH. Best-effort — a shim/PATH failure
+    // must not fail the whole install (bash coverage already succeeded).
+    if (process.platform === 'win32') {
+        try {
+            const shims = writeWinShims(dest, bashExe);
+            if (shims) {
+                const { changed } = await ensureUserPathContains(shims.shimDir);
+                output +=
+                    `\n${shims.commands.length} cmd/PowerShell shim(s) written to ${shims.shimDir}` +
+                    (changed
+                        ? ' and added to your User PATH (restart shells to pick it up).'
+                        : ' (already on your User PATH).');
+            }
+        } catch (e) {
+            output += `\nBash install OK, but Windows cmd/PowerShell shims failed: ${
+                e instanceof Error ? e.message : String(e)
+            }`;
+        }
+    }
+
+    writeInstallMarker(dest, currentVersion);
+    return { ok: result.ok, output };
+}
+
+/**
+ * Manual "Install system-wide" (Settings → Tools). Always (re)installs — the
+ * user asked for it — keyed to the running build so the marker stays accurate.
+ */
+export function installTynnCliSystemWide(): Promise<{ ok: boolean; output: string }> {
+    return performTynnCliInstall(app.getVersion());
+}
+
+/**
+ * Idempotent startup install (called best-effort from background.ts). Installs
+ * the toolkit system-wide ONCE per Genie build: if the marker shows THIS build
+ * already installed it, skip entirely (no install.sh re-run, no PATH edit).
+ * Never throws — returns a small outcome the caller can log. The setting gate
+ * (`cli_install_systemwide`) is applied by the caller.
+ */
+export async function ensureTynnCliInstalledOnce(
+    currentVersion: string,
+): Promise<{ installed: boolean; skipped: boolean; output: string }> {
+    try {
+        if (!resolveShippedTynnCli()) {
+            return { installed: false, skipped: true, output: 'tynn-cli not bundled with this build' };
+        }
+        const dest = installDest();
+        if (isInstallCurrent(readInstallMarker(dest), currentVersion)) {
+            return { installed: false, skipped: true, output: `already installed (build ${currentVersion})` };
+        }
+        const r = await performTynnCliInstall(currentVersion);
+        return { installed: r.ok, skipped: false, output: r.output };
+    } catch (e) {
+        return {
+            installed: false,
+            skipped: false,
+            output: `install error: ${e instanceof Error ? e.message : String(e)}`,
+        };
+    }
 }
 
 /** Find the process.env key for PATH (Windows uses 'Path'); default 'PATH'. */
