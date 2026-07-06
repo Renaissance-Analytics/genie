@@ -52,17 +52,19 @@ export const TYNN_TOKEN_ENV_KEY = 'TYNN_AGENT_TOKEN';
  * `.env`, which Genie loads into the agent's terminal).
  *
  * Per-target ref syntax:
- *   - Claude (`.mcp.json`): `${TYNN_AGENT_TOKEN:-}` — the `:-` default keeps an
- *     UNSET var from breaking the WHOLE config (the documented failure mode) when
- *     an agent is launched OUTSIDE a Genie terminal; it just sends an empty token
- *     (that one server fails auth) instead of poisoning every MCP server.
+ *   - Claude (`.mcp.json`): plain `${TYNN_AGENT_TOKEN}`. (An earlier form used the
+ *     bash-style `${TYNN_AGENT_TOKEN:-}` default to shrug off an unset var, but the
+ *     MCP client does NOT expand the `:-` — it left the `:-}` in the header, so the
+ *     token was never read even when set. Plain `${VAR}` is the form the client
+ *     actually substitutes; Genie injects the `.env` into its terminals, so the var
+ *     is set wherever the server is launched from Genie.)
  *   - Cursor (`.cursor/mcp.json`): `${env:TYNN_AGENT_TOKEN}` (Cursor's syntax).
  */
 export function tynnEntry(url: string, mode: 'claude' | 'cursor'): JsonObj {
     const auth =
         mode === 'cursor'
             ? `Bearer \${env:${TYNN_TOKEN_ENV_KEY}}`
-            : `Bearer \${${TYNN_TOKEN_ENV_KEY}:-}`;
+            : `Bearer \${${TYNN_TOKEN_ENV_KEY}}`;
     const base: JsonObj = mode === 'claude' ? { type: 'http', url } : { url };
     return { ...base, headers: { Authorization: auth } };
 }

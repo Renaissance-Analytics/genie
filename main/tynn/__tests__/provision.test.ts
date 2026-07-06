@@ -55,7 +55,7 @@ describe('tynn server config writing', () => {
                     type: 'http',
                     url: 'https://tynn.ai/mcp/tynn',
                     // `:-` keeps an unset var from breaking the whole config outside Genie.
-                    headers: { Authorization: 'Bearer ${TYNN_AGENT_TOKEN:-}' },
+                    headers: { Authorization: 'Bearer ${TYNN_AGENT_TOKEN}' },
                 },
             },
         });
@@ -121,7 +121,7 @@ describe('tynn server config writing', () => {
                     tynn: {
                         type: 'http',
                         url: 'https://tynn.ai/mcp/tynn',
-                        headers: { Authorization: 'Bearer ${TYNN_AGENT_TOKEN:-}' },
+                        headers: { Authorization: 'Bearer ${TYNN_AGENT_TOKEN}' },
                     },
                 },
             }),
@@ -158,7 +158,7 @@ describe('tynn server config writing', () => {
         // .mcp.json now REFERENCES the var — no literal token remains; the
         // sibling server is preserved.
         const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8'));
-        expect(cfg.mcpServers.tynn.headers.Authorization).toBe('Bearer ${TYNN_AGENT_TOKEN:-}');
+        expect(cfg.mcpServers.tynn.headers.Authorization).toBe('Bearer ${TYNN_AGENT_TOKEN}');
         expect(cfg.mcpServers.other).toBeTruthy();
         const raw = fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8');
         expect(raw).not.toContain('rpk_OLD.literal');
