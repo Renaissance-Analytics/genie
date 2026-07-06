@@ -114,15 +114,32 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 method: 'POST',
                 json: { workspaceId, siteId, patch },
             })) as { ok: boolean },
-        // The header `.gen` popover is a LOCAL-window affordance (hidden inside a
-        // host window), so these never fire here — a remote window owns no local
-        // sites and can't spawn local browser windows. Honest no-ops for the type.
-        // The header globe is CONTEXTUAL: `all`/`open` stay on the LOCAL preload
-        // (they hit local main, which resolves THIS host window's connKey → the
-        // host's enabled sites, opened in the host's Testing Browser). Only the
-        // workspace serve-local CONFIG (list/set) routes to the host above.
-        // Lazy wrappers so bridge construction never touches `local.sites`.
-        all: () => local.sites.all(),
+        // The header `.gen` popover is HOST-SOURCED when remote — the enabled sites
+        // belong to the machine THIS window drives, exactly like files / processes /
+        // IssueWatch. Fetch the host's aggregated enabled-`.gen` snapshot over the
+        // bridge (`/api/sites/enabled`) and shape it into the popover payload.
+        // (`GenSitesAll.local` means "the sites of the machine this window
+        // represents", so host sites go there — the popover renders `data.local`.)
+        // [] on a host that predates the endpoint or is locked.
+        all: async () => {
+            try {
+                const hostSites =
+                    ((await req('/api/sites/enabled')) as {
+                        sites?: Array<{ genName: string; hostname: string }>;
+                    }).sites ?? [];
+                return {
+                    local: hostSites.map((s) => ({ genName: s.genName, hostname: s.hostname })),
+                    hosts: [],
+                };
+            } catch {
+                return { local: [], hosts: [] };
+            }
+        },
+        // `open` MUST stay on the LOCAL preload: it spins up a Testing Browser
+        // WINDOW on THIS machine (main can't open a window on the host) and resolves
+        // this host window's connKey → the host's carrier, so the `.gen` site loads
+        // over the tunnel. Lazy wrapper so bridge construction never touches
+        // `local.sites`.
         open: (genName) => local.sites.open(genName),
     };
 

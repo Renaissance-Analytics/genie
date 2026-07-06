@@ -25,7 +25,7 @@ import {
 import { RelayMemberClient } from './relay-client';
 import type { PopKeypair } from './relay-pop';
 import { createTailnetSiteCarrier, createRelaySiteCarrier, type SiteCarrier } from './site-carrier';
-import type { SiteScheme, SiteView } from '../mobile/hosts';
+import type { SiteScheme } from '../mobile/hosts';
 
 /**
  * Work Mode — remote desktop (the local-main proxy).
@@ -1781,14 +1781,21 @@ export function getSiteCarrier(connKey: string): SiteCarrier | null {
 export async function remoteListEnabledGenSites(connKey: string): Promise<EnabledGenSite[]> {
     const conn = connections.get(connKey);
     if (!conn) return [];
-    let data: { sites?: SiteView[] } | undefined;
+    let data: { sites?: EnabledGenSite[] } | undefined;
     try {
-        data = (await connRequest(conn, '/api/sites')) as { sites?: SiteView[] } | undefined;
+        // `/api/sites/enabled` — the host's ENABLED sites aggregated across ALL its
+        // workspaces (the serve-local allowlist). NOT `/api/sites`, which needs a
+        // workspaceId and returns every discovered site DISABLED without one (so it
+        // always filtered to []). This is the enabled-only snapshot the shim
+        // resolver + header popover need.
+        data = (await connRequest(conn, '/api/sites/enabled')) as
+            | { sites?: EnabledGenSite[] }
+            | undefined;
     } catch {
-        return []; // host unreachable / locked (423) / predates the feature
+        return []; // host unreachable / locked (423) / predates the endpoint (404)
     }
     return (data?.sites ?? [])
-        .filter((s) => s.enabled && !!s.genName)
+        .filter((s) => !!s.genName)
         .map((s) => ({
             genName: s.genName.toLowerCase(),
             siteId: s.siteId,

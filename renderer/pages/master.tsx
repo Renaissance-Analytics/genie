@@ -2163,9 +2163,39 @@ function RemoteIndicator() {
 function SitesButton() {
     const [open, setOpen] = useState(false);
     const [hovering, setHovering] = useState(false);
+    const rootRef = useRef<HTMLDivElement>(null);
     const show = open || hovering;
+
+    // Standard popover dismissal (mirrors ProjectSelector / the Processes Chooser):
+    // an outside-click or Esc fully closes — clearing BOTH the sticky click state
+    // and the hover state, so it can't linger open. The globe's own onClick still
+    // toggles it (a mousedown INSIDE rootRef is ignored here, then the click fires).
+    useEffect(() => {
+        if (!show) return;
+        const onDocClick = (e: MouseEvent) => {
+            if (!rootRef.current) return;
+            if (e.target instanceof Node && !rootRef.current.contains(e.target)) {
+                setOpen(false);
+                setHovering(false);
+            }
+        };
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                setOpen(false);
+                setHovering(false);
+            }
+        };
+        document.addEventListener('mousedown', onDocClick);
+        document.addEventListener('keydown', onKey);
+        return () => {
+            document.removeEventListener('mousedown', onDocClick);
+            document.removeEventListener('keydown', onKey);
+        };
+    }, [show]);
+
     return (
         <div
+            ref={rootRef}
             style={{ position: 'relative', display: 'inline-flex' }}
             onMouseEnter={() => setHovering(true)}
             onMouseLeave={() => setHovering(false)}

@@ -30,6 +30,7 @@ import {
     setWorkspaceTunnelSite,
 } from './db';
 import { discoverSites } from './mobile/hosts';
+import { listLocalEnabledGenSites } from './sites/local-sites';
 import { writeWorkspaceAgentMcp, healTynnLiteralToken } from './mcp/agent-config';
 import { resolveAlertSound, deliverAlertSound } from './notify-sound';
 import { demandWindowAttention, resolveAttentionWindow } from './attention-flash';
@@ -1290,6 +1291,12 @@ app.whenReady().then(async () => {
                 setWorkspaceTunnelSite(workspaceId, siteId, patch);
                 return { ok: true };
             },
+            // The host's ENABLED `.gen` sites aggregated across EVERY workspace's
+            // allowlist — the enabled-only snapshot a remote reads over
+            // /api/sites/enabled for its header `.gen` popover + Testing Browser
+            // resolver. Same source the local IPC (`sites:all`) uses, so a remote
+            // window sees exactly what a local one computes.
+            listEnabledSites: () => listLocalEnabledGenSites(),
         },
     }).catch((e) => console.error('[mobile] failed to start', e));
     // Docs viewer IPC (docs:list / docs:read). __dirname is the compiled main

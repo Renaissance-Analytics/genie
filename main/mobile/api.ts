@@ -7,6 +7,7 @@ import type { PendingQuestion } from '../ask/force-question';
 import { sessionFromAuthHeader, attemptPair } from './auth';
 import { audit, isLocked } from './audit';
 import type { SiteView, TunnelSiteConfig } from './hosts';
+import type { EnabledGenSite } from '../remote';
 import { isHeadless } from '../runtime-mode';
 import { BRIDGE_PROTOCOL_VERSION } from '../remote/link-state';
 import {
@@ -299,6 +300,16 @@ export interface MobileDataDeps {
         siteId: string,
         patch: TunnelSiteConfig,
     ) => { ok: boolean };
+    /**
+     * The host's ENABLED `.gen` dev sites aggregated across EVERY workspace's
+     * tunnel allowlist — the enabled-only snapshot the header `.gen` popover and
+     * the remote Testing Browser resolver read (served at `/api/sites/enabled`).
+     * Unlike {@link listSites} this needs NO workspaceId: it already merges each
+     * workspace's stored config, so a remote gets the same aggregated view a
+     * local window computes. Optional: a host that predates the feature leaves it
+     * unwired and `/api/sites/enabled` returns an empty set.
+     */
+    listEnabledSites?: () => Promise<EnabledGenSite[]>;
 }
 
 // --- headless (genie-cloud) System-workspace exclusion + terminal confinement --
@@ -605,6 +616,24 @@ export async function handleApi(
             /* malformed query — treat as no workspace / no refresh */
         }
         const sites = await deps.listSites(workspaceId, { refresh });
+        sendJson(res, 200, { sites });
+        return true;
+    }
+
+    // GET /api/sites/enabled — the host's ENABLED `.gen` sites aggregated across
+    // ALL workspaces (the serve-local allowlist), the enabled-only snapshot the
+    // header `.gen` popover + the remote Testing Browser resolver read. Unlike
+    // `/api/sites` it takes NO workspaceId — it already merges each workspace's
+    // stored config — so a remote gets the same view a local window computes from
+    // `listLocalEnabledGenSites()`. Token- + kill-switch-gated like `/api/sites`;
+    // an empty set on a host that predates the feature.
+    if (pathname === '/api/sites/enabled' && method === 'GET') {
+        if (guardLocked()) return true;
+        if (!deps.listEnabledSites) {
+            sendJson(res, 200, { sites: [] });
+            return true;
+        }
+        const sites = await deps.listEnabledSites();
         sendJson(res, 200, { sites });
         return true;
     }

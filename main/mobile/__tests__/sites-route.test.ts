@@ -142,3 +142,81 @@ describe('GET /api/sites', () => {
         expect(r.json).toEqual({ sites: [] });
     });
 });
+
+/**
+ * `GET /api/sites/enabled` is the ENABLED-only `.gen` snapshot aggregated across
+ * ALL the host's workspaces — the source a remote's header popover + Testing
+ * Browser resolver read (never `/api/sites`, which needs a workspaceId and
+ * returns everything disabled without one). Token- + kill-switch-gated like
+ * `/api/sites`; an empty set on a host that predates the feature.
+ */
+describe('GET /api/sites/enabled', () => {
+    const ENABLED = [
+        {
+            genName: 'tynn.gen',
+            siteId: 'abc123',
+            hostname: 'tynn.test',
+            scheme: 'https' as const,
+            port: 443,
+        },
+    ];
+
+    it('rejects an unauthenticated request with 401', async () => {
+        const r = fakeRes();
+        const d = { listEnabledSites: async () => ENABLED } as unknown as MobileDataDeps;
+        const handled = await handleApi(
+            req('/api/sites/enabled'),
+            r.res,
+            '/api/sites/enabled',
+            d,
+            { ip: '100.0.0.1', ua: 'test' },
+        );
+        expect(handled).toBe(true);
+        expect(r.status).toBe(401);
+    });
+
+    it('returns 423 when the kill-switch is engaged (even for a read)', async () => {
+        const token = await mintToken();
+        setLocked(true);
+        const r = fakeRes();
+        const d = { listEnabledSites: async () => ENABLED } as unknown as MobileDataDeps;
+        await handleApi(
+            req('/api/sites/enabled', bearer(token)),
+            r.res,
+            '/api/sites/enabled',
+            d,
+            { ip: '100.0.0.1', ua: 'test' },
+        );
+        expect(r.status).toBe(423);
+        setLocked(false);
+    });
+
+    it('returns the aggregated enabled set for a valid token (no workspaceId)', async () => {
+        const token = await mintToken();
+        const r = fakeRes();
+        const d = { listEnabledSites: async () => ENABLED } as unknown as MobileDataDeps;
+        await handleApi(
+            req('/api/sites/enabled', bearer(token)),
+            r.res,
+            '/api/sites/enabled',
+            d,
+            { ip: '100.0.0.1', ua: 'test' },
+        );
+        expect(r.status).toBe(200);
+        expect(r.json).toEqual({ sites: ENABLED });
+    });
+
+    it('returns an empty set when the host does not support sites', async () => {
+        const token = await mintToken();
+        const r = fakeRes();
+        await handleApi(
+            req('/api/sites/enabled', bearer(token)),
+            r.res,
+            '/api/sites/enabled',
+            {} as MobileDataDeps,
+            { ip: '100.0.0.1', ua: 'test' },
+        );
+        expect(r.status).toBe(200);
+        expect(r.json).toEqual({ sites: [] });
+    });
+});
