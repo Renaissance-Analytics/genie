@@ -483,12 +483,18 @@ export default function Chooser({
     const showProcLog = (e: React.MouseEvent, s: TerminalSpec) => {
         cancelProcLogHide();
         const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        // Clamp the popover's top so a row near the bottom of the panel doesn't get
+        // its log cut off by the viewport edge — shift it UP to fit. The popover is
+        // ~340px tall (head + a 240px-max scrolling body + foot); keep a small margin.
+        const POP_MAX_H = 340;
+        const MARGIN = 12;
+        const top = Math.max(MARGIN, Math.min(r.top, window.innerHeight - POP_MAX_H - MARGIN));
         setProcLog({
             id: s.id,
             label: s.label,
             command: s.meta?.command ?? '',
             text: '',
-            top: r.top,
+            top,
             left: r.right + 8,
         });
         void api()
