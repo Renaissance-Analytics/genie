@@ -91,6 +91,7 @@ export const dialog = {
     showSaveDialog: async (): Promise<{ canceled: boolean; filePath?: string }> => ({
         canceled: true,
     }),
+    showMessageBox: async (): Promise<{ response: number }> => ({ response: 0 }),
 };
 
 export const contextBridge = {

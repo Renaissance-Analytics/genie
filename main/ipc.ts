@@ -106,7 +106,6 @@ import { getTailscaleStatus, tailscaleUp, installTailscale } from './tailscale';
 import { discoverHosts, openRemoteWindow } from './workmode';
 import {
     connectRemote,
-    connectWorkstation,
     disconnectRemote,
     remoteStatusFor,
     remoteBindingFor,
@@ -167,8 +166,7 @@ import {
     signedInBackends,
 } from './backend/registry';
 import type { BackendKind } from './backend/backend';
-import { TynnAuthError, type WorkstationConnectGrant } from './backend/tynn';
-import { PopKeypair } from './remote/relay-pop';
+import { openWorkstationById } from './workstation-open';
 import {
     getAutostart,
     isAutostartSupported,
@@ -746,40 +744,9 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('workstation:connectable', () =>
         getTynnBackend().listConnectableWorkstations(),
     );
-    ipcMain.handle('workstation:open', async (_e, workstationId: string, name: string) => {
-        // PoP (P4.5): generate the ephemeral keypair in MAIN; its public JWK
-        // binds the grant (cnf.jkt) and its private key answers the host's
-        // post-welcome challenge. The private key never leaves main and is wiped
-        // when the connection tears down (RelayMemberClient.close → discard).
-        const popKeypair = PopKeypair.generate();
-        let grant: WorkstationConnectGrant;
-        try {
-            grant = await getTynnBackend().connectGrant(workstationId, popKeypair.publicJwk);
-        } catch (e) {
-            if (e instanceof TynnAuthError) {
-                return { ok: false, error: 'Sign in to Tynn to connect to this workstation.' };
-            }
-            return {
-                ok: false,
-                error: e instanceof Error ? e.message : 'Could not get a connection grant.',
-            };
-        }
-        const res = await connectWorkstation({
-            workstationId,
-            name,
-            relayUrl: grant.relay_endpoint,
-            grant: grant.token,
-            popKeypair,
-            heartbeatIntervalMs:
-                grant.heartbeat_interval > 0 ? grant.heartbeat_interval * 1000 : undefined,
-            onHeartbeat: () => getTynnBackend().introspectGrant(grant.token),
-        });
-        if (res.ok && res.connKey) {
-            const host: RemoteHost = { ip: 'relay', port: 0, hostname: name };
-            showHostWindow(host, res.connKey);
-        }
-        return res;
-    });
+    ipcMain.handle('workstation:open', async (_e, workstationId: string, name: string) =>
+        openWorkstationById(workstationId, name),
+    );
 
     ipcMain.handle('workspaces:open', async (_e, id: string) => {
         await openWorkspace(id);

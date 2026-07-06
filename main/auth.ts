@@ -1,7 +1,9 @@
-import { app, BrowserWindow, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, session, shell } from 'electron';
 import path from 'node:path';
 import { tynnHost, whoami, TynnAuthError } from './tynn-api';
 import { showMainWindow } from './background';
+import { getTynnBackend } from './backend/registry';
+import { openWorkstationById } from './workstation-open';
 
 /**
  * Sign-in via custom protocol handoff.
@@ -90,26 +92,96 @@ export async function signOut(): Promise<void> {
     notifyAuthChanged(false);
 }
 
+/**
+ * A genie://workstation/open deep link that arrived while the Tynn session was
+ * DEAD. We stash it, kick off the browser sign-in, and replay it from
+ * redeemToken() the moment a live session lands. Single-slot: the newest deep
+ * link wins (a second click while signing in just overwrites the target).
+ */
+let pendingWorkstationOpen: { workstationId: string; name?: string } | null = null;
+
 export async function handleGenieUrl(rawUrl: string): Promise<void> {
     try {
         const url = new URL(rawUrl);
-        // Path is /oauth/callback. Query carries the token.
-        if (url.host !== 'oauth' || url.pathname !== '/callback') {
-            console.warn('Unknown genie:// URL ignored:', rawUrl);
+        // genie://oauth/callback?token=… — finish the browser sign-in handoff.
+        if (url.host === 'oauth' && url.pathname === '/callback') {
+            const token = url.searchParams.get('token');
+            if (!token) {
+                console.warn('genie://oauth/callback missing token');
+                return;
+            }
+            await redeemToken(token);
             return;
         }
-        const token = url.searchParams.get('token');
-        if (!token) {
-            console.warn('genie://oauth/callback missing token');
+        // genie://workstation/open?id=…&name=… — connect to a Virtual Workstation.
+        if (url.host === 'workstation' && url.pathname === '/open') {
+            await handleWorkstationOpenUrl(url);
             return;
         }
-        await redeemToken(token);
+        console.warn('Unknown genie:// URL ignored:', rawUrl);
     } catch (e) {
         if (e instanceof TynnAuthError) {
             notifyAuthChanged(false);
             return;
         }
         console.error('Auth callback failed:', e);
+    }
+}
+
+/**
+ * genie://workstation/open?id=…&name=… — the CONNECT deep link. Needs a live
+ * Tynn session (connectGrant is session-cookied). If we're signed out, stash the
+ * request, open the browser sign-in, and let redeemToken() replay it once the
+ * session lands. Otherwise open it straight away.
+ */
+async function handleWorkstationOpenUrl(url: URL): Promise<void> {
+    const workstationId = url.searchParams.get('id')?.trim();
+    if (!workstationId) {
+        console.warn('genie://workstation/open missing id');
+        return;
+    }
+    const name = url.searchParams.get('name')?.trim() || undefined;
+
+    const me = await getTynnBackend().whoami();
+    if (!me) {
+        pendingWorkstationOpen = { workstationId, name };
+        await startSignIn();
+        return;
+    }
+    await performWorkstationOpen({ workstationId, name });
+}
+
+/**
+ * Resolve the display name (if the deep link omitted it), open the workstation,
+ * and surface any failure — not-entitled (connectGrant 403), not-found, or a
+ * dead relay — as a dialog. Never throws: a bad deep link must not crash main.
+ */
+async function performWorkstationOpen(req: { workstationId: string; name?: string }): Promise<void> {
+    try {
+        let name = req.name;
+        if (!name) {
+            // Resolve the human-readable name by id; fall back to the id itself.
+            const list = await getTynnBackend().listConnectableWorkstations();
+            name = list.find((w) => w.id === req.workstationId)?.name ?? req.workstationId;
+        }
+        const res = await openWorkstationById(req.workstationId, name);
+        if (!res.ok) await showWorkstationOpenError(res.error);
+    } catch (e) {
+        await showWorkstationOpenError(e instanceof Error ? e.message : String(e));
+    }
+}
+
+async function showWorkstationOpenError(detail?: string): Promise<void> {
+    try {
+        await dialog.showMessageBox({
+            type: 'error',
+            title: 'Could not open workstation',
+            message: 'Could not open the workstation.',
+            detail: detail ?? 'Please try again from the Hosts list in Genie.',
+        });
+    } catch {
+        // No window / headless — the dialog is best-effort; log so it isn't silent.
+        console.error('Workstation open failed:', detail);
     }
 }
 
@@ -155,6 +227,12 @@ async function redeemToken(token: string): Promise<void> {
     if (me) {
         notifyAuthChanged(true);
         showMainWindow();
+        // Replay a genie://workstation/open deep link that arrived while signed
+        // out (see handleWorkstationOpenUrl). Fire-and-forget: errors surface via
+        // the dialog inside performWorkstationOpen.
+        const pending = pendingWorkstationOpen;
+        pendingWorkstationOpen = null;
+        if (pending) void performWorkstationOpen(pending);
     } else {
         notifyAuthChanged(false);
     }
