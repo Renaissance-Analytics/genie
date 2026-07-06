@@ -8,6 +8,7 @@ A composable bash toolkit for developer workflows. Optimized for **Git Bash on W
 |---------|-------------|
 | `puse` | Project Use - orchestrate tool installation per detected stack |
 | `resetme` | Reset database/state for detected stack |
+| `reload` | Clear caches and rebuild the project in the current directory |
 | `sandbox` | Run commands in configured sandbox directory |
 | `pkg` | Run commands in monorepo `packages/` directories |
 | `npmx` | Run npm commands in subdirectories |
@@ -82,6 +83,33 @@ resetme                  # Reset database (migrate:fresh or equivalent)
 resetme --seed           # Reset and seed
 resetme --demo           # Reset, seed, and run DemoSeeder
 resetme --dry-run        # Preview commands without executing
+```
+
+### reload
+
+Clear caches and rebuild the project in the current directory. Detects the
+stack and runs the right clear + rebuild; idempotent, safe to re-run.
+
+```bash
+reload [options]
+```
+
+**Behavior:**
+- **Laravel** — `php artisan optimize:clear`, then the frontend build
+  (`<pm> run build`) when `package.json` has a `build` script
+- **Node.js** — `<pm> run build`
+
+The Node package manager (npm/pnpm/yarn/bun) is auto-detected.
+
+**Options:**
+- `--dry-run` - Show what would be executed without running
+- `--stack` - Show detected stack and exit
+
+**Examples:**
+```bash
+reload                   # Clear caches + rebuild assets for the current project
+reload --dry-run         # Preview commands without executing
+reload --stack           # Show the detected stack
 ```
 
 ### sandbox

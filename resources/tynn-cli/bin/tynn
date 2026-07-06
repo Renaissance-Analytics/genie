@@ -27,6 +27,10 @@ Commands:
   resetme            Reset database/state for detected stack
                      Options: --seed, --demo, --dry-run, --stack
 
+  reload             Clear caches and rebuild the project in the current dir
+                     Laravel: optimize:clear + build; Node: build
+                     Options: --dry-run, --stack
+
   sandbox <cmd>      Run commands in configured sandbox directory
                      Options: --path, --stack
 

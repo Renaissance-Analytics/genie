@@ -259,6 +259,9 @@ command knows which project/repo it's acting on.
 
 - \`resetme\` — reset the detected stack's DB/state (Laravel \`migrate:fresh\` or the
   stack's equivalent). Flags: \`--seed\`, \`--demo\`, \`--dry-run\`, \`--stack\`.
+- \`reload\` — clear the detected stack's caches and rebuild its assets, scoped to
+  the current dir (Laravel \`optimize:clear\` + \`<pm> run build\`; Node \`<pm> run build\`).
+  Flags: \`--dry-run\`, \`--stack\`.
 - \`puse <tool>\` — install/configure a dev tool for the detected stack
   (e.g. \`puse pest\`, \`puse vitest\`, \`puse playwright\`, \`puse pest --browser\`).
   \`puse --list\` / \`puse --stack\` to inspect.
