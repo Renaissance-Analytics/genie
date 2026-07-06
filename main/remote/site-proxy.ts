@@ -1,11 +1,9 @@
 import http from 'node:http';
 import https from 'node:https';
 import tls from 'node:tls';
-import zlib from 'node:zlib';
 import type { Duplex } from 'node:stream';
 import type { AddressInfo } from 'node:net';
 import { SITE_PROXY_PREFIX, PRESERVE_ORIGIN_HEADER } from '../mobile/site-proxy';
-import { rewriteSiteHtml } from '../sites/site-rewrite';
 import type { SessionCa } from './site-ca';
 import type { SiteCarrier } from './site-carrier';
 
@@ -93,16 +91,6 @@ export interface SiteShimDeps {
      * injection (Bearer / grant), so the token never leaves MAIN.
      */
     carrier: SiteCarrier;
-    /**
-     * OPTIONAL. Called when a served HTML response reveals (or lacks) a Vite dev
-     * origin — `vitePort` is the detected loopback port, or null when the page has
-     * no Vite dev origin. The LOCAL Testing Browser wiring records the port per
-     * siteId so its carrier can route the now-same-origin Vite-owned asset paths
-     * (`/@vite/…`, `/resources/…`, …) to the Vite dev server instead of the Laravel
-     * port. Absent (or a null-on-a-later-page) leaves any prior routing untouched;
-     * the race is benign because the browser fetches the HTML before its assets.
-     */
-    onVitePort?: (siteId: string, vitePort: number | null) => void;
 }
 
 /** A running shim: its loopback proxy address + a clean shutdown. */
@@ -246,12 +234,7 @@ export function buildForwardResponseHeaders(
         const lk = k.toLowerCase();
         if (HOP_BY_HOP.has(lk)) continue;
         if (connTokens.has(lk)) continue;
-        // `Location` (server redirects) AND `X-Inertia-Location` (Inertia's
-        // full-page/external redirect — used after a Laravel Inertia login) both
-        // carry an absolute URL the browser navigates to; rewrite the site's own
-        // `.test` origin → `.gen` so a post-login redirect doesn't bounce the
-        // browser to the (proxy-refused) real vhost.
-        if (lk === 'location' || lk === 'x-inertia-location') {
+        if (lk === 'location') {
             out[k] = rewriteGenLocation(String(v), hostname, genHost);
             continue;
         }
@@ -270,51 +253,6 @@ export function buildForwardResponseHeaders(
 export function forwardPath(siteId: string, rawUrl: string | undefined): string {
     const rest = rawUrl && rawUrl.length ? rawUrl : '/';
     return `${SITE_PROXY_PREFIX}${siteId}${rest}`;
-}
-
-/** The biggest HTML body we buffer to rewrite. A document that exceeds this (never
- *  a real page) is streamed through UNMODIFIED rather than held in memory. */
-export const MAX_REWRITE_HTML_BYTES = 32 * 1024 * 1024;
-
-/** PURE. Is this response an HTML DOCUMENT (the only thing we body-rewrite)? Assets,
- *  downloads, SSE (`text/event-stream`), JSON, etc. are all left to stream. */
-export function isHtmlContentType(contentType: string | undefined): boolean {
-    return /^\s*text\/html\b/i.test(contentType ?? '');
-}
-
-/** PURE. Should we ask the upstream for an IDENTITY (uncompressed) body? True for a
- *  document navigation (`Accept:` contains `text/html`) so the HTML we buffer to
- *  rewrite comes back as plaintext. We still defensively decompress on the response
- *  side ({@link decodeContentEncoding}) in case an upstream compresses anyway. */
-export function wantsHtmlDocument(accept: string | undefined): boolean {
-    return /\btext\/html\b/i.test(accept ?? '');
-}
-
-/**
- * Decode a (buffered) body per its `Content-Encoding` so it can be rewritten as
- * text. Handles `gzip`, `br`, `deflate` (raw + zlib-wrapped), and `identity`/none.
- * Throws on an unknown/corrupt encoding — the caller then serves the body
- * unmodified rather than corrupting it.
- */
-export function decodeContentEncoding(
-    buf: Buffer,
-    encoding: string | string[] | undefined,
-): Buffer {
-    const enc = (Array.isArray(encoding) ? encoding.join(',') : encoding ?? '')
-        .trim()
-        .toLowerCase();
-    if (enc === '' || enc === 'identity') return buf;
-    if (enc === 'gzip' || enc === 'x-gzip') return zlib.gunzipSync(buf);
-    if (enc === 'br') return zlib.brotliDecompressSync(buf);
-    if (enc === 'deflate') {
-        // `deflate` may be zlib-wrapped or raw; try zlib first, fall back to raw.
-        try {
-            return zlib.inflateSync(buf);
-        } catch {
-            return zlib.inflateRawSync(buf);
-        }
-    }
-    throw new Error(`unsupported content-encoding: ${enc}`);
 }
 
 // --- the shim server -------------------------------------------------------
@@ -373,9 +311,6 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
         // (tailnet Bearer / relay grant), keeping the token in MAIN.
         const headers = buildForwardHeaders(req.headers);
         headers[PRESERVE_ORIGIN_HEADER] = '1';
-        // For a document navigation, ask upstream for an identity body so the HTML
-        // we buffer to rewrite arrives as plaintext (we still decompress defensively).
-        if (wantsHtmlDocument(req.headers['accept'])) headers['accept-encoding'] = 'identity';
         const call = deps.carrier.forward({
             method: req.method ?? 'GET',
             path: forwardPath(target.siteId, req.url),
@@ -388,10 +323,6 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
         call.response
             .then(({ status, headers: upHeaders, body }) => {
                 const outHeaders = buildForwardResponseHeaders(upHeaders, target.hostname, genHost);
-                if (isHtmlContentType(upHeaders['content-type'] as string | undefined)) {
-                    serveRewrittenHtml(res, status, upHeaders, outHeaders, body, target, genHost);
-                    return;
-                }
                 res.writeHead(status, outHeaders);
                 body.on('error', () => {
                     try {
@@ -411,79 +342,6 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
                         /* already gone */
                     }
             });
-    }
-
-    /**
-     * Buffer a (bounded) HTML document, rewrite its absolute-origin asset URLs onto
-     * the `.gen` origin ({@link rewriteSiteHtml}), and serve the plaintext result
-     * with a corrected `Content-Length` (and `Content-Encoding` dropped). A body
-     * that overflows {@link MAX_REWRITE_HTML_BYTES}, or that fails to decode, is
-     * served UNMODIFIED — the rewrite is best-effort, never lossy.
-     */
-    function serveRewrittenHtml(
-        res: http.ServerResponse,
-        status: number,
-        upHeaders: http.IncomingHttpHeaders,
-        outHeaders: http.OutgoingHttpHeaders,
-        body: NodeJS.ReadableStream,
-        target: GenTarget,
-        genHost: string,
-    ): void {
-        const chunks: Buffer[] = [];
-        let size = 0;
-        let overflowed = false;
-        body.on('data', (c: Buffer) => {
-            if (overflowed) {
-                res.write(c);
-                return;
-            }
-            size += c.length;
-            chunks.push(c);
-            if (size > MAX_REWRITE_HTML_BYTES) {
-                // Too big to rewrite — flush what we have with the original (still
-                // origin-rewritten) headers and stream the remainder verbatim.
-                overflowed = true;
-                res.writeHead(status, outHeaders);
-                for (const b of chunks) res.write(b);
-                chunks.length = 0;
-            }
-        });
-        body.on('error', () => {
-            try {
-                res.destroy();
-            } catch {
-                /* already gone */
-            }
-        });
-        body.on('end', () => {
-            if (overflowed) {
-                res.end();
-                return;
-            }
-            const raw = Buffer.concat(chunks);
-            let text: string;
-            try {
-                text = decodeContentEncoding(raw, upHeaders['content-encoding']).toString('utf8');
-            } catch {
-                // Unknown/corrupt encoding — serve the bytes untouched.
-                res.writeHead(status, outHeaders);
-                res.end(raw);
-                return;
-            }
-            const { html, vitePort } = rewriteSiteHtml(text, target.hostname, genHost);
-            deps.onVitePort?.(target.siteId, vitePort);
-            const outBuf = Buffer.from(html, 'utf8');
-            // The body is now identity-encoded plaintext: drop any content-encoding
-            // and set the true length so the browser frames it correctly.
-            for (const k of Object.keys(outHeaders)) {
-                if (k.toLowerCase() === 'content-encoding' || k.toLowerCase() === 'content-length') {
-                    delete outHeaders[k];
-                }
-            }
-            outHeaders['content-length'] = String(outBuf.length);
-            res.writeHead(status, outHeaders);
-            res.end(outBuf);
-        });
     }
 
     function onDecryptedUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer): void {

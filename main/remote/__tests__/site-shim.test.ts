@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
 import tls from 'node:tls';
-import zlib from 'node:zlib';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { SessionCa } from '../site-ca';
@@ -10,14 +9,11 @@ import {
     buildForwardHeaders,
     buildForwardResponseHeaders,
     createSiteShim,
-    decodeContentEncoding,
     forwardPath,
     isGenHost,
-    isHtmlContentType,
     rewriteGenLocation,
     rewriteGenSetCookieDomain,
     stripHostPort,
-    wantsHtmlDocument,
     type GenTarget,
     type SiteShim,
 } from '../site-proxy';
@@ -108,28 +104,6 @@ describe('shim pure helpers', () => {
         expect(out['strict-transport-security']).toBe('max-age=63072000'); // HSTS preserved
         expect(out['connection']).toBeUndefined(); // hop-by-hop stripped
     });
-
-    it('isHtmlContentType / wantsHtmlDocument', () => {
-        expect(isHtmlContentType('text/html; charset=utf-8')).toBe(true);
-        expect(isHtmlContentType('text/html')).toBe(true);
-        expect(isHtmlContentType('application/json')).toBe(false);
-        expect(isHtmlContentType('text/event-stream')).toBe(false); // SSE streams
-        expect(isHtmlContentType(undefined)).toBe(false);
-        expect(wantsHtmlDocument('text/html,application/xhtml+xml,*/*')).toBe(true);
-        expect(wantsHtmlDocument('*/*')).toBe(false);
-        expect(wantsHtmlDocument(undefined)).toBe(false);
-    });
-
-    it('decodeContentEncoding handles gzip / br / deflate / identity', () => {
-        const src = Buffer.from('<html>café</html>', 'utf8');
-        expect(decodeContentEncoding(src, undefined).equals(src)).toBe(true);
-        expect(decodeContentEncoding(src, 'identity').equals(src)).toBe(true);
-        expect(decodeContentEncoding(zlib.gzipSync(src), 'gzip').equals(src)).toBe(true);
-        expect(decodeContentEncoding(zlib.brotliCompressSync(src), 'br').equals(src)).toBe(true);
-        expect(decodeContentEncoding(zlib.deflateSync(src), 'deflate').equals(src)).toBe(true);
-        expect(decodeContentEncoding(zlib.deflateRawSync(src), 'deflate').equals(src)).toBe(true);
-        expect(() => decodeContentEncoding(src, 'weird')).toThrow();
-    });
 });
 
 // --- end-to-end drive ------------------------------------------------------
@@ -161,35 +135,6 @@ beforeEach(async () => {
             res.end();
             return;
         }
-        // An HTML document that hardcodes an absolute vhost origin + a Vite dev
-        // origin — the two real breakage patterns the rewrite fixes.
-        if (req.url?.includes('/html')) {
-            const gz = req.url.includes('gzip');
-            const html =
-                '<!doctype html><html><head>' +
-                '<link href="https://tynn.test/build/assets/app-x.css">' +
-                '<script src="http://[::1]:5173/@vite/client"></script>' +
-                '<script src="https://cdn.example.com/lib.js"></script>' +
-                '</head><body>ok</body></html>';
-            const payload = gz ? zlib.gzipSync(Buffer.from(html, 'utf8')) : Buffer.from(html, 'utf8');
-            res.writeHead(200, {
-                'Content-Type': 'text/html; charset=utf-8',
-                'Content-Length': payload.length,
-                ...(gz ? { 'Content-Encoding': 'gzip' } : {}),
-            });
-            res.end(payload);
-            return;
-        }
-        // A non-HTML asset — must stream through UNCHANGED (no rewrite).
-        if (req.url?.includes('/asset.js')) {
-            const body = 'const u="https://tynn.test/keep";';
-            res.writeHead(200, {
-                'Content-Type': 'application/javascript',
-                'Content-Length': Buffer.byteLength(body),
-            });
-            res.end(body);
-            return;
-        }
         const body = 'hello from the host site';
         res.writeHead(200, {
             'Content-Type': 'text/plain',
@@ -205,18 +150,13 @@ afterEach(async () => {
     await new Promise<void>((resolve) => fakeHost.close(() => resolve()));
 });
 
-function makeShim(
-    ca: SessionCa,
-    genMap: Map<string, GenTarget>,
-    onVitePort?: (siteId: string, vitePort: number | null) => void,
-): Promise<SiteShim> {
+function makeShim(ca: SessionCa, genMap: Map<string, GenTarget>): Promise<SiteShim> {
     return createSiteShim({
         ca,
         // The tailnet (direct-dial) carrier — injects the Bearer + `?__genie_token=`
         // IN MAIN, so the host leg sees them exactly as in Phase D.
         carrier: createTailnetSiteCarrier(`http://127.0.0.1:${fakeHostPort}`, () => 'THE_SESSION_TOKEN'),
         resolveGen: (h) => genMap.get(h) ?? null,
-        onVitePort,
     });
 }
 
@@ -313,65 +253,6 @@ describe('shim end-to-end (no display)', () => {
         try {
             await expect(connectTunnel(shim.port, 'evil.com:443')).rejects.toThrow('CONNECT 403');
             await expect(connectTunnel(shim.port, 'other.gen:443')).rejects.toThrow('CONNECT 403');
-        } finally {
-            await shim.close();
-        }
-    });
-
-    it('rewrites an HTML body onto the .gen origin and reports the Vite port', async () => {
-        const ca = new SessionCa();
-        const genMap = new Map<string, GenTarget>([[GEN, { siteId: SITE_ID, hostname: HOSTNAME }]]);
-        let reported: { siteId: string; vitePort: number | null } | null = null;
-        const shim = await makeShim(ca, genMap, (siteId, vitePort) => {
-            reported = { siteId, vitePort };
-        });
-        try {
-            const res = await fetchThroughShim(shim, GEN, '/html', ca.caPem);
-            expect(res.status).toBe(200);
-            // The site's own vhost origin + the Vite dev origin are mapped to .gen…
-            expect(res.body).toContain('href="https://tynn.gen/build/assets/app-x.css"');
-            expect(res.body).toContain('src="https://tynn.gen/@vite/client"');
-            expect(res.body).not.toContain('tynn.test');
-            expect(res.body).not.toContain('[::1]');
-            // …an unrelated CDN URL is left alone…
-            expect(res.body).toContain('https://cdn.example.com/lib.js');
-            // …Content-Length is corrected to the rewritten body…
-            expect(Number(res.headers['content-length'])).toBe(Buffer.byteLength(res.body));
-            // …and the detected Vite port is reported for carrier routing.
-            expect(reported).toEqual({ siteId: SITE_ID, vitePort: 5173 });
-        } finally {
-            await shim.close();
-        }
-    });
-
-    it('decompresses a gzipped HTML body before rewriting (drops content-encoding)', async () => {
-        const ca = new SessionCa();
-        const genMap = new Map<string, GenTarget>([[GEN, { siteId: SITE_ID, hostname: HOSTNAME }]]);
-        const shim = await makeShim(ca, genMap);
-        try {
-            const res = await fetchThroughShim(shim, GEN, '/html-gzip', ca.caPem);
-            expect(res.status).toBe(200);
-            expect(res.body).toContain('src="https://tynn.gen/@vite/client"');
-            expect(res.headers['content-encoding']).toBeUndefined(); // now identity plaintext
-            expect(Number(res.headers['content-length'])).toBe(Buffer.byteLength(res.body));
-        } finally {
-            await shim.close();
-        }
-    });
-
-    it('streams a non-HTML asset UNCHANGED (no body rewrite)', async () => {
-        const ca = new SessionCa();
-        const genMap = new Map<string, GenTarget>([[GEN, { siteId: SITE_ID, hostname: HOSTNAME }]]);
-        let called = false;
-        const shim = await makeShim(ca, genMap, () => {
-            called = true;
-        });
-        try {
-            const res = await fetchThroughShim(shim, GEN, '/asset.js', ca.caPem);
-            expect(res.status).toBe(200);
-            // A JS asset that happens to contain the vhost string is NOT rewritten.
-            expect(res.body).toBe('const u="https://tynn.test/keep";');
-            expect(called).toBe(false); // onVitePort only fires for HTML documents
         } finally {
             await shim.close();
         }
