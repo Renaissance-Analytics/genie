@@ -358,3 +358,23 @@ describe('auto-updater one-click hands-free apply', () => {
         expect(mockAuto.quitAndInstall).not.toHaveBeenCalled();
     });
 });
+
+describe('isReleasePublishingError (draft/publish-window 404 is not a real error)', () => {
+    it('treats a missing latest.yml (404 / cannot-find) as a publishing-window, not an error', async () => {
+        const { isReleasePublishingError } = await import('../auto-updater');
+        expect(
+            isReleasePublishingError(
+                'Cannot find latest.yml in the latest release artifacts (https://…/v0.7.0-beta.124/latest.yml): HTTPError: 404',
+            ),
+        ).toBe(true);
+        expect(isReleasePublishingError('HttpError: 404 method: GET url: …/latest.yml')).toBe(true);
+        expect(isReleasePublishingError('Cannot find latest-mac.yml')).toBe(true);
+    });
+
+    it('does NOT swallow genuine failures (network/offline/other)', async () => {
+        const { isReleasePublishingError } = await import('../auto-updater');
+        expect(isReleasePublishingError('net::ERR_INTERNET_DISCONNECTED')).toBe(false);
+        expect(isReleasePublishingError('getaddrinfo ENOTFOUND github.com')).toBe(false);
+        expect(isReleasePublishingError('Error: connect ETIMEDOUT')).toBe(false);
+    });
+});

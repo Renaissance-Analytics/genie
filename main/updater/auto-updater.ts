@@ -209,13 +209,12 @@ class AutoUpdater extends EventEmitter {
                 });
             }
         } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
             // A flaky/offline re-check must not throw away a build we'd already
             // downloaded and staged — restore it so the user can still apply it.
             // The failure is still captured in the log stream.
             if (stagedVersion) {
-                this.appendLog(
-                    `check failed: ${e instanceof Error ? e.message : String(e)}`,
-                );
+                this.appendLog(`check failed: ${msg}`);
                 this.setStatus({
                     state: 'ready-to-restart',
                     latestVersion: stagedVersion,
@@ -223,9 +222,20 @@ class AutoUpdater extends EventEmitter {
                 });
                 return;
             }
+            // A release that's mid-publish (its `latest.yml` isn't at the public
+            // download URL yet — GitHub un-drafts the release and propagates its
+            // assets to the CDN a few seconds apart, so a check in that ~6-min
+            // window 404s on latest.yml) is NOT a real error. Don't dump a scary
+            // HTTP 404 at the user — treat it as up-to-date; the next check finds
+            // the release once its manifest is live.
+            if (isReleasePublishingError(msg)) {
+                this.appendLog(`update manifest not published yet — treating as up-to-date: ${msg}`);
+                this.setStatus({ state: 'up-to-date' });
+                return;
+            }
             this.setStatus({
                 state: 'error',
-                error: e instanceof Error ? e.message : String(e),
+                error: msg,
                 manualDownloadUrl: this.manualUrlForPlatform(),
             });
         }
@@ -445,6 +455,22 @@ function pickReleaseUrl(info: UpdateInfo): string | null {
     const tag = info.version ? `v${info.version}` : null;
     if (!tag) return null;
     return `https://github.com/Renaissance-Analytics/genie/releases/tag/${tag}`;
+}
+
+/**
+ * True when a check error is just "the release's update manifest isn't public
+ * yet" rather than a real failure. A GitHub release un-drafts and its assets
+ * propagate to the public `releases/download/<tag>/latest*.yml` URL a few seconds
+ * apart, so a check landing in that window (or during the ~6-min publish build)
+ * 404s on `latest.yml`. That's transient + self-healing — the next check finds
+ * the release once its manifest is live — so we treat it as up-to-date instead of
+ * dumping a scary HTTP 404 at the user.
+ */
+export function isReleasePublishingError(message: string): boolean {
+    const m = message.toLowerCase();
+    const isManifest = m.includes('.yml') || m.includes('cannot find');
+    const isMissing = m.includes('404') || m.includes('not found') || m.includes('cannot find');
+    return isManifest && isMissing;
 }
 
 /** The GitHub repo electron-updater publishes to (mirrors electron-builder.yml). */
