@@ -7,7 +7,7 @@ import {
     writeProjectJson,
     type ProjectJsonTynn,
 } from '../workspace/project-json';
-import { hasTynnEnvReference, writeWorkspaceTynnMcp } from '../mcp/agent-config';
+import { hasTynnLiteralToken, writeWorkspaceTynnMcp } from '../mcp/agent-config';
 
 /**
  * Auto-provision the Tynn MCP agent token + Agent config for a workspace.
@@ -137,7 +137,7 @@ export async function provisionWorkspaceTynn(
     const decision = decideProvision({
         linked: !!link,
         signedIn,
-        alreadyConfigured: hasTynnEnvReference(workspacePath),
+        alreadyConfigured: hasTynnLiteralToken(workspacePath),
         force: !!opts.force,
     });
 
@@ -184,7 +184,7 @@ export async function provisionStatus(workspacePath: string): Promise<{
         status: decideProvision({
             linked: !!link,
             signedIn,
-            alreadyConfigured: hasTynnEnvReference(workspacePath),
+            alreadyConfigured: hasTynnLiteralToken(workspacePath),
             force: false,
         }),
         link,

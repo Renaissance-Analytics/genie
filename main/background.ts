@@ -30,7 +30,7 @@ import {
     setWorkspaceTunnelSite,
 } from './db';
 import { discoverSites } from './mobile/hosts';
-import { writeWorkspaceAgentMcp } from './mcp/agent-config';
+import { writeWorkspaceAgentMcp, healTynnLiteralToken } from './mcp/agent-config';
 import { resolveAlertSound, deliverAlertSound } from './notify-sound';
 import { demandWindowAttention, resolveAttentionWindow } from './attention-flash';
 import { workspaceDocHealth, repairWorkspaceDocs } from './workspace/create-agi';
@@ -108,7 +108,7 @@ import type {
 } from './mcp/protocol';
 import { resolveTargetWorkspace, type TargetDecision } from './mcp/target-workspace';
 import { TynnBackend } from './backend/tynn';
-import { readTynnLink } from './tynn/provision';
+import { readTynnLink, ensureMcpGitignored } from './tynn/provision';
 import {
     bindWindowToConnection,
     unbindWindow,
@@ -1107,6 +1107,20 @@ app.whenReady().then(async () => {
     for (const ws of listWorkspaces()) {
         if (ws.mcp_enabled) {
             writeWorkspaceAgentMcp(ws.path, true, workspaceEndpointUrl(ws.id));
+        }
+    }
+    // Self-heal the `tynn` MCP entry of any workspace still on the OLD, broken
+    // `${TYNN_AGENT_TOKEN}` reference form — which Claude Code / Cursor REFUSE to
+    // load when the var is unset (a stale terminal, a subagent, a non-Genie shell),
+    // breaking "connect to Tynn" for EVERY agent there (the outage). Rewrite it to
+    // the self-contained literal-token form, reading the token from the workspace's
+    // own gitignored `.env` (no re-mint / no network). Best-effort per workspace —
+    // never blocks or crashes boot.
+    for (const ws of listWorkspaces()) {
+        try {
+            if (healTynnLiteralToken(ws.path)) ensureMcpGitignored(ws.path);
+        } catch (e) {
+            console.error('[tynn] literal-token self-heal failed for', ws.path, e);
         }
     }
     // Control server for the bundled `genie` CLI (status / kill / host control).

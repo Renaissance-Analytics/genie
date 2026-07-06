@@ -180,7 +180,7 @@ root \`.env\`; a REPO NAME → \`repos/<name>/.env\`), and the usual \`terminalI
 PRESERVES other lines + comments and CREATES the gitignored \`.env\` if absent.
 \`.env\` is gitignored, so this never commits a secret — and Genie LOADS the
 workspace \`.env\` into the agent's terminal, so a value you set here is resolvable
-as \`\${KEY}\` (e.g. how the \`tynn\` MCP entry reads \`\${TYNN_AGENT_TOKEN}\`). No
+as \`\${KEY}\` (e.g. a \`\${DATABASE_URL}\` your app or an MCP entry reads). No
 approval prompt — an agent manages its own workspace env. Returns which \`.env\`
 was written. Available to System-workspace agents too.
 
