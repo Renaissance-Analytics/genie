@@ -196,6 +196,22 @@ export async function openTestingBrowser(
         minHeight: 480,
         show: false,
         title: `Genie Testing Browser — ${hostname}`,
+        // Same hidden-titlebar treatment as the master window — the in-app badge
+        // ribbon is the drag region, so we present one Genie chrome instead of a
+        // native title bar + menu bar stacked above it (which wasted vertical
+        // space). The overlay keeps the native min/max/close cluster on Windows;
+        // macOS keeps inset traffic lights. Menu bar hidden (nav is in-chrome).
+        titleBarStyle: 'hidden',
+        ...(process.platform !== 'darwin'
+            ? {
+                  titleBarOverlay: {
+                      color: '#131318',
+                      symbolColor: '#a1a1aa',
+                      height: 34,
+                  },
+              }
+            : {}),
+        autoHideMenuBar: true,
         backgroundColor: '#0a0a0c',
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),

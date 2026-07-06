@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
     api,
     hasGenieBridge,
@@ -108,19 +108,36 @@ function TestingBrowserInner() {
 
     const sites = state?.sites ?? [];
     const presets = state?.presets ?? [];
+    const isMac =
+        typeof navigator !== 'undefined' &&
+        /Mac/i.test(navigator.platform ?? navigator.userAgent ?? '');
 
     return (
         <div className="surface flex h-screen flex-col overflow-hidden bg-[#0a0a0c] text-zinc-200">
-            {/* Genie-owned badge — this is a Genie surface, not real Chrome. */}
-            <div className="flex items-center gap-2 border-b border-zinc-800 bg-[#131318] px-3 py-1.5 text-[11px]">
+            {/* Genie-owned badge — this is a Genie surface, not real Chrome. The
+                native title bar is hidden (titleBarStyle: 'hidden'), so THIS row
+                is the window chrome: it drags the window and pads right for the
+                native min/max/close overlay on Windows (left for macOS traffic
+                lights). Interactive children are marked no-drag. */}
+            <div
+                className="flex h-[34px] flex-shrink-0 items-center gap-2 border-b border-zinc-800 bg-[#131318] pl-3 text-[11px]"
+                style={{
+                    WebkitAppRegion: 'drag',
+                    // Reserve the Windows overlay controls; collapses to 12px where
+                    // no overlay exists (macOS / plain Linux).
+                    paddingRight: 'calc(100vw - env(titlebar-area-width, 100vw) + 12px)',
+                } as CSSProperties}
+            >
+                {isMac && <span className="w-[64px] flex-shrink-0" />}
                 <span className="rounded bg-emerald-900/60 px-1.5 py-0.5 font-semibold text-emerald-300">
                     GENIE TESTING BROWSER
                 </span>
-                <span className="text-zinc-400">
+                <span className="truncate text-zinc-400">
                     tunneling {state?.hostname ?? 'host'} · *.gen served only inside this session
                 </span>
                 <button
-                    className="ml-auto rounded px-1.5 py-0.5 text-zinc-400 hover:bg-zinc-800"
+                    className="ml-auto flex-shrink-0 rounded px-1.5 py-0.5 text-zinc-400 hover:bg-zinc-800"
+                    style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
                     onClick={() => void api().testingBrowser.refreshSites()}
                     title="Refresh the enabled .gen sites from the host"
                 >
