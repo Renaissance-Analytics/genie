@@ -154,6 +154,38 @@ export function hasTynnServer(workspacePath: string): boolean {
 }
 
 /**
+ * True when the `tynn` server is configured in the CURRENT form: the `.mcp.json`
+ * entry's Authorization REFERENCES `${TYNN_AGENT_TOKEN}` (not an embedded literal
+ * token) AND that token is actually present in the gitignored workspace `.env`.
+ *
+ * This is what "already configured" must mean for provisioning — an OLD build
+ * embedded the literal token in `.mcp.json`, so `hasTynnServer` alone reports
+ * such a workspace as done and the auto-provisioner skips it, never migrating it
+ * to `.env` (and never refreshing a stale token). Returning false for the literal
+ * form — or for a reference whose `.env` token is missing — makes the provisioner
+ * re-run, which migrates it via `writeWorkspaceTynnMcp`.
+ */
+export function hasTynnEnvReference(workspacePath: string): boolean {
+    const file = path.join(workspacePath, '.mcp.json');
+    const cfg = fs.existsSync(file) ? readJson(file) : null;
+    const servers = cfg?.mcpServers as JsonObj | undefined;
+    const tynn = servers?.[TYNN_SERVER_NAME] as JsonObj | undefined;
+    const headers = tynn?.headers as JsonObj | undefined;
+    const auth = headers?.Authorization;
+    // The entry must reference the env var, not embed a literal token.
+    if (typeof auth !== 'string' || !auth.includes(`\${${TYNN_TOKEN_ENV_KEY}`)) {
+        return false;
+    }
+    // And the token must actually be in `.env` (else the reference resolves empty).
+    try {
+        const env = fs.readFileSync(path.join(workspacePath, '.env'), 'utf8');
+        return new RegExp(`^\\s*${TYNN_TOKEN_ENV_KEY}=\\S`, 'm').test(env);
+    } catch {
+        return false;
+    }
+}
+
+/**
  * Write (or remove) the `tynn` MCP server in a workspace's Claude + Cursor
  * configs. Mirrors writeWorkspaceAgentMcp's per-target sync gating. The entry
  * carries the project agent token — callers must ensure `.mcp.json` is

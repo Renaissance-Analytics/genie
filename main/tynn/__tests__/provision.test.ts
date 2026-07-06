@@ -6,6 +6,7 @@ import {
     applyServer,
     tynnEntry,
     hasTynnServer,
+    hasTynnEnvReference,
     writeWorkspaceTynnMcp,
     TYNN_TOKEN_ENV_KEY,
 } from '../../mcp/agent-config';
@@ -88,6 +89,47 @@ describe('tynn server config writing', () => {
             JSON.stringify({ mcpServers: { tynn: { type: 'http', url: 'u' } } }),
         );
         expect(hasTynnServer(dir)).toBe(true);
+    });
+
+    it('hasTynnEnvReference is false for the OLD literal form (so it re-provisions/migrates)', () => {
+        const dir = makeTmpDir('tynn-envref-old');
+        // Old build: literal token embedded in .mcp.json, no .env reference.
+        fs.writeFileSync(
+            path.join(dir, '.mcp.json'),
+            JSON.stringify({
+                mcpServers: {
+                    tynn: {
+                        type: 'http',
+                        url: 'https://tynn.ai/mcp/tynn',
+                        headers: { Authorization: 'Bearer rpk_OLD.literal' },
+                    },
+                },
+            }),
+        );
+        // hasTynnServer sees it (entry exists) but hasTynnEnvReference does NOT —
+        // the gating that makes the auto-provisioner migrate it instead of skipping.
+        expect(hasTynnServer(dir)).toBe(true);
+        expect(hasTynnEnvReference(dir)).toBe(false);
+    });
+
+    it('hasTynnEnvReference is true only when the entry references the var AND .env has the token', () => {
+        const dir = makeTmpDir('tynn-envref-new');
+        fs.writeFileSync(
+            path.join(dir, '.mcp.json'),
+            JSON.stringify({
+                mcpServers: {
+                    tynn: {
+                        type: 'http',
+                        url: 'https://tynn.ai/mcp/tynn',
+                        headers: { Authorization: 'Bearer ${TYNN_AGENT_TOKEN:-}' },
+                    },
+                },
+            }),
+        );
+        // Reference present but the token is NOT in .env yet → still needs provisioning.
+        expect(hasTynnEnvReference(dir)).toBe(false);
+        fs.writeFileSync(path.join(dir, '.env'), `${TYNN_TOKEN_ENV_KEY}=rpk_present.value\n`);
+        expect(hasTynnEnvReference(dir)).toBe(true);
     });
 
     it('MIGRATES a literal token out of .mcp.json into the gitignored .env', () => {
