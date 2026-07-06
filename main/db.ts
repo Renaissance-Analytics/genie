@@ -642,9 +642,13 @@ export interface Settings {
      *  (settings are k/v text). Default '51717' (obscure, outside the OS
      *  ephemeral range). Changing it requires restarting the MCP server. */
     mcp_port?: string;
-    /** Mobile remote-control server (Settings → Mobile). Opt-in: 'off' (default)
-     *  binds nothing; 'on' binds the Tailscale-only HTTP/WS server. */
+    /** Phone web UI server (Settings → Remote control). Opt-in: 'off' (default)
+     *  withholds the phone UI; 'on' serves it on the Tailscale-only HTTP/WS server. */
     mobile_enabled?: 'on' | 'off';
+    /** Desktop Genie Remote (Settings → Remote control). Opt-in: 'off' (default) |
+     *  'on'. Independent of mobile_enabled — either binds the host server; the phone
+     *  UI route is gated on mobile_enabled, so remote works with mobile off. */
+    remote_enabled?: 'on' | 'off';
     /** Fixed port for the mobile server, bound on the Tailscale IP. String-
      *  encoded; default '51718' (obscure, beside the MCP port). Same Integer/
      *  range guard as mcp_port. Changing it requires restarting the server. */

@@ -399,8 +399,12 @@ export interface Settings {
     /** Fixed loopback port for the agent-integration MCP server. String-encoded;
      *  default '51717'. Changing it requires restarting the MCP server. */
     mcp_port?: string;
-    /** Mobile remote-control server. Opt-in: 'off' (default) | 'on'. */
+    /** Phone web UI (mobile) server. Opt-in: 'off' (default) | 'on'. */
     mobile_enabled?: 'on' | 'off';
+    /** Desktop Genie Remote — allow another Genie in Remote mode to drive this host.
+     *  Opt-in: 'off' (default) | 'on'. Independent of `mobile_enabled`: either can be
+     *  on alone; the host server binds while either is on. */
+    remote_enabled?: 'on' | 'off';
     /** Fixed port for the mobile server (bound on the Tailscale IP). String-
      *  encoded; default '51718'. Changing it requires restarting the server. */
     mobile_port?: string;
@@ -477,7 +481,12 @@ export interface MobileDevice {
 
 export interface MobileStatus {
     running: boolean;
+    /** True when the host server is bound (either the phone UI or desktop remote is on). */
     enabled: boolean;
+    /** True when the phone web UI (`/m`) is being served. */
+    mobileUiEnabled: boolean;
+    /** True when desktop Genie Remote connections are allowed (independent of the phone UI). */
+    remoteEnabled: boolean;
     /** The bound Tailscale IPv4 (null when not running). */
     ip: string | null;
     /** The bound port (null when not running). */
@@ -1283,6 +1292,8 @@ export interface GenieApi {
     mobile: {
         status: () => Promise<MobileStatus>;
         restart: (enabled?: boolean) => Promise<MobileStatus>;
+        /** Toggle desktop Genie Remote independently of the phone UI. */
+        setRemoteEnabled: (enabled: boolean) => Promise<MobileStatus>;
         regeneratePin: () => Promise<MobileStatus>;
         /** win32: add the inbound firewall rule for the live port (one UAC prompt).
          *  `cancelled` when the user declines UAC; `error` on any other failure. */

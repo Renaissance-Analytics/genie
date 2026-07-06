@@ -217,6 +217,43 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         expect(res.body).toContain('<base href="/m/">');
     });
 
+    it('binds for desktop Genie Remote with the phone UI off, and withholds /m', async () => {
+        // Mobile UI OFF but desktop remote ON — the server still binds (the bind
+        // gate is either surface), the API serves the desktop remote, but the phone
+        // shell (/m) is 404'd. This is the decouple: remote works without Mobile.
+        appDir = buildAppDir();
+        wsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mobile-ws-'));
+        await startMobileServer({
+            serverVersion: '0.0.0-test',
+            userDataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mobile-ud-')),
+            appDir,
+            enabled: true, // bind gate = mobileUi || remote
+            mobileUiEnabled: false, // phone UI withheld
+            remoteEnabled: true, // desktop Genie Remote allowed
+            configuredPort: () => 0,
+            data: deps(),
+            confirmPair: async () => true,
+            bindIpOverride: '127.0.0.1',
+        });
+        const st = mobileServerState();
+        expect(st.running).toBe(true);
+        expect(st.mobileUiEnabled).toBe(false);
+        expect(st.remoteEnabled).toBe(true);
+        const port = st.port!;
+        // Phone shell is withheld.
+        const shell = await new Promise<{ status: number }>((resolve) => {
+            http.get({ host: '127.0.0.1', port, path: '/m/' }, (r) => {
+                r.on('data', () => {});
+                r.on('end', () => resolve({ status: r.statusCode ?? 0 }));
+            });
+        });
+        expect(shell.status).toBe(404);
+        // But the API is live for the desktop remote: unauth /api/state is 401
+        // (reachable + auth-gated), NOT 404 (server-not-serving).
+        const state = await req(port, 'GET', '/api/state');
+        expect(state.status).toBe(401);
+    });
+
     it('pairs on the correct PIN + desktop confirm and mints a token', async () => {
         const port = await start(true);
         const token = await pair(port);

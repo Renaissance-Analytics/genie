@@ -1103,8 +1103,15 @@ app.whenReady().then(async () => {
         userDataDir: app.getPath('userData'),
         // The compiled app dir holding mobile.html + the static export.
         appDir: __dirname,
-        // Opt-in: mobile_enabled defaults 'off'. Only bind when the user turned it on.
-        enabled: (getAllSettings() as Record<string, string>)['mobile_enabled'] === 'on',
+        // Opt-in, two independent surfaces (both default 'off'): the phone web UI
+        // (mobile_enabled) and desktop Genie Remote (remote_enabled). The server
+        // binds when EITHER is on; the phone UI route is gated on mobileUiEnabled,
+        // so remote can be used without turning the Mobile toggle on.
+        enabled:
+            (getAllSettings() as Record<string, string>)['mobile_enabled'] === 'on' ||
+            (getAllSettings() as Record<string, string>)['remote_enabled'] === 'on',
+        mobileUiEnabled: (getAllSettings() as Record<string, string>)['mobile_enabled'] === 'on',
+        remoteEnabled: (getAllSettings() as Record<string, string>)['remote_enabled'] === 'on',
         configuredPort: () => {
             const raw = (getAllSettings() as Record<string, string>)['mobile_port'];
             const n = raw ? parseInt(raw, 10) : NaN;

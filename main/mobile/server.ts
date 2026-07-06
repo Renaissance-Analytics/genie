@@ -59,8 +59,20 @@ export interface MobileServerDeps {
     userDataDir: string;
     /** The compiled app dir holding mobile.html + _next/* (background.ts: __dirname). */
     appDir: string;
-    /** Whether the user enabled the mobile server (Settings → Mobile). */
+    /** Bind the host server when EITHER surface is on (phone UI or desktop remote). */
     enabled: boolean;
+    /**
+     * Serve the phone web UI (`/m`). When false but `enabled` (desktop-remote-only),
+     * the API/WS still bind for Genie Remote but the phone UI is 404'd. Defaults to
+     * `enabled` when unset (back-compat for callers that only pass `enabled`).
+     */
+    mobileUiEnabled?: boolean;
+    /**
+     * Allow desktop Genie Remote connections (Settings → Genie Remote). Independent
+     * of the phone UI — either surface can be on alone; the server binds if either
+     * is on. Recorded so the toggle setters can recompute the bind gate.
+     */
+    remoteEnabled?: boolean;
     /** The user-configured fixed port (Settings → Mobile). */
     configuredPort: () => number;
     /** Reused terminal/process/workspace/question functions (built in background.ts). */
@@ -285,7 +297,12 @@ async function handle(
         return;
     }
 
-    if (serveStatic(res, deps.appDir, pathname)) return;
+    // Phone web UI (`/m`) is served ONLY when the mobile UI is enabled. When the
+    // server is bound for desktop Genie Remote only (remote on, mobile off), the
+    // API/WS above still work but the phone shell is 404'd — the "Mobile UI off"
+    // toggle genuinely withholds the phone surface.
+    const mobileUi = deps.mobileUiEnabled ?? deps.enabled;
+    if (mobileUi && serveStatic(res, deps.appDir, pathname)) return;
 
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     res.end('not found');
@@ -634,9 +651,21 @@ export async function restartMobileServer(): Promise<void> {
     if (server) audit('server.restart', `${ip}:${boundPort}`, 'desktop');
 }
 
-/** Update the cached enabled flag (Settings toggle) before a restart. */
+/** Update the phone-UI toggle (Settings → Mobile) + recompute the bind gate. The
+ *  server binds whenever the phone UI OR desktop Genie Remote is on. */
 export function setMobileEnabled(enabled: boolean): void {
-    if (deps) deps.enabled = enabled;
+    if (!deps) return;
+    deps.mobileUiEnabled = enabled;
+    deps.enabled = enabled || !!deps.remoteEnabled;
+}
+
+/** Update the desktop Genie Remote toggle (Settings → Genie Remote) + recompute the
+ *  bind gate. Lets remote bind the host server independently of the phone UI, so a
+ *  desktop can connect without the Mobile toggle on. */
+export function setRemoteEnabled(enabled: boolean): void {
+    if (!deps) return;
+    deps.remoteEnabled = enabled;
+    deps.enabled = enabled || !!(deps.mobileUiEnabled ?? deps.enabled);
 }
 
 // Re-export the kill-switch + revoke so the desktop IPC layer drives them
@@ -656,7 +685,12 @@ export { mobileEmit } from './bus';
 /** Status for Settings → Mobile (drives the URL / PIN / QR / conflict banner). */
 export interface MobileServerState {
     running: boolean;
+    /** True when the server is bound (either the phone UI or desktop remote is on). */
     enabled: boolean;
+    /** True when the phone web UI (`/m`) is being served. */
+    mobileUiEnabled: boolean;
+    /** True when desktop Genie Remote connections are allowed. */
+    remoteEnabled: boolean;
     /** The bound Tailscale IP (null when not running). */
     ip: string | null;
     /** The bound port (null when not running). */
@@ -689,6 +723,8 @@ export function mobileServerState(): MobileServerState {
     return {
         running: server !== null,
         enabled: deps?.enabled ?? false,
+        mobileUiEnabled: (deps?.mobileUiEnabled ?? deps?.enabled) ?? false,
+        remoteEnabled: deps?.remoteEnabled ?? false,
         ip: boundIp,
         port: boundPort,
         configuredPort: deps?.configuredPort() ?? DEFAULT_MOBILE_PORT,

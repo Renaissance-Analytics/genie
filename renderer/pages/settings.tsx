@@ -576,6 +576,8 @@ export default function SettingsPage() {
                 <MobileSection
                     enabled={s.mobile_enabled === 'on'}
                     onEnabledChange={(on) => patch({ mobile_enabled: on ? 'on' : 'off' })}
+                    remoteEnabled={s.remote_enabled === 'on'}
+                    onRemoteEnabledChange={(on) => patch({ remote_enabled: on ? 'on' : 'off' })}
                     port={s.mobile_port ?? '51718'}
                     onPortChange={(v) => patch({ mobile_port: v })}
                     localSitesEnabled={s.local_sites_enabled === 'on'}
@@ -3254,6 +3256,8 @@ function RemoteHostCard() {
 function MobileSection({
     enabled,
     onEnabledChange,
+    remoteEnabled,
+    onRemoteEnabledChange,
     port,
     onPortChange,
     localSitesEnabled,
@@ -3262,6 +3266,8 @@ function MobileSection({
 }: {
     enabled: boolean;
     onEnabledChange: (on: boolean) => void;
+    remoteEnabled: boolean;
+    onRemoteEnabledChange: (on: boolean) => void;
     port: string;
     onPortChange: (v: string) => void;
     localSitesEnabled: boolean;
@@ -3293,6 +3299,20 @@ function MobileSection({
         try {
             await persistSettings();
             setStatus(await api().mobile.restart(on));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    // Desktop Genie Remote toggle — independent of the phone UI. Binds/unbinds the
+    // same host server (server stays up while either surface is on), so a desktop
+    // can connect without the Mobile UI toggle on.
+    const persistThenSetRemote = async (on: boolean) => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            await persistSettings();
+            setStatus(await api().mobile.setRemoteEnabled(on));
         } finally {
             setBusy(false);
         }
@@ -3385,8 +3405,8 @@ function MobileSection({
 
     return (
         <SetSection
-            title="Mobile remote control"
-            desc="Let your phone — or another Genie in remote mode — drive this Genie over Tailscale"
+            title="Remote control"
+            desc="Let another Genie (desktop) — or your phone — drive this Genie over Tailscale. Each surface is a separate switch; the server runs while either is on."
             status={statusLabel}
             statusColor={statusColor}
             statusIcon={
@@ -3398,9 +3418,24 @@ function MobileSection({
             }
         >
             <SettingRow
-                label="Enable mobile remote control"
-                keywords="mobile remote control phone enable server pairing tailscale"
-                desc="Off by default. Starts a small web server on your Tailscale interface so a paired phone can reach this desktop. Works only over your tailnet; pairing is confirmed here, then the device can drive terminals until you Disconnect or Lock."
+                label="Enable Genie Remote (desktop)"
+                keywords="genie remote desktop control connect host enable server pairing tailscale work mode"
+                desc="Off by default. Lets another Genie in Remote mode connect to and drive this desktop over your tailnet. Independent of the phone UI below — you do NOT need to enable Mobile to use Genie Remote. Pairing is confirmed here, then the remote can drive terminals until you Disconnect or Lock."
+            >
+                <Switch
+                    checked={remoteEnabled}
+                    disabled={busy}
+                    onCheckedChange={(on: boolean) => {
+                        onRemoteEnabledChange(on);
+                        void persistThenSetRemote(on);
+                    }}
+                />
+            </SettingRow>
+
+            <SettingRow
+                label="Enable Mobile UI (phone)"
+                keywords="mobile remote control phone enable server pairing tailscale web ui"
+                desc="Off by default. Serves a small web UI on your Tailscale interface so a paired phone can reach this desktop. Independent of Genie Remote above — turn this off and desktop remote still works."
             >
                 <Switch
                     checked={enabled}

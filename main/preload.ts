@@ -41,6 +41,10 @@ interface TestingBrowserState {
 interface MobileStatus {
     running: boolean;
     enabled: boolean;
+    /** True when the phone web UI is being served. */
+    mobileUiEnabled: boolean;
+    /** True when desktop Genie Remote connections are allowed. */
+    remoteEnabled: boolean;
     ip: string | null;
     port: number | null;
     configuredPort: number;
@@ -156,6 +160,10 @@ const api = {
         status: () => ipcRenderer.invoke('mobile:status') as Promise<MobileStatus>,
         restart: (enabled?: boolean) =>
             ipcRenderer.invoke('mobile:restart', enabled) as Promise<MobileStatus>,
+        /** Toggle desktop Genie Remote independently of the phone UI (binds/unbinds
+         *  the same host server). */
+        setRemoteEnabled: (enabled: boolean) =>
+            ipcRenderer.invoke('remote:set-enabled', enabled) as Promise<MobileStatus>,
         regeneratePin: () =>
             ipcRenderer.invoke('mobile:regenerate-pin') as Promise<MobileStatus>,
         /** win32: add the inbound firewall rule for the live port (one UAC prompt).

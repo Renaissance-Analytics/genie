@@ -92,6 +92,7 @@ import {
     mobileServerState,
     restartMobileServer,
     setMobileEnabled,
+    setRemoteEnabled,
     setLocked,
     regeneratePin,
     currentPin,
@@ -543,6 +544,14 @@ export function registerIpcHandlers(): void {
         // The Settings toggle persists `mobile_enabled` then calls restart; pass
         // the live flag through so the server reflects the new state.
         if (typeof enabled === 'boolean') setMobileEnabled(enabled);
+        await restartMobileServer();
+        return mobileStatus();
+    });
+    ipcMain.handle('remote:set-enabled', async (_e, enabled?: boolean) => {
+        // Settings → Genie Remote persists `remote_enabled` then calls this. Toggling
+        // desktop remote binds/unbinds the SAME host server (independent of the phone
+        // UI), so it goes through the same restart path.
+        if (typeof enabled === 'boolean') setRemoteEnabled(enabled);
         await restartMobileServer();
         return mobileStatus();
     });
