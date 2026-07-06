@@ -246,7 +246,12 @@ export function buildForwardResponseHeaders(
         const lk = k.toLowerCase();
         if (HOP_BY_HOP.has(lk)) continue;
         if (connTokens.has(lk)) continue;
-        if (lk === 'location') {
+        // `Location` (server redirects) AND `X-Inertia-Location` (Inertia's
+        // full-page/external redirect — used after a Laravel Inertia login) both
+        // carry an absolute URL the browser navigates to; rewrite the site's own
+        // `.test` origin → `.gen` so a post-login redirect doesn't bounce the
+        // browser to the (proxy-refused) real vhost.
+        if (lk === 'location' || lk === 'x-inertia-location') {
             out[k] = rewriteGenLocation(String(v), hostname, genHost);
             continue;
         }

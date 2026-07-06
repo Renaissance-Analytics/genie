@@ -52,6 +52,11 @@ export interface LocalTarget {
  *  dev server for a Vite-owned path on a site that has a detected `vitePort`. */
 interface DialTarget {
     scheme: SiteScheme;
+    /** The loopback address to CONNECT to. Vite dev commonly binds ONLY `::1`
+     *  (IPv6), so its leg dials `localhost` — Node's Happy-Eyeballs (autoSelectFamily,
+     *  default on Node 20+) reaches whichever family Vite bound (::1 or 127.0.0.1).
+     *  The Laravel leg keeps the explicit IPv4 loopback. */
+    dialHost: string;
     /** The `Host` header (and, for https, TLS SNI) to force upstream. */
     host: string;
     /** The loopback port. */
@@ -60,16 +65,21 @@ interface DialTarget {
 
 /**
  * PURE. Pick the loopback endpoint for a request: the Vite dev server (plain http,
- * `Host: 127.0.0.1:<vitePort>`) for a Vite-owned path when the site has a detected
- * `vitePort`, else the site's registered Laravel target. Both dial `127.0.0.1` —
- * the carrier stays loopback-only; `vitePort` is just another loopback port on THIS
- * machine.
+ * dialed via `localhost` so an IPv6-only `::1` bind is still reached) for a
+ * Vite-owned path when the site has a detected `vitePort`, else the site's
+ * registered Laravel target. Loopback-only either way — `vitePort` is just another
+ * loopback port on THIS machine.
  */
 export function pickDialTarget(target: LocalTarget, upstreamPath: string): DialTarget {
     if (target.vitePort != null && isViteAssetPath(upstreamPath)) {
-        return { scheme: 'http', host: `${LOOPBACK}:${target.vitePort}`, port: target.vitePort };
+        return {
+            scheme: 'http',
+            dialHost: 'localhost',
+            host: `localhost:${target.vitePort}`,
+            port: target.vitePort,
+        };
     }
-    return { scheme: target.scheme, host: target.hostname, port: target.port };
+    return { scheme: target.scheme, dialHost: LOOPBACK, host: target.hostname, port: target.port };
 }
 
 /** Split `/api/site/<siteId><path>` and resolve the target it selects. */
@@ -94,7 +104,12 @@ function dialOptions(
     const dial = pickDialTarget(target, upstreamPath);
     const isTls = dial.scheme === 'https';
     return {
-        host: LOOPBACK, // ALWAYS loopback — the siteId is the only selector (SSRF-safe)
+        // Loopback only — 127.0.0.1 for the site, `localhost` for the Vite leg (so an
+        // IPv6-only `::1` Vite bind is still reached). The siteId is the sole selector
+        // (SSRF-safe); `dialHost` never comes from the request.
+        // Node 20+ enables Happy-Eyeballs (autoSelectFamily) BY DEFAULT, so dialing
+        // `localhost` tries IPv6 + IPv4 and reaches a `::1`-only Vite dev server.
+        host: dial.dialHost,
         port: dial.port,
         method: keepUpgrade ? 'GET' : undefined,
         path: upstreamPath,

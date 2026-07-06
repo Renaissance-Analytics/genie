@@ -19,12 +19,14 @@ describe('pickDialTarget', () => {
         const t: LocalTarget = { ...base, vitePort: 5173 };
         expect(pickDialTarget(t, '/@vite/client')).toEqual({
             scheme: 'http',
-            host: '127.0.0.1:5173',
+            dialHost: 'localhost',
+            host: 'localhost:5173',
             port: 5173,
         });
         expect(pickDialTarget(t, '/resources/js/app.tsx')).toEqual({
             scheme: 'http',
-            host: '127.0.0.1:5173',
+            dialHost: 'localhost',
+            host: 'localhost:5173',
             port: 5173,
         });
     });
@@ -33,11 +35,13 @@ describe('pickDialTarget', () => {
         const t: LocalTarget = { ...base, vitePort: 5173 };
         expect(pickDialTarget(t, '/dashboard')).toEqual({
             scheme: 'https',
+            dialHost: '127.0.0.1',
             host: 'biz.test',
             port: 8443,
         });
         expect(pickDialTarget(t, '/build/assets/app.css')).toEqual({
             scheme: 'https',
+            dialHost: '127.0.0.1',
             host: 'biz.test',
             port: 8443,
         });
@@ -46,6 +50,7 @@ describe('pickDialTarget', () => {
     it('without a vitePort, every path stays on the Laravel target', () => {
         expect(pickDialTarget(base, '/@vite/client')).toEqual({
             scheme: 'https',
+            dialHost: '127.0.0.1',
             host: 'biz.test',
             port: 8443,
         });
@@ -114,7 +119,7 @@ describe('createLocalSiteCarrier — Vite routing', () => {
         expect(await drain(res.body)).toBe('vite');
         expect(viteHits).toHaveLength(1);
         expect(viteHits[0].path).toBe('/@vite/client');
-        expect(viteHits[0].host).toBe(`127.0.0.1:${vitePort}`);
+        expect(viteHits[0].host).toBe(`localhost:${vitePort}`);
         expect(laravelHits).toHaveLength(0);
     });
 
