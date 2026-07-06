@@ -143,8 +143,20 @@ export async function openTestingBrowser(
     // refreshSites keeps current. Created BEFORE the carrier so the closure is
     // stable; populated on the first refresh below.
     const localTargets = new Map<string, LocalTarget>();
+    // siteId → detected Vite dev-server port (from the served HTML). Kept SEPARATE
+    // from localTargets so it survives the 20s refresh (which rebuilds localTargets
+    // from the enabled-site set, which carries no vitePort). Merged into the target
+    // at resolve time so a Vite-owned path routes to the dev server. The race —
+    // an asset requested before the HTML records the port — is benign: the browser
+    // fetches the HTML document before its assets.
+    const vitePortsBySiteId = new Map<string, number>();
     const carrier = isLocal
-        ? createLocalSiteCarrier((siteId) => localTargets.get(siteId) ?? null)
+        ? createLocalSiteCarrier((siteId) => {
+              const t = localTargets.get(siteId);
+              if (!t) return null;
+              const vitePort = vitePortsBySiteId.get(siteId);
+              return vitePort != null ? { ...t, vitePort } : t;
+          })
         : getSiteCarrier(connKey);
     if (!carrier) {
         // A relay connection with the carrier gated off (owner decision #4) is a
@@ -174,6 +186,12 @@ export async function openTestingBrowser(
         ca,
         carrier,
         resolveGen: (genHost) => genMap.get(genHost) ?? null,
+        // Record a site's Vite dev-server port the first time its HTML is served so
+        // the local carrier routes the site's Vite-owned asset paths to it. A null
+        // (a page with no Vite origin) leaves any prior mapping untouched.
+        onVitePort: (siteId, vitePort) => {
+            if (vitePort != null) vitePortsBySiteId.set(siteId, vitePort);
+        },
     });
 
     // Route the session through the shim (it refuses non-`.gen`). Chromium keeps

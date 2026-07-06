@@ -7,6 +7,7 @@ import {
     stripTokenParam,
 } from '../mobile/site-proxy';
 import type { SiteScheme } from '../mobile/hosts';
+import { isViteAssetPath } from './site-rewrite';
 import type {
     SiteCarrier,
     SiteForwardCall,
@@ -37,6 +38,38 @@ export interface LocalTarget {
     hostname: string;
     /** The loopback port to dial. */
     port: number;
+    /**
+     * OPTIONAL. The Vite dev-server port detected when the site's HTML was served
+     * (see `rewriteSiteHtml`). When set, requests whose path is Vite-owned
+     * ({@link isViteAssetPath}) dial THIS port over plain http (Vite dev is http)
+     * instead of the Laravel `port` — that's what makes a Laravel + Vite-dev SPA
+     * boot through the `.gen` proxy. Absent ⇒ everything goes to `port` as before.
+     */
+    vitePort?: number;
+}
+
+/** The concrete loopback endpoint a request dials — the Laravel target, OR the Vite
+ *  dev server for a Vite-owned path on a site that has a detected `vitePort`. */
+interface DialTarget {
+    scheme: SiteScheme;
+    /** The `Host` header (and, for https, TLS SNI) to force upstream. */
+    host: string;
+    /** The loopback port. */
+    port: number;
+}
+
+/**
+ * PURE. Pick the loopback endpoint for a request: the Vite dev server (plain http,
+ * `Host: 127.0.0.1:<vitePort>`) for a Vite-owned path when the site has a detected
+ * `vitePort`, else the site's registered Laravel target. Both dial `127.0.0.1` —
+ * the carrier stays loopback-only; `vitePort` is just another loopback port on THIS
+ * machine.
+ */
+export function pickDialTarget(target: LocalTarget, upstreamPath: string): DialTarget {
+    if (target.vitePort != null && isViteAssetPath(upstreamPath)) {
+        return { scheme: 'http', host: `${LOOPBACK}:${target.vitePort}`, port: target.vitePort };
+    }
+    return { scheme: target.scheme, host: target.hostname, port: target.port };
 }
 
 /** Split `/api/site/<siteId><path>` and resolve the target it selects. */
@@ -58,19 +91,21 @@ function dialOptions(
     headers: http.OutgoingHttpHeaders,
     keepUpgrade: boolean,
 ): https.RequestOptions {
-    const isTls = target.scheme === 'https';
+    const dial = pickDialTarget(target, upstreamPath);
+    const isTls = dial.scheme === 'https';
     return {
         host: LOOPBACK, // ALWAYS loopback — the siteId is the only selector (SSRF-safe)
-        port: target.port,
+        port: dial.port,
         method: keepUpgrade ? 'GET' : undefined,
         path: upstreamPath,
-        headers: buildUpstreamHeaders(headers as http.IncomingHttpHeaders, target.hostname, {
+        headers: buildUpstreamHeaders(headers as http.IncomingHttpHeaders, dial.host, {
             keepUpgrade,
         }),
         // Terminate the dev site's local TLS as a client with SNI = the vhost;
-        // loopback has no MITM surface, so a self-signed .test cert is fine.
+        // loopback has no MITM surface, so a self-signed .test cert is fine. (The
+        // Vite dev leg is plain http, so no TLS options are set for it.)
         // codeql[js/disabling-certificate-validation]
-        ...(isTls ? { servername: target.hostname, rejectUnauthorized: false } : {}),
+        ...(isTls ? { servername: dial.host, rejectUnauthorized: false } : {}),
     };
 }
 
@@ -86,8 +121,7 @@ export function createLocalSiteCarrier(
                     reject(new Error('unknown or disabled local site'));
                     return;
                 }
-                const isTls = r.target.scheme === 'https';
-                const agent = isTls ? https : http;
+                const agent = pickDialTarget(r.target, r.upstreamPath).scheme === 'https' ? https : http;
                 const opts = dialOptions(r.target, r.upstreamPath, req.headers, false);
                 opts.method = req.method;
                 upReq = agent.request(opts, (upRes) =>
@@ -107,8 +141,7 @@ export function createLocalSiteCarrier(
                     reject(new Error('unknown or disabled local site'));
                     return;
                 }
-                const isTls = r.target.scheme === 'https';
-                const agent = isTls ? https : http;
+                const agent = pickDialTarget(r.target, r.upstreamPath).scheme === 'https' ? https : http;
                 upReq = agent.request(dialOptions(r.target, r.upstreamPath, req.headers, true));
                 upReq.on('upgrade', (upRes, upSocket: Duplex, upHead: Buffer) =>
                     resolve2({ handshake: serializeHandshake(upRes), socket: upSocket, head: upHead }),
