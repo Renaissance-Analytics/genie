@@ -93,11 +93,22 @@ export default function Terminal({
     // OR after create. Track it either way: create uses the latest
     // known size, and any later resize is forwarded to the pty.
     const sizeRef = useRef<{ cols: number; rows: number }>({ cols: 80, rows: 24 });
-    // The xterm selection captured at the instant of a right-click mousedown —
-    // BEFORE the click can clear it — so the right-click "Copy" still has text to
-    // copy even when the live selection was cleared (common over a mouse-reporting
-    // TUI). Overwritten on every right-mousedown, so it never goes stale.
+    // The xterm selection captured at the instant of a right-click mousedown /
+    // contextmenu — BEFORE the click can clear it — so the right-click "Copy" still
+    // has text to copy even when the live selection was cleared (common over a
+    // mouse-reporting TUI). Overwritten on every right-mousedown, so it never goes
+    // stale.
     const rightClickSelRef = useRef('');
+    // The last NON-EMPTY xterm selection, tracked live via onSelectionChange. This
+    // is the robust fallback for the right-click Copy: over a mouse-reporting TUI
+    // (Claude Code, tmux…) a right-click is forwarded to the app, whose redraw
+    // ASYNCHRONOUSLY clears xterm's selection a beat AFTER the menu opens — so a
+    // single mousedown snapshot can still read empty. Recording the selection at
+    // the exact moment xterm computes it (no event-phase-ordering dependence, and
+    // immune to the later async clear) means Copy always has the real text. Reset
+    // when a fresh left-click starts a new interaction, so it never copies stale
+    // text after the user has deselected.
+    const lastSelectionRef = useRef('');
 
     // Copy/paste behaviour (Settings → Customization). REACTIVE: read on mount AND
     // re-read on settings:changed, so changing the mode applies to LIVE terminals
@@ -287,9 +298,14 @@ export default function Terminal({
                       copy: copyText,
                       paste: pasteFromClipboard,
                       // A right-click can clear xterm's live selection before the
-                      // menu reads it — fall back to the selection snapshotted at
-                      // right-mousedown (rightClickSelRef) so Copy still works.
-                      resolveSelection: (ctxSel) => rightClickSelRef.current || ctxSel,
+                      // menu reads it. Prefer the live ctx selection when present
+                      // (correct for a plain shell, where xterm keeps it), then the
+                      // selection snapshotted at right-mousedown/contextmenu, then
+                      // the last non-empty selection tracked via onSelectionChange
+                      // (the only survivor when a mouse-reporting TUI async-clears
+                      // the selection just after the menu opens). So Copy still works.
+                      resolveSelection: (ctxSel) =>
+                          ctxSel || rightClickSelRef.current || lastSelectionRef.current,
                   })
                 : false,
         [copyPaste, copyText, pasteFromClipboard],
@@ -460,19 +476,47 @@ export default function Terminal({
                 /* registerOscHandler unavailable — OSC 52 copy just isn't honoured */
             }
 
-            // Snapshot the selection at right-mousedown — BEFORE the click can
-            // clear it — so the right-click Copy menu still has text to copy even
-            // when the live selection was cleared (common over a mouse-reporting
-            // TUI). Capture phase so we read it before xterm processes the click.
+            // Keep the right-click Copy menu supplied with the real selection even
+            // when xterm's live selection is cleared before/just-after the menu
+            // reads it (common over a mouse-reporting TUI: the right-click is
+            // forwarded to the app, whose redraw async-clears the selection a beat
+            // after the menu opens). Three complementary captures, cheap and
+            // belt-and-suspenders:
+            //  1. onSelectionChange → remember the last NON-EMPTY selection at the
+            //     instant xterm computes it (no event-phase dependence; survives the
+            //     later async clear). This is the robust fallback.
+            //  2. right-mousedown (capture) → snapshot the selection at the click
+            //     instant, before anything can clear it.
+            //  3. contextmenu (capture) → one last snapshot right before fancy-term
+            //     opens the menu (redundant with 2 in the normal case; catches any
+            //     path where the mousedown was consumed elsewhere).
+            // A left-mousedown starts a fresh interaction, so drop the remembered
+            // selection then — Copy must never resurrect stale text after a deselect.
+            const selChange = live.onSelectionChange(() => {
+                const s = live.getSelection();
+                if (s) lastSelectionRef.current = s;
+            });
+            cleanups.push(() => selChange.dispose());
             const selEl = live.element;
             if (selEl) {
-                const onRightDown = (e: MouseEvent) => {
-                    if (e.button === 2) rightClickSelRef.current = live.getSelection();
+                const onDown = (e: MouseEvent) => {
+                    if (e.button === 0) {
+                        lastSelectionRef.current = '';
+                        rightClickSelRef.current = '';
+                    } else if (e.button === 2) {
+                        rightClickSelRef.current = live.getSelection();
+                    }
                 };
-                selEl.addEventListener('mousedown', onRightDown, true);
-                cleanups.push(() =>
-                    selEl.removeEventListener('mousedown', onRightDown, true),
-                );
+                const onCtx = () => {
+                    const s = live.getSelection();
+                    if (s) rightClickSelRef.current = s;
+                };
+                selEl.addEventListener('mousedown', onDown, true);
+                selEl.addEventListener('contextmenu', onCtx, true);
+                cleanups.push(() => {
+                    selEl.removeEventListener('mousedown', onDown, true);
+                    selEl.removeEventListener('contextmenu', onCtx, true);
+                });
             }
 
             // Clickable URLs. We register our OWN xterm link provider rather
@@ -654,6 +698,13 @@ export default function Terminal({
                 activeShell={activeShell}
                 onShellChange={onShellChange}
                 showShellBar={Boolean(shells && shells.length > 1)}
+                // Genie owns OSC 52 itself (registerOscHandler(52,…) in wireLive,
+                // routed to the Electron-main clipboard over IPC), so disable
+                // fancy-term 0.4.0's own OSC 52 handling — otherwise it registers a
+                // second, navigator.clipboard-backed handler (its default is
+                // "copy") that no-ops in this sandboxed window and only muddies the
+                // handler chain. One handler, one clipboard path.
+                osc52={false}
                 // 'contextmenu' mode shows a right-click Copy/Paste menu whose
                 // actions go through the IPC clipboard (not navigator.clipboard);
                 // 'linux'/'winmac' disable the menu and use the handlers above.
