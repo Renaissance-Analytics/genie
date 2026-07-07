@@ -382,7 +382,7 @@ export default function SettingsPage() {
 
             <SetSection
                 title="Specialized terminals"
-                desc="The launch command for each AI-agent terminal type"
+                desc="The launch command and always-on flags for each AI-agent terminal type"
                 host={restricted}
             >
                 <SettingRow
@@ -398,6 +398,18 @@ export default function SettingsPage() {
                     />
                 </SettingRow>
                 <SettingRow
+                    label="Claude Code extra flags"
+                    desc="Always passed when launching this agent (after the command, before Genie's --session-id)."
+                    keywords="claude code agent flags specialized terminal launch dangerously skip permissions"
+                    grow
+                >
+                    <Input
+                        value={s.agent_flags_claude ?? ''}
+                        onValueChange={(v) => patch({ agent_flags_claude: v })}
+                        placeholder="--dangerously-skip-permissions"
+                    />
+                </SettingRow>
+                <SettingRow
                     label="Codex command"
                     desc="Launched when you add a Codex terminal. Blank uses the built-in default."
                     keywords="codex agent command specialized terminal launch openai"
@@ -410,6 +422,18 @@ export default function SettingsPage() {
                     />
                 </SettingRow>
                 <SettingRow
+                    label="Codex extra flags"
+                    desc="Always passed when launching this agent (after the command, before Genie's --session-id)."
+                    keywords="codex agent flags specialized terminal launch openai"
+                    grow
+                >
+                    <Input
+                        value={s.agent_flags_codex ?? ''}
+                        onValueChange={(v) => patch({ agent_flags_codex: v })}
+                        placeholder="--dangerously-skip-permissions"
+                    />
+                </SettingRow>
+                <SettingRow
                     label="Custom agent command"
                     desc="The default command for a Custom agent terminal. You can still override it per-terminal when creating one."
                     keywords="custom agent command specialized terminal launch"
@@ -419,6 +443,18 @@ export default function SettingsPage() {
                         value={s.agent_command_custom ?? ''}
                         onValueChange={(v) => patch({ agent_command_custom: v })}
                         placeholder="e.g. my-agent --interactive"
+                    />
+                </SettingRow>
+                <SettingRow
+                    label="Custom agent extra flags"
+                    desc="Always passed when launching this agent (after the command, before Genie's --session-id)."
+                    keywords="custom agent flags specialized terminal launch"
+                    grow
+                >
+                    <Input
+                        value={s.agent_flags_custom ?? ''}
+                        onValueChange={(v) => patch({ agent_flags_custom: v })}
+                        placeholder="--dangerously-skip-permissions"
                     />
                 </SettingRow>
             </SetSection>

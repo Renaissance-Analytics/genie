@@ -444,6 +444,14 @@ export interface Settings {
     /** Specialized terminals: the launch command for a Custom agent — no
      *  built-in default, so a per-terminal command is required when blank. */
     agent_command_custom?: string;
+    /** Specialized terminals: always-on launch flags for a Claude Code agent —
+     *  appended after the command, before Genie's `--session-id` (e.g.
+     *  `--dangerously-skip-permissions`). Blank = none. */
+    agent_flags_claude?: string;
+    /** Specialized terminals: always-on launch flags for a Codex agent. */
+    agent_flags_codex?: string;
+    /** Specialized terminals: always-on launch flags for a Custom agent. */
+    agent_flags_custom?: string;
 }
 
 /** Health of a workspace's agent docs (AGENTS.md + Genie section + CLAUDE sync). */
