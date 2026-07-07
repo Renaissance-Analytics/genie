@@ -378,3 +378,25 @@ describe('isReleasePublishingError (draft/publish-window 404 is not a real error
         expect(isReleasePublishingError('Error: connect ETIMEDOUT')).toBe(false);
     });
 });
+
+describe("auto-updater 'error' EVENT (the leaking path beta.125 missed)", () => {
+    it('does NOT surface a mid-publish latest.yml 404 error EVENT — settles to up-to-date', async () => {
+        const u = await fresh();
+        // electron-updater emits the failed check as an 'error' event too, not
+        // just a rejected promise — this is the path that dumped the scary 404.
+        handlers.get('error')?.(
+            new Error(
+                'Cannot find latest.yml in the latest release artifacts (https://github.com/…/v0.7.0-beta.128/latest.yml): HttpError: 404',
+            ),
+        );
+        expect(u.getStatus().state).toBe('up-to-date');
+    });
+
+    it('STILL surfaces a genuine error EVENT (e.g. the macOS signature failure)', async () => {
+        const u = await fresh();
+        handlers.get('error')?.(
+            new Error('code has no resources but signature indicates they must be present'),
+        );
+        expect(u.getStatus().state).toBe('error');
+    });
+});

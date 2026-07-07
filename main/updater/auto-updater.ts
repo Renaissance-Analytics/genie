@@ -356,13 +356,27 @@ class AutoUpdater extends EventEmitter {
             }
         });
         autoUpdater.on('error', (err) => {
+            const msg = err?.message ?? String(err);
+            // electron-updater surfaces a failed check BOTH as a rejected promise
+            // (handled in checkForUpdate's catch) AND as this 'error' event. So a
+            // release that's mid-publish — its `latest.yml` not yet at the public
+            // download URL (the ~6-min un-draft/CDN window) — 404s here too. That
+            // is NOT a real error; classify it and settle to up-to-date instead of
+            // dumping a scary HTTP 404 at the user. The next check self-heals once
+            // the manifest is live. (This was the missed path — beta.125 only
+            // fixed the promise-catch.)
+            if (isReleasePublishingError(msg)) {
+                this.appendLog(`update manifest not published yet (error event) — treating as up-to-date: ${msg}`);
+                this.setStatus({ state: 'up-to-date' });
+                return;
+            }
             // macOS Squirrel rejects an unsigned/ad-hoc build's signature on
             // apply ("code has no resources but signature indicates they must
             // be present") — there's no in-app recovery, so route the user to a
             // manual download instead of leaving them on a dead error.
             this.setStatus({
                 state: 'error',
-                error: err?.message ?? String(err),
+                error: msg,
                 manualDownloadUrl: this.manualUrlForPlatform(),
             });
         });
