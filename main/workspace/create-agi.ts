@@ -13,6 +13,8 @@ import {
 import { consolidateMcp } from './mcp';
 import { applyAgentsSection, hasGenieAgentsSection } from '../mcp/agent-config';
 import { getAllSettings } from '../db';
+import { getToken } from '../github/storage';
+import { githubCloneAuth, redactSecrets } from './git-auth';
 
 const execFileAsync = promisify(execFile);
 
@@ -696,6 +698,11 @@ export interface CloneAgiResult {
  * flow needs for a governed child whose envelope is already published. The
  * destination must not exist or be empty (we never clobber). `--recurse-
  * submodules` brings the repos down so the workspace is usable immediately.
+ *
+ * A governed `.agi` and its members are usually PRIVATE, so when Genie holds a
+ * GitHub token the whole recursive tree authenticates over HTTPS with it (see
+ * `githubCloneAuth`) — that's what lets a user without SSH keys provision the
+ * child. With no token it falls back to ambient git auth exactly as before.
  */
 export async function cloneAgiEnvelope(
     opts: CloneAgiOpts,
@@ -710,11 +717,22 @@ export async function cloneAgiEnvelope(
         );
     }
     fs.mkdirSync(opts.parent_path, { recursive: true });
-    // Clone INTO the parent with an explicit dir name so git creates the
-    // envelope folder for us. simple-git's clone takes (repo, localPath, opts).
-    await simpleGit({ baseDir: opts.parent_path }).clone(opts.url, dest, [
-        '--recurse-submodules',
-    ]);
+    // Token-authenticate the recursive clone (envelope + private submodules)
+    // when Genie holds a GitHub token; no-op ambient-auth fallback otherwise.
+    const auth = githubCloneAuth(opts.url, getToken());
+    try {
+        // Clone INTO the parent with an explicit dir name so git creates the
+        // envelope folder for us. simple-git's clone takes (repo, localPath,
+        // opts); `config` becomes leading `-c` args that also reach submodules.
+        await simpleGit({ baseDir: opts.parent_path, config: auth.config }).clone(
+            auth.url,
+            dest,
+            ['--recurse-submodules'],
+        );
+    } catch (e) {
+        // Scrub the token before the error propagates (callers wrap + log it).
+        throw new Error(redactSecrets((e as Error).message, auth.secrets));
+    }
     return { path: dest };
 }
 

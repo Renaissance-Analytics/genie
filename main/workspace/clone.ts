@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { simpleGit } from 'simple-git';
+import { getToken } from '../github/storage';
+import { githubCloneAuth, redactSecrets } from './git-auth';
 
 /** Derive a destination folder name from a git URL (the repo leaf, sans .git). */
 export function repoNameFromUrl(url: string): string {
@@ -20,10 +22,11 @@ export interface CloneRepoOpts {
  * Clone a remote git repo into `parent_path/<folder>` and return the local path
  * — so the Add-workspace "Simple" flow can register a REMOTE repo as a source,
  * not just a local folder. Recurses submodules so an envelope-shaped repo comes
- * down whole. The clone uses the user's ambient git auth (SSH agent / credential
- * helper), exactly like cloning from a terminal, so private repos work without
- * Genie handling secrets. Refuses a non-empty destination so an existing folder
- * is never clobbered.
+ * down whole. When Genie holds a GitHub token, the WHOLE recursive tree (the
+ * envelope + every private submodule) authenticates over HTTPS with that token,
+ * so a user without SSH keys / a credential helper still clones private repos;
+ * with no token it falls back to the user's ambient git auth exactly as before.
+ * Refuses a non-empty destination so an existing folder is never clobbered.
  */
 export async function cloneRepo(opts: CloneRepoOpts): Promise<{ path: string }> {
     const url = opts.url.trim();
@@ -39,16 +42,25 @@ export async function cloneRepo(opts: CloneRepoOpts): Promise<{ path: string }> 
     }
     fs.mkdirSync(opts.parent_path, { recursive: true });
 
+    // Authenticate the recursive clone with Genie's GitHub token when present
+    // (rewrites a github SSH URL → HTTPS + injects the token for every
+    // github.com fetch, submodules included); no-op when there's no token.
+    const auth = githubCloneAuth(url, getToken());
     try {
         // simple-git clone: (repo, localPath, opts). Created here, in the parent,
-        // so git makes the destination folder for us.
-        await simpleGit({ baseDir: opts.parent_path }).clone(url, dest, [
-            '--recurse-submodules',
-        ]);
+        // so git makes the destination folder for us. `config` becomes leading
+        // `-c` args that also propagate to submodule fetches.
+        await simpleGit({ baseDir: opts.parent_path, config: auth.config }).clone(
+            auth.url,
+            dest,
+            ['--recurse-submodules'],
+        );
     } catch (e) {
+        // Scrub the token from the git error before it's surfaced/logged.
         throw new Error(
-            `Clone failed: ${(e as Error).message}. Check the URL and that you have ` +
-                'access (SSH key / credential helper) to the repository.',
+            `Clone failed: ${redactSecrets((e as Error).message, auth.secrets)}. Check the URL ` +
+                'and that you have access to the repository (connect GitHub in Settings, ' +
+                'or set up an SSH key / credential helper).',
         );
     }
 
