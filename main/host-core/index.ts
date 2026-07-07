@@ -68,6 +68,11 @@ export function createHostCore(makeSteps: HostCoreStepsFactory): HostCore {
             await steps.servers.startMcp();
             await steps.servers.startControl();
             await steps.servers.startMobile();
+            // Optional workspace-assignment PUSH subscriber (headless only): open
+            // the ONE persistent subscription so Tynn assignments auto-provision.
+            // No polling; absent on desktop. Started after the servers so the
+            // reconcile's provisions land on a live control server (broadcasts).
+            await ports.workspaceAssignments?.start();
             // Anchor the process: headless keeps the event loop alive (desktop's
             // tray/windows already do, so its Lifecycle.keepAlive is a no-op).
             ports.lifecycle.keepAlive();
@@ -75,6 +80,9 @@ export function createHostCore(makeSteps: HostCoreStepsFactory): HostCore {
                 mcpPort: steps.servers.mcpPort(),
                 mobilePort: steps.servers.mobilePort(),
                 shutdown: async () => {
+                    // Drop the persistent subscription first so no provision races
+                    // the servers going down.
+                    await ports.workspaceAssignments?.stop();
                     await steps.servers.stop();
                     await steps.teardownTerminals();
                 },

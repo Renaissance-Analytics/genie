@@ -47,12 +47,27 @@ export interface Lifecycle {
     keepAlive(): void;
 }
 
-/** The four ports the host-core consumes instead of its Electron defaults. */
+/**
+ * An OPTIONAL background subscription the host runs alongside its servers. Used
+ * for the workspace-assignment PUSH subscriber (auto-provision on assign — no
+ * polling): the genie-cloud shell builds it (createWorkspaceAssignmentSubscriber,
+ * wired with its Pusher transport on Tynn's private `workstation.{id}` channel +
+ * the host-token reconcile fetch) and injects it here. Desktop Genie omits it —
+ * a member desktop doesn't HOST workspaces. Absent ⇒ the boot step is a no-op.
+ */
+export interface BackgroundSubscription {
+    start(): void | Promise<void>;
+    stop(): void | Promise<void>;
+}
+
+/** The ports the host-core consumes instead of its Electron defaults. */
 export interface HostCorePorts {
     encryptor: Encryptor;
     questionTransport: QuestionTransport;
     notifier: Notifier;
     lifecycle: Lifecycle;
+    /** Optional: the workspace-assignment push subscriber (headless only). */
+    workspaceAssignments?: BackgroundSubscription;
 }
 
 export interface HostBootOptions {
