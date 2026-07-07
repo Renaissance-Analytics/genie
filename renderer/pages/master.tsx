@@ -48,6 +48,7 @@ import {
     IconEye,
     IconCpu,
     IconMessage,
+    IconGraph,
     IconSettings,
     IconAlert,
     IconX,
@@ -1520,6 +1521,14 @@ function MasterInner() {
                     onShowTaskManager={() => setTaskManagerOpen((o) => !o)}
                     onShowWhisper={() => setWhisperOpen((o) => !o)}
                     whisperUnread={whisperUnread}
+                    onShowKnowledge={() => {
+                        // Header button → open the standalone Knowledge Graph
+                        // window (main-owned, via knowledge.openWindow). Guarded
+                        // so it no-ops if the preload bridge isn't wired yet.
+                        if (hasGenieBridge()) {
+                            void api().knowledge.openWindow().catch(() => {});
+                        }
+                    }}
                     onShowIssueWatch={() =>
                         activeWorkspaceId && openIssueWatch(activeWorkspaceId)
                     }
@@ -2197,6 +2206,7 @@ function TitleBar({
     onShowTaskManager,
     onShowWhisper,
     whisperUnread = 0,
+    onShowKnowledge,
     onShowIssueWatch,
     issueWatchUnread = 0,
     githubNeedsResolve = false,
@@ -2208,6 +2218,7 @@ function TitleBar({
     onShowTaskManager?: () => void;
     onShowWhisper?: () => void;
     whisperUnread?: number;
+    onShowKnowledge?: () => void;
     onShowIssueWatch?: () => void;
     issueWatchUnread?: number;
     /** True when GitHub permissions are missing — shows a persistent warning. */
@@ -2253,6 +2264,15 @@ function TitleBar({
                     <IconAlert size={16} />
                 </button>
             )}
+            <button
+                type="button"
+                className="gicon"
+                title="Knowledge Graph — your workstation memory store"
+                aria-label="Knowledge Graph"
+                onClick={() => onShowKnowledge?.()}
+            >
+                <IconGraph size={16} />
+            </button>
             <button
                 type="button"
                 className="gicon whisper-btn"

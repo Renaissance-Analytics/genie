@@ -1272,6 +1272,68 @@ export type PluginActionResult<T = { id: string; name: string; version: string }
     | { ok: true; value: T }
     | { ok: false; error: string };
 
+// --- Workstation Knowledge Graph (Wish #87) --------------------------------
+// A workstation-wide, local knowledge/memory store the Knowledge Graph window
+// reads/writes over `knowledge.*`. Each node is a markdown memory; the
+// `[[wikilink]]` refs between memories are the graph's edges. DISTINCT from the
+// envelope `.ai/` KnowledgeFolderView/KnowledgeResult above — those are one
+// workspace's on-disk knowledge FOLDERS; this is the cross-workspace memory
+// STORE that replaces bloated system-wide agent prompt instructions.
+
+/** One memory in the Knowledge Graph store. */
+export interface KnowledgeNode {
+    id: string;
+    title: string;
+    /** The memory body, as markdown. */
+    body: string;
+    tags: string[];
+    /** Ids of the memories this one links to — its outgoing `[[wikilink]]` edges. */
+    links: string[];
+    /** Who wrote it: an agent (RAG/MCP) or the user (this window). */
+    source: 'agent' | 'user';
+    createdAt: string;
+    updatedAt: string;
+}
+
+/** One `knowledge.search` hit — a lightweight node projection + match snippet. */
+export interface KnowledgeSearchResult {
+    id: string;
+    title: string;
+    /** A short excerpt around the match, for the results list. */
+    snippet: string;
+    /** Relevance score (higher = better). The result ORDER is authoritative. */
+    score: number;
+    tags: string[];
+}
+
+/** A graph node projection for the relationship view. */
+export interface KnowledgeGraphNode {
+    id: string;
+    title: string;
+    tags: string[];
+}
+
+/** A directed edge: `source` links to `target` (a resolved `[[wikilink]]`). */
+export interface KnowledgeGraphEdge {
+    source: string;
+    target: string;
+}
+
+/** The whole store as a graph: nodes + the edges between them. */
+export interface KnowledgeGraphData {
+    nodes: KnowledgeGraphNode[];
+    edges: KnowledgeGraphEdge[];
+}
+
+/** Fields accepted when creating / updating a memory from this window. */
+export interface KnowledgeInput {
+    title: string;
+    body: string;
+    tags: string[];
+    /** Resolved target node ids (derived from the body's `[[wikilinks]]`). */
+    links: string[];
+}
+
 export interface GenieApi {
     auth: {
         startSignIn: (kind?: BackendKind) => Promise<{
@@ -1790,6 +1852,34 @@ export interface GenieApi {
         list: () => Promise<DocEntry[]>;
         read: (slug: string) => Promise<string | null>;
     };
+    /**
+     * Workstation Knowledge Graph (Wish #87) — a local, cross-workspace memory
+     * store. Nodes are markdown memories; `[[wikilink]]` refs between them are
+     * edges. `openWindow` opens the standalone, Genie-skinned Knowledge Graph
+     * window (renderer/pages/knowledge.tsx); the rest are the store's CRUD +
+     * search + graph read that window drives. `source` is set main-side —
+     * anything added here is `'user'`.
+     */
+    knowledge: {
+        /** Full-text search across memories; results are pre-ranked by `score`. */
+        search: (
+            query: string,
+            opts?: { limit?: number },
+        ) => Promise<KnowledgeSearchResult[]>;
+        /** Every memory (optionally filtered by tag / capped), newest first. */
+        list: (opts?: { tag?: string; limit?: number }) => Promise<KnowledgeNode[]>;
+        get: (id: string) => Promise<KnowledgeNode | null>;
+        add: (input: KnowledgeInput) => Promise<KnowledgeNode>;
+        update: (
+            id: string,
+            patch: Partial<KnowledgeInput>,
+        ) => Promise<KnowledgeNode | null>;
+        delete: (id: string) => Promise<{ ok: boolean }>;
+        /** The whole store as nodes + edges, for the relationship view. */
+        graph: () => Promise<KnowledgeGraphData>;
+        /** Open the standalone Knowledge Graph window (the header button). */
+        openWindow: () => Promise<{ ok: boolean }>;
+    };
     process: {
         /** Start a background Process service runner. */
         start: (id: string) => Promise<{ ok: boolean }>;
@@ -2245,6 +2335,11 @@ export interface GenieApi {
         whisperMessage: (
             cb: (payload: WhisperMessageEvent) => void,
         ) => () => void;
+        /** Knowledge Graph: a memory was added / edited / deleted (by an agent
+         *  via MCP, or another window) — the window re-fetches its list + graph.
+         *  Optional: an older host that predates the store simply omits it, so
+         *  callers guard with `api().on.knowledgeChanged?.(…)`. */
+        knowledgeChanged?: (cb: () => void) => () => void;
     };
 }
 

@@ -407,6 +407,22 @@ export const IconTynn = ({ size = 13, ...p }: Props) => (
         <path d="M28.48,926.25c14.77-20.61,37.59-51.77,66.68-88.67c143.57-182.15,241.74-306.7,400.75-370.81c102.56-41.35,194.77-41.73,244.65-41.99c49.64-0.26,154.54,0.19,271.92,49.12c134.77,56.18,213.88,146.2,315.34,261.65c66.3,75.45,113.63,143.49,143.69,190.08c-42.74,0.89-104.56,6.47-174.79,28.96c-39.24,12.56-130.75,46.3-219.49,124.37c-175.18,154.1-180.54,341.01-313.92,353.08c-11.94,1.08-20.85,0.39-24.87,0c-114.89-11.24-127.67-164.71-273.25-312.69c-36.97-37.57-108.15-100.86-212.49-144.49C163.48,937.54,82.49,928.19,28.48,926.25z" />
     </svg>
 );
+/** Connected nodes — the Knowledge Graph window's titlebar button. Three
+ *  linked memory nodes reading as a small relationship graph. */
+export const IconGraph = ({ size = 16, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <circle cx="5.5" cy="6" r="2.5" />
+            <circle cx="18.5" cy="6" r="2.5" />
+            <circle cx="12" cy="18" r="2.5" />
+            <line x1="8" y1="6" x2="16" y2="6" />
+            <line x1="6.8" y1="8.1" x2="10.7" y2="15.9" />
+            <line x1="17.2" y1="8.1" x2="13.3" y2="15.9" />
+        </>,
+        p.className,
+        p.style,
+    );
 /** Speech bubbles — WhisperChat (inter-agent messaging) titlebar button. */
 export const IconMessage = ({ size = 16, ...p }: Props) =>
     wrap(
