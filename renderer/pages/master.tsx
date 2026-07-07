@@ -33,6 +33,7 @@ import {
 } from '../lib/view-state';
 import { planCommitStep, shouldDriveRestart } from '../lib/updater-flow';
 import { pickReusePanel, emitOpenInPanel } from '../lib/editor-open';
+import { workstationConnectState } from '../lib/workstation-status';
 import {
     IconBox,
     IconChevronDown,
@@ -2580,28 +2581,37 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                 {workstations.length > 0 && (
                     <>
                         <div style={{ padding: '8px 6px 6px', fontSize: 11, letterSpacing: '0.04em', color: '#a1a1aa' }}>WORKSTATIONS</div>
-                        {workstations.map((ws) => (
+                        {workstations.map((ws) => {
+                            // Gate Connect on the GCC/Tynn readiness `status`, not just
+                            // Tynn's `connectable` flag — a down host must never offer a
+                            // Connect that ends in "relay handshake timed out".
+                            const st = workstationConnectState(ws);
+                            return (
                             <div key={`ws:${ws.id}`} style={{ borderRadius: 8, padding: '7px 8px', marginBottom: 2, background: '#1b1b21' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                    <span style={{ width: 7, height: 7, borderRadius: 999, flex: '0 0 auto', background: ws.connectable ? '#22c55e' : '#52525b' }} title={ws.connectable ? 'Connectable over the Tynn relay' : `Unavailable (${ws.status})`} />
+                                    <span style={{ width: 7, height: 7, borderRadius: 999, flex: '0 0 auto', background: st.dotColor }} title={st.title} />
                                     <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                         <span style={{ fontWeight: 600 }}>{ws.name}</span>
                                         {ws.capability && <span style={{ color: '#71717a', marginLeft: 6 }}>{ws.capability}</span>}
                                         {ws.source && ws.source !== 'owner' && <span style={{ color: '#52525b', marginLeft: 6 }}>via {ws.source}</span>}
                                     </span>
+                                    {st.showRetry && (
+                                        <button type="button" className="gicon" title="Rescan for this workstation" aria-label="Retry workstation" onClick={() => void load()} style={{ width: 20, height: 20, flex: '0 0 auto' }}>⟳</button>
+                                    )}
                                     <button
                                         type="button"
                                         className="gbtn gbtn-sm"
-                                        disabled={!ws.connectable || busy === `ws:${ws.id}`}
+                                        disabled={!st.canConnect || busy === `ws:${ws.id}`}
                                         onClick={() => void openWorkstation(ws)}
-                                        title={ws.connectable ? 'Connect to this workstation over the Tynn relay' : `Unavailable — ${ws.status}`}
+                                        title={st.title}
                                         style={{ flex: '0 0 auto' }}
                                     >
-                                        {busy === `ws:${ws.id}` ? '…' : 'Connect'}
+                                        {busy === `ws:${ws.id}` ? '…' : st.label}
                                     </button>
                                 </div>
                             </div>
-                        ))}
+                            );
+                        })}
                     </>
                 )}
             </div>
