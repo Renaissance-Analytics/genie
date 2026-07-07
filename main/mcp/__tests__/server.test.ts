@@ -127,6 +127,7 @@ const deps = (
         messages?: any[];
         cursor?: number;
     }> = async () => ({ ok: true, messages: [], cursor: 0 }),
+    knowledge: () => Promise<{ ok: boolean }> = async () => ({ ok: true }),
 ) => ({
     serverVersion: '0.0.0-test',
     userDataDir,
@@ -147,6 +148,7 @@ const deps = (
     runAgent,
     manageWorkspaces,
     whisper,
+    knowledge,
     openFileForUser: async () => ({ ok: true, reused: false, openedNew: true }),
     setEnv: () => ({ ok: true, file: '.env' }),
     checkEnv: () => ({ ok: true, exists: false, file: '.env' }),

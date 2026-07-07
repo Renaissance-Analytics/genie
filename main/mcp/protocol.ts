@@ -22,9 +22,14 @@ import type {
     WhisperChannelInfo,
     WhisperMessage,
 } from '../whisper/types';
+import type {
+    KnowledgeNode,
+    KnowledgeSearchResult,
+} from '../knowledge/types';
 
 export type { SetEnvRequest, SetEnvResult, CheckEnvRequest, CheckEnvResult };
 export type { WhisperScope, WhisperAgentInfo, WhisperChannelInfo, WhisperMessage };
+export type { KnowledgeNode, KnowledgeSearchResult };
 
 export const MCP_PROTOCOL_VERSION = '2024-11-05';
 
@@ -280,6 +285,14 @@ export interface McpContext {
      * over the SSE keepalive path, like ForceTheQuestion.
      */
     whisper: (terminalId: string, req: WhisperRequest) => Promise<WhisperResult>;
+    /**
+     * The workstation Knowledge Graph (the `knowledge` tool): a workstation-wide,
+     * local knowledge/memory store shared across every workspace on this Genie.
+     * `search` (FTS keyword retrieval), `get`, `add` (source `agent`), `list`,
+     * `link`. Not workspace-scoped — any agent reads/writes the one shared store.
+     * Does the sqlite + FTS I/O (kept out of this pure module).
+     */
+    knowledge: (terminalId: string, req: KnowledgeToolRequest) => Promise<KnowledgeToolResult>;
     /**
      * Open a file in Genie's built-in editor FOR THE USER (the openFileForUser
      * tool): resolve the caller's workspace from the terminal (incl the System
@@ -606,6 +619,47 @@ export interface WhisperResult {
     cursor?: number;
     /** send: how many recipients the message reached. */
     delivered?: number;
+}
+
+// --- knowledge ---------------------------------------------------------------
+
+export interface KnowledgeToolRequest {
+    /** `search`, `get`, `add`, `list`, `link`. */
+    action: 'search' | 'get' | 'add' | 'list' | 'link';
+    /** search: the query text. */
+    query?: string;
+    /** search / list: cap the number returned. */
+    limit?: number;
+    /** search (optional): restrict hits to nodes carrying ALL of these tags. */
+    tags?: string[];
+    /** list (optional): restrict to nodes carrying this tag. */
+    tag?: string;
+    /** get: the node id. */
+    id?: string;
+    /** add: the node title (required). */
+    title?: string;
+    /** add: the markdown body — its `[[wikilink]]`s become edges. */
+    body?: string;
+    /** add (optional): explicit link targets (a node id, title, or slug). */
+    links?: string[];
+    /** link: the source node id. */
+    from?: string;
+    /** link: the target (a node id, title, or slug). */
+    to?: string;
+}
+
+export interface KnowledgeToolResult {
+    ok: boolean;
+    /** Set when ok is false (missing args, unknown id, …). */
+    error?: string;
+    /** search: the ranked hits. */
+    results?: KnowledgeSearchResult[];
+    /** get: the resolved node, or null when not found. */
+    node?: KnowledgeNode | null;
+    /** add: the new node's id. */
+    id?: string;
+    /** list: the nodes. */
+    nodes?: KnowledgeNode[];
 }
 
 // --- openFileForUser ---------------------------------------------------------
@@ -1045,6 +1099,56 @@ const WHISPER_TOOL = {
     },
 };
 
+const KNOWLEDGE_TOOL = {
+    name: 'knowledge',
+    description:
+        "Read + write Genie's workstation KNOWLEDGE GRAPH — a workstation-wide, LOCAL knowledge/memory store shared across EVERY workspace on this Genie instance (one store, not per-workspace). Use it to STASH durable, reusable context as small markdown \"memory\" nodes and RETRIEVE it on demand — so shared, system-wide knowledge lives here instead of bloating every workspace's AGENTS.md/CLAUDE.md. Nodes link to each other with `[[wikilink]]` references in their body (each becomes a graph edge). Actions (`action`): `search` (keyword retrieval — needs `query`; optional `limit`, `tags` to restrict to nodes carrying ALL those tags — returns ranked `{ id, title, snippet, score, tags }` hits; USE THIS FIRST to check what's already known); `get` (`id` → the full node incl. its linked node ids); `add` (create a node — needs `title`, optional markdown `body` (put `[[wikilink]]`s to related nodes in it), optional `tags`, optional explicit `links` (ids/titles/slugs) → returns the new `id`); `list` (recent nodes — optional `tag`, `limit`); `link` (add an edge from node `from` to `to` (an id, title, or slug)). Search is keyword-based and always available (no setup). Prefer searching before adding a duplicate, and cross-link related memories with `[[wikilink]]`s so the graph stays connected.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            action: {
+                type: 'string',
+                enum: ['search', 'get', 'add', 'list', 'link'],
+                description: 'What to do.',
+            },
+            query: { type: 'string', description: 'search: the text to search for.' },
+            limit: {
+                type: 'number',
+                description: 'search / list (optional): cap the number of results.',
+            },
+            tags: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'search (optional): restrict hits to nodes carrying ALL of these tags.',
+            },
+            tag: {
+                type: 'string',
+                description: 'list (optional): restrict to nodes carrying this tag.',
+            },
+            id: { type: 'string', description: 'get: the node id to fetch.' },
+            title: { type: 'string', description: 'add: the node title (required).' },
+            body: {
+                type: 'string',
+                description:
+                    'add: the markdown body. Put `[[wikilink]]` references to related nodes in it — each becomes a graph edge.',
+            },
+            links: {
+                type: 'array',
+                items: { type: 'string' },
+                description:
+                    'add (optional): explicit link targets (a node id, title, or slug) — edges in addition to the body\'s `[[wikilink]]`s.',
+            },
+            from: { type: 'string', description: 'link: the source node id.' },
+            to: {
+                type: 'string',
+                description: 'link: the target to link to (a node id, title, or slug).',
+            },
+        },
+        required: ['action'],
+        additionalProperties: false,
+    },
+};
+
 /**
  * Format a workspace map into the agent-facing orientation: a numbered learning
  * plan (envelope docs first, then each repo's README/AGENTS/CLAUDE + manifest,
@@ -1395,6 +1499,7 @@ export async function handleMcpMessage(
                     RUN_AGENT_TOOL,
                     MANAGE_WORKSPACES_TOOL,
                     WHISPER_TOOL,
+                    KNOWLEDGE_TOOL,
                     OPEN_FILE_TOOL,
                     SET_ENV_TOOL,
                     CHECK_ENV_TOOL,
@@ -1725,6 +1830,58 @@ export async function handleMcpMessage(
                     summary = `Sent — delivered to ${result.delivered ?? 0} recipient(s).`;
                 } else {
                     summary = `whisper ${action} ok.`;
+                }
+                return ok(msg.id, {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `${summary}\n\n${JSON.stringify(result, null, 2)}`,
+                        },
+                    ],
+                });
+            }
+            if (params.name === 'knowledge') {
+                const a = (params.arguments ?? {}) as Partial<KnowledgeToolRequest>;
+                const action = a.action;
+                if (
+                    action !== 'search' &&
+                    action !== 'get' &&
+                    action !== 'add' &&
+                    action !== 'list' &&
+                    action !== 'link'
+                ) {
+                    return err(
+                        msg.id,
+                        -32602,
+                        'knowledge requires `action`: search | get | add | list | link.',
+                    );
+                }
+                const result = await ctx.knowledge(ctx.terminalId, {
+                    action,
+                    query: a.query,
+                    limit: a.limit,
+                    tags: a.tags,
+                    tag: a.tag,
+                    id: a.id,
+                    title: a.title,
+                    body: a.body,
+                    links: a.links,
+                    from: a.from,
+                    to: a.to,
+                });
+                let summary: string;
+                if (!result.ok) {
+                    summary = `knowledge failed: ${result.error ?? 'unknown error'}`;
+                } else if (action === 'search') {
+                    summary = `${result.results?.length ?? 0} result(s) for "${a.query ?? ''}".`;
+                } else if (action === 'list') {
+                    summary = `${result.nodes?.length ?? 0} node(s).`;
+                } else if (action === 'get') {
+                    summary = result.node ? `Node "${result.node.title}".` : 'No such node.';
+                } else if (action === 'add') {
+                    summary = `Added node ${result.id ?? '?'}.`;
+                } else {
+                    summary = 'Linked.';
                 }
                 return ok(msg.id, {
                     content: [

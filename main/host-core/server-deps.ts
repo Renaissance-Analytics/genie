@@ -16,6 +16,7 @@ import {
     runAgentForMcp,
     manageWorkspacesForMcp,
     whisperForMcp,
+    knowledgeForMcp,
     isOpsProjectFor,
     workspaceRootForTerminal,
 } from '../mcp/host-tools';
@@ -90,6 +91,7 @@ export function buildHostServerDeps(
         runAgent: (terminalId, req) => runAgentForMcp(terminalId, req),
         manageWorkspaces: (terminalId, req) => manageWorkspacesForMcp(terminalId, req),
         whisper: (terminalId, req) => whisperForMcp(terminalId, req),
+        knowledge: (terminalId, req) => knowledgeForMcp(terminalId, req),
         openFileForUser: (terminalId, req) => openFileForUserForMcp(terminalId, req),
         setEnv: (terminalId, req) => {
             const root = workspaceRootForTerminal(terminalId);

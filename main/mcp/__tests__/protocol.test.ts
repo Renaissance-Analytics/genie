@@ -31,6 +31,7 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
             .fn()
             .mockResolvedValue({ ok: true, workspaces: [] }),
         whisper: vi.fn().mockResolvedValue({ ok: true }),
+        knowledge: vi.fn().mockResolvedValue({ ok: true }),
         openFileForUser: vi
             .fn()
             .mockResolvedValue({ ok: true, reused: false, openedNew: true }),
@@ -81,6 +82,7 @@ describe('handleMcpMessage', () => {
             'runAgent',
             'manageWorkspaces',
             'whisper',
+            'knowledge',
             'openFileForUser',
             'setEnv',
             'checkEnv',
@@ -104,6 +106,7 @@ describe('handleMcpMessage', () => {
             'runAgent',
             'manageWorkspaces',
             'whisper',
+            'knowledge',
             'openFileForUser',
             'setEnv',
             'checkEnv',
@@ -724,6 +727,92 @@ describe('handleMcpMessage', () => {
         const props = tools.find((t) => t.name === 'whisper')!.inputSchema.properties;
         for (const k of ['action', 'to', 'channel', 'text', 'wait', 'cursor', 'scope']) {
             expect(props).toHaveProperty(k);
+        }
+    });
+
+    it('knowledge plumbs search args and summarizes the result count', async () => {
+        const knowledge = vi.fn().mockResolvedValue({
+            ok: true,
+            results: [{ id: 'n1', title: 'Runbook', snippet: '…', score: 1.2, tags: [] }],
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 80,
+                method: 'tools/call',
+                params: {
+                    name: 'knowledge',
+                    arguments: { action: 'search', query: 'deploy', limit: 5, tags: ['ops'] },
+                },
+            },
+            ctx({ terminalId: 'term-K', knowledge }),
+        );
+        expect(knowledge).toHaveBeenCalledWith(
+            'term-K',
+            expect.objectContaining({ action: 'search', query: 'deploy', limit: 5, tags: ['ops'] }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('1 result(s) for "deploy".');
+        expect(text).toContain('Runbook'); // the JSON block
+    });
+
+    it('knowledge summarizes an add with the new id', async () => {
+        const knowledge = vi.fn().mockResolvedValue({ ok: true, id: 'new-node' });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 81,
+                method: 'tools/call',
+                params: {
+                    name: 'knowledge',
+                    arguments: { action: 'add', title: 'T', body: 'see [[Other]]' },
+                },
+            },
+            ctx({ knowledge }),
+        );
+        expect(knowledge).toHaveBeenCalledWith(
+            'term-1',
+            expect.objectContaining({ action: 'add', title: 'T', body: 'see [[Other]]' }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('Added node new-node.');
+    });
+
+    it('knowledge surfaces a failure', async () => {
+        const knowledge = vi.fn().mockResolvedValue({ ok: false, error: 'add needs a `title`.' });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 82,
+                method: 'tools/call',
+                params: { name: 'knowledge', arguments: { action: 'add' } },
+            },
+            ctx({ knowledge }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('knowledge failed: add needs a `title`.');
+    });
+
+    it('knowledge rejects a bad/missing action', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 83, method: 'tools/call', params: { name: 'knowledge', arguments: {} } },
+            ctx(),
+        );
+        expect(res?.error?.code).toBe(-32602);
+    });
+
+    it('lists the knowledge tool with its action enum + args', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 84, method: 'tools/list' },
+            ctx(),
+        );
+        const tools = (res?.result as {
+            tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }>;
+        }).tools;
+        const tool = tools.find((t) => t.name === 'knowledge');
+        expect(tool).toBeTruthy();
+        for (const k of ['action', 'query', 'title', 'body', 'tags', 'links', 'from', 'to']) {
+            expect(tool!.inputSchema.properties).toHaveProperty(k);
         }
     });
 

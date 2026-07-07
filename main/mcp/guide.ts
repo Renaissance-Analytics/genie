@@ -158,6 +158,27 @@ Your identity + accessibility persist across restarts. Local-only — no relay, 
 cross-host. Use it to hand a peer context, ask another agent to take a task, or
 watch a shared channel while you work.
 
+### knowledge
+**Genie's workstation KNOWLEDGE GRAPH** — a workstation-wide, LOCAL knowledge/
+memory store shared across EVERY workspace on this Genie (one store, not
+per-workspace). Stash durable, reusable context as small markdown "memory" nodes
+and retrieve it on demand — so shared, system-wide knowledge lives here instead
+of bloating every workspace's AGENTS.md/CLAUDE.md. Nodes cross-link with
+\`[[wikilink]]\` references in their body; each link is a graph edge. Actions
+(\`action\`):
+- \`search\` — keyword retrieval (needs \`query\`; optional \`limit\`, and \`tags\` to
+  restrict to nodes carrying ALL those tags). Returns ranked \`{ id, title,
+  snippet, score, tags }\` hits. **Search FIRST** to see what's already known.
+- \`get\` — a node by \`id\` (full body + its linked node ids).
+- \`add\` — create a node: \`title\` (required), optional markdown \`body\` (put
+  \`[[wikilink]]\`s to related nodes in it), optional \`tags\`, optional explicit
+  \`links\` (ids/titles/slugs). Returns the new \`id\`.
+- \`list\` — recent nodes (optional \`tag\`, \`limit\`).
+- \`link\` — add an edge from node \`from\` to \`to\` (an id, title, or slug).
+Keyword search is always available (no API key, no setup). Prefer searching
+before adding a duplicate, and cross-link related memories with \`[[wikilink]]\`s
+so the graph stays connected.
+
 ### checkIssues
 Get a detailed, grouped list of the open GitHub **Issues, Pull Requests, and
 SECURITY ALERTS** (Dependabot + Code-scanning + Secret-scanning) that Genie's

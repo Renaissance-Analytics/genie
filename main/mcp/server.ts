@@ -20,6 +20,8 @@ import {
     type ManageWorkspacesResult,
     type WhisperRequest,
     type WhisperResult,
+    type KnowledgeToolRequest,
+    type KnowledgeToolResult,
     type OpenFileRequest,
     type OpenFileResult,
     type SetEnvRequest,
@@ -110,6 +112,8 @@ export interface ServerDeps {
     ) => Promise<ManageWorkspacesResult>;
     /** Local inter-agent messaging (whisper tool). `receive`+`wait` long-polls. */
     whisper: (terminalId: string, req: WhisperRequest) => Promise<WhisperResult>;
+    /** Workstation Knowledge Graph — the shared local memory store (knowledge tool). */
+    knowledge: (terminalId: string, req: KnowledgeToolRequest) => Promise<KnowledgeToolResult>;
     /** Open a file in Genie's built-in editor for the user (openFileForUser tool). */
     openFileForUser: (
         terminalId: string,
@@ -441,6 +445,7 @@ async function handle(
         runAgent: deps.runAgent,
         manageWorkspaces: deps.manageWorkspaces,
         whisper: deps.whisper,
+        knowledge: deps.knowledge,
         openFileForUser: deps.openFileForUser,
         setEnv: deps.setEnv,
         checkEnv: deps.checkEnv,

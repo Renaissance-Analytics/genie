@@ -22,6 +22,7 @@ import {
     type TerminalSpecRow,
 } from '../db';
 import { whisperBroker } from '../whisper/broker';
+import { getKnowledgeStore } from '../knowledge/store';
 import { workspaceSlug } from '../whisper/slug';
 import { appendLaunchFlags } from '../whisper/session-capture';
 import {
@@ -86,6 +87,8 @@ import type {
     ManagedWorkspaceInfo,
     WhisperRequest,
     WhisperResult,
+    KnowledgeToolRequest,
+    KnowledgeToolResult,
 } from './protocol';
 
 /**
@@ -1344,6 +1347,70 @@ export async function whisperForMcp(
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
     return { ok: false, error: 'Unhandled whisper action.' };
+}
+
+/**
+ * Back the workstation Knowledge Graph MCP `knowledge` tool. Unlike the other
+ * tools this is NOT workspace-scoped — the store is workstation-wide (one shared
+ * store across every workspace), so any agent in any workspace reads/writes it
+ * and the caller's terminal is not resolved to a workspace here. Dispatches
+ * against the shared {@link getKnowledgeStore}:
+ *   - `search {query, limit?, tags?}` — keyword (FTS) retrieval.
+ *   - `get {id}` — one node + its resolved links.
+ *   - `add {title, body?, tags?, links?}` — create a node (source `agent`).
+ *   - `list {tag?, limit?}` — recent nodes.
+ *   - `link {from, to}` — add an edge.
+ */
+export async function knowledgeForMcp(
+    _callerTerminalId: string,
+    req: KnowledgeToolRequest,
+): Promise<KnowledgeToolResult> {
+    try {
+        const store = getKnowledgeStore();
+        switch (req.action) {
+            case 'search': {
+                const query = String(req.query ?? '').trim();
+                if (!query) return { ok: false, error: 'search needs a non-empty `query`.' };
+                const results = store.search({
+                    query,
+                    limit: req.limit,
+                    tags: req.tags,
+                });
+                return { ok: true, results };
+            }
+            case 'get': {
+                const id = String(req.id ?? '').trim();
+                if (!id) return { ok: false, error: 'get needs an `id`.' };
+                return { ok: true, node: store.get(id) };
+            }
+            case 'add': {
+                const title = String(req.title ?? '').trim();
+                if (!title) return { ok: false, error: 'add needs a `title`.' };
+                const node = store.add({
+                    title,
+                    body: req.body,
+                    tags: req.tags,
+                    links: req.links,
+                    source: 'agent',
+                });
+                return { ok: true, id: node.id };
+            }
+            case 'list': {
+                const nodes = store.list({ tag: req.tag, limit: req.limit });
+                return { ok: true, nodes };
+            }
+            case 'link': {
+                const from = String(req.from ?? '').trim();
+                const to = String(req.to ?? '').trim();
+                if (!from || !to) return { ok: false, error: 'link needs `from` and `to`.' };
+                const r = store.link(from, to);
+                return r.ok ? { ok: true } : { ok: false, error: r.error };
+            }
+        }
+    } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+    return { ok: false, error: 'Unhandled knowledge action.' };
 }
 
 /** The caller's own workspace + every workspace it governs (manageWorkspaces). */
