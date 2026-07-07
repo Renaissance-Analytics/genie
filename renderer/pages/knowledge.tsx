@@ -7,7 +7,7 @@ import React, {
     useState,
     type CSSProperties,
 } from 'react';
-import { ContentRenderer, Heading, Text } from '@particle-academy/react-fancy';
+import { ContentRenderer, Heading, Pillbox, Text } from '@particle-academy/react-fancy';
 import {
     IconGraph,
     IconListTree,
@@ -56,19 +56,6 @@ type LeftView = 'list' | 'graph';
 
 function truncate(s: string, n: number): string {
     return s.length > n ? `${s.slice(0, n - 1)}…` : s;
-}
-
-/** Split a comma-separated tag input into a trimmed, de-duplicated list. */
-function parseTags(raw: string): string[] {
-    const out: string[] = [];
-    const seen = new Set<string>();
-    for (const t of raw.split(',')) {
-        const v = t.trim();
-        if (!v || seen.has(v.toLowerCase())) continue;
-        seen.add(v.toLowerCase());
-        out.push(v);
-    }
-    return out;
 }
 
 export default function KnowledgePage() {
@@ -726,13 +713,13 @@ function MemoryEditor({
     onSave: (draft: { id?: string; title: string; tags: string[]; body: string }) => void;
 }) {
     const [title, setTitle] = useState(initial.title);
-    const [tags, setTags] = useState(initial.tags.join(', '));
+    const [tags, setTags] = useState<string[]>(initial.tags);
     const [body, setBody] = useState(initial.body);
 
     const canSave = title.trim().length > 0 && !busy;
     const submit = () => {
         if (!canSave) return;
-        onSave({ id: initial.id, title: title.trim(), tags: parseTags(tags), body });
+        onSave({ id: initial.id, title: title.trim(), tags, body });
     };
 
     return (
@@ -773,12 +760,10 @@ function MemoryEditor({
                     aria-label="Memory title"
                     autoFocus
                 />
-                <input
+                <Pillbox
                     value={tags}
-                    onChange={(e) => setTags(e.target.value)}
-                    placeholder="Tags (comma separated)"
-                    style={fieldStyle}
-                    aria-label="Tags"
+                    onChange={setTags}
+                    placeholder="Add a tag and press Enter…"
                 />
                 <Text size="xs" className="text-zinc-500">
                     Link to another memory by its title with {'[[Memory Title]]'} — resolved
