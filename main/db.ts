@@ -538,6 +538,59 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v22 — Workstation Knowledge Graph (Wish #87). A workstation-wide,
+            // local knowledge/memory store shared across EVERY workspace on this
+            // Genie instance (it lives in the shared genie.db, not per-workspace):
+            //   - knowledge_nodes      — one markdown "memory" per row.
+            //   - knowledge_nodes_fts  — FTS5 index over title/body/tags for the
+            //                            keyword retrieval floor (kept in sync by
+            //                            the store's writes, not triggers, so the
+            //                            id column can stay UNINDEXED).
+            //   - knowledge_edges      — a node's outbound links. `to_ref` is a raw
+            //                            reference (a node id, title, or slug from a
+            //                            `[[wikilink]]` or an explicit link),
+            //                            resolved to a node id at read time; `kind`
+            //                            ('wiki'|'explicit') lets an update to the
+            //                            body vs the explicit links recompute one
+            //                            without clobbering the other. from_id
+            //                            cascades on node delete.
+            version: 22,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS knowledge_nodes (
+                        id         TEXT PRIMARY KEY,
+                        title      TEXT NOT NULL DEFAULT '',
+                        slug       TEXT NOT NULL DEFAULT '',
+                        body       TEXT NOT NULL DEFAULT '',
+                        tags       TEXT NOT NULL DEFAULT '[]',
+                        source     TEXT NOT NULL DEFAULT 'user'
+                                   CHECK (source IN ('agent', 'user')),
+                        created_at INTEGER NOT NULL,
+                        updated_at INTEGER NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_knowledge_nodes_updated
+                        ON knowledge_nodes(updated_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_knowledge_nodes_slug
+                        ON knowledge_nodes(slug);
+
+                    CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_nodes_fts USING fts5(
+                        id UNINDEXED, title, body, tags
+                    );
+
+                    CREATE TABLE IF NOT EXISTS knowledge_edges (
+                        from_id TEXT NOT NULL,
+                        to_ref  TEXT NOT NULL,
+                        kind    TEXT NOT NULL DEFAULT 'wiki'
+                                CHECK (kind IN ('wiki', 'explicit')),
+                        PRIMARY KEY (from_id, to_ref, kind),
+                        FOREIGN KEY (from_id) REFERENCES knowledge_nodes(id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_knowledge_edges_to
+                        ON knowledge_edges(to_ref);
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
