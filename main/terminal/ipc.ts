@@ -95,6 +95,32 @@ export function shouldKillOnDetach(input: {
 }
 
 /**
+ * Decide whether a RETAIN request (hiding a terminal to keep its pty alive +
+ * windowless) must be REFUSED by the MAX_RETAINED cap.
+ *
+ * AGENT terminals are EXEMPT: the owner deliberately runs MANY hidden-but-alive
+ * agents, and losing one (its shell, MCP endpoint, and WhisperChat membership)
+ * discards live work — so an agent terminal neither counts toward the cap nor is
+ * ever blocked by it. Only PLAIN terminals are capped, among themselves (a
+ * runaway of windowless shells still can't grow unbounded). An already-retained
+ * id is idempotent (never refused).
+ *
+ * Pure → unit-testable without the pty manager.
+ */
+export function refuseRetainForCap(input: {
+    /** The terminal being retained runs an agent (spec meta.agent_id). */
+    isAgent: boolean;
+    /** It is already retained (re-retain is idempotent). */
+    alreadyRetained: boolean;
+    /** How many NON-agent ptys are currently retained (agents don't count). */
+    nonAgentRetainedCount: number;
+    max: number;
+}): boolean {
+    if (input.isAgent || input.alreadyRetained) return false;
+    return input.nonAgentRetainedCount >= input.max;
+}
+
+/**
  * IPC layer for the terminal subsystem. The manager owns ptys + emits
  * `data`/`exit` events; this layer fans those events out to whichever
  * webContents own each terminal id, and routes renderer-side write /
@@ -566,13 +592,25 @@ export function registerTerminalIpc(): void {
             retained: boolean,
         ): { ok: boolean; retainedCount: number; max: number; reason?: string } => {
             if (retained) {
-                // Already retained → idempotent success.
-                if (!mgr().isRetained(id) && mgr().retainedCount() >= MAX_RETAINED) {
+                // AGENT terminals are exempt from the cap (the owner runs many
+                // hidden-but-alive agents); only plain terminals count/are capped.
+                const isAgent = !!getTerminalSpec(id)?.meta?.agent_id;
+                const nonAgentRetainedCount = mgr()
+                    .retainedIds()
+                    .filter((rid) => !getTerminalSpec(rid)?.meta?.agent_id).length;
+                if (
+                    refuseRetainForCap({
+                        isAgent,
+                        alreadyRetained: mgr().isRetained(id),
+                        nonAgentRetainedCount,
+                        max: MAX_RETAINED,
+                    })
+                ) {
                     return {
                         ok: false,
                         retainedCount: mgr().retainedCount(),
                         max: MAX_RETAINED,
-                        reason: `Retained-terminal limit reached (${MAX_RETAINED}). Re-enable or delete a suspended terminal first.`,
+                        reason: `Retained-terminal limit reached (${MAX_RETAINED}). Re-enable or delete a suspended terminal first. (Agent terminals are exempt.)`,
                     };
                 }
                 mgr().setRetained(id, true);

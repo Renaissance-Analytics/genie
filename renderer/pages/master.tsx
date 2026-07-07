@@ -720,14 +720,48 @@ function MasterInner() {
         [specs, selected, activeWorkspaceId],
     );
 
-    const toggleSpec = useCallback((id: string) => {
-        setSelected((prev) => {
-            const next = new Set(prev);
-            if (next.has(id)) next.delete(id);
-            else next.add(id);
-            return next;
-        });
-    }, []);
+    /**
+     * Eyeball toggle — show/hide a view in the grid. HIDING a terminal (not a
+     * Code view) must RETAIN its pty FIRST, so the shell — and any agent running
+     * in it, with its MCP endpoint + WhisperChat membership — stays ALIVE and
+     * windowless, instead of the panel's unmount detaching → KILLING it (the
+     * eyeball-hide crash). Showing releases retention (a visible panel isn't a
+     * windowless retained one). Same retain-before-unmount ordering as disableSpec.
+     * Agent terminals are exempt from the retained cap; a plain terminal past the
+     * cap is REFUSED (stays visible + a toast) rather than silently killed.
+     */
+    const toggleSpec = useCallback(
+        async (id: string) => {
+            const spec = specs.find((s) => s.id === id);
+            const hiding = selected.has(id);
+            if (spec && spec.type !== 'code') {
+                if (hiding) {
+                    const res = await api()
+                        .terminal.setRetained(id, true)
+                        .catch(
+                            () =>
+                                ({ ok: false, reason: 'Could not hide terminal.' }) as {
+                                    ok: boolean;
+                                    reason?: string;
+                                },
+                        );
+                    if (!res.ok) {
+                        setToast(res.reason ?? 'Could not hide terminal.');
+                        return; // keep it visible — NEVER silently kill the pty/agent
+                    }
+                } else {
+                    await api().terminal.setRetained(id, false).catch(() => {});
+                }
+            }
+            setSelected((prev) => {
+                const next = new Set(prev);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+            });
+        },
+        [specs, selected],
+    );
 
     const addSpec = useCallback(
         async (workspaceId: string, type: ViewType = 'terminal') => {
@@ -939,12 +973,9 @@ function MasterInner() {
                 next.delete(id);
                 return next;
             });
-            setActiveIds((prev) => {
-                if (!prev.has(id)) return prev;
-                const next = new Set(prev);
-                next.delete(id);
-                return next;
-            });
+            // Keep it in activeIds: the pty is RETAINED (still running), so the
+            // suspended row must read as live (run/online), not idle. activeIds is
+            // cleared only on a real pty EXIT (onMarkInactive), not on suspend.
             setFocusId((cur) => (cur === id ? null : cur));
             setMaximizedId((cur) => (cur === id ? null : cur));
         },

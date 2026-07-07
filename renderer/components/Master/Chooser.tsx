@@ -1669,13 +1669,15 @@ function SpecRow({
                 </span>
             ) : agentDef && AgentIcon ? (
                 <span
-                    className={`srow-ico agent ${suspended ? 'idle' : live ? 'run' : 'idle'}`}
+                    // A retained pty (hidden OR suspended) is still ALIVE, so status
+                    // follows `live` (the pty), not the suspended/hidden view state.
+                    className={`srow-ico agent ${live ? 'run' : 'idle'}`}
                     title={agentDef.label}
                 >
                     <AgentIcon size={12} />
                 </span>
             ) : (
-                <span className={`sdot ${suspended ? 'idle' : live ? 'run' : 'idle'}`} />
+                <span className={`sdot ${live ? 'run' : 'idle'}`} />
             )}
             {agentDef && purposeStr ? (
                 <span className="tname srow-hasub">
