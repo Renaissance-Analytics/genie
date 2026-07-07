@@ -91,6 +91,19 @@ export function renderAgentLaunch(
 }
 
 /**
+ * Append a user's ALWAYS-ON launch flags to a base agent command. Both sides are
+ * trimmed; empty/whitespace flags are a no-op. Pure so the flag behaviour is
+ * unit-testable independent of the settings read. The session-id flag is added
+ * AFTER this (by {@link renderAgentLaunch}), so a command built here that already
+ * contains `--session-id` is handled by that step's idempotency check.
+ */
+export function appendLaunchFlags(base: string, flags: string | undefined): string {
+    const b = String(base ?? '').trim();
+    const f = String(flags ?? '').trim();
+    return f ? `${b} ${f}` : b;
+}
+
+/**
  * Claude Code's transcript dir for a cwd: `~/.claude/projects/<encoded>` where
  * the cwd is encoded by replacing every non-alphanumeric run's chars with `-`
  * (e.g. `C:\_Projects\tynn.ai` → `C---Projects-tynn-ai`).

@@ -712,6 +712,16 @@ export interface Settings {
      *  No default — the agent must pass an explicit `command`, or this is used
      *  when set. Empty means "no preset; require an explicit command". */
     agent_command_custom?: string;
+    /** ALWAYS-ON launch flags appended to a `claude` agent's command when a
+     *  specialized terminal (or runAgent) opens it — e.g.
+     *  `--dangerously-skip-permissions`. Appended AFTER the resolved command and
+     *  BEFORE the session-id flag: `<command> <flags> --session-id <uuid>`.
+     *  Default '' (no extra flags). */
+    agent_flags_claude?: string;
+    /** Always-on launch flags appended to a `codex` agent's command. Default ''. */
+    agent_flags_codex?: string;
+    /** Always-on launch flags appended to a `custom` agent's command. Default ''. */
+    agent_flags_custom?: string;
     /** Plugin System Developer Mode. When 'on', the user may install/enable
      *  UNSIGNED plugins (with escalated consent + restricted runtime) and manage
      *  developer-trusted signing keys. Default 'off' — the signed registry is the
@@ -792,6 +802,9 @@ export function getAllSettings(): Settings {
         agent_command_claude: out['agent_command_claude'] ?? 'claude',
         agent_command_codex: out['agent_command_codex'] ?? 'codex',
         agent_command_custom: out['agent_command_custom'] ?? '',
+        agent_flags_claude: out['agent_flags_claude'] ?? '',
+        agent_flags_codex: out['agent_flags_codex'] ?? '',
+        agent_flags_custom: out['agent_flags_custom'] ?? '',
         plugins_developer_mode:
             (out['plugins_developer_mode'] as 'on' | 'off') ?? 'off',
     };

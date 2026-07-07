@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     renderAgentLaunch,
+    appendLaunchFlags,
     extractSessionId,
     transcriptDirFor,
     sessionIdFromTranscriptFile,
@@ -57,6 +58,45 @@ describe('renderAgentLaunch — non-flag agents', () => {
 
     it('the profile registry is exhaustive over the agent types', () => {
         expect(Object.keys(LAUNCH_PROFILES).sort()).toEqual(['claude', 'codex', 'custom']);
+    });
+});
+
+describe('appendLaunchFlags — always-on agent flags', () => {
+    it('appends flags when set', () => {
+        expect(appendLaunchFlags('claude', '--dangerously-skip-permissions')).toBe(
+            'claude --dangerously-skip-permissions',
+        );
+    });
+
+    it('is a no-op when the flags are empty or whitespace', () => {
+        expect(appendLaunchFlags('claude', '')).toBe('claude');
+        expect(appendLaunchFlags('claude', '   ')).toBe('claude');
+        expect(appendLaunchFlags('claude', undefined)).toBe('claude');
+    });
+
+    it('trims both sides and preserves multiple flags', () => {
+        expect(appendLaunchFlags('  my-agent  ', '  --a --b=1  ')).toBe('my-agent --a --b=1');
+    });
+
+    it('applies to any agent command (e.g. a custom agent)', () => {
+        expect(appendLaunchFlags('my-cli run', '--browser')).toBe('my-cli run --browser');
+    });
+});
+
+describe('always-on flags → session-id pipeline (appendLaunchFlags then renderAgentLaunch)', () => {
+    it('injects the session-id AFTER the flags: <command> <flags> --session-id <uuid>', () => {
+        const withFlags = appendLaunchFlags('claude', '--dangerously-skip-permissions');
+        const r = renderAgentLaunch('claude', withFlags, () => 'sid-1');
+        expect(r.command).toBe('claude --dangerously-skip-permissions --session-id sid-1');
+        expect(r.chatSessionId).toBe('sid-1');
+    });
+
+    it('does NOT double --session-id when the flags already include one', () => {
+        const existing = 'abcd1234-5678-90ab-cdef-1234567890ab';
+        const withFlags = appendLaunchFlags('claude', `--session-id ${existing}`);
+        const r = renderAgentLaunch('claude', withFlags, () => 'should-not-be-used');
+        expect(r.command).toBe(`claude --session-id ${existing}`);
+        expect(r.chatSessionId).toBe(existing);
     });
 });
 

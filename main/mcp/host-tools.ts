@@ -23,6 +23,7 @@ import {
 } from '../db';
 import { whisperBroker } from '../whisper/broker';
 import { workspaceSlug } from '../whisper/slug';
+import { appendLaunchFlags } from '../whisper/session-capture';
 import {
     normalizePurpose,
     type WhisperAgentType,
@@ -1020,6 +1021,31 @@ export function resolveAgentCommand(agent: AgentType, override?: string): string
 }
 
 /**
+ * Resolve an agent's FULL launch command: the base command
+ * ({@link resolveAgentCommand}) plus the user's ALWAYS-ON flags for that agent
+ * type (`agent_flags_<agent>` in Settings), appended after the command. Both
+ * launch paths (specialized-terminal create + runAgent start) go through this so
+ * the flags apply everywhere. The session-id flag is injected LATER (in
+ * createAgentTerminal's `renderAgentLaunch`), giving the order
+ * `<command> <flags> --session-id <uuid>` — and that injection already skips
+ * adding a second `--session-id` if the user's flags happen to include one.
+ * Returns null when no base command resolves (same contract as
+ * resolveAgentCommand).
+ */
+export function resolveAgentLaunch(agent: AgentType, override?: string): string | null {
+    const base = resolveAgentCommand(agent, override);
+    if (!base) return null;
+    const s = getAllSettings();
+    const flags =
+        agent === 'claude'
+            ? s.agent_flags_claude
+            : agent === 'codex'
+              ? s.agent_flags_codex
+              : s.agent_flags_custom;
+    return appendLaunchFlags(base, flags);
+}
+
+/**
  * Create a SPECIALIZED (AI-TUI) terminal from the UI — the shared path behind
  * BOTH the local `terminal-spec:create-agent` IPC and the remote host endpoint
  * (`POST /api/desktop/terminal-spec/create-agent`). Resolves the agent's launch
@@ -1040,7 +1066,8 @@ export function createSpecializedAgentTerminal(input: {
 }): { ok: boolean; spec?: TerminalSpecRow; error?: string } {
     const ws = getWorkspace(input.workspace_id);
     if (!ws) return { ok: false, error: 'Workspace not found.' };
-    const command = resolveAgentCommand(input.agent, input.command);
+    // Base command + the agent type's always-on flags (session-id injected later).
+    const command = resolveAgentLaunch(input.agent, input.command);
     if (!command) {
         return {
             ok: false,
@@ -1093,7 +1120,9 @@ export async function runAgentForMcp(
         switch (req.action) {
             case 'start': {
                 const agent: AgentType = req.agent ?? 'claude';
-                const command = resolveAgentCommand(agent, req.command);
+                // Base command + the agent type's always-on flags (session-id
+                // injected later in createAgentTerminal).
+                const command = resolveAgentLaunch(agent, req.command);
                 if (!command) {
                     return {
                         ok: false,
