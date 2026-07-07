@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
     IconAlert,
@@ -27,9 +27,14 @@ import TerminalTypeSplitButton from './TerminalTypeSplitButton';
 import { terminalTypeForAgent, type TerminalTypeId } from '../../lib/terminal-types';
 import { workspaceNeedsAttention } from '../../lib/attention';
 import {
+    enterableWorkspaceIds,
+    newlyAddedWorkspaceIds,
+} from '../../lib/workspace-enter';
+import {
     api,
     detectedShells,
     isSystemWorkspace,
+    SYSTEM_WORKSPACE_ID,
     type McpStatus,
     type ProcessStatus,
     type WatchTypeCounts,
@@ -396,6 +401,60 @@ export default function Chooser({
         };
     }, []);
 
+    // New-workspace ENTRY animation: when a genuinely-new workspace id appears in
+    // the (host-sourced) list — e.g. one a workstation auto-provisioned and
+    // pushed to this REMOTE session over the bridge — fade/slide its rail button
+    // + flyout row IN instead of popping. `seenWsRef` is the id baseline as of
+    // the last commit; a null baseline (first render) animates NOTHING, so the
+    // INITIAL list never animates — only genuine later arrivals do. The class is
+    // dropped after ENTER_MS, mirroring the `pulsing` one-shot, so existing rows
+    // never re-animate on a re-render/reorder/rename. NO polling — this reacts to
+    // the list the renderer already refreshes on the host's broadcast.
+    const ENTER_MS = 640;
+    const [enteringWs, setEnteringWs] = useState<Set<string>>(() => new Set());
+    const seenWsRef = useRef<Set<string> | null>(null);
+    const enterTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+        new Map(),
+    );
+    // useLayoutEffect (not useEffect): the setState it schedules is flushed
+    // BEFORE the browser paints, so the freshly-mounted row gets `ws-enter` on
+    // its first painted frame (animation starts at opacity 0) — no pop-then-fade.
+    useLayoutEffect(() => {
+        const current = enterableWorkspaceIds(workspaces, SYSTEM_WORKSPACE_ID);
+        const fresh = newlyAddedWorkspaceIds(seenWsRef.current, current);
+        seenWsRef.current = current;
+        if (fresh.length === 0) return;
+        setEnteringWs((prev) => {
+            const next = new Set(prev);
+            for (const id of fresh) next.add(id);
+            return next;
+        });
+        const timers = enterTimers.current;
+        for (const id of fresh) {
+            const existing = timers.get(id);
+            if (existing) clearTimeout(existing);
+            timers.set(
+                id,
+                setTimeout(() => {
+                    timers.delete(id);
+                    setEnteringWs((prev) => {
+                        if (!prev.has(id)) return prev;
+                        const next = new Set(prev);
+                        next.delete(id);
+                        return next;
+                    });
+                }, ENTER_MS),
+            );
+        }
+    }, [workspaces]);
+    useEffect(() => {
+        const timers = enterTimers.current;
+        return () => {
+            for (const t of timers.values()) clearTimeout(t);
+            timers.clear();
+        };
+    }, []);
+
     // Which workspaces' `.agi` envelopes declare a Tynn MCP server. The Tynn
     // glyph on a spec reflects REAL Tynn-MCP presence (a server named `tynn` in
     // the envelope's .mcp.json / .cursor/mcp.json), not the product backend
@@ -639,7 +698,7 @@ export default function Chooser({
                                 isActive ? ' is-active' : ''
                             }${wsAttention ? ' attention' : ''}${
                                 pulsingWs.has(ws.id) ? ' pulsing' : ''
-                            }`}
+                            }${enteringWs.has(ws.id) ? ' ws-enter' : ''}`}
                             onClick={() => onActivateWorkspace(ws.id)}
                             title={`${ws.project_name}${live > 0 ? ` · ${live} live` : ''}`}
                         >
@@ -766,7 +825,7 @@ export default function Chooser({
                                     ws.shape === 'agi' ? ' agi' : ''
                                 }${wsAttention ? ' attention' : ''}${
                                     pulsingWs.has(ws.id) ? ' pulsing' : ''
-                                }`}
+                                }${enteringWs.has(ws.id) ? ' ws-enter' : ''}`}
                                 onDragOver={(e) => {
                                     if (!draggingId.current) return;
                                     e.preventDefault();

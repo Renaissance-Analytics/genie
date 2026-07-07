@@ -2352,6 +2352,53 @@ body.gutter-dragging .grid-gutter {
         background: transparent;
     }
 }
+
+/* One-shot ENTER animation for a GENUINELY-NEW workspace — e.g. one a
+   workstation auto-provisioned and pushed to a remote session over the bridge.
+   The row fades + slides/scales IN instead of popping. Chooser applies
+   `ws-enter` on the row's first painted frame (via a layout effect) and drops
+   it after the animation, so it plays exactly once and never re-animates
+   existing rows. The rail slides in from the rail edge; the flyout row drops in
+   from just above its slot — both settling to their resting transform. */
+.chooser-rail .crail-btn.ws-enter {
+    animation: ws-enter-rail 0.6s var(--ease-out, ease-out) 1;
+}
+@keyframes ws-enter-rail {
+    0% {
+        opacity: 0;
+        transform: translateX(-12px) scale(0.55);
+    }
+    55% {
+        opacity: 1;
+    }
+    100% {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+    }
+}
+.chooser-flyout .tproj.ws-enter {
+    animation: ws-enter-row 0.6s var(--ease-out, ease-out) 1;
+    /* Keep the fade/slide from bleeding onto neighbours mid-animation. */
+    transform-origin: top center;
+}
+@keyframes ws-enter-row {
+    0% {
+        opacity: 0;
+        transform: translateY(-10px) scale(0.97);
+    }
+    100% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+/* Honour reduced-motion: the new workspace still appears, just without the
+   fade/slide (drop straight to its resting state). */
+@media (prefers-reduced-motion: reduce) {
+    .chooser-rail .crail-btn.ws-enter,
+    .chooser-flyout .tproj.ws-enter {
+        animation: none !important;
+    }
+}
 .tpanel .pa {
     opacity: 0;
     transition: opacity var(--dur-fast) var(--ease-out);
