@@ -47,13 +47,13 @@ export interface KnowledgeSearchResult {
 
 /**
  * A resolved graph edge: a directed link from the node that CONTAINS the link
- * (`from`) to the node it points at (`to`). Mirrors the store's own
- * `from_id`/`to_ref` columns, and is what the Knowledge Graph window's GraphView
- * consumes directly.
+ * (`source`) to the node it points at (`target`). The `source`/`target` naming
+ * matches the convention force-graph renderers expect, so the Knowledge Graph
+ * window's GraphView can consume `graph()` directly.
  */
 export interface KnowledgeEdge {
-    from: string;
-    to: string;
+    source: string;
+    target: string;
 }
 
 /** The whole graph — every node + every resolved edge (both ends existing). */
