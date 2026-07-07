@@ -133,17 +133,17 @@ export class KnowledgeStore {
                 'SELECT from_id, to_ref FROM knowledge_edges',
             )
             .all();
-        // Edges use source/target (the force-graph convention): source = the node
-        // that CONTAINS the link, target = the node it points at.
+        // Edges are directed: from = the node that CONTAINS the link, to = the
+        // node it points at (mirrors the from_id/to_ref columns).
         const edges: KnowledgeEdge[] = [];
         const seen = new Set<string>();
         for (const e of edgeRows) {
-            const target = resolver(e.to_ref);
-            if (!target || target === e.from_id) continue;
-            const key = `${e.from_id}->${target}`;
+            const to = resolver(e.to_ref);
+            if (!to || to === e.from_id) continue;
+            const key = `${e.from_id}->${to}`;
             if (seen.has(key)) continue;
             seen.add(key);
-            edges.push({ source: e.from_id, target });
+            edges.push({ from: e.from_id, to });
         }
         return { nodes, edges };
     }
