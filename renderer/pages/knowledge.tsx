@@ -517,18 +517,18 @@ function GraphView({
 
     const neighbors = new Set<string>();
     for (const e of graph.edges) {
-        if (e.from === selectedId) neighbors.add(e.to);
-        else if (e.to === selectedId) neighbors.add(e.from);
+        if (e.source === selectedId) neighbors.add(e.target);
+        else if (e.target === selectedId) neighbors.add(e.source);
     }
 
     return (
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', padding: 8 }}>
             <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="100%" style={{ display: 'block' }}>
                 {graph.edges.map((e, i) => {
-                    const a = layout.get(e.from);
-                    const b = layout.get(e.to);
+                    const a = layout.get(e.source);
+                    const b = layout.get(e.target);
                     if (!a || !b) return null;
-                    const active = e.from === selectedId || e.to === selectedId;
+                    const active = e.source === selectedId || e.target === selectedId;
                     return (
                         <line
                             key={i}

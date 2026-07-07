@@ -1309,10 +1309,11 @@ export interface KnowledgeSearchResult {
     tags: string[];
 }
 
-/** A directed edge: `from` links to `to` (a resolved `[[wikilink]]` or explicit link). */
+/** A directed edge: `source` (the memory containing the link) → `target` (the
+ *  linked memory's id). Only edges whose BOTH ends resolve to real nodes appear. */
 export interface KnowledgeGraphEdge {
-    from: string;
-    to: string;
+    source: string;
+    target: string;
 }
 
 /** The whole store as a graph: the full nodes + the edges between them. */
