@@ -56,6 +56,7 @@ describe('remote (restricted) Settings', () => {
             'general',
             'workspaces',
             'mobile',
+            'sites',
             'connections',
             'devices',
             'updates',

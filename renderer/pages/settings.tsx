@@ -28,6 +28,9 @@ import {
     type MarketplaceView,
     type OfficialPluginsResult,
     type PluginDeveloperModeState,
+    type SiteView,
+    type SiteScheme,
+    type WorkspaceRow,
 } from '../lib/genie';
 import {
     NAV_GROUPS,
@@ -616,6 +619,13 @@ export default function SettingsPage() {
             ) : (
                 <RemoteHostCard />
             )}
+
+                            </SearchGroup>
+                        )}
+                        {show('sites') && (
+                            <SearchGroup label=".gen Sites" searching={searching}>
+
+            <SitesSection activeWorkspace={s.active_workspace} />
 
                             </SearchGroup>
                         )}
@@ -3268,6 +3278,271 @@ function RemoteHostCard() {
 }
 
 /**
+ * Settings → .gen Sites (serve-local-sites). The per-site `.gen` tunnel
+ * allowlist — the entry point moved here from the per-workspace Workspace
+ * Settings modal so it's a first-class Genie Settings page. The tunnel config
+ * is stored PER WORKSPACE (a site is served if ANY workspace enables it), so
+ * this page carries a small workspace selector — defaulting to the active
+ * workspace — and edits that workspace's allowlist via the same `sites.*` IPC.
+ *
+ * The global master switch (`local_sites_enabled`) still lives in Work Mode;
+ * this is the second, per-site opt-in on top of it. HOST-SOURCED in a remote
+ * window (the `sites.*` calls route to the host via remote-bridge.ts).
+ */
+function SitesSection({ activeWorkspace }: { activeWorkspace?: string }) {
+    const [workspaces, setWorkspaces] = useState<WorkspaceRow[] | null>(null);
+    const [wsId, setWsId] = useState<string>('');
+
+    useEffect(() => {
+        void (async () => {
+            const list = await api()
+                .workspaces.list()
+                .catch(() => [] as WorkspaceRow[]);
+            setWorkspaces(list);
+            // Default to the active (last-focused) workspace when it's a real,
+            // still-open workspace; otherwise the first one in the list.
+            setWsId((cur) => {
+                if (cur && list.some((w) => w.id === cur)) return cur;
+                if (activeWorkspace && list.some((w) => w.id === activeWorkspace)) {
+                    return activeWorkspace;
+                }
+                return list[0]?.id ?? '';
+            });
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    return (
+        <SetSection
+            title=".gen Sites"
+            desc="Choose which of this machine's loopback dev sites (e.g. tynn.test) are served to a remote Genie as *.gen"
+        >
+            <SettingRow
+                label="Workspace"
+                desc="Local-site tunnel settings are stored per workspace. Pick the one to configure; a site is served if any workspace enables it."
+                keywords="workspace sites gen tunnel serve local dev select"
+                grow
+            >
+                <Select
+                    value={wsId}
+                    onValueChange={setWsId}
+                    list={(workspaces ?? []).map((w) => ({
+                        value: w.id,
+                        label: w.project_name,
+                    }))}
+                />
+            </SettingRow>
+
+            {workspaces !== null && workspaces.length === 0 ? (
+                <div className="set-row">
+                    <div className="set-row-main">
+                        <span className="set-row-desc">
+                            No workspaces yet — open a project to configure its .gen sites.
+                        </span>
+                    </div>
+                </div>
+            ) : wsId ? (
+                <LocalSitesList key={wsId} workspaceId={wsId} />
+            ) : null}
+        </SetSection>
+    );
+}
+
+/**
+ * The per-workspace `.gen` allowlist body: discovers this host's loopback dev
+ * sites (hosts-file parse + loopback probe) and lists them with an enable
+ * toggle, an editable `.gen` name, and a scheme/port override. Nothing is
+ * tunnelled until a site is enabled (infra names default off). Moved verbatim
+ * from the Workspace Settings modal's LocalSitesPanel; the `sites.*` IPC is
+ * unchanged and remains HOST-SOURCED in a remote window.
+ */
+function LocalSitesList({ workspaceId }: { workspaceId: string }) {
+    const [sites, setSites] = useState<SiteView[] | null>(null);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const load = async (refresh = false) => {
+        setBusy(true);
+        setError(null);
+        try {
+            setSites(await api().sites.list(workspaceId, { refresh }));
+        } catch {
+            setSites([]);
+            setError('Could not read the hosts file on this machine.');
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    useEffect(() => {
+        void load();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [workspaceId]);
+
+    // Persist ONE field of ONE site optimistically, reverting on failure. The
+    // siteId is the opaque allowlist key — the host resolves it to a hostname,
+    // never trusting a caller-supplied target.
+    const patchSite = async (
+        siteId: string,
+        patch: { enabled?: boolean; genName?: string; scheme?: SiteScheme; port?: number },
+    ) => {
+        const prev = sites;
+        setSites((cur) =>
+            (cur ?? []).map((s) => (s.siteId === siteId ? { ...s, ...patch } : s)),
+        );
+        try {
+            await api().sites.set(workspaceId, siteId, patch);
+        } catch {
+            setSites(prev); // revert
+        }
+    };
+
+    return (
+        <>
+            <div className="set-row">
+                <div className="set-row-main">
+                    <span className="set-row-label">Discovered sites</span>
+                    <span className="set-row-desc">
+                        Nothing is tunnelled until you enable a site (infra helpers
+                        default off).
+                    </span>
+                </div>
+                <div className="set-row-control">
+                    <Action
+                        size="sm"
+                        variant="ghost"
+                        icon="refresh-cw"
+                        disabled={busy}
+                        onClick={() => void load(true)}
+                    >
+                        {busy ? 'Scanning…' : 'Rescan'}
+                    </Action>
+                </div>
+            </div>
+
+            {sites === null ? (
+                <Text size="xs" className="text-zinc-500" style={{ paddingTop: 4 }}>
+                    Scanning the hosts file…
+                </Text>
+            ) : sites.length === 0 ? (
+                <Text size="xs" className="text-zinc-500" style={{ paddingTop: 4 }}>
+                    No loopback dev sites found in this machine&apos;s hosts file.
+                </Text>
+            ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {sites.map((s) => (
+                        <div
+                            key={s.siteId}
+                            style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 6,
+                                padding: 8,
+                                borderRadius: 8,
+                                background: 'var(--bg-2)',
+                                border: '1px solid var(--border-1)',
+                                opacity: s.enabled ? 1 : 0.85,
+                            }}
+                        >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <input
+                                    type="checkbox"
+                                    checked={s.enabled}
+                                    onChange={(e) =>
+                                        void patchSite(s.siteId, { enabled: e.target.checked })
+                                    }
+                                    aria-label={`Tunnel ${s.hostname}`}
+                                />
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    <Text size="sm" style={{ fontWeight: 600 }}>
+                                        {s.hostname}
+                                        {s.kind === 'infra' && (
+                                            <span
+                                                style={{
+                                                    marginLeft: 6,
+                                                    fontSize: 10,
+                                                    fontWeight: 600,
+                                                    color: 'var(--amber-600)',
+                                                }}
+                                            >
+                                                infra
+                                            </span>
+                                        )}
+                                    </Text>
+                                    <Text size="xs" className="text-zinc-500">
+                                        {s.scheme}://127.0.0.1:{s.port}
+                                    </Text>
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    <Input
+                                        value={s.genName}
+                                        onValueChange={(v: string) =>
+                                            setSites((cur) =>
+                                                (cur ?? []).map((x) =>
+                                                    x.siteId === s.siteId ? { ...x, genName: v } : x,
+                                                ),
+                                            )
+                                        }
+                                        onBlur={() =>
+                                            void patchSite(s.siteId, { genName: s.genName })
+                                        }
+                                        placeholder="tynn.gen"
+                                        aria-label={`Tunnel name for ${s.hostname}`}
+                                    />
+                                </div>
+                                <div style={{ width: 108 }}>
+                                    <Select
+                                        value={s.scheme}
+                                        onValueChange={(v) =>
+                                            void patchSite(s.siteId, { scheme: v as SiteScheme })
+                                        }
+                                        list={[
+                                            { value: 'https', label: 'https' },
+                                            { value: 'http', label: 'http' },
+                                        ]}
+                                    />
+                                </div>
+                                <div style={{ width: 92 }}>
+                                    <Input
+                                        type="number"
+                                        min={1}
+                                        max={65535}
+                                        value={String(s.port)}
+                                        onValueChange={(v: string) => {
+                                            const n = parseInt(v, 10);
+                                            if (Number.isFinite(n)) {
+                                                setSites((cur) =>
+                                                    (cur ?? []).map((x) =>
+                                                        x.siteId === s.siteId
+                                                            ? { ...x, port: n }
+                                                            : x,
+                                                    ),
+                                                );
+                                            }
+                                        }}
+                                        onBlur={() => void patchSite(s.siteId, { port: s.port })}
+                                        placeholder="443"
+                                        aria-label={`Port for ${s.hostname}`}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {error && (
+                <Text size="xs" style={{ color: 'var(--rose-500)', marginTop: 4 }}>
+                    {error}
+                </Text>
+            )}
+        </>
+    );
+}
+
+/**
  * Settings → Mobile. Drives the tailnet remote-control server: the enable
  * toggle + fixed `mobile_port`, plus a live status block (tailnet URL when
  * running, a "Tailscale not detected" notice when fail-closed, a port-conflict
@@ -3498,7 +3773,7 @@ function MobileSection({
             <SettingRow
                 label="Serve local dev sites"
                 keywords="local sites serve tunnel gen herd valet loopback dev site work mode"
-                desc="Off by default. Lets this host expose its loopback dev sites (e.g. tynn.test, served by Herd/Valet) to a remote Genie as *.gen. A separate opt-in from mobile remote control — and each repo's site is still individually enabled in that workspace's settings before anything is tunnelled."
+                desc="Off by default. Lets this host expose its loopback dev sites (e.g. tynn.test, served by Herd/Valet) to a remote Genie as *.gen. A separate opt-in from mobile remote control — and each site is still individually enabled on the .gen Sites page before anything is tunnelled."
             >
                 <Switch
                     checked={localSitesEnabled}
