@@ -842,6 +842,34 @@ const api = {
         ) => ipcRenderer.invoke('whisper:update-channel', specId, patch),
     },
 
+    /** Knowledge Graph — Genie's workstation-wide local knowledge/memory store.
+     *  CRUD here stamps source 'user'; agents write via the `knowledge` MCP tool
+     *  (source 'agent'). Both share one workstation store. */
+    knowledge: {
+        /** Keyword (FTS) search → ranked `{ id, title, snippet, score, tags }[]`. */
+        search: (query: string, opts?: { limit?: number; tags?: string[] }) =>
+            ipcRenderer.invoke('knowledge:search', query, opts),
+        /** Recent nodes (optional `tag`, `limit`). */
+        list: (opts?: { tag?: string; limit?: number }) =>
+            ipcRenderer.invoke('knowledge:list', opts),
+        /** One node by id (with its resolved linked node ids), or null. */
+        get: (id: string) => ipcRenderer.invoke('knowledge:get', id),
+        /** Create a node (source 'user'); returns the created node. */
+        add: (input: { title: string; body?: string; tags?: string[]; links?: string[] }) =>
+            ipcRenderer.invoke('knowledge:add', input),
+        /** Patch a node; returns the updated node (or null when unknown). */
+        update: (
+            id: string,
+            patch: { title?: string; body?: string; tags?: string[]; links?: string[] },
+        ) => ipcRenderer.invoke('knowledge:update', id, patch),
+        /** Delete a node; returns `{ ok }`. */
+        delete: (id: string) => ipcRenderer.invoke('knowledge:delete', id),
+        /** The whole graph — `{ nodes, edges }`. */
+        graph: () => ipcRenderer.invoke('knowledge:graph'),
+        /** Open (or focus) the Knowledge Graph window. */
+        openWindow: () => ipcRenderer.invoke('knowledge:open-window'),
+    },
+
     files: {
         listTree: (
             workspacePath: string,
@@ -1201,6 +1229,19 @@ const api = {
             const handler = (_e: unknown, payload: Parameters<typeof cb>[0]) => cb(payload);
             ipcRenderer.on('whisper:message', handler);
             return () => ipcRenderer.off('whisper:message', handler);
+        },
+        /** The Knowledge Graph changed (a node added/updated/deleted or an edge
+         *  linked — incl. an AGENT's write via the `knowledge` MCP tool). The
+         *  Knowledge Graph window re-fetches to stay live. */
+        knowledgeChanged: (
+            cb: (payload: { action: 'add' | 'update' | 'delete' | 'link'; id?: string }) => void,
+        ) => {
+            const handler = (
+                _e: unknown,
+                payload: { action: 'add' | 'update' | 'delete' | 'link'; id?: string },
+            ) => cb(payload);
+            ipcRenderer.on('knowledge:changed', handler);
+            return () => ipcRenderer.off('knowledge:changed', handler);
         },
         /** A file was created/renamed/deleted on disk in a watched workspace
          *  (outside the renderer's own edits — an agent, a git op, a tool). The

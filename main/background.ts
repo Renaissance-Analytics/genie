@@ -66,6 +66,7 @@ import {
     readTerminalOutput,
 } from './terminal/ipc';
 import { installWhisperPresence } from './whisper/presence';
+import { installKnowledgeBroadcast } from './knowledge/presence';
 import {
     buildSubmitBytes,
     resolveTerminalInput,
@@ -289,6 +290,7 @@ let settingsRestricted = false;
  *  host (or for local) needs a fresh window. */
 let settingsConnKey: string | null = null;
 let docsWindow: BrowserWindow | null = null;
+let knowledgeWindow: BrowserWindow | null = null;
 let masterWindow: BrowserWindow | null = null;
 const terminalWindows = new Set<BrowserWindow>();
 
@@ -593,6 +595,26 @@ export function showDocsWindow(): void {
     docsWindow.focus();
 }
 
+export function getKnowledgeWindow(): BrowserWindow | null {
+    return knowledgeWindow;
+}
+
+/**
+ * Open (or focus) the Knowledge Graph window. Mirrors showDocsWindow — a separate
+ * Genie-skinned BrowserWindow loading the `/knowledge` renderer page, reused on
+ * repeat opens (a singleton) so we never stack duplicate windows. Backs the
+ * `knowledge:open-window` IPC + the `knowledge.openWindow()` renderer call.
+ */
+export function showKnowledgeWindow(): void {
+    if (!knowledgeWindow || knowledgeWindow.isDestroyed()) {
+        knowledgeWindow = createKnowledgeWindow();
+        knowledgeWindow.once('ready-to-show', () => knowledgeWindow?.focus());
+        return;
+    }
+    knowledgeWindow.show();
+    knowledgeWindow.focus();
+}
+
 export function showCaptureWindow(): void {
     if (!captureWindow || captureWindow.isDestroyed()) {
         captureWindow = createCaptureWindow();
@@ -713,6 +735,34 @@ function createDocsWindow(): BrowserWindow {
         win.loadURL('http://localhost:8888/docs');
     } else {
         win.loadFile(path.join(__dirname, 'docs.html'));
+    }
+
+    win.once('ready-to-show', () => win.show());
+    return win;
+}
+
+function createKnowledgeWindow(): BrowserWindow {
+    const win = new BrowserWindow({
+        width: 1100,
+        height: 760,
+        minWidth: 720,
+        minHeight: 480,
+        show: false,
+        frame: true,
+        title: 'Knowledge Graph',
+        backgroundColor: '#0a0a0c',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false,
+        },
+    });
+
+    if (isDev) {
+        win.loadURL('http://localhost:8888/knowledge');
+    } else {
+        win.loadFile(path.join(__dirname, 'knowledge.html'));
     }
 
     win.once('ready-to-show', () => win.show());
@@ -969,6 +1019,13 @@ app.whenReady().then(async () => {
         rehydrateWhisper();
     } catch {
         /* best-effort — whisper is additive; a failure never blocks startup */
+    }
+    // Knowledge Graph: wire the store's change events to the renderer broadcast
+    // so an open window live-refreshes (incl. an agent's MCP writes).
+    try {
+        installKnowledgeBroadcast();
+    } catch {
+        /* best-effort — knowledge is additive; a failure never blocks startup */
     }
     registerFilesIpc();
     registerGithubIpc();

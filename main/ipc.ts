@@ -67,6 +67,7 @@ import { broadcastTerminalSpecsChanged } from './terminal/ipc';
 import { createSpecializedAgentTerminal } from './mcp/host-tools';
 import { whisperBroker } from './whisper/broker';
 import { normalizePurpose, type WhisperScope } from './whisper/types';
+import { getKnowledgeStore } from './knowledge/store';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import {
     provisionWorkspaceTynn,
@@ -156,6 +157,7 @@ import {
     hideCaptureWindow,
     showSettingsWindow,
     showDocsWindow,
+    showKnowledgeWindow,
     showMainWindow,
     showStageWindow,
     showHostWindow,
@@ -955,6 +957,54 @@ export function registerIpcHandlers(): void {
             return { ok: true };
         },
     );
+
+    // --- Knowledge Graph (workstation-wide local memory store) -----------
+    // The renderer Knowledge Graph window reads/writes the shared store here;
+    // window CRUD stamps source 'user' (an agent's MCP writes stamp 'agent').
+    // Mutations broadcast `knowledge:changed` (via the store's emitter) so a live
+    // window re-fetches — incl. nodes an agent added over MCP. openWindow
+    // create-or-focuses the singleton Genie-skinned window.
+    ipcMain.handle(
+        'knowledge:search',
+        (_e, query: string, opts?: { limit?: number; tags?: string[] }) =>
+            getKnowledgeStore().search({
+                query: String(query ?? ''),
+                limit: opts?.limit,
+                tags: opts?.tags,
+            }),
+    );
+    ipcMain.handle('knowledge:list', (_e, opts?: { tag?: string; limit?: number }) =>
+        getKnowledgeStore().list(opts ?? {}),
+    );
+    ipcMain.handle('knowledge:get', (_e, id: string) => getKnowledgeStore().get(id));
+    ipcMain.handle(
+        'knowledge:add',
+        (
+            _e,
+            input: { title: string; body?: string; tags?: string[]; links?: string[] },
+        ) =>
+            getKnowledgeStore().add({
+                title: input?.title ?? '',
+                body: input?.body,
+                tags: input?.tags,
+                links: input?.links,
+                source: 'user',
+            }),
+    );
+    ipcMain.handle(
+        'knowledge:update',
+        (
+            _e,
+            id: string,
+            patch: { title?: string; body?: string; tags?: string[]; links?: string[] },
+        ) => getKnowledgeStore().update(id, patch ?? {}),
+    );
+    ipcMain.handle('knowledge:delete', (_e, id: string) => getKnowledgeStore().delete(id));
+    ipcMain.handle('knowledge:graph', () => getKnowledgeStore().graph());
+    ipcMain.handle('knowledge:open-window', () => {
+        showKnowledgeWindow();
+        return { ok: true };
+    });
 
     // --- Backend projects (fans out across signed-in backends) ----------
     ipcMain.handle('tynn:projects', async () => listAllProjects());
