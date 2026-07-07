@@ -19,6 +19,7 @@ import {
     getWorkspaceIssuewatchPolicyBuckets,
     removeWorkspace,
     type TerminalSpecMeta,
+    type TerminalSpecRow,
 } from '../db';
 import { whisperBroker } from '../whisper/broker';
 import { workspaceSlug } from '../whisper/slug';
@@ -1016,6 +1017,60 @@ export function resolveAgentCommand(agent: AgentType, override?: string): string
     // custom: only the configured custom command (no built-in default).
     const c = (s.agent_command_custom || '').trim();
     return c || null;
+}
+
+/**
+ * Create a SPECIALIZED (AI-TUI) terminal from the UI — the shared path behind
+ * BOTH the local `terminal-spec:create-agent` IPC and the remote host endpoint
+ * (`POST /api/desktop/terminal-spec/create-agent`). Resolves the agent's launch
+ * command, spawns the headless agent terminal (stamping its captured chat-session
+ * id + WhisperChat identity/accessibility, joining the broker), and submits the
+ * boot command. No approval gate — the human is creating it directly in their own
+ * (or the host's) Genie. Returns the persisted spec, or a clear error.
+ */
+export function createSpecializedAgentTerminal(input: {
+    workspace_id: string;
+    agent: AgentType;
+    command?: string;
+    cwd?: string;
+    label?: string;
+    purpose: string;
+    scope: WhisperScope;
+    scope_workspaces?: string[];
+}): { ok: boolean; spec?: TerminalSpecRow; error?: string } {
+    const ws = getWorkspace(input.workspace_id);
+    if (!ws) return { ok: false, error: 'Workspace not found.' };
+    const command = resolveAgentCommand(input.agent, input.command);
+    if (!command) {
+        return {
+            ok: false,
+            error:
+                input.agent === 'custom'
+                    ? 'A custom agent needs a command (here or in Settings → Agent commands).'
+                    : `No command configured for agent "${input.agent}".`,
+        };
+    }
+    let cwd = ws.path;
+    if (input.cwd && input.cwd.trim()) {
+        cwd = path.isAbsolute(input.cwd)
+            ? path.normalize(input.cwd)
+            : path.join(ws.path, input.cwd);
+    }
+    const label = input.label?.trim() || `${input.agent} · ${normalizePurpose(input.purpose)}`;
+    const { id, command: launchCommand } = createAgentTerminal({
+        workspaceId: ws.id,
+        cwd,
+        label,
+        agentMeta: { agent: input.agent, command },
+        whisper: {
+            purpose: input.purpose,
+            scope: input.scope,
+            scopeWorkspaces: input.scope_workspaces,
+        },
+    });
+    // Launch the agent CLI in the fresh shell (the session-captured form).
+    writeToTerminal(id, buildSubmitBytes(launchCommand ?? command, true));
+    return { ok: true, spec: getTerminalSpec(id) ?? undefined };
 }
 
 /** Back the runAgent MCP tool (launch + drive a coding agent; gated). */

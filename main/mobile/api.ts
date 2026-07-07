@@ -34,6 +34,7 @@ import {
     setSettings,
     AI_SYSTEM_MAX,
     type Settings,
+    type TerminalSpecRow,
 } from '../db';
 import {
     getOpenCounts,
@@ -217,6 +218,24 @@ export interface MobileDataDeps {
         cwd: string;
         label: string;
     }) => { id: string; scrollback: string };
+    /**
+     * Create a SPECIALIZED (AI-TUI) terminal on the host — resolves the agent's
+     * launch command, spawns the agent pty with its captured chat-session id +
+     * WhisperChat identity, and launches it (the shared create-agent path). Backs
+     * the `POST /api/desktop/terminal-spec/create-agent` host endpoint so a REMOTE
+     * host window creates specialized terminals identically to a local one.
+     * OPTIONAL — only a full desktop host wires it; absent ⇒ the endpoint 501s.
+     */
+    createSpecializedAgentTerminal?: (input: {
+        workspace_id: string;
+        agent: 'claude' | 'codex' | 'custom';
+        command?: string;
+        cwd?: string;
+        label?: string;
+        purpose: string;
+        scope: 'none' | 'self' | 'specific' | 'all';
+        scope_workspaces?: string[];
+    }) => { ok: boolean; spec?: TerminalSpecRow; error?: string };
     killTerminalById: (id: string) => boolean;
     writeToTerminal: (id: string, data: string) => boolean;
     readTerminalOutput: (
@@ -1241,6 +1260,23 @@ export async function handleApi(
             if (guardLocked()) return true;
             if (pathname === '/api/desktop/terminal-spec/create' && d.input) {
                 sendJson(res, 200, { spec: createTerminalSpec(d.input) });
+                return true;
+            }
+            // Specialized (AI-TUI) terminal — routes through the SAME create-agent
+            // path as the local IPC (command resolution + session-id capture +
+            // whisper broker join), so a remote host window creates one identically.
+            if (pathname === '/api/desktop/terminal-spec/create-agent' && d.input) {
+                if (!deps.createSpecializedAgentTerminal) {
+                    sendJson(res, 501, {
+                        ok: false,
+                        error: 'Specialized terminals are not available on this host.',
+                    });
+                    return true;
+                }
+                const agentInput = d.input as unknown as Parameters<
+                    NonNullable<MobileDataDeps['createSpecializedAgentTerminal']>
+                >[0];
+                sendJson(res, 200, deps.createSpecializedAgentTerminal(agentInput));
                 return true;
             }
             if (pathname === '/api/desktop/terminal-spec/update') {

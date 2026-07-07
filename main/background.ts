@@ -159,7 +159,7 @@ import {
     SYSTEM_WORKSPACE_ID,
 } from './terminal/workspace-of-terminal';
 import { registerOpenFile } from './editor/open-file';
-import { registerHostTools } from './mcp/host-tools';
+import { registerHostTools, createSpecializedAgentTerminal } from './mcp/host-tools';
 import { isQuittingForUpdate } from './updater/quit-state';
 import { markDesktopRuntime } from './runtime-mode';
 import { registerFilesIpc } from './files/ipc';
@@ -1240,6 +1240,7 @@ app.whenReady().then(async () => {
             stopProcess: (id) => stopProcess(id),
             restartProcess: (id) => restartProcess(id),
             createAgentTerminal: (opts) => createAgentTerminal(opts),
+            createSpecializedAgentTerminal: (input) => createSpecializedAgentTerminal(input),
             killTerminalById: (id) => killTerminalById(id),
             writeToTerminal: (id, data) => writeToTerminal(id, data),
             readTerminalOutput: (id, o) => readTerminalOutput(id, o),

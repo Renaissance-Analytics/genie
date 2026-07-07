@@ -63,13 +63,8 @@ import {
     createKnowledgeFolder,
 } from './workspace/envelope';
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
-import {
-    createAgentTerminal,
-    writeToTerminal,
-    broadcastTerminalSpecsChanged,
-} from './terminal/ipc';
-import { buildSubmitBytes } from './terminal/keystrokes';
-import { resolveAgentCommand } from './mcp/host-tools';
+import { broadcastTerminalSpecsChanged } from './terminal/ipc';
+import { createSpecializedAgentTerminal } from './mcp/host-tools';
 import { whisperBroker } from './whisper/broker';
 import { normalizePurpose, type WhisperScope } from './whisper/types';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
@@ -879,10 +874,13 @@ export function registerIpcHandlers(): void {
     });
 
     // --- Specialized Terminals + WhisperChat ----------------------------
-    // Create an AI-TUI terminal FROM THE UI (the split Add-Terminal button):
-    // resolve the agent's CLI command, spawn a headless agent terminal (stamping
-    // its captured chat-session id + whisper identity/accessibility), and launch
-    // it. No approval gate — the human is creating it directly in their own Genie.
+    // Create an AI-TUI terminal FROM THE UI (the split Add-Terminal button) via
+    // the SHARED create-agent path — resolve the agent's CLI command, spawn a
+    // headless agent terminal (stamping its captured chat-session id + whisper
+    // identity/accessibility, joining the broker), and launch it. No approval gate
+    // — the human is creating it directly. The same helper backs the host endpoint
+    // (POST /api/desktop/terminal-spec/create-agent) so a REMOTE host window
+    // creates specialized terminals identically.
     ipcMain.handle(
         'terminal-spec:create-agent',
         (
@@ -897,42 +895,7 @@ export function registerIpcHandlers(): void {
                 scope: WhisperScope;
                 scope_workspaces?: string[];
             },
-        ) => {
-            const ws = getWorkspace(input.workspace_id);
-            if (!ws) return { ok: false, error: 'Workspace not found.' };
-            const command = resolveAgentCommand(input.agent, input.command);
-            if (!command) {
-                return {
-                    ok: false,
-                    error:
-                        input.agent === 'custom'
-                            ? 'A custom agent needs a command (here or in Settings → Agent commands).'
-                            : `No command configured for agent "${input.agent}".`,
-                };
-            }
-            let cwd = ws.path;
-            if (input.cwd && input.cwd.trim()) {
-                cwd = path.isAbsolute(input.cwd)
-                    ? path.normalize(input.cwd)
-                    : path.join(ws.path, input.cwd);
-            }
-            const label =
-                input.label?.trim() || `${input.agent} · ${normalizePurpose(input.purpose)}`;
-            const { id, command: launchCommand } = createAgentTerminal({
-                workspaceId: ws.id,
-                cwd,
-                label,
-                agentMeta: { agent: input.agent, command },
-                whisper: {
-                    purpose: input.purpose,
-                    scope: input.scope,
-                    scopeWorkspaces: input.scope_workspaces,
-                },
-            });
-            // Launch the agent CLI in the fresh shell (the session-captured form).
-            writeToTerminal(id, buildSubmitBytes(launchCommand ?? command, true));
-            return { ok: true, spec: getTerminalSpec(id) };
-        },
+        ) => createSpecializedAgentTerminal(input),
     );
 
     // The human WhisperChat panel: read the agent directory, channel list, and a

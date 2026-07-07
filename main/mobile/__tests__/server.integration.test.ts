@@ -40,6 +40,10 @@ const LINUX_PASTE_PATH = '/tmp/genie-clipboard/paste-123-abc.png';
 // Drives the mock updater deps: flip to true to simulate a staged build so the
 // install endpoint returns 200; left false it reports not-ready (→ 409).
 let updateReady = false;
+// Specialized-terminal host endpoint: when wired, records the plumbed input;
+// flip `specializedWired` false to simulate a host that doesn't support it (501).
+let specializedWired = true;
+const specializedInputs: Array<Record<string, unknown>> = [];
 
 function buildAppDir(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mobile-it-'));
@@ -70,6 +74,23 @@ const deps = (): MobileDataDeps => ({
     stopProcess: () => {},
     restartProcess: () => {},
     createAgentTerminal: () => ({ id: 't-new', scrollback: '' }),
+    ...(specializedWired
+        ? {
+              createSpecializedAgentTerminal: (input) => {
+                  specializedInputs.push(input);
+                  return {
+                      ok: true,
+                      spec: {
+                          id: 't-agent',
+                          workspace_id: input.workspace_id,
+                          label: 'claude agent',
+                          type: 'terminal',
+                          cwd: '/tmp/demo',
+                      } as unknown as import('../../db').TerminalSpecRow,
+                  };
+              },
+          }
+        : {}),
     killTerminalById: () => true,
     writeToTerminal: (id, data) => {
         written.push({ id, data });
@@ -192,6 +213,8 @@ beforeEach(() => {
     updateReady = false;
     clipboardImages.length = 0;
     clipboardMode = 'desktop';
+    specializedWired = true;
+    specializedInputs.length = 0;
 });
 
 afterEach(() => {
@@ -672,6 +695,52 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         for (const banned of ['token', 'secret', '_enc', 'refresh', 'password', 'bearer']) {
             expect(serialized).not.toContain(banned);
         }
+    });
+
+    it('creates a specialized (AI-TUI) terminal on the host via the shared path', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/desktop/terminal-spec/create-agent', {
+            token,
+            body: {
+                input: {
+                    workspace_id: 'ws-1',
+                    agent: 'claude',
+                    purpose: 'frontend',
+                    scope: 'self',
+                },
+            },
+        });
+        expect(r.status).toBe(200);
+        expect(r.json.ok).toBe(true);
+        expect(r.json.spec.id).toBe('t-agent'); // the persisted spec round-trips back
+        // The specialized input was plumbed through untouched.
+        expect(specializedInputs[0]).toMatchObject({
+            workspace_id: 'ws-1',
+            agent: 'claude',
+            purpose: 'frontend',
+            scope: 'self',
+        });
+    });
+
+    it('501s the create-agent endpoint on a host that does not support it', async () => {
+        specializedWired = false; // simulate a host without the dep wired
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/desktop/terminal-spec/create-agent', {
+            token,
+            body: { input: { workspace_id: 'ws-1', agent: 'claude', purpose: 'x', scope: 'self' } },
+        });
+        expect(r.status).toBe(501);
+        expect(r.json.ok).toBe(false);
+    });
+
+    it('rejects the create-agent endpoint without a token', async () => {
+        const port = await start();
+        const r = await req(port, 'POST', '/api/desktop/terminal-spec/create-agent', {
+            body: { input: { workspace_id: 'ws-1', agent: 'claude', purpose: 'x', scope: 'self' } },
+        });
+        expect(r.status).toBe(401);
     });
 
     it('does not bind when disabled (opt-in)', async () => {
