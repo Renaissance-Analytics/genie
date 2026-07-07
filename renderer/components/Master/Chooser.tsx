@@ -23,6 +23,8 @@ import {
     IconTynn,
 } from './icons';
 import { showPrompt } from './Prompt';
+import TerminalTypeSplitButton from './TerminalTypeSplitButton';
+import { terminalTypeForAgent, type TerminalTypeId } from '../../lib/terminal-types';
 import { workspaceNeedsAttention } from '../../lib/attention';
 import {
     api,
@@ -85,6 +87,13 @@ interface Props {
     issueWatchCounts?: Record<string, WatchTypeCounts>;
     /** Open the Issue Watch flyout for a specific workspace (the pill click). */
     onShowIssueWatch: (workspaceId: string) => void;
+    /** Split Add-Terminal button: last-used type + its persistence. */
+    lastTerminalType: TerminalTypeId;
+    onLastTerminalType: (id: TerminalTypeId) => void;
+    /** A specialized (agent) terminal was created — select it into view. */
+    onAgentCreated: (spec: TerminalSpec) => void;
+    /** The configured custom-agent command (create-form placeholder). */
+    agentCustomCommand?: string;
 }
 
 /**
@@ -118,6 +127,10 @@ export default function Chooser({
     onUpdateProcess,
     issueWatchCounts = {},
     onShowIssueWatch,
+    lastTerminalType,
+    onLastTerminalType,
+    onAgentCreated,
+    agentCustomCommand,
 }: Props) {
     // Inline Add-Process form: which workspace's form is open, its fields, and
     // the cached repo list (root + repos/<name>) for the cwd picker. When
@@ -908,15 +921,19 @@ export default function Chooser({
                                         />
                                     ))}
                                     <div className="tproj-adds">
-                                        <button
-                                            type="button"
-                                            className="tterm tterm-add"
-                                            onClick={() => onAddSpec(ws.id, 'terminal')}
-                                        >
-                                            <span className="pick" />
-                                            <IconPlus size={12} />
-                                            <span className="tname">Add Terminal…</span>
-                                        </button>
+                                        <TerminalTypeSplitButton
+                                            variant="row"
+                                            disabled={false}
+                                            workspaceId={ws.id}
+                                            workspaces={workspaces}
+                                            lastType={lastTerminalType}
+                                            onLastTypeChange={onLastTerminalType}
+                                            onAddView={(type) => onAddSpec(ws.id, type)}
+                                            onAgentCreated={onAgentCreated}
+                                            customCommand={agentCustomCommand}
+                                        />
+                                        {/* "Add Files…" stays a distinct action next to the
+                                            terminal-type split button. */}
                                         <button
                                             type="button"
                                             className="tterm tterm-add"
@@ -1597,6 +1614,12 @@ function SpecRow({
         if (ok !== null) onDestroy();
     };
     const isTerminal = spec.type !== 'code';
+    // Specialized (agent) terminal: mark the row with the agent glyph + a purpose
+    // sub-label so the sidebar reads which AI is running and what it's for.
+    const agentDef = spec.meta?.agent ? terminalTypeForAgent(spec.meta.agent) : null;
+    const AgentIcon = agentDef?.icon;
+    const purposeStr =
+        typeof spec.meta?.purpose === 'string' ? (spec.meta.purpose as string) : '';
     // Clicking a view ALWAYS activates its workspace (jump to it), matching a
     // click on the workspace row. On top of that: suspended rows resume; a
     // hidden row is shown; a visible row stays put (the eyeball is the dedicated
@@ -1644,10 +1667,24 @@ function SpecRow({
                 <span className="srow-ico code" title="Files">
                     <IconCode size={12} />
                 </span>
+            ) : agentDef && AgentIcon ? (
+                <span
+                    className={`srow-ico agent ${suspended ? 'idle' : live ? 'run' : 'idle'}`}
+                    title={agentDef.label}
+                >
+                    <AgentIcon size={12} />
+                </span>
             ) : (
                 <span className={`sdot ${suspended ? 'idle' : live ? 'run' : 'idle'}`} />
             )}
-            <span className="tname">{spec.label}</span>
+            {agentDef && purposeStr ? (
+                <span className="tname srow-hasub">
+                    <span className="srow-name">{spec.label}</span>
+                    <span className="srow-sub">{purposeStr}</span>
+                </span>
+            ) : (
+                <span className="tname">{spec.label}</span>
+            )}
             {suspended && (
                 <span className="susp-badge" title="Suspended — pty still running">
                     Suspended

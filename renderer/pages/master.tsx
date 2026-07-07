@@ -17,10 +17,14 @@ import HostBuildNudge from '../components/Master/HostBuildNudge';
 import DocsFlyout from '../components/Master/DocsFlyout';
 import IssueWatchFlyout from '../components/Master/IssueWatchFlyout';
 import TaskManagerFlyout from '../components/Master/TaskManagerFlyout';
+import WhisperFlyout from '../components/Master/WhisperFlyout';
+import TerminalTypeSplitButton from '../components/Master/TerminalTypeSplitButton';
+import AgentTerminalForm from '../components/Master/AgentTerminalForm';
 import GithubCapabilitiesFlyout from '../components/Master/GithubCapabilitiesFlyout';
 import { useGithubCapabilities } from '../lib/githubCapabilities';
+import { terminalTypeById, type TerminalTypeId } from '../lib/terminal-types';
 import SignInPrompt from '../components/SignInPrompt';
-import type { BackendUser, ViewType } from '../lib/genie';
+import type { AgentType, BackendUser, ViewType, WhisperScope } from '../lib/genie';
 import { resolveShortcut } from '../lib/master-shortcuts';
 import { computeLaunchSelection } from '../lib/launch-restore';
 import {
@@ -36,16 +40,14 @@ import { pickReusePanel, emitOpenInPanel } from '../lib/editor-open';
 import { workstationConnectState } from '../lib/workstation-status';
 import {
     IconBox,
-    IconChevronDown,
-    IconCode,
     IconColumns,
     IconLayoutGrid,
     IconMaximize,
     IconPanelLeft,
-    IconPlus,
     IconHelp,
     IconEye,
     IconCpu,
+    IconMessage,
     IconSettings,
     IconAlert,
     IconX,
@@ -276,6 +278,34 @@ function MasterInner() {
     useEffect(() => {
         return api().on.openTaskManager?.(() => setTaskManagerOpen(true));
     }, []);
+    // WhisperChat: the human panel + an unread badge on its titlebar button.
+    const [whisperOpen, setWhisperOpen] = useState(false);
+    const [whisperUnread, setWhisperUnread] = useState(0);
+    // Live unread tally: bump on each new whisper message while the panel is
+    // CLOSED; opening it clears the badge. The flyout owns its own live stream.
+    const whisperOpenRef = useRef(whisperOpen);
+    whisperOpenRef.current = whisperOpen;
+    useEffect(() => {
+        return api().on.whisperMessage?.(() => {
+            if (!whisperOpenRef.current) setWhisperUnread((n) => Math.min(999, n + 1));
+        });
+    }, []);
+    useEffect(() => {
+        if (whisperOpen) setWhisperUnread(0);
+    }, [whisperOpen]);
+    // Split Add-Terminal button: the last-used terminal type (persisted) + the
+    // configured custom-agent command (for the create form's placeholder).
+    const [lastTerminalType, setLastTerminalTypeState] = useState<TerminalTypeId>('regular');
+    const [agentCustomCommand, setAgentCustomCommand] = useState<string>('');
+    // Persist the last-used terminal type (runtime-owned: targeted patch, so the
+    // Settings window's stale-snapshot Save can't clobber it — see settings-nav).
+    const setLastTerminalType = useCallback((id: TerminalTypeId) => {
+        setLastTerminalTypeState(id);
+        void api().settings.set({ last_terminal_type: id }).catch(() => {});
+    }, []);
+    // The spec whose WhisperChat purpose/scope is being edited (context menu →
+    // "Agent settings…"), or null. Rendered as a modal reusing the create form.
+    const [agentEditSpec, setAgentEditSpec] = useState<TerminalSpec | null>(null);
     // GitHub capability gate: which GitHub-powered features are unavailable
     // because the App is missing permissions on the user's installation. Drives
     // a persistent header warning + a resolve flyout (also auto-shown once on
@@ -642,6 +672,12 @@ function MasterInner() {
                 .then((s) => {
                     const n = parseInt(String(s.max_views ?? '4'), 10);
                     if (Number.isFinite(n) && n > 0) setMaxViews(n);
+                    // Split Add-Terminal button: the last-used type + the custom
+                    // agent command (drives the create form's placeholder).
+                    setLastTerminalTypeState(
+                        terminalTypeById(s.last_terminal_type).id,
+                    );
+                    setAgentCustomCommand(s.agent_command_custom ?? '');
                 })
                 .catch(() => {});
         };
@@ -1017,6 +1053,22 @@ function MasterInner() {
             }
         },
         [specs],
+    );
+
+    /**
+     * A specialized (agent) terminal was created via `terminalSpec.createAgent` —
+     * mirror it into the grid the way `addSpec` does: append-if-absent (main may
+     * also broadcast `terminalSpecsChanged`, so dedupe by id), select it, and jump
+     * to its workspace so the agent booting is visible right away.
+     */
+    const selectAgentSpec = useCallback(
+        (spec: TerminalSpec) => {
+            setSpecs((prev) => (prev.some((s) => s.id === spec.id) ? prev : [...prev, spec]));
+            setSelected((prev) => new Set(prev).add(spec.id));
+            const wsId = specWorkspaceId(spec) ?? SYSTEM_WORKSPACE_ID;
+            activateWorkspace(wsId);
+        },
+        [activateWorkspace],
     );
 
     /**
@@ -1435,6 +1487,8 @@ function MasterInner() {
                     }
                     onShowDocs={() => setDocsOpen((o) => !o)}
                     onShowTaskManager={() => setTaskManagerOpen((o) => !o)}
+                    onShowWhisper={() => setWhisperOpen((o) => !o)}
+                    whisperUnread={whisperUnread}
                     onShowIssueWatch={() =>
                         activeWorkspaceId && openIssueWatch(activeWorkspaceId)
                     }
@@ -1454,6 +1508,7 @@ function MasterInner() {
                             ? workspacesById.get(activeWorkspaceId)
                             : undefined
                     }
+                    workspaces={workspaces}
                     layoutMode={layoutMode}
                     onLayoutMode={setLayoutMode}
                     onAddView={(type) =>
@@ -1461,6 +1516,10 @@ function MasterInner() {
                     }
                     addDisabled={atMaxViews}
                     addDisabledReason={maxViewsReason}
+                    lastTerminalType={lastTerminalType}
+                    onLastTerminalType={setLastTerminalType}
+                    onAgentCreated={selectAgentSpec}
+                    agentCustomCommand={agentCustomCommand}
                 />
                 <div className="gbody">
                     <Chooser
@@ -1515,6 +1574,10 @@ function MasterInner() {
                         onUpdateProcess={(id, patch, wasRunning) =>
                             void editProcess(id, patch, wasRunning)
                         }
+                        lastTerminalType={lastTerminalType}
+                        onLastTerminalType={setLastTerminalType}
+                        onAgentCreated={selectAgentSpec}
+                        agentCustomCommand={agentCustomCommand}
                     />
                     <TerminalGrid
                         specs={selectedSpecs}
@@ -1562,6 +1625,10 @@ function MasterInner() {
             <TaskManagerFlyout
                 open={taskManagerOpen}
                 onClose={() => setTaskManagerOpen(false)}
+            />
+            <WhisperFlyout
+                open={whisperOpen}
+                onClose={() => setWhisperOpen(false)}
             />
             <GithubCapabilitiesFlyout
                 open={githubCapsOpen}
@@ -1646,6 +1713,7 @@ function MasterInner() {
                         onMoveToWorkspace={(wsId) =>
                             void moveSpecToWorkspace(target.id, wsId)
                         }
+                        onAgentSettings={() => setAgentEditSpec(target)}
                         onDelete={async () => {
                             const ok = await showPrompt({
                                 title: 'Delete terminal',
@@ -1658,6 +1726,101 @@ function MasterInner() {
                     />
                 );
             })()}
+
+            {agentEditSpec && agentEditSpec.meta?.agent && (
+                <AgentSettingsModal
+                    spec={agentEditSpec}
+                    workspaces={workspaces}
+                    onClose={() => setAgentEditSpec(null)}
+                    onSaved={() => {
+                        setAgentEditSpec(null);
+                        // The broker re-emits presence; re-fetch specs so the row's
+                        // purpose sub-label reflects the edit immediately.
+                        void api().terminalSpec.list().then(setSpecs).catch(() => {});
+                    }}
+                />
+            )}
+        </div>
+    );
+}
+
+/**
+ * Edit modal for a specialized (agent) terminal's WhisperChat identity — the same
+ * purpose / scope / command form as create, pre-filled from the spec's meta and
+ * persisted via `whisper.updateChannel` (which re-emits presence). Opened from the
+ * spec context menu's "Agent settings…" item.
+ */
+function AgentSettingsModal({
+    spec,
+    workspaces,
+    onClose,
+    onSaved,
+}: {
+    spec: TerminalSpec;
+    workspaces: WorkspaceRow[];
+    onClose: () => void;
+    onSaved: () => void;
+}) {
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const agent = (spec.meta?.agent ?? 'custom') as AgentType;
+    const meta = spec.meta ?? {};
+
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') onClose();
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [onClose]);
+
+    return (
+        <div className="ctx-scrim" onMouseDown={onClose}>
+            <div
+                className="agent-settings-modal"
+                role="dialog"
+                aria-label="Agent settings"
+                onMouseDown={(e) => e.stopPropagation()}
+            >
+                <div className="agent-settings-head">
+                    <span className="agent-settings-title">Agent settings — {spec.label}</span>
+                </div>
+                <AgentTerminalForm
+                    agent={agent}
+                    workspaces={workspaces}
+                    ownWorkspaceId={spec.workspace_id}
+                    initial={{
+                        purpose: typeof meta.purpose === 'string' ? meta.purpose : '',
+                        scope: (meta.scope as WhisperScope | undefined) ?? 'self',
+                        scopeWorkspaces: Array.isArray(meta.scope_workspaces)
+                            ? (meta.scope_workspaces as string[])
+                            : [],
+                        command: typeof meta.agent_command === 'string' ? meta.agent_command : '',
+                    }}
+                    submitLabel="Save"
+                    busy={busy}
+                    error={error}
+                    onCancel={onClose}
+                    onSubmit={async (v) => {
+                        setBusy(true);
+                        setError(null);
+                        try {
+                            const res = await api().whisper.updateChannel(spec.id, {
+                                purpose: v.purpose,
+                                scope: v.scope,
+                                scope_workspaces:
+                                    v.scope === 'specific' ? v.scopeWorkspaces : [],
+                            });
+                            if (res.ok) onSaved();
+                            else setError(res.error || 'Could not update the agent.');
+                        } catch {
+                            setError('Could not update the agent.');
+                        } finally {
+                            setBusy(false);
+                        }
+                    }}
+                />
+            </div>
         </div>
     );
 }
@@ -2001,6 +2164,8 @@ function TitleBar({
     stageWorkspaceName,
     onShowDocs,
     onShowTaskManager,
+    onShowWhisper,
+    whisperUnread = 0,
     onShowIssueWatch,
     issueWatchUnread = 0,
     githubNeedsResolve = false,
@@ -2010,6 +2175,8 @@ function TitleBar({
     stageWorkspaceName?: string;
     onShowDocs?: () => void;
     onShowTaskManager?: () => void;
+    onShowWhisper?: () => void;
+    whisperUnread?: number;
     onShowIssueWatch?: () => void;
     issueWatchUnread?: number;
     /** True when GitHub permissions are missing — shows a persistent warning. */
@@ -2055,6 +2222,20 @@ function TitleBar({
                     <IconAlert size={16} />
                 </button>
             )}
+            <button
+                type="button"
+                className="gicon whisper-btn"
+                title="WhisperChat — talk to & between your agents"
+                aria-label="WhisperChat"
+                onClick={() => onShowWhisper?.()}
+            >
+                <IconMessage size={16} />
+                {whisperUnread > 0 && (
+                    <span className="iw-btn-badge">
+                        {whisperUnread > 99 ? '99+' : whisperUnread}
+                    </span>
+                )}
+            </button>
             <button
                 type="button"
                 className="gicon"
@@ -2772,20 +2953,32 @@ function HostSessionOverlay() {
 
 interface ToolbarProps {
     activeWorkspace?: WorkspaceRow;
+    /** All workspaces — the split button's `specific`-scope multiselect + slug preview. */
+    workspaces: WorkspaceRow[];
     layoutMode: LayoutMode;
     onLayoutMode: (m: LayoutMode) => void;
     onAddView: (type: ViewType) => void;
     addDisabled?: boolean;
     addDisabledReason?: string;
+    /** Split Add-Terminal button: last-used type + its persistence + agent create. */
+    lastTerminalType: TerminalTypeId;
+    onLastTerminalType: (id: TerminalTypeId) => void;
+    onAgentCreated: (spec: TerminalSpec) => void;
+    agentCustomCommand?: string;
 }
 
 function Toolbar({
     activeWorkspace,
+    workspaces,
     layoutMode,
     onLayoutMode,
     onAddView,
     addDisabled,
     addDisabledReason,
+    lastTerminalType,
+    onLastTerminalType,
+    onAgentCreated,
+    agentCustomCommand,
 }: ToolbarProps) {
     return (
         <div className="gtoolbar">
@@ -2839,93 +3032,18 @@ function Toolbar({
             <button type="button" className="gicon" title="Maximize window">
                 <IconMaximize />
             </button>
-            <AddViewButton
+            <TerminalTypeSplitButton
                 disabled={!activeWorkspace || !!addDisabled}
                 disabledReason={!activeWorkspace ? undefined : addDisabledReason}
-                onAddTerminal={() => onAddView('terminal')}
-                onAddCode={() => onAddView('code')}
+                workspaceId={activeWorkspace?.id ?? null}
+                workspaces={workspaces}
+                lastType={lastTerminalType}
+                onLastTypeChange={onLastTerminalType}
+                onAddView={onAddView}
+                onAgentCreated={onAgentCreated}
+                customCommand={agentCustomCommand}
+                includeFiles
             />
-        </div>
-    );
-}
-
-/**
- * Split button: primary [Add Terminal] + a chevron that opens a tiny menu
- * with [Add Editor]. Both target the active workspace; disabled when no
- * workspace is active. Closes on outside-click / Escape.
- */
-function AddViewButton({
-    disabled,
-    disabledReason,
-    onAddTerminal,
-    onAddCode,
-}: {
-    disabled: boolean;
-    disabledReason?: string;
-    onAddTerminal: () => void;
-    onAddCode: () => void;
-}) {
-    const [open, setOpen] = useState(false);
-    const ref = useRef<HTMLDivElement>(null);
-    useEffect(() => {
-        if (!open) return;
-        const onAway = (e: MouseEvent) => {
-            if (!ref.current?.contains(e.target as Node)) setOpen(false);
-        };
-        const onEsc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
-        document.addEventListener('mousedown', onAway);
-        document.addEventListener('keydown', onEsc);
-        return () => {
-            document.removeEventListener('mousedown', onAway);
-            document.removeEventListener('keydown', onEsc);
-        };
-    }, [open]);
-
-    return (
-        <div className="addview-split" ref={ref} title={disabled ? disabledReason : undefined}>
-            <button
-                type="button"
-                className="gbtn accent addview-main"
-                onClick={onAddTerminal}
-                disabled={disabled}
-                title={disabled ? disabledReason : undefined}
-            >
-                <IconPlus /> Add Terminal
-            </button>
-            <button
-                type="button"
-                className="gbtn accent addview-caret"
-                onClick={() => setOpen((o) => !o)}
-                disabled={disabled}
-                title="Add another view type"
-                aria-label="Add another view type"
-            >
-                <IconChevronDown size={13} />
-            </button>
-            {open && (
-                <div className="addview-menu" role="menu">
-                    <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                            setOpen(false);
-                            onAddTerminal();
-                        }}
-                    >
-                        <IconPlus size={13} /> Add Terminal
-                    </button>
-                    <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                            setOpen(false);
-                            onAddCode();
-                        }}
-                    >
-                        <IconCode size={13} /> Add Editor
-                    </button>
-                </div>
-            )}
         </div>
     );
 }

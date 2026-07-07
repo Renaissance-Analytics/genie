@@ -178,6 +178,15 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 method: 'POST',
                 json: { id },
             })) as { ok: boolean },
+        // A specialized (AI-TUI) terminal is spawned on the machine that owns the
+        // pty + the whisper broker — the HOST — so this routes through the bridge
+        // like `create`. (WhisperChat itself is local-only in v1, but creating an
+        // agent terminal in a host window must target the host, not the client.)
+        createAgent: async (input) =>
+            (await req('/api/desktop/terminal-spec/create-agent', {
+                method: 'POST',
+                json: { input },
+            })) as { ok: boolean; spec?: TerminalSpec; error?: string },
     };
 
     // The host's workspace files (keyed by the WorkspaceRow.path the desktop holds).

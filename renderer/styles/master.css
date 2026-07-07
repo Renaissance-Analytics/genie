@@ -3471,3 +3471,449 @@ body.gutter-dragging .grid-gutter {
     .boot-spark { opacity: 0.7; }
     .boot-screen.boot-fade { opacity: 0; }
 }
+
+/* ===== Specialized terminals: split-button type menu + create form ====== */
+/* The type dropdown (richer than the old plain menu): icon + label + hint. */
+.addview-type-menu {
+    min-width: 208px;
+}
+.addview-menu.anchor-left {
+    right: auto;
+    left: 0;
+}
+.addview-menu-divider {
+    height: 1px;
+    margin: 4px 2px;
+    background: var(--border-1);
+}
+.addview-type-item {
+    align-items: flex-start !important;
+}
+.addview-type-item svg {
+    margin-top: 2px;
+    flex: 0 0 auto;
+    color: var(--fg-3);
+}
+.addview-type-main {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+.addview-type-label {
+    color: var(--fg-1);
+    font-size: 12.5px;
+}
+.addview-type-hint {
+    color: var(--fg-4);
+    font-size: 11px;
+    line-height: 1.3;
+}
+
+/* The row-variant split button fills the sidebar add-row width. */
+.addview-split.addview-row {
+    display: flex;
+    width: 100%;
+    margin: 2px 0;
+}
+.addview-split.addview-row .addview-main {
+    flex: 1;
+    justify-content: flex-start;
+    gap: 8px;
+    font-size: 12.5px;
+}
+
+/* The specialized-create popover (anchored to the split button). */
+.addview-form-pop {
+    width: 288px;
+    max-width: 92vw;
+    padding: 10px;
+    gap: 0;
+}
+.addview-form-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg-1);
+    padding: 2px 2px 8px;
+}
+
+/* The shared agent create/edit form (purpose / scope / workspaces / command). */
+.agent-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.agent-form .agent-form-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.agent-form-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--fg-3);
+}
+.agent-form .input {
+    width: 100%;
+    font-size: 12px;
+    padding: 6px 8px;
+    background: var(--bg-1);
+    color: var(--fg-1);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md);
+    font-family: inherit;
+}
+.agent-form .input:focus {
+    outline: none;
+    border-color: var(--blue-500, #3b82f6);
+}
+.agent-form-scope-desc {
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--fg-4);
+    margin-top: -2px;
+}
+.agent-form-ws {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 132px;
+    overflow-y: auto;
+    padding: 6px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md);
+    background: var(--bg-1);
+}
+.agent-form-ws-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--fg-2);
+    cursor: pointer;
+    padding: 2px 2px;
+}
+.agent-form-ws-row.is-own {
+    color: var(--fg-3);
+    cursor: default;
+}
+.agent-form-ws-note {
+    color: var(--fg-4);
+    font-size: 11px;
+}
+.agent-form-preview {
+    font-size: 11.5px;
+    color: var(--fg-3);
+}
+.agent-form-preview code {
+    font-family: var(--font-mono);
+    color: var(--fg-1);
+    background: var(--bg-2);
+    padding: 1px 5px;
+    border-radius: 4px;
+}
+.agent-form-error {
+    font-size: 11.5px;
+    color: #f43f5e;
+}
+.agent-form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-top: 2px;
+}
+.agent-form-btn {
+    font-size: 11.5px;
+    padding: 5px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-1);
+    background: var(--bg-1);
+    color: var(--fg-2);
+    cursor: pointer;
+}
+.agent-form-btn:hover {
+    border-color: var(--border-2, #3f3f46);
+    color: var(--fg-1);
+}
+.agent-form-btn.agent-form-go {
+    border-color: var(--blue-500, #3b82f6);
+    background: color-mix(in srgb, #3b82f6 16%, var(--bg-1));
+    color: var(--fg-1);
+}
+.agent-form-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* The "Agent settings…" edit modal (context menu → same form, centred). */
+.ctx-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    background: rgba(0, 0, 0, 0.42);
+    display: grid;
+    place-items: center;
+}
+.agent-settings-modal {
+    width: 360px;
+    max-width: 92vw;
+    background: var(--shell);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-xl);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.agent-settings-head .agent-settings-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg-1);
+}
+
+/* Specialized (agent) SpecRow marking: agent glyph + purpose sub-label. */
+.srow-ico.agent {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    flex: 0 0 auto;
+    color: var(--fg-4);
+}
+.srow-ico.agent.run {
+    color: #10b981;
+}
+.tname.srow-hasub {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    line-height: 1.15;
+    min-width: 0;
+}
+.tname.srow-hasub .srow-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.srow-sub {
+    font-size: 10px;
+    color: var(--fg-4);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ===== WhisperChat flyout ============================================== */
+.whisper-btn {
+    position: relative;
+}
+.whisper-flyout {
+    width: min(760px, 84vw);
+}
+.whisper-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+.whisper-nav {
+    flex: 0 0 244px;
+    width: 244px;
+    border-right: 1px solid var(--border-1);
+    overflow-y: auto;
+    padding: 10px 8px;
+}
+.whisper-nav-head {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--fg-4);
+    margin: 10px 6px 4px;
+}
+.whisper-nav-head:first-child {
+    margin-top: 2px;
+}
+.whisper-empty {
+    padding: 6px 8px;
+    font-size: 12px;
+    color: var(--fg-4);
+}
+.whisper-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.whisper-agent,
+.whisper-channel {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    margin-bottom: 2px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--fg-2);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.whisper-agent:hover,
+.whisper-channel:hover {
+    background: var(--bg-2);
+}
+.whisper-agent.on,
+.whisper-channel.on {
+    background: var(--agent-soft);
+    color: var(--fg-1);
+}
+.whisper-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background: var(--fg-4);
+}
+.whisper-dot.whisper-online {
+    background: #10b981;
+    box-shadow: 0 0 5px rgba(16, 185, 129, 0.6);
+}
+.whisper-dot.whisper-away {
+    background: var(--term-warn, #e2c08d);
+}
+.whisper-dot.whisper-offline {
+    background: var(--fg-4);
+    opacity: 0.5;
+}
+.whisper-agent-main {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+.whisper-agent-label {
+    font-size: 12.5px;
+    color: var(--fg-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.whisper-agent-sub {
+    font-size: 10.5px;
+    color: var(--fg-4);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.whisper-channel-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12.5px;
+}
+.whisper-channel-count {
+    flex: 0 0 auto;
+    font-size: 10.5px;
+    color: var(--fg-4);
+    background: var(--bg-2);
+    border-radius: 999px;
+    padding: 0 7px;
+    line-height: 16px;
+}
+.whisper-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+.whisper-placeholder {
+    margin: auto;
+    text-align: center;
+    max-width: 260px;
+}
+.whisper-thread-head {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-1);
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--fg-1);
+}
+.whisper-stream {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.whisper-msg {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.whisper-msg-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+.whisper-msg-from {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--fg-2);
+}
+.whisper-msg.is-human .whisper-msg-from {
+    color: var(--agent, #818cf8);
+}
+.whisper-msg-time {
+    font-size: 10px;
+    color: var(--fg-4);
+}
+.whisper-msg-text {
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: var(--fg-1);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.whisper-composer {
+    display: flex;
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--border-1);
+    align-items: flex-end;
+}
+.whisper-input {
+    flex: 1;
+    resize: none;
+    font-size: 12.5px;
+    padding: 7px 9px;
+    background: var(--bg-1);
+    color: var(--fg-1);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md);
+    font-family: inherit;
+    line-height: 1.4;
+}
+.whisper-input:focus {
+    outline: none;
+    border-color: var(--blue-500, #3b82f6);
+}
+.whisper-send {
+    flex: 0 0 auto;
+    font-size: 12px;
+    padding: 8px 14px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--blue-500, #3b82f6);
+    background: color-mix(in srgb, #3b82f6 18%, var(--bg-1));
+    color: var(--fg-1);
+    cursor: pointer;
+}
+.whisper-send:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

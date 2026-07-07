@@ -6,6 +6,7 @@ import {
     IconGlobe,
     IconMaximize,
     IconPlus,
+    IconSettings,
     IconTerminal,
     IconTrash,
 } from './icons';
@@ -28,6 +29,9 @@ interface Props {
     onDuplicate: () => void;
     onMoveToWorkspace: (workspaceId: string | null) => void;
     onDelete: () => void;
+    /** Edit a specialized (agent) terminal's WhisperChat purpose/scope. Only
+     *  offered when this spec is an agent terminal (`meta.agent` set). */
+    onAgentSettings?: () => void;
 }
 
 /**
@@ -50,7 +54,9 @@ export default function SpecContextMenu({
     onDuplicate,
     onMoveToWorkspace,
     onDelete,
+    onAgentSettings,
 }: Props) {
+    const isAgent = !!spec.meta?.agent;
     const menuRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -141,6 +147,16 @@ export default function SpecContextMenu({
                         onClose();
                     }}
                 />
+                {isAgent && onAgentSettings && (
+                    <CtxItem
+                        icon={<IconSettings size={14} />}
+                        label="Agent settings…"
+                        onClick={() => {
+                            onAgentSettings();
+                            onClose();
+                        }}
+                    />
+                )}
             </div>
 
             {workspaces.length > 0 && (

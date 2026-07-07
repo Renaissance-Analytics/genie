@@ -131,12 +131,24 @@ describe('host-sourced (bucket 2) classification', () => {
 describe('runtime-owned (Settings-never-writes) classification', () => {
     it('the runtime-owned key list is exactly the master/grid session keys', () => {
         expect([...RUNTIME_OWNED_SETTINGS_KEYS].sort()).toEqual(
-            ['active_workspace', 'collapsed_workspaces', 'layout_json', 'view_state_json'].sort(),
+            [
+                'active_workspace',
+                'collapsed_workspaces',
+                'last_terminal_type',
+                'layout_json',
+                'view_state_json',
+            ].sort(),
         );
     });
 
     it('classifies the master/grid keys as runtime-owned, ordinary prefs as not', () => {
-        for (const k of ['view_state_json', 'layout_json', 'active_workspace', 'collapsed_workspaces']) {
+        for (const k of [
+            'view_state_json',
+            'layout_json',
+            'active_workspace',
+            'collapsed_workspaces',
+            'last_terminal_type',
+        ]) {
             expect(isRuntimeOwnedSettingKey(k)).toBe(true);
         }
         for (const k of ['max_views', 'terminal_copy_paste', 'ai_system', 'notify_sound', 'work_mode']) {

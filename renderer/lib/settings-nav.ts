@@ -140,6 +140,10 @@ export const RUNTIME_OWNED_SETTINGS_KEYS = [
     'layout_json',
     'active_workspace',
     'collapsed_workspaces',
+    // The split Add-Terminal button writes this each time the user creates a
+    // terminal (last-used type). Like the panel-layout keys it must NOT be
+    // clobbered by the Settings window's stale-snapshot Save.
+    'last_terminal_type',
 ] as const satisfies readonly (keyof Settings)[];
 
 export type RuntimeOwnedSettingKey = (typeof RUNTIME_OWNED_SETTINGS_KEYS)[number];

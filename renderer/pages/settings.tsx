@@ -380,6 +380,49 @@ export default function SettingsPage() {
                 )}
             </SetSection>
 
+            <SetSection
+                title="Specialized terminals"
+                desc="The launch command for each AI-agent terminal type"
+                host={restricted}
+            >
+                <SettingRow
+                    label="Claude Code command"
+                    desc="Launched when you add a Claude Code terminal. Blank uses the built-in default (claude)."
+                    keywords="claude code agent command specialized terminal launch"
+                    grow
+                >
+                    <Input
+                        value={s.agent_command_claude ?? ''}
+                        onValueChange={(v) => patch({ agent_command_claude: v })}
+                        placeholder="claude"
+                    />
+                </SettingRow>
+                <SettingRow
+                    label="Codex command"
+                    desc="Launched when you add a Codex terminal. Blank uses the built-in default."
+                    keywords="codex agent command specialized terminal launch openai"
+                    grow
+                >
+                    <Input
+                        value={s.agent_command_codex ?? ''}
+                        onValueChange={(v) => patch({ agent_command_codex: v })}
+                        placeholder="codex"
+                    />
+                </SettingRow>
+                <SettingRow
+                    label="Custom agent command"
+                    desc="The default command for a Custom agent terminal. You can still override it per-terminal when creating one."
+                    keywords="custom agent command specialized terminal launch"
+                    grow
+                >
+                    <Input
+                        value={s.agent_command_custom ?? ''}
+                        onValueChange={(v) => patch({ agent_command_custom: v })}
+                        placeholder="e.g. my-agent --interactive"
+                    />
+                </SettingRow>
+            </SetSection>
+
                             </SearchGroup>
                         )}
                         {show('workspaces') && (

@@ -430,6 +430,20 @@ export interface Settings {
     /** Ai.System — instruction set injected into every workspace's AGENTS.md
      *  (inside the Genie Protocol block). Capped at 2000 chars. Default ''. */
     ai_system?: string;
+    /** Split Add-Terminal button: the last terminal type the user created
+     *  (`regular` | `claude` | `codex` | `custom`). Drives the main button's
+     *  default action. RUNTIME-owned — written by the master as terminals are
+     *  created, never by the Settings UI. Default 'regular'. */
+    last_terminal_type?: string;
+    /** Specialized terminals: the launch command for a Claude Code agent
+     *  (resolved server-side; blank = the built-in default `claude`). */
+    agent_command_claude?: string;
+    /** Specialized terminals: the launch command for a Codex agent (blank =
+     *  the built-in default). */
+    agent_command_codex?: string;
+    /** Specialized terminals: the launch command for a Custom agent — no
+     *  built-in default, so a per-terminal command is required when blank. */
+    agent_command_custom?: string;
 }
 
 /** Health of a workspace's agent docs (AGENTS.md + Genie section + CLAUDE sync). */
@@ -818,7 +832,97 @@ export interface ViewMeta {
     /** Plugin editor view: the declared Fancy package + version (provenance). */
     fancy_package?: string;
     fancy_version?: string;
+    /** Specialized terminal: the AI-TUI kind this terminal launches (claude /
+     *  codex / custom). Set on agent terminals created via terminalSpec.createAgent;
+     *  absent on a plain shell. Gates the WhisperChat identity + the sidebar badge. */
+    agent?: AgentType;
+    /** Specialized terminal: the resolved command line the agent was launched with
+     *  (informational — the launch profile / resolveAgentCommand fills this). */
+    agent_command?: string;
+    /** WhisperChat: this agent's channel purpose (kebab, ≤6 words; default `general`). */
+    purpose?: string;
+    /** WhisperChat: who can discover / DM this agent — see {@link WhisperScope}. */
+    scope?: WhisperScope;
+    /** WhisperChat: the chosen workspace ids when `scope === 'specific'`. */
+    scope_workspaces?: string[];
     [key: string]: unknown;
+}
+
+/** The AI-TUI kind a specialized terminal launches. */
+export type AgentType = 'claude' | 'codex' | 'custom';
+
+/**
+ * WhisperChat accessibility scope — who can DISCOVER + DM this agent:
+ *  - `none`     — hidden (may still lurk-and-broadcast in a channel it joined),
+ *  - `self`     — same-workspace agents only (DEFAULT),
+ *  - `specific` — the workspaces the owner picks (∪ its own),
+ *  - `all`      — every agent on the workstation.
+ * Channel broadcasts reach members regardless of scope.
+ */
+export type WhisperScope = 'none' | 'self' | 'specific' | 'all';
+
+/** A discoverable WhisperChat agent (directory row / presence payload). */
+export interface WhisperAgentInfo {
+    agentId: string;
+    terminalId: string;
+    workspaceId: string | null;
+    workspaceName: string;
+    /** The workspace slug the channel name is built from. */
+    slug: string;
+    /** 'claude' | 'codex' | 'custom' (or another launched TUI kind). */
+    agentType: string;
+    label: string;
+    purpose: string;
+    scope: WhisperScope;
+    scopeWorkspaces: string[];
+    status: 'online' | 'away' | 'offline';
+    /** The captured AI chat-session uuid, or null when not yet detected. */
+    chatSessionId: string | null;
+}
+
+/** A WhisperChat broadcast channel (`slug:purpose`), keyed internally by workspace. */
+export interface WhisperChannelInfo {
+    /** Opaque internal key (`workspaceId:purpose`). */
+    key: string;
+    /** The workspace slug displayed in the `slug:purpose` label. */
+    slug: string;
+    purpose: string;
+    workspaceId: string | null;
+    workspaceName: string;
+    memberCount: number;
+}
+
+/** One WhisperChat message (channel broadcast or 1:1 DM). */
+export interface WhisperMessage {
+    seq: number;
+    id: string;
+    /** Sender agentId, or `'human'` for a message posted from the panel. */
+    from: string;
+    fromLabel: string;
+    kind: 'dm' | 'channel';
+    /** Channel key when `kind === 'channel'`. */
+    channel?: string;
+    /** Recipient agentId when `kind === 'dm'`. */
+    to?: string;
+    text: string;
+    ts: number;
+}
+
+/** Live presence event: a full agent snapshot, or a terse offline/left tick. */
+export type WhisperPresenceEvent =
+    | WhisperAgentInfo
+    | { agentId: string; status: 'offline'; left: true };
+
+/** Live message event (preview only — the full body is fetched via history). */
+export interface WhisperMessageEvent {
+    kind: 'dm' | 'channel';
+    channelKey?: string;
+    toAgentId?: string;
+    from: string;
+    fromLabel: string;
+    seq: number;
+    ts: number;
+    preview: string;
 }
 
 /** Result of a plugin-editor binary read (base64 payload) (§6.2). */
@@ -1729,6 +1833,56 @@ export interface GenieApi {
         remove: (id: string) => Promise<boolean>;
         get: (id: string) => Promise<TerminalSpec | null>;
         touch: (id: string) => Promise<{ ok: boolean }>;
+        /**
+         * Create a SPECIALIZED (AI-TUI) terminal: main resolves the launch command
+         * (`resolveAgentCommand` + the `agent_command_*` settings), spawns the pty,
+         * submits the boot command, stamps the WhisperChat identity/scope onto the
+         * spec meta, and joins the whisper broker. Returns the persisted spec so the
+         * renderer can select it into view.
+         */
+        createAgent: (input: {
+            workspace_id: string | null;
+            agent: AgentType;
+            /** Required for `custom`; overrides the resolved command otherwise. */
+            command?: string;
+            cwd?: string;
+            label?: string;
+            /** Channel purpose (kebab, ≤6 words). */
+            purpose: string;
+            scope: WhisperScope;
+            /** The chosen workspace ids when `scope === 'specific'`. */
+            scope_workspaces?: string[];
+        }) => Promise<{ ok: boolean; spec?: TerminalSpec; error?: string }>;
+    };
+    /**
+     * WhisperChat — the local inter-agent messaging network. Local-only in v1
+     * (one Genie instance; no relay). The human panel reads the directory /
+     * channels / history and posts as the human; live updates arrive on
+     * `on.whisperPresence` / `on.whisperMessage`.
+     */
+    whisper: {
+        /** Every discoverable agent (the directory pane). */
+        directory: () => Promise<{ agents: WhisperAgentInfo[] }>;
+        /** Every broadcast channel (`slug:purpose`). */
+        channels: () => Promise<{ channels: WhisperChannelInfo[] }>;
+        /** Message history for a channel OR a 1:1 DM thread (paginate via `before`). */
+        history: (opts: {
+            channelKey?: string;
+            agentId?: string;
+            limit?: number;
+            before?: number;
+        }) => Promise<{ messages: WhisperMessage[] }>;
+        /** Post as the human — to a channel (`channelKey`) or an agent (`toAgentId`). */
+        post: (input: {
+            channelKey?: string;
+            toAgentId?: string;
+            text: string;
+        }) => Promise<{ ok: boolean; error?: string }>;
+        /** Edit an agent's channel identity (purpose / scope) — re-emits presence. */
+        updateChannel: (
+            specId: string,
+            patch: { purpose?: string; scope?: WhisperScope; scope_workspaces?: string[] },
+        ) => Promise<{ ok: boolean; error?: string }>;
     };
     files: {
         listTree: (
@@ -2073,6 +2227,16 @@ export interface GenieApi {
         githubCapabilities: (
             cb: (payload: GithubCapabilities) => void,
         ) => () => void;
+        /** WhisperChat: an agent joined / changed accessibility / went offline —
+         *  the panel re-renders its directory + channel list live. */
+        whisperPresence: (
+            cb: (payload: WhisperPresenceEvent) => void,
+        ) => () => void;
+        /** WhisperChat: a new message (preview only) — the panel bumps its unread
+         *  badge and, if the relevant thread is open, re-fetches history. */
+        whisperMessage: (
+            cb: (payload: WhisperMessageEvent) => void,
+        ) => () => void;
     };
 }
 
@@ -2192,6 +2356,26 @@ export function workspaceDisplayName(
 /** True when a workspace has no associated project (project association is optional). */
 export function hasProjectAssociation(ws: Pick<WorkspaceRow, 'project_id'>): boolean {
     return !!ws.project_id && ws.project_id !== SYSTEM_WORKSPACE_ID;
+}
+
+/**
+ * A workspace's WhisperChat slug — the base of the `slug:purpose` channel name.
+ * Mirrors main's slug resolution FALLBACK: the envelope folder leaf (minus a
+ * `.agi` suffix), else the kebab of the project name. This is the renderer-side
+ * PREVIEW; the authoritative slug (a Tynn-linked project's real slug) is computed
+ * on the host, which owns the backend project record.
+ */
+export function workspaceSlug(
+    ws: Pick<WorkspaceRow, 'path' | 'project_name'>,
+): string {
+    const leaf = (ws.path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '';
+    const base = leaf.replace(/\.agi$/i, '') || ws.project_name || '';
+    return (
+        base
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '') || 'workspace'
+    );
 }
 
 /**
