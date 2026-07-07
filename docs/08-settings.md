@@ -38,11 +38,41 @@ shells **survive a full quit** and reattach on next launch.
 > in-process terminals — which still restore from a snapshot, but don't survive
 > a full quit. See **[Terminal session persistence](05-session-persistence.md)**.
 
+## Specialized terminals
+
+The launch command and always-on flags for each AI-agent terminal type:
+
+- **Claude Code command** / **Codex command** / **Custom agent command** — the
+  command run when you add a terminal of that type. Blank uses the built-in
+  default (`claude`, `codex`).
+- **Claude Code extra flags** / **Codex extra flags** — flags always appended
+  when launching that agent (for example `--dangerously-skip-permissions`),
+  before Genie's own `--session-id`.
+
+See **[Terminals → Terminal types](04-terminals.md)**.
+
+## Agent MCP server
+
+A small **loopback MCP server** that lets agents in your terminals reach you —
+glow the sidebar when done (`imDone`), pop a question (`ForceTheQuestion`),
+manage processes, and more (see **[Agents & the Genie MCP](12-agents-and-mcp.md)**).
+The section shows the live server status (running / port conflict / not running)
+and offers:
+
+- **Server port** — a fixed, obscure loopback port baked into each workspace's
+  `.mcp.json` (e.g. `51717`). Changing it needs a restart; open terminals keep
+  their old endpoint until recreated.
+- **Restart MCP server** — rebinds on the configured port and rewrites the
+  enabled workspaces' configs.
+- **Config sync** — keep the Genie endpoint written into your agent configs:
+  **Claude** (`.mcp.json`), **Cursor** (`.cursor/mcp.json`), and **AGENTS.md**
+  (the Genie brief block). Unchecking one leaves that file alone.
+
 ## Workspace layout — Max views
 
 **Max views** — the maximum number of panels visible at once *per workspace*
 (default **4**, range **1–9**). Reaching the limit disables the Add Terminal /
-Add Editor buttons until you raise it or close a view.
+Add Files buttons until you raise it or close a view.
 
 ## Defaults for new workspaces
 
@@ -68,14 +98,27 @@ OS's native mechanism:
 > Dev builds can't register a stable autostart path — install the packaged
 > release to use this.
 
-## Integrations
+## Serve local dev sites (.gen)
+
+- **Serve local dev sites** — a master toggle (off by default). Lets this host
+  expose its loopback dev sites (e.g. `tynn.test`, served by Herd/Valet) to a
+  remote Genie as `*.gen`. A separate opt-in from remote control.
+- **.gen Sites** — per workspace, choose which of this machine's loopback dev
+  sites are served, each with a `.gen` name and scheme/port. Nothing is
+  tunnelled until you enable a site here. See
+  **[.gen dev sites & the Testing Browser](18-dev-sites.md)**.
+
+## Integrations & more
 
 The Settings window also hosts the **Tynn**, **Aionima**, and **GitHub** sign-in
-sections, and the **Updater** configuration. Those are covered on their own
-pages:
+sections, the **Updater** configuration, and more — covered on their own pages:
 
-- **[Sign in & integrations](10-sign-in-and-integrations.md)**
-- **[Updates](09-updates.md)**
+- **[Sign in & integrations](10-sign-in-and-integrations.md)** — Tynn, Aionima,
+  GitHub, and quick capture.
+- **[Updates](09-updates.md)** — the Updater section.
 - **[Plugins & marketplaces](11-plugins.md)** — the **Plugins** section
   (installed plugins, capability grants, the Official + Marketplaces tabs, and
   Developer Mode).
+- **[Agents & the Genie MCP](12-agents-and-mcp.md)**,
+  **[Hosts & Genie Cloud Workstations](17-hosts-and-workstations.md)** — remote
+  control and cloud settings live alongside these features.

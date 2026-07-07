@@ -18,7 +18,7 @@ The sidebar has two parts:
     terminals running.
 - **Flyout panel** (the "Terminals" panel): titled *"Terminals — Pick from any
   project"*. It lists each workspace as a collapsible group with its terminals,
-  a search box, and **Add Terminal…** / **Add Editor…** buttons per workspace.
+  a search box, and **Add Terminal…** / **Add Files…** buttons per workspace.
 
 ## Adding a workspace
 
@@ -45,10 +45,8 @@ into the view grid.
 The chooser flyout can be **pinned** (always open) or **unpinned** (hovers on
 demand and closes when you click away or press Escape).
 
-- Toggle with the pin button at the top of the sidebar.
-- Or press **⌘/Ctrl + \\** to toggle pin from anywhere.
-
-Titles: *"Pin terminals panel"* / *"Unpin terminals panel"*.
+Toggle it with the **pin button** at the top of the sidebar. Titles:
+*"Pin terminals panel"* / *"Unpin terminals panel"*.
 
 ## `.agi` envelopes — detect, create, convert, import
 

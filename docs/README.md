@@ -14,10 +14,10 @@ renders these same pages with a navigable sidebar.
    terminal, first editor.
 3. **[Workspaces](02-workspaces.md)** — the sidebar, switching, `.agi`
    envelopes, pinning.
-4. **[Views & layouts](03-views-and-layouts.md)** — terminals vs editors,
+4. **[Views & layouts](03-views-and-layouts.md)** — terminals vs Files,
    Max Views, layout modes, maximise, resizable splits.
-5. **[Terminals](04-terminals.md)** — creating, shells, focus, close, suspend /
-   re-enable.
+5. **[Terminals](04-terminals.md)** — creating, terminal types (Claude Code /
+   Codex / Custom), shells, focus, hide, suspend, close.
 6. **[Terminal session persistence](05-session-persistence.md)** — the three
    tiers, quit confirmation, update warning, cwd resume.
 7. **[Files panel](06-files.md)** — browse / open / edit / save, live refresh on
@@ -31,6 +31,21 @@ renders these same pages with a navigable sidebar.
 12. **[Plugins & marketplaces](11-plugins.md)** — the bundled plugins,
     installing from the Official tab / marketplaces / a repo URL, capability
     grants, plugin editor tabs, agent tools, signing & Developer Mode.
+13. **[Agents & the Genie MCP](12-agents-and-mcp.md)** — how your agents reach
+    you (`imDone` glow, `ForceTheQuestion`), the tool surface, and approvals.
+14. **[WhisperChat](13-whisperchat.md)** — local messaging between your agents,
+    channels & DMs, the drawer, and reach scopes.
+15. **[Processes & the Task Manager](14-processes.md)** — supervised background
+    services vs terminals, start / stop / restart, the cross-workspace view.
+16. **[Knowledge Graph](15-knowledge-graph.md)** — the workstation memory store,
+    wikilinked markdown memories, list / graph / edit, agent + user writes.
+17. **[Issue Watch](16-issue-watch.md)** — watch GitHub issues, PRs & Dependabot
+    for the workspace's repos.
+18. **[Hosts & Genie Cloud Workstations](17-hosts-and-workstations.md)** — drive
+    another machine's Genie over Tailscale, cloud workstations, the host/local
+    split.
+19. **[.gen dev sites & the Testing Browser](18-dev-sites.md)** — serve a host's
+    loopback dev sites as `*.gen` and open them in the built-in browser.
 
 ## Developer & reference docs
 

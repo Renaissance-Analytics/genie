@@ -2,28 +2,31 @@
 
 A **view** is a tile in the grid. There are two kinds:
 
-- **Terminal** — a live shell in the workspace.
-- **Editor** — a file tree + code editor for the workspace.
+- **Terminal** — a live shell in the workspace (optionally a coding agent — see
+  **[Terminals](04-terminals.md)**).
+- **Files** — a file tree + code editor for the workspace.
 
 This page covers adding views, the **Max Views** cap, the four layout modes,
 maximising, and resizable splits.
 
 ## Adding views
 
-### The split "Add" button (toolbar)
+### The split "Add Terminal" button (toolbar)
 
 On the right of the toolbar is a split button:
 
 - The **primary** part is **Add Terminal** — click it to add a terminal to the
-  active workspace.
-- The **chevron** opens a small menu with **Add Terminal** and **Add Editor**.
+  active workspace (it repeats the last terminal type you chose).
+- The **chevron** opens a menu to pick a **terminal type** (Terminal, Claude
+  Code, Codex, Custom agent — see **[Terminals](04-terminals.md)**) and an
+  **Add Files…** entry for a file editor.
 
 When the **Max Views** limit is reached, the whole button disables and shows a
 tooltip: *"Max views reached (N) — raise it in Settings"*.
 
 ### Per-workspace add rows (chooser)
 
-In the flyout, each workspace group has **Add Terminal…** and **Add Editor…**
+In the flyout, each workspace group has **Add Terminal…** and **Add Files…**
 buttons. These add a view to *that* workspace specifically.
 
 ### Empty-grid tiles
@@ -31,7 +34,7 @@ buttons. These add a view to *that* workspace specifically.
 When a workspace has no views selected, the grid shows two large tiles:
 
 - **Add Terminal** — *"a live shell in this workspace"*.
-- **Add Editor** — *"browse + edit files in this workspace"*.
+- **Add Files** — *"browse + edit files in this workspace"*.
 
 In the **2×2** layout, when fewer than four panels are filled, a smaller **Add
 Terminal** tile appears in the empty cell — *"from any project — pick on the
@@ -59,9 +62,9 @@ In **Auto**, the grid re-arranges itself as you add or remove panels.
 
 ### Focusing a panel
 
-In **Focus + stack**, the focused panel is the big one on the left. Set the
-focus by clicking a panel, or press **⌘/Ctrl + 1…9** to focus panel *N*. (These
-keys focus panels in any layout — see
+In **Focus + stack**, the focused panel is the big one on the left. **Click a
+panel** to focus it. (Genie doesn't bind a keyboard shortcut for panel focus —
+a focused terminal would swallow it. See
 **[Keyboard shortcuts](07-keyboard-shortcuts.md)**.)
 
 ## Maximise a panel

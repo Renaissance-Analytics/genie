@@ -17,6 +17,42 @@ Any of these create a terminal in the active (or chosen) workspace:
 Each terminal gets an auto-generated label (e.g. `myproject`, `myproject-1`)
 and opens rooted at the workspace folder.
 
+## Terminal types (specialized terminals)
+
+The **Add Terminal** button's chevron opens a menu of terminal types. The main
+button repeats the **last type you used**, so the common case is one click.
+
+| Type | What it launches |
+|------|------------------|
+| **Terminal** | A plain shell. |
+| **Claude Code** | The Claude Code TUI (a coding agent). |
+| **Codex** | The Codex TUI (a coding agent). |
+| **Custom agent** | Your own agent command. |
+
+Picking a plain **Terminal** creates it immediately. Picking an agent type opens
+a short form first:
+
+- **Purpose** — a few words describing what this agent is for (e.g. `frontend`).
+  Genie kebab-cases it and uses it to name the agent's chat channel, shown live
+  as `‹workspace›:‹purpose›`. Agents talk to each other on these channels — see
+  **[WhisperChat](13-whisperchat.md)**.
+- **Who can reach this agent** — the agent's discoverability for WhisperChat:
+  - **None — hidden** — no other agent can find or message it.
+  - **This workspace (default)** — agents in the same workspace can reach it.
+  - **Specific workspaces** — the ones you tick, plus its own.
+  - **All — whole workstation** — every agent on this machine.
+- **Command** — *(Custom agent only)* the command to run, e.g.
+  `my-agent --interactive`.
+
+Click **Create** to launch. Agent terminals otherwise behave exactly like plain
+ones — same focus, hide, suspend, close, and session-restore behaviour below.
+
+> **Command & extra flags.** Each agent type's launch command and its
+> **always-on extra flags** (for example `--dangerously-skip-permissions`) are
+> set once in **Settings → Specialized terminals** — they apply to every terminal
+> of that type. A **Custom agent**'s command can still be overridden per terminal
+> in the create form above.
+
 ## Shells
 
 A terminal uses your **default shell** unless it specifies its own. Set the
@@ -29,20 +65,34 @@ starts the chosen one; the choice is remembered on that terminal.
 
 ## Focusing a terminal
 
-Click a panel to focus it, or press **⌘/Ctrl + 1…9** to focus panel *N*.
-Keyboard input goes to the focused terminal. (Genie's global shortcuts are
-careful not to steal keystrokes from an active terminal — see
-**[Keyboard shortcuts](07-keyboard-shortcuts.md)**.)
+**Click a panel** to focus it — keyboard input then goes to that terminal. Genie
+doesn't bind a keyboard shortcut for panel focus, because a focused terminal
+(shell or agent TUI) would swallow it. See
+**[Keyboard shortcuts](07-keyboard-shortcuts.md)**.
+
+## Hide from grid (keeps the terminal running)
+
+Each terminal's row in the chooser has an **eye toggle** on the left:
+
+- **Eye open** (*"Hide from grid"*) — the terminal is showing in the grid. Click
+  to **hide** it: the panel leaves the grid but **the shell and any agent keep
+  running**. The row stays in the chooser with the eye now closed.
+- **Eye closed** (*"Show in grid"*) — click to bring the panel back.
+
+Hiding is the safe way to declutter the grid without losing anything: an agent
+you've hidden **keeps working**. (Clicking a hidden terminal's row also shows it
+again.)
 
 ## Closing a terminal
 
-- Click the **✕** button in the panel header (*"Close panel"*), or
-- Press **⌘/Ctrl + W** with the panel focused.
+Click the **✕** button in the panel header (*"Close panel"*). Closing removes the
+panel from the grid and detaches it. When the last window holding that terminal
+detaches, the shell is shut down — **unless** the terminal is suspended or
+detached (see below and **[session persistence](05-session-persistence.md)**).
 
-Closing removes the panel from the grid and detaches it. When the last window
-holding that terminal detaches, the shell is shut down — **unless** the terminal
-is suspended or detached (see below and
-**[session persistence](05-session-persistence.md)**).
+> **Hide vs close.** *Hiding* (the eye toggle) keeps the terminal and its agent
+> alive; *closing* (the ✕) tears the panel down and, on the last detach, ends the
+> shell. Reach for **hide** when you just want it out of sight.
 
 To delete a terminal entirely (remove its saved spec and kill the shell),
 right-click it in the chooser and choose **Delete terminal**.
