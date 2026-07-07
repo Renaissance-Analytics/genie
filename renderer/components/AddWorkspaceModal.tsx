@@ -7,6 +7,7 @@ import {
     Icon,
     Input,
     Modal,
+    Popover,
     Select,
     Text,
 } from '@particle-academy/react-fancy';
@@ -184,7 +185,10 @@ function ShapePicker({ onPick }: { onPick: (s: Stage) => void }) {
                 </Badge>
                 <Icon name="box" size="lg" className="text-violet-500" />
                 <Heading as="h3" size="sm" style={{ marginTop: 8 }}>
-                    .agi envelope
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        .agi envelope
+                        <EnvelopeHelp />
+                    </span>
                 </Heading>
                 <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
                     Aionima format: <code>{'{slug}.agi'}</code> git envelope
@@ -193,6 +197,80 @@ function ShapePicker({ onPick }: { onPick: (s: Stage) => void }) {
                 </Text>
             </Card>
         </div>
+    );
+}
+
+/**
+ * The little "?" affordance on the ".agi envelope" shape card. On hover it
+ * pops a Fancy Popover explaining what an Aionima envelope is, why it helps,
+ * and how Genie uses it — with a "Learn more" link out to the full docs page.
+ * The wrapper stops click propagation so poking the icon never selects the
+ * card behind it (which would kick off the envelope flow).
+ */
+function EnvelopeHelp() {
+    return (
+        <span
+            onClick={(e) => e.stopPropagation()}
+            style={{ display: 'inline-flex', alignItems: 'center' }}
+        >
+            <Popover hover placement="bottom" offset={8}>
+                <Popover.Trigger>
+                    <Icon
+                        name="circle-help"
+                        size="xs"
+                        className="text-zinc-400 hover:text-violet-500"
+                        style={{ cursor: 'help' }}
+                    />
+                </Popover.Trigger>
+                <Popover.Content className="max-w-xs">
+                    <Text
+                        size="xs"
+                        style={{ display: 'block', fontWeight: 600, marginBottom: 4 }}
+                    >
+                        What's an Aionima envelope?
+                    </Text>
+                    <Text
+                        size="xs"
+                        className="text-zinc-500"
+                        style={{ display: 'block', lineHeight: 1.5 }}
+                    >
+                        A portable <code>{'{slug}.agi'}</code> git folder that
+                        bundles a whole project: your code repos as submodules in{' '}
+                        <code>repos/</code>, shared knowledge in <code>.ai/</code>,
+                        and a <code>project.json</code> that ties them together.
+                    </Text>
+                    <Text
+                        size="xs"
+                        className="text-zinc-500"
+                        style={{ display: 'block', lineHeight: 1.5, marginTop: 6 }}
+                    >
+                        Genie clones or scaffolds it, surfaces its repos in the
+                        tree, and lets your agents share the <code>.ai/</code>{' '}
+                        knowledge. It's compatible with the AGI gateway, and Tynn
+                        treats an envelope-backed project as a workspace.
+                    </Text>
+                    <a
+                        href="https://tynn.ai/docs/aionima-envelope"
+                        onClick={(e) => {
+                            e.preventDefault();
+                            api().tynn.openInBrowser(
+                                'https://tynn.ai/docs/aionima-envelope',
+                            );
+                        }}
+                        className="text-blue-600 hover:underline dark:text-blue-400"
+                        style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            marginTop: 8,
+                            fontSize: 12,
+                        }}
+                    >
+                        <Icon name="external-link" size="xs" /> Learn more
+                    </a>
+                </Popover.Content>
+            </Popover>
+        </span>
     );
 }
 
