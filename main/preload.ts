@@ -800,6 +800,46 @@ const api = {
         remove: (id: string) => ipcRenderer.invoke('terminal-spec:delete', id),
         get: (id: string) => ipcRenderer.invoke('terminal-spec:get', id),
         touch: (id: string) => ipcRenderer.invoke('terminal-spec:touch', id),
+        /** Create an AI-TUI terminal from the split Add-Terminal button — spawns a
+         *  headless agent terminal (captured chat-session id + whisper identity)
+         *  and launches it. Returns the created spec. */
+        createAgent: (input: {
+            workspace_id: string;
+            agent: 'claude' | 'codex' | 'custom';
+            command?: string;
+            cwd?: string;
+            label?: string;
+            purpose: string;
+            scope: 'none' | 'self' | 'specific' | 'all';
+            scope_workspaces?: string[];
+        }) => ipcRenderer.invoke('terminal-spec:create-agent', input),
+    },
+
+    /** WhisperChat — the local inter-agent messaging network's human panel. */
+    whisper: {
+        /** All agents in this Genie (the human owns the workstation → no scope filter). */
+        directory: () => ipcRenderer.invoke('whisper:directory'),
+        /** Every non-empty channel (`slug:purpose`). */
+        channels: () => ipcRenderer.invoke('whisper:channels'),
+        /** A channel log (`channelKey`) or a human↔agent DM thread (`agentId`). */
+        history: (opts: {
+            channelKey?: string;
+            agentId?: string;
+            limit?: number;
+            before?: number;
+        }) => ipcRenderer.invoke('whisper:history', opts),
+        /** Post as the human — to a channel (`channelKey`) or an agent (`toAgentId`). */
+        post: (input: { channelKey?: string; toAgentId?: string; text: string }) =>
+            ipcRenderer.invoke('whisper:post', input),
+        /** Edit an agent's purpose/scope (re-keys its channel + re-emits presence). */
+        updateChannel: (
+            specId: string,
+            patch: {
+                purpose?: string;
+                scope?: 'none' | 'self' | 'specific' | 'all';
+                scope_workspaces?: string[];
+            },
+        ) => ipcRenderer.invoke('whisper:update-channel', specId, patch),
     },
 
     files: {
@@ -1135,6 +1175,32 @@ const api = {
             const handler = () => cb();
             ipcRenderer.on('terminal-spec:changed', handler);
             return () => ipcRenderer.off('terminal-spec:changed', handler);
+        },
+        /** WhisperChat presence — an agent joined/changed (full info), or LEFT
+         *  (`{ agentId, status:'offline', left:true }`). The panel updates its
+         *  directory + channel list live. */
+        whisperPresence: (cb: (payload: unknown) => void) => {
+            const handler = (_e: unknown, payload: unknown) => cb(payload);
+            ipcRenderer.on('whisper:presence', handler);
+            return () => ipcRenderer.off('whisper:presence', handler);
+        },
+        /** WhisperChat message preview — a DM or channel message was delivered.
+         *  The panel appends it to the live stream (history has the full text). */
+        whisperMessage: (
+            cb: (payload: {
+                kind: 'dm' | 'channel';
+                channelKey?: string;
+                toAgentId?: string;
+                from: string;
+                fromLabel: string;
+                seq: number;
+                ts: number;
+                preview: string;
+            }) => void,
+        ) => {
+            const handler = (_e: unknown, payload: Parameters<typeof cb>[0]) => cb(payload);
+            ipcRenderer.on('whisper:message', handler);
+            return () => ipcRenderer.off('whisper:message', handler);
         },
         /** A file was created/renamed/deleted on disk in a watched workspace
          *  (outside the renderer's own edits — an agent, a git op, a tool). The

@@ -63,6 +63,15 @@ import {
     createKnowledgeFolder,
 } from './workspace/envelope';
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
+import {
+    createAgentTerminal,
+    writeToTerminal,
+    broadcastTerminalSpecsChanged,
+} from './terminal/ipc';
+import { buildSubmitBytes } from './terminal/keystrokes';
+import { resolveAgentCommand } from './mcp/host-tools';
+import { whisperBroker } from './whisper/broker';
+import { normalizePurpose, type WhisperScope } from './whisper/types';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import {
     provisionWorkspaceTynn,
@@ -868,6 +877,121 @@ export function registerIpcHandlers(): void {
         touchTerminalSpec(id);
         return { ok: true };
     });
+
+    // --- Specialized Terminals + WhisperChat ----------------------------
+    // Create an AI-TUI terminal FROM THE UI (the split Add-Terminal button):
+    // resolve the agent's CLI command, spawn a headless agent terminal (stamping
+    // its captured chat-session id + whisper identity/accessibility), and launch
+    // it. No approval gate — the human is creating it directly in their own Genie.
+    ipcMain.handle(
+        'terminal-spec:create-agent',
+        (
+            _e,
+            input: {
+                workspace_id: string;
+                agent: 'claude' | 'codex' | 'custom';
+                command?: string;
+                cwd?: string;
+                label?: string;
+                purpose: string;
+                scope: WhisperScope;
+                scope_workspaces?: string[];
+            },
+        ) => {
+            const ws = getWorkspace(input.workspace_id);
+            if (!ws) return { ok: false, error: 'Workspace not found.' };
+            const command = resolveAgentCommand(input.agent, input.command);
+            if (!command) {
+                return {
+                    ok: false,
+                    error:
+                        input.agent === 'custom'
+                            ? 'A custom agent needs a command (here or in Settings → Agent commands).'
+                            : `No command configured for agent "${input.agent}".`,
+                };
+            }
+            let cwd = ws.path;
+            if (input.cwd && input.cwd.trim()) {
+                cwd = path.isAbsolute(input.cwd)
+                    ? path.normalize(input.cwd)
+                    : path.join(ws.path, input.cwd);
+            }
+            const label =
+                input.label?.trim() || `${input.agent} · ${normalizePurpose(input.purpose)}`;
+            const { id, command: launchCommand } = createAgentTerminal({
+                workspaceId: ws.id,
+                cwd,
+                label,
+                agentMeta: { agent: input.agent, command },
+                whisper: {
+                    purpose: input.purpose,
+                    scope: input.scope,
+                    scopeWorkspaces: input.scope_workspaces,
+                },
+            });
+            // Launch the agent CLI in the fresh shell (the session-captured form).
+            writeToTerminal(id, buildSubmitBytes(launchCommand ?? command, true));
+            return { ok: true, spec: getTerminalSpec(id) };
+        },
+    );
+
+    // The human WhisperChat panel: read the agent directory, channel list, and a
+    // channel / human↔agent DM history; post as the human; and edit an agent's
+    // accessibility (re-keys its channel + re-emits presence). The live push
+    // (whisper:presence / whisper:message) rides the broker's presence emitter.
+    ipcMain.handle('whisper:directory', () => ({ agents: whisperBroker.directory() }));
+    ipcMain.handle('whisper:channels', () => ({ channels: whisperBroker.channels() }));
+    ipcMain.handle(
+        'whisper:history',
+        (
+            _e,
+            opts: { channelKey?: string; agentId?: string; limit?: number; before?: number },
+        ) => ({ messages: whisperBroker.history(opts ?? {}) }),
+    );
+    ipcMain.handle(
+        'whisper:post',
+        (_e, input: { channelKey?: string; toAgentId?: string; text: string }) => {
+            if (!input?.text?.trim()) return { ok: false, error: 'Message is empty.' };
+            if (!input.channelKey && !input.toAgentId) {
+                return { ok: false, error: 'Pick a channel or an agent to message.' };
+            }
+            const r = whisperBroker.send({
+                human: true,
+                channelArg: input.channelKey,
+                toAgentId: input.toAgentId,
+                text: input.text,
+            });
+            return r.ok ? { ok: true } : { ok: false, error: r.error };
+        },
+    );
+    ipcMain.handle(
+        'whisper:update-channel',
+        (
+            _e,
+            specId: string,
+            patch: { purpose?: string; scope?: WhisperScope; scope_workspaces?: string[] },
+        ) => {
+            const spec = getTerminalSpec(specId);
+            if (!spec) return { ok: false, error: 'Terminal not found.' };
+            const agentId = spec.meta?.agent_id;
+            if (!agentId) return { ok: false, error: 'That terminal is not a whisper agent.' };
+            whisperBroker.setAccessibility(agentId, {
+                scope: patch.scope,
+                workspaces: patch.scope_workspaces,
+                purpose: patch.purpose,
+            });
+            // Persist the durable bits to the spec meta + refresh the sidebar row.
+            const meta = { ...spec.meta };
+            if (patch.purpose !== undefined) meta.whisper_purpose = normalizePurpose(patch.purpose);
+            if (patch.scope !== undefined) meta.whisper_scope = patch.scope;
+            if (patch.scope_workspaces !== undefined) {
+                meta.whisper_workspaces = patch.scope_workspaces;
+            }
+            updateTerminalSpec(specId, { meta });
+            broadcastTerminalSpecsChanged();
+            return { ok: true };
+        },
+    );
 
     // --- Backend projects (fans out across signed-in backends) ----------
     ipcMain.handle('tynn:projects', async () => listAllProjects());

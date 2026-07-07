@@ -30,6 +30,7 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
         manageWorkspaces: vi
             .fn()
             .mockResolvedValue({ ok: true, workspaces: [] }),
+        whisper: vi.fn().mockResolvedValue({ ok: true }),
         openFileForUser: vi
             .fn()
             .mockResolvedValue({ ok: true, reused: false, openedNew: true }),
@@ -79,6 +80,7 @@ describe('handleMcpMessage', () => {
             'manageTerminals',
             'runAgent',
             'manageWorkspaces',
+            'whisper',
             'openFileForUser',
             'setEnv',
             'checkEnv',
@@ -101,6 +103,7 @@ describe('handleMcpMessage', () => {
             'manageTerminals',
             'runAgent',
             'manageWorkspaces',
+            'whisper',
             'openFileForUser',
             'setEnv',
             'checkEnv',
@@ -606,6 +609,122 @@ describe('handleMcpMessage', () => {
             ctx(),
         );
         expect(res?.error?.code).toBe(-32602);
+    });
+
+    it('whisper routes to the dep and summarizes a list', async () => {
+        const whisper = vi.fn().mockResolvedValue({
+            ok: true,
+            self: { agentId: 'me', label: 'Me' },
+            agents: [{ agentId: 'peer', label: 'Peer' }],
+            channels: [{ key: 'w1:general', slug: 'ws-one', purpose: 'general' }],
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 70,
+                method: 'tools/call',
+                params: { name: 'whisper', arguments: { action: 'list', terminalId: 'term-W' } },
+            },
+            ctx({ terminalId: 'term-W', whisper }),
+        );
+        expect(whisper).toHaveBeenCalledWith('term-W', {
+            action: 'list',
+            to: undefined,
+            channel: undefined,
+            text: undefined,
+            interrupt: undefined,
+            cursor: undefined,
+            wait: undefined,
+            timeoutMs: undefined,
+            scope: undefined,
+            workspaces: undefined,
+            purpose: undefined,
+        });
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('1 agent(s) reachable, 1 channel(s).');
+        expect(text).toContain('w1:general'); // the JSON block
+    });
+
+    it('whisper plumbs send args (to/channel/text/interrupt) and summarizes delivery', async () => {
+        const whisper = vi.fn().mockResolvedValue({ ok: true, delivered: 2 });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 71,
+                method: 'tools/call',
+                params: {
+                    name: 'whisper',
+                    arguments: { action: 'send', channel: 'general', text: 'hey', interrupt: true },
+                },
+            },
+            ctx({ whisper }),
+        );
+        expect(whisper).toHaveBeenCalledWith(
+            'term-1',
+            expect.objectContaining({ action: 'send', channel: 'general', text: 'hey', interrupt: true }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('delivered to 2 recipient(s)');
+    });
+
+    it('whisper summarizes a receive with its message count', async () => {
+        const whisper = vi.fn().mockResolvedValue({
+            ok: true,
+            messages: [{ seq: 1, id: 'x', from: 'p', fromLabel: 'P', kind: 'dm', text: 'hi', ts: 1 }],
+            cursor: 1,
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 72,
+                method: 'tools/call',
+                params: { name: 'whisper', arguments: { action: 'receive', cursor: 0, wait: true } },
+            },
+            ctx({ whisper }),
+        );
+        expect(whisper).toHaveBeenCalledWith(
+            'term-1',
+            expect.objectContaining({ action: 'receive', cursor: 0, wait: true }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('1 new message(s).');
+    });
+
+    it('whisper surfaces a failure', async () => {
+        const whisper = vi.fn().mockResolvedValue({ ok: false, error: 'not reachable' });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 73,
+                method: 'tools/call',
+                params: { name: 'whisper', arguments: { action: 'send', to: 'x', text: 'y' } },
+            },
+            ctx({ whisper }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('whisper failed: not reachable');
+    });
+
+    it('whisper rejects a bad/missing action', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 74, method: 'tools/call', params: { name: 'whisper', arguments: {} } },
+            ctx(),
+        );
+        expect(res?.error?.code).toBe(-32602);
+    });
+
+    it('the whisper schema exposes its action enum + send/receive args', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 75, method: 'tools/list' },
+            ctx(),
+        );
+        const tools = (res?.result as {
+            tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }>;
+        }).tools;
+        const props = tools.find((t) => t.name === 'whisper')!.inputSchema.properties;
+        for (const k of ['action', 'to', 'channel', 'text', 'wait', 'cursor', 'scope']) {
+            expect(props).toHaveProperty(k);
+        }
     });
 
     it('serves the guide via initialize instructions and genieGuide', async () => {

@@ -134,6 +134,30 @@ workspace from Genie — never deletes anything on disk). Targets are limited to
 your own or a governed workspace. To CREATE missing child workspaces, use
 \`provisionWorkspaces\`.
 
+### whisper
+**Coordinate with the OTHER AI agents in this Genie** — WhisperChat, a LOCAL
+inter-agent messaging network. Discover peer agents, DM them 1:1, and broadcast
+on shared CHANNELS. Delivery is **PULL-based** — you POLL for messages; nothing is
+ever injected into your terminal (that would corrupt your turn). Actions (\`action\`):
+- \`list\` — discovery: your own agent info (\`self\`), the peers you can reach
+  (\`agents\`, filtered by their accessibility scope), and your \`channels\`.
+- \`send\` — DM a peer with \`to\` = their \`agentId\`, OR broadcast with \`channel\` =
+  a purpose (\`frontend\` → your workspace's room) or \`slug:purpose\` (another
+  workspace's). Needs \`text\`. Optional \`interrupt: true\` also glows a DM target's
+  terminal so they notice (never injected into their pty).
+- \`receive\` — fetch NEW messages: pass a \`cursor\` from a prior receive to page
+  forward; set \`wait: true\` to LONG-POLL (optional \`timeoutMs\`) — it blocks until
+  a message arrives, you leave, or the timeout, so you can wait for a peer's reply
+  without busy-looping.
+- \`setAccessibility\` — \`scope\`: \`none\` (hidden) / \`self\` (your workspace only,
+  the default) / \`specific\` + \`workspaces\` (a chosen set — limited to workspaces
+  you govern) / \`all\` (the whole workstation) — governs who can see + DM you.
+  Optional \`purpose\` renames your channel.
+- \`join\` / \`leave\` — opt in/out of a \`channel\`.
+Your identity + accessibility persist across restarts. Local-only — no relay, no
+cross-host. Use it to hand a peer context, ask another agent to take a task, or
+watch a shared channel while you work.
+
 ### checkIssues
 Get a detailed, grouped list of the open GitHub **Issues, Pull Requests, and
 SECURITY ALERTS** (Dependabot + Code-scanning + Secret-scanning) that Genie's

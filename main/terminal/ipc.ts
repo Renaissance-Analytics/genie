@@ -16,7 +16,18 @@ import {
     workspaceMcpEnabled,
     createTerminalSpec,
     getWorkspace,
+    type TerminalSpecRow,
+    type TerminalSpecMeta,
 } from '../db';
+import { whisperBroker } from '../whisper/broker';
+import { workspaceSlug } from '../whisper/slug';
+import { renderAgentLaunch, captureSessionByDetect } from '../whisper/session-capture';
+import {
+    normalizePurpose,
+    type WhisperJoinInput,
+    type WhisperAgentType,
+    type WhisperScope,
+} from '../whisper/types';
 import { buildTynnCliEnv } from '../cli/tynn-cli';
 import { loadWorkspaceEnvVars } from '../env-store';
 import { computeOrphans } from './orphans';
@@ -176,9 +187,43 @@ export function createAgentTerminal(opts: {
     label: string;
     /** Marks this terminal as running an agent (surfaced in the list). */
     agentMeta?: { agent: 'claude' | 'codex' | 'custom'; command: string };
-}): { id: string; scrollback: string } {
+    /** Specialized terminals: WhisperChat accessibility to stamp + join with. */
+    whisper?: {
+        purpose?: string;
+        scope?: WhisperScope;
+        scopeWorkspaces?: string[];
+    };
+}): { id: string; scrollback: string; command?: string; chatSessionId: string | null } {
     const id = crypto.randomUUID();
     const resolved = resolveDefaultShell(dbSettingsProvider());
+
+    // Agent terminals capture their chat-session id at launch + get a whisper
+    // identity so they can coordinate. Render the (possibly session-augmented)
+    // launch command from the agent's capture profile; a plain terminal has no
+    // agentMeta and gets none of this.
+    let launchCommand: string | undefined;
+    let chatSessionId: string | null = null;
+    let strategy: ReturnType<typeof renderAgentLaunch>['strategy'] | null = null;
+    let agentId: string | undefined;
+    let meta: TerminalSpecMeta = {};
+    if (opts.agentMeta) {
+        const rendered = renderAgentLaunch(opts.agentMeta.agent, opts.agentMeta.command);
+        launchCommand = rendered.command;
+        chatSessionId = rendered.chatSessionId;
+        strategy = rendered.strategy;
+        agentId = crypto.randomUUID();
+        meta = {
+            agent: opts.agentMeta.agent,
+            agent_command: opts.agentMeta.command,
+            agent_id: agentId,
+            whisper_purpose: normalizePurpose(opts.whisper?.purpose),
+            whisper_scope: opts.whisper?.scope ?? 'self',
+            ...(opts.whisper?.scopeWorkspaces?.length
+                ? { whisper_workspaces: opts.whisper.scopeWorkspaces }
+                : {}),
+            ...(chatSessionId ? { chat_session_id: chatSessionId } : {}),
+        };
+    }
 
     // Persist a spec so the terminal is a first-class member of the workspace
     // (appears in lists, can be reattached by a window, killed by the user).
@@ -188,9 +233,7 @@ export function createAgentTerminal(opts: {
         label: opts.label,
         cwd: opts.cwd,
         type: 'terminal',
-        meta: opts.agentMeta
-            ? { agent: opts.agentMeta.agent, agent_command: opts.agentMeta.command }
-            : {},
+        meta,
     });
 
     // Env: the workspace `.env` (so an agent resolves ${TYNN_AGENT_TOKEN} etc.)
@@ -221,7 +264,73 @@ export function createAgentTerminal(opts: {
     noteTerminalActivity(id);
     // Tell every window the spec set changed so the new terminal appears live.
     broadcastTerminalSpecsChanged();
-    return { id, scrollback: result.scrollback };
+
+    // WhisperChat: register the fresh agent so peers can discover/DM it. When the
+    // session id wasn't captured by a launch flag (detect / a custom wrapper),
+    // briefly watch the transcript dir and backfill it.
+    if (agentId) {
+        const input = joinInputFromSpec(getTerminalSpec(id));
+        if (input) whisperBroker.join(input);
+        if (strategy === 'detect' && !chatSessionId) {
+            captureSessionByDetect(opts.cwd)
+                .then((sid) => {
+                    if (!sid) return;
+                    const cur = getTerminalSpec(id);
+                    if (!cur) return;
+                    updateTerminalSpec(id, { meta: { ...cur.meta, chat_session_id: sid } });
+                    whisperBroker.setChatSession(agentId!, sid);
+                    broadcastTerminalSpecsChanged();
+                })
+                .catch(() => {
+                    /* best-effort — no id is fine */
+                });
+        }
+    }
+    return { id, scrollback: result.scrollback, command: launchCommand, chatSessionId };
+}
+
+/**
+ * Build a WhisperChat join input from a persisted agent spec — resolves the
+ * workspace + its display slug (the db/fs I/O the pure broker can't do). Null
+ * when the spec isn't a whisper agent (no `agent_id`) or its workspace is gone.
+ */
+function joinInputFromSpec(spec: TerminalSpecRow | null): WhisperJoinInput | null {
+    if (!spec || !spec.workspace_id) return null;
+    const agentId = spec.meta?.agent_id;
+    if (!agentId) return null;
+    const ws = getWorkspace(spec.workspace_id);
+    if (!ws) return null;
+    return {
+        agentId,
+        terminalId: spec.id,
+        workspaceId: ws.id,
+        workspaceName: ws.project_name,
+        slug: workspaceSlug(ws),
+        agentType: (spec.meta?.agent as WhisperAgentType) ?? 'custom',
+        label: spec.label,
+        purpose: normalizePurpose(spec.meta?.whisper_purpose),
+        scope: (spec.meta?.whisper_scope as WhisperScope) ?? 'self',
+        scopeWorkspaces: Array.isArray(spec.meta?.whisper_workspaces)
+            ? (spec.meta.whisper_workspaces as string[])
+            : [],
+        chatSessionId: spec.meta?.chat_session_id ?? null,
+    };
+}
+
+/**
+ * Re-register every persisted whisper agent into the in-memory broker at boot
+ * (its durable identity rides `terminal_specs.meta`). Agents come back `away`
+ * (their pty's liveness is unknown until they next act). Called near
+ * reapOrphanTerminals.
+ */
+export function rehydrateWhisper(): void {
+    const inputs: WhisperJoinInput[] = [];
+    for (const spec of listTerminalSpecs()) {
+        if (!spec.meta?.agent_id) continue;
+        const input = joinInputFromSpec(spec);
+        if (input) inputs.push({ ...input, status: 'away' });
+    }
+    whisperBroker.rehydrate(inputs);
 }
 
 /** Send input to a terminal (manageTerminals.write / runAgent.send). */
@@ -254,6 +363,9 @@ function feedTerminalExit(id: string, payload: { exitCode: number; signal?: numb
     onProcessPtyExit(id, payload);
     // The pty is gone — drop its agent read buffer so it can't leak.
     agentReadBuffer.forget(id);
+    // WhisperChat: the pty exited but the spec is retained (revivable) — mark the
+    // agent `away` (no-op for a non-agent terminal).
+    whisperBroker.away(id);
     // Tell any attached mobile /ws/term socket the pty exited + drop it.
     mobileTermClose(id, payload);
 }
@@ -612,6 +724,9 @@ export function killTerminalById(id: string): boolean {
     agentReadBuffer.forget(id);
     // Drop the per-terminal MCP endpoint so its token stops resolving.
     unregisterTerminalEndpoint(id);
+    // WhisperChat: a killed terminal is a hard leave — drop the agent from the
+    // registry + channels and push an offline presence (no-op for a non-agent).
+    whisperBroker.leaveByTerminal(id);
     // kill() also clears the retained flag in the manager.
     const killed = terminalManager().kill(id);
     // Drop the Tier 1 snapshot too so a killed terminal can't resurrect on the

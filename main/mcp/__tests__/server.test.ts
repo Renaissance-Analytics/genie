@@ -122,6 +122,11 @@ const deps = (
         ok: true,
         workspaces: [],
     }),
+    whisper: () => Promise<{
+        ok: boolean;
+        messages?: any[];
+        cursor?: number;
+    }> = async () => ({ ok: true, messages: [], cursor: 0 }),
 ) => ({
     serverVersion: '0.0.0-test',
     userDataDir,
@@ -141,6 +146,7 @@ const deps = (
     manageTerminals,
     runAgent,
     manageWorkspaces,
+    whisper,
     openFileForUser: async () => ({ ok: true, reused: false, openedNew: true }),
     setEnv: () => ({ ok: true, file: '.env' }),
     checkEnv: () => ({ ok: true, exists: false, file: '.env' }),
@@ -423,6 +429,81 @@ describe('mcp server', () => {
             if (prev === undefined) delete process.env.GENIE_MCP_HEARTBEAT_MS;
             else process.env.GENIE_MCP_HEARTBEAT_MS = prev;
         }
+    });
+
+    it('serves a whisper RECEIVE+wait over SSE so a long-poll never times out', async () => {
+        // A `receive` with wait:true parks a long-poll waiter; it must ride the
+        // heartbeat SSE path (like ForceTheQuestion) so the client never times
+        // out. Simulate the wait with a whisper dep that resolves after a delay.
+        const prev = process.env.GENIE_MCP_HEARTBEAT_MS;
+        process.env.GENIE_MCP_HEARTBEAT_MS = '20';
+        try {
+            const dir = tmpUserDir();
+            await startMcpServer(
+                deps(
+                    dir,
+                    0,
+                    { ids: ['t-a'], lastActive: 't-a' },
+                    () => {},
+                    undefined,
+                    undefined,
+                    undefined,
+                    undefined,
+                    undefined,
+                    undefined,
+                    // whisper dep resolves after a delay (simulating the long-poll).
+                    () =>
+                        new Promise((r) =>
+                            setTimeout(
+                                () => r({ ok: true, messages: [{ seq: 1, text: 'hi' }], cursor: 1 }),
+                                120,
+                            ),
+                        ),
+                ),
+            );
+            const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+            const res = await rpcStream(mcpServerPort()!, token, {
+                jsonrpc: '2.0',
+                id: 80,
+                method: 'tools/call',
+                params: { name: 'whisper', arguments: { action: 'receive', wait: true } },
+            });
+            expect(res.contentType).toContain('text/event-stream');
+            expect(res.raw).toContain(': heartbeat'); // kept alive while polling
+            expect(res.events.some((e) => e.id === 80)).toBe(true); // final response delivered
+        } finally {
+            if (prev === undefined) delete process.env.GENIE_MCP_HEARTBEAT_MS;
+            else process.env.GENIE_MCP_HEARTBEAT_MS = prev;
+        }
+    });
+
+    it('serves a whisper LIST as a single JSON response (no blocking path)', async () => {
+        const dir = tmpUserDir();
+        await startMcpServer(deps(dir, 0, { ids: ['t-a'], lastActive: 't-a' }, () => {}));
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+        const res = await rpc(mcpServerPort()!, token, {
+            jsonrpc: '2.0',
+            id: 81,
+            method: 'tools/call',
+            params: { name: 'whisper', arguments: { action: 'list' } },
+        });
+        expect(res.status).toBe(200);
+        const body = JSON.parse(res.body);
+        expect(body.id).toBe(81);
+    });
+
+    it('serves a whisper RECEIVE without wait as a single JSON response', async () => {
+        const dir = tmpUserDir();
+        await startMcpServer(deps(dir, 0, { ids: ['t-a'], lastActive: 't-a' }, () => {}));
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+        const res = await rpc(mcpServerPort()!, token, {
+            jsonrpc: '2.0',
+            id: 82,
+            method: 'tools/call',
+            params: { name: 'whisper', arguments: { action: 'receive' } },
+        });
+        expect(res.status).toBe(200);
+        expect(JSON.parse(res.body).id).toBe(82);
     });
 
     it('answers ForceTheQuestion over an SSE stream (never a timed-out single response)', async () => {

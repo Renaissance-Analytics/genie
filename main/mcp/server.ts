@@ -18,6 +18,8 @@ import {
     type RunAgentResult,
     type ManageWorkspacesRequest,
     type ManageWorkspacesResult,
+    type WhisperRequest,
+    type WhisperResult,
     type OpenFileRequest,
     type OpenFileResult,
     type SetEnvRequest,
@@ -106,6 +108,8 @@ export interface ServerDeps {
         terminalId: string,
         req: ManageWorkspacesRequest,
     ) => Promise<ManageWorkspacesResult>;
+    /** Local inter-agent messaging (whisper tool). `receive`+`wait` long-polls. */
+    whisper: (terminalId: string, req: WhisperRequest) => Promise<WhisperResult>;
     /** Open a file in Genie's built-in editor for the user (openFileForUser tool). */
     openFileForUser: (
         terminalId: string,
@@ -263,6 +267,12 @@ function isBlockingCall(msg: JsonRpcRequest): boolean {
     if (name === 'runAgent') {
         const action = params?.arguments?.action;
         return action === 'start' || action === 'send';
+    }
+    if (name === 'whisper') {
+        // Only a long-polling receive blocks; every other whisper action is a
+        // quick synchronous op that gets a single JSON response.
+        const args = params?.arguments as { action?: unknown; wait?: unknown } | undefined;
+        return args?.action === 'receive' && args?.wait === true;
     }
     return false;
 }
@@ -430,6 +440,7 @@ async function handle(
         manageTerminals: deps.manageTerminals,
         runAgent: deps.runAgent,
         manageWorkspaces: deps.manageWorkspaces,
+        whisper: deps.whisper,
         openFileForUser: deps.openFileForUser,
         setEnv: deps.setEnv,
         checkEnv: deps.checkEnv,

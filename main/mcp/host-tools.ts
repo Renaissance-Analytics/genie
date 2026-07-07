@@ -13,11 +13,20 @@ import {
     getTerminalSpec,
     getWorkspace,
     createTerminalSpec,
+    updateTerminalSpec,
     workspaceProcessApproval,
     workspaceTerminalApproval,
     getWorkspaceIssuewatchPolicyBuckets,
     removeWorkspace,
+    type TerminalSpecMeta,
 } from '../db';
+import { whisperBroker } from '../whisper/broker';
+import { workspaceSlug } from '../whisper/slug';
+import {
+    normalizePurpose,
+    type WhisperAgentType,
+    type WhisperScope,
+} from '../whisper/types';
 import {
     broadcastTerminalSpecsChanged,
     killTerminalById,
@@ -73,6 +82,8 @@ import type {
     ManageWorkspacesRequest,
     ManageWorkspacesResult,
     ManagedWorkspaceInfo,
+    WhisperRequest,
+    WhisperResult,
 } from './protocol';
 
 /**
@@ -855,7 +866,8 @@ function listAgentTerminals(ws: { id: string; path: string }): ManagedTerminalIn
                 rel = '';
             }
             const agent = (s.meta?.agent as ManagedTerminalInfo['agent']) ?? null;
-            return { id: s.id, label: s.label, cwd: rel, agent };
+            const chatSessionId = (s.meta?.chat_session_id as string | undefined) ?? null;
+            return { id: s.id, label: s.label, cwd: rel, agent, chatSessionId };
         });
 }
 
@@ -995,7 +1007,7 @@ export async function manageTerminalsForMcp(
  * an explicit override. `custom` has no default — it needs an explicit command
  * (here or in Settings). Returns null when nothing resolves.
  */
-function resolveAgentCommand(agent: AgentType, override?: string): string | null {
+export function resolveAgentCommand(agent: AgentType, override?: string): string | null {
     const o = override?.trim();
     if (o) return o;
     const s = getAllSettings();
@@ -1046,15 +1058,17 @@ export async function runAgentForMcp(
                 if (!approved) {
                     return { ok: false, error: 'Denied by user — no agent was launched.' };
                 }
-                const { id } = createAgentTerminal({
+                const { id, command: launchCommand } = createAgentTerminal({
                     workspaceId: ws.id,
                     cwd: cwdR.cwd,
                     label: `${agent} agent`,
                     agentMeta: { agent, command },
                 });
                 // Launch the agent CLI in the fresh shell. A single-line command
-                // submits on the trailing CR, same as a shell Enter.
-                writeToTerminal(id, buildSubmitBytes(command, true));
+                // submits on the trailing CR, same as a shell Enter. `launchCommand`
+                // is the session-captured form (e.g. `claude --session-id <uuid>`);
+                // fall back to the base command if none was rendered.
+                writeToTerminal(id, buildSubmitBytes(launchCommand ?? command, true));
                 return { ok: true, id, agent, command };
             }
             case 'send': {
@@ -1103,6 +1117,149 @@ export async function runAgentForMcp(
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
     return { ok: false, error: 'Unhandled action.' };
+}
+
+/**
+ * Back the WhisperChat MCP `whisper` tool. Resolves (or lazily creates) the
+ * caller's whisper identity from its terminal, then dispatches the action against
+ * the in-memory broker:
+ *   - `list` — the caller's self info + discoverable peers (scope-filtered) + its
+ *     channels.
+ *   - `send {to?|channel?, text, interrupt?}` — DM a discoverable peer, or
+ *     broadcast on a channel (auto-joining it). `interrupt` nudges a DM target's
+ *     terminal glow; it never injects into the pty.
+ *   - `receive {cursor?, wait?, timeoutMs?}` — page the inbox; `wait` LONG-POLLS
+ *     (this takes the SSE keepalive path in the server, like ForceTheQuestion).
+ *   - `setAccessibility {scope, workspaces?, purpose?}` — change visibility; a
+ *     `specific` workspace list is validated against what the caller GOVERNS (∪
+ *     its own) so an agent can't expose itself to unrelated workspaces. Persisted
+ *     to the spec meta (durable across restart).
+ *   - `join`/`leave {channel}` — opt in/out of a channel (a bare purpose targets
+ *     the caller's own workspace room; `slug:purpose` targets another's).
+ *
+ * A NON-agent caller (a plain terminal that runs an agent and calls whisper) is
+ * lazily joined with defaults (`self` scope, `general` purpose) so any Genie
+ * terminal can participate.
+ */
+export async function whisperForMcp(
+    callerTerminalId: string,
+    req: WhisperRequest,
+): Promise<WhisperResult> {
+    const spec = callerTerminalId ? getTerminalSpec(callerTerminalId) : null;
+    if (!spec || !spec.workspace_id) {
+        return { ok: false, error: 'This terminal is not in a workspace, so it can’t use whisper.' };
+    }
+    const ws = getWorkspace(spec.workspace_id);
+    if (!ws) return { ok: false, error: 'Workspace not found.' };
+
+    // Resolve — or lazily create — the caller's whisper identity.
+    let agentId = spec.meta?.agent_id;
+    if (!agentId) {
+        agentId = crypto.randomUUID();
+        const meta: TerminalSpecMeta = {
+            ...spec.meta,
+            agent: (spec.meta?.agent as WhisperAgentType) ?? 'custom',
+            agent_id: agentId,
+            whisper_purpose: normalizePurpose(spec.meta?.whisper_purpose),
+            whisper_scope: (spec.meta?.whisper_scope as WhisperScope) ?? 'self',
+        };
+        updateTerminalSpec(spec.id, { meta });
+        whisperBroker.join({
+            agentId,
+            terminalId: spec.id,
+            workspaceId: ws.id,
+            workspaceName: ws.project_name,
+            slug: workspaceSlug(ws),
+            agentType: meta.agent as WhisperAgentType,
+            label: spec.label,
+            purpose: meta.whisper_purpose!,
+            scope: meta.whisper_scope as WhisperScope,
+            scopeWorkspaces: Array.isArray(meta.whisper_workspaces)
+                ? (meta.whisper_workspaces as string[])
+                : [],
+            chatSessionId: (meta.chat_session_id as string | undefined) ?? null,
+        });
+    } else {
+        whisperBroker.markOnline(agentId);
+    }
+
+    try {
+        switch (req.action) {
+            case 'list':
+                return {
+                    ok: true,
+                    self: whisperBroker.getInfo(agentId) ?? undefined,
+                    agents: whisperBroker.discoverableFor(agentId),
+                    channels: whisperBroker.channelsForAgent(agentId),
+                };
+            case 'send': {
+                if (!req.text || !req.text.trim()) {
+                    return { ok: false, error: 'send needs a non-empty `text`.' };
+                }
+                if (!req.to && !req.channel) {
+                    return { ok: false, error: 'send needs `to` (an agent) or `channel`.' };
+                }
+                const r = whisperBroker.send({
+                    fromAgentId: agentId,
+                    toAgentId: req.to,
+                    channelArg: req.channel,
+                    text: req.text,
+                    interrupt: req.interrupt,
+                });
+                return r.ok ? { ok: true, delivered: r.delivered } : { ok: false, error: r.error };
+            }
+            case 'receive': {
+                const { messages, cursor } = await whisperBroker.receive(agentId, {
+                    cursor: req.cursor,
+                    wait: req.wait,
+                    timeoutMs: req.timeoutMs,
+                });
+                return { ok: true, messages, cursor };
+            }
+            case 'setAccessibility': {
+                // A `specific` visibility list is limited to workspaces the caller
+                // GOVERNS (∪ its own) — an agent can't make itself discoverable to
+                // arbitrary unrelated workspaces (a discovery leak). Fail-closed.
+                let workspaces = req.workspaces;
+                if (req.scope === 'specific') {
+                    const governed = await governedWorkspaceIdsFor(ws.path).catch(
+                        () => new Set<string>(),
+                    );
+                    const allowed = new Set<string>([ws.id, ...governed]);
+                    workspaces = (req.workspaces ?? []).filter((id) => allowed.has(id));
+                }
+                const info = whisperBroker.setAccessibility(agentId, {
+                    scope: req.scope,
+                    workspaces,
+                    purpose: req.purpose,
+                });
+                // Persist the durable bits to the spec meta.
+                const cur = getTerminalSpec(spec.id);
+                if (cur) {
+                    const meta: TerminalSpecMeta = { ...cur.meta };
+                    if (req.scope !== undefined) meta.whisper_scope = req.scope;
+                    if (workspaces !== undefined) meta.whisper_workspaces = workspaces;
+                    if (req.purpose !== undefined) meta.whisper_purpose = normalizePurpose(req.purpose);
+                    updateTerminalSpec(spec.id, { meta });
+                }
+                return { ok: true, self: info ?? undefined };
+            }
+            case 'join': {
+                if (!req.channel) return { ok: false, error: 'join needs a `channel`.' };
+                const ok = whisperBroker.joinChannel(agentId, req.channel);
+                if (!ok) return { ok: false, error: `Couldn't resolve channel "${req.channel}".` };
+                return { ok: true, channels: whisperBroker.channelsForAgent(agentId) };
+            }
+            case 'leave': {
+                if (!req.channel) return { ok: false, error: 'leave needs a `channel`.' };
+                whisperBroker.leaveChannel(agentId, req.channel);
+                return { ok: true, channels: whisperBroker.channelsForAgent(agentId) };
+            }
+        }
+    } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+    return { ok: false, error: 'Unhandled whisper action.' };
 }
 
 /** The caller's own workspace + every workspace it governs (manageWorkspaces). */

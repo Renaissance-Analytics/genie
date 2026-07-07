@@ -16,8 +16,15 @@ import type {
     CheckEnvRequest,
     CheckEnvResult,
 } from '../env-store';
+import type {
+    WhisperScope,
+    WhisperAgentInfo,
+    WhisperChannelInfo,
+    WhisperMessage,
+} from '../whisper/types';
 
 export type { SetEnvRequest, SetEnvResult, CheckEnvRequest, CheckEnvResult };
+export type { WhisperScope, WhisperAgentInfo, WhisperChannelInfo, WhisperMessage };
 
 export const MCP_PROTOCOL_VERSION = '2024-11-05';
 
@@ -266,6 +273,14 @@ export interface McpContext {
         req: ManageWorkspacesRequest,
     ) => Promise<ManageWorkspacesResult>;
     /**
+     * Local inter-agent messaging (the WhisperChat `whisper` tool): discover peers
+     * (scope-filtered), DM, channel broadcast, long-poll receive, accessibility.
+     * Resolves the caller's whisper identity from the terminal (lazily joining a
+     * plain terminal). `receive` + `wait` blocks (long-poll) — server.ts routes it
+     * over the SSE keepalive path, like ForceTheQuestion.
+     */
+    whisper: (terminalId: string, req: WhisperRequest) => Promise<WhisperResult>;
+    /**
      * Open a file in Genie's built-in editor FOR THE USER (the openFileForUser
      * tool): resolve the caller's workspace from the terminal (incl the System
      * workspace), resolve the path (workspace-relative against the root, or
@@ -395,6 +410,8 @@ export interface ManagedTerminalInfo {
     cwd: string;
     /** True when this terminal is currently running an agent (via runAgent). */
     agent?: 'claude' | 'codex' | 'custom' | null;
+    /** The captured AI chat-session uuid for an agent terminal, or null. */
+    chatSessionId?: string | null;
 }
 
 export interface ManageTerminalsRequest {
@@ -544,6 +561,51 @@ export interface ManageWorkspacesResult {
     workspaces: ManagedWorkspaceInfo[];
     /** The workspace the action targeted, when applicable. */
     affectedId?: string;
+}
+
+// --- whisper -----------------------------------------------------------------
+
+export interface WhisperRequest {
+    /** `list` (discovery), `send`, `receive`, `setAccessibility`, `join`, `leave`. */
+    action: 'list' | 'send' | 'receive' | 'setAccessibility' | 'join' | 'leave';
+    /** send: DM this agent id (mutually exclusive with `channel`). */
+    to?: string;
+    /** send/join/leave: a channel — a bare purpose (own workspace) or `slug:purpose`. */
+    channel?: string;
+    /** send: the message body. */
+    text?: string;
+    /** send (optional): also nudge a DM target's terminal glow (no pty injection). */
+    interrupt?: boolean;
+    /** receive (optional): page from this cursor (a prior receive's `cursor`). */
+    cursor?: number;
+    /** receive (optional): LONG-POLL until a message arrives / you leave / timeout. */
+    wait?: boolean;
+    /** receive (optional): long-poll window in ms (default ~55s, capped). */
+    timeoutMs?: number;
+    /** setAccessibility: who can see/DM you. */
+    scope?: WhisperScope;
+    /** setAccessibility (scope `specific`): the workspace ids you're visible to. */
+    workspaces?: string[];
+    /** setAccessibility (optional): change your channel purpose (re-keys the room). */
+    purpose?: string;
+}
+
+export interface WhisperResult {
+    ok: boolean;
+    /** Set when ok is false (bad args, unreachable target, unknown channel, …). */
+    error?: string;
+    /** list / setAccessibility: the caller's own agent info. */
+    self?: WhisperAgentInfo;
+    /** list: the peers discoverable by the caller (scope-filtered). */
+    agents?: WhisperAgentInfo[];
+    /** list / join / leave: the caller's channels. */
+    channels?: WhisperChannelInfo[];
+    /** receive: the new messages since the cursor. */
+    messages?: WhisperMessage[];
+    /** receive: the cursor to pass to the NEXT receive. */
+    cursor?: number;
+    /** send: how many recipients the message reached. */
+    delivered?: number;
 }
 
 // --- openFileForUser ---------------------------------------------------------
@@ -921,6 +983,68 @@ const MANAGE_WORKSPACES_TOOL = {
     },
 };
 
+const WHISPER_TOOL = {
+    name: 'whisper',
+    description:
+        "Coordinate with OTHER AI agents running in this Genie instance — WhisperChat, a LOCAL inter-agent messaging network. Discover peer agents (in your workspace, or across the workstation when they allow it), DM them 1:1, and broadcast on shared CHANNELS. Delivery is PULL-based — you POLL for messages, they're never injected into your terminal (which would corrupt your turn). Actions (`action`): `list` (discovery — returns YOUR agent info `self`, the peers you can reach `agents`, and your `channels`); `send` (message a peer with `to` = their agentId, OR broadcast with `channel` = a purpose like `frontend` (your workspace's room) or `slug:purpose` (another workspace's) — needs `text`; optional `interrupt:true` also glows a DM target's terminal so they notice); `receive` (fetch NEW messages — pass a `cursor` from a prior receive to page forward; set `wait:true` to LONG-POLL until a message arrives (optional `timeoutMs`), so you can block waiting for a peer's reply); `setAccessibility` (`scope`: `none` hidden / `self` your workspace only (default) / `specific` + `workspaces` a chosen set / `all` the whole workstation — governs who can see + DM you; optional `purpose` renames your channel); `join`/`leave` (`channel`) to opt in/out of a channel. Your identity + accessibility are remembered across restarts. Local-only — no relay, no cross-host.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            action: {
+                type: 'string',
+                enum: ['list', 'send', 'receive', 'setAccessibility', 'join', 'leave'],
+                description: 'What to do.',
+            },
+            to: {
+                type: 'string',
+                description: 'send: the recipient agent id (DM). Mutually exclusive with `channel`.',
+            },
+            channel: {
+                type: 'string',
+                description:
+                    'send/join/leave: a channel — a bare purpose (`frontend` → your workspace room) or `slug:purpose` (another workspace).',
+            },
+            text: { type: 'string', description: 'send: the message body.' },
+            interrupt: {
+                type: 'boolean',
+                description:
+                    'send (optional): also nudge a DM target — glows their terminal so they notice. Never injected into their pty.',
+            },
+            cursor: {
+                type: 'number',
+                description: 'receive (optional): page from this cursor (a prior receive returned it).',
+            },
+            wait: {
+                type: 'boolean',
+                description:
+                    'receive (optional): LONG-POLL — block until a message arrives, you leave, or the timeout. Returns empty on timeout so you re-poll.',
+            },
+            timeoutMs: {
+                type: 'number',
+                description: 'receive (optional): long-poll window in ms (default ~55s, capped).',
+            },
+            scope: {
+                type: 'string',
+                enum: ['none', 'self', 'specific', 'all'],
+                description:
+                    'setAccessibility: who can see/DM you — none (hidden) / self (your workspace, default) / specific (a chosen set) / all (the workstation).',
+            },
+            workspaces: {
+                type: 'array',
+                items: { type: 'string' },
+                description:
+                    'setAccessibility (scope `specific`): the workspace ids you allow — limited to ones you govern (∪ your own).',
+            },
+            purpose: {
+                type: 'string',
+                description: 'setAccessibility (optional): rename your channel purpose (kebab; re-keys your room).',
+            },
+        },
+        required: ['action'],
+        additionalProperties: false,
+    },
+};
+
 /**
  * Format a workspace map into the agent-facing orientation: a numbered learning
  * plan (envelope docs first, then each repo's README/AGENTS/CLAUDE + manifest,
@@ -1270,6 +1394,7 @@ export async function handleMcpMessage(
                     MANAGE_TERMINALS_TOOL,
                     RUN_AGENT_TOOL,
                     MANAGE_WORKSPACES_TOOL,
+                    WHISPER_TOOL,
                     OPEN_FILE_TOOL,
                     SET_ENV_TOOL,
                     CHECK_ENV_TOOL,
@@ -1548,6 +1673,59 @@ export async function handleMcpMessage(
                           result.affectedId ? ` (acted on ${result.affectedId})` : ''
                       }.`
                     : `manageWorkspaces failed: ${result.error ?? 'unknown error'}`;
+                return ok(msg.id, {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `${summary}\n\n${JSON.stringify(result, null, 2)}`,
+                        },
+                    ],
+                });
+            }
+            if (params.name === 'whisper') {
+                const a = (params.arguments ?? {}) as Partial<WhisperRequest>;
+                const action = a.action;
+                if (
+                    action !== 'list' &&
+                    action !== 'send' &&
+                    action !== 'receive' &&
+                    action !== 'setAccessibility' &&
+                    action !== 'join' &&
+                    action !== 'leave'
+                ) {
+                    return err(
+                        msg.id,
+                        -32602,
+                        'whisper requires `action`: list | send | receive | setAccessibility | join | leave.',
+                    );
+                }
+                const result = await ctx.whisper(ctx.terminalId, {
+                    action,
+                    to: a.to,
+                    channel: a.channel,
+                    text: a.text,
+                    interrupt: a.interrupt,
+                    cursor: a.cursor,
+                    wait: a.wait,
+                    timeoutMs: a.timeoutMs,
+                    scope: a.scope,
+                    workspaces: a.workspaces,
+                    purpose: a.purpose,
+                });
+                let summary: string;
+                if (!result.ok) {
+                    summary = `whisper failed: ${result.error ?? 'unknown error'}`;
+                } else if (action === 'list') {
+                    summary = `${result.agents?.length ?? 0} agent(s) reachable, ${
+                        result.channels?.length ?? 0
+                    } channel(s).`;
+                } else if (action === 'receive') {
+                    summary = `${result.messages?.length ?? 0} new message(s).`;
+                } else if (action === 'send') {
+                    summary = `Sent — delivered to ${result.delivered ?? 0} recipient(s).`;
+                } else {
+                    summary = `whisper ${action} ok.`;
+                }
                 return ok(msg.id, {
                     content: [
                         {

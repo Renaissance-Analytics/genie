@@ -1381,6 +1381,25 @@ export interface TerminalSpecMeta {
      * + `system: true` and is grouped under the System Workspace in the UI.
      */
     system?: boolean;
+    /** Agent terminals (runAgent / specialized): which AI TUI this runs. */
+    agent?: 'claude' | 'codex' | 'custom';
+    /** Agent terminals: the CLI command line that was launched (display). */
+    agent_command?: string;
+    /**
+     * WhisperChat identity + accessibility (Specialized Terminals). These ride
+     * the spec's meta so an agent's whisper registration is durable across a
+     * restart (the in-memory broker rehydrates from them) — NO migration.
+     */
+    /** Stable whisper identity (uuid). Present ⇒ this terminal is a whisper agent. */
+    agent_id?: string;
+    /** Channel purpose (kebab). Default `general`. */
+    whisper_purpose?: string;
+    /** Accessibility scope — who can see/DM this agent. Default `self`. */
+    whisper_scope?: 'none' | 'self' | 'specific' | 'all';
+    /** Workspace ids this agent is visible to when `whisper_scope: 'specific'`. */
+    whisper_workspaces?: string[];
+    /** The captured AI chat-session uuid (session-capture), when known. */
+    chat_session_id?: string;
     [key: string]: unknown;
 }
 

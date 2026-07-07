@@ -60,10 +60,12 @@ import {
     terminalHasWindow,
     killTerminalById,
     reapOrphanTerminals,
+    rehydrateWhisper,
     createAgentTerminal,
     writeToTerminal,
     readTerminalOutput,
 } from './terminal/ipc';
+import { installWhisperPresence } from './whisper/presence';
 import {
     buildSubmitBytes,
     resolveTerminalInput,
@@ -959,6 +961,15 @@ app.whenReady().then(async () => {
             /* best-effort */
         }
     }, 8000).unref?.();
+    // WhisperChat: wire the presence/message fan-out, then re-register every
+    // persisted whisper agent (durable identity rides terminal_specs.meta) into
+    // the in-memory broker so a restart doesn't lose the agent directory.
+    try {
+        installWhisperPresence();
+        rehydrateWhisper();
+    } catch {
+        /* best-effort — whisper is additive; a failure never blocks startup */
+    }
     registerFilesIpc();
     registerGithubIpc();
     // Plugin System (Settings → Plugins): install / enable / grant / marketplace.
