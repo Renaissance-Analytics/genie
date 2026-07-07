@@ -23,7 +23,7 @@ import {
     type KnowledgeNode,
     type KnowledgeSearchResult,
 } from '../lib/genie';
-import { circleLayout, parseWikilinks, resolveLinkIds } from '../lib/knowledge-graph';
+import { circleLayout } from '../lib/knowledge-graph';
 
 /**
  * The Workstation Knowledge Graph window (Wish #87). A separate Genie-skinned
@@ -126,11 +126,11 @@ export default function KnowledgePage() {
         };
     }, [reload]);
 
-    // Live-refresh when an agent (via MCP) or another window mutates the store.
-    // The event is optional — an older host omits it, so we simply don't subscribe.
+    // Live-refresh when an agent (via MCP) or another window mutates the store —
+    // any add / update / delete / link re-fetches the list + graph.
     useEffect(() => {
         if (!hasGenieBridge()) return;
-        return api().on.knowledgeChanged?.(() => {
+        return api().on.knowledgeChanged(() => {
             void reload().catch(() => {});
         });
     }, [reload]);
@@ -174,22 +174,18 @@ export default function KnowledgePage() {
         async (draft: { id?: string; title: string; tags: string[]; body: string }) => {
             setBusy(true);
             try {
-                // Edges come from the body's `[[wikilinks]]`, resolved to node ids
-                // (a node never links to itself; dangling links form no edge).
-                const links = resolveLinkIds(parseWikilinks(draft.body), nodes, draft.id);
+                // Edges are derived main-side from the body's `[[wikilinks]]`
+                // (resolved by title/slug at read time), so we send only the
+                // content — no explicit `links`. Omitting it also leaves any
+                // extra edges an agent attached untouched on update.
+                const input = {
+                    title: draft.title,
+                    body: draft.body,
+                    tags: draft.tags,
+                };
                 const saved = draft.id
-                    ? await api().knowledge.update(draft.id, {
-                          title: draft.title,
-                          body: draft.body,
-                          tags: draft.tags,
-                          links,
-                      })
-                    : await api().knowledge.add({
-                          title: draft.title,
-                          body: draft.body,
-                          tags: draft.tags,
-                          links,
-                      });
+                    ? await api().knowledge.update(draft.id, input)
+                    : await api().knowledge.add(input);
                 await reload();
                 if (saved) setSelectedId(saved.id);
                 setMode('view');
@@ -200,7 +196,7 @@ export default function KnowledgePage() {
                 setBusy(false);
             }
         },
-        [nodes, reload],
+        [reload],
     );
 
     const deleteMemory = useCallback(
@@ -521,18 +517,18 @@ function GraphView({
 
     const neighbors = new Set<string>();
     for (const e of graph.edges) {
-        if (e.source === selectedId) neighbors.add(e.target);
-        else if (e.target === selectedId) neighbors.add(e.source);
+        if (e.from === selectedId) neighbors.add(e.to);
+        else if (e.to === selectedId) neighbors.add(e.from);
     }
 
     return (
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', padding: 8 }}>
             <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="100%" style={{ display: 'block' }}>
                 {graph.edges.map((e, i) => {
-                    const a = layout.get(e.source);
-                    const b = layout.get(e.target);
+                    const a = layout.get(e.from);
+                    const b = layout.get(e.to);
                     if (!a || !b) return null;
-                    const active = e.source === selectedId || e.target === selectedId;
+                    const active = e.from === selectedId || e.to === selectedId;
                     return (
                         <line
                             key={i}
@@ -603,9 +599,9 @@ function MemoryView({
     const linked = (node.links ?? [])
         .map((id) => nodesById.get(id))
         .filter((n): n is KnowledgeNode => !!n);
-    const updated = new Date(node.updatedAt);
+    const updated = new Date(node.updatedAt); // epoch ms
     const updatedLabel = Number.isNaN(updated.getTime())
-        ? node.updatedAt
+        ? '—'
         : updated.toLocaleString();
 
     return (

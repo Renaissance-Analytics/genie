@@ -1,64 +1,10 @@
 /**
  * Pure helpers for the Knowledge Graph window (renderer/pages/knowledge.tsx).
- * Kept dependency-free + side-effect-free so the window's `[[wikilink]]`
- * parsing and its graph layout are unit-testable without a DOM or a store.
+ * Kept dependency-free + side-effect-free so the graph layout is unit-testable
+ * without a DOM. (Edge derivation from `[[wikilinks]]` lives main-side — the
+ * store resolves them by title/slug at read time — so the renderer only lays
+ * out the nodes + edges it's handed.)
  */
-
-/** The minimal node shape both store nodes and graph nodes satisfy. */
-export interface TitledNode {
-    id: string;
-    title: string;
-}
-
-/**
- * Extract `[[wikilink]]` TARGETS from a markdown body, in document order,
- * de-duplicated case-insensitively and trimmed. Empty `[[]]` refs are ignored.
- * The inner text is the link target — another memory's TITLE.
- */
-export function parseWikilinks(body: string): string[] {
-    const out: string[] = [];
-    const seen = new Set<string>();
-    const re = /\[\[([^\]]+)\]\]/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(body)) !== null) {
-        const target = m[1].trim();
-        if (!target) continue;
-        const key = target.toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push(target);
-    }
-    return out;
-}
-
-/**
- * Resolve wikilink targets (memory titles) to node IDS against the known nodes,
- * matching case-insensitively by title. Unresolved targets are dropped — a
- * dangling `[[wikilink]]` forms no edge until its target memory exists. A node
- * never links to itself (`selfId`). Returns de-duplicated ids in first-seen
- * order.
- */
-export function resolveLinkIds(
-    targets: string[],
-    nodes: TitledNode[],
-    selfId?: string,
-): string[] {
-    const byTitle = new Map<string, string>();
-    // Later duplicates keep the FIRST title→id mapping (stable).
-    for (const n of nodes) {
-        const key = n.title.trim().toLowerCase();
-        if (!byTitle.has(key)) byTitle.set(key, n.id);
-    }
-    const out: string[] = [];
-    const seen = new Set<string>();
-    for (const t of targets) {
-        const id = byTitle.get(t.trim().toLowerCase());
-        if (!id || id === selfId || seen.has(id)) continue;
-        seen.add(id);
-        out.push(id);
-    }
-    return out;
-}
 
 export interface Point {
     x: number;

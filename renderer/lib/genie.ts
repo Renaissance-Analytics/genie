@@ -1287,12 +1287,15 @@ export interface KnowledgeNode {
     /** The memory body, as markdown. */
     body: string;
     tags: string[];
-    /** Ids of the memories this one links to — its outgoing `[[wikilink]]` edges. */
+    /** Ids of the memories this one links to — its out-edges. Resolved main-side
+     *  from the body's `[[wikilinks]]` (by title/slug, at read time) PLUS any
+     *  explicit links passed to add/update. */
     links: string[];
     /** Who wrote it: an agent (RAG/MCP) or the user (this window). */
     source: 'agent' | 'user';
-    createdAt: string;
-    updatedAt: string;
+    /** Epoch ms. */
+    createdAt: number;
+    updatedAt: number;
 }
 
 /** One `knowledge.search` hit — a lightweight node projection + match snippet. */
@@ -1306,32 +1309,29 @@ export interface KnowledgeSearchResult {
     tags: string[];
 }
 
-/** A graph node projection for the relationship view. */
-export interface KnowledgeGraphNode {
-    id: string;
-    title: string;
-    tags: string[];
-}
-
-/** A directed edge: `source` links to `target` (a resolved `[[wikilink]]`). */
+/** A directed edge: `from` links to `to` (a resolved `[[wikilink]]` or explicit link). */
 export interface KnowledgeGraphEdge {
-    source: string;
-    target: string;
+    from: string;
+    to: string;
 }
 
-/** The whole store as a graph: nodes + the edges between them. */
+/** The whole store as a graph: the full nodes + the edges between them. */
 export interface KnowledgeGraphData {
-    nodes: KnowledgeGraphNode[];
+    nodes: KnowledgeNode[];
     edges: KnowledgeGraphEdge[];
 }
 
-/** Fields accepted when creating / updating a memory from this window. */
+/**
+ * Fields accepted when creating / updating a memory. Only `title` is required;
+ * edges are derived main-side from the body's `[[wikilinks]]`, so `links` is
+ * reserved for EXPLICIT extra edges (ids/titles/slugs) — this window omits it,
+ * letting the body be the single source of truth for links.
+ */
 export interface KnowledgeInput {
     title: string;
-    body: string;
-    tags: string[];
-    /** Resolved target node ids (derived from the body's `[[wikilinks]]`). */
-    links: string[];
+    body?: string;
+    tags?: string[];
+    links?: string[];
 }
 
 export interface GenieApi {
@@ -1864,7 +1864,7 @@ export interface GenieApi {
         /** Full-text search across memories; results are pre-ranked by `score`. */
         search: (
             query: string,
-            opts?: { limit?: number },
+            opts?: { limit?: number; tags?: string[] },
         ) => Promise<KnowledgeSearchResult[]>;
         /** Every memory (optionally filtered by tag / capped), newest first. */
         list: (opts?: { tag?: string; limit?: number }) => Promise<KnowledgeNode[]>;
@@ -2335,11 +2335,15 @@ export interface GenieApi {
         whisperMessage: (
             cb: (payload: WhisperMessageEvent) => void,
         ) => () => void;
-        /** Knowledge Graph: a memory was added / edited / deleted (by an agent
-         *  via MCP, or another window) — the window re-fetches its list + graph.
-         *  Optional: an older host that predates the store simply omits it, so
-         *  callers guard with `api().on.knowledgeChanged?.(…)`. */
-        knowledgeChanged?: (cb: () => void) => () => void;
+        /** Knowledge Graph: any change (add / update / delete / link), INCLUDING
+         *  an agent's MCP write — the window re-fetches its list + graph so the
+         *  view stays live. Returns an unsubscribe fn. */
+        knowledgeChanged: (
+            cb: (payload: {
+                action: 'add' | 'update' | 'delete' | 'link';
+                id?: string;
+            }) => void,
+        ) => () => void;
     };
 }
 
