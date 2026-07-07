@@ -116,3 +116,38 @@ export function workstationConnectState(
             };
     }
 }
+
+type WorkstationConnectFields = Pick<
+    ConnectableWorkstation,
+    'id' | 'status' | 'connectable' | 'source'
+>;
+
+/** The set of workstation IDs that are CONNECTABLE right now (host active +
+ *  entitled) — i.e. `workstationConnectState(ws).canConnect`. */
+export function connectableWorkstationIds(
+    workstations: ReadonlyArray<WorkstationConnectFields>,
+): Set<string> {
+    const ids = new Set<string>();
+    for (const ws of workstations) {
+        if (workstationConnectState(ws).canConnect) ids.add(ws.id);
+    }
+    return ids;
+}
+
+/**
+ * The IDs that JUST became connectable — present in the current set, absent from
+ * the previously-observed set. Powers the Hosts button's "a workstation came
+ * online" glow: it fires on a real provisioning→connectable transition, NOT for
+ * a workstation that was already connectable.
+ *
+ * `prev === null` (the first observation, no baseline yet) returns [] so an
+ * already-online workstation at startup never glows — only a fresh transition.
+ */
+export function newlyConnectableWorkstationIds(
+    prev: ReadonlySet<string> | null,
+    workstations: ReadonlyArray<WorkstationConnectFields>,
+): string[] {
+    const current = connectableWorkstationIds(workstations);
+    if (prev === null) return [];
+    return [...current].filter((id) => !prev.has(id));
+}

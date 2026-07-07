@@ -2305,6 +2305,15 @@ body.gutter-dragging .grid-gutter {
     }
 }
 
+/* The Hosts titlebar button glows when a Virtual Workstation transitions
+   provisioning → connectable, so the owner doesn't have to keep re-opening the
+   popover after a spawn to catch the moment it's ready. Clears on open. Reuses
+   the imDone attention-glow aesthetic for consistency. */
+.gicon.ws-online-glow {
+    animation: attention-rail-glow 1.6s ease-in-out infinite;
+    border-radius: var(--radius-sm, 6px);
+}
+
 /* Agent-integration MCP: a workspace-level "something finished here" pulse,
    fired when a terminal in the workspace calls imDone. Unlike the persistent
    .attention glow above, this is a brief one-shot (a single soft violet swell

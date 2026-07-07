@@ -37,7 +37,11 @@ import {
 } from '../lib/view-state';
 import { planCommitStep, shouldDriveRestart } from '../lib/updater-flow';
 import { pickReusePanel, emitOpenInPanel } from '../lib/editor-open';
-import { workstationConnectState } from '../lib/workstation-status';
+import {
+    workstationConnectState,
+    connectableWorkstationIds,
+    newlyConnectableWorkstationIds,
+} from '../lib/workstation-status';
 import {
     IconBox,
     IconColumns,
@@ -2579,16 +2583,49 @@ function HostsButton() {
     const isHostWindow =
         typeof window !== 'undefined' && /[?&]host=/.test(window.location.search);
     const [open, setOpen] = useState(false);
+    // Glow the button when a Virtual Workstation transitions provisioning→online,
+    // so the owner doesn't have to keep re-opening this popover after a spawn to
+    // catch the moment it's connectable. Fires only on the transition (see
+    // newlyConnectableWorkstationIds), and clears when the popover is opened.
+    const [cameOnline, setCameOnline] = useState(false);
+    const seenConnectableRef = useRef<Set<string> | null>(null);
+    useEffect(() => {
+        if (isHostWindow) return; // remote Floors don't spawn workstations from here
+        let cancelled = false;
+        const poll = async () => {
+            const ws = await api()
+                .workstations.connectable()
+                .catch(() => [] as ConnectableWorkstation[]);
+            if (cancelled) return;
+            const fresh = newlyConnectableWorkstationIds(seenConnectableRef.current, ws);
+            seenConnectableRef.current = connectableWorkstationIds(ws);
+            if (fresh.length > 0) setCameOnline(true);
+        };
+        void poll(); // first poll seeds the baseline (no glow for already-online)
+        const t = setInterval(() => void poll(), 20_000);
+        return () => {
+            cancelled = true;
+            clearInterval(t);
+        };
+    }, [isHostWindow]);
     if (isHostWindow) return null;
+    const toggle = () => {
+        setOpen((o) => !o);
+        setCameOnline(false); // opening acknowledges the "came online" glow
+    };
     return (
         <div style={{ position: 'relative', display: 'inline-flex' }}>
             <button
                 type="button"
-                className="gicon"
-                title="Connect to a host Genie — opens its desktop in a new window"
+                className={`gicon${cameOnline ? ' ws-online-glow' : ''}`}
+                title={
+                    cameOnline
+                        ? 'A workstation just came online — click to connect'
+                        : 'Connect to a host Genie — opens its desktop in a new window'
+                }
                 aria-label="Hosts"
                 aria-expanded={open}
-                onClick={() => setOpen((o) => !o)}
+                onClick={toggle}
             >
                 {/* stacked-servers glyph */}
                 <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>

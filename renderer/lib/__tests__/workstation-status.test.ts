@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { workstationConnectState } from '../workstation-status';
+import {
+    workstationConnectState,
+    connectableWorkstationIds,
+    newlyConnectableWorkstationIds,
+} from '../workstation-status';
 import type { ConnectableWorkstation } from '../genie';
 
 /**
@@ -79,5 +83,69 @@ describe('workstationConnectState', () => {
         expect(st.canConnect).toBe(false);
         expect(st.label).toBe('Unavailable');
         expect(st.title).toContain('suspended');
+    });
+});
+
+/**
+ * The Hosts button glows when a workstation comes online AFTER provisioning, so
+ * the owner isn't stuck re-opening the popover to catch the moment. These lock
+ * in the transition detection powering that glow.
+ */
+describe('connectableWorkstationIds / newlyConnectableWorkstationIds', () => {
+    it('connectableWorkstationIds returns only the genuinely connectable rows', () => {
+        const ids = connectableWorkstationIds([
+            ws({ id: 'a', status: 'active', connectable: true, source: 'owner' }),
+            ws({ id: 'b', status: 'provisioning', connectable: false }),
+            ws({ id: 'c', status: 'active', connectable: false, source: null }), // no access
+        ]);
+        expect([...ids]).toEqual(['a']);
+    });
+
+    it('does NOT glow on the first observation (baseline) even if already online', () => {
+        const fresh = newlyConnectableWorkstationIds(null, [
+            ws({ id: 'a', status: 'active', connectable: true, source: 'owner' }),
+        ]);
+        expect(fresh).toEqual([]);
+    });
+
+    it('glows when a provisioning workstation becomes connectable', () => {
+        const prev = connectableWorkstationIds([
+            ws({ id: 'a', status: 'provisioning', connectable: false }),
+        ]);
+        const fresh = newlyConnectableWorkstationIds(prev, [
+            ws({ id: 'a', status: 'active', connectable: true, source: 'owner' }),
+        ]);
+        expect(fresh).toEqual(['a']);
+    });
+
+    it('does NOT re-glow for a workstation that was already connectable', () => {
+        const prev = connectableWorkstationIds([
+            ws({ id: 'a', status: 'active', connectable: true, source: 'owner' }),
+        ]);
+        const fresh = newlyConnectableWorkstationIds(prev, [
+            ws({ id: 'a', status: 'active', connectable: true, source: 'owner' }),
+        ]);
+        expect(fresh).toEqual([]);
+    });
+
+    it('does NOT glow when a host goes active → unreachable (that is not coming online)', () => {
+        const prev = connectableWorkstationIds([
+            ws({ id: 'a', status: 'active', connectable: true, source: 'owner' }),
+        ]);
+        const fresh = newlyConnectableWorkstationIds(prev, [
+            ws({ id: 'a', status: 'unreachable', connectable: false }),
+        ]);
+        expect(fresh).toEqual([]);
+    });
+
+    it('glows for a brand-new workstation that appears already connectable', () => {
+        const prev = connectableWorkstationIds([
+            ws({ id: 'a', status: 'active', connectable: true, source: 'owner' }),
+        ]);
+        const fresh = newlyConnectableWorkstationIds(prev, [
+            ws({ id: 'a', status: 'active', connectable: true, source: 'owner' }),
+            ws({ id: 'b', status: 'active', connectable: true, source: 'grant' }),
+        ]);
+        expect(fresh).toEqual(['b']);
     });
 });
