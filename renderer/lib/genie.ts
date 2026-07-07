@@ -900,6 +900,26 @@ export interface WhisperChannelInfo {
     memberCount: number;
 }
 
+/** A WhisperChat DM thread (a message-carrying pair) — human↔agent OR
+ *  agent↔agent — as the human panel's DMs list reports it. */
+export interface WhisperDmThreadInfo {
+    /** Order-independent pair key (`idA|idB`). */
+    key: string;
+    /** Participant ids (either may be `'human'`). */
+    a: string;
+    b: string;
+    /** Display labels (`You` for the human; a logged label for a departed agent). */
+    aLabel: string;
+    bLabel: string;
+    /** True when the human is a participant (else agent↔agent). */
+    withHuman: boolean;
+    lastFromLabel: string;
+    lastPreview: string;
+    lastSeq: number;
+    lastTs: number;
+    count: number;
+}
+
 /** One WhisperChat message (channel broadcast or 1:1 DM). */
 export interface WhisperMessage {
     seq: number;
@@ -1964,10 +1984,14 @@ export interface GenieApi {
         directory: () => Promise<{ agents: WhisperAgentInfo[] }>;
         /** Every broadcast channel (`slug:purpose`). */
         channels: () => Promise<{ channels: WhisperChannelInfo[] }>;
-        /** Message history for a channel OR a 1:1 DM thread (paginate via `before`). */
+        /** Every DM thread with messages — human↔agent AND agent↔agent. */
+        dmThreads: () => Promise<{ threads: WhisperDmThreadInfo[] }>;
+        /** Message history for a channel, an arbitrary DM `dmPair`, OR the
+         *  human↔agent thread (`agentId`) — paginate via `before`. */
         history: (opts: {
             channelKey?: string;
             agentId?: string;
+            dmPair?: [string, string];
             limit?: number;
             before?: number;
         }) => Promise<{ messages: WhisperMessage[] }>;

@@ -6,6 +6,7 @@ import {
     type WhisperAgentInfo,
     type WhisperBrokerEvent,
     type WhisperChannelInfo,
+    type WhisperDmThreadInfo,
     type WhisperJoinInput,
     type WhisperMessage,
     type WhisperScope,
@@ -572,19 +573,73 @@ export class WhisperBroker {
     // --- history (human panel) --------------------------------------------
 
     /**
-     * The message log for a channel (`channelKey`) or the human↔agent DM thread
-     * (`agentId`). Newest-last, capped by `limit`, optionally paged with
-     * `before` (only messages with seq < before).
+     * Resolve a display label for a DM participant, tolerating a departed agent.
+     * The human is always `You`; a live agent uses its current label; an agent
+     * that has already LEFT is recovered from the label it stamped on a message
+     * in `log` (else the raw id, so the thread is never label-less).
+     */
+    private dmLabelFor(id: string, log: WhisperMessage[]): string {
+        if (id === WHISPER_HUMAN) return 'You';
+        const live = this.agents.get(id);
+        if (live) return live.label || `${live.slug}:${live.purpose}`;
+        for (let i = log.length - 1; i >= 0; i--) {
+            if (log[i].from === id) return log[i].fromLabel;
+        }
+        return id;
+    }
+
+    /**
+     * Every DM thread that has messages — human↔agent AND agent↔agent — for the
+     * human panel's DMs list. The human owns the workstation, so (like
+     * {@link directory}) there is NO scope filter. Each entry carries both
+     * participants' labels and a last-message preview, sorted newest-first.
+     */
+    dmThreads(): WhisperDmThreadInfo[] {
+        const out: WhisperDmThreadInfo[] = [];
+        for (const [key, log] of this.dmLogs) {
+            if (log.length === 0) continue;
+            const sep = key.indexOf('|');
+            const a = key.slice(0, sep);
+            const b = key.slice(sep + 1);
+            const last = log[log.length - 1];
+            out.push({
+                key,
+                a,
+                b,
+                aLabel: this.dmLabelFor(a, log),
+                bLabel: this.dmLabelFor(b, log),
+                withHuman: a === WHISPER_HUMAN || b === WHISPER_HUMAN,
+                lastFromLabel: last.fromLabel,
+                lastPreview: previewText(last.text),
+                lastSeq: last.seq,
+                lastTs: last.ts,
+                count: log.length,
+            });
+        }
+        // Newest-first by ts, tie-broken by seq (monotonic — never ties, so the
+        // order is deterministic even for messages within the same millisecond).
+        return out.sort((x, y) => y.lastTs - x.lastTs || y.lastSeq - x.lastSeq);
+    }
+
+    /**
+     * The message log for a channel (`channelKey`), an arbitrary DM pair
+     * (`dmPair: [idA, idB]` — either may be the human; covers agent↔agent), or —
+     * for back-compat — the human↔agent thread (`agentId`). Newest-last, capped
+     * by `limit`, optionally paged with `before` (only messages with seq <
+     * before).
      */
     history(opts: {
         channelKey?: string;
         agentId?: string;
+        dmPair?: [string, string];
         limit?: number;
         before?: number;
     }): WhisperMessage[] {
         let log: WhisperMessage[] = [];
         if (opts.channelKey) {
             log = this.channelLogs.get(opts.channelKey) ?? [];
+        } else if (opts.dmPair) {
+            log = this.dmLogs.get(pairKey(opts.dmPair[0], opts.dmPair[1])) ?? [];
         } else if (opts.agentId) {
             log = this.dmLogs.get(pairKey(WHISPER_HUMAN, opts.agentId)) ?? [];
         }

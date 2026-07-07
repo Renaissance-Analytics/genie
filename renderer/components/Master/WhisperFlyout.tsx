@@ -5,21 +5,29 @@ import {
     hasGenieBridge,
     type WhisperAgentInfo,
     type WhisperChannelInfo,
+    type WhisperDmThreadInfo,
     type WhisperMessage,
 } from '../../lib/genie';
 
 /**
  * WhisperChat human panel. Right-side slide-in (reuses the Docs / Task Manager
- * flyout chrome) with three panes: the AGENT DIRECTORY (label / type / purpose /
- * status / workspace), the CHANNEL list (`slug:purpose`), and the message STREAM
- * for the selected channel or DM plus a composer that posts as the human. Loads on
- * open and stays live via `on.whisperPresence` / `on.whisperMessage`. WhisperChat
- * is local-only in v1, so it's guarded behind the Genie bridge.
+ * flyout chrome) with panes: the AGENT DIRECTORY (label / type / purpose /
+ * status / workspace), the DIRECT-MESSAGE thread list (every DM pair with
+ * messages — the human's OWN DMs AND agent↔agent threads), the CHANNEL list
+ * (`slug:purpose`), and the message STREAM for the selection plus a composer that
+ * posts as the human. Loads on open and stays live via `on.whisperPresence` /
+ * `on.whisperMessage`. WhisperChat is local-only in v1, so it's guarded behind the
+ * Genie bridge.
  */
+
+/** The human panel's sender identity token (mirrors the broker's `WHISPER_HUMAN`). */
+const HUMAN = 'human';
 
 type Selection =
     | { kind: 'channel'; key: string; title: string }
-    | { kind: 'dm'; agentId: string; title: string };
+    | { kind: 'dm'; agentId: string; title: string }
+    // An agent↔agent thread — the human watches it read-only.
+    | { kind: 'dmPair'; a: string; b: string; title: string };
 
 const STATUS_LABEL: Record<WhisperAgentInfo['status'], string> = {
     online: 'online',
@@ -43,8 +51,14 @@ function eventMatches(
     ev: { kind: 'dm' | 'channel'; channelKey?: string; toAgentId?: string; from: string },
 ): boolean {
     if (sel.kind === 'channel') return ev.kind === 'channel' && ev.channelKey === sel.key;
+    if (sel.kind === 'dm') {
+        return ev.kind === 'dm' && (ev.from === sel.agentId || ev.toAgentId === sel.agentId);
+    }
+    // dmPair: the event's two endpoints must be exactly this agent↔agent pair.
     return (
-        ev.kind === 'dm' && (ev.from === sel.agentId || ev.toAgentId === sel.agentId)
+        ev.kind === 'dm' &&
+        ((ev.from === sel.a && ev.toAgentId === sel.b) ||
+            (ev.from === sel.b && ev.toAgentId === sel.a))
     );
 }
 
@@ -57,6 +71,7 @@ export default function WhisperFlyout({
 }) {
     const [agents, setAgents] = useState<WhisperAgentInfo[]>([]);
     const [channels, setChannels] = useState<WhisperChannelInfo[]>([]);
+    const [threads, setThreads] = useState<WhisperDmThreadInfo[]>([]);
     const [sel, setSel] = useState<Selection | null>(null);
     const [messages, setMessages] = useState<WhisperMessage[]>([]);
     const [draft, setDraft] = useState('');
@@ -66,12 +81,14 @@ export default function WhisperFlyout({
 
     const loadDirectory = useCallback(async () => {
         if (!hasGenieBridge()) return;
-        const [d, c] = await Promise.all([
+        const [d, c, t] = await Promise.all([
             api().whisper.directory().catch(() => ({ agents: [] as WhisperAgentInfo[] })),
             api().whisper.channels().catch(() => ({ channels: [] as WhisperChannelInfo[] })),
+            api().whisper.dmThreads().catch(() => ({ threads: [] as WhisperDmThreadInfo[] })),
         ]);
         setAgents(d.agents);
         setChannels(c.channels);
+        setThreads(t.threads);
     }, []);
 
     const loadHistory = useCallback(async (s: Selection) => {
@@ -80,12 +97,29 @@ export default function WhisperFlyout({
         try {
             const res = await api()
                 .whisper.history(
-                    s.kind === 'channel' ? { channelKey: s.key } : { agentId: s.agentId },
+                    s.kind === 'channel'
+                        ? { channelKey: s.key }
+                        : s.kind === 'dmPair'
+                          ? { dmPair: [s.a, s.b] }
+                          : { agentId: s.agentId },
                 )
                 .catch(() => ({ messages: [] as WhisperMessage[] }));
             setMessages(res.messages);
         } finally {
             setLoading(false);
+        }
+    }, []);
+
+    // Select a DM thread from the list: the human's OWN DM reuses the human↔agent
+    // path (so the composer posts to that agent); an agent↔agent thread opens as a
+    // read-only `dmPair` view.
+    const selectThread = useCallback((t: WhisperDmThreadInfo) => {
+        if (t.withHuman) {
+            const agentId = t.a === HUMAN ? t.b : t.a;
+            const title = t.a === HUMAN ? t.bLabel : t.aLabel;
+            setSel({ kind: 'dm', agentId, title });
+        } else {
+            setSel({ kind: 'dmPair', a: t.a, b: t.b, title: `${t.aLabel} ↔ ${t.bLabel}` });
         }
     }, []);
 
@@ -141,7 +175,8 @@ export default function WhisperFlyout({
 
     const post = async () => {
         const text = draft.trim();
-        if (!text || !sel || posting) return;
+        // Agent↔agent threads are read-only for the human (no 3-party DM model).
+        if (!text || !sel || sel.kind === 'dmPair' || posting) return;
         setPosting(true);
         try {
             const res = await api()
@@ -243,6 +278,45 @@ export default function WhisperFlyout({
                                 </ul>
                             )}
 
+                            <div className="whisper-nav-head">Direct messages</div>
+                            {threads.length === 0 ? (
+                                <div className="whisper-empty">No direct messages yet.</div>
+                            ) : (
+                                <ul className="whisper-list">
+                                    {threads.map((t) => {
+                                        const active =
+                                            (sel?.kind === 'dmPair' &&
+                                                sel.a === t.a &&
+                                                sel.b === t.b) ||
+                                            (sel?.kind === 'dm' &&
+                                                t.withHuman &&
+                                                (t.a === sel.agentId || t.b === sel.agentId));
+                                        return (
+                                            <li key={t.key}>
+                                                <button
+                                                    type="button"
+                                                    className={`whisper-dm${active ? ' on' : ''}`}
+                                                    onClick={() => selectThread(t)}
+                                                    title={`${t.aLabel} ↔ ${t.bLabel}`}
+                                                >
+                                                    <span className="whisper-dm-main">
+                                                        <span className="whisper-dm-label">
+                                                            {t.aLabel} ↔ {t.bLabel}
+                                                        </span>
+                                                        <span className="whisper-dm-sub">
+                                                            {t.lastFromLabel}: {t.lastPreview}
+                                                        </span>
+                                                    </span>
+                                                    <span className="whisper-dm-time">
+                                                        {relTime(t.lastTs)}
+                                                    </span>
+                                                </button>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                            )}
+
                             <div className="whisper-nav-head">Channels</div>
                             {channels.length === 0 ? (
                                 <div className="whisper-empty">No channels yet.</div>
@@ -283,12 +357,18 @@ export default function WhisperFlyout({
                         <div className="whisper-main">
                             {!sel ? (
                                 <div className="whisper-empty whisper-placeholder">
-                                    Pick an agent or a channel to see the conversation.
+                                    Pick an agent, a DM thread, or a channel to see the
+                                    conversation.
                                 </div>
                             ) : (
                                 <>
                                     <div className="whisper-thread-head">
-                                        {sel.kind === 'channel' ? '#' : '@'} {sel.title}
+                                        {sel.kind === 'channel'
+                                            ? '#'
+                                            : sel.kind === 'dm'
+                                              ? '@'
+                                              : ''}{' '}
+                                        {sel.title}
                                         {loading && (
                                             <span className="iw-muted"> · loading…</span>
                                         )}
@@ -322,33 +402,35 @@ export default function WhisperFlyout({
                                         )}
                                         <div ref={streamEndRef} />
                                     </div>
-                                    <div className="whisper-composer">
-                                        <textarea
-                                            className="input whisper-input"
-                                            value={draft}
-                                            onChange={(e) => setDraft(e.target.value)}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter' && !e.shiftKey) {
-                                                    e.preventDefault();
-                                                    void post();
-                                                }
-                                            }}
-                                            placeholder={
-                                                sel.kind === 'channel'
-                                                    ? `Message ${sel.title} as you…`
-                                                    : `Message ${sel.title} as you…`
-                                            }
-                                            rows={2}
-                                        />
-                                        <button
-                                            type="button"
-                                            className="whisper-send"
-                                            onClick={() => void post()}
-                                            disabled={!draft.trim() || posting}
-                                        >
-                                            {posting ? 'Sending…' : 'Send'}
-                                        </button>
-                                    </div>
+                                    {sel.kind === 'dmPair' ? (
+                                        <div className="whisper-readonly">
+                                            Agent-to-agent thread — read-only.
+                                        </div>
+                                    ) : (
+                                        <div className="whisper-composer">
+                                            <textarea
+                                                className="input whisper-input"
+                                                value={draft}
+                                                onChange={(e) => setDraft(e.target.value)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter' && !e.shiftKey) {
+                                                        e.preventDefault();
+                                                        void post();
+                                                    }
+                                                }}
+                                                placeholder={`Message ${sel.title} as you…`}
+                                                rows={2}
+                                            />
+                                            <button
+                                                type="button"
+                                                className="whisper-send"
+                                                onClick={() => void post()}
+                                                disabled={!draft.trim() || posting}
+                                            >
+                                                {posting ? 'Sending…' : 'Send'}
+                                            </button>
+                                        </div>
+                                    )}
                                 </>
                             )}
                         </div>

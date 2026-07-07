@@ -264,4 +264,71 @@ describe('WhisperBroker — history', () => {
         expect(b.history({ channelKey: 'w1:general' }).map((m) => m.text)).toEqual(['ch1']);
         expect(b.history({ agentId: 'A' }).map((m) => m.text)).toEqual(['dm to A']);
     });
+
+    it('retrieves an agent↔agent DM thread by dmPair (order-independent)', () => {
+        const b = fresh();
+        b.join(input({ agentId: 'A', workspaceId: 'w1' }));
+        b.join(input({ agentId: 'B', workspaceId: 'w1' }));
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'a→b' });
+        b.send({ fromAgentId: 'B', toAgentId: 'A', text: 'b→a' });
+
+        // The pair key is order-independent — either arg order finds the thread.
+        expect(b.history({ dmPair: ['A', 'B'] }).map((m) => m.text)).toEqual(['a→b', 'b→a']);
+        expect(b.history({ dmPair: ['B', 'A'] }).map((m) => m.text)).toEqual(['a→b', 'b→a']);
+        // The human↔agent thread stays separate from the agent↔agent one.
+        b.send({ human: true, toAgentId: 'A', text: 'human→a' });
+        expect(b.history({ agentId: 'A' }).map((m) => m.text)).toEqual(['human→a']);
+        expect(b.history({ dmPair: ['A', 'B'] }).map((m) => m.text)).toEqual(['a→b', 'b→a']);
+    });
+});
+
+describe('WhisperBroker — dmThreads (human panel)', () => {
+    it('lists every DM thread — human↔agent AND agent↔agent — newest-first', () => {
+        const b = fresh();
+        b.join(input({ agentId: 'A', workspaceId: 'w1', label: 'Backend' }));
+        b.join(input({ agentId: 'B', workspaceId: 'w1', label: 'Frontend' }));
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'first, agent to agent' });
+        b.send({ human: true, toAgentId: 'A', text: 'then, human to A' });
+
+        const threads = b.dmThreads();
+        expect(threads.length).toBe(2);
+        // Sorted newest-first: the human↔A thread is most recent.
+        expect(threads[0].withHuman).toBe(true);
+        expect(threads[0].lastPreview).toBe('then, human to A');
+        // The agent↔agent thread is present with both agents' labels.
+        const aa = threads.find((t) => !t.withHuman)!;
+        expect([aa.aLabel, aa.bLabel].sort()).toEqual(['Backend', 'Frontend']);
+        expect(aa.lastPreview).toBe('first, agent to agent');
+        expect(aa.count).toBe(1);
+    });
+
+    it('resolves the human label as "You"', () => {
+        const b = fresh();
+        b.join(input({ agentId: 'A', label: 'Backend' }));
+        b.send({ human: true, toAgentId: 'A', text: 'hi A' });
+        const t = b.dmThreads()[0];
+        expect([t.aLabel, t.bLabel].sort()).toEqual(['Backend', 'You']);
+    });
+
+    it('recovers a departed agent\'s label from the message log', () => {
+        const b = fresh();
+        b.join(input({ agentId: 'A', workspaceId: 'w1', label: 'Backend' }));
+        b.join(input({ agentId: 'B', workspaceId: 'w1', label: 'Frontend' }));
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'ping' });
+        b.send({ fromAgentId: 'B', toAgentId: 'A', text: 'pong' });
+        // A leaves — its label must still resolve from the log, not vanish.
+        b.leave('A');
+        const t = b.dmThreads().find((x) => !x.withHuman)!;
+        expect([t.aLabel, t.bLabel].sort()).toEqual(['Backend', 'Frontend']);
+        // The thread is still retrievable after the agent left.
+        expect(b.history({ dmPair: ['A', 'B'] }).map((m) => m.text)).toEqual(['ping', 'pong']);
+    });
+
+    it('omits pairs with no messages', () => {
+        const b = fresh();
+        b.join(input({ agentId: 'A' }));
+        b.join(input({ agentId: 'B' }));
+        // No DMs sent yet.
+        expect(b.dmThreads()).toEqual([]);
+    });
 });

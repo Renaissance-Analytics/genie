@@ -906,11 +906,20 @@ export function registerIpcHandlers(): void {
     // (whisper:presence / whisper:message) rides the broker's presence emitter.
     ipcMain.handle('whisper:directory', () => ({ agents: whisperBroker.directory() }));
     ipcMain.handle('whisper:channels', () => ({ channels: whisperBroker.channels() }));
+    // Every DM thread (human↔agent AND agent↔agent) so the panel can view the
+    // agent-to-agent conversations that fire the unread badge but were unviewable.
+    ipcMain.handle('whisper:dm-threads', () => ({ threads: whisperBroker.dmThreads() }));
     ipcMain.handle(
         'whisper:history',
         (
             _e,
-            opts: { channelKey?: string; agentId?: string; limit?: number; before?: number },
+            opts: {
+                channelKey?: string;
+                agentId?: string;
+                dmPair?: [string, string];
+                limit?: number;
+                before?: number;
+            },
         ) => ({ messages: whisperBroker.history(opts ?? {}) }),
     );
     ipcMain.handle(

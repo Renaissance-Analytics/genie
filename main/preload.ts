@@ -821,10 +821,14 @@ const api = {
         directory: () => ipcRenderer.invoke('whisper:directory'),
         /** Every non-empty channel (`slug:purpose`). */
         channels: () => ipcRenderer.invoke('whisper:channels'),
-        /** A channel log (`channelKey`) or a human↔agent DM thread (`agentId`). */
+        /** Every DM thread with messages — human↔agent AND agent↔agent. */
+        dmThreads: () => ipcRenderer.invoke('whisper:dm-threads'),
+        /** A channel log (`channelKey`), an arbitrary DM pair (`dmPair`), or the
+         *  human↔agent DM thread (`agentId`). */
         history: (opts: {
             channelKey?: string;
             agentId?: string;
+            dmPair?: [string, string];
             limit?: number;
             before?: number;
         }) => ipcRenderer.invoke('whisper:history', opts),

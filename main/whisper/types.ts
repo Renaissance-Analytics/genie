@@ -50,6 +50,33 @@ export interface WhisperAgentInfo {
     chatSessionId: string | null;
 }
 
+/**
+ * A DM thread (a message-carrying pair) as the human panel's DMs list reports it.
+ * Covers BOTH human↔agent AND agent↔agent pairs — the human owns the workstation
+ * and sees every thread. Keyed by the order-independent `pairKey`.
+ */
+export interface WhisperDmThreadInfo {
+    /** Order-independent pair key (`idA|idB`, ids sorted). */
+    key: string;
+    /** The two participant ids (either may be the literal `human`). */
+    a: string;
+    b: string;
+    /** Display label for `a` (`You` for the human; falls back to a logged label
+     *  when the agent has already left). */
+    aLabel: string;
+    /** Display label for `b`. */
+    bLabel: string;
+    /** True when one participant is the human panel (else it's agent↔agent). */
+    withHuman: boolean;
+    /** The last message's sender label, short preview, seq, and epoch-ms ts. */
+    lastFromLabel: string;
+    lastPreview: string;
+    lastSeq: number;
+    lastTs: number;
+    /** Messages in the thread (post-cap). */
+    count: number;
+}
+
 /** A channel as the channel list reports it. Keyed internally by
  *  `workspaceId:purpose`; displayed as `slug:purpose`. */
 export interface WhisperChannelInfo {
