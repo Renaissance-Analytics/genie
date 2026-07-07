@@ -45,10 +45,15 @@ export interface KnowledgeSearchResult {
     tags: string[];
 }
 
-/** A resolved graph edge: a directed link from one node id to another. */
+/**
+ * A resolved graph edge: a directed link from the node that CONTAINS the link
+ * (`source`) to the node it points at (`target`). The `source`/`target` naming
+ * matches the convention force-graph renderers expect, so the window can feed
+ * `graph()` straight in.
+ */
 export interface KnowledgeEdge {
-    from: string;
-    to: string;
+    source: string;
+    target: string;
 }
 
 /** The whole graph — every node + every resolved edge (both ends existing). */

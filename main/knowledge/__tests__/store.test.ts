@@ -171,8 +171,8 @@ describe('KnowledgeStore — graph', () => {
         const c = store.add({ title: 'C', source: 'user' });
         const g = store.graph();
         expect(g.nodes.map((n) => n.id).sort()).toEqual([a.id, b.id, c.id].sort());
-        expect(g.edges).toContainEqual({ from: a.id, to: b.id });
-        expect(g.edges).toContainEqual({ from: b.id, to: c.id });
+        expect(g.edges).toContainEqual({ source: a.id, target: b.id });
+        expect(g.edges).toContainEqual({ source: b.id, target: c.id });
         expect(g.edges.length).toBe(2);
     });
 });
