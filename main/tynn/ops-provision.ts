@@ -133,17 +133,26 @@ export interface ChildAgiUrlSource {
  * Returns null when neither form can be built — we never guess a URL we can't
  * form. The resolved URL is surfaced for approval, since a GitHub login may
  * still differ from the Tynn slug.
+ *
+ * The primary repo (or the slug) is sometimes ITSELF the `.agi` envelope repo
+ * (registered directly, not a separate code repo with an implied sibling) —
+ * blindly appending `.agi` would double it into an invalid `foo.agi.agi.git`,
+ * so it's only appended when not already present. Mirrors Tynn's
+ * ResolveEnvelopeCloneUrl::cloneUrl() — keep both in sync.
  */
 export function childAgiCloneUrl(src: ChildAgiUrlSource): string | null {
+    const withAgiSuffix = (name: string): string =>
+        name.toLowerCase().endsWith('.agi') ? name : `${name}.agi`;
+
     const repoOwner = src.repoOwner?.trim();
     const repoName = src.repoName?.trim();
     if (repoOwner && repoName) {
-        return `https://github.com/${repoOwner}/${repoName}.agi.git`;
+        return `https://github.com/${repoOwner}/${withAgiSuffix(repoName)}.git`;
     }
 
     const owner = src.ownerSlug?.trim();
     if (owner && src.slug.trim()) {
-        return `https://github.com/${owner}/${src.slug}.agi.git`;
+        return `https://github.com/${owner}/${withAgiSuffix(src.slug.trim())}.git`;
     }
 
     return null;

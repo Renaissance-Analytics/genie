@@ -101,6 +101,26 @@ describe('childAgiCloneUrl', () => {
         ).toBe('https://github.com/civicognita/civi-web.agi.git');
     });
 
+    it('does not double the .agi suffix when the primary repo name already carries it', () => {
+        // Real bug hit live 2026-07-08 (Tynn side, mirrored here): a primary repo
+        // registered directly AS the .agi envelope repo (not a separate code repo
+        // with an implied sibling) produced an invalid `foo.agi.agi.git` clone
+        // target that silently failed to clone.
+        expect(
+            childAgiCloneUrl({
+                ownerSlug: 'moic',
+                slug: 'moic-suite',
+                repoOwner: 'MOIC-Partners',
+                repoName: 'moic-suite.agi',
+            }),
+        ).toBe('https://github.com/MOIC-Partners/moic-suite.agi.git');
+
+        // Same guard on the fallback (owner-slug + project-slug) path.
+        expect(
+            childAgiCloneUrl({ ownerSlug: 'moic', slug: 'moic-suite.agi' }),
+        ).toBe('https://github.com/moic/moic-suite.agi.git');
+    });
+
     it('falls back when only ONE of repo owner / name is present', () => {
         expect(
             childAgiCloneUrl({
