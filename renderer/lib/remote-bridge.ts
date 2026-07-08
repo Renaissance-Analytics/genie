@@ -314,10 +314,29 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         clearLog: async () => ({ ok: true }),
     };
 
-    // xterm forwards the host app's mouse-tracking (CSI M / CSI < … M|m) as input.
-    // A remote session must only drive the UI — never push our mouse into the host
-    // terminal — so strip mouse reports before they reach the host pty.
-    const isMouseReport = (data: string): boolean => /^\x1b\[(M|<[0-9;]+[Mm])/.test(data);
+    // xterm forwards the host app's mouse-tracking (CSI M / CSI < … M|m) as input
+    // whenever the host program (tmux, vim, htop, `less -M`, …) turns mouse-
+    // tracking mode on — which also makes xterm stop doing its OWN client-side
+    // scrollback for wheel/trackpad ticks, since it assumes the program is
+    // handling them. A remote session must never push CLICKS/DRAGS into the
+    // host terminal (a remote viewer clicking something in the host's TUI would
+    // be surprising and wrong) — but a wheel/trackpad SCROLL is exactly what the
+    // remote user is asking for, and blocking it too (the original behaviour)
+    // left remote scrolling completely dead any time mouse-tracking was on.
+    //
+    // SGR mouse reports (`CSI < Cb ; Cx ; Cy M|m` — what tmux/vim/htop send by
+    // default; legacy X10 `CSI M...` 3-byte reports are rare in modern configs
+    // and stay blocked below, unparsed) encode the button + modifiers in `Cb`:
+    // base buttons are 0–3 (press/release), modifiers (shift/meta/ctrl) OR 4/8/16
+    // on top, so the highest possible NON-wheel value is 3+4+8+16=31. The wheel/
+    // tilt range starts at 64, so `Cb >= 64` is unambiguous — never a click or
+    // drag, always a scroll tick — and safe to forward.
+    const isBlockedMouseReport = (data: string): boolean => {
+        if (/^\x1b\[M/.test(data)) return true; // legacy X10 — can't safely tell wheel from click here
+        const sgr = /^\x1b\[<(\d+);\d+;\d+[Mm]/.exec(data);
+        if (!sgr) return false;
+        return parseInt(sgr[1], 10) < 64; // < 64 ⇒ click/drag/release — block; ≥ 64 ⇒ wheel — forward
+    };
 
     // Drive the host's pty-host terminals (data/exit arrive on the local channels).
     const terminal: GenieApi['terminal'] = {
@@ -342,7 +361,7 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         write: (id: string, data: string) => {
             // View-only (host has control): swallow the keystroke locally.
             if (controlLocked) return Promise.resolve(false);
-            return r.terminalInput(id, isMouseReport(data) ? '' : data);
+            return r.terminalInput(id, isBlockedMouseReport(data) ? '' : data);
         },
 
         resize: (id: string, cols: number, rows: number) => r.terminalResize(id, cols, rows),
