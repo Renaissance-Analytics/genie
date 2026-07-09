@@ -153,6 +153,9 @@ ever injected into your terminal (that would corrupt your turn). Actions (\`acti
   forward; set \`wait: true\` to LONG-POLL (optional \`timeoutMs\`) — it blocks until
   a message arrives, you leave, or the timeout, so you can wait for a peer's reply
   without busy-looping.
+- \`receipts\` — read-receipts for the DMs YOU sent: each with a \`seen\` flag (true
+  once the recipient has received it). Lets you tell 'queued' from 'seen' and decide
+  whether to escalate to a nudge. Optional \`limit\` (default 20).
 - \`setAccessibility\` — \`scope\`: \`none\` (hidden) / \`self\` (your workspace only,
   the default) / \`specific\` + \`workspaces\` (a chosen set — limited to workspaces
   you govern) / \`all\` (the whole workstation) — governs who can see + DM you.

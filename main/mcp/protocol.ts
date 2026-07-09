@@ -590,8 +590,8 @@ export interface ManageWorkspacesResult {
 // --- whisper -----------------------------------------------------------------
 
 export interface WhisperRequest {
-    /** `list` (discovery), `send`, `receive`, `setAccessibility`, `join`, `leave`. */
-    action: 'list' | 'send' | 'receive' | 'setAccessibility' | 'join' | 'leave';
+    /** `list` (discovery), `send`, `receive`, `receipts`, `setAccessibility`, `join`, `leave`. */
+    action: 'list' | 'send' | 'receive' | 'receipts' | 'setAccessibility' | 'join' | 'leave';
     /** send: DM this agent id (mutually exclusive with `channel`). */
     to?: string;
     /** send/join/leave: a channel — a bare purpose (own workspace) or `slug:purpose`. */
@@ -612,6 +612,18 @@ export interface WhisperRequest {
     workspaces?: string[];
     /** setAccessibility (optional): change your channel purpose (re-keys the room). */
     purpose?: string;
+    /** receipts (optional): how many recent sent DMs to report (default 20, cap 100). */
+    limit?: number;
+}
+
+/** One sent-DM read-receipt (whisper `receipts`): the message + whether SEEN. */
+export interface WhisperReceipt {
+    seq: number;
+    id: string;
+    to: string;
+    text: string;
+    ts: number;
+    seen: boolean;
 }
 
 export interface WhisperResult {
@@ -630,6 +642,8 @@ export interface WhisperResult {
     cursor?: number;
     /** send: how many recipients the message reached. */
     delivered?: number;
+    /** receipts: the caller's recent sent DMs, each with a `seen` flag. */
+    receipts?: WhisperReceipt[];
 }
 
 // --- knowledge ---------------------------------------------------------------
@@ -1056,18 +1070,22 @@ const MANAGE_WORKSPACES_TOOL = {
 const WHISPER_TOOL = {
     name: 'whisper',
     description:
-        "Coordinate with OTHER AI agents running in this Genie instance — WhisperChat, a LOCAL inter-agent messaging network. Discover peer agents (in your workspace, or across the workstation when they allow it), DM them 1:1, and broadcast on shared CHANNELS. Delivery is PULL-based — you POLL for messages, they're never injected into your terminal (which would corrupt your turn). Actions (`action`): `list` (discovery — returns YOUR agent info `self`, the peers you can reach `agents`, and your `channels`); `send` (message a peer with `to` = their agentId, OR broadcast with `channel` = a purpose like `frontend` (your workspace's room) or `slug:purpose` (another workspace's) — needs `text`; optional `interrupt:true` also glows a DM target's terminal so they notice); `receive` (fetch NEW messages — pass a `cursor` from a prior receive to page forward; set `wait:true` to LONG-POLL until a message arrives (optional `timeoutMs`), so you can block waiting for a peer's reply); `setAccessibility` (`scope`: `none` hidden / `self` your workspace only (default) / `specific` + `workspaces` a chosen set / `all` the whole workstation — governs who can see + DM you; optional `purpose` renames your channel); `join`/`leave` (`channel`) to opt in/out of a channel. Your identity + accessibility are remembered across restarts. Local-only — no relay, no cross-host.",
+        "Coordinate with OTHER AI agents running in this Genie instance — WhisperChat, a LOCAL inter-agent messaging network. Discover peer agents (in your workspace, or across the workstation when they allow it), DM them 1:1, and broadcast on shared CHANNELS. Delivery is PULL-based — you POLL for messages, they're never injected into your terminal (which would corrupt your turn). Actions (`action`): `list` (discovery — returns YOUR agent info `self`, the peers you can reach `agents`, and your `channels`); `send` (message a peer with `to` = their agentId, OR broadcast with `channel` = a purpose like `frontend` (your workspace's room) or `slug:purpose` (another workspace's) — needs `text`; optional `interrupt:true` also glows a DM target's terminal so they notice); `receive` (fetch NEW messages — pass a `cursor` from a prior receive to page forward; set `wait:true` to LONG-POLL until a message arrives (optional `timeoutMs`), so you can block waiting for a peer's reply); `receipts` (read-receipts for the DMs YOU sent — each with a `seen` flag that's true once the recipient has received it, so you can tell 'queued' from 'seen' and decide whether to escalate; optional `limit`, default 20); `setAccessibility` (`scope`: `none` hidden / `self` your workspace only (default) / `specific` + `workspaces` a chosen set / `all` the whole workstation — governs who can see + DM you; optional `purpose` renames your channel); `join`/`leave` (`channel`) to opt in/out of a channel. Your identity + accessibility are remembered across restarts. Local-only — no relay, no cross-host.",
     inputSchema: {
         type: 'object',
         properties: {
             action: {
                 type: 'string',
-                enum: ['list', 'send', 'receive', 'setAccessibility', 'join', 'leave'],
+                enum: ['list', 'send', 'receive', 'receipts', 'setAccessibility', 'join', 'leave'],
                 description: 'What to do.',
             },
             to: {
                 type: 'string',
                 description: 'send: the recipient agent id (DM). Mutually exclusive with `channel`.',
+            },
+            limit: {
+                type: 'number',
+                description: 'receipts (optional): how many recent sent DMs to report (default 20, cap 100).',
             },
             channel: {
                 type: 'string',
@@ -1837,6 +1855,7 @@ export async function handleMcpMessage(
                     action !== 'list' &&
                     action !== 'send' &&
                     action !== 'receive' &&
+                    action !== 'receipts' &&
                     action !== 'setAccessibility' &&
                     action !== 'join' &&
                     action !== 'leave'
@@ -1844,7 +1863,7 @@ export async function handleMcpMessage(
                     return err(
                         msg.id,
                         -32602,
-                        'whisper requires `action`: list | send | receive | setAccessibility | join | leave.',
+                        'whisper requires `action`: list | send | receive | receipts | setAccessibility | join | leave.',
                     );
                 }
                 const result = await ctx.whisper(ctx.terminalId, {
@@ -1859,6 +1878,7 @@ export async function handleMcpMessage(
                     scope: a.scope,
                     workspaces: a.workspaces,
                     purpose: a.purpose,
+                    limit: a.limit,
                 });
                 let summary: string;
                 if (!result.ok) {
@@ -1871,6 +1891,9 @@ export async function handleMcpMessage(
                     summary = `${result.messages?.length ?? 0} new message(s).`;
                 } else if (action === 'send') {
                     summary = `Sent — delivered to ${result.delivered ?? 0} recipient(s).`;
+                } else if (action === 'receipts') {
+                    const rs = result.receipts ?? [];
+                    summary = `${rs.length} sent DM(s); ${rs.filter((r) => r.seen).length} seen.`;
                 } else {
                     summary = `whisper ${action} ok.`;
                 }

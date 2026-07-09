@@ -1394,6 +1394,12 @@ export async function whisperForMcp(
                 });
                 return { ok: true, messages, cursor };
             }
+            case 'receipts': {
+                // Read-receipts for the caller's sent DMs: `seen` once the recipient's
+                // ACK cursor passed the message (issue #9) — so a sender can tell
+                // 'queued' from 'seen' and decide whether to escalate to a nudge.
+                return { ok: true, receipts: whisperBroker.receipts(agentId, req.limit) };
+            }
             case 'setAccessibility': {
                 // A `specific` visibility list is limited to workspaces the caller
                 // GOVERNS (∪ its own) — an agent can't make itself discoverable to

@@ -722,6 +722,17 @@ export class WhisperBroker {
         });
     }
 
+    /**
+     * Read-receipts for the DMs an agent SENT — each with whether the recipient
+     * has SEEN it (their ACK cursor passed the message's seq). Lets a sender tell
+     * 'queued' from 'seen' and decide whether to escalate to a nudge (issue #9).
+     * Durable-store backed (survives restart); newest first, capped.
+     */
+    receipts(agentId: string, limit = 20): ReturnType<WhisperStore['sentDmReceipts']> {
+        const cap = Math.min(Math.max(1, limit), 100);
+        return this.store.sentDmReceipts(agentId, cap);
+    }
+
     // --- history (human panel) --------------------------------------------
 
     /**

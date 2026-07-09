@@ -30,6 +30,21 @@ export interface WhisperStore {
      *  member of — with seq > cursor, excluding the agent's own sends. Used to
      *  rebuild an inbox on boot so nothing queued is lost. */
     undeliveredFor(agentId: string, channelKeys: string[], cursor: number): WhisperMessage[];
+    /** Read-receipts for the DMs an agent SENT (newest first, capped): each with
+     *  whether the recipient has SEEN it (their ACK cursor has passed the message's
+     *  seq). Lets a sender tell 'queued' from 'seen' and decide whether to escalate
+     *  (issue #9). Derived from the existing cursors — no per-message state. */
+    sentDmReceipts(fromId: string, limit: number): DmReceipt[];
+}
+
+/** One sent-DM read-receipt: the message + whether its recipient has seen it. */
+export interface DmReceipt {
+    seq: number;
+    id: string;
+    to: string;
+    text: string;
+    ts: number;
+    seen: boolean;
 }
 
 /** No-op store — the broker's default (pure / in-memory-only; used by tests). */
@@ -46,6 +61,9 @@ export const noopWhisperStore: WhisperStore = {
     },
     setCursor() {},
     undeliveredFor() {
+        return [];
+    },
+    sentDmReceipts() {
         return [];
     },
 };
@@ -144,5 +162,32 @@ export const dbWhisperStore: WhisperStore = {
             )
             .all(cursor, agentId, agentId, ...channelKeys);
         return rows.map(toMsg);
+    },
+    sentDmReceipts(fromId, limit) {
+        // A DM is SEEN once its recipient's ACK cursor (advanced on `receive`) has
+        // passed the message's seq. Left-join the recipient's cursor (0 if they've
+        // never received) and compare — no per-message 'seen' column needed.
+        const rows = getDb()
+            .prepare<
+                [string, number],
+                { id: string; seq: number; to_id: string | null; text: string; ts: number; acked: number }
+            >(
+                `SELECT m.id, m.seq, m.to_id, m.text, m.ts,
+                        COALESCE(c.acked_seq, 0) AS acked
+                   FROM whisper_messages m
+                   LEFT JOIN whisper_cursors c ON c.agent_id = m.to_id
+                  WHERE m.from_id = ? AND m.kind = 'dm'
+                  ORDER BY m.seq DESC
+                  LIMIT ?`,
+            )
+            .all(fromId, limit);
+        return rows.map((r) => ({
+            seq: r.seq,
+            id: r.id,
+            to: r.to_id ?? '',
+            text: r.text,
+            ts: r.ts,
+            seen: r.acked >= r.seq,
+        }));
     },
 };

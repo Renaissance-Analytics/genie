@@ -42,6 +42,20 @@ function makeStore(): WhisperStore & { rows: WhisperMessage[]; cursors: Map<stri
                         (m.kind === 'channel' && !!m.channel && keys.has(m.channel))),
             );
         },
+        sentDmReceipts(fromId, limit) {
+            return rows
+                .filter((m) => m.from === fromId && m.kind === 'dm')
+                .sort((a, b) => b.seq - a.seq)
+                .slice(0, limit)
+                .map((m) => ({
+                    seq: m.seq,
+                    id: m.id,
+                    to: m.to ?? '',
+                    text: m.text,
+                    ts: m.ts,
+                    seen: (cursors.get(m.to ?? '') ?? 0) >= m.seq,
+                }));
+        },
     };
 }
 
@@ -78,6 +92,27 @@ describe('whisper durable inbox (Track B)', () => {
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'hi b' });
         expect(store.rows).toHaveLength(1);
         expect(store.rows[0]).toMatchObject({ kind: 'dm', from: 'a', to: 'b', text: 'hi b' });
+    });
+
+    it('read-receipts: a sent DM is unseen until the recipient receives it (#9)', async () => {
+        const b = new WhisperBroker();
+        b.setStore(store);
+        join(b, 'a');
+        join(b, 'b');
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping' });
+
+        // Sender a sees its DM as NOT yet seen (b hasn't received).
+        let receipts = b.receipts('a');
+        expect(receipts).toHaveLength(1);
+        expect(receipts[0]).toMatchObject({ to: 'b', text: 'ping', seen: false });
+
+        // b receives → its ACK cursor advances → the DM flips to seen.
+        await b.receive('b', {});
+        receipts = b.receipts('a');
+        expect(receipts[0].seen).toBe(true);
+
+        // Only the caller's OWN sent DMs are reported (b sent none).
+        expect(b.receipts('b')).toHaveLength(0);
     });
 
     it('re-queues an undelivered DM after a restart', async () => {
