@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { IconChevronDown, IconCode } from './icons';
 import AgentTerminalForm, { type AgentFormValues } from './AgentTerminalForm';
 import {
@@ -62,15 +63,49 @@ export default function TerminalTypeSplitButton({
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const ref = useRef<HTMLDivElement>(null);
+    // The dropdown/form popover is portaled to <body> + `position: fixed` (top/
+    // left|right set inline from the button's rect below) instead of living
+    // inline under `ref`. In the `variant="row"` (Chooser sidebar) usage the
+    // button sits inside a scrollable, per-row `isolation: isolate` stacking
+    // context — an inline-positioned popover that overflows its own row gets
+    // painted UNDER later sibling rows' own content (their text/icons show
+    // through it, reading as a transparent panel). Portaling is the same
+    // escape hatch Chooser.tsx already uses for AgiHealth / the process-log
+    // popover / the process context menu.
+    const popRef = useRef<HTMLDivElement>(null);
+    const [coords, setCoords] = useState<
+        { top: number; left?: number; right?: number } | null
+    >(null);
 
     const open = menuOpen || formAgent !== null;
+
+    const place = () => {
+        const r = ref.current?.getBoundingClientRect();
+        if (!r) return;
+        setCoords(
+            variant === 'row'
+                ? { top: r.bottom + 6, left: r.left }
+                : { top: r.bottom + 6, right: window.innerWidth - r.right },
+        );
+    };
+    // useLayoutEffect: coords are set BEFORE paint so the popover never flashes
+    // at (0,0) for a frame.
+    useLayoutEffect(() => {
+        if (!open) {
+            setCoords(null);
+            return;
+        }
+        place();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open]);
+
     useEffect(() => {
         if (!open) return;
         const onAway = (e: MouseEvent) => {
-            if (!ref.current?.contains(e.target as Node)) {
-                setMenuOpen(false);
-                setFormAgent(null);
-            }
+            const t = e.target as Node;
+            if (ref.current?.contains(t) || popRef.current?.contains(t)) return;
+            setMenuOpen(false);
+            setFormAgent(null);
         };
         const onEsc = (e: KeyboardEvent) => {
             if (e.key === 'Escape') {
@@ -78,11 +113,22 @@ export default function TerminalTypeSplitButton({
                 setFormAgent(null);
             }
         };
+        // A portaled popover can't track its anchor's position, so a scroll
+        // (the sidebar list, most likely) or resize just closes it — matching
+        // AgiHealth's popover in Chooser.tsx.
+        const onScrollResize = () => {
+            setMenuOpen(false);
+            setFormAgent(null);
+        };
         document.addEventListener('mousedown', onAway);
         document.addEventListener('keydown', onEsc);
+        window.addEventListener('resize', onScrollResize);
+        window.addEventListener('scroll', onScrollResize, true);
         return () => {
             document.removeEventListener('mousedown', onAway);
             document.removeEventListener('keydown', onEsc);
+            window.removeEventListener('resize', onScrollResize);
+            window.removeEventListener('scroll', onScrollResize, true);
         };
     }, [open]);
 
@@ -166,79 +212,85 @@ export default function TerminalTypeSplitButton({
                 <IconChevronDown size={13} />
             </button>
 
-            {menuOpen && (
-                <div
-                    className={`addview-menu addview-type-menu${
-                        variant === 'row' ? ' anchor-left' : ''
-                    }`}
-                    role="menu"
-                >
-                    {TERMINAL_TYPES.map((t) => {
-                        const Ico = t.icon;
-                        return (
-                            <button
-                                key={t.id}
-                                type="button"
-                                role="menuitem"
-                                className="addview-type-item"
-                                onClick={() => pickType(t.id)}
-                            >
-                                <Ico size={14} />
-                                <span className="addview-type-main">
-                                    <span className="addview-type-label">{t.label}</span>
-                                    {t.hint && (
-                                        <span className="addview-type-hint">{t.hint}</span>
-                                    )}
-                                </span>
-                            </button>
-                        );
-                    })}
-                    {includeFiles && (
-                        <>
-                            <div className="addview-menu-divider" />
-                            <button
-                                type="button"
-                                role="menuitem"
-                                className="addview-type-item"
-                                onClick={addFiles}
-                            >
-                                <IconCode size={14} />
-                                <span className="addview-type-main">
-                                    <span className="addview-type-label">Add Files…</span>
-                                    <span className="addview-type-hint">
-                                        Open a file editor
+            {menuOpen &&
+                coords &&
+                createPortal(
+                    <div
+                        ref={popRef}
+                        className="addview-menu addview-type-menu"
+                        role="menu"
+                        style={{ top: coords.top, left: coords.left, right: coords.right }}
+                    >
+                        {TERMINAL_TYPES.map((t) => {
+                            const Ico = t.icon;
+                            return (
+                                <button
+                                    key={t.id}
+                                    type="button"
+                                    role="menuitem"
+                                    className="addview-type-item"
+                                    onClick={() => pickType(t.id)}
+                                >
+                                    <Ico size={14} />
+                                    <span className="addview-type-main">
+                                        <span className="addview-type-label">{t.label}</span>
+                                        {t.hint && (
+                                            <span className="addview-type-hint">{t.hint}</span>
+                                        )}
                                     </span>
-                                </span>
-                            </button>
-                        </>
-                    )}
-                </div>
-            )}
+                                </button>
+                            );
+                        })}
+                        {includeFiles && (
+                            <>
+                                <div className="addview-menu-divider" />
+                                <button
+                                    type="button"
+                                    role="menuitem"
+                                    className="addview-type-item"
+                                    onClick={addFiles}
+                                >
+                                    <IconCode size={14} />
+                                    <span className="addview-type-main">
+                                        <span className="addview-type-label">Add Files…</span>
+                                        <span className="addview-type-hint">
+                                            Open a file editor
+                                        </span>
+                                    </span>
+                                </button>
+                            </>
+                        )}
+                    </div>,
+                    document.body,
+                )}
 
-            {formAgent && (
-                <div
-                    className={`addview-menu addview-form-pop${
-                        variant === 'row' ? ' anchor-left' : ''
-                    }`}
-                    role="dialog"
-                    aria-label={`New ${terminalTypeById(formAgent).label}`}
-                >
-                    <div className="addview-form-title">
-                        New {terminalTypeById(formAgent).label}
-                    </div>
-                    <AgentTerminalForm
-                        agent={formAgent}
-                        workspaces={workspaces}
-                        ownWorkspaceId={workspaceId}
-                        submitLabel="Create"
-                        busy={busy}
-                        error={error}
-                        customPlaceholder={customCommand}
-                        onSubmit={(v) => void submitForm(formAgent, v)}
-                        onCancel={() => setFormAgent(null)}
-                    />
-                </div>
-            )}
+            {formAgent &&
+                coords &&
+                createPortal(
+                    <div
+                        ref={popRef}
+                        className="addview-menu addview-form-pop"
+                        role="dialog"
+                        aria-label={`New ${terminalTypeById(formAgent).label}`}
+                        style={{ top: coords.top, left: coords.left, right: coords.right }}
+                    >
+                        <div className="addview-form-title">
+                            New {terminalTypeById(formAgent).label}
+                        </div>
+                        <AgentTerminalForm
+                            agent={formAgent}
+                            workspaces={workspaces}
+                            ownWorkspaceId={workspaceId}
+                            submitLabel="Create"
+                            busy={busy}
+                            error={error}
+                            customPlaceholder={customCommand}
+                            onSubmit={(v) => void submitForm(formAgent, v)}
+                            onCancel={() => setFormAgent(null)}
+                        />
+                    </div>,
+                    document.body,
+                )}
         </div>
     );
 }

@@ -476,6 +476,47 @@ export default function Chooser({
         };
     }, []);
 
+    // AgentPulse per-terminal LIGHT: the sparkline above is workspace-level and
+    // only draws for a COLLAPSED workspace (see the render below); an EXPANDED
+    // workspace instead lights a small dot on each terminal ROW for that
+    // terminal's OWN activity. Reuses the exact `terminal:data` push
+    // Terminal.tsx already consumes to feed its own xterm — no new IPC/polling.
+    // `streamingTerms` briefly holds a spec id, cleared TERM_LIGHT_MS after its
+    // last byte (a fresh byte resets the timer), so the dot reads as "receiving
+    // bytes right now", distinct from `activeIds` (the pty is alive/live).
+    const TERM_LIGHT_MS = 1200;
+    const [streamingTerms, setStreamingTerms] = useState<Set<string>>(
+        () => new Set(),
+    );
+    const termLightTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+        new Map(),
+    );
+    useEffect(() => {
+        const timers = termLightTimers.current;
+        const off = api().on.terminalData(({ id }) => {
+            setStreamingTerms((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+            const existing = timers.get(id);
+            if (existing) clearTimeout(existing);
+            timers.set(
+                id,
+                setTimeout(() => {
+                    timers.delete(id);
+                    setStreamingTerms((prev) => {
+                        if (!prev.has(id)) return prev;
+                        const next = new Set(prev);
+                        next.delete(id);
+                        return next;
+                    });
+                }, TERM_LIGHT_MS),
+            );
+        });
+        return () => {
+            off();
+            for (const t of timers.values()) clearTimeout(t);
+            timers.clear();
+        };
+    }, []);
+
     // New-workspace ENTRY animation: when a genuinely-new workspace id appears in
     // the (host-sourced) list — e.g. one a workstation auto-provisioned and
     // pushed to this REMOTE session over the bridge — fade/slide its rail button
@@ -917,11 +958,16 @@ export default function Chooser({
                                 }}
                             >
                                 {/* AgentPulse: last-60s activity sparkline drawn
-                                    BEHIND the row content. */}
-                                <AgentPulseSparkline
-                                    ring={pulseRings.current.get(ws.id)}
-                                    active={activeWs.has(ws.id)}
-                                />
+                                    BEHIND the row content — COLLAPSED workspaces
+                                    only. An expanded workspace shows its own
+                                    terminals' rows instead, each with its own
+                                    per-terminal activity light (SpecRow below). */}
+                                {collapsed && (
+                                    <AgentPulseSparkline
+                                        ring={pulseRings.current.get(ws.id)}
+                                        active={activeWs.has(ws.id)}
+                                    />
+                                )}
                                 <button
                                     type="button"
                                     className="tproj-head"
@@ -1051,6 +1097,7 @@ export default function Chooser({
                                             spec={s}
                                             checked={selected.has(s.id)}
                                             live={activeIds.has(s.id)}
+                                            pulse={streamingTerms.has(s.id)}
                                             attention={attentionIds.has(s.id)}
                                             suspended={s.enabled === false}
                                             hasTynnMcp={tynnMcpWs.has(ws.id)}
@@ -1337,6 +1384,7 @@ export default function Chooser({
                                         spec={s}
                                         checked={selected.has(s.id)}
                                         live={activeIds.has(s.id)}
+                                        pulse={streamingTerms.has(s.id)}
                                         attention={attentionIds.has(s.id)}
                                         suspended={s.enabled === false}
                                         onToggle={() => onToggleSpec(s.id)}
@@ -1704,6 +1752,11 @@ interface SpecRowProps {
     spec: TerminalSpec;
     checked: boolean;
     live: boolean;
+    /** AgentPulse: this terminal is RECEIVING BYTES right now (distinct from
+     *  `live`, which just means the pty is alive). Drives the row's activity
+     *  light — the per-terminal replacement for the sparkline once its
+     *  workspace is expanded. */
+    pulse?: boolean;
     /** Agent-integration MCP: this terminal is pulsing for attention (imDone). */
     attention?: boolean;
     /** Tier 2: this spec is disabled-but-retained (suspended). */
@@ -1737,6 +1790,7 @@ function SpecRow({
     spec,
     checked,
     live,
+    pulse,
     attention,
     suspended,
     hasTynnMcp,
@@ -1822,6 +1876,16 @@ function SpecRow({
                 </span>
             ) : (
                 <span className={`sdot ${live ? 'run' : 'idle'}`} />
+            )}
+            {/* AgentPulse light: lights up while THIS terminal is receiving
+                bytes, dim otherwise. Terminal rows only — a 'code' (editor)
+                row has no pty to stream from. */}
+            {isTerminal && (
+                <span
+                    className={`term-pulse${pulse ? ' on' : ''}`}
+                    title={pulse ? 'Receiving activity' : 'No recent activity'}
+                    aria-hidden="true"
+                />
             )}
             {agentDef && purposeStr ? (
                 <span className="tname srow-hasub">

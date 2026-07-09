@@ -2108,6 +2108,28 @@
     background: #f43f5e;
 }
 
+/* AgentPulse per-terminal light — the row-level replacement for the
+   workspace sparkline once its workspace is expanded (see AgentPulseSparkline
+   in Chooser.tsx). A quiet ring by default; lights up + breathes (reusing the
+   same keyframe as the workspace-level sustained glow) while THIS terminal is
+   receiving bytes. Always visible (not hover-gated), unlike the trailing
+   action buttons — the point is to notice activity without hovering. */
+.tterm .term-pulse {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    border: 1.5px solid var(--border-2, #3f3f46);
+    background: transparent;
+    transition: background var(--dur-fast), border-color var(--dur-fast),
+        box-shadow var(--dur-fast);
+}
+.tterm .term-pulse.on {
+    border-color: var(--agent);
+    background: var(--agent);
+    animation: agent-pulse-breathe 1.6s ease-in-out infinite;
+}
+
 /* The per-row host badge (text "tynn"/"local"/"aionima") was removed — the
    gold Tynn glyph (.srow-tynn, terminal rows only) is the only host signal.
    Its .host/.host.* styles were deleted with it so the label can't reappear. */
@@ -2846,15 +2868,20 @@ body.gutter-dragging .grid-gutter {
     cursor: not-allowed;
 }
 .addview-menu {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    z-index: 40;
+    /* Portaled to <body> + fixed (top/left|right set inline from the split
+       button's rect) so the Chooser sidebar's scrollable, per-row-isolated
+       rows (variant="row") can't clip it or let a later sibling row paint
+       over it — see the comment in TerminalTypeSplitButton.tsx. `--shell` /
+       `--shadow-xl` are scoped to `.gwrap`, which a portaled element sits
+       OUTSIDE of, so this uses the globally-scoped `--card` + a literal
+       shadow instead (matching .agi-health-pop below). */
+    position: fixed;
+    z-index: 1000;
     min-width: 168px;
-    background: var(--shell);
+    background: var(--card);
     border: 1px solid var(--border-1);
     border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-xl);
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
     padding: 4px;
     display: flex;
     flex-direction: column;
@@ -3587,10 +3614,6 @@ body.gutter-dragging .grid-gutter {
 /* The type dropdown (richer than the old plain menu): icon + label + hint. */
 .addview-type-menu {
     min-width: 208px;
-}
-.addview-menu.anchor-left {
-    right: auto;
-    left: 0;
 }
 .addview-menu-divider {
     height: 1px;
