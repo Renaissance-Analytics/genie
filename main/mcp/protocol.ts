@@ -498,7 +498,7 @@ export interface ManageTerminalsResult {
 export type AgentType = 'claude' | 'codex' | 'custom';
 
 export interface RunAgentRequest {
-    action: 'start' | 'send' | 'read' | 'stop';
+    action: 'start' | 'send' | 'read' | 'stop' | 'restart';
     /** Target workspace (own, or a governed child). Same rules as manageTerminals. */
     workspaceId?: string;
     /** start: which agent CLI to launch. Default 'claude'. */
@@ -967,14 +967,14 @@ const MANAGE_TERMINALS_TOOL = {
 const RUN_AGENT_TOOL = {
     name: 'runAgent',
     description:
-        "Launch and control a CODING AGENT (claude / codex / a custom CLI) inside a terminal — in your own workspace or one you govern. This SPAWNS AN AUTONOMOUS AGENT that can itself read, write, and run code, so it is high-power. A thin layer over manageTerminals. Actions: `start` (open a terminal and launch the agent — `agent` is 'claude' | 'codex' | 'custom', default 'claude'; the actual CLI command is configurable in Genie Settings, or pass an explicit `command` (required for 'custom' unless a custom command is configured); optional `repo`/`cwd`; returns the agent terminal's `id` + the launched command); `send` (deliver a `prompt` to the running agent `id` — SUBMITTED by default, even multi-line: the prompt is wrapped in bracketed paste with the Enter delivered separately so the agent's TUI submits it instead of leaving it parked as a pasted buffer; pass `submit:false` to load without sending, or `key` (`enter`/`escape`/`ctrl-c`) to deliver a bare keypress — e.g. a lone `enter` to submit or clear a stuck multi-line buffer); `read` (its output — `cursor` for new output, or `bytes` for the last N; add `strip:true` for plain text with escape codes removed); `stop` (terminate the agent `id`). SAFETY: `start` and `send` are APPROVAL-GATED — when the target workspace requires approval (the default) each blocks on an OS modal showing exactly what will launch/run until the user approves; OFF runs immediately. `read` never prompts.",
+        "Launch and control a CODING AGENT (claude / codex / a custom CLI) inside a terminal — in your own workspace or one you govern. This SPAWNS AN AUTONOMOUS AGENT that can itself read, write, and run code, so it is high-power. A thin layer over manageTerminals. Actions: `start` (open a terminal and launch the agent — `agent` is 'claude' | 'codex' | 'custom', default 'claude'; the actual CLI command is configurable in Genie Settings, or pass an explicit `command` (required for 'custom' unless a custom command is configured); optional `repo`/`cwd`; returns the agent terminal's `id` + the launched command); `send` (deliver a `prompt` to the running agent `id` — SUBMITTED by default, even multi-line: the prompt is wrapped in bracketed paste with the Enter delivered separately so the agent's TUI submits it instead of leaving it parked as a pasted buffer; pass `submit:false` to load without sending, or `key` (`enter`/`escape`/`ctrl-c`) to deliver a bare keypress — e.g. a lone `enter` to submit or clear a stuck multi-line buffer); `read` (its output — `cursor` for new output, or `bytes` for the last N; add `strip:true` for plain text with escape codes removed); `stop` (terminate the agent `id`); `restart` (GRACEFULLY relaunch the agent `id` — resumes the SAME conversation via `--resume` in a fresh terminal, so its TUI reconnects to the current MCP rig / `.mcp.json` after a genie update WITHOUT losing context; claude-only, needs a captured session; returns the NEW terminal `id`). SAFETY: `start`, `send`, and `restart` are APPROVAL-GATED — when the target workspace requires approval (the default) each blocks on an OS modal showing exactly what will launch/run until the user approves; OFF runs immediately. `read` never prompts.",
     inputSchema: {
         type: 'object',
         properties: {
             ...TARGET_WORKSPACE_PROP,
             action: {
                 type: 'string',
-                enum: ['start', 'send', 'read', 'stop'],
+                enum: ['start', 'send', 'read', 'stop', 'restart'],
                 description: 'What to do.',
             },
             agent: {
@@ -997,7 +997,7 @@ const RUN_AGENT_TOOL = {
             },
             id: {
                 type: 'string',
-                description: 'send | read | stop: the agent terminal id (from a prior start).',
+                description: 'send | read | stop | restart: the agent terminal id (from a prior start).',
             },
             prompt: {
                 type: 'string',
@@ -1753,12 +1753,13 @@ export async function handleMcpMessage(
                     action !== 'start' &&
                     action !== 'send' &&
                     action !== 'read' &&
-                    action !== 'stop'
+                    action !== 'stop' &&
+                    action !== 'restart'
                 ) {
                     return err(
                         msg.id,
                         -32602,
-                        'runAgent requires `action`: start | send | read | stop.',
+                        'runAgent requires `action`: start | send | read | stop | restart.',
                     );
                 }
                 const result = await ctx.runAgent(ctx.terminalId, {

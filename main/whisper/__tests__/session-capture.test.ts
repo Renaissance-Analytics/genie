@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     renderAgentLaunch,
+    renderAgentResume,
     appendLaunchFlags,
     extractSessionId,
     transcriptDirFor,
@@ -8,6 +9,49 @@ import {
     pickNewSessionId,
     LAUNCH_PROFILES,
 } from '../session-capture';
+
+describe('renderAgentResume — graceful restart command (wish #88)', () => {
+    const SID = 'abcd1234-5678-90ab-cdef-1234567890ab';
+
+    it('builds a claude --resume command from the captured session id', () => {
+        expect(renderAgentResume('claude', 'claude', SID)).toBe(`claude --resume ${SID}`);
+    });
+
+    it('strips an existing --session-id before adding --resume (no double-flag)', () => {
+        expect(renderAgentResume('claude', `claude --session-id ${SID}`, SID)).toBe(
+            `claude --resume ${SID}`,
+        );
+    });
+
+    it('strips an existing --resume/--continue before rebuilding', () => {
+        expect(renderAgentResume('claude', `claude --resume ${SID}`, SID)).toBe(
+            `claude --resume ${SID}`,
+        );
+        expect(renderAgentResume('claude', `claude --continue ${SID}`, SID)).toBe(
+            `claude --resume ${SID}`,
+        );
+    });
+
+    it('preserves other flags around the session flag', () => {
+        expect(renderAgentResume('claude', `claude --model opus --session-id ${SID}`, SID)).toBe(
+            `claude --model opus --resume ${SID}`,
+        );
+    });
+
+    it('falls back to the bare `claude` binary when the base command is empty', () => {
+        expect(renderAgentResume('claude', '', SID)).toBe(`claude --resume ${SID}`);
+    });
+
+    it('refuses (null) with no captured session id — never a context-less restart', () => {
+        expect(renderAgentResume('claude', 'claude', null)).toBeNull();
+        expect(renderAgentResume('claude', 'claude', '')).toBeNull();
+    });
+
+    it('refuses (null) for non-claude agents (codex/custom resume unknown)', () => {
+        expect(renderAgentResume('codex', 'codex', SID)).toBeNull();
+        expect(renderAgentResume('custom', 'my-wrapper.sh', SID)).toBeNull();
+    });
+});
 
 describe('renderAgentLaunch — flag strategy (claude)', () => {
     it('appends --session-id with a minted uuid and reports it', () => {

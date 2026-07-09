@@ -122,8 +122,12 @@ manageTerminals; it SPAWNS AN AUTONOMOUS AGENT. Actions (\`action\`):
 - \`read\` — its output (\`cursor\` for new, or \`bytes\` for the last N; add
   \`strip: true\` for plain text with escape codes removed).
 - \`stop\` — terminate the agent \`id\`.
-**Approval:** \`start\` and \`send\` are GATED the same way (OFF runs immediately);
-\`read\` never prompts.
+- \`restart\` — GRACEFULLY relaunch the agent \`id\`: it resumes the SAME
+  conversation (via \`--resume\`) in a fresh terminal, so its TUI reconnects to the
+  current MCP rig / \`.mcp.json\` after a genie update WITHOUT losing context.
+  claude-only, needs a captured session. Returns the NEW terminal \`id\`.
+**Approval:** \`start\`, \`send\`, and \`restart\` are GATED the same way (OFF runs
+immediately); \`read\` never prompts.
 
 ### manageWorkspaces
 **Manage the Genie workspaces you can act on** — your own + (for an Ops agent)

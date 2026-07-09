@@ -49,6 +49,7 @@ import {
     restartProcess,
     getProcessStatuses,
 } from '../terminal/process-supervisor';
+import { renderAgentResume } from '../whisper/session-capture';
 import { detectFolder } from '../workspace/detect';
 import { workspaceDocHealth } from '../workspace/create-agi';
 import { openWorkspace } from '../workspace/open';
@@ -1125,6 +1126,57 @@ export function createSpecializedAgentTerminal(input: {
     return { ok: true, spec: getTerminalSpec(id) ?? undefined };
 }
 
+export type RestartAgentResult =
+    | { ok: true; oldId: string; newId: string; agent: WhisperAgentType; command: string }
+    | { ok: false; error: string };
+
+/**
+ * GRACEFULLY restart an agent terminal so its TUI reconnects to the (possibly
+ * updated) MCP rig WITHOUT losing the conversation (wish #88): tear the current
+ * agent down, then relaunch it in a fresh terminal with `--resume <captured-id>`.
+ * Claude persists its session to disk continuously, so the resumed CLI continues
+ * where it left off while re-reading the current `.mcp.json` + getting a fresh
+ * agent MCP endpoint. REFUSES (no teardown) when the terminal isn't a resumable
+ * agent — no captured session id, or a non-claude agent — so a restart can never
+ * silently drop the conversation into a fresh, context-less session.
+ */
+export function restartAgentTerminal(id: string): RestartAgentResult {
+    const spec = getTerminalSpec(id);
+    const agent = spec?.meta?.agent;
+    if (!spec || !agent) {
+        return { ok: false, error: `"${id}" is not an agent terminal.` };
+    }
+    const resume = renderAgentResume(agent, spec.meta?.agent_command ?? '', spec.meta?.chat_session_id ?? null);
+    if (!resume) {
+        return {
+            ok: false,
+            error:
+                `Cannot gracefully restart "${agent}": no captured session to resume, so a restart would ` +
+                'lose the conversation. Only a claude agent with a captured session can be resumed.',
+        };
+    }
+
+    // Tear the old agent down FIRST (releases its pty + MCP endpoint + whisper
+    // presence) so two processes never share the session id, THEN relaunch the
+    // resumed agent in a fresh terminal that picks up the current rig.
+    killTerminalById(id);
+    const restarted = createAgentTerminal({
+        workspaceId: spec.workspace_id!,
+        cwd: spec.cwd,
+        label: spec.label,
+        agentMeta: { agent, command: resume },
+        whisper: {
+            purpose: spec.meta?.whisper_purpose,
+            scope: spec.meta?.whisper_scope,
+            scopeWorkspaces: spec.meta?.whisper_workspaces,
+        },
+    });
+    // renderAgentLaunch leaves a resume command untouched (it already carries the
+    // session), so restarted.command === resume — submit it to launch.
+    writeToTerminal(restarted.id, buildSubmitBytes(restarted.command ?? resume, true));
+    return { ok: true, oldId: id, newId: restarted.id, agent, command: restarted.command ?? resume };
+}
+
 /** Back the runAgent MCP tool (launch + drive a coding agent; gated). */
 export async function runAgentForMcp(
     callerTerminalId: string,
@@ -1220,6 +1272,23 @@ export async function runAgentForMcp(
                 }
                 killTerminalById(req.id!);
                 return { ok: true, id: req.id };
+            }
+            case 'restart': {
+                if (!ownTerminal(req.id)) {
+                    return { ok: false, error: `No agent terminal "${req.id ?? ''}" in this workspace.` };
+                }
+                // Restarting relaunches an agent CLI (it can read/write/run code) —
+                // gate it like start.
+                const approved = await approveTerminalAction(ws, {
+                    title: 'An agent wants to RESTART a running coding agent — relaunch its TUI (resuming the same conversation) so it picks up genie rig / protocol updates:',
+                    lines: [`terminal: ${req.id}`],
+                });
+                if (!approved) {
+                    return { ok: false, error: 'Denied by user — the agent was not restarted.' };
+                }
+                const r = restartAgentTerminal(req.id!);
+                if (!r.ok) return { ok: false, error: r.error };
+                return { ok: true, id: r.newId, agent: r.agent, command: r.command };
             }
         }
     } catch (e) {

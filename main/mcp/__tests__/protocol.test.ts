@@ -538,6 +538,39 @@ describe('handleMcpMessage', () => {
         expect(text).toContain('a-1');
     });
 
+    it('runAgent routes a restart to the dep (wish #88) and reports the new terminal', async () => {
+        const runAgent = vi.fn().mockResolvedValue({
+            ok: true,
+            id: 'a-2',
+            agent: 'claude',
+            command: 'claude --resume sid',
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 45,
+                method: 'tools/call',
+                params: { name: 'runAgent', arguments: { action: 'restart', id: 'a-1' } },
+            },
+            ctx({ terminalId: 'term-Z', runAgent }),
+        );
+        expect(runAgent).toHaveBeenCalledWith('term-Z', expect.objectContaining({
+            action: 'restart',
+            id: 'a-1',
+        }));
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('restart ok');
+        expect(text).toContain('a-2'); // the NEW terminal id
+    });
+
+    it('runAgent rejects an unknown action', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 46, method: 'tools/call', params: { name: 'runAgent', arguments: { action: 'nope' } } },
+            ctx(),
+        );
+        expect(res?.error?.code).toBe(-32602);
+    });
+
     it('runAgent surfaces a failure (no command configured)', async () => {
         const runAgent = vi.fn().mockResolvedValue({
             ok: false,

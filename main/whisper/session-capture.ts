@@ -90,6 +90,39 @@ export function renderAgentLaunch(
     return { command: cmd, chatSessionId: null, strategy: profile.strategy };
 }
 
+/** Strip any session-id / resume flag (+ its id) from a command, so a resume can
+ *  be (re)built cleanly without double-flagging. */
+function stripSessionFlags(command: string): string {
+    return String(command ?? '')
+        .replace(/\s*--session-id(?:=|\s+)[0-9a-fA-F-]{8,}/g, '')
+        .replace(/\s*(?:--resume|--continue)(?:=|\s+)[0-9a-fA-F-]{8,}/g, '')
+        .trim();
+}
+
+/**
+ * Build the command to RESUME an agent's captured chat session — the heart of a
+ * GRACEFUL restart: re-launching the SAME conversation so the TUI reconnects to
+ * the (updated) MCP rig without losing context (wish #88). Claude resumes with
+ * `--resume <id>` (confirmed flag). Any existing session/resume flag is stripped
+ * first so we never double-flag.
+ *
+ * Returns null when there's no captured id, or the agent can't be safely resumed
+ * (codex has no capture in v1; a `custom` wrapper's resume syntax is unknown) — so
+ * the caller REFUSES rather than silently launching a fresh, context-less session.
+ */
+export function renderAgentResume(
+    agent: WhisperAgentType,
+    baseCommand: string,
+    sessionId: string | null,
+): string | null {
+    if (!sessionId) return null;
+    // Only claude has a confirmed resume flag; codex/custom can't be resumed
+    // generically without risking a broken re-launch.
+    if (agent !== 'claude') return null;
+    const base = stripSessionFlags(baseCommand) || 'claude';
+    return `${base} --resume ${sessionId}`;
+}
+
 /**
  * Append a user's ALWAYS-ON launch flags to a base agent command. Both sides are
  * trimmed; empty/whitespace flags are a no-op. Pure so the flag behaviour is
