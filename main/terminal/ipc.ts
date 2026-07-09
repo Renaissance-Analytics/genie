@@ -780,6 +780,30 @@ export function killTerminalById(id: string): boolean {
     return killed;
 }
 
+/**
+ * Fully tear down EVERY terminal + process belonging to a workspace — the safe
+ * deprovision primitive behind workspace-assignment DETACH. Each is stopped via
+ * killTerminalById, so a running agent's pty is killed, its MCP endpoint is
+ * released, its WhisperChat presence goes offline, and its snapshot is dropped —
+ * nothing is orphaned. Does NOT touch the on-disk clone (uncommitted work is
+ * left intact); disk removal is deliberately out of scope. Returns the ids torn
+ * down (empty when the workspace had none). Best-effort per terminal.
+ */
+export function stopWorkspaceTerminals(workspaceId: string): string[] {
+    if (!workspaceId) return [];
+    const stopped: string[] = [];
+    for (const spec of listTerminalSpecs()) {
+        if (spec.workspace_id !== workspaceId) continue;
+        try {
+            killTerminalById(spec.id);
+        } catch {
+            /* best-effort — one stubborn terminal can't block the teardown */
+        }
+        stopped.push(spec.id);
+    }
+    return stopped;
+}
+
 /** Forward the broadcast helper for callers that want it. */
 export function broadcastTerminalCount(): void {
     const count = terminalManager().list().length;

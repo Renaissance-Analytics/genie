@@ -1,4 +1,11 @@
-import { addWorkspace, getAllSettings, listWorkspaces } from '../db';
+import {
+    addWorkspace,
+    getAllSettings,
+    getWorkspace,
+    listAssignmentWorkspaces,
+    listWorkspaces,
+    removeWorkspace,
+} from '../db';
 import { cloneAgiEnvelope } from '../workspace/create-agi';
 import { broadcastWorkspacesChanged } from '../ipc';
 import { childAgiCloneUrl } from './ops-provision';
@@ -134,6 +141,9 @@ export async function provisionAssignedWorkspace(
             env_file: deps.envFile ?? getAllSettings().default_env_file ?? '.env',
             last_opened_at: null,
             created_by_genie: 1,
+            // Mark it assignment-managed so the convergent reconcile may safely
+            // deprovision it later — this is the ONLY flow that sets this flag.
+            assignment_managed: 1,
         });
         // The workspace-list broadcast assign-ui keys off — emits `workspaces:changed`
         // locally + over the host `/ws/events` so remote sessions re-fetch + fade in.
@@ -148,27 +158,119 @@ export async function provisionAssignedWorkspace(
     }
 }
 
+/** Injectable seams for the SAFE teardown side (DETACH), defaulting to the real
+ *  db / terminal / broadcast so callers pass nothing; tests pass fakes. */
+export interface AssignmentDeprovisionDeps {
+    /** This host's assignment-managed workspaces (default: listAssignmentWorkspaces).
+     *  Deprovision only ever touches an id present here — a user-local or an
+     *  ops-provisioned workspace (identical backend/created_by_genie) is invisible
+     *  to it, so it can never be torn down. */
+    listManaged?: () => Array<{ id: string }>;
+    /** Whether a workspace row exists at all (default: getWorkspace). Distinguishes
+     *  a present-but-unmanaged row (SKIPPED for safety) from a genuinely absent one
+     *  (an idempotent no-op — a duplicate push). */
+    hasWorkspace?: (id: string) => boolean;
+    /** Fully stop + tear down the workspace's terminals (default: the real
+     *  stopWorkspaceTerminals, lazy-required so this module stays electron-free at
+     *  import — unit tests inject this and never reach the require). */
+    stopTerminals?: (workspaceId: string) => string[];
+    /** Unregister the workspace row — LEAVES the on-disk clone (default: removeWorkspace). */
+    remove?: (id: string) => void;
+    /** Announce the workspace-list change to clients (default: broadcastWorkspacesChanged). */
+    notifyChanged?: () => void;
+}
+
+export type AssignmentDeprovisionStatus = 'deprovisioned' | 'absent' | 'skipped';
+
+export interface AssignmentDeprovisionResult {
+    status: AssignmentDeprovisionStatus;
+    workspaceId: string;
+    /** The terminals torn down, when deprovisioned. */
+    stopped?: string[];
+}
+
+/**
+ * SAFELY deprovision ONE unassigned workspace (the DETACH mirror of
+ * provisionAssignedWorkspace): stop its terminals/agents (full teardown, no
+ * orphans), unregister the row, and broadcast — LEAVING the on-disk clone in
+ * place (uncommitted work is never destroyed). Synchronous + best-effort.
+ *
+ * SAFETY: only a workspace THIS host provisioned from a Tynn assignment
+ * (`assignment_managed`) is ever torn down. A present-but-unmanaged row (a
+ * user-local or ops-provisioned workspace) is refused → `skipped`. An id with no
+ * local row is an idempotent no-op → `absent` (a duplicate push is harmless).
+ */
+export function deprovisionAssignedWorkspace(
+    workspaceId: string,
+    deps: AssignmentDeprovisionDeps = {},
+): AssignmentDeprovisionResult {
+    const listManaged = deps.listManaged ?? listAssignmentWorkspaces;
+    const hasWorkspace = deps.hasWorkspace ?? ((id: string) => !!getWorkspace(id));
+    const stopTerminals =
+        deps.stopTerminals ??
+        ((id: string): string[] =>
+            // Lazy require keeps this module electron-free at import (unit tests
+            // inject stopTerminals; only the real host reaches this).
+            (require('../terminal/ipc') as typeof import('../terminal/ipc')).stopWorkspaceTerminals(id));
+    const remove = deps.remove ?? removeWorkspace;
+    const notifyChanged = deps.notifyChanged ?? broadcastWorkspacesChanged;
+
+    if (!workspaceId) return { status: 'absent', workspaceId };
+
+    if (!listManaged().some((w) => w.id === workspaceId)) {
+        // Not assignment-managed: refuse if the row exists (safety), else no-op.
+        return { status: hasWorkspace(workspaceId) ? 'skipped' : 'absent', workspaceId };
+    }
+
+    const stopped = stopTerminals(workspaceId);
+    remove(workspaceId);
+    // The same broadcast attach uses — remote sessions re-fetch and fade it OUT.
+    notifyChanged();
+    return { status: 'deprovisioned', workspaceId, stopped };
+}
+
 export interface AssignmentReconcileResult {
     provisioned: string[];
     existing: string[];
     errors: string[];
+    /** Assignment-managed workspaces removed because Tynn no longer assigns them. */
+    deprovisioned: string[];
 }
 
 /**
- * RECONCILE a full assigned-workspace list (the one-shot on (re)connect): provision
- * each not-yet-local one. Best-effort per workspace. This is NOT a poll — the
- * caller runs it ONCE per connection, off the transport's `onConnected`.
+ * RECONCILE a full assigned-workspace list against local state (the one-shot on
+ * (re)connect) — CONVERGENT in both directions: provision each not-yet-local
+ * assignment AND deprovision each assignment-managed local workspace Tynn no
+ * longer assigns (the offline-catch-up for a detach whose push was missed).
+ * Best-effort per workspace. NOT a poll — the caller runs it ONCE per connection,
+ * off the transport's `onConnected`.
  */
 export async function reconcileAssignedWorkspaces(
     assignments: WorkspaceAssignment[],
-    deps: AssignmentProvisionDeps,
+    deps: AssignmentProvisionDeps & AssignmentDeprovisionDeps,
 ): Promise<AssignmentReconcileResult> {
-    const out: AssignmentReconcileResult = { provisioned: [], existing: [], errors: [] };
+    const out: AssignmentReconcileResult = {
+        provisioned: [],
+        existing: [],
+        errors: [],
+        deprovisioned: [],
+    };
+
+    // 1) ADD: provision every assignment not yet local.
     for (const a of assignments) {
         const r = await provisionAssignedWorkspace(a, deps);
         if (r.status === 'provisioned') out.provisioned.push(r.workspaceId);
         else if (r.status === 'exists') out.existing.push(r.workspaceId);
         else out.errors.push(`${a.name}: ${r.error}`);
+    }
+
+    // 2) CONVERGE: remove assignment-managed locals absent from the assigned set.
+    const assignedIds = new Set(assignments.map((a) => a.workspaceId));
+    const listManaged = deps.listManaged ?? listAssignmentWorkspaces;
+    for (const w of listManaged()) {
+        if (assignedIds.has(w.id)) continue;
+        const r = deprovisionAssignedWorkspace(w.id, deps);
+        if (r.status === 'deprovisioned') out.deprovisioned.push(w.id);
     }
     return out;
 }
@@ -180,31 +282,41 @@ export interface AssignmentSubscriptionHandle {
 
 /**
  * The persistent push carrier, injected by the shell. `onConnected` fires on
- * every (re)connect (the trigger for the one-shot reconcile); `onAssignment`
- * fires per pushed `WorkspaceAssigned`. Implementations MUST hold ONE persistent
- * connection and MUST NOT poll.
+ * every (re)connect (the trigger for the one-shot convergent reconcile);
+ * `onAssignment` per pushed `WorkspaceAssigned`; `onUnassignment` per pushed
+ * `WorkspaceUnassigned` (the DETACH trigger — the id to deprovision).
+ * Implementations MUST hold ONE persistent connection and MUST NOT poll.
  */
 export interface AssignmentTransport {
     open(handlers: {
         onConnected: () => void;
         onAssignment: (a: WorkspaceAssignment) => void;
+        /** Optional so older transports still satisfy the type; the subscriber
+         *  always supplies it. */
+        onUnassignment?: (workspaceId: string) => void;
     }): AssignmentSubscriptionHandle;
 }
 
+export type AssignmentSubscriberContext = 'reconcile' | 'provision' | 'deprovision';
+
 export interface WorkspaceAssignmentSubscriberDeps {
     transport: AssignmentTransport;
-    /** One-shot reconcile (fetch the assigned list + provision the diff). */
+    /** One-shot convergent reconcile (fetch the assigned list; provision the
+     *  additions AND deprovision the removals). */
     reconcile: () => Promise<void>;
     /** Provision one pushed assignment. */
     provision: (a: WorkspaceAssignment) => Promise<void>;
-    /** Surfaced for logging; a failed reconcile/provision never tears down the sub. */
-    onError?: (context: 'reconcile' | 'provision', e: unknown) => void;
+    /** Safely deprovision one pushed unassignment (the DETACH trigger). */
+    deprovision: (workspaceId: string) => Promise<void>;
+    /** Surfaced for logging; a failed step never tears down the sub. */
+    onError?: (context: AssignmentSubscriberContext, e: unknown) => void;
 }
 
 /**
  * Orchestrates the push subscription: on each (re)connect run the one-shot
- * reconcile; on each push provision that one workspace. NO timers, NO polling —
- * the injected transport is the single long-lived connection.
+ * convergent reconcile; on each assignment push provision that workspace; on each
+ * unassignment push safely deprovision it. NO timers, NO polling — the injected
+ * transport is the single long-lived connection.
  */
 export class WorkspaceAssignmentSubscriber {
     private handle: AssignmentSubscriptionHandle | null = null;
@@ -216,6 +328,8 @@ export class WorkspaceAssignmentSubscriber {
         this.handle = this.deps.transport.open({
             onConnected: () => void this.guard('reconcile', this.deps.reconcile()),
             onAssignment: (a) => void this.guard('provision', this.deps.provision(a)),
+            onUnassignment: (workspaceId) =>
+                void this.guard('deprovision', this.deps.deprovision(workspaceId)),
         });
     }
 
@@ -224,7 +338,7 @@ export class WorkspaceAssignmentSubscriber {
         this.handle = null;
     }
 
-    private async guard(context: 'reconcile' | 'provision', p: Promise<void>): Promise<void> {
+    private async guard(context: AssignmentSubscriberContext, p: Promise<void>): Promise<void> {
         try {
             await p;
         } catch (e) {
@@ -242,20 +356,24 @@ export interface WorkspaceAssignmentWiring {
     fetchAssigned: () => Promise<WorkspaceAssignment[]>;
     /** Where assigned envelopes clone to (`<parent>/<slug>`). */
     parentPath: string;
-    /** Optional provision-seam overrides (tests / custom env-file). */
-    provisionDeps?: Partial<AssignmentProvisionDeps>;
-    onError?: (context: 'reconcile' | 'provision', e: unknown) => void;
+    /** Optional provision/deprovision-seam overrides (tests / custom env-file). */
+    provisionDeps?: Partial<AssignmentProvisionDeps & AssignmentDeprovisionDeps>;
+    onError?: (context: AssignmentSubscriberContext, e: unknown) => void;
 }
 
 /**
  * Assemble a ready-to-start subscriber from the shell's wiring. The reconcile
- * closure fetches the assigned list then provisions the diff; the provision
- * closure handles a single push. Both reuse the same provision seams.
+ * closure fetches the assigned list then converges local state (provision the
+ * additions, deprovision the removals); the provision/deprovision closures handle
+ * single pushes. All reuse the same seams.
  */
 export function createWorkspaceAssignmentSubscriber(
     w: WorkspaceAssignmentWiring,
 ): WorkspaceAssignmentSubscriber {
-    const deps: AssignmentProvisionDeps = { parentPath: w.parentPath, ...w.provisionDeps };
+    const deps: AssignmentProvisionDeps & AssignmentDeprovisionDeps = {
+        parentPath: w.parentPath,
+        ...w.provisionDeps,
+    };
     return new WorkspaceAssignmentSubscriber({
         transport: w.transport,
         reconcile: async () => {
@@ -264,6 +382,9 @@ export function createWorkspaceAssignmentSubscriber(
         },
         provision: async (a) => {
             await provisionAssignedWorkspace(a, deps);
+        },
+        deprovision: async (workspaceId) => {
+            deprovisionAssignedWorkspace(workspaceId, deps);
         },
         onError: w.onError,
     });

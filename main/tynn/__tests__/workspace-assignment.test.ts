@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
     createWorkspaceAssignmentSubscriber,
+    deprovisionAssignedWorkspace,
     provisionAssignedWorkspace,
     reconcileAssignedWorkspaces,
     resolveAssignmentCloneUrl,
     WorkspaceAssignmentSubscriber,
+    type AssignmentDeprovisionDeps,
     type AssignmentProvisionDeps,
     type AssignmentTransport,
     type WorkspaceAssignment,
@@ -22,24 +24,43 @@ function assignment(over: Partial<WorkspaceAssignment> = {}): WorkspaceAssignmen
     };
 }
 
-/** Provision deps with everything faked — no disk / db / broadcast. */
-function fakeDeps(over: Partial<AssignmentProvisionDeps> = {}) {
+type Deps = AssignmentProvisionDeps & AssignmentDeprovisionDeps;
+
+/**
+ * Provision + deprovision deps with everything faked — no disk / db / broadcast /
+ * terminal teardown. `existing` = all local rows (provision idempotency +
+ * hasWorkspace); `managed` = the assignment-managed subset (deprovision safety).
+ * `remove` keeps both consistent so convergent reconcile is exercised for real.
+ */
+function fakeDeps(over: Partial<Deps> = {}) {
     const clone = vi.fn(async (o: { url: string; parent_path: string; folder: string }) => ({
         path: `${o.parent_path}/${o.folder}`,
     }));
     const register = vi.fn();
     const notifyChanged = vi.fn();
+    const stopTerminals = vi.fn((id: string) => [`${id}-t1`]);
     const existing: Array<{ id: string }> = [];
-    const deps: AssignmentProvisionDeps = {
+    const managed: Array<{ id: string }> = [];
+    const remove = vi.fn((id: string) => {
+        const i = existing.findIndex((w) => w.id === id);
+        if (i >= 0) existing.splice(i, 1);
+        const j = managed.findIndex((w) => w.id === id);
+        if (j >= 0) managed.splice(j, 1);
+    });
+    const deps: Deps = {
         parentPath: '/hosts/root',
         clone,
-        listExisting: () => existing,
         register,
+        listExisting: () => existing,
         notifyChanged,
         envFile: '.env',
+        listManaged: () => managed,
+        hasWorkspace: (id) => existing.some((w) => w.id === id),
+        stopTerminals,
+        remove,
         ...over,
     };
-    return { deps, clone, register, notifyChanged, existing };
+    return { deps, clone, register, notifyChanged, stopTerminals, remove, existing, managed };
 }
 
 describe('resolveAssignmentCloneUrl', () => {
@@ -68,7 +89,7 @@ describe('resolveAssignmentCloneUrl', () => {
 });
 
 describe('provisionAssignedWorkspace', () => {
-    it('clones, registers, and broadcasts a new workspace', async () => {
+    it('clones, registers (assignment_managed), and broadcasts a new workspace', async () => {
         const { deps, clone, register, notifyChanged } = fakeDeps();
 
         const r = await provisionAssignedWorkspace(assignment(), deps);
@@ -80,7 +101,7 @@ describe('provisionAssignedWorkspace', () => {
             parent_path: '/hosts/root',
             folder: 'wonder',
         });
-        // Registered under the project id, as an agi/tynn workspace.
+        // Registered under the project id, as an agi/tynn assignment-managed row.
         expect(register).toHaveBeenCalledTimes(1);
         expect(register.mock.calls[0][0]).toMatchObject({
             id: 'p1',
@@ -89,6 +110,7 @@ describe('provisionAssignedWorkspace', () => {
             shape: 'agi',
             path: '/hosts/root/wonder',
             created_by_genie: 1,
+            assignment_managed: 1,
         });
         expect(notifyChanged).toHaveBeenCalledTimes(1);
     });
@@ -132,10 +154,52 @@ describe('provisionAssignedWorkspace', () => {
     });
 });
 
+describe('deprovisionAssignedWorkspace', () => {
+    it('stops terminals, unregisters, and broadcasts an assignment-managed workspace', () => {
+        const { deps, stopTerminals, remove, notifyChanged, existing, managed } = fakeDeps();
+        existing.push({ id: 'p1' });
+        managed.push({ id: 'p1' });
+
+        const r = deprovisionAssignedWorkspace('p1', deps);
+
+        expect(r.status).toBe('deprovisioned');
+        expect(r.stopped).toEqual(['p1-t1']);
+        expect(stopTerminals).toHaveBeenCalledWith('p1');
+        expect(remove).toHaveBeenCalledWith('p1');
+        expect(notifyChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it('REFUSES a present-but-unmanaged workspace (never touches ops/user rows)', () => {
+        const { deps, stopTerminals, remove, notifyChanged, existing } = fakeDeps();
+        existing.push({ id: 'ops1' }); // exists but NOT in managed
+
+        const r = deprovisionAssignedWorkspace('ops1', deps);
+
+        expect(r.status).toBe('skipped');
+        expect(stopTerminals).not.toHaveBeenCalled();
+        expect(remove).not.toHaveBeenCalled();
+        expect(notifyChanged).not.toHaveBeenCalled();
+    });
+
+    it('is an idempotent no-op (absent) when there is no such workspace', () => {
+        const { deps, remove } = fakeDeps();
+        const r = deprovisionAssignedWorkspace('ghost', deps);
+        expect(r.status).toBe('absent');
+        expect(remove).not.toHaveBeenCalled();
+    });
+
+    it('treats an empty id as absent', () => {
+        const { deps, remove } = fakeDeps();
+        expect(deprovisionAssignedWorkspace('', deps).status).toBe('absent');
+        expect(remove).not.toHaveBeenCalled();
+    });
+});
+
 describe('reconcileAssignedWorkspaces', () => {
     it('provisions the missing, skips the present, collects errors', async () => {
-        const { deps, existing } = fakeDeps();
+        const { deps, existing, managed } = fakeDeps();
         existing.push({ id: 'have' });
+        managed.push({ id: 'have' }); // already assigned + local → left alone
 
         const res = await reconcileAssignedWorkspaces(
             [
@@ -150,12 +214,36 @@ describe('reconcileAssignedWorkspaces', () => {
         expect(res.existing).toEqual(['have']);
         expect(res.errors).toHaveLength(1);
         expect(res.errors[0]).toMatch(/^Bad: /);
+        expect(res.deprovisioned).toEqual([]);
+    });
+
+    it('CONVERGES: deprovisions assignment-managed locals Tynn no longer assigns', async () => {
+        const { deps, remove, stopTerminals, existing, managed } = fakeDeps();
+        // Local state: 'keep' + 'drop' are assignment-managed; 'ops' is a foreign
+        // (ops-provisioned) row that must never be touched.
+        existing.push({ id: 'keep' }, { id: 'drop' }, { id: 'ops' });
+        managed.push({ id: 'keep' }, { id: 'drop' });
+
+        const res = await reconcileAssignedWorkspaces(
+            [assignment({ workspaceId: 'keep', projectId: 'keep', slug: 'keep' })],
+            deps,
+        );
+
+        expect(res.deprovisioned).toEqual(['drop']);
+        expect(remove).toHaveBeenCalledWith('drop');
+        expect(stopTerminals).toHaveBeenCalledWith('drop');
+        expect(remove).not.toHaveBeenCalledWith('keep');
+        expect(remove).not.toHaveBeenCalledWith('ops'); // safety: foreign row untouched
     });
 });
 
-/** A fake transport that captures the handlers so a test can drive connect/push. */
+/** A fake transport that captures the handlers so a test can drive connect / push. */
 function fakeTransport() {
-    let handlers: { onConnected: () => void; onAssignment: (a: WorkspaceAssignment) => void } | null = null;
+    let handlers: {
+        onConnected: () => void;
+        onAssignment: (a: WorkspaceAssignment) => void;
+        onUnassignment?: (workspaceId: string) => void;
+    } | null = null;
     const close = vi.fn();
     const transport: AssignmentTransport = {
         open: (h) => {
@@ -168,6 +256,7 @@ function fakeTransport() {
         close,
         connect: () => handlers?.onConnected(),
         push: (a: WorkspaceAssignment) => handlers?.onAssignment(a),
+        unassign: (id: string) => handlers?.onUnassignment?.(id),
         get opened() {
             return handlers !== null;
         },
@@ -175,14 +264,15 @@ function fakeTransport() {
 }
 
 describe('WorkspaceAssignmentSubscriber', () => {
-    it('reconciles on connect and provisions on push — one persistent connection, no timers', async () => {
+    it('reconciles on connect, provisions on push, deprovisions on unassign — no timers', async () => {
         vi.useFakeTimers();
         const setInterval = vi.spyOn(globalThis, 'setInterval');
         const t = fakeTransport();
         const reconcile = vi.fn(async () => {});
         const provision = vi.fn(async (_a: WorkspaceAssignment) => {});
+        const deprovision = vi.fn(async (_id: string) => {});
 
-        const sub = new WorkspaceAssignmentSubscriber({ transport: t.transport, reconcile, provision });
+        const sub = new WorkspaceAssignmentSubscriber({ transport: t.transport, reconcile, provision, deprovision });
         sub.start();
         expect(t.opened).toBe(true);
 
@@ -192,11 +282,17 @@ describe('WorkspaceAssignmentSubscriber', () => {
         await vi.runAllTimersAsync();
         expect(reconcile).toHaveBeenCalledTimes(2);
 
-        // Each push provisions that one workspace.
+        // Each assignment push provisions that one workspace.
         t.push(assignment({ workspaceId: 'x' }));
         await vi.runAllTimersAsync();
         expect(provision).toHaveBeenCalledTimes(1);
         expect(provision.mock.calls[0][0].workspaceId).toBe('x');
+
+        // Each unassignment push deprovisions that one workspace.
+        t.unassign('x');
+        await vi.runAllTimersAsync();
+        expect(deprovision).toHaveBeenCalledTimes(1);
+        expect(deprovision.mock.calls[0][0]).toBe('x');
 
         // NEVER a polling loop.
         expect(setInterval).not.toHaveBeenCalled();
@@ -213,13 +309,14 @@ describe('WorkspaceAssignmentSubscriber', () => {
             transport: t.transport,
             reconcile: vi.fn(async () => {}),
             provision: vi.fn(async () => {}),
+            deprovision: vi.fn(async () => {}),
         });
         sub.start();
         sub.start();
         expect(openSpy).toHaveBeenCalledTimes(1);
     });
 
-    it('an error in reconcile/provision is surfaced but never tears down the sub', async () => {
+    it('an error in a step is surfaced but never tears down the sub', async () => {
         const t = fakeTransport();
         const onError = vi.fn();
         const sub = new WorkspaceAssignmentSubscriber({
@@ -228,6 +325,9 @@ describe('WorkspaceAssignmentSubscriber', () => {
                 throw new Error('reconcile boom');
             }),
             provision: vi.fn(async () => {}),
+            deprovision: vi.fn(async () => {
+                throw new Error('deprovision boom');
+            }),
             onError,
         });
         sub.start();
@@ -235,13 +335,19 @@ describe('WorkspaceAssignmentSubscriber', () => {
         await Promise.resolve();
         await Promise.resolve();
         expect(onError).toHaveBeenCalledWith('reconcile', expect.any(Error));
+
+        t.unassign('z');
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(onError).toHaveBeenCalledWith('deprovision', expect.any(Error));
     });
 });
 
 describe('createWorkspaceAssignmentSubscriber', () => {
-    it('wires reconcile to fetch-then-provision the diff, and push to a single provision', async () => {
-        const { deps, clone, register, existing } = fakeDeps();
+    it('wires reconcile to converge, push to provision, and unassign to deprovision', async () => {
+        const { deps, clone, register, remove, stopTerminals, existing, managed } = fakeDeps();
         existing.push({ id: 'have' });
+        managed.push({ id: 'have' });
         const t = fakeTransport();
         const fetchAssigned = vi.fn(async () => [
             assignment({ workspaceId: 'have', projectId: 'have' }),
@@ -258,6 +364,10 @@ describe('createWorkspaceAssignmentSubscriber', () => {
                 listExisting: () => existing,
                 notifyChanged: vi.fn(),
                 envFile: '.env',
+                listManaged: () => managed,
+                hasWorkspace: (id) => existing.some((w) => w.id === id),
+                stopTerminals,
+                remove,
             },
         });
         sub.start();
@@ -267,8 +377,11 @@ describe('createWorkspaceAssignmentSubscriber', () => {
         await vi.waitFor(() => expect(clone).toHaveBeenCalledTimes(1)); // only 'new1'
         expect(clone.mock.calls[0][0].folder).toBe('new1');
 
-        t.push(assignment({ workspaceId: 'pushed', projectId: 'pushed', slug: 'pushed' }));
-        await vi.waitFor(() => expect(clone).toHaveBeenCalledTimes(2));
-        expect(clone.mock.calls[1][0].folder).toBe('pushed');
+        // An unassignment push tears down that assignment-managed workspace.
+        managed.push({ id: 'gone' });
+        existing.push({ id: 'gone' });
+        t.unassign('gone');
+        await vi.waitFor(() => expect(remove).toHaveBeenCalledWith('gone'));
+        expect(stopTerminals).toHaveBeenCalledWith('gone');
     });
 });

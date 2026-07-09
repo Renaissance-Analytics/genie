@@ -823,3 +823,53 @@ describe('db migration v11 (enable MCP for all workspaces by default)', () => {
         expect(mcp('w-on')).toBe(1);
     });
 });
+
+describe('db migration v24 (workspace-assignment deprovision marker)', () => {
+    const insertWs = (db: Database.Database, id: string, extra = '') =>
+        db.prepare(
+            `INSERT INTO workspaces
+               (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, last_opened_at, created_by_genie${extra ? ', assignment_managed' : ''})
+             VALUES (@id, 'tynn', 'p', 'P', 'p', 'P', 'agi', @path, NULL, 1${extra})`,
+        ).run({ id, path: `/tmp/${id}` });
+
+    it('adds the assignment_managed column to workspaces', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(cols(db, 'workspaces').has('assignment_managed')).toBe(true);
+    });
+
+    // The safe default is 0 (NOT managed): an existing ops-provisioned or
+    // user-local row must never be seen by the convergent reconcile.
+    it('a raw workspace row defaults to assignment_managed=0', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        insertWs(db, 'w-am');
+        const row = db
+            .prepare<[string], { assignment_managed: number }>(
+                'SELECT assignment_managed FROM workspaces WHERE id = ?',
+            )
+            .get('w-am');
+        expect(row?.assignment_managed).toBe(0);
+    });
+
+    it('round-trips an assignment-managed (=1) row and filters on it', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        insertWs(db, 'w-managed', ', 1');
+        insertWs(db, 'w-plain'); // default 0
+        const managed = db
+            .prepare<[], { id: string }>(
+                'SELECT id FROM workspaces WHERE assignment_managed = 1',
+            )
+            .all()
+            .map((r) => r.id);
+        expect(managed).toEqual(['w-managed']);
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'workspaces').has('assignment_managed')).toBe(true);
+    });
+});

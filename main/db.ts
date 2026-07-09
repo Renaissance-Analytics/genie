@@ -627,6 +627,26 @@ export function runMigrations(d: Database.Database): void {
                 `);
             },
         },
+        {
+            // v24 — workspace-assignment DEPROVISION marker. `assignment_managed`
+            // flags a workspace that this headless host provisioned FROM a Tynn
+            // `WorkspaceAssigned` push. It is the discriminator the convergent
+            // reconcile keys off to safely REMOVE a workspace Tynn no longer
+            // assigns: ops-provisioned and user-local workspaces register with
+            // identical backend/created_by_genie, so those fields can't tell them
+            // apart — only rows the assignment flow set to 1 are ever torn down.
+            // Idempotent ADD COLUMN like v2's `backend` (no CHECK on ALTER for
+            // SQLite < 3.25); pre-existing rows read back 0 (not managed).
+            version: 24,
+            runner: (db) => {
+                const ws = workspaceColumns(db);
+                if (!ws.has('assignment_managed')) {
+                    db.exec(
+                        `ALTER TABLE workspaces ADD COLUMN assignment_managed INTEGER NOT NULL DEFAULT 0`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -933,6 +953,11 @@ export interface WorkspaceRow {
     env_file: string | null;
     last_opened_at: string | null;
     created_by_genie: number;
+    /** 1 when this headless host provisioned the workspace from a Tynn
+     *  `WorkspaceAssigned` push. The convergent reconcile ONLY ever deprovisions
+     *  rows with this set — ops-provisioned / user-local rows (same backend +
+     *  created_by_genie) stay 0 and are never torn down. Default 0. */
+    assignment_managed: number;
     /** User-defined sidebar order (lower = higher). New rows append to the bottom. */
     sort_order: number;
     /** Agent-integration MCP enabled for this workspace's terminals. 0=off (default). */
@@ -970,6 +995,20 @@ export function listWorkspaces(): WorkspaceRow[] {
         .prepare<[], WorkspaceRow>(
             `SELECT * FROM workspaces
              ORDER BY sort_order ASC, (last_opened_at IS NULL) ASC, last_opened_at DESC, project_name ASC`,
+        )
+        .all();
+}
+
+/**
+ * Workspaces this host provisioned from a Tynn assignment (`assignment_managed`
+ * = 1). The convergent reconcile diffs THIS list against Tynn's current assigned
+ * set to find safe-to-deprovision workspaces — it never sees ops-provisioned or
+ * user-local rows, so it can't tear them down.
+ */
+export function listAssignmentWorkspaces(): WorkspaceRow[] {
+    return getDb()
+        .prepare<[], WorkspaceRow>(
+            'SELECT * FROM workspaces WHERE assignment_managed = 1',
         )
         .all();
 }
@@ -1023,12 +1062,17 @@ export function getWorkspaceByPath(wsPath: string): WorkspaceRow | undefined {
 export function addWorkspace(
     row: Omit<
         WorkspaceRow,
-        'sort_order' | 'mcp_enabled' | 'process_approval' | 'terminal_approval'
+        | 'sort_order'
+        | 'mcp_enabled'
+        | 'process_approval'
+        | 'terminal_approval'
+        | 'assignment_managed'
     > & {
         sort_order?: number;
         mcp_enabled?: number;
         process_approval?: number;
         terminal_approval?: number;
+        assignment_managed?: number;
     },
 ): WorkspaceRow {
     // Mirror project_id / project_name into the legacy tynn_* columns
@@ -1045,12 +1089,16 @@ export function addWorkspace(
         // Genie MCP (imDone, ForceTheQuestion, …) is available to agents
         // everywhere out of the box. The per-workspace toggle can opt out.
         mcp_enabled: row.mcp_enabled ?? 1,
+        // Only the workspace-assignment provisioner sets this to 1 (see
+        // provisionAssignedWorkspace); everything else stays 0 so the convergent
+        // reconcile never tears it down.
+        assignment_managed: row.assignment_managed ?? 0,
     };
     getDb()
         .prepare(
             `INSERT INTO workspaces
-             (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, editor, editor_cmd, start_cmd, env_file, last_opened_at, created_by_genie, sort_order, mcp_enabled)
-             VALUES (@id, @backend, @project_id, @project_name, @tynn_project_id, @tynn_project_name, @shape, @path, @editor, @editor_cmd, @start_cmd, @env_file, @last_opened_at, @created_by_genie, @sort_order, @mcp_enabled)`,
+             (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, editor, editor_cmd, start_cmd, env_file, last_opened_at, created_by_genie, sort_order, mcp_enabled, assignment_managed)
+             VALUES (@id, @backend, @project_id, @project_name, @tynn_project_id, @tynn_project_name, @shape, @path, @editor, @editor_cmd, @start_cmd, @env_file, @last_opened_at, @created_by_genie, @sort_order, @mcp_enabled, @assignment_managed)`,
         )
         .run(full);
     return getWorkspace(row.id)!;
