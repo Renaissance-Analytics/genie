@@ -1548,6 +1548,9 @@ export interface TerminalSpecMeta {
     whisper_scope?: 'none' | 'self' | 'specific' | 'all';
     /** Workspace ids this agent is visible to when `whisper_scope: 'specific'`. */
     whisper_workspaces?: string[];
+    /** Opt-in wake-on-DM (issue #9): a DM to an idle agent may inject a nudge to
+     *  start a turn. Default off/absent. */
+    whisper_wake_on_dm?: boolean;
     /** The captured AI chat-session uuid (session-capture), when known. */
     chat_session_id?: string;
     [key: string]: unknown;

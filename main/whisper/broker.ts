@@ -13,6 +13,7 @@ import {
     type WhisperScope,
 } from './types';
 import { noopWhisperStore, type WhisperStore } from './store';
+import { shouldWakeAgent, wakeNudgeText } from './wake';
 
 /**
  * WhisperChat broker — the in-memory registry + channels + inboxes powering the
@@ -69,6 +70,15 @@ interface WhisperAgent extends WhisperAgentInfo {
     /** Highest seq this agent has received (its ACK position). Persisted to the
      *  store so restart-survival + unACKed-urgent escalation (Track C) work. */
     cursor: number;
+    /** Opt-in wake-on-DM (issue #9): a DM to an IDLE agent may inject a nudge to
+     *  start a turn. Default OFF — a persisted preference (spec meta). */
+    wakeOnDm: boolean;
+    /** Epoch ms the agent's last turn ended (imDone), or null. Wake-on-DM idle signal. */
+    lastTurnEndAt: number | null;
+    /** Epoch ms of the agent terminal's last output byte, or null. Wake-on-DM idle signal. */
+    lastOutputAt: number | null;
+    /** Epoch ms we last woke this agent, or null. One wake per idle period. */
+    lastWokenAt: number | null;
 }
 
 /** Normalise a DM pair into a stable, order-independent log key. */
@@ -101,6 +111,69 @@ export class WhisperBroker {
     /** Wire the durable store (background.ts installs the genie.db one at boot). */
     setStore(store: WhisperStore): void {
         this.store = store;
+    }
+
+    /** Deliver a wake nudge to a terminal (injects text + submit). Injected by the
+     *  host at boot (writes to the pty); absent in tests → wake is a no-op. Kept a
+     *  seam so the broker stays electron-free. */
+    private wakeSink: ((terminalId: string, text: string) => void) | null = null;
+    /** Clock — injectable so wake-on-DM idle timing is deterministically testable. */
+    private now: () => number = () => Date.now();
+
+    setWakeSink(fn: (terminalId: string, text: string) => void): void {
+        this.wakeSink = fn;
+    }
+
+    /** Test seam for the wake-on-DM clock. */
+    setClock(now: () => number): void {
+        this.now = now;
+    }
+
+    /** Record that an agent's TURN ENDED (its terminal called imDone) — the
+     *  wake-on-DM idle signal. No-op for a terminal with no agent. */
+    markTurnEnd(terminalId: string): void {
+        const a = this.agentForTerminal(terminalId);
+        if (a) a.lastTurnEndAt = this.now();
+    }
+
+    /** Record that an agent terminal produced OUTPUT — any output SINCE a turn end
+     *  means a new turn (or a human typing) started, which fail-closes wake-on-DM.
+     *  Called from the terminal output choke point; cheap (a timestamp write). */
+    noteOutput(terminalId: string): void {
+        const a = this.agentForTerminal(terminalId);
+        if (a) a.lastOutputAt = this.now();
+    }
+
+    private agentForTerminal(terminalId: string): WhisperAgent | null {
+        const id = this.byTerminal.get(terminalId);
+        return id ? this.agents.get(id) ?? null : null;
+    }
+
+    /**
+     * Wake-on-DM (issue #9): if `target` opted in AND is PROVABLY idle at its
+     * prompt, inject a nudge so a dormant agent actually starts a turn. Fail-safe —
+     * {@link shouldWakeAgent} refuses on any output since the last turn ended (a new
+     * turn / a human typing), so this can never inject mid-turn. A refused wake is
+     * harmless: the sender still sees the DM unseen via `receipts` and can nudge by
+     * hand. Best-effort; a failed inject is swallowed.
+     */
+    private maybeWake(target: WhisperAgent): void {
+        if (!this.wakeSink || !target.terminalId) return;
+        const wake = shouldWakeAgent({
+            wakeOnDm: target.wakeOnDm,
+            lastTurnEndAt: target.lastTurnEndAt,
+            lastOutputAt: target.lastOutputAt,
+            lastWokenAt: target.lastWokenAt,
+            now: this.now(),
+        });
+        if (!wake) return;
+        const unread = target.inbox.filter((m) => m.seq > target.cursor).length;
+        target.lastWokenAt = this.now();
+        try {
+            this.wakeSink(target.terminalId, wakeNudgeText(unread));
+        } catch {
+            /* a failed wake just leaves the DM for read-receipts + a manual nudge */
+        }
     }
 
     /**
@@ -271,6 +344,13 @@ export class WhisperBroker {
             inbox: existing?.inbox ?? [],
             waiter: existing?.waiter ?? null,
             cursor: existing?.cursor ?? 0,
+            // Wake-on-DM: the opt-in is a persisted preference (from the join input,
+            // e.g. spec meta) that survives a re-join; the idle-signal timestamps are
+            // runtime state carried across a re-join, never reset by it.
+            wakeOnDm: input.wakeOnDm ?? existing?.wakeOnDm ?? false,
+            lastTurnEndAt: existing?.lastTurnEndAt ?? null,
+            lastOutputAt: existing?.lastOutputAt ?? null,
+            lastWokenAt: existing?.lastWokenAt ?? null,
         };
         this.agents.set(agent.agentId, agent);
         this.byTerminal.set(agent.terminalId, agent.agentId);
@@ -339,7 +419,7 @@ export class WhisperBroker {
      */
     setAccessibility(
         agentId: string,
-        patch: { scope?: WhisperScope; workspaces?: string[]; purpose?: string },
+        patch: { scope?: WhisperScope; workspaces?: string[]; purpose?: string; wakeOnDm?: boolean },
     ): WhisperAgentInfo | null {
         const a = this.agents.get(agentId);
         if (!a) return null;
@@ -353,8 +433,15 @@ export class WhisperBroker {
         }
         if (patch.scope !== undefined) a.scope = patch.scope;
         if (patch.workspaces !== undefined) a.scopeWorkspaces = [...patch.workspaces];
+        if (patch.wakeOnDm !== undefined) a.wakeOnDm = patch.wakeOnDm;
         this.emitPresence(a);
         return this.toInfo(a);
+    }
+
+    /** The agent's current wake-on-DM opt-in — the host persists this to spec meta
+     *  so it survives a restart (restored via the join input). */
+    wakeOnDmFor(agentId: string): boolean {
+        return this.agents.get(agentId)?.wakeOnDm ?? false;
     }
 
     // --- channels ----------------------------------------------------------
@@ -598,6 +685,9 @@ export class WhisperBroker {
             this.appendLog(this.dmLogs, pairKey(from, target.agentId), msg);
             this.store.append(msg);
             this.emitMessage(msg);
+            // Wake-on-DM (opt-in, fail-safe): nudge a genuinely-idle target so a
+            // dormant agent starts a turn instead of staying deaf.
+            this.maybeWake(target);
             if (input.interrupt) {
                 if (target.terminalId) {
                     this.emit({ type: 'interrupt', terminalId: target.terminalId });

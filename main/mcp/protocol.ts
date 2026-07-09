@@ -612,6 +612,9 @@ export interface WhisperRequest {
     workspaces?: string[];
     /** setAccessibility (optional): change your channel purpose (re-keys the room). */
     purpose?: string;
+    /** setAccessibility (optional): opt in/out of wake-on-DM — a DM to you when idle
+     *  injects a nudge to start a turn (issue #9). Default off. */
+    wakeOnDm?: boolean;
     /** receipts (optional): how many recent sent DMs to report (default 20, cap 100). */
     limit?: number;
 }
@@ -1086,6 +1089,11 @@ const WHISPER_TOOL = {
             limit: {
                 type: 'number',
                 description: 'receipts (optional): how many recent sent DMs to report (default 20, cap 100).',
+            },
+            wakeOnDm: {
+                type: 'boolean',
+                description:
+                    'setAccessibility (optional): opt in/out of wake-on-DM. When ON, a DM that arrives while you are IDLE (turn ended, prompt empty) injects a one-line nudge so you start a turn and see it — instead of the DM sitting unread until you next act. Fail-safe: never fires mid-turn. Default off.',
             },
             channel: {
                 type: 'string',
@@ -1878,6 +1886,7 @@ export async function handleMcpMessage(
                     scope: a.scope,
                     workspaces: a.workspaces,
                     purpose: a.purpose,
+                    wakeOnDm: a.wakeOnDm,
                     limit: a.limit,
                 });
                 let summary: string;

@@ -159,7 +159,11 @@ ever injected into your terminal (that would corrupt your turn). Actions (\`acti
 - \`setAccessibility\` — \`scope\`: \`none\` (hidden) / \`self\` (your workspace only,
   the default) / \`specific\` + \`workspaces\` (a chosen set — limited to workspaces
   you govern) / \`all\` (the whole workstation) — governs who can see + DM you.
-  Optional \`purpose\` renames your channel.
+  Optional \`purpose\` renames your channel. Optional \`wakeOnDm\` (default off): when
+  ON, a DM that arrives while you're IDLE (turn ended, prompt empty) injects a
+  one-line nudge so you start a turn and see it — instead of it sitting unread
+  until you next act. Fail-safe: never fires mid-turn (any output since your last
+  turn ended cancels it).
 - \`join\` / \`leave\` — opt in/out of a \`channel\`.
 Your identity + accessibility persist across restarts. Local-only — no relay, no
 cross-host. Use it to hand a peer context, ask another agent to take a task, or

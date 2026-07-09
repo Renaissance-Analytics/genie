@@ -154,6 +154,8 @@ export interface WhisperJoinInput {
     scopeWorkspaces: string[];
     chatSessionId: string | null;
     status?: WhisperStatus;
+    /** Opt-in wake-on-DM (issue #9), restored from spec meta on (re)join. Default false. */
+    wakeOnDm?: boolean;
 }
 
 /** An unACKed urgent (`interrupt`) DM that escalated to the human oversight

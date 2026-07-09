@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { WhisperBroker } from '../broker';
 import type { WhisperStore } from '../store';
 import type { WhisperJoinInput, WhisperMessage } from '../types';
+import { WAKE_QUIET_MS } from '../wake';
 import { formatWhisperMailLine } from '../../mcp/protocol';
 
 /**
@@ -92,6 +93,58 @@ describe('whisper durable inbox (Track B)', () => {
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'hi b' });
         expect(store.rows).toHaveLength(1);
         expect(store.rows[0]).toMatchObject({ kind: 'dm', from: 'a', to: 'b', text: 'hi b' });
+    });
+
+    it('wake-on-DM: nudges an opted-in IDLE target, once, and NEVER after output (#9)', () => {
+        let clock = 1_000_000;
+        const b = new WhisperBroker();
+        b.setStore(store);
+        b.setClock(() => clock);
+        const woken: Array<{ terminalId: string; text: string }> = [];
+        b.setWakeSink((terminalId, text) => woken.push({ terminalId, text }));
+
+        join(b, 'a');
+        join(b, 'b', { wakeOnDm: true });
+
+        // B finished a turn (imDone) → idle at its prompt, but not yet quiet enough.
+        b.markTurnEnd('t-b');
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping1' });
+        expect(woken).toHaveLength(0);
+
+        // Past the quiet window → a DM wakes B with the canned nudge.
+        clock += WAKE_QUIET_MS + 1;
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping2' });
+        expect(woken).toHaveLength(1);
+        expect(woken[0].terminalId).toBe('t-b');
+        expect(woken[0].text).toContain('unread WhisperChat');
+
+        // One wake per idle period — a further DM doesn't re-nudge.
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping3' });
+        expect(woken).toHaveLength(1);
+
+        // B produces output (a new turn / a human typing) → the core safety gate:
+        // any output after the turn end means NOT idle, so no more wakes.
+        clock += WAKE_QUIET_MS + 1;
+        b.noteOutput('t-b');
+        clock += WAKE_QUIET_MS + 1;
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping4' });
+        expect(woken).toHaveLength(1);
+    });
+
+    it('wake-on-DM: an opted-OUT agent (default) is never woken', () => {
+        let clock = 1_000_000;
+        const b = new WhisperBroker();
+        b.setStore(store);
+        b.setClock(() => clock);
+        const woken: string[] = [];
+        b.setWakeSink((tid) => woken.push(tid));
+
+        join(b, 'a');
+        join(b, 'b'); // wakeOnDm defaults false
+        b.markTurnEnd('t-b');
+        clock += WAKE_QUIET_MS + 1;
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'hi' });
+        expect(woken).toHaveLength(0);
     });
 
     it('read-receipts: a sent DM is unseen until the recipient receives it (#9)', async () => {

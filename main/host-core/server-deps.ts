@@ -64,6 +64,9 @@ export function buildHostServerDeps(
         onImDone: (terminalId) => {
             if (!terminalId) return;
             broadcastTerminalAttention(terminalId, true);
+            // Wake-on-DM idle signal (issue #9): imDone = the agent's turn ended, so
+            // it's now at its prompt. A later DM may wake it IF no output follows.
+            whisperBroker.markTurnEnd(terminalId);
             const wsId = workspaceIdOfTerminal(terminalId);
             if (wsId) broadcastWorkspacePulse(wsId);
             // The user-facing notification (chime/toast/window-flash on desktop;

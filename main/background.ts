@@ -1021,6 +1021,12 @@ app.whenReady().then(async () => {
     try {
         installWhisperPresence();
         whisperBroker.setStore(dbWhisperStore);
+        // Wake-on-DM (issue #9): the broker decides IF an idle opted-in agent should
+        // be woken (fail-safe); this sink does the actual injection — submit the
+        // nudge to the agent's pty, like a bracketed-paste send.
+        whisperBroker.setWakeSink((terminalId, text) => {
+            writeToTerminal(terminalId, buildSubmitBytes(text, true));
+        });
         rehydrateWhisper();
         whisperBroker.rehydrateMessages();
     } catch {

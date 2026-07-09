@@ -341,6 +341,7 @@ function joinInputFromSpec(spec: TerminalSpecRow | null): WhisperJoinInput | nul
             ? (spec.meta.whisper_workspaces as string[])
             : [],
         chatSessionId: spec.meta?.chat_session_id ?? null,
+        wakeOnDm: spec.meta?.whisper_wake_on_dm === true,
     };
 }
 
@@ -386,6 +387,9 @@ function feedTerminalData(id: string, data: string): void {
     // every terminal, desktop AND headless.
     const pulseWs = getTerminalSpec(id)?.workspace_id;
     if (pulseWs) agentPulse.note(pulseWs, data.length);
+    // Wake-on-DM idle signal (issue #9): any output means the agent is active — so
+    // a DM wake fails closed until it's genuinely quiet again. Cheap (a timestamp).
+    whisperBroker.noteOutput(id);
     // Mirror to any attached mobile /ws/term socket (no-op when off / unwatched).
     mobileTermFanout(id, data);
 }

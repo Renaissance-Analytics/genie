@@ -1416,6 +1416,7 @@ export async function whisperForMcp(
                     scope: req.scope,
                     workspaces,
                     purpose: req.purpose,
+                    wakeOnDm: req.wakeOnDm,
                 });
                 // Persist the durable bits to the spec meta.
                 const cur = getTerminalSpec(spec.id);
@@ -1424,6 +1425,7 @@ export async function whisperForMcp(
                     if (req.scope !== undefined) meta.whisper_scope = req.scope;
                     if (workspaces !== undefined) meta.whisper_workspaces = workspaces;
                     if (req.purpose !== undefined) meta.whisper_purpose = normalizePurpose(req.purpose);
+                    if (req.wakeOnDm !== undefined) meta.whisper_wake_on_dm = req.wakeOnDm;
                     updateTerminalSpec(spec.id, { meta });
                 }
                 return { ok: true, self: info ?? undefined };
