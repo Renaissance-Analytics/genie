@@ -64,6 +64,7 @@ import {
 } from './workspace/envelope';
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
 import { broadcastTerminalSpecsChanged } from './terminal/ipc';
+import { agentPulse } from './terminal/agent-pulse';
 import { createSpecializedAgentTerminal } from './mcp/host-tools';
 import { whisperBroker } from './whisper/broker';
 import { normalizePurpose, type WhisperScope } from './whisper/types';
@@ -904,6 +905,11 @@ export function registerIpcHandlers(): void {
     // channel / human↔agent DM history; post as the human; and edit an agent's
     // accessibility (re-keys its channel + re-emits presence). The live push
     // (whisper:presence / whisper:message) rides the broker's presence emitter.
+    // AgentPulse — the last-60s per-workspace byte buckets, fetched once when the
+    // workspace menu opens to backfill each sparkline; live `agent-pulse` pushes
+    // advance it from there.
+    ipcMain.handle('agent-pulse:snapshot', () => ({ pulses: agentPulse.snapshot() }));
+
     ipcMain.handle('whisper:directory', () => ({ agents: whisperBroker.directory() }));
     ipcMain.handle('whisper:channels', () => ({ channels: whisperBroker.channels() }));
     // Every DM thread (human↔agent AND agent↔agent) so the panel can view the

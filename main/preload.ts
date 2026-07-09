@@ -816,6 +816,12 @@ const api = {
     },
 
     /** WhisperChat — the local inter-agent messaging network's human panel. */
+    agentPulse: {
+        /** Last-60s per-workspace byte buckets — fetched once when the workspace
+         *  menu opens to backfill each sparkline; live `on.agentPulse` pushes
+         *  advance it from there. */
+        snapshot: () => ipcRenderer.invoke('agent-pulse:snapshot'),
+    },
     whisper: {
         /** All agents in this Genie (the human owns the workstation → no scope filter). */
         directory: () => ipcRenderer.invoke('whisper:directory'),
@@ -1141,6 +1147,15 @@ const api = {
                 cb(payload);
             ipcRenderer.on('workspace:pulse', handler);
             return () => ipcRenderer.off('workspace:pulse', handler);
+        },
+        /** AgentPulse — per-workspace real-time terminal-activity. `active` drives
+         *  the rail-icon glow; `bytes` feeds the live 1-minute sparkline. */
+        agentPulse: (
+            cb: (payload: { workspaceId: string; active: boolean; bytes: number }) => void,
+        ) => {
+            const handler = (_e: unknown, payload: Parameters<typeof cb>[0]) => cb(payload);
+            ipcRenderer.on('agent-pulse', handler);
+            return () => ipcRenderer.off('agent-pulse', handler);
         },
         /** A workspace was "opened" (tray / menu / MCP) — the master window
          *  should focus it and open its in-app editor scoped to the folder. */

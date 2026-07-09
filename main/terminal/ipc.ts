@@ -55,6 +55,7 @@ import { broadcastLocal } from '../remote';
 import { getSnapshotStore, dbSettingsProvider } from './genie-adapter';
 import { listAllProcesses } from './process-list';
 import { logPtyOsc } from './osc-debug';
+import { agentPulse } from './agent-pulse';
 import crypto from 'node:crypto';
 
 /**
@@ -380,6 +381,11 @@ function feedTerminalData(id: string, data: string): void {
     recordProcessOutput(id, data);
     // Agent-control read buffer (manageTerminals.read / runAgent.read).
     agentReadBuffer.append(id, data);
+    // AgentPulse: pty output = an agent is doing something → feed the workspace's
+    // real-time activity pulse (rail glow + 1-min sparkline). Single hook for
+    // every terminal, desktop AND headless.
+    const pulseWs = getTerminalSpec(id)?.workspace_id;
+    if (pulseWs) agentPulse.note(pulseWs, data.length);
     // Mirror to any attached mobile /ws/term socket (no-op when off / unwatched).
     mobileTermFanout(id, data);
 }
@@ -841,6 +847,20 @@ export function broadcastWorkspacePulse(workspaceId: string): void {
     // local pulse carrying a shared project.id / __system__ would false-glow it.
     broadcastLocal('workspace:pulse', { workspaceId });
     mobileEmit('workspace:pulse', { workspaceId });
+}
+
+/**
+ * AgentPulse — install the tracker's emitter so its per-workspace activity events
+ * fan out to the renderer (rail glow + live sparkline), the mobile dashboard, and
+ * (via PASSTHROUGH_EVENTS) remote windows. Mirrors broadcastWorkspacePulse's
+ * LOCAL-only reasoning: a host window's pulse arrives over its /ws/events, so a
+ * local terminal's bytes must not false-glow it. Call once at boot.
+ */
+export function installAgentPulse(): void {
+    agentPulse.setEmitter((ev) => {
+        broadcastLocal('agent-pulse', ev);
+        mobileEmit('agent-pulse', ev);
+    });
 }
 
 /**

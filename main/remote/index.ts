@@ -912,6 +912,9 @@ const PASSTHROUGH_EVENTS = new Set([
     'whisper:message',
     // Track C — unACKed-urgent "waiting on <agent>" oversight alerts.
     'whisper:escalation',
+    // AgentPulse — per-workspace real-time terminal-activity (rail glow + live
+    // sparkline); a remote window reflects the HOST's agent activity.
+    'agent-pulse',
 ]);
 
 /**

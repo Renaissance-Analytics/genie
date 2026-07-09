@@ -1991,6 +1991,11 @@ export interface GenieApi {
      * channels / history and posts as the human; live updates arrive on
      * `on.whisperPresence` / `on.whisperMessage`.
      */
+    agentPulse: {
+        /** Last-60s per-workspace byte buckets (index 0 = 59s ago … 59 = now),
+         *  fetched once when the workspace menu opens to backfill each sparkline. */
+        snapshot: () => Promise<{ pulses: Record<string, number[]> }>;
+    };
     whisper: {
         /** Every discoverable agent (the directory pane). */
         directory: () => Promise<{ agents: WhisperAgentInfo[] }>;
@@ -2304,6 +2309,12 @@ export interface GenieApi {
          *  System-Workspace terminal). A transient sidebar-level cue. */
         workspacePulse: (
             cb: (payload: { workspaceId: string }) => void,
+        ) => () => void;
+        /** AgentPulse — per-workspace real-time terminal-activity. `active` drives
+         *  the rail-icon glow; `bytes` (since the last emit) feeds the live
+         *  1-minute sparkline. */
+        agentPulse: (
+            cb: (payload: { workspaceId: string; active: boolean; bytes: number }) => void,
         ) => () => void;
         /** A workspace was "opened" (tray / menu / MCP) — focus it in the master
          *  window and open its in-app editor scoped to the workspace folder. */

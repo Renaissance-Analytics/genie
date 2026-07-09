@@ -401,6 +401,81 @@ export default function Chooser({
         };
     }, []);
 
+    // AgentPulse: SUSTAINED per-workspace terminal activity (distinct from the
+    // one-shot imDone pulse above). `activeWs` drives a live glow on the rail icon
+    // + workspace bar while a terminal is receiving bytes; `pulseRings` holds a
+    // rolling 60×1s byte ring per workspace that draws the 1-minute sparkline
+    // behind each bar. Backfilled once from a snapshot, advanced by pushed
+    // `agent-pulse` events, and shifted by a 1s timer that SELF-SUSPENDS when all
+    // rings go quiet (no idle polling — it restarts on the next pulse).
+    const [activeWs, setActiveWs] = useState<Set<string>>(() => new Set());
+    const pulseRings = useRef<Map<string, number[]>>(new Map());
+    const [, setPulseTick] = useState(0);
+    const pulseTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+    useEffect(() => {
+        const bump = () => setPulseTick((t) => (t + 1) % 1_000_000);
+        const stopTimer = () => {
+            if (pulseTimer.current) {
+                clearInterval(pulseTimer.current);
+                pulseTimer.current = null;
+            }
+        };
+        const ensureTimer = () => {
+            if (pulseTimer.current) return;
+            pulseTimer.current = setInterval(() => {
+                let anyData = false;
+                for (const ring of pulseRings.current.values()) {
+                    ring.shift();
+                    ring.push(0);
+                    if (!anyData && ring.some((v) => v > 0)) anyData = true;
+                }
+                bump();
+                if (!anyData) stopTimer();
+            }, 1000);
+        };
+
+        let cancelled = false;
+        void api()
+            .agentPulse.snapshot()
+            .then(({ pulses }) => {
+                if (cancelled) return;
+                let any = false;
+                for (const [wsId, arr] of Object.entries(pulses)) {
+                    pulseRings.current.set(wsId, arr.slice(-60));
+                    if (arr.some((v) => v > 0)) any = true;
+                }
+                bump();
+                if (any) ensureTimer();
+            })
+            .catch(() => {});
+
+        const off = api().on.agentPulse(({ workspaceId, active, bytes }) => {
+            if (!workspaceId) return;
+            setActiveWs((prev) => {
+                if (active === prev.has(workspaceId)) return prev;
+                const next = new Set(prev);
+                if (active) next.add(workspaceId);
+                else next.delete(workspaceId);
+                return next;
+            });
+            if (bytes > 0) {
+                let ring = pulseRings.current.get(workspaceId);
+                if (!ring) {
+                    ring = new Array(60).fill(0);
+                    pulseRings.current.set(workspaceId, ring);
+                }
+                ring[ring.length - 1] += bytes;
+                bump();
+                ensureTimer();
+            }
+        });
+        return () => {
+            cancelled = true;
+            off();
+            stopTimer();
+        };
+    }, []);
+
     // New-workspace ENTRY animation: when a genuinely-new workspace id appears in
     // the (host-sourced) list — e.g. one a workstation auto-provisioned and
     // pushed to this REMOTE session over the bridge — fade/slide its rail button
@@ -698,7 +773,9 @@ export default function Chooser({
                                 isActive ? ' is-active' : ''
                             }${wsAttention ? ' attention' : ''}${
                                 pulsingWs.has(ws.id) ? ' pulsing' : ''
-                            }${enteringWs.has(ws.id) ? ' ws-enter' : ''}`}
+                            }${activeWs.has(ws.id) ? ' agent-active' : ''}${
+                                enteringWs.has(ws.id) ? ' ws-enter' : ''
+                            }`}
                             onClick={() => onActivateWorkspace(ws.id)}
                             title={`${ws.project_name}${live > 0 ? ` · ${live} live` : ''}`}
                         >
@@ -825,7 +902,9 @@ export default function Chooser({
                                     ws.shape === 'agi' ? ' agi' : ''
                                 }${wsAttention ? ' attention' : ''}${
                                     pulsingWs.has(ws.id) ? ' pulsing' : ''
-                                }${enteringWs.has(ws.id) ? ' ws-enter' : ''}`}
+                                }${activeWs.has(ws.id) ? ' agent-active' : ''}${
+                                    enteringWs.has(ws.id) ? ' ws-enter' : ''
+                                }`}
                                 onDragOver={(e) => {
                                     if (!draggingId.current) return;
                                     e.preventDefault();
@@ -837,6 +916,12 @@ export default function Chooser({
                                     commitReorder();
                                 }}
                             >
+                                {/* AgentPulse: last-60s activity sparkline drawn
+                                    BEHIND the row content. */}
+                                <AgentPulseSparkline
+                                    ring={pulseRings.current.get(ws.id)}
+                                    active={activeWs.has(ws.id)}
+                                />
                                 <button
                                     type="button"
                                     className="tproj-head"
@@ -1799,5 +1884,43 @@ function SpecRow({
                 </span>
             )}
         </div>
+    );
+}
+
+/**
+ * AgentPulse sparkline — a faint 1-minute activity trace drawn as a background
+ * layer behind a workspace row. `ring` is 60 one-second byte counts (oldest→
+ * newest); each is normalized to the ring's own peak so a quiet workspace still
+ * reads. Renders nothing when there's no activity. `active` brightens it while a
+ * terminal is currently streaming. Pointer-events-none so it never blocks the
+ * row's own clicks/drag.
+ */
+function AgentPulseSparkline({ ring, active }: { ring?: number[]; active: boolean }) {
+    if (!ring || ring.length === 0) return null;
+    const max = Math.max(...ring);
+    if (max <= 0) return null;
+
+    const w = 100;
+    const h = 100;
+    const n = ring.length;
+    const step = n > 1 ? w / (n - 1) : w;
+    const pts = ring.map((v, i) => {
+        const x = i * step;
+        const y = h - (v / max) * (h - 6) - 3;
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+    });
+    const line = pts.join(' ');
+    const area = `0,${h} ${line} ${w},${h}`;
+
+    return (
+        <svg
+            className={`agent-pulse-spark${active ? ' active' : ''}`}
+            viewBox={`0 0 ${w} ${h}`}
+            preserveAspectRatio="none"
+            aria-hidden="true"
+        >
+            <polygon className="aps-fill" points={area} />
+            <polyline className="aps-line" points={line} />
+        </svg>
     );
 }

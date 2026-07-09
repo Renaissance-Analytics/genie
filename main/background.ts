@@ -61,6 +61,7 @@ import {
     killTerminalById,
     reapOrphanTerminals,
     rehydrateWhisper,
+    installAgentPulse,
     createAgentTerminal,
     writeToTerminal,
     readTerminalOutput,
@@ -1024,6 +1025,13 @@ app.whenReady().then(async () => {
         whisperBroker.rehydrateMessages();
     } catch {
         /* best-effort — whisper is additive; a failure never blocks startup */
+    }
+    // AgentPulse: wire the terminal-activity tracker's broadcast (rail glow +
+    // live sparkline). Additive; a failure never blocks startup.
+    try {
+        installAgentPulse();
+    } catch {
+        /* best-effort */
     }
     // Knowledge Graph: wire the store's change events to the renderer broadcast
     // so an open window live-refreshes (incl. an agent's MCP writes).
