@@ -156,13 +156,31 @@ export interface WhisperJoinInput {
     status?: WhisperStatus;
 }
 
+/** An unACKed urgent (`interrupt`) DM that escalated to the human oversight
+ *  surface — the target didn't drain it within the escalation window (Track C).
+ *  `resolved` clears a previously-raised "waiting on X" indicator once the target
+ *  finally receives (its cursor passes the message). */
+export interface WhisperEscalation {
+    messageId: string;
+    targetAgentId: string;
+    targetLabel: string;
+    fromLabel: string;
+    preview: string;
+    /** Epoch ms the urgent DM was sent (how long the human has been waiting). */
+    sinceTs: number;
+    /** True on the clearing event (the target finally drained it). */
+    resolved?: boolean;
+}
+
 /** The broker's outbound event, mapped by presence.ts to the local broadcast +
  *  mobile push channels (and the terminal attention glow for `interrupt`). */
 export type WhisperBrokerEvent =
     | { type: 'presence'; agent: WhisperAgentInfo }
     | { type: 'offline'; agentId: string }
     | { type: 'message'; preview: WhisperMessagePreview }
-    | { type: 'interrupt'; terminalId: string };
+    | { type: 'interrupt'; terminalId: string }
+    | { type: 'escalation'; escalation: WhisperEscalation }
+    | { type: 'escalation-resolved'; messageId: string; targetAgentId: string };
 
 /** A short preview excerpt for the message push (cap the body). */
 export function previewText(text: string, max = 140): string {

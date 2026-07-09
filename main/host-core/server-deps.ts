@@ -23,6 +23,8 @@ import {
 import { openFileForUserForMcp } from '../editor/open-file';
 import { applySetEnv, applyCheckEnv } from '../env-store';
 import { pluginToolDescriptors, dispatchPluginTool } from '../plugins/registry';
+import { whisperBroker } from '../whisper/broker';
+import { formatWhisperMailLine } from '../mcp/protocol';
 import type { ServerDeps } from '../mcp/server';
 import type { HostCorePorts } from './ports';
 
@@ -72,6 +74,8 @@ export function buildHostServerDeps(
             mobileEmit('notify:imdone', { label: getTerminalSpec(terminalId)?.label });
         },
         checkIssues: (terminalId) => checkIssuesForMcp(terminalId),
+        whisperMailLine: (terminalId) =>
+            formatWhisperMailLine(whisperBroker.unreadForTerminal(terminalId)),
         onForceQuestion: (terminalId, questions) => {
             let workspaceLabel: string | undefined;
             try {

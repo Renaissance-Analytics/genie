@@ -910,6 +910,8 @@ const PASSTHROUGH_EVENTS = new Set([
     // they reach the client socket but get dropped before the local re-emit).
     'whisper:presence',
     'whisper:message',
+    // Track C — unACKed-urgent "waiting on <agent>" oversight alerts.
+    'whisper:escalation',
 ]);
 
 /**

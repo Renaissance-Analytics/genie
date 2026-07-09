@@ -1234,6 +1234,24 @@ const api = {
             ipcRenderer.on('whisper:message', handler);
             return () => ipcRenderer.off('whisper:message', handler);
         },
+        /** WhisperChat escalation (Track C) — an urgent DM went unACKed past the
+         *  window, or (`resolved`) was finally received. The panel shows/clears a
+         *  "waiting on <agent>" oversight alert. */
+        whisperEscalation: (
+            cb: (payload: {
+                messageId: string;
+                targetAgentId: string;
+                targetLabel?: string;
+                fromLabel?: string;
+                preview?: string;
+                sinceTs?: number;
+                resolved?: boolean;
+            }) => void,
+        ) => {
+            const handler = (_e: unknown, payload: Parameters<typeof cb>[0]) => cb(payload);
+            ipcRenderer.on('whisper:escalation', handler);
+            return () => ipcRenderer.off('whisper:escalation', handler);
+        },
         /** The Knowledge Graph changed (a node added/updated/deleted or an edge
          *  linked — incl. an AGENT's write via the `knowledge` MCP tool). The
          *  Knowledge Graph window re-fetches to stay live. */

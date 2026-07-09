@@ -7,10 +7,12 @@ import {
     type WhisperBrokerEvent,
     type WhisperChannelInfo,
     type WhisperDmThreadInfo,
+    type WhisperEscalation,
     type WhisperJoinInput,
     type WhisperMessage,
     type WhisperScope,
 } from './types';
+import { noopWhisperStore, type WhisperStore } from './store';
 
 /**
  * WhisperChat broker — the in-memory registry + channels + inboxes powering the
@@ -39,6 +41,19 @@ export const LOG_CAP = 500;
 export const DEFAULT_WAIT_MS = 55_000;
 /** Hard cap on a requested long-poll window. */
 export const MAX_WAIT_MS = 600_000;
+/** How long an urgent (`interrupt`) DM may sit unACKed before it escalates to the
+ *  human oversight surface (Track C). ACK = the target's cursor passing the DM. */
+export const ESCALATION_MS = 5 * 60_000;
+
+/** A tracked urgent DM awaiting ACK (Track C). */
+interface PendingEscalation {
+    targetAgentId: string;
+    seq: number;
+    timer: ReturnType<typeof setTimeout> | null;
+    /** Whether the escalation event has already fired to the human. */
+    fired: boolean;
+    payload: WhisperEscalation;
+}
 
 interface Waiter {
     resolve: (msgs: WhisperMessage[]) => void;
@@ -51,6 +66,9 @@ interface WhisperAgent extends WhisperAgentInfo {
     inbox: WhisperMessage[];
     /** The single live long-poll resolver, or null. */
     waiter: Waiter | null;
+    /** Highest seq this agent has received (its ACK position). Persisted to the
+     *  store so restart-survival + unACKed-urgent escalation (Track C) work. */
+    cursor: number;
 }
 
 /** Normalise a DM pair into a stable, order-independent log key. */
@@ -68,10 +86,132 @@ export class WhisperBroker {
     private dmLogs = new Map<string, WhisperMessage[]>();
     private seq = 0;
     private emit: (ev: WhisperBrokerEvent) => void = () => {};
+    /** Durability backstop (genie.db in production, no-op for tests). */
+    private store: WhisperStore = noopWhisperStore;
+    /** Urgent DMs awaiting ACK, keyed by messageId (Track C). */
+    private escalations = new Map<string, PendingEscalation>();
+    /** Escalation delay — overridable in tests so they don't wait 5 minutes. */
+    private escalationMs = ESCALATION_MS;
 
     /** Wire the outbound event sink (presence.ts installs the real one at boot). */
     setEmitter(fn: (ev: WhisperBrokerEvent) => void): void {
         this.emit = fn;
+    }
+
+    /** Wire the durable store (background.ts installs the genie.db one at boot). */
+    setStore(store: WhisperStore): void {
+        this.store = store;
+    }
+
+    /**
+     * Rehydrate the in-memory logs + inboxes from the store at boot — call AFTER
+     * {@link rehydrate} (identities) and {@link setStore}. Resumes the global seq
+     * (so cursors stay valid), rebuilds the human-panel channel/DM history, and
+     * re-queues each known agent's undelivered messages so a whisper sent while
+     * the app was down still lands on the next `receive`.
+     */
+    rehydrateMessages(limit = 2000): void {
+        this.seq = Math.max(this.seq, this.store.maxSeq());
+        for (const msg of this.store.loadRecent(limit)) {
+            if (msg.kind === 'channel' && msg.channel) {
+                this.appendLog(this.channelLogs, msg.channel, msg);
+            } else if (msg.kind === 'dm' && msg.to) {
+                this.appendLog(this.dmLogs, pairKey(msg.from, msg.to), msg);
+            }
+        }
+        for (const agent of this.agents.values()) {
+            agent.cursor = this.store.getCursor(agent.agentId);
+            const channelKeys: string[] = [];
+            for (const [key, members] of this.channelMembers) {
+                if (members.has(agent.agentId)) channelKeys.push(key);
+            }
+            for (const msg of this.store.undeliveredFor(agent.agentId, channelKeys, agent.cursor)) {
+                this.push(agent, msg);
+            }
+        }
+    }
+
+    /** Does the agent have unreceived mail (seq beyond its cursor)? Cheap — no
+     *  long-poll. The signal a harness hook checks between turns (Track A). */
+    hasMail(agentId: string): boolean {
+        const a = this.agents.get(agentId);
+        if (!a) return false;
+        return a.inbox.some((m) => m.seq > a.cursor);
+    }
+
+    /** Unread summary for the agent bound to a TERMINAL — powers the turn-boundary
+     *  nudge folded into `imDone` (Track A): surface waiting whispers at the exact
+     *  point an agent hands back, without ever writing into its pty. Empty when the
+     *  terminal isn't a whisper agent or has nothing waiting. */
+    unreadForTerminal(terminalId: string): { count: number; fromLabels: string[] } {
+        const agentId = this.byTerminal.get(terminalId);
+        const a = agentId ? this.agents.get(agentId) : undefined;
+        if (!a) return { count: 0, fromLabels: [] };
+        const unread = a.inbox.filter((m) => m.seq > a.cursor);
+        return { count: unread.length, fromLabels: [...new Set(unread.map((m) => m.fromLabel))] };
+    }
+
+    /** Advance + persist an agent's ACK cursor (monotonic), and resolve any urgent
+     *  DMs the agent has now received (Track C). */
+    private ackCursor(agent: WhisperAgent, cursor: number): void {
+        if (cursor > agent.cursor) {
+            agent.cursor = cursor;
+            this.store.setCursor(agent.agentId, cursor);
+            this.resolveEscalations(agent.agentId, cursor);
+        }
+    }
+
+    /** Track an urgent DM: if the target hasn't received it within the escalation
+     *  window, surface a "waiting on X" alert to the human (Track C). */
+    private registerEscalation(msg: WhisperMessage, target: WhisperAgent): void {
+        const payload: WhisperEscalation = {
+            messageId: msg.id,
+            targetAgentId: target.agentId,
+            targetLabel: target.label || `${target.slug}:${target.purpose}`,
+            fromLabel: msg.fromLabel,
+            preview: previewText(msg.text),
+            sinceTs: msg.ts,
+        };
+        const timer = setTimeout(() => {
+            const esc = this.escalations.get(msg.id);
+            if (!esc) return; // already acked/cleared
+            const a = this.agents.get(esc.targetAgentId);
+            if (a && a.cursor >= esc.seq) {
+                this.escalations.delete(msg.id); // acked in the meantime
+                return;
+            }
+            esc.fired = true;
+            this.emit({ type: 'escalation', escalation: esc.payload });
+        }, this.escalationMs);
+        if (typeof (timer as { unref?: () => void }).unref === 'function') {
+            (timer as { unref: () => void }).unref();
+        }
+        this.escalations.set(msg.id, {
+            targetAgentId: target.agentId,
+            seq: msg.seq,
+            timer,
+            fired: false,
+            payload,
+        });
+    }
+
+    /** Clear (and, if already surfaced, resolve) the urgent DMs an agent has now
+     *  received — its cursor passed their seq. */
+    private resolveEscalations(agentId: string, cursor: number): void {
+        for (const [id, esc] of this.escalations) {
+            if (esc.targetAgentId === agentId && esc.seq <= cursor) {
+                if (esc.timer) clearTimeout(esc.timer);
+                this.escalations.delete(id);
+                if (esc.fired) {
+                    this.emit({ type: 'escalation-resolved', messageId: id, targetAgentId: agentId });
+                }
+            }
+        }
+    }
+
+    /** Test hook — shorten the escalation window so tests don't wait minutes. */
+    _setEscalationMs(ms: number): void {
+        this.escalationMs = ms;
     }
 
     /** The internal channel key for a workspace + purpose. */
@@ -130,6 +270,7 @@ export class WhisperBroker {
             chatSessionId: input.chatSessionId ?? null,
             inbox: existing?.inbox ?? [],
             waiter: existing?.waiter ?? null,
+            cursor: existing?.cursor ?? 0,
         };
         this.agents.set(agent.agentId, agent);
         this.byTerminal.set(agent.terminalId, agent.agentId);
@@ -455,9 +596,14 @@ export class WhisperBroker {
             };
             this.push(target, msg);
             this.appendLog(this.dmLogs, pairKey(from, target.agentId), msg);
+            this.store.append(msg);
             this.emitMessage(msg);
-            if (input.interrupt && target.terminalId) {
-                this.emit({ type: 'interrupt', terminalId: target.terminalId });
+            if (input.interrupt) {
+                if (target.terminalId) {
+                    this.emit({ type: 'interrupt', terminalId: target.terminalId });
+                }
+                // Track C: escalate to the human if the target doesn't drain it.
+                this.registerEscalation(msg, target);
             }
             return { ok: true, delivered: 1, message: msg };
         }
@@ -494,6 +640,7 @@ export class WhisperBroker {
                 delivered++;
             }
             this.appendLog(this.channelLogs, key, msg);
+            this.store.append(msg);
             this.emitMessage(msg);
             return { ok: true, delivered, message: msg };
         }
@@ -547,7 +694,9 @@ export class WhisperBroker {
             msgs.length ? msgs[msgs.length - 1].seq : cursor;
 
         if (pending.length > 0 || !opts.wait) {
-            return Promise.resolve({ messages: pending, cursor: nextCursor(pending) });
+            const c = nextCursor(pending);
+            this.ackCursor(agent, c);
+            return Promise.resolve({ messages: pending, cursor: c });
         }
 
         // Long-poll: supersede any existing waiter, then park a new one.
@@ -557,8 +706,11 @@ export class WhisperBroker {
             MAX_WAIT_MS,
         );
         return new Promise((resolve) => {
-            const finish = (msgs: WhisperMessage[]): void =>
-                resolve({ messages: msgs, cursor: nextCursor(msgs) });
+            const finish = (msgs: WhisperMessage[]): void => {
+                const c = nextCursor(msgs);
+                this.ackCursor(agent, c);
+                resolve({ messages: msgs, cursor: c });
+            };
             const timer = setTimeout(() => {
                 if (agent.waiter && agent.waiter.resolve === finish) agent.waiter = null;
                 finish([]);

@@ -41,6 +41,25 @@ export function installWhisperPresence(): void {
                 // inject into its pty (that would corrupt an in-flight agent turn).
                 broadcastTerminalAttention(ev.terminalId, true);
                 break;
+            case 'escalation':
+                // Track C — an urgent DM went unACKed past the window; surface a
+                // "waiting on <agent>" alert to the human oversight panel.
+                broadcastLocal('whisper:escalation', ev.escalation);
+                mobileEmit('whisper:escalation', ev.escalation);
+                break;
+            case 'escalation-resolved':
+                // The target finally received it — clear the alert.
+                broadcastLocal('whisper:escalation', {
+                    messageId: ev.messageId,
+                    targetAgentId: ev.targetAgentId,
+                    resolved: true,
+                });
+                mobileEmit('whisper:escalation', {
+                    messageId: ev.messageId,
+                    targetAgentId: ev.targetAgentId,
+                    resolved: true,
+                });
+                break;
         }
     });
 }

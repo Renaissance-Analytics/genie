@@ -953,6 +953,18 @@ export interface WhisperMessageEvent {
     preview: string;
 }
 
+/** Track C — an unACKed urgent DM escalating to the human oversight surface, or
+ *  (`resolved: true`) the clearing of a previously-raised alert. */
+export interface WhisperEscalationEvent {
+    messageId: string;
+    targetAgentId: string;
+    targetLabel?: string;
+    fromLabel?: string;
+    preview?: string;
+    sinceTs?: number;
+    resolved?: boolean;
+}
+
 /** Result of a plugin-editor binary read (base64 payload) (§6.2). */
 export interface PluginEditorReadResult {
     ok: boolean;
@@ -2359,6 +2371,12 @@ export interface GenieApi {
          *  badge and, if the relevant thread is open, re-fetches history. */
         whisperMessage: (
             cb: (payload: WhisperMessageEvent) => void,
+        ) => () => void;
+        /** WhisperChat (Track C): an urgent DM went unACKed past the window — the
+         *  panel shows a "waiting on <agent>" oversight alert (cleared when the
+         *  same event arrives with `resolved: true`). */
+        whisperEscalation: (
+            cb: (payload: WhisperEscalationEvent) => void,
         ) => () => void;
         /** Knowledge Graph: any change (add / update / delete / link), INCLUDING
          *  an agent's MCP write — the window re-fetches its list + graph so the

@@ -78,6 +78,9 @@ export interface ServerDeps {
     onImDone: (terminalId: string) => void;
     /** Resolve the caller's workspace IssueWatch snapshot (checkIssues + imDone counts). */
     checkIssues: (terminalId: string) => Promise<IssueWatchSnapshot>;
+    /** A "you have N unread whispers" nudge for the caller's terminal, folded into
+     *  imDone (Track A turn-boundary delivery). Optional. */
+    whisperMailLine?: (terminalId: string) => string | null;
     /** Raise the OS-level question modal (ForceTheQuestion). */
     onForceQuestion: (
         terminalId: string,
@@ -437,6 +440,7 @@ async function handle(
         serverVersion: deps.serverVersion,
         onImDone: deps.onImDone,
         checkIssues: deps.checkIssues,
+        whisperMailLine: deps.whisperMailLine,
         onForceQuestion: deps.onForceQuestion,
         describeWorkspace: deps.describeWorkspace,
         manageProcess: deps.manageProcess,

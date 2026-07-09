@@ -66,6 +66,8 @@ import {
     readTerminalOutput,
 } from './terminal/ipc';
 import { installWhisperPresence } from './whisper/presence';
+import { whisperBroker } from './whisper/broker';
+import { dbWhisperStore } from './whisper/store';
 import { installKnowledgeBroadcast } from './knowledge/presence';
 import {
     buildSubmitBytes,
@@ -1011,12 +1013,15 @@ app.whenReady().then(async () => {
             /* best-effort */
         }
     }, 8000).unref?.();
-    // WhisperChat: wire the presence/message fan-out, then re-register every
-    // persisted whisper agent (durable identity rides terminal_specs.meta) into
-    // the in-memory broker so a restart doesn't lose the agent directory.
+    // WhisperChat: wire the presence/message fan-out + the durable store, then
+    // re-register every persisted whisper agent (durable identity rides
+    // terminal_specs.meta) and rehydrate their messages/inboxes from genie.db so
+    // a restart loses neither the agent directory nor a queued whisper.
     try {
         installWhisperPresence();
+        whisperBroker.setStore(dbWhisperStore);
         rehydrateWhisper();
+        whisperBroker.rehydrateMessages();
     } catch {
         /* best-effort — whisper is additive; a failure never blocks startup */
     }

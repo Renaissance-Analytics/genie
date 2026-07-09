@@ -286,6 +286,15 @@ export interface McpContext {
      */
     whisper: (terminalId: string, req: WhisperRequest) => Promise<WhisperResult>;
     /**
+     * A concise "you have N unread whisper(s)" nudge for the caller's terminal,
+     * folded into the `imDone` response so waiting WhisperChat messages surface at
+     * a TURN BOUNDARY (Track A) — the point an agent hands back — without ever
+     * writing into its pty. Returns null when there's nothing unread (or the
+     * terminal isn't a whisper agent). Optional: consumers that don't wire it just
+     * omit the line.
+     */
+    whisperMailLine?: (terminalId: string) => string | null;
+    /**
      * The workstation Knowledge Graph (the `knowledge` tool): a workstation-wide,
      * local knowledge/memory store shared across every workspace on this Genie.
      * `search` (FTS keyword retrieval), `get`, `add` (source `agent`), `list`,
@@ -1284,6 +1293,19 @@ export function formatIssueCountsLine(snap: IssueWatchSnapshot): string | null {
     return `${base} · remediation — ${parts.join('; ')} (act on these when no other work is in progress).`;
 }
 
+/**
+ * The concise WhisperChat nudge folded into an `imDone` response (Track A). Turns
+ * an unread summary into e.g. `📬 2 unread whisper(s) from claude·general, codex —
+ * call whisper(action:"receive") before you stop.` Returns null when nothing is
+ * waiting, so the line is omitted rather than printing a noisy "0".
+ */
+export function formatWhisperMailLine(unread: { count: number; fromLabels: string[] }): string | null {
+    if (!unread || unread.count <= 0) return null;
+    const who = unread.fromLabels.length ? ` from ${unread.fromLabels.join(', ')}` : '';
+    const n = unread.count;
+    return `📬 ${n} unread whisper${n === 1 ? '' : 's'}${who} — call whisper(action:"receive") to read ${n === 1 ? 'it' : 'them'} before you stop.`;
+}
+
 /** Human label for a feed item kind (used in the grouped checkIssues list). */
 const ISSUE_KIND_GROUP: Record<IssueWatchItem['kind'], string> = {
     issue: 'Issues',
@@ -1545,13 +1567,23 @@ export async function handleMcpMessage(
                 } catch {
                     /* best-effort — the glow is the point, counts are a bonus */
                 }
+                // Track A — surface any waiting WhisperChat mail at this turn
+                // boundary so a queued ping actually LANDS (agents call imDone at
+                // every finish). No pty injection — it rides the tool response.
+                let mailLine: string | null = null;
+                try {
+                    mailLine = ctx.whisperMailLine?.(ctx.terminalId) ?? null;
+                } catch {
+                    /* best-effort */
+                }
                 const base =
                     'Done — this terminal is now glowing in Genie until you focus it.';
+                const extras = [countsLine, mailLine].filter(Boolean).join('\n');
                 return ok(msg.id, {
                     content: [
                         {
                             type: 'text',
-                            text: countsLine ? `${base}\n\n${countsLine}` : base,
+                            text: extras ? `${base}\n\n${extras}` : base,
                         },
                     ],
                 });

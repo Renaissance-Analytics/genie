@@ -6,6 +6,7 @@ import {
     type WhisperAgentInfo,
     type WhisperChannelInfo,
     type WhisperDmThreadInfo,
+    type WhisperEscalationEvent,
     type WhisperMessage,
 } from '../../lib/genie';
 
@@ -77,6 +78,9 @@ export default function WhisperFlyout({
     const [draft, setDraft] = useState('');
     const [loading, setLoading] = useState(false);
     const [posting, setPosting] = useState(false);
+    // Track C — unACKed urgent DMs, keyed by messageId. Populated by
+    // `on.whisperEscalation`; each is a "waiting on <agent>" oversight alert.
+    const [escalations, setEscalations] = useState<Map<string, WhisperEscalationEvent>>(new Map());
     const streamEndRef = useRef<HTMLDivElement>(null);
 
     const loadDirectory = useCallback(async () => {
@@ -140,9 +144,19 @@ export default function WhisperFlyout({
                 return cur;
             });
         });
+        // Track C — raise / clear "waiting on <agent>" oversight alerts.
+        const offEscalation = api().on.whisperEscalation?.((ev) => {
+            setEscalations((prev) => {
+                const next = new Map(prev);
+                if (ev.resolved) next.delete(ev.messageId);
+                else next.set(ev.messageId, ev);
+                return next;
+            });
+        });
         return () => {
             offPresence?.();
             offMessage?.();
+            offEscalation?.();
         };
     }, [open, loadDirectory, loadHistory]);
 
@@ -226,6 +240,21 @@ export default function WhisperFlyout({
                         <IconX />
                     </button>
                 </div>
+
+                {/* Track C — oversight: urgent DMs a peer hasn't picked up. */}
+                {hasGenieBridge() && escalations.size > 0 && (
+                    <div className="whisper-escalations">
+                        {[...escalations.values()].map((e) => (
+                            <div key={e.messageId} className="whisper-escalation" role="alert">
+                                <span className="whisper-escalation-dot" />
+                                <span className="whisper-escalation-text">
+                                    Waiting on <b>{e.targetLabel ?? 'an agent'}</b> — {e.fromLabel ?? 'an'} urgent message is unread
+                                    {e.sinceTs ? <span className="whisper-escalation-age"> · {relTime(e.sinceTs)}</span> : null}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                )}
 
                 {!hasGenieBridge() ? (
                     <div className="whisper-body">

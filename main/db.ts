@@ -591,6 +591,42 @@ export function runMigrations(d: Database.Database): void {
                 `);
             },
         },
+        {
+            // v23 — WhisperChat durable inbox. Messages were in-memory only (lost on
+            // restart, silently dropped past the 200 cap). Persist every message +
+            // a per-agent ACK cursor so a queued whisper survives a restart, the
+            // human panel keeps its history, and unACKed-urgent escalation (Track C)
+            // has a durable position to check. `seq` is the broker's monotonic global
+            // sequence (resumed from MAX(seq) on boot so cursors stay valid).
+            version: 23,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS whisper_messages (
+                        id          TEXT PRIMARY KEY,
+                        seq         INTEGER NOT NULL,
+                        kind        TEXT NOT NULL CHECK (kind IN ('dm', 'channel')),
+                        from_id     TEXT NOT NULL,
+                        from_label  TEXT NOT NULL DEFAULT '',
+                        to_id       TEXT,
+                        channel_key TEXT,
+                        text        TEXT NOT NULL DEFAULT '',
+                        ts          INTEGER NOT NULL,
+                        interrupt   INTEGER NOT NULL DEFAULT 0
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_whisper_messages_seq
+                        ON whisper_messages(seq);
+                    CREATE INDEX IF NOT EXISTS idx_whisper_messages_dm
+                        ON whisper_messages(to_id, seq);
+                    CREATE INDEX IF NOT EXISTS idx_whisper_messages_channel
+                        ON whisper_messages(channel_key, seq);
+
+                    CREATE TABLE IF NOT EXISTS whisper_cursors (
+                        agent_id  TEXT PRIMARY KEY,
+                        acked_seq INTEGER NOT NULL DEFAULT 0
+                    );
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
