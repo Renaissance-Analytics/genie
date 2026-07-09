@@ -904,6 +904,12 @@ const PASSTHROUGH_EVENTS = new Set([
     // Host IssueWatch pushes its per-workspace counts/errors here; re-emitting it
     // keeps a host window's rail pill / flyout / badge live with the HOST's data.
     'issue-watch:update',
+    // Host WhisperChat presence/message pushes — re-emitting keeps a remote
+    // window's WhisperFlyout LIVE with the HOST broker's agents + messages
+    // (the host already fans these to /ws/events via mobileEmit; without this
+    // they reach the client socket but get dropped before the local re-emit).
+    'whisper:presence',
+    'whisper:message',
 ]);
 
 /**

@@ -45,6 +45,7 @@ import {
     setWorkspaceWatch,
     pollWorkspace,
 } from '../issue-watch';
+import { whisperBroker } from '../whisper/broker';
 
 /**
  * REST surface for the mobile remote-control server. Pure routing over the
@@ -1224,6 +1225,82 @@ export async function handleApi(
             return true;
         }
         sendJson(res, 404, { error: 'unknown issue-watch route' });
+        return true;
+    }
+
+    // --- host-sourced WhisperChat — for a remote DESKTOP driving this host ------
+    // The WhisperFlyout on a remote window reads the HOST broker's directory /
+    // channels / DM threads / history and posts as the human to the HOST broker
+    // (the agents + pty live on the host). Reads are auth-only; posting is a
+    // "drive the host" mutation, so it's kill-switch-gated like the other
+    // mutations. Live presence/message updates arrive over /ws/events (mobileEmit)
+    // and are re-emitted client-side via PASSTHROUGH_EVENTS (see main/remote).
+    // The human panel is unscoped by design ("the human owns the workstation"),
+    // matching the local IPC handlers in main/ipc.ts.
+    if (pathname.startsWith('/api/desktop/whisper/')) {
+        if (pathname === '/api/desktop/whisper/directory' && method === 'GET') {
+            sendJson(res, 200, { agents: whisperBroker.directory() });
+            return true;
+        }
+        if (pathname === '/api/desktop/whisper/channels' && method === 'GET') {
+            sendJson(res, 200, { channels: whisperBroker.channels() });
+            return true;
+        }
+        if (pathname === '/api/desktop/whisper/dm-threads' && method === 'GET') {
+            sendJson(res, 200, { threads: whisperBroker.dmThreads() });
+            return true;
+        }
+        if (method !== 'POST') {
+            sendJson(res, 405, { error: 'method not allowed' });
+            return true;
+        }
+        let wb: {
+            channelKey?: string;
+            agentId?: string;
+            dmPair?: [string, string];
+            limit?: number;
+            before?: number;
+            toAgentId?: string;
+            text?: string;
+        };
+        try {
+            wb = await readJsonBody(req);
+        } catch {
+            sendJson(res, 400, { error: 'invalid body' });
+            return true;
+        }
+        if (pathname === '/api/desktop/whisper/history') {
+            sendJson(res, 200, {
+                messages: whisperBroker.history({
+                    channelKey: wb.channelKey,
+                    agentId: wb.agentId,
+                    dmPair: wb.dmPair,
+                    limit: wb.limit,
+                    before: wb.before,
+                }),
+            });
+            return true;
+        }
+        if (pathname === '/api/desktop/whisper/post') {
+            if (guardLocked()) return true;
+            if (!wb.text || !wb.text.trim()) {
+                sendJson(res, 200, { ok: false, error: 'Message is empty.' });
+                return true;
+            }
+            if (!wb.channelKey && !wb.toAgentId) {
+                sendJson(res, 200, { ok: false, error: 'Pick a channel or an agent to message.' });
+                return true;
+            }
+            const r = whisperBroker.send({
+                human: true,
+                channelArg: wb.channelKey,
+                toAgentId: wb.toAgentId,
+                text: wb.text,
+            });
+            sendJson(res, 200, r.ok ? { ok: true } : { ok: false, error: r.error });
+            return true;
+        }
+        sendJson(res, 404, { error: 'unknown whisper route' });
         return true;
     }
 

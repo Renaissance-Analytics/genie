@@ -12,6 +12,10 @@ import type {
     WatchFeedItem,
     WorkspaceWatchStatus,
     SiteView,
+    WhisperAgentInfo,
+    WhisperChannelInfo,
+    WhisperDmThreadInfo,
+    WhisperMessage,
 } from './genie';
 import { isHostSourcedSettingKey } from './settings-nav';
 
@@ -434,6 +438,34 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         },
     };
 
+    // Host-sourced WhisperChat. The agents + the broker live on the HOST, so a
+    // remote window's WhisperFlyout must read the HOST broker's directory /
+    // channels / DM threads / history and post to IT — not the client's own empty
+    // local broker (which is why remote showed "no agents"). Live presence/message
+    // updates arrive on the SAME local channels (main re-emits the host's
+    // /ws/events `whisper:presence` / `whisper:message` — see PASSTHROUGH_EVENTS),
+    // so the spread's `on.whisper*` subscriptions need no change. `updateChannel`
+    // stays spread-from-local (it edits a terminal spec; the human flyout never
+    // calls it — a remote spec-edit route is a follow-on).
+    const whisper: GenieApi['whisper'] = {
+        ...local.whisper,
+        directory: async () =>
+            (await req('/api/desktop/whisper/directory')) as { agents: WhisperAgentInfo[] },
+        channels: async () =>
+            (await req('/api/desktop/whisper/channels')) as { channels: WhisperChannelInfo[] },
+        dmThreads: async () =>
+            (await req('/api/desktop/whisper/dm-threads')) as { threads: WhisperDmThreadInfo[] },
+        history: async (opts) =>
+            (await req('/api/desktop/whisper/history', { method: 'POST', json: opts })) as {
+                messages: WhisperMessage[];
+            },
+        post: async (input) =>
+            (await req('/api/desktop/whisper/post', { method: 'POST', json: input })) as {
+                ok: boolean;
+                error?: string;
+            },
+    };
+
     return {
         ...local,
         workspaces,
@@ -445,5 +477,6 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         issueWatch,
         sites,
         settings,
+        whisper,
     };
 }
