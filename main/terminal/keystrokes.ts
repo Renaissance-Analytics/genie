@@ -25,6 +25,15 @@ const PASTE_END = '\x1b[201~';
 export const CR = '\r';
 
 /**
+ * Delay (ms) between delivering a bracketed paste and the SEPARATE Enter that
+ * submits it. Without a gap the Enter races the TUI still exiting paste mode
+ * (processing the `ESC[201~` end marker), so the paste lands in the buffer but
+ * the submit is swallowed — the prompt sits parked, unsubmitted (issue #8). A
+ * short pause lets the TUI settle before the Enter lands.
+ */
+export const PASTE_SUBMIT_DELAY_MS = 60;
+
+/**
  * Named single keypresses an agent can deliver on their own (the `key` escape-
  * hatch), so a bare Enter can submit/clear a stuck buffer, Escape can dismiss a
  * mode, and Ctrl-C can interrupt — without smuggling them inside a text body.
@@ -87,6 +96,12 @@ export function buildSubmitBytes(text: string, submit: boolean): string {
  *    text is ignored. Lets a bare Enter submit/clear a stuck buffer.
  *  - otherwise → the text body via buildSubmitBytes (SUBMITTED by default).
  *
+ * `submitAfter` (when present) is a submit sequence the caller must deliver as a
+ * SEPARATE write, after {@link PASTE_SUBMIT_DELAY_MS}. It is only set for a
+ * MULTI-LINE submit: the body is delivered as a bracketed paste, and the Enter
+ * that submits it is split out so it can't race the TUI exiting paste mode
+ * (issue #8). Single-line submits keep the CR inline (no paste wrapper, no race).
+ *
  * Returns `{ error }` when there is genuinely nothing to do (no text, no submit,
  * no key) or the key name is unknown — so empty input is STILL rejected unless it
  * carries a submit or a keypress.
@@ -94,7 +109,7 @@ export function buildSubmitBytes(text: string, submit: boolean): string {
 export function resolveTerminalInput(
     text: string | undefined,
     opts: { submit?: boolean; key?: string },
-): { bytes: string; preview: string } | { error: string } {
+): { bytes: string; preview: string; submitAfter?: string } | { error: string } {
     if (opts.key !== undefined) {
         if (!isTerminalKey(opts.key)) {
             return { error: `Unknown key "${opts.key}". Allowed: enter, escape, ctrl-c.` };
@@ -106,10 +121,17 @@ export function resolveTerminalInput(
     if (body.length === 0 && !submit) {
         return { error: 'nothing to send — provide text, `submit`, or a `key`.' };
     }
-    const bytes = buildSubmitBytes(body, submit);
-    const visible = body.length === 0 ? '<enter>' : body;
+    // Strip a trailing newline the caller may have added; the submit is the
+    // explicit CR, never an in-band newline (matches buildSubmitBytes).
+    const cleaned = body.replace(/\r?\n$/, '');
+    const visible = cleaned.length === 0 ? '<enter>' : cleaned;
     const preview = visible.length > 200 ? visible.slice(0, 200) + '…' : visible;
-    return { bytes, preview };
+    if (submit && cleaned.includes('\n')) {
+        // Multi-line → bracketed paste now, Enter delivered SEPARATELY after a
+        // short delay so it doesn't race the paste-end marker (issue #8).
+        return { bytes: PASTE_START + cleaned + PASTE_END, submitAfter: CR, preview };
+    }
+    return { bytes: buildSubmitBytes(cleaned, submit), preview };
 }
 
 /**

@@ -37,7 +37,12 @@ import {
     writeToTerminal,
     readTerminalOutput,
 } from '../terminal/ipc';
-import { buildSubmitBytes, resolveTerminalInput, stripAnsi } from '../terminal/keystrokes';
+import {
+    buildSubmitBytes,
+    PASTE_SUBMIT_DELAY_MS,
+    resolveTerminalInput,
+    stripAnsi,
+} from '../terminal/keystrokes';
 import {
     startProcess,
     stopProcess,
@@ -309,6 +314,23 @@ async function approveProcessRun(
     if (result.cancelled) return false; // dismissed = deny
     const selected = result.answers[0]?.selected ?? [];
     return selected.includes('Approve');
+}
+
+/**
+ * Deliver resolved terminal input to a pty: the body now, then — for a MULTI-LINE
+ * bracketed paste — the submit Enter as a SEPARATE write after a short delay, so
+ * the Enter can't race the TUI exiting paste mode and leave the prompt parked
+ * (issue #8). Single-line submits carry the CR inline and skip the second write.
+ */
+async function deliverTerminalInput(
+    id: string,
+    built: { bytes: string; submitAfter?: string },
+): Promise<void> {
+    writeToTerminal(id, built.bytes);
+    if (built.submitAfter) {
+        await new Promise((resolve) => setTimeout(resolve, PASTE_SUBMIT_DELAY_MS));
+        writeToTerminal(id, built.submitAfter);
+    }
 }
 
 /**
@@ -992,7 +1014,7 @@ export async function manageTerminalsForMcp(
                         terminals: listAgentTerminals(ws),
                     };
                 }
-                writeToTerminal(req.id!, built.bytes);
+                await deliverTerminalInput(req.id!, built);
                 return { ok: true, terminals: listAgentTerminals(ws), affectedId: req.id };
             }
         }
@@ -1176,7 +1198,7 @@ export async function runAgentForMcp(
                 if (!approved) {
                     return { ok: false, error: 'Denied by user — nothing was sent.' };
                 }
-                writeToTerminal(req.id!, built.bytes);
+                await deliverTerminalInput(req.id!, built);
                 return { ok: true, id: req.id };
             }
             case 'read': {

@@ -229,6 +229,56 @@ describe('handleMcpMessage', () => {
         expect(text).toContain('npm run dev'); // the JSON block
     });
 
+    it('manageProcess accepts `id` as the process id (issue #7 — list returns `id`)', async () => {
+        const manageProcess = vi.fn().mockResolvedValue({ ok: true, affectedId: 'p-9', processes: [] });
+        await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 27,
+                method: 'tools/call',
+                params: { name: 'manageProcess', arguments: { action: 'restart', id: 'p-9' } },
+            },
+            ctx({ terminalId: 'term-X', manageProcess }),
+        );
+        // The `id` a caller copied from a `list` result must reach the handler as
+        // processId — previously dropped, so restart/stop failed with No process "".
+        expect(manageProcess).toHaveBeenCalledWith('term-X', expect.objectContaining({
+            action: 'restart',
+            processId: 'p-9',
+        }));
+    });
+
+    it('manageProcess still accepts the legacy `processId` alias', async () => {
+        const manageProcess = vi.fn().mockResolvedValue({ ok: true, processes: [] });
+        await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 28,
+                method: 'tools/call',
+                params: { name: 'manageProcess', arguments: { action: 'stop', processId: 'p-legacy' } },
+            },
+            ctx({ terminalId: 'term-X', manageProcess }),
+        );
+        expect(manageProcess).toHaveBeenCalledWith('term-X', expect.objectContaining({
+            action: 'stop',
+            processId: 'p-legacy',
+        }));
+    });
+
+    it('manageProcess prefers `id` over `processId` when both are sent', async () => {
+        const manageProcess = vi.fn().mockResolvedValue({ ok: true, processes: [] });
+        await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 29,
+                method: 'tools/call',
+                params: { name: 'manageProcess', arguments: { action: 'stop', id: 'p-new', processId: 'p-old' } },
+            },
+            ctx({ terminalId: 'term-X', manageProcess }),
+        );
+        expect(manageProcess).toHaveBeenCalledWith('term-X', expect.objectContaining({ processId: 'p-new' }));
+    });
+
     it('manageProcess rejects a bad/missing action', async () => {
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 26, method: 'tools/call', params: { name: 'manageProcess', arguments: {} } },

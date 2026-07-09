@@ -80,20 +80,44 @@ describe('keys (the escape-hatch allow-list)', () => {
 describe('resolveTerminalInput', () => {
     const bytes = (r: ReturnType<typeof resolveTerminalInput>) =>
         'bytes' in r ? r.bytes : undefined;
+    const submitAfter = (r: ReturnType<typeof resolveTerminalInput>) =>
+        'bytes' in r ? r.submitAfter : undefined;
 
-    it('default submit → single-line text + CR', () => {
+    it('default submit → single-line text + CR inline (no separate submit)', () => {
         const r = resolveTerminalInput('npm test', {});
         expect(bytes(r)).toBe('npm test\r');
+        expect(submitAfter(r)).toBeUndefined();
     });
 
-    it('multi-line default submit → bracketed paste + separate CR', () => {
+    it('multi-line submit → paste WITHOUT the CR, and the CR split into submitAfter (issue #8)', () => {
         const r = resolveTerminalInput('a\nb\nc', {});
-        expect(bytes(r)).toBe(`${PASTE_START}a\nb\nc${PASTE_END}\r`);
+        // The paste block carries no trailing Enter — it would race paste-mode exit.
+        expect(bytes(r)).toBe(`${PASTE_START}a\nb\nc${PASTE_END}`);
+        expect(bytes(r)).not.toContain('\r');
+        // The submit Enter is delivered separately (after PASTE_SUBMIT_DELAY_MS).
+        expect(submitAfter(r)).toBe('\r');
+    });
+
+    it('multi-line: strips a trailing newline before wrapping the paste', () => {
+        const r = resolveTerminalInput('a\nb\n', {});
+        expect(bytes(r)).toBe(`${PASTE_START}a\nb${PASTE_END}`);
+        expect(submitAfter(r)).toBe('\r');
+    });
+
+    it('multi-line submit:false → paste body only, no CR, no submitAfter', () => {
+        const r = resolveTerminalInput('a\nb', { submit: false });
+        expect(bytes(r)).toBe('a\nb');
+        expect(submitAfter(r)).toBeUndefined();
+    });
+
+    it('a key never carries a separate submit', () => {
+        expect(submitAfter(resolveTerminalInput('', { key: 'enter' }))).toBeUndefined();
     });
 
     it('submit:false → text with no CR', () => {
         const r = resolveTerminalInput('typed', { submit: false });
         expect(bytes(r)).toBe('typed');
+        expect(submitAfter(r)).toBeUndefined();
     });
 
     it('key:"enter" with empty prompt → just a CR', () => {

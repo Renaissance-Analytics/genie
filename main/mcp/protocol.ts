@@ -363,7 +363,9 @@ export interface ManageProcessRequest {
     repo?: string;
     /** create: start now + on every launch. Default false. */
     autostart?: boolean;
-    /** start | stop | restart: the target process id (from a prior list). */
+    /** start | stop | restart: the target process id (the `id` from a prior list). */
+    id?: string;
+    /** Deprecated alias for {@link id}, kept for back-compat (issue #7). */
     processId?: string;
 }
 
@@ -853,9 +855,14 @@ const MANAGE_PROCESS_TOOL = {
                 type: 'boolean',
                 description: 'create (optional): start now and on every launch. Default false.',
             },
+            id: {
+                type: 'string',
+                description:
+                    'start | stop | restart: the target process id — the `id` field from a `list` result, passed back verbatim.',
+            },
             processId: {
                 type: 'string',
-                description: 'start | stop | restart: the target process id (from a `list`).',
+                description: 'Deprecated alias for `id` (kept for back-compat). Prefer `id`.',
             },
         },
         required: ['action'],
@@ -1621,7 +1628,10 @@ export async function handleMcpMessage(
                     command: a.command,
                     repo: a.repo,
                     autostart: a.autostart,
-                    processId: a.processId,
+                    // `list` reports each process keyed `id`, so accept `id` as the
+                    // primary field (what callers naturally copy back); `processId`
+                    // stays a back-compat alias. This mismatch was issue #7.
+                    processId: a.id ?? a.processId,
                 });
                 const summary = result.ok
                     ? `${result.processes.length} process${result.processes.length === 1 ? '' : 'es'} in this workspace${
