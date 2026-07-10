@@ -445,8 +445,9 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
     // updates arrive on the SAME local channels (main re-emits the host's
     // /ws/events `whisper:presence` / `whisper:message` — see PASSTHROUGH_EVENTS),
     // so the spread's `on.whisper*` subscriptions need no change. `updateChannel`
-    // stays spread-from-local (it edits a terminal spec; the human flyout never
-    // calls it — a remote spec-edit route is a follow-on).
+    // (the "Agent settings…" edit) ALSO targets the host — the agent + its spec live
+    // there — so a remote window edits the host agent's purpose/scope/wake-on-DM
+    // through the host route, not the client's own empty broker.
     const whisper: GenieApi['whisper'] = {
         ...local.whisper,
         directory: async () =>
@@ -464,6 +465,11 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 ok: boolean;
                 error?: string;
             },
+        updateChannel: async (specId, patch) =>
+            (await req('/api/desktop/whisper/update-channel', {
+                method: 'POST',
+                json: { specId, patch },
+            })) as { ok: boolean; error?: string },
     };
 
     return {

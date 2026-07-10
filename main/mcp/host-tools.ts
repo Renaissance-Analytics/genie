@@ -1148,6 +1148,45 @@ export function createSpecializedAgentTerminal(input: {
     return { ok: true, spec: getTerminalSpec(id) ?? undefined };
 }
 
+/**
+ * Apply an agent-settings edit — WhisperChat purpose / scope / wake-on-DM — to a
+ * specialized terminal: LIVE-update the broker (so a running agent's accessibility
+ * + wake opt-in change immediately) AND persist the durable bits to the spec meta,
+ * then broadcast the spec change so every window's sidebar refreshes. Shared by the
+ * local IPC handler (`whisper:update-channel`) AND the remote host route
+ * (`POST /api/desktop/whisper/update-channel`) so a REMOTE window edits the HOST
+ * agent through the exact same path — they can't drift.
+ */
+export function updateWhisperChannel(
+    specId: string,
+    patch: {
+        purpose?: string;
+        scope?: WhisperScope;
+        scope_workspaces?: string[];
+        wake_on_dm?: boolean;
+    },
+): { ok: boolean; error?: string } {
+    const spec = getTerminalSpec(specId);
+    if (!spec) return { ok: false, error: 'Terminal not found.' };
+    const agentId = spec.meta?.agent_id;
+    if (!agentId) return { ok: false, error: 'That terminal is not a whisper agent.' };
+    whisperBroker.setAccessibility(agentId, {
+        scope: patch.scope,
+        workspaces: patch.scope_workspaces,
+        purpose: patch.purpose,
+        wakeOnDm: patch.wake_on_dm,
+    });
+    // Persist the durable bits to the spec meta + refresh the sidebar row.
+    const meta = { ...spec.meta };
+    if (patch.purpose !== undefined) meta.whisper_purpose = normalizePurpose(patch.purpose);
+    if (patch.scope !== undefined) meta.whisper_scope = patch.scope;
+    if (patch.scope_workspaces !== undefined) meta.whisper_workspaces = patch.scope_workspaces;
+    if (patch.wake_on_dm !== undefined) meta.whisper_wake_on_dm = patch.wake_on_dm;
+    updateTerminalSpec(specId, { meta });
+    broadcastTerminalSpecsChanged();
+    return { ok: true };
+}
+
 export type RestartAgentResult =
     | { ok: true; oldId: string; newId: string; agent: WhisperAgentType; command: string }
     | { ok: false; error: string };

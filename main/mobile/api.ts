@@ -239,6 +239,21 @@ export interface MobileDataDeps {
         scope_workspaces?: string[];
         wake_on_dm?: boolean;
     }) => { ok: boolean; spec?: TerminalSpecRow; error?: string };
+    /**
+     * Edit a specialized (agent) terminal's WhisperChat settings — purpose / scope /
+     * wake-on-DM — on the HOST (live broker + persisted spec meta). Lets a REMOTE
+     * window drive the host's "Agent settings…" edit. OPTIONAL — only a full desktop
+     * host wires it; absent ⇒ the endpoint 501s.
+     */
+    updateWhisperChannel?: (
+        specId: string,
+        patch: {
+            purpose?: string;
+            scope?: 'none' | 'self' | 'specific' | 'all';
+            scope_workspaces?: string[];
+            wake_on_dm?: boolean;
+        },
+    ) => { ok: boolean; error?: string };
     killTerminalById: (id: string) => boolean;
     writeToTerminal: (id: string, data: string) => boolean;
     readTerminalOutput: (
@@ -1264,6 +1279,13 @@ export async function handleApi(
             before?: number;
             toAgentId?: string;
             text?: string;
+            specId?: string;
+            patch?: {
+                purpose?: string;
+                scope?: 'none' | 'self' | 'specific' | 'all';
+                scope_workspaces?: string[];
+                wake_on_dm?: boolean;
+            };
         };
         try {
             wb = await readJsonBody(req);
@@ -1300,6 +1322,25 @@ export async function handleApi(
                 text: wb.text,
             });
             sendJson(res, 200, r.ok ? { ok: true } : { ok: false, error: r.error });
+            return true;
+        }
+        if (pathname === '/api/desktop/whisper/update-channel') {
+            // "Drive the host" mutation (edit the host agent's identity) — kill-switch
+            // gated like post. Routes to the SAME updateWhisperChannel the local IPC
+            // handler uses, so a remote "Agent settings…" edit is byte-identical.
+            if (guardLocked()) return true;
+            if (!deps.updateWhisperChannel) {
+                sendJson(res, 501, {
+                    ok: false,
+                    error: 'Agent settings cannot be edited on this host.',
+                });
+                return true;
+            }
+            if (!wb.specId) {
+                sendJson(res, 200, { ok: false, error: 'Terminal not found.' });
+                return true;
+            }
+            sendJson(res, 200, deps.updateWhisperChannel(wb.specId, wb.patch ?? {}));
             return true;
         }
         sendJson(res, 404, { error: 'unknown whisper route' });

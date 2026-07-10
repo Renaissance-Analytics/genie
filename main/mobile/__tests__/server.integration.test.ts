@@ -44,6 +44,10 @@ let updateReady = false;
 // flip `specializedWired` false to simulate a host that doesn't support it (501).
 let specializedWired = true;
 const specializedInputs: Array<Record<string, unknown>> = [];
+// Agent-settings host edit (whisper/update-channel): records the plumbed (specId,
+// patch); flip `whisperUpdateWired` false to simulate a host without the dep (501).
+let whisperUpdateWired = true;
+const whisperUpdates: Array<{ specId: string; patch: Record<string, unknown> }> = [];
 
 function buildAppDir(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mobile-it-'));
@@ -88,6 +92,14 @@ const deps = (): MobileDataDeps => ({
                           cwd: '/tmp/demo',
                       } as unknown as import('../../db').TerminalSpecRow,
                   };
+              },
+          }
+        : {}),
+    ...(whisperUpdateWired
+        ? {
+              updateWhisperChannel: (specId, patch) => {
+                  whisperUpdates.push({ specId, patch });
+                  return { ok: true };
               },
           }
         : {}),
@@ -215,6 +227,8 @@ beforeEach(() => {
     clipboardMode = 'desktop';
     specializedWired = true;
     specializedInputs.length = 0;
+    whisperUpdateWired = true;
+    whisperUpdates.length = 0;
 });
 
 afterEach(() => {
@@ -739,6 +753,58 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         const port = await start();
         const r = await req(port, 'POST', '/api/desktop/terminal-spec/create-agent', {
             body: { input: { workspace_id: 'ws-1', agent: 'claude', purpose: 'x', scope: 'self' } },
+        });
+        expect(r.status).toBe(401);
+    });
+
+    it('edits agent settings on the host via whisper/update-channel (remote Agent settings…)', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/desktop/whisper/update-channel', {
+            token,
+            body: {
+                specId: 't-agent',
+                patch: { purpose: 'reviewer', scope: 'all', wake_on_dm: true },
+            },
+        });
+        expect(r.status).toBe(200);
+        expect(r.json.ok).toBe(true);
+        // The edit was plumbed to the host's shared updateWhisperChannel untouched.
+        expect(whisperUpdates[0]).toEqual({
+            specId: 't-agent',
+            patch: { purpose: 'reviewer', scope: 'all', wake_on_dm: true },
+        });
+    });
+
+    it('423s the agent-settings edit while the desktop is locked (kill-switch)', async () => {
+        const port = await start();
+        const token = await pair(port);
+        setLocked(true);
+        const locked = await req(port, 'POST', '/api/desktop/whisper/update-channel', {
+            token,
+            body: { specId: 't-agent', patch: { wake_on_dm: true } },
+        });
+        expect(locked.status).toBe(423);
+        expect(whisperUpdates).toHaveLength(0); // never reached the host
+        setLocked(false);
+    });
+
+    it('501s the agent-settings edit on a host that does not support it', async () => {
+        whisperUpdateWired = false;
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/desktop/whisper/update-channel', {
+            token,
+            body: { specId: 't-agent', patch: { purpose: 'x' } },
+        });
+        expect(r.status).toBe(501);
+        expect(r.json.ok).toBe(false);
+    });
+
+    it('rejects the agent-settings edit without a token', async () => {
+        const port = await start();
+        const r = await req(port, 'POST', '/api/desktop/whisper/update-channel', {
+            body: { specId: 't-agent', patch: { purpose: 'x' } },
         });
         expect(r.status).toBe(401);
     });

@@ -65,9 +65,9 @@ import {
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
 import { broadcastTerminalSpecsChanged } from './terminal/ipc';
 import { agentPulse } from './terminal/agent-pulse';
-import { createSpecializedAgentTerminal } from './mcp/host-tools';
+import { createSpecializedAgentTerminal, updateWhisperChannel } from './mcp/host-tools';
 import { whisperBroker } from './whisper/broker';
-import { normalizePurpose, type WhisperScope } from './whisper/types';
+import { type WhisperScope } from './whisper/types';
 import { getKnowledgeStore } from './knowledge/store';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import {
@@ -956,29 +956,7 @@ export function registerIpcHandlers(): void {
                 scope_workspaces?: string[];
                 wake_on_dm?: boolean;
             },
-        ) => {
-            const spec = getTerminalSpec(specId);
-            if (!spec) return { ok: false, error: 'Terminal not found.' };
-            const agentId = spec.meta?.agent_id;
-            if (!agentId) return { ok: false, error: 'That terminal is not a whisper agent.' };
-            whisperBroker.setAccessibility(agentId, {
-                scope: patch.scope,
-                workspaces: patch.scope_workspaces,
-                purpose: patch.purpose,
-                wakeOnDm: patch.wake_on_dm,
-            });
-            // Persist the durable bits to the spec meta + refresh the sidebar row.
-            const meta = { ...spec.meta };
-            if (patch.purpose !== undefined) meta.whisper_purpose = normalizePurpose(patch.purpose);
-            if (patch.scope !== undefined) meta.whisper_scope = patch.scope;
-            if (patch.scope_workspaces !== undefined) {
-                meta.whisper_workspaces = patch.scope_workspaces;
-            }
-            if (patch.wake_on_dm !== undefined) meta.whisper_wake_on_dm = patch.wake_on_dm;
-            updateTerminalSpec(specId, { meta });
-            broadcastTerminalSpecsChanged();
-            return { ok: true };
-        },
+        ) => updateWhisperChannel(specId, patch),
     );
 
     // --- Knowledge Graph (workstation-wide local memory store) -----------
