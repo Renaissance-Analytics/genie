@@ -9,6 +9,7 @@ import {
     type AssignmentDeprovisionDeps,
     type AssignmentProvisionDeps,
     type AssignmentTransport,
+    type IssueWatchDeltaPush,
     type WorkspaceAssignment,
 } from '../workspace-assignment';
 
@@ -243,6 +244,7 @@ function fakeTransport() {
         onConnected: () => void;
         onAssignment: (a: WorkspaceAssignment) => void;
         onUnassignment?: (workspaceId: string) => void;
+        onIssueWatchDelta?: (delta: IssueWatchDeltaPush) => void;
     } | null = null;
     const close = vi.fn();
     const transport: AssignmentTransport = {
@@ -257,6 +259,7 @@ function fakeTransport() {
         connect: () => handlers?.onConnected(),
         push: (a: WorkspaceAssignment) => handlers?.onAssignment(a),
         unassign: (id: string) => handlers?.onUnassignment?.(id),
+        pushDelta: (d: IssueWatchDeltaPush) => handlers?.onIssueWatchDelta?.(d),
         get opened() {
             return handlers !== null;
         },
@@ -340,6 +343,31 @@ describe('WorkspaceAssignmentSubscriber', () => {
         await Promise.resolve();
         await Promise.resolve();
         expect(onError).toHaveBeenCalledWith('deprovision', expect.any(Error));
+    });
+
+    it('routes an issuewatch.delta to applyIssueWatchDelta, and clears it on unassign', async () => {
+        const t = fakeTransport();
+        const applyIssueWatchDelta = vi.fn();
+        const clearIssueWatchDelta = vi.fn();
+        const sub = new WorkspaceAssignmentSubscriber({
+            transport: t.transport,
+            reconcile: vi.fn(async () => {}),
+            provision: vi.fn(async () => {}),
+            deprovision: vi.fn(async () => {}),
+            applyIssueWatchDelta,
+            clearIssueWatchDelta,
+        });
+        sub.start();
+
+        const push: IssueWatchDeltaPush = {
+            workspaceId: 'p1', projectId: 'p1', counts: { issue: 2, pr: 0, security: 1 }, items: [{ key: 'o/r:issue:1' }],
+        };
+        t.pushDelta(push);
+        expect(applyIssueWatchDelta).toHaveBeenCalledWith(push);
+
+        // Detach drops the server-fed snapshot too.
+        t.unassign('p1');
+        expect(clearIssueWatchDelta).toHaveBeenCalledWith('p1');
     });
 });
 

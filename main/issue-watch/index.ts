@@ -125,6 +125,87 @@ const EPOCH = '1970-01-01T00:00:00.000Z';
 /** Re-resolve a repo's fork→upstream after the cached entry is ~7 days stale. */
 const UPSTREAM_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** One flattened, unread-flagged feed row (the getWorkspaceFeed element). */
+export type WorkspaceFeedItem = WatchItem & {
+    repo: string;
+    owner: string;
+    source: 'own' | 'upstream';
+    unread: boolean;
+};
+
+/**
+ * A server-side IssueWatch delta pushed from Tynn (per workspace) — the `counts`
+ * + `items` Tynn already computed by polling GitHub ONCE server-side. The item
+ * shape matches the client feed row, so the client just renders it.
+ */
+export interface PushedIssueWatchDelta {
+    workspaceId: string;
+    counts: TypeCounts;
+    items: Array<{
+        kind: WatchItem['kind'];
+        key: string;
+        number?: number | null;
+        title: string;
+        url: string;
+        updatedAt: string;
+        author?: string | null;
+        severity?: string | null;
+        owner: string;
+        repo: string;
+        source?: 'own' | 'upstream';
+        unread?: boolean;
+    }>;
+}
+
+/**
+ * Workspaces whose IssueWatch is SERVER-FED (Tynn broadcasts `issuewatch.delta`,
+ * or the reconcile snapshot seeded it): the local poller SKIPS them and every
+ * read path returns this snapshot — the client stops polling GitHub for them
+ * entirely (the hard-cut to server-push, one service / two transports). Keyed by
+ * workspace id.
+ */
+const pushedByWorkspace = new Map<string, { counts: TypeCounts; feed: WorkspaceFeedItem[] }>();
+
+/**
+ * Apply a server-side IssueWatch delta for a workspace (Tynn → the assignment
+ * transport → here). Stores the snapshot (switching the workspace to server-fed)
+ * and rebroadcasts so the rail pills / flyout / titlebar reflect it immediately.
+ */
+export function applyPushedDelta(delta: PushedIssueWatchDelta): void {
+    const feed = delta.items.map(
+        (it): WorkspaceFeedItem =>
+            ({
+                key: it.key,
+                kind: it.kind,
+                number: it.number ?? null,
+                title: it.title,
+                url: it.url,
+                updatedAt: it.updatedAt,
+                author: it.author ?? undefined,
+                severity: it.severity ?? undefined,
+                owner: it.owner,
+                repo: it.repo,
+                source: it.source ?? 'own',
+                unread: it.unread ?? false,
+            }) as WorkspaceFeedItem,
+    );
+    pushedByWorkspace.set(delta.workspaceId, { counts: { ...delta.counts }, feed });
+    void broadcastUpdate();
+}
+
+/**
+ * Drop a workspace's server-fed snapshot (e.g. on unassignment) — it reverts to
+ * local polling. No-op when it wasn't server-fed.
+ */
+export function clearPushedDelta(workspaceId: string): void {
+    if (pushedByWorkspace.delete(workspaceId)) void broadcastUpdate();
+}
+
+/** Whether a workspace's IssueWatch is currently server-fed (skip local polling). */
+export function isServerFed(workspaceId: string): boolean {
+    return pushedByWorkspace.has(workspaceId);
+}
+
 /**
  * Pure: keep only the items a workspace's granularity wants surfaced/counted —
  * the READ-side gate (the FETCH side is gated in pollRepo). This guarantees
@@ -441,10 +522,14 @@ async function pollNextWorkspace(): Promise<void> {
     if (roundRobinCursor >= workspaces.length) roundRobinCursor = 0;
     const ws = workspaces[roundRobinCursor];
     roundRobinCursor = (roundRobinCursor + 1) % workspaces.length;
-    try {
-        await pollWorkspace(ws.id);
-    } catch {
-        /* best-effort — one workspace's failure shouldn't break the cycle */
+    // Source-switch: a server-fed workspace is NEVER polled locally — Tynn's push
+    // is authoritative. (The cursor already advanced, so the next tick moves on.)
+    if (!pushedByWorkspace.has(ws.id)) {
+        try {
+            await pollWorkspace(ws.id);
+        } catch {
+            /* best-effort — one workspace's failure shouldn't break the cycle */
+        }
     }
     await broadcastUpdate();
 }
@@ -462,6 +547,10 @@ export async function getWorkspaceFeed(
         }
     >
 > {
+    // Server-fed: Tynn already resolved this workspace's feed — return it verbatim.
+    const pushed = pushedByWorkspace.get(workspaceId);
+    if (pushed) return pushed.feed;
+
     const watches = listIssueWatches(workspaceId);
     const seenByKey = new Map(watches.map((w) => [cacheKey(w.owner, w.repo), w.seen_at]));
     const granularity = getWorkspaceIssuewatchGranularity(workspaceId);
@@ -516,6 +605,14 @@ export async function getWorkspaceFeed(
 export async function getOpenCounts(): Promise<Record<string, TypeCounts>> {
     const out: Record<string, TypeCounts> = {};
     for (const ws of listWorkspaces()) {
+        // Server-fed: use Tynn's counts, skip the local git/GitHub resolution.
+        const pushed = pushedByWorkspace.get(ws.id);
+        if (pushed) {
+            if (pushed.counts.issue || pushed.counts.pr || pushed.counts.security) {
+                out[ws.id] = { ...pushed.counts };
+            }
+            continue;
+        }
         let repos: ResolvedRepo[];
         try {
             repos = await resolveWorkspaceRepos(ws.id);
@@ -555,6 +652,11 @@ export async function getOpenCounts(): Promise<Record<string, TypeCounts>> {
 export async function getWorkspaceStatus(
     workspaceId: string,
 ): Promise<WorkspaceWatchStatus> {
+    // Server-fed: Tynn holds the credential + does the reads, so this is connected
+    // and error-free from the client's view regardless of any LOCAL GitHub token.
+    if (pushedByWorkspace.has(workspaceId)) {
+        return { connected: true, error: null, detail: null, needsReauth: false, missingCapabilities: [] };
+    }
     if (!getToken()) {
         // No token at all. A dead session (revoked / refresh exhausted) still
         // leaves the reauth flag set, so report it: the flyout shows Reconnect
@@ -595,6 +697,8 @@ export async function getWorkspaceStatus(
 async function getWorkspaceErrors(): Promise<Record<string, WatchErrorDetail>> {
     const out: Record<string, WatchErrorDetail> = {};
     for (const ws of listWorkspaces()) {
+        // Server-fed workspaces have no LOCAL read — Tynn owns their auth/errors.
+        if (pushedByWorkspace.has(ws.id)) continue;
         const views = await getWorkspaceRepoViews(ws.id).catch(() => []);
         const worst = worstViewDetail(views);
         if (worst) out[ws.id] = worst;

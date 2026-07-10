@@ -287,6 +287,18 @@ export interface AssignmentSubscriptionHandle {
  * `WorkspaceUnassigned` (the DETACH trigger — the id to deprovision).
  * Implementations MUST hold ONE persistent connection and MUST NOT poll.
  */
+/**
+ * A server-side IssueWatch delta pushed from Tynn (per workspace) — the
+ * `issuewatch.delta` payload the shell's transport decodes. `items` stays opaque
+ * here (the issue-watch module owns the shape); this module only routes it.
+ */
+export interface IssueWatchDeltaPush {
+    workspaceId: string;
+    projectId: string;
+    counts: { issue: number; pr: number; security: number };
+    items: unknown[];
+}
+
 export interface AssignmentTransport {
     open(handlers: {
         onConnected: () => void;
@@ -294,6 +306,9 @@ export interface AssignmentTransport {
         /** Optional so older transports still satisfy the type; the subscriber
          *  always supplies it. */
         onUnassignment?: (workspaceId: string) => void;
+        /** Optional server-side IssueWatch delta (counts/items) for a workspace —
+         *  routed to the issue-watch module so the client stops polling GitHub. */
+        onIssueWatchDelta?: (delta: IssueWatchDeltaPush) => void;
     }): AssignmentSubscriptionHandle;
 }
 
@@ -308,6 +323,11 @@ export interface WorkspaceAssignmentSubscriberDeps {
     provision: (a: WorkspaceAssignment) => Promise<void>;
     /** Safely deprovision one pushed unassignment (the DETACH trigger). */
     deprovision: (workspaceId: string) => Promise<void>;
+    /** Route a server-side IssueWatch delta to the issue-watch module (injected —
+     *  keeps this module electron-free; the shell supplies issueWatch.applyPushedDelta). */
+    applyIssueWatchDelta?: (delta: IssueWatchDeltaPush) => void;
+    /** Drop a workspace's server-fed IssueWatch snapshot (on unassignment). */
+    clearIssueWatchDelta?: (workspaceId: string) => void;
     /** Surfaced for logging; a failed step never tears down the sub. */
     onError?: (context: AssignmentSubscriberContext, e: unknown) => void;
 }
@@ -328,8 +348,16 @@ export class WorkspaceAssignmentSubscriber {
         this.handle = this.deps.transport.open({
             onConnected: () => void this.guard('reconcile', this.deps.reconcile()),
             onAssignment: (a) => void this.guard('provision', this.deps.provision(a)),
-            onUnassignment: (workspaceId) =>
-                void this.guard('deprovision', this.deps.deprovision(workspaceId)),
+            onUnassignment: (workspaceId) => {
+                // Detach: tear the workspace down AND drop its server-fed IssueWatch.
+                this.deps.clearIssueWatchDelta?.(workspaceId);
+                void this.guard('deprovision', this.deps.deprovision(workspaceId));
+            },
+            // Server-side IssueWatch: route the delta to the issue-watch module —
+            // synchronous, never throws (the module just stores + rebroadcasts).
+            onIssueWatchDelta: this.deps.applyIssueWatchDelta
+                ? (delta) => this.deps.applyIssueWatchDelta?.(delta)
+                : undefined,
         });
     }
 
@@ -358,6 +386,11 @@ export interface WorkspaceAssignmentWiring {
     parentPath: string;
     /** Optional provision/deprovision-seam overrides (tests / custom env-file). */
     provisionDeps?: Partial<AssignmentProvisionDeps & AssignmentDeprovisionDeps>;
+    /** Route server-side IssueWatch deltas to the issue-watch module (the shell
+     *  injects issueWatch.applyPushedDelta / clearPushedDelta — keeps this seam
+     *  electron-free). Absent ⇒ deltas are simply ignored. */
+    applyIssueWatchDelta?: (delta: IssueWatchDeltaPush) => void;
+    clearIssueWatchDelta?: (workspaceId: string) => void;
     onError?: (context: AssignmentSubscriberContext, e: unknown) => void;
 }
 
@@ -386,6 +419,8 @@ export function createWorkspaceAssignmentSubscriber(
         deprovision: async (workspaceId) => {
             deprovisionAssignedWorkspace(workspaceId, deps);
         },
+        applyIssueWatchDelta: w.applyIssueWatchDelta,
+        clearIssueWatchDelta: w.clearIssueWatchDelta,
         onError: w.onError,
     });
 }
