@@ -88,6 +88,13 @@ describe('host-sourced (bucket 2) classification', () => {
                 'mcp_sync_claude',
                 'mcp_sync_codex',
                 'mcp_sync_cursor',
+                // Specialized-terminal launch command + flags (host resolves these).
+                'agent_command_claude',
+                'agent_flags_claude',
+                'agent_command_codex',
+                'agent_flags_codex',
+                'agent_command_custom',
+                'agent_flags_custom',
             ].sort(),
         );
     });
@@ -101,6 +108,12 @@ describe('host-sourced (bucket 2) classification', () => {
             'mcp_sync_cursor',
             'mcp_sync_codex',
             'mcp_sync_agents',
+            'agent_command_claude',
+            'agent_flags_claude',
+            'agent_command_codex',
+            'agent_flags_codex',
+            'agent_command_custom',
+            'agent_flags_custom',
         ]) {
             expect(isHostSourcedSettingKey(k)).toBe(true);
         }

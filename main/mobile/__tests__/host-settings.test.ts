@@ -20,6 +20,12 @@ describe('pickHostSettings — host-sourced allow-list', () => {
                 'mcp_sync_claude',
                 'mcp_sync_codex',
                 'mcp_sync_cursor',
+                'agent_command_claude',
+                'agent_flags_claude',
+                'agent_command_codex',
+                'agent_flags_codex',
+                'agent_command_custom',
+                'agent_flags_custom',
             ].sort(),
         );
     });
@@ -34,6 +40,12 @@ describe('pickHostSettings — host-sourced allow-list', () => {
             mcp_sync_cursor: 'off',
             mcp_sync_codex: 'on',
             mcp_sync_agents: 'on',
+            agent_command_claude: 'claude',
+            agent_flags_claude: '--dangerously-skip-permissions',
+            agent_command_codex: 'codex',
+            agent_flags_codex: '--yolo',
+            agent_command_custom: 'my-agent',
+            agent_flags_custom: '--interactive',
             // host-machine / device / secret — must NOT leak:
             primary_workspace: '/host/only/path',
             tynn_host: 'https://tynn.ai',
@@ -54,6 +66,12 @@ describe('pickHostSettings — host-sourced allow-list', () => {
             mcp_sync_cursor: 'off',
             mcp_sync_codex: 'on',
             mcp_sync_agents: 'on',
+            agent_command_claude: 'claude',
+            agent_flags_claude: '--dangerously-skip-permissions',
+            agent_command_codex: 'codex',
+            agent_flags_codex: '--yolo',
+            agent_command_custom: 'my-agent',
+            agent_flags_custom: '--interactive',
         });
         // Explicit: no secret / host-machine key survives the filter.
         expect('github_token_enc' in picked).toBe(false);

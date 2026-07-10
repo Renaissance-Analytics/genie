@@ -83,6 +83,14 @@ export const HOST_SOURCED_SETTINGS_KEYS = [
     'mcp_sync_cursor',
     'mcp_sync_codex',
     'mcp_sync_agents',
+    // Specialized-terminal launch command + always-on flags (host resolves these
+    // when spawning each agent type). Mirrors renderer/lib/settings-nav.ts.
+    'agent_command_claude',
+    'agent_flags_claude',
+    'agent_command_codex',
+    'agent_flags_codex',
+    'agent_command_custom',
+    'agent_flags_custom',
 ] as const satisfies readonly (keyof Settings)[];
 
 /** The bucket-2 subset of the host's settings a remote may see (allow-list filter). */

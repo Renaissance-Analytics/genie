@@ -101,6 +101,15 @@ export const HOST_SOURCED_SETTINGS_KEYS = [
     'mcp_sync_cursor',
     'mcp_sync_codex',
     'mcp_sync_agents',
+    // Specialized-terminal launch: the command + always-on flags the HOST resolves
+    // when it spawns each agent type (resolveAgentLaunch reads these on the host).
+    // Badged "On the host" in Settings, so their VALUES must come from + write to it.
+    'agent_command_claude',
+    'agent_flags_claude',
+    'agent_command_codex',
+    'agent_flags_codex',
+    'agent_command_custom',
+    'agent_flags_custom',
 ] as const satisfies readonly (keyof Settings)[];
 
 export type HostSourcedSettingKey = (typeof HOST_SOURCED_SETTINGS_KEYS)[number];
