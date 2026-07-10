@@ -3735,6 +3735,22 @@ body.gutter-dragging .grid-gutter {
     color: var(--fg-4);
     font-size: 11px;
 }
+/* Wake-on-DM opt-in: a checkbox aligned to the top of its title + description. */
+.agent-form-wake {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    cursor: pointer;
+}
+.agent-form-wake input {
+    margin-top: 2px;
+    flex: none;
+}
+.agent-form-wake-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
 .agent-form-preview {
     font-size: 11.5px;
     color: var(--fg-3);

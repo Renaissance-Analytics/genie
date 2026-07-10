@@ -1816,8 +1816,12 @@ function SpecRow({
     // sub-label so the sidebar reads which AI is running and what it's for.
     const agentDef = spec.meta?.agent ? terminalTypeForAgent(spec.meta.agent) : null;
     const AgentIcon = agentDef?.icon;
+    // Persisted meta uses `whisper_purpose` (createAgentTerminal / update-channel),
+    // not a bare `purpose`; read that so the sub-label isn't always blank.
     const purposeStr =
-        typeof spec.meta?.purpose === 'string' ? (spec.meta.purpose as string) : '';
+        typeof spec.meta?.whisper_purpose === 'string'
+            ? (spec.meta.whisper_purpose as string)
+            : '';
     // Clicking a view ALWAYS activates its workspace (jump to it), matching a
     // click on the workspace row. On top of that: suspended rows resume; a
     // hidden row is shown; a visible row stays put (the eyeball is the dedicated

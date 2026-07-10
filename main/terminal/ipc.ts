@@ -219,6 +219,8 @@ export function createAgentTerminal(opts: {
         purpose?: string;
         scope?: WhisperScope;
         scopeWorkspaces?: string[];
+        /** Opt-in wake-on-DM (issue #9): a direct whisper wakes this agent when idle. */
+        wakeOnDm?: boolean;
     };
 }): { id: string; scrollback: string; command?: string; chatSessionId: string | null } {
     const id = crypto.randomUUID();
@@ -248,6 +250,7 @@ export function createAgentTerminal(opts: {
             ...(opts.whisper?.scopeWorkspaces?.length
                 ? { whisper_workspaces: opts.whisper.scopeWorkspaces }
                 : {}),
+            ...(opts.whisper?.wakeOnDm ? { whisper_wake_on_dm: true } : {}),
             ...(chatSessionId ? { chat_session_id: chatSessionId } : {}),
         };
     }

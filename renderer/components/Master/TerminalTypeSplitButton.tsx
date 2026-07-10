@@ -166,6 +166,7 @@ export default function TerminalTypeSplitButton({
                 scope: values.scope,
                 scope_workspaces:
                     values.scope === 'specific' ? values.scopeWorkspaces : undefined,
+                wake_on_dm: values.wakeOnDm,
             });
             if (res.ok && res.spec) {
                 onAgentCreated(res.spec);

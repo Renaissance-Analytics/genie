@@ -1109,6 +1109,7 @@ export function createSpecializedAgentTerminal(input: {
     purpose: string;
     scope: WhisperScope;
     scope_workspaces?: string[];
+    wake_on_dm?: boolean;
 }): { ok: boolean; spec?: TerminalSpecRow; error?: string } {
     const ws = getWorkspace(input.workspace_id);
     if (!ws) return { ok: false, error: 'Workspace not found.' };
@@ -1139,6 +1140,7 @@ export function createSpecializedAgentTerminal(input: {
             purpose: input.purpose,
             scope: input.scope,
             scopeWorkspaces: input.scope_workspaces,
+            wakeOnDm: input.wake_on_dm,
         },
     });
     // Launch the agent CLI in the fresh shell (the session-captured form).

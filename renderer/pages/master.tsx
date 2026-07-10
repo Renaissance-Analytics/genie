@@ -1834,12 +1834,18 @@ function AgentSettingsModal({
                     workspaces={workspaces}
                     ownWorkspaceId={spec.workspace_id}
                     initial={{
-                        purpose: typeof meta.purpose === 'string' ? meta.purpose : '',
-                        scope: (meta.scope as WhisperScope | undefined) ?? 'self',
-                        scopeWorkspaces: Array.isArray(meta.scope_workspaces)
-                            ? (meta.scope_workspaces as string[])
+                        // The persisted meta uses the `whisper_*` keys (see
+                        // createAgentTerminal / whisper:update-channel); read those, not the
+                        // bare `purpose`/`scope`, or the edit pre-fill is blank and Save
+                        // silently resets the agent's purpose→general and scope→self.
+                        purpose:
+                            typeof meta.whisper_purpose === 'string' ? meta.whisper_purpose : '',
+                        scope: (meta.whisper_scope as WhisperScope | undefined) ?? 'self',
+                        scopeWorkspaces: Array.isArray(meta.whisper_workspaces)
+                            ? (meta.whisper_workspaces as string[])
                             : [],
                         command: typeof meta.agent_command === 'string' ? meta.agent_command : '',
+                        wakeOnDm: meta.whisper_wake_on_dm === true,
                     }}
                     submitLabel="Save"
                     busy={busy}

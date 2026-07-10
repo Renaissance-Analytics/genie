@@ -812,6 +812,7 @@ const api = {
             purpose: string;
             scope: 'none' | 'self' | 'specific' | 'all';
             scope_workspaces?: string[];
+            wake_on_dm?: boolean;
         }) => ipcRenderer.invoke('terminal-spec:create-agent', input),
     },
 
@@ -848,6 +849,7 @@ const api = {
                 purpose?: string;
                 scope?: 'none' | 'self' | 'specific' | 'all';
                 scope_workspaces?: string[];
+                wake_on_dm?: boolean;
             },
         ) => ipcRenderer.invoke('whisper:update-channel', specId, patch),
     },

@@ -1983,6 +1983,8 @@ export interface GenieApi {
             scope: WhisperScope;
             /** The chosen workspace ids when `scope === 'specific'`. */
             scope_workspaces?: string[];
+            /** Opt-in wake-on-DM: a direct whisper wakes this agent when idle (issue #9). */
+            wake_on_dm?: boolean;
         }) => Promise<{ ok: boolean; spec?: TerminalSpec; error?: string }>;
     };
     /**
@@ -2021,7 +2023,13 @@ export interface GenieApi {
         /** Edit an agent's channel identity (purpose / scope) — re-emits presence. */
         updateChannel: (
             specId: string,
-            patch: { purpose?: string; scope?: WhisperScope; scope_workspaces?: string[] },
+            patch: {
+                purpose?: string;
+                scope?: WhisperScope;
+                scope_workspaces?: string[];
+                /** Opt-in wake-on-DM (issue #9): a direct whisper wakes this agent when idle. */
+                wake_on_dm?: boolean;
+            },
         ) => Promise<{ ok: boolean; error?: string }>;
     };
     files: {

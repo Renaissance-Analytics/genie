@@ -897,6 +897,7 @@ export function registerIpcHandlers(): void {
                 purpose: string;
                 scope: WhisperScope;
                 scope_workspaces?: string[];
+                wake_on_dm?: boolean;
             },
         ) => createSpecializedAgentTerminal(input),
     );
@@ -949,7 +950,12 @@ export function registerIpcHandlers(): void {
         (
             _e,
             specId: string,
-            patch: { purpose?: string; scope?: WhisperScope; scope_workspaces?: string[] },
+            patch: {
+                purpose?: string;
+                scope?: WhisperScope;
+                scope_workspaces?: string[];
+                wake_on_dm?: boolean;
+            },
         ) => {
             const spec = getTerminalSpec(specId);
             if (!spec) return { ok: false, error: 'Terminal not found.' };
@@ -959,6 +965,7 @@ export function registerIpcHandlers(): void {
                 scope: patch.scope,
                 workspaces: patch.scope_workspaces,
                 purpose: patch.purpose,
+                wakeOnDm: patch.wake_on_dm,
             });
             // Persist the durable bits to the spec meta + refresh the sidebar row.
             const meta = { ...spec.meta };
@@ -967,6 +974,7 @@ export function registerIpcHandlers(): void {
             if (patch.scope_workspaces !== undefined) {
                 meta.whisper_workspaces = patch.scope_workspaces;
             }
+            if (patch.wake_on_dm !== undefined) meta.whisper_wake_on_dm = patch.wake_on_dm;
             updateTerminalSpec(specId, { meta });
             broadcastTerminalSpecsChanged();
             return { ok: true };

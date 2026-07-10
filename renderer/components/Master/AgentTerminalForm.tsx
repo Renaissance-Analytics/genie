@@ -21,6 +21,9 @@ export interface AgentFormValues {
     scopeWorkspaces: string[];
     /** Only meaningful for a `custom` agent. */
     command: string;
+    /** Opt-in: a direct whisper to this agent while it's idle injects a nudge so it
+     *  starts a turn and reads the message (issue #9). Default off. */
+    wakeOnDm: boolean;
 }
 
 const SCOPE_OPTIONS: Array<{ value: WhisperScope; label: string; desc: string }> = [
@@ -92,6 +95,7 @@ export default function AgentTerminalForm({
         () => initial?.scopeWorkspaces ?? [],
     );
     const [command, setCommand] = useState(() => initial?.command ?? '');
+    const [wakeOnDm, setWakeOnDm] = useState(() => initial?.wakeOnDm ?? false);
 
     const ownWorkspace = useMemo(
         () => workspaces.find((w) => w.id === ownWorkspaceId),
@@ -130,6 +134,7 @@ export default function AgentTerminalForm({
             scope,
             scopeWorkspaces: scope === 'specific' ? scopeWorkspaces : [],
             command: command.trim(),
+            wakeOnDm,
         });
     };
 
@@ -211,6 +216,22 @@ export default function AgentTerminalForm({
                     />
                 </label>
             )}
+
+            <label className="agent-form-wake">
+                <input
+                    type="checkbox"
+                    checked={wakeOnDm}
+                    onChange={(e) => setWakeOnDm(e.target.checked)}
+                />
+                <span className="agent-form-wake-text">
+                    <span className="agent-form-label">Wake on direct whisper</span>
+                    <span className="agent-form-scope-desc">
+                        When this agent is idle, a direct whisper injects a one-line nudge so it
+                        starts a turn and reads it — no manual check needed. Only ever fires when
+                        it's provably idle at its prompt, so it can't interrupt a running turn.
+                    </span>
+                </span>
+            </label>
 
             <div className="agent-form-preview">
                 Channel: <code>{`${slug}:${previewPurpose}`}</code>

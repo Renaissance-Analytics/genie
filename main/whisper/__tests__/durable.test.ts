@@ -147,6 +147,43 @@ describe('whisper durable inbox (Track B)', () => {
         expect(woken).toHaveLength(0);
     });
 
+    it('wake-on-DM: setAccessibility live-toggles the opt-in on a RUNNING agent (#9)', () => {
+        // The "Wake on direct whisper" agent-settings toggle edits the channel
+        // (whisper:update-channel → setAccessibility) — it must take effect on the
+        // already-running agent, not only after a restart/rejoin.
+        let clock = 1_000_000;
+        const b = new WhisperBroker();
+        b.setStore(store);
+        b.setClock(() => clock);
+        const woken: string[] = [];
+        b.setWakeSink((tid) => woken.push(tid));
+
+        join(b, 'a');
+        join(b, 'b'); // opted OUT by default
+        b.markTurnEnd('t-b');
+
+        // Idle + past the quiet window, but opted out → no wake.
+        clock += WAKE_QUIET_MS + 1;
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping1' });
+        expect(woken).toHaveLength(0);
+
+        // User flips the toggle ON — live, no restart.
+        b.setAccessibility('b', { wakeOnDm: true });
+        expect(b.wakeOnDmFor('b')).toBe(true);
+
+        // A further idle DM now wakes it.
+        clock += WAKE_QUIET_MS + 1;
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping2' });
+        expect(woken).toEqual(['t-b']);
+
+        // Flipping it back OFF stops future wakes, even in a fresh idle period.
+        b.setAccessibility('b', { wakeOnDm: false });
+        b.markTurnEnd('t-b');
+        clock += WAKE_QUIET_MS + 1;
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping3' });
+        expect(woken).toEqual(['t-b']); // unchanged
+    });
+
     it('read-receipts: a sent DM is unseen until the recipient receives it (#9)', async () => {
         const b = new WhisperBroker();
         b.setStore(store);

@@ -237,6 +237,7 @@ export interface MobileDataDeps {
         purpose: string;
         scope: 'none' | 'self' | 'specific' | 'all';
         scope_workspaces?: string[];
+        wake_on_dm?: boolean;
     }) => { ok: boolean; spec?: TerminalSpecRow; error?: string };
     killTerminalById: (id: string) => boolean;
     writeToTerminal: (id: string, data: string) => boolean;
