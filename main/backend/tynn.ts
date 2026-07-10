@@ -239,6 +239,74 @@ export class TynnBackend implements Backend {
         };
     }
 
+    // --- Local Workstation (self-register + enroll) ------------------------
+
+    /**
+     * Self-register THIS machine as a Tynn Workstation (POST /api/v1/workstations/
+     * self-register) — session-authed, FREE + uncapped (no GCC spawn; design brief
+     * genie-service-separation §2a). Returns the workstation row + a one-time
+     * enrollment grant (`workstation_id`, `secret`, `expires_at`) to complete with
+     * `enrollWorkstation`. Throws TynnAuthError on a dead session.
+     */
+    async selfRegisterWorkstation(name: string): Promise<{
+        workstation: { id: string; name: string; status: string };
+        enrollment: { workstation_id: string; secret: string; expires_at: string | null };
+    }> {
+        return this.fetch<{
+            workstation: { id: string; name: string; status: string };
+            enrollment: { workstation_id: string; secret: string; expires_at: string | null };
+        }>('/api/v1/workstations/self-register', {
+            method: 'POST',
+            body: { name },
+        });
+    }
+
+    /**
+     * Complete enrollment by presenting the one-time secret + this host's Ed25519
+     * PUBLIC key (POST /api/v1/workstations/{id}/enroll), which flips the
+     * workstation Active. `hostPublicKeyB64` is the SPKI DER, base64 (exactly what
+     * the GCC enrolls for a cloud host). Rides the session cookie. Throws
+     * TynnAuthError on a dead session and a plain Error on 403/410/422.
+     */
+    async enrollWorkstation(
+        id: string,
+        enrollmentSecret: string,
+        hostPublicKeyB64: string,
+        fingerprint?: string,
+    ): Promise<{ workstation: { id: string; name: string; status: string } }> {
+        return this.fetch<{ workstation: { id: string; name: string; status: string } }>(
+            `/api/v1/workstations/${encodeURIComponent(id)}/enroll`,
+            {
+                method: 'POST',
+                body: {
+                    enrollment_secret: enrollmentSecret,
+                    host_public_key: hostPublicKeyB64,
+                    host_fingerprint: fingerprint,
+                },
+            },
+        );
+    }
+
+    /**
+     * The user's FMS feature toggles (GET /api/v1/features) — the per-account
+     * entitlements that gate the connected services (WhisperChat, IssueWatch) on
+     * top of the free local host. Returns both OFF on a dead session / failure, so
+     * a missing/unreachable Tynn simply leaves the connected services off.
+     */
+    async fetchFeatures(): Promise<{ issuewatch: boolean; whisperchat: boolean }> {
+        try {
+            const data = await this.fetch<{
+                features?: { issuewatch?: boolean; whisperchat?: boolean };
+            }>('/api/v1/features');
+            return {
+                issuewatch: !!data.features?.issuewatch,
+                whisperchat: !!data.features?.whisperchat,
+            };
+        } catch {
+            return { issuewatch: false, whisperchat: false };
+        }
+    }
+
     /**
      * For an Ops project, the projects it governs (POST /api/v1/projects/
      * ops-slaves). Genie maps each slave to a local workspace to resolve its

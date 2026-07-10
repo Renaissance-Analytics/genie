@@ -839,6 +839,15 @@ export interface Settings {
      *  developer-trusted signing keys. Default 'off' — the signed registry is the
      *  production path (§12.3). */
     plugins_developer_mode?: 'on' | 'off';
+    /** This machine's Tynn Workstation id — set once the local Genie SELF-REGISTERS
+     *  + enrolls as a workstation (design brief genie-service-separation §2a). In
+     *  the clear (like `github_user`) so the transport can address the
+     *  `private-workstation.{id}` channel without decrypting. Absent = not enrolled. */
+    workstation_id?: string;
+    /** The base64 ciphertext of this workstation's Ed25519 PRIVATE key (PKCS8 PEM),
+     *  encrypted at rest through the OS keychain — mirrors `github_token_enc`. The
+     *  raw key NEVER lands in plaintext on disk. Absent = not enrolled. */
+    workstation_key_enc?: string;
 }
 
 /** Hard cap on the Ai.System instruction set. Enforced BOTH in the Settings UI
@@ -920,6 +929,11 @@ export function getAllSettings(): Settings {
         agent_flags_custom: out['agent_flags_custom'] ?? '',
         plugins_developer_mode:
             (out['plugins_developer_mode'] as 'on' | 'off') ?? 'off',
+        // Local-workstation identity (design brief §2a). No default — absent means
+        // "not yet enrolled" (readWorkstationIdentity keys off that). Threaded like
+        // github_token_enc: id in the clear, key encrypted at rest.
+        workstation_id: out['workstation_id'],
+        workstation_key_enc: out['workstation_key_enc'],
     };
 }
 
