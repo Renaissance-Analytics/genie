@@ -415,8 +415,6 @@ export interface Settings {
      *  (default) | 'on'. Distinct from mobile_enabled — exposing your dev sites
      *  is a separate, deliberate decision. Per-repo `.gen` enables sit on top. */
     local_sites_enabled?: 'on' | 'off';
-    /** Work Mode: 'host' (default) or 'remote' (connect to a host Genie). */
-    work_mode?: 'host' | 'remote';
     /** Keep the Genie endpoint synced into each workspace's Claude `.mcp.json`.
      *  Default 'on'; 'off' leaves that file alone. */
     mcp_sync_claude?: 'on' | 'off';

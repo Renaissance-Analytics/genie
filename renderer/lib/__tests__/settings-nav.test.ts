@@ -113,7 +113,7 @@ describe('host-sourced (bucket 2) classification', () => {
             'primary_workspace',
             'global_hotkey',
             'tynn_host',
-            'work_mode',
+            'remote_enabled',
             'auto_update',
         ]) {
             expect(isHostSourcedSettingKey(k)).toBe(false);
@@ -153,7 +153,7 @@ describe('runtime-owned (Settings-never-writes) classification', () => {
         ]) {
             expect(isRuntimeOwnedSettingKey(k)).toBe(true);
         }
-        for (const k of ['max_views', 'terminal_copy_paste', 'ai_system', 'notify_sound', 'work_mode']) {
+        for (const k of ['max_views', 'terminal_copy_paste', 'ai_system', 'notify_sound', 'remote_enabled']) {
             expect(isRuntimeOwnedSettingKey(k)).toBe(false);
         }
     });

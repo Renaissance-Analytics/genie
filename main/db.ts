@@ -776,11 +776,6 @@ export interface Settings {
      *  deliberate decision. Per-repo `.gen` enables (tunnel_sites) are the
      *  second opt-in on top of this. */
     local_sites_enabled?: 'on' | 'off';
-    /** Work Mode: 'host' (default) — this Genie hosts; phones / other Genies
-     *  connect to it. 'remote' — this Genie connects to a host Genie over the
-     *  tailnet. The desktop-to-desktop remote client is Phase 2; the setting +
-     *  Tailscale lifecycle management land in Phase 1. */
-    work_mode?: 'host' | 'remote';
     /** Keep the Genie endpoint synced into a workspace's Claude `.mcp.json`.
      *  Default 'on'; 'off' means Genie never touches that file (manual edits
      *  stick). */
@@ -910,7 +905,6 @@ export function getAllSettings(): Settings {
         mobile_port: out['mobile_port'] ?? '51718',
         local_sites_enabled:
             (out['local_sites_enabled'] as 'on' | 'off') ?? 'off',
-        work_mode: (out['work_mode'] as 'host' | 'remote') ?? 'host',
         mcp_sync_claude: (out['mcp_sync_claude'] as 'on' | 'off') ?? 'on',
         mcp_sync_cursor: (out['mcp_sync_cursor'] as 'on' | 'off') ?? 'on',
         mcp_sync_codex: (out['mcp_sync_codex'] as 'on' | 'off') ?? 'on',

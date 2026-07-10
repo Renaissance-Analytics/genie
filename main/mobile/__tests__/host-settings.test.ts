@@ -39,7 +39,7 @@ describe('pickHostSettings — host-sourced allow-list', () => {
             tynn_host: 'https://tynn.ai',
             notify_sound: 'on',
             terminal_copy_paste: 'winmac',
-            work_mode: 'host',
+            remote_enabled: 'on',
             github_token_enc: 'SECRET',
             updater_repo: 'owner/repo',
         } as unknown as Settings;

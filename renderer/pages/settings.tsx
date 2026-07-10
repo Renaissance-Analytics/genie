@@ -677,28 +677,26 @@ export default function SettingsPage() {
                         {show('mobile') && (
                             <SearchGroup label="Work Mode" searching={searching}>
 
-            <WorkModeModeCard
-                mode={s.work_mode ?? 'host'}
-                onModeChange={(m) => patch({ work_mode: m })}
-            />
+            {/* Every Genie IS a host (workstation) — the old Host|Remote MODE is
+                retired (design brief genie-service-separation §2a). This machine's
+                host controls (remote-access toggle, phone UI, port, local sites)
+                are ALWAYS shown; reaching another host is an ACTION, not a mode, so
+                the connect card sits alongside them, always available. */}
             <TailscaleSection />
-            {(s.work_mode ?? 'host') === 'host' ? (
-                <MobileSection
-                    enabled={s.mobile_enabled === 'on'}
-                    onEnabledChange={(on) => patch({ mobile_enabled: on ? 'on' : 'off' })}
-                    remoteEnabled={s.remote_enabled === 'on'}
-                    onRemoteEnabledChange={(on) => patch({ remote_enabled: on ? 'on' : 'off' })}
-                    port={s.mobile_port ?? '51718'}
-                    onPortChange={(v) => patch({ mobile_port: v })}
-                    localSitesEnabled={s.local_sites_enabled === 'on'}
-                    onLocalSitesChange={(on) =>
-                        patch({ local_sites_enabled: on ? 'on' : 'off' })
-                    }
-                    persistSettings={save}
-                />
-            ) : (
-                <RemoteHostCard />
-            )}
+            <MobileSection
+                enabled={s.mobile_enabled === 'on'}
+                onEnabledChange={(on) => patch({ mobile_enabled: on ? 'on' : 'off' })}
+                remoteEnabled={s.remote_enabled === 'on'}
+                onRemoteEnabledChange={(on) => patch({ remote_enabled: on ? 'on' : 'off' })}
+                port={s.mobile_port ?? '51718'}
+                onPortChange={(v) => patch({ mobile_port: v })}
+                localSitesEnabled={s.local_sites_enabled === 'on'}
+                onLocalSitesChange={(on) =>
+                    patch({ local_sites_enabled: on ? 'on' : 'off' })
+                }
+                persistSettings={save}
+            />
+            <RemoteHostCard />
 
                             </SearchGroup>
                         )}
@@ -2950,37 +2948,6 @@ function PluginCard({
  * Remote means this Genie connects out to a host Genie over the tailnet. Phase 1
  * persists the choice + drives the section below it; the remote client is Phase 2.
  */
-function WorkModeModeCard({
-    mode,
-    onModeChange,
-}: {
-    mode: 'host' | 'remote';
-    onModeChange: (m: 'host' | 'remote') => void;
-}) {
-    return (
-        <SetSection title="Mode" desc="How this Genie participates over the tailnet">
-            <SettingRow
-                label="Participation mode"
-                keywords="host remote tailnet participate work mode"
-                desc={
-                    mode === 'host'
-                        ? 'Host — this Genie runs your projects and lets your phone (and, soon, other Genies) connect to it over Tailscale.'
-                        : 'Remote — connect this Genie to a host Genie over Tailscale and drive it from here. Desktop-to-desktop control arrives in Phase 2; Tailscale + discovery are set up below.'
-                }
-            >
-                <Segmented
-                    value={mode}
-                    onChange={onModeChange}
-                    options={[
-                        { value: 'host', label: 'Host' },
-                        { value: 'remote', label: 'Remote' },
-                    ]}
-                />
-            </SettingRow>
-        </SetSection>
-    );
-}
-
 /**
  * Settings → Work Mode → Tailscale. Genie MANAGES Tailscale (no separate app):
  * shows live status (installed / online / tailnet IP + online peers), installs
