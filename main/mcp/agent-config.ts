@@ -70,6 +70,81 @@ export function tynnEntry(url: string, token: string, mode: 'claude' | 'cursor')
     return { ...base, headers: { Authorization: `Bearer ${token}` } };
 }
 
+/** Read the provisioned Tynn MCP URL from the workspace's Claude config. The
+ * token itself is not needed for Codex: Genie loads the workspace `.env` into
+ * agent terminals and Codex supports `bearer_token_env_var`. */
+export function readTynnMcpUrl(workspacePath: string): string | null {
+    const file = path.join(workspacePath, '.mcp.json');
+    const cfg = fs.existsSync(file) ? readJson(file) : null;
+    const servers = cfg?.mcpServers as JsonObj | undefined;
+    const tynn = servers?.[TYNN_SERVER_NAME] as JsonObj | undefined;
+    const url = tynn?.url;
+    return typeof url === 'string' && url.trim() ? url : null;
+}
+
+/**
+ * Quote a value as a single-quoted TOML literal for Codex's `-c key=value`
+ * override. Single quotes are shell-portable inside the outer `"..."` (a literal
+ * char in bash/pwsh/cmd). TOML literal strings have NO escape for a single quote,
+ * and our values are URLs / an env-var name that never legitimately contain one —
+ * so any stray `'` is percent-encoded (`%27`, its correct URL form) to keep the
+ * output valid TOML instead of silently malformed (`''` is not a TOML escape).
+ */
+function tomlLiteral(value: string): string {
+    return `'${value.replace(/'/g, '%27')}'`;
+}
+
+/**
+ * Codex 0.144 does not read a workspace-local `.codex/config.toml`; it reads
+ * global `~/.codex/config.toml` plus command-line `-c` overrides. Genie must not
+ * mutate a user's global Codex config for a workspace, so Codex Agent Terminals
+ * get project-scoped MCP by appending these overrides at launch.
+ */
+export function codexMcpLaunchArgs(input: {
+    genieUrl?: string | null;
+    tynnUrl?: string | null;
+}): string {
+    const args: string[] = [];
+    if (input.genieUrl) {
+        args.push(`-c "mcp_servers.${GENIE_SERVER_NAME}.url=${tomlLiteral(input.genieUrl)}"`);
+    }
+    if (input.tynnUrl) {
+        args.push(`-c "mcp_servers.${TYNN_SERVER_NAME}.url=${tomlLiteral(input.tynnUrl)}"`);
+        args.push(
+            `-c "mcp_servers.${TYNN_SERVER_NAME}.bearer_token_env_var=${tomlLiteral(TYNN_TOKEN_ENV_KEY)}"`,
+        );
+    }
+    return args.join(' ');
+}
+
+export function applyCodexMcpLaunchArgs(
+    command: string,
+    input: { genieUrl?: string | null; tynnUrl?: string | null },
+): string {
+    const args = codexMcpLaunchArgs(input);
+    return args ? `${command.trim()} ${args}`.trim() : command;
+}
+
+/**
+ * The launch-command gate for Codex MCP wiring: ONLY a Codex terminal, and ONLY
+ * when `mcp_sync_codex` is on, gets the project-scoped `-c` overrides appended;
+ * every other agent — and Codex with the sync off — is returned unchanged. Pure
+ * (host-tools resolves the URLs + settings and passes them in) so the gating is
+ * testable without host-tools' dependency graph.
+ */
+export function withCodexMcpLaunch(
+    command: string,
+    input: {
+        agent: string;
+        mcpSyncCodexOff: boolean;
+        genieUrl?: string | null;
+        tynnUrl?: string | null;
+    },
+): string {
+    if (input.agent !== 'codex' || input.mcpSyncCodexOff) return command;
+    return applyCodexMcpLaunchArgs(command, { genieUrl: input.genieUrl, tynnUrl: input.tynnUrl });
+}
+
 /**
  * ALSO land the Tynn token in the workspace `.env` (gitignored) under
  * `TYNN_AGENT_TOKEN`, preserving any other `.env` lines. The `.mcp.json` entry

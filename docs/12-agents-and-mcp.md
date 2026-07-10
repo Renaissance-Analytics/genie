@@ -53,6 +53,9 @@ your approval by default** — an agent can ask to spawn a terminal or another
 agent, but you decide whether it happens. Read-only tools (like `checkIssues`)
 and attention tools (`imDone`, `ForceTheQuestion`) run freely.
 
-> The MCP server is auto-wired into each enabled workspace's `.mcp.json` at a
-> fixed loopback URL — agents get it with zero setup. Turn it on and set the
-> port in **[Settings → Agent MCP server](08-settings.md)**.
+> The MCP server is auto-wired into each enabled workspace at a fixed loopback
+> URL. Claude Code reads it from `.mcp.json`, Cursor reads `.cursor/mcp.json`,
+> and Codex Agent Terminals launched by Genie receive equivalent project-scoped
+> `-c mcp_servers...` overrides because Codex does not currently read a
+> workspace-local MCP config file. Turn it on and set the port in
+> **[Settings → Agent MCP server](08-settings.md)**.

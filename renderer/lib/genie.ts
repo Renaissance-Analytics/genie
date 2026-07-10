@@ -422,6 +422,8 @@ export interface Settings {
     mcp_sync_claude?: 'on' | 'off';
     /** Keep it synced into Cursor `.cursor/mcp.json`. Default 'on'. */
     mcp_sync_cursor?: 'on' | 'off';
+    /** Inject workspace-scoped MCP config into Codex Agent Terminal launches. */
+    mcp_sync_codex?: 'on' | 'off';
     /** Keep the Genie brief synced into AGENTS.md. Default 'on'. */
     mcp_sync_agents?: 'on' | 'off';
     /** Terminal copy/paste behaviour: 'contextmenu' (default) | 'linux'

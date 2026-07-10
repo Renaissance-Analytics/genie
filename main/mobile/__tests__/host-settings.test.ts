@@ -18,6 +18,7 @@ describe('pickHostSettings — host-sourced allow-list', () => {
                 'mcp_port',
                 'mcp_sync_agents',
                 'mcp_sync_claude',
+                'mcp_sync_codex',
                 'mcp_sync_cursor',
             ].sort(),
         );
@@ -31,6 +32,7 @@ describe('pickHostSettings — host-sourced allow-list', () => {
             mcp_port: '51717',
             mcp_sync_claude: 'on',
             mcp_sync_cursor: 'off',
+            mcp_sync_codex: 'on',
             mcp_sync_agents: 'on',
             // host-machine / device / secret — must NOT leak:
             primary_workspace: '/host/only/path',
@@ -50,6 +52,7 @@ describe('pickHostSettings — host-sourced allow-list', () => {
             mcp_port: '51717',
             mcp_sync_claude: 'on',
             mcp_sync_cursor: 'off',
+            mcp_sync_codex: 'on',
             mcp_sync_agents: 'on',
         });
         // Explicit: no secret / host-machine key survives the filter.

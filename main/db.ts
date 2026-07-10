@@ -788,6 +788,9 @@ export interface Settings {
     /** Keep the Genie endpoint synced into a workspace's Cursor
      *  `.cursor/mcp.json`. Default 'on'; 'off' leaves it alone. */
     mcp_sync_cursor?: 'on' | 'off';
+    /** Inject workspace-scoped MCP config into Codex Agent Terminal launches.
+     *  Default 'on'; 'off' leaves Codex launch commands alone. */
+    mcp_sync_codex?: 'on' | 'off';
     /** Keep the Genie brief synced into a workspace's AGENTS.md. Default 'on';
      *  'off' leaves it alone. */
     mcp_sync_agents?: 'on' | 'off';
@@ -901,6 +904,7 @@ export function getAllSettings(): Settings {
         work_mode: (out['work_mode'] as 'host' | 'remote') ?? 'host',
         mcp_sync_claude: (out['mcp_sync_claude'] as 'on' | 'off') ?? 'on',
         mcp_sync_cursor: (out['mcp_sync_cursor'] as 'on' | 'off') ?? 'on',
+        mcp_sync_codex: (out['mcp_sync_codex'] as 'on' | 'off') ?? 'on',
         mcp_sync_agents: (out['mcp_sync_agents'] as 'on' | 'off') ?? 'on',
         ops_auto_provision_workspaces:
             (out['ops_auto_provision_workspaces'] as 'on' | 'off') ?? 'off',

@@ -58,6 +58,11 @@ import { getToken } from '../github/storage';
 import { forceQuestion } from '../ask/force-question';
 import { resolveTargetWorkspace, type TargetDecision } from './target-workspace';
 import { readTynnLink } from '../tynn/provision';
+import { workspaceEndpointUrl } from './server';
+import {
+    readTynnMcpUrl,
+    withCodexMcpLaunch,
+} from './agent-config';
 import { TynnBackend } from '../backend/tynn';
 import {
     computeOpsProvisionPlan,
@@ -1058,7 +1063,11 @@ export function resolveAgentCommand(agent: AgentType, override?: string): string
  * Returns null when no base command resolves (same contract as
  * resolveAgentCommand).
  */
-export function resolveAgentLaunch(agent: AgentType, override?: string): string | null {
+export function resolveAgentLaunch(
+    agent: AgentType,
+    override?: string,
+    workspace?: { id: string; path: string },
+): string | null {
     const base = resolveAgentCommand(agent, override);
     if (!base) return null;
     const s = getAllSettings();
@@ -1068,7 +1077,18 @@ export function resolveAgentLaunch(agent: AgentType, override?: string): string 
             : agent === 'codex'
               ? s.agent_flags_codex
               : s.agent_flags_custom;
-    return appendLaunchFlags(base, flags);
+    const withFlags = appendLaunchFlags(base, flags);
+    // Without a workspace there are no URLs to resolve; the gate (Codex + sync-on)
+    // itself lives in withCodexMcpLaunch so it's unit-tested off host-tools.
+    if (!workspace) {
+        return withFlags;
+    }
+    return withCodexMcpLaunch(withFlags, {
+        agent,
+        mcpSyncCodexOff: s.mcp_sync_codex === 'off',
+        genieUrl: workspaceEndpointUrl(workspace.id),
+        tynnUrl: readTynnMcpUrl(workspace.path),
+    });
 }
 
 /**
@@ -1093,7 +1113,7 @@ export function createSpecializedAgentTerminal(input: {
     const ws = getWorkspace(input.workspace_id);
     if (!ws) return { ok: false, error: 'Workspace not found.' };
     // Base command + the agent type's always-on flags (session-id injected later).
-    const command = resolveAgentLaunch(input.agent, input.command);
+    const command = resolveAgentLaunch(input.agent, input.command, ws);
     if (!command) {
         return {
             ok: false,
@@ -1199,7 +1219,7 @@ export async function runAgentForMcp(
                 const agent: AgentType = req.agent ?? 'claude';
                 // Base command + the agent type's always-on flags (session-id
                 // injected later in createAgentTerminal).
-                const command = resolveAgentLaunch(agent, req.command);
+                const command = resolveAgentLaunch(agent, req.command, ws);
                 if (!command) {
                     return {
                         ok: false,

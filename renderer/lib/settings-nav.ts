@@ -99,6 +99,7 @@ export const HOST_SOURCED_SETTINGS_KEYS = [
     'mcp_port',
     'mcp_sync_claude',
     'mcp_sync_cursor',
+    'mcp_sync_codex',
     'mcp_sync_agents',
 ] as const satisfies readonly (keyof Settings)[];
 

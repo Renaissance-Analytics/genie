@@ -658,6 +658,7 @@ export default function SettingsPage() {
                 onPortChange={(v) => patch({ mcp_port: v })}
                 syncClaude={s.mcp_sync_claude !== 'off'}
                 syncCursor={s.mcp_sync_cursor !== 'off'}
+                syncCodex={s.mcp_sync_codex !== 'off'}
                 syncAgents={s.mcp_sync_agents !== 'off'}
                 onSyncChange={(target, on) =>
                     patch({ [`mcp_sync_${target}`]: on ? 'on' : 'off' })
@@ -2233,6 +2234,7 @@ function AgentMcpSection({
     onPortChange,
     syncClaude,
     syncCursor,
+    syncCodex,
     syncAgents,
     onSyncChange,
 }: {
@@ -2244,8 +2246,9 @@ function AgentMcpSection({
     onPortChange: (v: string) => void;
     syncClaude: boolean;
     syncCursor: boolean;
+    syncCodex: boolean;
     syncAgents: boolean;
-    onSyncChange: (target: 'claude' | 'cursor' | 'agents', on: boolean) => void;
+    onSyncChange: (target: 'claude' | 'cursor' | 'codex' | 'agents', on: boolean) => void;
 }) {
     const [state, setState] = useState<McpServerState | null>(null);
     const [busy, setBusy] = useState(false);
@@ -2375,12 +2378,13 @@ function AgentMcpSection({
 
             <SetSubhead>Config sync</SetSubhead>
             <Text size="xs" className="text-zinc-500" style={{ marginBottom: 2 }}>
-                Keep the Genie endpoint in these agent configs. Unchecking one leaves
-                that file alone — your manual edits stick.
+                Keep the Genie endpoint available to these agent clients. Unchecking
+                one leaves that target alone — your manual edits stick.
             </Text>
             {([
                 ['claude', syncClaude, 'Claude', '.mcp.json'],
                 ['cursor', syncCursor, 'Cursor', '.cursor/mcp.json'],
+                ['codex', syncCodex, 'Codex', 'launch -c overrides'],
                 ['agents', syncAgents, 'AGENTS.md', 'Genie brief block'],
             ] as const).map(([target, on, label, file]) => (
                 <SettingRow

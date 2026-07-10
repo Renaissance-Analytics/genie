@@ -64,9 +64,10 @@ and offers:
   their old endpoint until recreated.
 - **Restart MCP server** — rebinds on the configured port and rewrites the
   enabled workspaces' configs.
-- **Config sync** — keep the Genie endpoint written into your agent configs:
-  **Claude** (`.mcp.json`), **Cursor** (`.cursor/mcp.json`), and **AGENTS.md**
-  (the Genie brief block). Unchecking one leaves that file alone.
+- **Config sync** — keep the Genie endpoint available to agent clients:
+  **Claude** (`.mcp.json`), **Cursor** (`.cursor/mcp.json`), **Codex**
+  (workspace-scoped launch `-c` overrides), and **AGENTS.md** (the Genie brief
+  block). Unchecking one leaves that target alone.
 
 ## Workspace layout — Max views
 

@@ -51,7 +51,7 @@ describe('makeRemoteBridge — host-sourced settings', () => {
         const api = makeRemoteBridge(fakeLocal(request, { get, set }));
 
         request.mockResolvedValueOnce({
-            settings: { ai_system: 'HOST', mcp_port: '52000', mcp_sync_claude: 'off' },
+            settings: { ai_system: 'HOST', mcp_port: '52000', mcp_sync_claude: 'off', mcp_sync_codex: 'on' },
         });
         const merged = await api.settings.get();
 
@@ -63,6 +63,7 @@ describe('makeRemoteBridge — host-sourced settings', () => {
             ai_system: 'HOST',
             mcp_port: '52000',
             mcp_sync_claude: 'off',
+            mcp_sync_codex: 'on',
         });
     });
 
@@ -80,13 +81,14 @@ describe('makeRemoteBridge — host-sourced settings', () => {
         const api = makeRemoteBridge(fakeLocal(request, { get, set }));
 
         request.mockResolvedValueOnce({
-            settings: { ai_system: 'NEW', mcp_port: '52000', mcp_sync_agents: 'off' },
+            settings: { ai_system: 'NEW', mcp_port: '52000', mcp_sync_codex: 'off', mcp_sync_agents: 'off' },
         });
 
         const result = await api.settings.set({
             // Host-sourced (bucket 2):
             ai_system: 'NEW',
             mcp_port: '52000',
+            mcp_sync_codex: 'off',
             mcp_sync_agents: 'off',
             // Device-local:
             notify_sound: 'on',
@@ -97,7 +99,7 @@ describe('makeRemoteBridge — host-sourced settings', () => {
         expect(request).toHaveBeenCalledWith('/api/desktop/settings', {
             method: 'POST',
             json: {
-                patch: { ai_system: 'NEW', mcp_port: '52000', mcp_sync_agents: 'off' },
+                patch: { ai_system: 'NEW', mcp_port: '52000', mcp_sync_codex: 'off', mcp_sync_agents: 'off' },
             },
         });
         // Device keys written locally — NEVER the host keys.
@@ -110,6 +112,7 @@ describe('makeRemoteBridge — host-sourced settings', () => {
             notify_sound: 'on',
             ai_system: 'NEW',
             mcp_port: '52000',
+            mcp_sync_codex: 'off',
             mcp_sync_agents: 'off',
         });
     });

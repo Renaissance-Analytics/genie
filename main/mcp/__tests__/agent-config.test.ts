@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
     applyAgentsSection,
+    applyCodexMcpLaunchArgs,
     applyGenieServer,
     claudeEntry,
+    codexMcpLaunchArgs,
     cursorEntry,
     GENIE_SERVER_NAME,
+    readTynnMcpUrl,
+    withCodexMcpLaunch,
 } from '../agent-config';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const URL = 'http://127.0.0.1:51717/mcp/abc123';
 const entry = claudeEntry(URL);
@@ -57,6 +64,76 @@ describe('applyGenieServer', () => {
     it('claudeEntry sets an explicit http transport type; cursorEntry omits it', () => {
         expect(claudeEntry(URL)).toEqual({ type: 'http', url: URL });
         expect(cursorEntry(URL)).toEqual({ url: URL });
+    });
+});
+
+describe('Codex MCP launch overrides', () => {
+    it('renders Genie and Tynn as Codex -c overrides without embedding the Tynn token', () => {
+        const out = codexMcpLaunchArgs({
+            genieUrl: 'http://127.0.0.1:51717/mcp/abc123',
+            tynnUrl: 'https://tynn.test/mcp/project',
+        });
+        expect(out).toContain(`-c "mcp_servers.genie.url='http://127.0.0.1:51717/mcp/abc123'"`);
+        expect(out).toContain(`-c "mcp_servers.tynn.url='https://tynn.test/mcp/project'"`);
+        expect(out).toContain(`-c "mcp_servers.tynn.bearer_token_env_var='TYNN_AGENT_TOKEN'"`);
+        expect(out).not.toContain('Bearer ');
+        expect(out).not.toContain('rpk_');
+    });
+
+    it('appends only configured servers to a Codex command', () => {
+        expect(
+            applyCodexMcpLaunchArgs('codex --model gpt-5', {
+                genieUrl: 'http://127.0.0.1:51717/mcp/abc123',
+            }),
+        ).toBe(`codex --model gpt-5 -c "mcp_servers.genie.url='http://127.0.0.1:51717/mcp/abc123'"`);
+    });
+
+    it('gates the launch override: only Codex, only when sync is on', () => {
+        const genieUrl = 'http://127.0.0.1:51717/mcp/abc123';
+        const tynnUrl = 'https://tynn.test/mcp/project';
+
+        // Codex + sync on → overrides appended.
+        expect(
+            withCodexMcpLaunch('codex', { agent: 'codex', mcpSyncCodexOff: false, genieUrl, tynnUrl }),
+        ).toBe(applyCodexMcpLaunchArgs('codex', { genieUrl, tynnUrl }));
+
+        // Codex + sync OFF → untouched.
+        expect(
+            withCodexMcpLaunch('codex', { agent: 'codex', mcpSyncCodexOff: true, genieUrl, tynnUrl }),
+        ).toBe('codex');
+
+        // Non-Codex agent → untouched even with sync on + URLs present.
+        expect(
+            withCodexMcpLaunch('claude', { agent: 'claude', mcpSyncCodexOff: false, genieUrl, tynnUrl }),
+        ).toBe('claude');
+
+        // Codex + sync on but no resolvable URLs (no workspace) → untouched.
+        expect(
+            withCodexMcpLaunch('codex', { agent: 'codex', mcpSyncCodexOff: false, genieUrl: null, tynnUrl: null }),
+        ).toBe('codex');
+    });
+
+    it('percent-encodes a stray single quote so the TOML literal stays valid', () => {
+        const out = codexMcpLaunchArgs({ genieUrl: "http://h/mcp/a'b" });
+        expect(out).toBe(`-c "mcp_servers.genie.url='http://h/mcp/a%27b'"`);
+        expect(out).not.toContain("a''b"); // not the invalid TOML double-quote-escape
+    });
+
+    it('reads the provisioned Tynn MCP URL from .mcp.json', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-tynn-url-'));
+        fs.writeFileSync(
+            path.join(dir, '.mcp.json'),
+            JSON.stringify({
+                mcpServers: {
+                    tynn: {
+                        type: 'http',
+                        url: 'https://tynn.test/mcp/project',
+                        headers: { Authorization: 'Bearer rpk_SECRET' },
+                    },
+                },
+            }),
+        );
+        expect(readTynnMcpUrl(dir)).toBe('https://tynn.test/mcp/project');
     });
 });
 

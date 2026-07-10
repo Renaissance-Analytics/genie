@@ -86,6 +86,7 @@ describe('host-sourced (bucket 2) classification', () => {
                 'mcp_port',
                 'mcp_sync_agents',
                 'mcp_sync_claude',
+                'mcp_sync_codex',
                 'mcp_sync_cursor',
             ].sort(),
         );
@@ -98,6 +99,7 @@ describe('host-sourced (bucket 2) classification', () => {
             'mcp_port',
             'mcp_sync_claude',
             'mcp_sync_cursor',
+            'mcp_sync_codex',
             'mcp_sync_agents',
         ]) {
             expect(isHostSourcedSettingKey(k)).toBe(true);
