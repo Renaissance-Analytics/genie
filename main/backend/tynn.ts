@@ -288,6 +288,31 @@ export class TynnBackend implements Backend {
     }
 
     /**
+     * The PUBLIC broadcast app key + cluster this Tynn broadcasts over (GET
+     * /api/v1/broadcasting-config) — the SAME Pusher app key Tynn's own web bundle
+     * already ships (`VITE_PUSHER_APP_KEY`; a Pusher app key is public, it rides
+     * every browser). A local workstation reads it to subscribe to its own channel
+     * without any build-time config. Returns null on any failure (endpoint absent /
+     * dead session), so the IssueWatch push simply stays off.
+     *
+     * TODO(genie-service-separation §2a): this endpoint is the pending SERVER-side
+     * piece — until Tynn ships it this yields null and the local client falls back
+     * to the GENIE_PUSHER_APP_KEY env override (dev / self-host). Wiring it here now
+     * means the day Tynn deploys `/api/v1/broadcasting-config` a local Genie picks
+     * up the push path with zero client changes.
+     */
+    async fetchBroadcastConfig(): Promise<{ key: string; cluster: string } | null> {
+        try {
+            const data = await this.fetch<{ key?: string; cluster?: string }>(
+                '/api/v1/broadcasting-config',
+            );
+            return data.key ? { key: data.key, cluster: data.cluster || 'us2' } : null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
      * The user's FMS feature toggles (GET /api/v1/features) — the per-account
      * entitlements that gate the connected services (WhisperChat, IssueWatch) on
      * top of the free local host. Returns both OFF on a dead session / failure, so

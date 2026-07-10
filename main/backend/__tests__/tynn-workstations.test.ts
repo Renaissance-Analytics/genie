@@ -146,6 +146,109 @@ describe('TynnBackend.connectGrant', () => {
     });
 });
 
+describe('TynnBackend.selfRegisterWorkstation', () => {
+    it('POSTs the machine name to self-register and returns the enrollment grant', async () => {
+        const captured: CapturedRequest[] = [];
+        mockFetch(captured, () =>
+            json(
+                {
+                    workstation: { id: 'ws-new', name: 'studio-pc', status: 'pending' },
+                    enrollment: { workstation_id: 'ws-new', secret: 's3cr3t', expires_at: null },
+                },
+                201,
+            ),
+        );
+
+        const out = await new TynnBackend().selfRegisterWorkstation('studio-pc');
+        expect(captured[0].url).toBe('https://tynn.test/api/v1/workstations/self-register');
+        expect(captured[0].method).toBe('POST');
+        expect(JSON.parse(captured[0].body as string)).toEqual({ name: 'studio-pc' });
+        expect(out.enrollment).toEqual({ workstation_id: 'ws-new', secret: 's3cr3t', expires_at: null });
+    });
+
+    it('throws TynnAuthError on a dead session (401)', async () => {
+        const captured: CapturedRequest[] = [];
+        mockFetch(captured, () => json({ error: 'unauthenticated' }, 401));
+        await expect(new TynnBackend().selfRegisterWorkstation('pc')).rejects.toBeInstanceOf(
+            TynnAuthError,
+        );
+    });
+});
+
+describe('TynnBackend.enrollWorkstation', () => {
+    it('POSTs the secret + SPKI public key (+ fingerprint) to the enroll endpoint', async () => {
+        const captured: CapturedRequest[] = [];
+        mockFetch(captured, () =>
+            json({ workstation: { id: 'ws-new', name: 'pc', status: 'active' } }),
+        );
+
+        const out = await new TynnBackend().enrollWorkstation('ws-new', 's3cr3t', 'SPKIb64', 'fp-hex');
+        expect(captured[0].url).toBe('https://tynn.test/api/v1/workstations/ws-new/enroll');
+        expect(captured[0].method).toBe('POST');
+        expect(JSON.parse(captured[0].body as string)).toEqual({
+            enrollment_secret: 's3cr3t',
+            host_public_key: 'SPKIb64',
+            host_fingerprint: 'fp-hex',
+        });
+        expect(out.workstation.status).toBe('active');
+    });
+
+    it('throws a plain Error on 410 (expired enrollment)', async () => {
+        const captured: CapturedRequest[] = [];
+        mockFetch(captured, () => json({ error: 'expired' }, 410));
+        await expect(
+            new TynnBackend().enrollWorkstation('ws-new', 'stale', 'SPKIb64'),
+        ).rejects.toThrow();
+    });
+});
+
+describe('TynnBackend.fetchFeatures', () => {
+    it('GETs /api/v1/features and maps the FMS toggles', async () => {
+        const captured: CapturedRequest[] = [];
+        mockFetch(captured, () => json({ features: { issuewatch: true, whisperchat: false } }));
+
+        const out = await new TynnBackend().fetchFeatures();
+        expect(captured[0].url).toBe('https://tynn.test/api/v1/features');
+        expect(captured[0].method ?? 'GET').toBe('GET');
+        expect(out).toEqual({ issuewatch: true, whisperchat: false });
+    });
+
+    it('returns both OFF when the call fails (dead session / unreachable Tynn)', async () => {
+        const captured: CapturedRequest[] = [];
+        mockFetch(captured, () => json({ error: 'unauthenticated' }, 401));
+        await expect(new TynnBackend().fetchFeatures()).resolves.toEqual({
+            issuewatch: false,
+            whisperchat: false,
+        });
+    });
+});
+
+describe('TynnBackend.fetchBroadcastConfig', () => {
+    it('GETs /api/v1/broadcasting-config and returns the public key + cluster', async () => {
+        const captured: CapturedRequest[] = [];
+        mockFetch(captured, () => json({ key: 'pk_public', cluster: 'eu' }));
+
+        const out = await new TynnBackend().fetchBroadcastConfig();
+        expect(captured[0].url).toBe('https://tynn.test/api/v1/broadcasting-config');
+        expect(out).toEqual({ key: 'pk_public', cluster: 'eu' });
+    });
+
+    it('defaults the cluster to us2 when only a key is returned', async () => {
+        const captured: CapturedRequest[] = [];
+        mockFetch(captured, () => json({ key: 'pk_public' }));
+        await expect(new TynnBackend().fetchBroadcastConfig()).resolves.toEqual({
+            key: 'pk_public',
+            cluster: 'us2',
+        });
+    });
+
+    it('returns null when the endpoint is absent / fails (push stays off)', async () => {
+        const captured: CapturedRequest[] = [];
+        mockFetch(captured, () => json({ error: 'not found' }, 404));
+        await expect(new TynnBackend().fetchBroadcastConfig()).resolves.toBeNull();
+    });
+});
+
 describe('TynnBackend.introspectGrant', () => {
     it('POSTs the token to the introspect endpoint and maps active', async () => {
         const captured: CapturedRequest[] = [];

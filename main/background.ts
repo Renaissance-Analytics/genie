@@ -115,6 +115,7 @@ import type {
 } from './mcp/protocol';
 import { resolveTargetWorkspace, type TargetDecision } from './mcp/target-workspace';
 import { TynnBackend } from './backend/tynn';
+import { startLocalWorkstation } from './tynn/local-workstation';
 import { readTynnLink, ensureMcpGitignored } from './tynn/provision';
 import {
     bindWindowToConnection,
@@ -1220,6 +1221,19 @@ app.whenReady().then(async () => {
         hostStart,
         hostRestart,
     }).catch((e) => console.error('[control] failed to start', e));
+    // Local-workstation IssueWatch client (design brief genie-service-separation
+    // §2a): self-register + Ed25519-enroll THIS machine as a Tynn Workstation
+    // (FREE + uncapped, no GCC spawn), then — when the user's IssueWatch FMS
+    // toggle is on — subscribe to our OWN private-workstation channel so
+    // server-side IssueWatch deltas arrive via PUSH (the same hosted path the
+    // cloud host rides), not a local GitHub poll. Best-effort, fire-and-forget:
+    // any failure just leaves IssueWatch on its local poller — no regression.
+    // Skipped under E2E (no live Tynn) so a Playwright run never self-registers.
+    if (!isE2E()) {
+        void startLocalWorkstation({
+            log: (m) => console.log('[workstation]', m),
+        }).catch((e) => console.error('[workstation] failed to start', e));
+    }
     // Mobile remote-control server (Settings → Mobile, opt-in). Bound ONLY to the
     // Tailscale IP — fail closed if no tailnet. Reuses the SAME terminal/process/
     // workspace/question functions the desktop + MCP use (built as MobileDataDeps
