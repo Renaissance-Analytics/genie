@@ -1860,6 +1860,7 @@ function AgentSettingsModal({
                                 scope: v.scope,
                                 scope_workspaces:
                                     v.scope === 'specific' ? v.scopeWorkspaces : [],
+                                wake_on_dm: v.wakeOnDm,
                             });
                             if (res.ok) onSaved();
                             else setError(res.error || 'Could not update the agent.');
