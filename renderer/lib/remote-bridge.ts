@@ -198,14 +198,26 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         ...local.files,
         listTree: async (
             workspacePath: string,
-            opts?: { maxDepth?: number; maxEntries?: number; root?: string },
-        ) =>
-            (
+            opts?: { maxDepth?: number; maxEntries?: number; root?: string; system?: boolean },
+        ) => {
+            // System-mode = the FileBrowser host-path picker: browse the HOST's whole
+            // filesystem (drive roots / absolute paths), NOT a workspace — so it goes
+            // to the dedicated, non-workspace-scoped host route (owner-approved).
+            if (opts?.system) {
+                return (
+                    (await req('/api/files/system-tree', {
+                        method: 'POST',
+                        json: { root: opts.root, maxDepth: opts.maxDepth },
+                    })) as { tree: TreeNodeData[] }
+                ).tree;
+            }
+            return (
                 (await req('/api/files/tree', {
                     method: 'POST',
                     json: { workspacePath, root: opts?.root },
                 })) as { tree: TreeNodeData[] }
-            ).tree,
+            ).tree;
+        },
         read: async (workspacePath: string, relPath: string) =>
             (await req('/api/files/read', {
                 method: 'POST',

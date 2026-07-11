@@ -3822,6 +3822,60 @@ body.gutter-dragging .grid-gutter {
     color: var(--fg-1);
 }
 
+/* In-app file/folder picker modal (FilePickerModal — replaces native OS dialogs).
+ * Uses the shared .ctx-scrim; the body hosts the react-fancy FileBrowser. */
+.file-picker-modal {
+    display: flex;
+    flex-direction: column;
+    width: min(760px, 92vw);
+    height: min(560px, 84vh);
+    background: var(--shell);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-xl);
+    overflow: hidden;
+}
+.file-picker-head {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-1);
+    flex: none;
+}
+.file-picker-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg-1);
+}
+.file-picker-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 8px;
+}
+.file-picker-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 16px;
+    border-top: 1px solid var(--border-1);
+    flex: none;
+}
+.file-picker-selected {
+    flex: 1;
+    min-width: 0;
+    font-size: 11.5px;
+    color: var(--fg-3);
+    font-family: var(--font-mono);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.file-picker-btns {
+    display: flex;
+    gap: 8px;
+    flex: none;
+}
+
 /* Specialized (agent) SpecRow marking: agent glyph + purpose sub-label. */
 .srow-ico.agent {
     display: inline-flex;

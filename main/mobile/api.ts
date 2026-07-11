@@ -1055,11 +1055,28 @@ export async function handleApi(
             content?: string;
             root?: string;
             ignored?: boolean;
+            maxDepth?: number;
         };
         try {
             f = await readJsonBody(req);
         } catch {
             sendJson(res, 400, { error: 'invalid body' });
+            return true;
+        }
+        // System-workspace full-filesystem browse (the FileBrowser host-path picker).
+        // OWNER-APPROVED reversal of the workspace confinement for this ONE read: a
+        // paired remote client already has terminal code-exec on the host, so a
+        // host-path picker adds no real surface. Auth-gated like every read here, and
+        // NOT workspace-scoped — so it runs BEFORE the workspace match below. listTree's
+        // own fullFsAllowed() gate keeps it desktop-only + fail-closed on a headless
+        // host (which stays confined). Read-only: no mutation ever rides this path.
+        if (pathname === '/api/files/system-tree') {
+            const tree = await listTree('', {
+                system: true,
+                root: f.root,
+                maxDepth: f.maxDepth,
+            });
+            sendJson(res, 200, { tree });
             return true;
         }
         // Verify the path is one of THIS host's REAL workspaces (a remote can't
