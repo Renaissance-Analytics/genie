@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { pickPath } from '../FilePickerModal';
 import {
     IconAlert,
     IconBox,
@@ -204,11 +205,14 @@ export default function Chooser({
         loadProcFormMeta(ws);
     };
 
-    // Open the native directory picker for a System Workspace process, seeded at
+    // Open the in-app directory picker for a System Workspace process, seeded at
     // the System Workspace's home path. Keeps the current pick on cancel.
     const pickProcDir = (ws: WorkspaceRow) => {
-        void api()
-            .settings.chooseFolder('Choose a directory for this process', procDir || ws.path)
+        void pickPath({
+            mode: 'directory',
+            title: 'Choose a directory for this process',
+            initialPath: procDir || ws.path,
+        })
             .then((dir) => {
                 if (dir) setProcDir(dir);
             })

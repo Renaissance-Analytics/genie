@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
     FileBrowser,
     type FileBrowserProvider,
@@ -126,44 +126,66 @@ export default function FilePickerModal({
     );
 }
 
+// --- Singleton picker service ------------------------------------------------
+//
+// A picker is used from ~15 call sites across many components. Rather than make
+// each mount its own modal, a module-level singleton drives ONE <FilePickerHost>
+// mounted at the app root: any code calls `pickPath(opts)` and awaits the chosen
+// path — a one-line swap for the old `api().settings.chooseFolder()` native dialog.
+
+interface PickRequest {
+    mode: 'file' | 'directory';
+    title: string;
+    initialPath?: string;
+    resolve: (path: string | null) => void;
+}
+
+let currentRequest: PickRequest | null = null;
+const listeners = new Set<() => void>();
+
+function emit(): void {
+    for (const l of listeners) l();
+}
+
 /**
- * Imperative helper for the picker: `pick({mode,title})` resolves to the chosen
- * absolute path (or null if cancelled); render `modal` somewhere in the tree.
- * Lets a plain handler `await` a path where it used to `await api().settings.
- * chooseFolder()` — the native dialog — with a one-line swap.
+ * Open the in-app picker and resolve to the chosen absolute host path, or null if
+ * cancelled. Requires <FilePickerHost/> to be mounted once at the app root. A
+ * second call while one is open supersedes it (the prior resolves null).
  */
-export function useFilePicker(): {
-    pick: (opts: {
-        mode: 'file' | 'directory';
-        title: string;
-        initialPath?: string;
-    }) => Promise<string | null>;
-    modal: ReactNode;
-} {
-    const [request, setRequest] = useState<{
-        mode: 'file' | 'directory';
-        title: string;
-        initialPath?: string;
-        resolve: (path: string | null) => void;
-    } | null>(null);
+export function pickPath(opts: {
+    mode: 'file' | 'directory';
+    title: string;
+    initialPath?: string;
+}): Promise<string | null> {
+    return new Promise((resolve) => {
+        if (currentRequest) currentRequest.resolve(null);
+        currentRequest = { ...opts, resolve };
+        emit();
+    });
+}
 
-    const pick = useCallback(
-        (opts: { mode: 'file' | 'directory'; title: string; initialPath?: string }) =>
-            new Promise<string | null>((resolve) => setRequest({ ...opts, resolve })),
-        [],
-    );
-
-    const finish = useCallback(
-        (path: string | null) => {
-            setRequest((cur) => {
-                cur?.resolve(path);
-                return null;
-            });
+/**
+ * The single always-mounted host for {@link pickPath}. Renders nothing until a
+ * pick is requested. Mount it ONCE, high in the tree (e.g. _app), so the modal
+ * overlays every page.
+ */
+export function FilePickerHost() {
+    const request = useSyncExternalStore(
+        (cb) => {
+            listeners.add(cb);
+            return () => listeners.delete(cb);
         },
-        [],
+        () => currentRequest,
+        () => currentRequest,
     );
-
-    const modal = request ? (
+    if (!request) return null;
+    const finish = (path: string | null) => {
+        const r = request;
+        currentRequest = null;
+        emit();
+        r.resolve(path);
+    };
+    return (
         <FilePickerModal
             mode={request.mode}
             title={request.title}
@@ -171,7 +193,5 @@ export function useFilePicker(): {
             onPick={(p) => finish(p)}
             onCancel={() => finish(null)}
         />
-    ) : null;
-
-    return { pick, modal };
+    );
 }

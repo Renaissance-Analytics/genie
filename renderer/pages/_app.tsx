@@ -7,6 +7,7 @@ import '@particle-academy/fancy-sheets/styles.css';
 import '../styles/globals.css';
 import '../styles/master.css';
 import ErrorBoundary from '../components/ErrorBoundary';
+import { FilePickerHost } from '../components/FilePickerModal';
 
 export default function App({ Component, pageProps }: AppProps) {
     // Apply the persisted theme preference ('system' | 'light' | 'dark').
@@ -54,6 +55,8 @@ export default function App({ Component, pageProps }: AppProps) {
     return (
         <ErrorBoundary>
             <Component {...pageProps} />
+            {/* One picker host per window drives pickPath() from anywhere in it. */}
+            <FilePickerHost />
         </ErrorBoundary>
     );
 }

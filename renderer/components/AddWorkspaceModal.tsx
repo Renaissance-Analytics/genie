@@ -12,6 +12,7 @@ import {
     Text,
 } from '@particle-academy/react-fancy';
 import { api, ulid } from '../lib/genie';
+import { pickPath } from './FilePickerModal';
 import type {
     DetectResult,
     OwnerOption,
@@ -335,17 +336,18 @@ function SimpleWizard({
     }, [folder, projectId]);
 
     const choose = async () => {
-        const p = await api().settings.chooseFolder('Choose project folder');
+        const p = await pickPath({ mode: 'directory', title: 'Choose project folder' });
         if (p) setFolder(p);
     };
     const chooseAgiParent = async () => {
-        const p = await api().settings.chooseFolder(
-            'Choose where the new .agi envelope folder will be created',
-        );
+        const p = await pickPath({
+            mode: 'directory',
+            title: 'Choose where the new .agi envelope folder will be created',
+        });
         if (p) setAgiParent(p);
     };
     const chooseCloneParent = async () => {
-        const p = await api().settings.chooseFolder('Choose where to clone the repo');
+        const p = await pickPath({ mode: 'directory', title: 'Choose where to clone the repo' });
         if (p) setCloneParent(p);
     };
 
@@ -731,12 +733,12 @@ function AgiConvertWizard({
     }, [sourceMode, sourcePath, sourceUrl]);
 
     const chooseSource = async () => {
-        const p = await api().settings.chooseFolder('Choose existing project folder');
+        const p = await pickPath({ mode: 'directory', title: 'Choose existing project folder' });
         if (p) setSourcePath(p);
     };
 
     const chooseParent = async () => {
-        const p = await api().settings.chooseFolder('Choose destination parent folder');
+        const p = await pickPath({ mode: 'directory', title: 'Choose destination parent folder' });
         if (p) setParentFolder(p);
     };
 
@@ -975,7 +977,7 @@ function AgiCreateWizard({
     }, [projectId, projects, slug]);
 
     const choose = async () => {
-        const p = await api().settings.chooseFolder('Choose parent folder for new envelope');
+        const p = await pickPath({ mode: 'directory', title: 'Choose parent folder for new envelope' });
         if (p) setParentFolder(p);
     };
 
@@ -1215,13 +1217,13 @@ function AgiImportWizard({
     };
 
     const choose = async () => {
-        const p = await api().settings.chooseFolder('Choose existing folder');
+        const p = await pickPath({ mode: 'directory', title: 'Choose existing folder' });
         if (!p) return;
         await inspect(p);
     };
 
     const chooseCloneParent = async () => {
-        const p = await api().settings.chooseFolder('Choose where to clone the repo');
+        const p = await pickPath({ mode: 'directory', title: 'Choose where to clone the repo' });
         if (p) setCloneParent(p);
     };
 

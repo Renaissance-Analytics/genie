@@ -41,7 +41,7 @@ import {
     withoutRuntimeOwnedSettings,
     type SectionId,
 } from '../lib/settings-nav';
-import { useFilePicker } from '../components/FilePickerModal';
+import { pickPath } from '../components/FilePickerModal';
 
 /** Hard cap on the Ai.System instruction set (mirrors main's AI_SYSTEM_MAX).
  *  Enforced here in the UI (`maxLength` + slice) and again server-side in the
@@ -60,9 +60,6 @@ export default function SettingsPage() {
     // Opened FROM a remote/host window? Then restrict to the connection-relevant
     // subset (see settings-nav.ts). Constant per window (reads the ?remote=1 flag).
     const restricted = isRestrictedSettings();
-    // In-app file/folder picker (replaces native OS dialogs; browses the HOST FS on
-    // a remote window). `filePicker.modal` is rendered at the end of the page.
-    const filePicker = useFilePicker();
     // New IA: which sidebar section is showing + the cross-row search filter.
     const [section, setSection] = useState<SectionId>(defaultSection(restricted));
     const [filter, setFilter] = useState('');
@@ -104,7 +101,7 @@ export default function SettingsPage() {
     };
 
     const pickPrimary = async () => {
-        const p = await filePicker.pick({
+        const p = await pickPath({
             mode: 'directory',
             title: 'Choose primary workspace folder',
             initialPath: s?.primary_workspace,
@@ -235,7 +232,7 @@ export default function SettingsPage() {
                                 variant="ghost"
                                 icon="folder"
                                 onClick={async () => {
-                                    const p = await filePicker.pick({
+                                    const p = await pickPath({
                                         mode: 'file',
                                         title: 'Choose shell executable',
                                     });
@@ -760,7 +757,6 @@ export default function SettingsPage() {
                     </div>
                 </div>
             </div>
-            {filePicker.modal}
         </SettingsFilterCtx.Provider>
     );
 }
@@ -1056,13 +1052,11 @@ function AlertSoundRow({
     onChoice: (v: SoundChoice) => void;
     onCustom: (path: string) => void;
 }) {
-    const filePicker = useFilePicker();
     const pickCustom = async () => {
-        const p = await filePicker.pick({ mode: 'file', title: 'Choose a sound file' });
+        const p = await pickPath({ mode: 'file', title: 'Choose a sound file' });
         if (p) onCustom(p);
     };
     return (
-        <>
         <SettingRow
             label={label}
             keywords={`alert sound ${kind} ${label} preview synth chime custom file`}
@@ -1096,8 +1090,6 @@ function AlertSoundRow({
                 </div>
             )}
         </SettingRow>
-        {filePicker.modal}
-        </>
     );
 }
 

@@ -9,6 +9,7 @@ import {
     Text,
     useCarousel,
 } from '@particle-academy/react-fancy';
+import { pickPath } from './FilePickerModal';
 import {
     api,
     ulid,
@@ -367,14 +368,14 @@ export default function InteractiveUpgradeWizard({
     };
 
     const pickSourceFolder = async () => {
-        const p = await api().settings.chooseFolder('Choose source folder to analyse');
+        const p = await pickPath({ mode: 'directory', title: 'Choose source folder to analyse' });
         if (p) {
             setSourceFolder(p);
             await runScan(p);
         }
     };
     const chooseCloneParent = async () => {
-        const p = await api().settings.chooseFolder('Choose where to clone the repo');
+        const p = await pickPath({ mode: 'directory', title: 'Choose where to clone the repo' });
         if (p) setCloneParent(p);
     };
     // Remote source: clone the repo, then analyse the local checkout. The clone
@@ -405,9 +406,10 @@ export default function InteractiveUpgradeWizard({
         }
     };
     const pickParentFolder = async () => {
-        const p = await api().settings.chooseFolder(
-            'Choose destination parent folder for the new envelope',
-        );
+        const p = await pickPath({
+            mode: 'directory',
+            title: 'Choose destination parent folder for the new envelope',
+        });
         if (p) setParentFolder(p);
     };
 
