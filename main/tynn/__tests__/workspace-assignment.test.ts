@@ -149,6 +149,53 @@ describe('provisionAssignedWorkspace', () => {
         });
     });
 
+    it('reports each provisioning stage via reportProgress in order (genie #45)', async () => {
+        const reportProgress = vi.fn();
+        const { deps } = fakeDeps({ reportProgress });
+
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+
+        expect(r.status).toBe('provisioned');
+        expect(reportProgress.mock.calls.map(([i]) => `${i.step}:${i.status}`)).toEqual([
+            'cloning:running',
+            'cloning:done',
+            'submodules:done',
+            'agent_config:running',
+            'agent_config:done',
+            'ready:done',
+        ]);
+        expect(reportProgress.mock.calls.every(([i]) => i.workspaceId === 'p1')).toBe(true);
+    });
+
+    it('reports an error on the current stage when the clone fails', async () => {
+        const reportProgress = vi.fn();
+        const { deps } = fakeDeps({
+            reportProgress,
+            clone: vi.fn(async () => {
+                throw new Error('repository not found');
+            }),
+        });
+
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+
+        expect(r.status).toBe('error');
+        expect(reportProgress.mock.calls.map(([i]) => `${i.step}:${i.status}`)).toEqual([
+            'cloning:running',
+            'cloning:error',
+        ]);
+        expect(reportProgress.mock.calls.at(-1)?.[0].message).toMatch(/repository not found/);
+    });
+
+    it('a throwing reportProgress never breaks provisioning (best-effort)', async () => {
+        const reportProgress = vi.fn(() => {
+            throw new Error('reporter down');
+        });
+        const { deps } = fakeDeps({ reportProgress });
+
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+        expect(r.status).toBe('provisioned');
+    });
+
     it('is idempotent — a workspace already registered is a no-op', async () => {
         const { deps, clone, register, notifyChanged, existing } = fakeDeps();
         existing.push({ id: 'p1' });

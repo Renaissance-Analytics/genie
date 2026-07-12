@@ -102,6 +102,16 @@ export interface AssignmentProvisionDeps {
      * used. Best-effort: a fetch failure must not abort provisioning.
      */
     getCloneToken?: (url: string) => Promise<string | null>;
+    /** Report a provisioning stage back to Tynn so the assigning browser animates a
+     *  live progress bar (genie #45 / Story #200). Injected because it needs the
+     *  Ed25519 host signer + Tynn base the shell holds. Fire-and-forget + best-effort
+     *  — a report failure must NEVER abort provisioning. Absent on the desktop. */
+    reportProgress?: (input: {
+        workspaceId: string;
+        step: 'cloning' | 'submodules' | 'agent_config' | 'ready';
+        status: 'running' | 'done' | 'error';
+        message?: string;
+    }) => void;
     listExisting?: () => Array<{ id: string }>;
     register?: (row: Parameters<typeof addWorkspace>[0]) => unknown;
     /** Announce the workspace-list change to clients (default: broadcastWorkspacesChanged). */
@@ -139,7 +149,24 @@ export async function provisionAssignedWorkspace(
         };
     }
 
+    // Best-effort progress reporter (genie #45): narrates each stage to Tynn for
+    // the assign UI. Never throws into provisioning. `stage` tracks where we are so
+    // a failure reports an error on the right step.
+    const report = (
+        step: 'cloning' | 'submodules' | 'agent_config' | 'ready',
+        status: 'running' | 'done' | 'error',
+        message?: string,
+    ) => {
+        try {
+            deps.reportProgress?.({ workspaceId: a.workspaceId, step, status, message });
+        } catch {
+            /* a progress report must never break provisioning */
+        }
+    };
+    let stage: 'cloning' | 'agent_config' | 'ready' = 'cloning';
+
     try {
+        report('cloning', 'running');
         // Resolve a clone credential when the shell provides a fetcher (headless
         // host, genie #47). Best-effort: a fetch failure resolves to no token, so a
         // public envelope still clones via ambient auth rather than aborting.
@@ -153,6 +180,12 @@ export async function provisionAssignedWorkspace(
             folder: a.slug,
             ...(token !== undefined ? { token } : {}),
         });
+        // The recursive `--recurse-submodules` clone brought the envelope AND its
+        // submodules down together.
+        report('cloning', 'done');
+        report('submodules', 'done');
+        stage = 'agent_config';
+        report('agent_config', 'running');
         register({
             id: a.workspaceId,
             backend: 'tynn',
@@ -172,15 +205,20 @@ export async function provisionAssignedWorkspace(
             // deprovision it later — this is the ONLY flow that sets this flag.
             assignment_managed: 1,
         });
+        report('agent_config', 'done');
         // The workspace-list broadcast assign-ui keys off — emits `workspaces:changed`
         // locally + over the host `/ws/events` so remote sessions re-fetch + fade in.
         notifyChanged();
+        stage = 'ready';
+        report('ready', 'done');
         return { status: 'provisioned', workspaceId: a.workspaceId, path: wsPath };
     } catch (e) {
+        const error = e instanceof Error ? e.message : String(e);
+        report(stage, 'error', error);
         return {
             status: 'error',
             workspaceId: a.workspaceId,
-            error: e instanceof Error ? e.message : String(e),
+            error,
         };
     }
 }
@@ -413,6 +451,10 @@ export interface WorkspaceAssignmentWiring {
      *  Injected because it needs the Ed25519 host signer + Tynn base the shell
      *  holds. Absent on the desktop (its clone uses the local getToken()). */
     getCloneToken?: (url: string) => Promise<string | null>;
+    /** Report a provisioning stage back to Tynn for the assign UI's live progress
+     *  bar (genie #45). Injected (needs the host signer + Tynn base). Absent on the
+     *  desktop. Fire-and-forget + best-effort. */
+    reportProgress?: AssignmentProvisionDeps['reportProgress'];
     /** Where assigned envelopes clone to (`<parent>/<slug>`). */
     parentPath: string;
     /** Optional provision/deprovision-seam overrides (tests / custom env-file). */
@@ -437,6 +479,7 @@ export function createWorkspaceAssignmentSubscriber(
     const deps: AssignmentProvisionDeps & AssignmentDeprovisionDeps = {
         parentPath: w.parentPath,
         ...(w.getCloneToken ? { getCloneToken: w.getCloneToken } : {}),
+        ...(w.reportProgress ? { reportProgress: w.reportProgress } : {}),
         ...w.provisionDeps,
     };
     return new WorkspaceAssignmentSubscriber({
