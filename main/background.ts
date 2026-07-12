@@ -170,7 +170,7 @@ import {
     updateWhisperChannel,
 } from './mcp/host-tools';
 import { isQuittingForUpdate } from './updater/quit-state';
-import { markDesktopRuntime } from './runtime-mode';
+import { markDesktopRuntime, isHeadless } from './runtime-mode';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
 import { registerPluginsIpc } from './plugins/ipc';
@@ -332,6 +332,13 @@ export function openTaskManagerWindow(): void {
  * clicking the tray entry while already open just focuses it.
  */
 export function showMasterWindow(): void {
+    // HEADLESS (genie-cloud host): there is no real BrowserWindow — electron is a
+    // stub, so `win.loadFile` is undefined and creating/loading one throws
+    // `win.loadFile is not a function`. A stray call here (an agent action, the auth
+    // flow, the tray) would then abort the host boot BEFORE the workspace-assignment
+    // subscription starts (host-core `workspaceAssignments.start()`), so assigned
+    // workspaces never provision. Nothing to show without a display: no-op.
+    if (isHeadless()) return;
     // Whenever the window comes to the front, refresh the update check so
     // the header pill reflects reality (throttled in the updater). Genie
     // lives in the tray, so this is the moment the user can actually see
