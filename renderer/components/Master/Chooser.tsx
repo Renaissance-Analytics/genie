@@ -1021,17 +1021,7 @@ export default function Chooser({
                                     >
                                         <IconChevronDown />
                                     </span>
-                                    <span className="pico">
-                                        {workspaceIcon(ws, 14)}
-                                        {wsSpecs.length > 1 && (
-                                            <span
-                                                className="pico-count"
-                                                title={`${wsSpecs.length} views`}
-                                            >
-                                                {wsSpecs.length}
-                                            </span>
-                                        )}
-                                    </span>
+                                    <span className="pico">{workspaceIcon(ws, 14)}</span>
                                     <span className="pname">{ws.project_name}</span>
                                     {ws.shape === 'agi' && <AgiHealth ws={ws} />}
                                     {/* Issue Watch is GitHub-scoped — not for the
