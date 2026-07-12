@@ -1251,7 +1251,17 @@ app.whenReady().then(async () => {
     // cloud host rides), not a local GitHub poll. Best-effort, fire-and-forget:
     // any failure just leaves IssueWatch on its local poller — no regression.
     // Skipped under E2E (no live Tynn) so a Playwright run never self-registers.
-    if (!isE2E()) {
+    //
+    // GATED on Genie Remote being ON: a Workstation IS a Genie HOST. A machine that
+    // is only a CLIENT (remote_enabled off — it just connects OUT to other hosts)
+    // must NOT self-register, or every desktop that ever opens Genie litters Tynn's
+    // Workstations list (the "why is my client machine a workstation" bug). Enabling
+    // Genie Remote registers it (see the remote:set-enabled handler); disabling it
+    // deregisters. mobile_enabled ALSO makes the machine a reachable host, so either
+    // toggle qualifies — matching the host-server bind condition below.
+    const s = getAllSettings() as Record<string, string>;
+    const isRemoteHost = s['remote_enabled'] === 'on' || s['mobile_enabled'] === 'on';
+    if (!isE2E() && isRemoteHost) {
         void startLocalWorkstation({
             log: (m) => console.log('[workstation]', m),
         }).catch((e) => console.error('[workstation] failed to start', e));

@@ -411,10 +411,23 @@ export function createWorkspaceAssignmentSubscriber(
         transport: w.transport,
         reconcile: async () => {
             const list = await w.fetchAssigned();
-            await reconcileAssignedWorkspaces(list, deps);
+            const r = await reconcileAssignedWorkspaces(list, deps);
+            // Observability: the reconcile is otherwise silent on success, so a host
+            // that saw ZERO assignments (e.g. a wrong/duplicate workstation id) looked
+            // identical to one that provisioned fine. Log what it actually did.
+            console.log(
+                `[workspace-assignment] reconcile: ${list.length} assigned → ` +
+                    `provisioned ${r.provisioned.length}, existing ${r.existing.length}, ` +
+                    `deprovisioned ${r.deprovisioned.length}` +
+                    (r.errors.length ? `, errors: ${r.errors.join('; ')}` : ''),
+            );
         },
         provision: async (a) => {
-            await provisionAssignedWorkspace(a, deps);
+            const r = await provisionAssignedWorkspace(a, deps);
+            console.log(
+                `[workspace-assignment] provision ${a.workspaceId} (${a.name}): ${r.status}` +
+                    (r.error ? ` — ${r.error}` : r.path ? ` → ${r.path}` : ''),
+            );
         },
         deprovision: async (workspaceId) => {
             deprovisionAssignedWorkspace(workspaceId, deps);
