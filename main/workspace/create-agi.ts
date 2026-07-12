@@ -684,6 +684,16 @@ export interface CloneAgiOpts {
     parent_path: string;
     /** Envelope folder name override; defaults to the repo basename. */
     folder?: string;
+    /**
+     * Explicit GitHub token to authenticate the (recursive) clone with, for a
+     * caller that mints its own — notably a HEADLESS host (genie-cloud), which has
+     * no desktop OAuth token from `getToken()` and instead fetches a short-lived
+     * GitHub App installation token from Tynn's workstation git-credential endpoint
+     * (genie #47). When PRESENT (even `null`) it OVERRIDES `getToken()`: pass the
+     * fetched token to authenticate, or `null` to force ambient git auth. When
+     * OMITTED, the desktop path's `getToken()` is used exactly as before.
+     */
+    token?: string | null;
 }
 
 export interface CloneAgiResult {
@@ -719,7 +729,10 @@ export async function cloneAgiEnvelope(
     fs.mkdirSync(opts.parent_path, { recursive: true });
     // Token-authenticate the recursive clone (envelope + private submodules)
     // when Genie holds a GitHub token; no-op ambient-auth fallback otherwise.
-    const auth = githubCloneAuth(opts.url, getToken());
+    // A caller may pass its OWN token (genie-cloud's fetched App installation
+    // token — genie #47); an explicit `token` (incl. null) overrides getToken().
+    const token = opts.token !== undefined ? opts.token : getToken();
+    const auth = githubCloneAuth(opts.url, token);
     try {
         // Clone INTO the parent with an explicit dir name so git creates the
         // envelope folder for us. simple-git's clone takes (repo, localPath,

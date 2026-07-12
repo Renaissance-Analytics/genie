@@ -116,6 +116,39 @@ describe('provisionAssignedWorkspace', () => {
         expect(notifyChanged).toHaveBeenCalledTimes(1);
     });
 
+    it('threads a getCloneToken credential into the clone (genie #47 headless host)', async () => {
+        const getCloneToken = vi.fn(async () => 'ghs_installtoken');
+        const { deps, clone } = fakeDeps({ getCloneToken });
+
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+
+        expect(r.status).toBe('provisioned');
+        expect(getCloneToken).toHaveBeenCalledWith('https://github.com/acme/wonder.agi.git');
+        expect(clone).toHaveBeenCalledWith({
+            url: 'https://github.com/acme/wonder.agi.git',
+            parent_path: '/hosts/root',
+            folder: 'wonder',
+            token: 'ghs_installtoken',
+        });
+    });
+
+    it('a getCloneToken failure falls back to ambient auth (null token), never aborts', async () => {
+        const getCloneToken = vi.fn(async () => {
+            throw new Error('git-credential endpoint down');
+        });
+        const { deps, clone } = fakeDeps({ getCloneToken });
+
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+
+        expect(r.status).toBe('provisioned');
+        expect(clone).toHaveBeenCalledWith({
+            url: 'https://github.com/acme/wonder.agi.git',
+            parent_path: '/hosts/root',
+            folder: 'wonder',
+            token: null,
+        });
+    });
+
     it('is idempotent — a workspace already registered is a no-op', async () => {
         const { deps, clone, register, notifyChanged, existing } = fakeDeps();
         existing.push({ id: 'p1' });

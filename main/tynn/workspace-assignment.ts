@@ -86,7 +86,22 @@ export interface AssignmentProvisionResult {
 export interface AssignmentProvisionDeps {
     /** Parent folder new envelopes clone into (`<parent>/<slug>`). */
     parentPath: string;
-    clone?: (opts: { url: string; parent_path: string; folder: string }) => Promise<{ path: string }>;
+    clone?: (opts: {
+        url: string;
+        parent_path: string;
+        folder: string;
+        token?: string | null;
+    }) => Promise<{ path: string }>;
+    /**
+     * Resolve a short-lived GitHub token to clone `url` with (genie #47). A headless
+     * host (genie-cloud) has no desktop OAuth token, so the shell injects this to
+     * fetch a repo-scoped GitHub App installation token from Tynn's workstation
+     * git-credential endpoint, keyed on the envelope's owner. Returns null when no
+     * credential covers the repo (falls back to ambient git auth — fine for a public
+     * envelope). Omitted on the desktop, where `cloneAgiEnvelope`'s own getToken() is
+     * used. Best-effort: a fetch failure must not abort provisioning.
+     */
+    getCloneToken?: (url: string) => Promise<string | null>;
     listExisting?: () => Array<{ id: string }>;
     register?: (row: Parameters<typeof addWorkspace>[0]) => unknown;
     /** Announce the workspace-list change to clients (default: broadcastWorkspacesChanged). */
@@ -125,7 +140,19 @@ export async function provisionAssignedWorkspace(
     }
 
     try {
-        const { path: wsPath } = await clone({ url, parent_path: deps.parentPath, folder: a.slug });
+        // Resolve a clone credential when the shell provides a fetcher (headless
+        // host, genie #47). Best-effort: a fetch failure resolves to no token, so a
+        // public envelope still clones via ambient auth rather than aborting.
+        let token: string | null | undefined;
+        if (deps.getCloneToken) {
+            token = await deps.getCloneToken(url).catch(() => null);
+        }
+        const { path: wsPath } = await clone({
+            url,
+            parent_path: deps.parentPath,
+            folder: a.slug,
+            ...(token !== undefined ? { token } : {}),
+        });
         register({
             id: a.workspaceId,
             backend: 'tynn',
@@ -382,6 +409,10 @@ export interface WorkspaceAssignmentWiring {
     /** Fetch this host's assigned workspaces (the host-authed reconcile endpoint).
      *  Injected because it needs the host token + Tynn base URL the shell holds. */
     fetchAssigned: () => Promise<WorkspaceAssignment[]>;
+    /** Resolve a short-lived clone credential for an envelope URL (genie #47).
+     *  Injected because it needs the Ed25519 host signer + Tynn base the shell
+     *  holds. Absent on the desktop (its clone uses the local getToken()). */
+    getCloneToken?: (url: string) => Promise<string | null>;
     /** Where assigned envelopes clone to (`<parent>/<slug>`). */
     parentPath: string;
     /** Optional provision/deprovision-seam overrides (tests / custom env-file). */
@@ -405,6 +436,7 @@ export function createWorkspaceAssignmentSubscriber(
 ): WorkspaceAssignmentSubscriber {
     const deps: AssignmentProvisionDeps & AssignmentDeprovisionDeps = {
         parentPath: w.parentPath,
+        ...(w.getCloneToken ? { getCloneToken: w.getCloneToken } : {}),
         ...w.provisionDeps,
     };
     return new WorkspaceAssignmentSubscriber({
