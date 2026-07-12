@@ -226,8 +226,10 @@ export function unlinkWorkspaceTynn(workspacePath: string): void {
 export function ensureMcpGitignored(workspacePath: string): void {
     const file = path.join(workspacePath, '.gitignore');
     // `.env` now carries the Tynn agent token (the `.mcp.json` entry only refs
-    // it); `.mcp.json` + `.cursor/` stay listed too.
-    const needed = ['.mcp.json', '.cursor/', '.env'];
+    // it); `.mcp.json` + `.cursor/` stay listed too. `.claude/settings.local.json`
+    // carries the per-machine `enableAllProjectMcpServers` approval (genie #10) —
+    // machine-local like the provisioned `.mcp.json` it enables, so never commit it.
+    const needed = ['.mcp.json', '.cursor/', '.env', '.claude/settings.local.json'];
     try {
         let content = '';
         try {

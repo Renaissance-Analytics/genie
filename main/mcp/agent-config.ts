@@ -225,6 +225,37 @@ function upsert(file: string, name: string, entry: JsonObj, enabled: boolean): v
     }
 }
 
+/**
+ * Make the workspace's project `.mcp.json` MCP servers AVAILABLE to a launched
+ * Claude Code agent (genie #10). Claude Code does NOT auto-enable project-scoped
+ * `.mcp.json` servers: on launch they sit DISABLED pending an interactive
+ * approval prompt, and `--dangerously-skip-permissions` does not cover that
+ * approval. A non-interactive Genie agent terminal never gets to approve, so it
+ * boots with the `genie`/`tynn` servers present-but-unavailable — the agent looks
+ * healthy but is toolless. Setting `enableAllProjectMcpServers` in the workspace's
+ * `.claude/settings.local.json` auto-approves the project config so the servers
+ * come up on launch. Written to the LOCAL settings (per-machine, gitignored)
+ * because the `.mcp.json` it enables is itself per-machine (provisioned +
+ * gitignored, never committed) and Genie-authored, so auto-approving it is not a
+ * trust escalation. Idempotent + best-effort — a locked file must never break
+ * provisioning, and existing keys in the file are preserved.
+ */
+export function ensureClaudeProjectMcpEnabled(workspacePath: string): void {
+    if (!workspacePath) return;
+    const file = path.join(workspacePath, '.claude', 'settings.local.json');
+    const existing = (fs.existsSync(file) ? readJson(file) : null) ?? {};
+    if (existing.enableAllProjectMcpServers === true) return; // already enabled
+    try {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(
+            file,
+            JSON.stringify({ ...existing, enableAllProjectMcpServers: true }, null, 2) + '\n',
+        );
+    } catch {
+        /* best-effort — a read-only/locked settings file must not break provisioning */
+    }
+}
+
 /** True when a workspace's `.mcp.json` already has a `tynn` server entry. */
 export function hasTynnServer(workspacePath: string): boolean {
     const file = path.join(workspacePath, '.mcp.json');
@@ -290,6 +321,9 @@ export function writeWorkspaceTynnMcp(
     if (sync.claude) {
         const entry = enabled && opts ? tynnEntry(opts.url, opts.token, 'claude') : {};
         upsert(path.join(workspacePath, '.mcp.json'), TYNN_SERVER_NAME, entry, enabled);
+        // Auto-approve project MCP servers so the launched Claude agent actually
+        // has the tynn server available on boot, not present-but-disabled (genie #10).
+        if (enabled) ensureClaudeProjectMcpEnabled(workspacePath);
     }
     if (sync.cursor) {
         const entry = enabled && opts ? tynnEntry(opts.url, opts.token, 'cursor') : {};
@@ -447,6 +481,11 @@ export function writeWorkspaceAgentMcp(
     } catch {
         /* best-effort — default to syncing all if settings can't be read */
     }
+    // Auto-approve the workspace's project MCP servers for a launched Claude agent
+    // (genie #10) whenever the workspace is MCP-enabled and we sync Claude —
+    // independent of whether the endpoint resolved right now, since the tynn server
+    // (and a later genie re-sync) still need to come up available.
+    if (enabled && sync.claude) ensureClaudeProjectMcpEnabled(workspacePath);
     // Enabling without a resolved URL (the server isn't listening / a stale box
     // can't resolve the endpoint). Writing the entry would be a broken stub, and
     // LEAVING a previously-written one makes the agent's client fail to connect

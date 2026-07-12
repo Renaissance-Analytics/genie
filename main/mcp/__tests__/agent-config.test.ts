@@ -6,6 +6,7 @@ import {
     claudeEntry,
     codexMcpLaunchArgs,
     cursorEntry,
+    ensureClaudeProjectMcpEnabled,
     GENIE_SERVER_NAME,
     readTynnMcpUrl,
     withCodexMcpLaunch,
@@ -223,5 +224,51 @@ describe('applyAgentsSection', () => {
         expect(out).not.toContain('### Ai.System');
         expect(out).toContain('# P');
         expect(out).toContain('body');
+    });
+});
+
+describe('ensureClaudeProjectMcpEnabled (genie #10 — auto-approve project MCP)', () => {
+    const mk = () => fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mcp-enable-'));
+    const settingsPath = (dir: string) => path.join(dir, '.claude', 'settings.local.json');
+
+    it('creates .claude/settings.local.json with enableAllProjectMcpServers', () => {
+        const dir = mk();
+        ensureClaudeProjectMcpEnabled(dir);
+        expect(JSON.parse(fs.readFileSync(settingsPath(dir), 'utf8'))).toEqual({
+            enableAllProjectMcpServers: true,
+        });
+    });
+
+    it('merges the flag into an existing settings file, preserving other keys', () => {
+        const dir = mk();
+        fs.mkdirSync(path.dirname(settingsPath(dir)), { recursive: true });
+        fs.writeFileSync(
+            settingsPath(dir),
+            JSON.stringify({ permissions: { allow: ['Bash'] }, hooks: {} }),
+        );
+        ensureClaudeProjectMcpEnabled(dir);
+        expect(JSON.parse(fs.readFileSync(settingsPath(dir), 'utf8'))).toEqual({
+            permissions: { allow: ['Bash'] },
+            hooks: {},
+            enableAllProjectMcpServers: true,
+        });
+    });
+
+    it('is idempotent — a no-op when already enabled (leaves other keys untouched)', () => {
+        const dir = mk();
+        fs.mkdirSync(path.dirname(settingsPath(dir)), { recursive: true });
+        fs.writeFileSync(
+            settingsPath(dir),
+            JSON.stringify({ enableAllProjectMcpServers: true, custom: 1 }),
+        );
+        ensureClaudeProjectMcpEnabled(dir);
+        expect(JSON.parse(fs.readFileSync(settingsPath(dir), 'utf8'))).toEqual({
+            enableAllProjectMcpServers: true,
+            custom: 1,
+        });
+    });
+
+    it('is a no-op for an empty workspace path (never throws)', () => {
+        expect(() => ensureClaudeProjectMcpEnabled('')).not.toThrow();
     });
 });
