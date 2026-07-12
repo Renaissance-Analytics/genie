@@ -2337,20 +2337,24 @@ function AgentMcpSection({
                 label="Server port"
                 desc="A fixed, obscure loopback port baked into each workspace's .mcp.json (e.g. 51717). Changing it requires a restart; open terminals keep their old endpoint until recreated."
                 keywords="agent mcp server port loopback 51717 restart imdone forcethequestion"
-                grow
             >
-                <Input
-                    type="number"
-                    min={1024}
-                    max={65535}
-                    value={port}
-                    onValueChange={(v) => {
-                        const n = parseInt(v, 10);
-                        if (v === '') onPortChange('');
-                        else if (Number.isFinite(n)) onPortChange(String(Math.min(65535, Math.max(1, n))));
-                    }}
-                    placeholder="51717"
-                />
+                {/* Fixed width so all 5 port digits show (the type=number spinner
+                    otherwise clips it) — matches the mobile "Server port" row. */}
+                <div style={{ width: 120 }}>
+                    <Input
+                        type="number"
+                        min={1024}
+                        max={65535}
+                        value={port}
+                        onValueChange={(v) => {
+                            const n = parseInt(v, 10);
+                            if (v === '') onPortChange('');
+                            else if (Number.isFinite(n))
+                                onPortChange(String(Math.min(65535, Math.max(1, n))));
+                        }}
+                        placeholder="51717"
+                    />
+                </div>
             </SettingRow>
 
             {/* Restart is a host PROCESS control and api().mcp.restart() isn't

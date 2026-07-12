@@ -484,6 +484,51 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             })) as { ok: boolean; error?: string },
     };
 
+    // Host-sourced Tynn provisioning. The workspace-settings "Tynn agent" panel writes
+    // the MCP agent token into a workspace's .mcp.json — but the workspace files, the
+    // running agent, and the user's Tynn session all live on the HOST. So a remote
+    // window reads its projects / link-status / tynn-host and performs link / provision
+    // / unlink AGAINST THE HOST over the bridge; running them locally would mint against
+    // the wrong session and write to a client path that doesn't exist (which is why
+    // remote "Link & provision" did nothing). Every OTHER tynn.* method (inbox,
+    // capture-wish, create-project, ops-*) stays spread-from-local. Token stays in main.
+    const tynn: GenieApi['tynn'] = {
+        ...local.tynn,
+        projects: async () =>
+            (
+                (await req('/api/desktop/tynn/projects')) as {
+                    projects: Awaited<ReturnType<GenieApi['tynn']['projects']>>;
+                }
+            ).projects,
+        provisionStatus: async (workspacePath) =>
+            (await req('/api/desktop/tynn/status', {
+                method: 'POST',
+                json: { workspacePath },
+            })) as Awaited<ReturnType<GenieApi['tynn']['provisionStatus']>>,
+        link: async (workspacePath, link) =>
+            (await req('/api/desktop/tynn/link', {
+                method: 'POST',
+                json: { workspacePath, link },
+            })) as { ok: boolean },
+        unlink: async (workspacePath) =>
+            (await req('/api/desktop/tynn/unlink', {
+                method: 'POST',
+                json: { workspacePath },
+            })) as { ok: boolean },
+        provision: async (workspacePath, force) =>
+            (await req('/api/desktop/tynn/provision', {
+                method: 'POST',
+                json: { workspacePath, force },
+            })) as Awaited<ReturnType<GenieApi['tynn']['provision']>>,
+    };
+
+    // The Tynn instance base the HOST is signed into — the link block the host writes
+    // must reference the host's Tynn host, so a remote window reads it from the host.
+    const tynnHost: GenieApi['tynnHost'] = {
+        ...local.tynnHost,
+        get: async () => ((await req('/api/desktop/tynn/host')) as { host: string }).host,
+    };
+
     return {
         ...local,
         workspaces,
@@ -496,5 +541,7 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         sites,
         settings,
         whisper,
+        tynn,
+        tynnHost,
     };
 }

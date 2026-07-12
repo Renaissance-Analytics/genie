@@ -46,6 +46,14 @@ import {
     pollWorkspace,
 } from '../issue-watch';
 import { whisperBroker } from '../whisper/broker';
+import { listAllProjects, getTynnBackend } from '../backend/registry';
+import {
+    provisionWorkspaceTynn,
+    provisionStatus as tynnProvisionStatus,
+    linkWorkspaceTynn,
+    unlinkWorkspaceTynn,
+} from '../tynn/provision';
+import type { ProjectJsonTynn } from '../workspace/project-json';
 
 /**
  * REST surface for the mobile remote-control server. Pure routing over the
@@ -1369,6 +1377,71 @@ export async function handleApi(
             return true;
         }
         sendJson(res, 404, { error: 'unknown whisper route' });
+        return true;
+    }
+
+    // --- host-sourced Tynn provisioning — for a remote DESKTOP driving this host ---
+    // The workspace-settings "Tynn agent" panel provisions the MCP agent token into
+    // the HOST workspace's .mcp.json: the agent runs on the host, the workspace files
+    // live on the host, and the host holds the user's Tynn session. A remote window
+    // must therefore read its projects / link-status / tynn-host and perform
+    // link / provision / unlink AGAINST THE HOST — running these on the client would
+    // mint against the client's session and write to a path that only exists on the
+    // host (which is why remote "Link & provision" did nothing). Reads are auth-only;
+    // the link / provision / unlink mutations are "drive the host" writes, kill-switch
+    // gated like the other mutations. workspacePath is validated against the host's
+    // OWN workspace list so a remote can never target an arbitrary host path.
+    if (pathname.startsWith('/api/desktop/tynn/')) {
+        if (pathname === '/api/desktop/tynn/projects' && method === 'GET') {
+            sendJson(res, 200, { projects: await listAllProjects() });
+            return true;
+        }
+        if (pathname === '/api/desktop/tynn/host' && method === 'GET') {
+            sendJson(res, 200, { host: getTynnBackend().host() });
+            return true;
+        }
+        if (method !== 'POST') {
+            sendJson(res, 405, { error: 'method not allowed' });
+            return true;
+        }
+        let tb: { workspacePath?: string; force?: boolean; link?: ProjectJsonTynn };
+        try {
+            tb = await readJsonBody(req);
+        } catch {
+            sendJson(res, 400, { error: 'invalid body' });
+            return true;
+        }
+        const wsPath = String(tb.workspacePath ?? '');
+        // Only the host's OWN workspaces — never an arbitrary host filesystem path.
+        if (!wsPath || !dbListWorkspaces().some((w) => w.path === wsPath)) {
+            sendJson(res, 404, { error: 'unknown workspace' });
+            return true;
+        }
+        if (pathname === '/api/desktop/tynn/status') {
+            sendJson(res, 200, await tynnProvisionStatus(wsPath));
+            return true;
+        }
+        // Mutations — kill-switch-gated.
+        if (guardLocked()) return true;
+        if (pathname === '/api/desktop/tynn/link') {
+            linkWorkspaceTynn(wsPath, tb.link ?? {});
+            audit('tynn.link', wsPath, actor);
+            sendJson(res, 200, { ok: true });
+            return true;
+        }
+        if (pathname === '/api/desktop/tynn/unlink') {
+            unlinkWorkspaceTynn(wsPath);
+            audit('tynn.unlink', wsPath, actor);
+            sendJson(res, 200, { ok: true });
+            return true;
+        }
+        if (pathname === '/api/desktop/tynn/provision') {
+            const r = await provisionWorkspaceTynn(wsPath, { force: !!tb.force });
+            audit('tynn.provision', `${wsPath}:${r.status}`, actor);
+            sendJson(res, 200, r);
+            return true;
+        }
+        sendJson(res, 404, { error: 'unknown tynn route' });
         return true;
     }
 
