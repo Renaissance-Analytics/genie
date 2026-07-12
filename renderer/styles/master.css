@@ -2663,6 +2663,19 @@ body.gutter-dragging .grid-gutter {
 .filetree-root {
     min-height: 100%;
 }
+/* File-tree cursor: react-fancy's TreeNav hard-codes `cursor-grab` on every
+   draggable node, so the file panel shows an open-hand "grab to move" cursor on
+   mere hover — it wrongly implies the user's intent is to reorder before they've
+   pressed anything. A file row is primarily CLICK-to-open, so read as the normal
+   pointer on hover; show the closed-hand only once a drag/press actually starts.
+   (Downstream mitigation — upstream fix requested on Particle-Academy/react-fancy;
+   the double-class selector out-specifies the single utility class.) */
+.filetree-root .fancy-tree-node {
+    cursor: default;
+}
+.filetree-root .fancy-tree-node:active {
+    cursor: grabbing;
+}
 /* Unsaved-changes dot beside a code view's label. */
 .tpanel-head .dirty-dot {
     width: 7px;
