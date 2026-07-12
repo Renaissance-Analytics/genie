@@ -913,6 +913,17 @@ process.on('unhandledRejection', (reason) => {
 });
 
 app.whenReady().then(async () => {
+    // HEADLESS (genie-cloud host): the electron stub still resolves whenReady, so
+    // this DESKTOP boot would otherwise run on a headless host — calling
+    // markDesktopRuntime() (which wrongly flips isDesktop()/isHeadless() and would
+    // enable desktop-only full-FS access), creating windows, and crashing in
+    // showMasterWindow (no real BrowserWindow → win.loadFile is not a function),
+    // aborting before the host-core workspace-assignment subscription can run. The
+    // host uses its own host-core boot, never this desktop path. isHeadless() is
+    // reliably true here (plain-node process.type is undefined, and markDesktop
+    // hasn't run yet), so bail before any of it. Desktop (process.type==='browser')
+    // is NOT headless → proceeds normally.
+    if (isHeadless()) return;
     // Mark this as the DESKTOP runtime (Electron main). Gates the System
     // workspace's full-filesystem access (files/ipc.ts) — impossible headless.
     markDesktopRuntime();
