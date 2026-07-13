@@ -232,10 +232,14 @@ export interface MobileDataDeps {
 
     // --- terminal control ---
     createAgentTerminal: (opts: {
+        /** Honor a caller-supplied id — a remote plain spawn keys all its I/O off it. */
+        id?: string;
         workspaceId: string;
         cwd: string;
         label: string;
-    }) => { id: string; scrollback: string };
+        shell?: string;
+        args?: string[];
+    }) => { id: string; scrollback: string; existing: boolean };
     /**
      * Create a SPECIALIZED (AI-TUI) terminal on the host — resolves the agent's
      * launch command, spawns the agent pty with its captured chat-session id +
@@ -821,6 +825,52 @@ export async function handleApi(
         });
         audit('terminal.create', `${created.id} in ${ws.project_name}`, actor);
         sendJson(res, 200, { id: created.id, scrollback: created.scrollback });
+        return true;
+    }
+
+    // --- desktop plain terminal SPAWN (spec-id-keyed): POST /api/desktop/terminal-open
+    // The remote counterpart of a LOCAL terminal spawn. A remote window creates a
+    // plain terminal on the host with ITS OWN id (Terminal.tsx keys all later I/O off
+    // it), so the follow-on /ws/term attach finds a live, SERVED pty — closing the gap
+    // where remote `terminal.create` could only ATTACH, never spawn, leaving a fresh
+    // or post-restart-dead panel permanently dead. Idempotent (a live id reattaches +
+    // replays scrollback), served-gated + cwd-confined exactly like /api/terminal/create.
+    if (pathname === '/api/desktop/terminal-open' && method === 'POST') {
+        if (guardLocked()) return true;
+        let body: {
+            id?: string;
+            workspaceId?: string;
+            cwd?: string;
+            label?: string;
+            shell?: string;
+            args?: string[];
+        };
+        try {
+            body = await readJsonBody(req);
+        } catch {
+            sendJson(res, 400, { error: 'invalid body' });
+            return true;
+        }
+        const ws = deps.listWorkspaces().find((w) => w.id === body.workspaceId);
+        if (!ws) {
+            sendJson(res, 400, { error: 'unknown workspace' });
+            return true;
+        }
+        const created = deps.createAgentTerminal({
+            id: body.id,
+            workspaceId: ws.id,
+            // Confine the pty cwd to the workspace folder — never spawn outside it.
+            cwd: confineCwdToWorkspace(ws.path, body.cwd),
+            label: body.label?.trim() || 'Terminal',
+            shell: body.shell,
+            args: body.args,
+        });
+        audit('terminal.open', `${created.id} in ${ws.project_name}`, actor);
+        sendJson(res, 200, {
+            id: created.id,
+            scrollback: created.scrollback,
+            existing: created.existing,
+        });
         return true;
     }
 

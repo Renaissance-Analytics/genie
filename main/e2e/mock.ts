@@ -440,8 +440,9 @@ function buildMobileE2EDeps(): MobileDataDeps {
         restartProcess: () => setProc('running'),
 
         createAgentTerminal: (opts) => ({
-            id: `term-e2e-${Date.now()}`,
+            id: opts.id ?? `term-e2e-${Date.now()}`,
             scrollback: `*** new terminal in ${opts.label} ***\r\n`,
+            existing: false,
         }),
         killTerminalById: (id) => id === E2E_MOBILE_TERMINAL_ID,
         // Echo the phone's input straight back down the byte stream, so the

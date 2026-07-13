@@ -209,9 +209,19 @@ export function readTerminalOutput(
  * APPROVAL GATE is enforced by the caller (background.ts) BEFORE this runs.
  */
 export function createAgentTerminal(opts: {
+    /**
+     * Honor a caller-supplied terminal id. Local spawns let the renderer pick the
+     * id (Terminal.tsx keys ALL its later I/O off it); a REMOTE plain spawn must do
+     * the same so the follow-on `/ws/term` attach targets this exact pty. Omitted ⇒
+     * mint one (the agent path + the phone `/api/terminal/create` surface).
+     */
+    id?: string;
     workspaceId: string;
     cwd: string;
     label: string;
+    /** Plain-terminal shell override; agent terminals ignore it (they submit a launch command). */
+    shell?: string;
+    args?: string[];
     /** Marks this terminal as running an agent (surfaced in the list). */
     agentMeta?: { agent: 'claude' | 'codex' | 'custom'; command: string };
     /** Specialized terminals: WhisperChat accessibility to stamp + join with. */
@@ -222,8 +232,8 @@ export function createAgentTerminal(opts: {
         /** Opt-in wake-on-DM (issue #9): a direct whisper wakes this agent when idle. */
         wakeOnDm?: boolean;
     };
-}): { id: string; scrollback: string; command?: string; chatSessionId: string | null } {
-    const id = crypto.randomUUID();
+}): { id: string; scrollback: string; existing: boolean; command?: string; chatSessionId: string | null } {
+    const id = opts.id ?? crypto.randomUUID();
     const resolved = resolveDefaultShell(dbSettingsProvider());
 
     // Agent terminals capture their chat-session id at launch + get a whisper
@@ -256,15 +266,19 @@ export function createAgentTerminal(opts: {
     }
 
     // Persist a spec so the terminal is a first-class member of the workspace
-    // (appears in lists, can be reattached by a window, killed by the user).
-    createTerminalSpec({
-        id,
-        workspace_id: opts.workspaceId,
-        label: opts.label,
-        cwd: opts.cwd,
-        type: 'terminal',
-        meta,
-    });
+    // (appears in lists, can be reattached by a window, killed by the user). A
+    // caller-supplied id may ALREADY have a spec (a remote re-open, or a respawn
+    // after the host restarted and the pty died) — reuse it rather than duplicate.
+    if (!getTerminalSpec(id)) {
+        createTerminalSpec({
+            id,
+            workspace_id: opts.workspaceId,
+            label: opts.label,
+            cwd: opts.cwd,
+            type: 'terminal',
+            meta,
+        });
+    }
 
     // Env: the workspace `.env` (so an agent resolves ${TYNN_AGENT_TOKEN} etc.)
     // + bundled tynn-cli (behind its setting) + the workspace's agent MCP
@@ -286,10 +300,12 @@ export function createAgentTerminal(opts: {
     const createOpts: CreateTerminalOpts = {
         id,
         cwd: opts.cwd,
-        shell: resolved.command,
-        args: resolved.args,
+        shell: opts.shell ?? resolved.command,
+        args: opts.args ?? resolved.args,
         env,
     };
+    // Idempotent on the id: if a live pty already owns it, this reattaches
+    // (existing:true, scrollback replayed) instead of spawning a duplicate.
     const result = terminalManager().create(createOpts);
     noteTerminalActivity(id);
     // Tell every window the spec set changed so the new terminal appears live.
@@ -316,7 +332,7 @@ export function createAgentTerminal(opts: {
                 });
         }
     }
-    return { id, scrollback: result.scrollback, command: launchCommand, chatSessionId };
+    return { id, scrollback: result.scrollback, existing: result.existing, command: launchCommand, chatSessionId };
 }
 
 /**

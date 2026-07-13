@@ -204,7 +204,7 @@ const dataDeps = (): MobileDataDeps =>
         startProcess: () => {},
         stopProcess: () => {},
         restartProcess: () => {},
-        createAgentTerminal: () => ({ id: 't', scrollback: '' }),
+        createAgentTerminal: () => ({ id: 't', scrollback: '', existing: false }),
         killTerminalById: () => true,
         writeToTerminal: () => true,
         readTerminalOutput: () => ({ data: '', cursor: 0, dropped: false }),

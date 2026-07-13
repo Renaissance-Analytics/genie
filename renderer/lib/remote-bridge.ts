@@ -367,12 +367,37 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             env?: Record<string, string>;
             workspaceId?: string;
         }) => {
-            // Tag the terminal's workspace onto the relay term `open` frame so the
-            // host scopes it to the grant's workspaces (a workspace-scoped grant
-            // only reaches its own terminals; `host:all` reaches any). Missing →
-            // fails closed to host:all on the host side.
+            // SPAWN, then attach. A remote window owns its terminal id, but the host
+            // had no way to spawn a pty for it — create only ATTACHED — so a fresh or
+            // post-restart-dead panel fail-closed at the /ws/term gate and never
+            // started. First spawn a plain, cwd-confined, served-gated pty for this id
+            // (idempotent: a still-live id is a no-op reattach on the host)…
+            // A host that PREDATES this endpoint (mid-rollout, or simply not upgraded
+            // yet) 404s here — fall back to attach-only (the prior behavior) so a
+            // version-skewed client is never WORSE than before, just un-fixed.
+            let existing = true;
+            try {
+                const spawned = (await req('/api/desktop/terminal-open', {
+                    method: 'POST',
+                    json: {
+                        id: opts.id,
+                        workspaceId: opts.workspaceId,
+                        cwd: opts.cwd,
+                        shell: opts.shell,
+                        args: opts.args,
+                    },
+                })) as { existing?: boolean };
+                if (typeof spawned?.existing === 'boolean') existing = spawned.existing;
+            } catch {
+                /* old host without /api/desktop/terminal-open — attach-only */
+            }
+            // …then open the relay term channel (workspace-tagged so a scoped grant
+            // only reaches its own terminals; missing → host:all on the host side).
+            // The attach itself replays scrollback (server-side catch-up), so return
+            // '' here to avoid double-drawing — but surface the host's REAL `existing`
+            // so Terminal.tsx frames a genuine cold spawn vs a warm reattach correctly.
             await r.terminalAttach(opts.id, opts.workspaceId);
-            return { id: opts.id, pid: 0, shell: opts.shell ?? '', existing: true, scrollback: '' };
+            return { id: opts.id, pid: 0, shell: opts.shell ?? '', existing, scrollback: '' };
         },
         write: (id: string, data: string) => {
             // View-only (host has control): swallow the keystroke locally.

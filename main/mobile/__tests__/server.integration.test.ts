@@ -48,6 +48,9 @@ const specializedInputs: Array<Record<string, unknown>> = [];
 // patch); flip `whisperUpdateWired` false to simulate a host without the dep (501).
 let whisperUpdateWired = true;
 const whisperUpdates: Array<{ specId: string; patch: Record<string, unknown> }> = [];
+// Plain remote-spawn endpoint (/api/desktop/terminal-open): records the args the
+// server plumbed to createAgentTerminal — the id it honored + the confined cwd.
+const termOpens: Array<Record<string, unknown>> = [];
 
 function buildAppDir(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mobile-it-'));
@@ -77,7 +80,10 @@ const deps = (): MobileDataDeps => ({
     startProcess: () => {},
     stopProcess: () => {},
     restartProcess: () => {},
-    createAgentTerminal: () => ({ id: 't-new', scrollback: '' }),
+    createAgentTerminal: (o) => {
+        termOpens.push(o);
+        return { id: o.id ?? 't-new', scrollback: 'catch-up', existing: false };
+    },
     ...(specializedWired
         ? {
               createSpecializedAgentTerminal: (input) => {
@@ -229,6 +235,7 @@ beforeEach(() => {
     specializedInputs.length = 0;
     whisperUpdateWired = true;
     whisperUpdates.length = 0;
+    termOpens.length = 0;
 });
 
 afterEach(() => {
@@ -241,6 +248,35 @@ afterEach(() => {
 });
 
 describe('mobile server (integration, 127.0.0.1)', () => {
+    it('POST /api/desktop/terminal-open spawns a plain terminal for the CLIENT id, cwd-confined, surfacing existing', async () => {
+        const port = await start();
+        const token = await pair(port);
+        // A cwd that tries to escape the workspace must be clamped to its root.
+        const r = await req(port, 'POST', '/api/desktop/terminal-open', {
+            token,
+            body: { id: 'client-term-1', workspaceId: 'ws-1', cwd: '/etc/passwd', label: 'My shell' },
+        });
+        expect(r.status).toBe(200);
+        // The client's id is honored end-to-end (Terminal.tsx keys all I/O off it);
+        // scrollback + existing come from the host spawn, not a hardcoded value.
+        expect(r.json).toMatchObject({ id: 'client-term-1', scrollback: 'catch-up', existing: false });
+        expect(termOpens).toHaveLength(1);
+        expect(termOpens[0].id).toBe('client-term-1');
+        // Confined: the pty cwd never escapes the served workspace root.
+        expect(String(termOpens[0].cwd).startsWith(wsRoot)).toBe(true);
+    });
+
+    it('POST /api/desktop/terminal-open rejects an unknown/unserved workspace (400, no spawn)', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/desktop/terminal-open', {
+            token,
+            body: { id: 'x', workspaceId: 'not-served', cwd: wsRoot },
+        });
+        expect(r.status).toBe(400);
+        expect(termOpens).toHaveLength(0);
+    });
+
     it('serves the app shell under /m/ with the <base> injected', async () => {
         const port = await start();
         const res = await new Promise<{ status: number; body: string }>((resolve) => {
