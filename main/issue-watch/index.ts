@@ -278,7 +278,30 @@ export async function resolveUpstream(
  * Resolve a workspace's GitHub repos from its repo subfolders' origin remotes.
  * An .agi envelope has repos/<name>; a simple workspace is its own single repo.
  */
-export async function resolveWorkspaceRepos(workspaceId: string): Promise<ResolvedRepo[]> {
+/**
+ * Cache of resolved repos per workspace. resolveWorkspaceRepos spawns
+ * `git getRemotes` per repo path, which is expensive; the READ paths
+ * (getOpenCounts + getWorkspaceRepoViews, folded into imDone + the IssueWatch
+ * flyout) must NEVER pay that on the hot path — a git burst across every
+ * workspace on every read is what hung imDone and made the panel slow to open.
+ * The background poller (pollWorkspace) force-refreshes this; reads read it.
+ */
+const workspaceReposCache = new Map<string, ResolvedRepo[]>();
+
+export async function resolveWorkspaceRepos(
+    workspaceId: string,
+    force = false,
+): Promise<ResolvedRepo[]> {
+    // READ path: return the cached resolution and never spawn git on the hot
+    // path. On a cold miss (a brand-new / never-polled workspace) warm it in the
+    // BACKGROUND so the next read is populated, without blocking this one.
+    if (!force) {
+        const cached = workspaceReposCache.get(workspaceId);
+        if (cached) return cached;
+        void resolveWorkspaceRepos(workspaceId, true).catch(() => {});
+        return [];
+    }
+
     const ws = getWorkspace(workspaceId);
     if (!ws) return [];
     let names: string[] = [];
@@ -309,6 +332,7 @@ export async function resolveWorkspaceRepos(workspaceId: string): Promise<Resolv
             /* not a git repo / git missing — skip */
         }
     }
+    workspaceReposCache.set(workspaceId, out);
     return out;
 }
 
@@ -495,6 +519,10 @@ async function pollRepo(
 export async function pollWorkspace(workspaceId: string): Promise<void> {
     if (!getToken()) return;
     const granularity = getWorkspaceIssuewatchGranularity(workspaceId);
+    // Refresh the repos cache off the read path — this is the ONE place that pays
+    // the `git getRemotes` cost, so imDone / the flyout read it instantly, and
+    // newly-added repos get rediscovered each poll cycle.
+    await resolveWorkspaceRepos(workspaceId, true);
     const views = await getWorkspaceRepoViews(workspaceId);
     await Promise.all(
         views
