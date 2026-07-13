@@ -451,6 +451,14 @@ export default function Terminal({
             // clipboard. Route it to the system clipboard via main (the renderer's
             // navigator.clipboard is unreliable here); a read request replies on
             // the pty input. Registered before the pty streams so no copy is missed.
+            // Guard against a TUI that POLLS the clipboard via OSC 52 read (Claude
+            // Code does): over a REMOTE terminal each read is an async clipboard
+            // round-trip answered by a write BACK into the pty, so an unthrottled
+            // poll FLOODS the pty stdin with repeated ~34-byte responses and drowns
+            // the user's keystrokes — the agent terminal becomes undrivable. Answer
+            // only when the clipboard actually CHANGED, and never faster than ~5×/sec.
+            let lastOsc52Body = '';
+            let lastOsc52At = 0;
             try {
                 const oscSub = live.parser.registerOscHandler(52, (oscData: string) =>
                     handleOsc52(oscData, {
@@ -459,6 +467,15 @@ export default function Terminal({
                         },
                         read: () => api().clipboard.read().catch(() => ''),
                         respond: (oscBody) => {
+                            const now = Date.now();
+                            // Unchanged since the last answer → a polling TUI; skip
+                            // (the value it already has is still current).
+                            if (oscBody === lastOsc52Body) return;
+                            // Rate backstop so even genuinely-changing content can't
+                            // flood the pty faster than the terminal can drain it.
+                            if (now - lastOsc52At < 200) return;
+                            lastOsc52Body = oscBody;
+                            lastOsc52At = now;
                             void api()
                                 .terminal.write(id, `\x1b]${oscBody}\x07`)
                                 .catch(() => {});
