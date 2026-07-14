@@ -166,7 +166,11 @@ export async function provisionWorkspaceTynn(
             isOpsProject: minted.isOpsProject,
         };
     } catch (e) {
-        return { status: 'error', error: e instanceof Error ? e.message : String(e) };
+        // Don't return the raw exception text — this result is forwarded to the
+        // (remote) mobile client (CodeQL js/stack-trace-exposure). Log it main-side;
+        // return a generic message.
+        console.error('[tynn/provision] provisioning failed:', e);
+        return { status: 'error', error: 'provisioning failed' };
     }
 }
 
