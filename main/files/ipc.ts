@@ -10,19 +10,16 @@ import { unwatchWorkspace, watchWorkspace } from './watch';
 const execFileAsync = promisify(execFile);
 
 /**
- * A validation error whose message is INTENTIONALLY safe to show the client
- * (e.g. "Path escapes workspace"). The safe text lives on `clientMessage` — a
- * property distinct from `.message`/`.stack` — so response paths can surface it
- * without tripping CodeQL js/stack-trace-exposure; every OTHER thrown error stays
- * redacted to a generic message + logged main-side.
+ * Marks a DELIBERATE, client-safe validation failure (e.g. a path escaping the
+ * workspace) vs an unexpected internal error. Response handlers reply to a
+ * ClientError with a FIXED safe literal — never a value read off the caught
+ * exception, which would trip CodeQL js/stack-trace-exposure — and redact + log
+ * everything else. The message is kept for main-side logging only.
  */
 export class ClientError extends Error {
-    readonly clientMessage: string;
-
     constructor(message: string) {
         super(message);
         this.name = 'ClientError';
-        this.clientMessage = message;
     }
 }
 

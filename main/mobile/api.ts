@@ -1090,11 +1090,11 @@ export async function handleApi(
             sendJson(res, 200, r);
             return true;
         } catch (e) {
-            // Surface deliberate validation errors (ClientError.clientMessage — a safe
-            // string, NOT .message/.stack, so CodeQL js/stack-trace-exposure stays clear);
-            // redact + log anything else.
+            // Deliberate validation errors (ClientError) get a FIXED safe literal —
+            // never a value read off the exception — so CodeQL js/stack-trace-exposure
+            // stays clear; redact + log anything else.
             if (e instanceof ClientError) {
-                sendJson(res, 400, { error: e.clientMessage });
+                sendJson(res, 400, { error: 'Path escapes workspace' });
             } else {
                 console.error('[mobile-api] import failed:', e);
                 sendJson(res, 400, { error: 'import failed' });
@@ -1206,7 +1206,7 @@ export async function handleApi(
             }
         } catch (e) {
             if (e instanceof ClientError) {
-                sendJson(res, 400, { error: e.clientMessage });
+                sendJson(res, 400, { error: 'Path escapes workspace' });
             } else {
                 console.error('[mobile-api] file op failed:', e);
                 sendJson(res, 400, { error: 'file op failed' });
@@ -1578,7 +1578,7 @@ export async function handleApi(
             }
         } catch (e) {
             if (e instanceof ClientError) {
-                sendJson(res, 400, { error: e.clientMessage });
+                sendJson(res, 400, { error: 'Path escapes workspace' });
             } else {
                 console.error('[mobile-api] desktop op failed:', e);
                 sendJson(res, 400, { error: 'desktop op failed' });
