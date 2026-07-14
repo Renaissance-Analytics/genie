@@ -46,6 +46,10 @@ interface Props {
  *  body owns its model); dirty mirrors the body's flag. */
 interface FileState {
     content: string;
+    /** Last saved/loaded on-disk content — the diff-gutter baseline the live
+     *  `content` is compared against (fancy-code `diffBase`). Text tabs only;
+     *  plugin tabs own their model and don't render <CodeEditor>. */
+    baseline?: string;
     language: string;
     dirty: boolean;
     kind?: 'text' | 'plugin';
@@ -300,6 +304,9 @@ export default function CodePanel({
                                           [rel]: {
                                               ...m[rel],
                                               content: text,
+                                              // Absorbed external change → advance the
+                                              // baseline too, so it shows no false diff.
+                                              baseline: text,
                                               dirty: false,
                                               rev: (m[rel].rev ?? 0) + 1,
                                           },
@@ -387,6 +394,7 @@ export default function CodePanel({
                             ...m,
                             [relPath]: {
                                 content: text,
+                                baseline: text,
                                 language: languageFor(relPath),
                                 dirty: false,
                                 kind: 'text',
@@ -465,6 +473,7 @@ export default function CodePanel({
                     );
                     loaded[rel] = {
                         content: text,
+                        baseline: text,
                         language: languageFor(rel),
                         dirty: false,
                         kind: 'text',
@@ -520,7 +529,9 @@ export default function CodePanel({
             justWrote.current.set(file, Date.now());
             await api().files.write(workspacePath, file, st.content, system);
             setFiles((m) =>
-                m[file] ? { ...m, [file]: { ...m[file], dirty: false } } : m,
+                m[file]
+                    ? { ...m, [file]: { ...m[file], dirty: false, baseline: st.content } }
+                    : m,
             );
             // The file changed on disk — refresh git colours in the tree.
             setGitRefreshKey((k) => k + 1);
@@ -864,6 +875,10 @@ export default function CodePanel({
                             key={`${activeFile}:${active.rev ?? 0}`}
                             className="cv-editor"
                             value={active.content}
+                            // Inline diff gutter: mark lines changed since the file
+                            // was last saved/loaded. baseline advances on save and on
+                            // absorbed external reloads, so a clean tab shows no diff.
+                            diffBase={active.baseline}
                             language={active.language}
                             theme="dark"
                             wordWrap={wordWrap}
