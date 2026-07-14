@@ -21,6 +21,7 @@ import {
     deletePath,
     gitStatus,
     importExternalBytes,
+    ClientError,
 } from '../files/ipc';
 import {
     listWorkspaces as dbListWorkspaces,
@@ -1089,7 +1090,15 @@ export async function handleApi(
             sendJson(res, 200, r);
             return true;
         } catch (e) {
-            sendJson(res, 400, { error: e instanceof Error ? e.message : 'import failed' });
+            // Surface deliberate validation errors (ClientError.clientMessage — a safe
+            // string, NOT .message/.stack, so CodeQL js/stack-trace-exposure stays clear);
+            // redact + log anything else.
+            if (e instanceof ClientError) {
+                sendJson(res, 400, { error: e.clientMessage });
+            } else {
+                console.error('[mobile-api] import failed:', e);
+                sendJson(res, 400, { error: 'import failed' });
+            }
             return true;
         }
     }
@@ -1196,7 +1205,12 @@ export async function handleApi(
                 return true;
             }
         } catch (e) {
-            sendJson(res, 400, { error: e instanceof Error ? e.message : 'file op failed' });
+            if (e instanceof ClientError) {
+                sendJson(res, 400, { error: e.clientMessage });
+            } else {
+                console.error('[mobile-api] file op failed:', e);
+                sendJson(res, 400, { error: 'file op failed' });
+            }
             return true;
         }
         sendJson(res, 404, { error: 'unknown files route' });
@@ -1563,7 +1577,12 @@ export async function handleApi(
                 return true;
             }
         } catch (e) {
-            sendJson(res, 400, { error: e instanceof Error ? e.message : 'desktop op failed' });
+            if (e instanceof ClientError) {
+                sendJson(res, 400, { error: e.clientMessage });
+            } else {
+                console.error('[mobile-api] desktop op failed:', e);
+                sendJson(res, 400, { error: 'desktop op failed' });
+            }
             return true;
         }
         sendJson(res, 404, { error: 'unknown desktop route' });

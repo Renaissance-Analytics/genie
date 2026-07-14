@@ -10,6 +10,23 @@ import { unwatchWorkspace, watchWorkspace } from './watch';
 const execFileAsync = promisify(execFile);
 
 /**
+ * A validation error whose message is INTENTIONALLY safe to show the client
+ * (e.g. "Path escapes workspace"). The safe text lives on `clientMessage` — a
+ * property distinct from `.message`/`.stack` — so response paths can surface it
+ * without tripping CodeQL js/stack-trace-exposure; every OTHER thrown error stays
+ * redacted to a generic message + logged main-side.
+ */
+export class ClientError extends Error {
+    readonly clientMessage: string;
+
+    constructor(message: string) {
+        super(message);
+        this.name = 'ClientError';
+        this.clientMessage = message;
+    }
+}
+
+/**
  * Filesystem IPC for the Code View. Three channels, all scoped to a
  * workspace root and hardened against escaping it:
  *
@@ -309,12 +326,12 @@ export async function listTree(
     // cross-platform inconsistency is the failing CI test (system-fs :115).
     const raw = (opts.root ?? '').replace(/\\/g, '/');
     if (path.posix.isAbsolute(raw) || path.win32.isAbsolute(raw)) {
-        throw new Error('Path escapes workspace');
+        throw new ClientError('Path escapes workspace');
     }
     const sub = raw.replace(/^\/+|\/+$/g, '');
     if (sub) {
         const start = guardedResolve(workspacePath, sub);
-        if (!start) throw new Error('Path escapes workspace');
+        if (!start) throw new ClientError('Path escapes workspace');
         return walk(start, sub, 0, maxDepth, budget);
     }
 
@@ -328,7 +345,7 @@ export async function readFile(
     system?: boolean,
 ): Promise<{ content: string; truncated: boolean }> {
     const abs = resolvePath(workspacePath, relPath, system);
-    if (!abs) throw new Error('Path escapes workspace');
+    if (!abs) throw new ClientError('Path escapes workspace');
     const stat = await fsp.stat(abs);
     if (!stat.isFile()) throw new Error('Not a file');
     const buf = await fsp.readFile(abs);
@@ -345,7 +362,7 @@ export async function writeFile(
     system?: boolean,
 ): Promise<{ ok: boolean }> {
     const abs = resolvePath(workspacePath, relPath, system);
-    if (!abs) throw new Error('Path escapes workspace');
+    if (!abs) throw new ClientError('Path escapes workspace');
     const bytes = Buffer.byteLength(content, 'utf8');
     if (bytes > MAX_FILE_BYTES) throw new Error('Content exceeds size limit');
     // Guard against NUL bytes — these never appear in real source files and
@@ -404,7 +421,7 @@ export function resolvePluginPath(
     allowedExts: string[],
 ): string {
     const abs = guardedResolve(workspaceRoot, relPath);
-    if (!abs) throw new Error('Path escapes workspace');
+    if (!abs) throw new ClientError('Path escapes workspace');
     if (abs === path.resolve(workspaceRoot)) throw new Error('Invalid path');
     const allow = normaliseExts(allowedExts);
     if (allow.length === 0) {
@@ -501,7 +518,7 @@ export async function createFile(
     system?: boolean,
 ): Promise<{ ok: boolean }> {
     const abs = resolvePath(workspacePath, relPath, system);
-    if (!abs) throw new Error('Path escapes workspace');
+    if (!abs) throw new ClientError('Path escapes workspace');
     // The root itself is never a valid create target.
     if (abs === path.resolve(workspacePath)) throw new Error('Invalid path');
     await fsp.mkdir(path.dirname(abs), { recursive: true });
@@ -525,7 +542,7 @@ export async function createFolder(
     system?: boolean,
 ): Promise<{ ok: boolean }> {
     const abs = resolvePath(workspacePath, relPath, system);
-    if (!abs) throw new Error('Path escapes workspace');
+    if (!abs) throw new ClientError('Path escapes workspace');
     if (abs === path.resolve(workspacePath)) throw new Error('Invalid path');
     await fsp.mkdir(abs, { recursive: true });
     return { ok: true };
@@ -544,7 +561,7 @@ export async function renamePath(
 ): Promise<{ ok: boolean }> {
     const from = resolvePath(workspacePath, fromRel, system);
     const to = resolvePath(workspacePath, toRel, system);
-    if (!from || !to) throw new Error('Path escapes workspace');
+    if (!from || !to) throw new ClientError('Path escapes workspace');
     const root = path.resolve(workspacePath);
     if (from === root || to === root) throw new Error('Invalid path');
     // No-clobber: refuse if the destination already exists.
@@ -583,7 +600,7 @@ export async function duplicatePath(
     system?: boolean,
 ): Promise<{ ok: boolean; relPath: string }> {
     const from = resolvePath(workspacePath, relPath, system);
-    if (!from) throw new Error('Path escapes workspace');
+    if (!from) throw new ClientError('Path escapes workspace');
     if (from === path.resolve(workspacePath)) throw new Error('Invalid path');
     const stat = await fsp.stat(from);
     if (!stat.isFile()) throw new Error('Not a file');
@@ -637,7 +654,7 @@ async function resolveImportDest(
     const dir = (destFolderRel ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
     const baseRel = dir ? `${dir}/${leaf}` : leaf;
     const baseAbs = resolvePath(workspacePath, baseRel, system);
-    if (!baseAbs) throw new Error('Destination escapes workspace');
+    if (!baseAbs) throw new ClientError('Destination escapes workspace');
 
     // No-clobber: pick the first free `-copy` name in the destination folder.
     let finalRel = baseRel;
@@ -757,7 +774,7 @@ export async function deletePath(
     system?: boolean,
 ): Promise<{ ok: boolean }> {
     const abs = resolvePath(workspacePath, relPath, system);
-    if (!abs) throw new Error('Path escapes workspace');
+    if (!abs) throw new ClientError('Path escapes workspace');
     if (abs === path.resolve(workspacePath)) throw new Error('Invalid path');
     await fsp.rm(abs, { recursive: true, force: true });
     return { ok: true };
