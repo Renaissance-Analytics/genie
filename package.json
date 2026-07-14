@@ -1,6 +1,6 @@
 {
   "name": "genie",
-  "version": "0.7.0-beta.163",
+  "version": "0.7.0-beta.164",
   "description": "Tynn desktop companion — tray-resident workspace manager",
   "private": true,
   "main": "app/background.js",
@@ -35,14 +35,14 @@
   },
   "dependencies": {
     "@particle-academy/dark-slide": "^0.5.2",
-    "@particle-academy/fancy-code": "^0.7.0",
-    "@particle-academy/fancy-features": "^0.1.0",
+    "@particle-academy/fancy-code": "^0.8.0",
+    "@particle-academy/fancy-features": "^0.1.1",
     "@particle-academy/fancy-sheets": "^0.9.0",
     "@particle-academy/fancy-slides": "^0.15.2",
-    "@particle-academy/fancy-term": "^0.4.0",
+    "@particle-academy/fancy-term": "^0.4.1",
     "@particle-academy/fancy-term-host": "^0.2.3",
     "@particle-academy/holy-sheet": "^1.0.0",
-    "@particle-academy/last-word": "^0.1.1",
+    "@particle-academy/last-word": "^0.2.0",
     "@types/ws": "^8.18.1",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-serialize": "^0.14.0",
@@ -57,7 +57,7 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "@particle-academy/react-fancy": "^4.13.1",
+    "@particle-academy/react-fancy": "^4.14.1",
     "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4.0.0",
     "@tailwindcss/typography": "^0.5.19",
