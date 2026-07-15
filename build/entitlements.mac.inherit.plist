@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Inherited entitlements applied to NESTED executables during signing — most
+  importantly node-pty's `spawn-helper`. com.apple.security.inherit makes the
+  child inherit the parent app's sandbox/entitlement context; disable-library-
+  validation must also be present here so the helper itself may exec under the
+  Hardened Runtime. This is the pair that actually unblocks the shell spawn.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.inherit</key>
+    <true/>
+</dict>
+</plist>

@@ -118,6 +118,14 @@ mac:
   # at build time. Drop in a real icon.icns later for tighter control.
   icon: resources/icon.png
   hardenedRuntime: true
+  # node-pty forks the shell through a nested `spawn-helper` Mach-O. Under
+  # Hardened Runtime + notarization it (and node-pty's .node) are killed on exec
+  # unless the app is signed WITH these entitlements — without them the pty
+  # master opens (create() doesn't throw) but the shell never runs, so on signed
+  # Mac builds the terminal shows a cursor and no output. entitlementsInherit
+  # carries disable-library-validation onto the nested helper. See build/*.plist.
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
   gatekeeperAssess: false
   # Notarize when the build is Developer-ID signed (CI provides MAC_CSC_LINK +
   # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID). electron-builder

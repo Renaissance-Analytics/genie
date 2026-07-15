@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened Runtime entitlements for the signed + notarized macOS build.
+
+  Without these, macOS kills node-pty's nested `spawn-helper` Mach-O (and blocks
+  loading node-pty's unsigned .node) the moment the shell is forked — so the pty
+  master opens (create() does NOT throw) but the shell child never execs, and the
+  terminal shows a blinking cursor with zero output. disable-library-validation
+  is the load-bearing key: it lets the signed app run a helper / load a native
+  addon that isn't signed by the same Team ID. allow-jit / allow-unsigned-
+  executable-memory are required by V8/Electron; allow-dyld-environment-variables
+  is needed because the detached pty-host is spawned via process.execPath with
+  ELECTRON_RUN_AS_NODE + NODE_PATH set.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+</dict>
+</plist>
