@@ -25,6 +25,12 @@ files:
 
 asar: true
 
+# Post-pack fix: the Windows node-pty rebuild leaves conpty.dll / OpenConsole.exe
+# out of build/Release, so ConPTY fails to load at runtime ("Cannot find conpty.dll")
+# and NO terminal spawns on a packaged Windows install. This copies them into place.
+# See build/after-pack.js + genie #14.
+afterPack: build/after-pack.js
+
 # Tier 3 — detached pty-host packaging.
 #
 # The detached host now ships inside @particle-academy/fancy-term-host
