@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
     // Flip between signed-out (null) and signed-in per test.
     whoamiUser: null as null | { id: string; name: string; email: string },
     connectable: [] as Array<{ id: string; name: string }>,
+    // Countable so we can assert redeemCode does a SINGLE whoami (no redundant
+    // second exchange of the now-consumed token).
+    whoami: vi.fn(async () => mocks.whoamiUser),
     openWorkstationById: vi.fn(async (_id: string, _name?: string) => ({
         ok: true as boolean,
         connKey: 'ck',
@@ -32,13 +35,13 @@ vi.mock('../workstation-open', () => ({
 }));
 vi.mock('../backend/registry', () => ({
     getTynnBackend: () => ({
-        whoami: async () => mocks.whoamiUser,
+        whoami: mocks.whoami,
         host: () => 'https://tynn.test',
         listConnectableWorkstations: async () => mocks.connectable,
     }),
 }));
 
-import { handleGenieUrl } from '../auth';
+import { handleGenieUrl, redeemCode } from '../auth';
 
 beforeEach(() => {
     mocks.whoamiUser = null;
@@ -46,6 +49,7 @@ beforeEach(() => {
     mocks.openWorkstationById.mockClear();
     mocks.openWorkstationById.mockResolvedValue({ ok: true, connKey: 'ck', error: undefined });
     mocks.showMainWindow.mockClear();
+    mocks.whoami.mockClear();
 });
 
 afterEach(() => {
@@ -93,5 +97,33 @@ describe('handleGenieUrl', () => {
     it('ignores an unknown genie:// host without throwing', async () => {
         await expect(handleGenieUrl('genie://nope/whatever')).resolves.toBeUndefined();
         expect(mocks.openWorkstationById).not.toHaveBeenCalled();
+    });
+});
+
+describe('redeemCode — manual code-paste path', () => {
+    it('signs in with a SINGLE whoami (reuses redeemToken result, no second exchange)', async () => {
+        mocks.whoamiUser = { id: 'u1', name: 'U', email: '' };
+
+        const ok = await redeemCode('paste-me');
+
+        expect(ok).toBe(true);
+        // The old code called whoami twice (once in redeemToken, once again in
+        // redeemCode against the now-consumed token) — the second re-exchange is
+        // exactly what produced spurious "already used" after a real sign-in.
+        expect(mocks.whoami).toHaveBeenCalledTimes(1);
+        expect(mocks.showMainWindow).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns false when the code does not sign us in', async () => {
+        mocks.whoamiUser = null;
+
+        expect(await redeemCode('bad-code')).toBe(false);
+        expect(mocks.whoami).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects empty / oversized input without touching the backend', async () => {
+        expect(await redeemCode('   ')).toBe(false);
+        expect(await redeemCode('x'.repeat(257))).toBe(false);
+        expect(mocks.whoami).not.toHaveBeenCalled();
     });
 });

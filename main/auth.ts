@@ -195,8 +195,11 @@ export async function redeemCode(rawCode: string): Promise<boolean> {
     const code = rawCode.trim();
     if (!code || code.length > 256) return false;
     try {
-        await redeemToken(code);
-        return (await whoami()) !== null;
+        // redeemToken already establishes truth via whoami — reuse THAT result.
+        // A second whoami() here would re-send the now-consumed genie_token and
+        // could spuriously report failure after a successful sign-in (the token
+        // is single-use; only the freshly-set session cookie is still valid).
+        return (await redeemToken(code)) !== null;
     } catch (e) {
         console.error('redeemCode failed:', e);
         notifyAuthChanged(false);
@@ -210,7 +213,7 @@ export async function redeemCode(rawCode: string): Promise<boolean> {
  * cookie. Used by both handleGenieUrl (protocol path) and redeemCode
  * (manual paste path).
  */
-async function redeemToken(token: string): Promise<void> {
+async function redeemToken(token: string): Promise<Awaited<ReturnType<typeof whoami>>> {
     const host = tynnHost();
     const tynnUrl = new URL(host);
     await session.defaultSession.cookies.set({
@@ -236,6 +239,7 @@ async function redeemToken(token: string): Promise<void> {
     } else {
         notifyAuthChanged(false);
     }
+    return me;
 }
 
 export async function isSignedIn(): Promise<boolean> {

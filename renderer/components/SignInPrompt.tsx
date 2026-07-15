@@ -182,11 +182,19 @@ function BackendCard({
         setRedeemError(null);
         try {
             const ok = await onRedeemCode(code);
-            if (ok) {
+            // The code may have already signed us in via the protocol path (or a
+            // concurrent request) — confirm before showing an error, so a
+            // successful sign-in never surfaces a scary "rejected" message.
+            const signedInNow = ok || (await api().auth.whoami('tynn')) !== null;
+            if (signedInNow) {
                 setCode('');
                 setCodeOpen(false);
             } else {
-                setRedeemError('Code rejected — it may have expired (5 min) or already been used.');
+                setRedeemError(
+                    'That code didn’t work. Sign-in codes expire 5 minutes after the ' +
+                        'Tynn page opens and can only be used once — start the sign-in ' +
+                        'again to get a fresh code.',
+                );
             }
         } catch (e: unknown) {
             setRedeemError(e instanceof Error ? e.message : String(e));
