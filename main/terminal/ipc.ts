@@ -21,7 +21,8 @@ import {
 } from '../db';
 import { whisperBroker } from '../whisper/broker';
 import { workspaceSlug } from '../whisper/slug';
-import { renderAgentLaunch, captureSessionByDetect } from '../whisper/session-capture';
+import { renderAgentLaunch, captureSessionByDetect, agentRelaunchDecision } from '../whisper/session-capture';
+import { buildSubmitBytes } from './keystrokes';
 import {
     normalizePurpose,
     type WhisperJoinInput,
@@ -336,6 +337,36 @@ export function createAgentTerminal(opts: {
 }
 
 /**
+ * After a FRESH pty spawn for an AGENT terminal (a restart/reopen where the previous
+ * shell + agent died), re-launch it so the panel isn't left as a plain shell (the
+ * "agent terminal opens as a regular terminal" bug), resuming its captured chat
+ * session when there is one. The first launch is done by createAgent; a warm reattach
+ * still has the agent running. See {@link agentRelaunchDecision}.
+ */
+function maybeRelaunchAgent(id: string, existing: boolean): void {
+    const decision = agentRelaunchDecision(getTerminalSpec(id), existing);
+    if (!decision) return;
+    if (decision.newSessionId) {
+        const spec = getTerminalSpec(id);
+        if (spec) {
+            updateTerminalSpec(id, { meta: { ...spec.meta, chat_session_id: decision.newSessionId } });
+        }
+    }
+    const bytes = buildSubmitBytes(decision.command, true);
+    // Let the fresh shell settle (profile load) before submitting the boot command.
+    const timer = setTimeout(() => {
+        try {
+            writeToTerminal(id, bytes);
+        } catch {
+            /* pty gone — nothing to submit */
+        }
+    }, 500);
+    if (typeof (timer as { unref?: () => void }).unref === 'function') {
+        (timer as { unref: () => void }).unref();
+    }
+}
+
+/**
  * Build a WhisperChat join input from a persisted agent spec — resolves the
  * workspace + its display slug (the db/fs I/O the pure broker can't do). Null
  * when the spec isn't a whisper agent (no `agent_id`) or its workspace is gone.
@@ -557,6 +588,10 @@ export function registerTerminalIpc(): void {
                 }
             }
             const result = mgr().create(opts);
+            // Agent terminal reattach after a restart: re-launch it (resuming the
+            // captured chat session) so it isn't left a plain shell. No-op for a
+            // warm reattach or a non-agent terminal. See maybeRelaunchAgent.
+            maybeRelaunchAgent(opts.id, result.existing);
             trackOwner(opts.id, event.sender);
             noteTerminalActivity(opts.id);
             return result;

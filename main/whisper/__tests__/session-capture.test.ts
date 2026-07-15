@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     renderAgentLaunch,
     renderAgentResume,
+    agentRelaunchDecision,
     appendLaunchFlags,
     extractSessionId,
     transcriptDirFor,
@@ -182,5 +183,42 @@ describe('transcript dir + filename parsing (detect)', () => {
     it('returns null when nothing new appeared', () => {
         const before = new Set(['a.jsonl']);
         expect(pickNewSessionId([{ name: 'a.jsonl', mtimeMs: 1 }], before)).toBeNull();
+    });
+});
+
+describe('agentRelaunchDecision — fresh vs continue on agent-terminal reattach', () => {
+    const claude = (extra: Record<string, string> = {}) => ({
+        meta: { agent: 'claude', agent_command: 'claude', ...extra },
+    });
+
+    it('no-ops on a WARM reattach (existing=true) — the agent is still running', () => {
+        expect(agentRelaunchDecision(claude({ chat_session_id: 'abc' }), true)).toBeNull();
+    });
+
+    it('no-ops for a non-agent terminal (or a missing spec)', () => {
+        expect(agentRelaunchDecision({ meta: {} }, false)).toBeNull();
+        expect(agentRelaunchDecision(null, false)).toBeNull();
+    });
+
+    it('CONTINUES: a captured chat_session_id resumes the same conversation', () => {
+        expect(agentRelaunchDecision(claude({ chat_session_id: 'sess-1' }), false)).toEqual({
+            command: 'claude --resume sess-1',
+        });
+    });
+
+    it('FRESH: no captured session → mints a new --session-id (and returns it to persist)', () => {
+        const d = agentRelaunchDecision(claude(), false);
+        expect(d?.command).toMatch(/^claude --session-id [0-9a-fA-F-]{8,}$/);
+        expect(d?.newSessionId).toBeTruthy();
+        expect(d?.command).toBe(`claude --session-id ${d?.newSessionId}`);
+    });
+
+    it('codex falls back to a fresh, session-less launch (no resume flag in v1)', () => {
+        expect(
+            agentRelaunchDecision(
+                { meta: { agent: 'codex', agent_command: 'codex', chat_session_id: 'x' } },
+                false,
+            ),
+        ).toEqual({ command: 'codex' });
     });
 });

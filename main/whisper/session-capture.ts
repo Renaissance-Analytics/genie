@@ -123,6 +123,47 @@ export function renderAgentResume(
     return `${base} --resume ${sessionId}`;
 }
 
+/** The agent-relevant slice of a terminal spec's meta (loose so this stays free of
+ *  the heavy db types). */
+interface AgentSpecLike {
+    meta?: {
+        agent?: string;
+        agent_command?: string;
+        chat_session_id?: string;
+    } | null;
+}
+
+/**
+ * Fresh-vs-continue decision for an AGENT terminal on a FRESH pty spawn (a restart /
+ * reopen where the previous shell + agent died). The spec's captured `chat_session_id`
+ * is the signal:
+ *   - present → RESUME the same conversation (`claude --resume <id>`) — a restart
+ *               continues where it left off (the graceful resume the MCP
+ *               `runAgent restart` uses).
+ *   - absent  → a fresh launch (mints a new session id) — a first spawn, or an agent
+ *               whose session was never captured (e.g. codex has no resume in v1).
+ * Returns the command to submit (+ any minted session id to persist), or null when
+ * there's nothing to (re)launch: a WARM reattach (`existing` — the agent is still
+ * running) or a non-agent terminal. Pure — the caller does the pty/db side-effects.
+ */
+export function agentRelaunchDecision(
+    spec: AgentSpecLike | null,
+    existing: boolean,
+): { command: string; newSessionId?: string } | null {
+    if (existing || !spec) return null;
+    const agent = spec.meta?.agent as WhisperAgentType | undefined;
+    if (!agent) return null;
+    const baseCmd = spec.meta?.agent_command ?? '';
+    const sid = spec.meta?.chat_session_id ?? null;
+    const resume = sid ? renderAgentResume(agent, baseCmd, sid) : null;
+    if (resume) return { command: resume };
+    const r = renderAgentLaunch(agent, baseCmd);
+    if (!r.command) return null;
+    return r.chatSessionId && !sid
+        ? { command: r.command, newSessionId: r.chatSessionId }
+        : { command: r.command };
+}
+
 /**
  * Append a user's ALWAYS-ON launch flags to a base agent command. Both sides are
  * trimmed; empty/whitespace flags are a no-op. Pure so the flag behaviour is
