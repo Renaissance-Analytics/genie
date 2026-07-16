@@ -5,6 +5,8 @@ import {
     applyGenieServer,
     claudeEntry,
     codexMcpLaunchArgs,
+    loadWorkspaceTerminalEnv,
+    readTynnMcpBearerToken,
     cursorEntry,
     ensureClaudeProjectMcpEnabled,
     GENIE_SERVER_NAME,
@@ -135,6 +137,26 @@ describe('Codex MCP launch overrides', () => {
             }),
         );
         expect(readTynnMcpUrl(dir)).toBe('https://tynn.test/mcp/project');
+        expect(readTynnMcpBearerToken(dir)).toBe('rpk_SECRET');
+        expect(loadWorkspaceTerminalEnv(dir)).toMatchObject({ TYNN_AGENT_TOKEN: 'rpk_SECRET' });
+    });
+
+    it('heals Codex terminal env from the literal MCP token when .env is absent', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-codex-env-'));
+        fs.writeFileSync(
+            path.join(dir, '.mcp.json'),
+            JSON.stringify({
+                mcpServers: {
+                    tynn: {
+                        type: 'http',
+                        url: 'https://tynn.test/mcp/project',
+                        headers: { Authorization: 'Bearer rpk_FROM_CONFIG' },
+                    },
+                },
+            }),
+        );
+        expect(fs.existsSync(path.join(dir, '.env'))).toBe(false);
+        expect(loadWorkspaceTerminalEnv(dir)).toEqual({ TYNN_AGENT_TOKEN: 'rpk_FROM_CONFIG' });
     });
 });
 

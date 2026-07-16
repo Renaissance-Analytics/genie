@@ -83,6 +83,31 @@ export function readTynnMcpUrl(workspacePath: string): string | null {
 }
 
 /**
+ * Read the literal bearer token from the provisioned Tynn MCP entry. Codex uses
+ * `bearer_token_env_var`, so every terminal spawn must be able to reconstruct
+ * that environment even when the workspace `.env` is absent or stale.
+ */
+export function readTynnMcpBearerToken(workspacePath: string): string | null {
+    const file = path.join(workspacePath, '.mcp.json');
+    const cfg = fs.existsSync(file) ? readJson(file) : null;
+    const servers = cfg?.mcpServers as JsonObj | undefined;
+    const tynn = servers?.[TYNN_SERVER_NAME] as JsonObj | undefined;
+    const headers = tynn?.headers as JsonObj | undefined;
+    const authorization = headers?.Authorization;
+    if (typeof authorization !== 'string') return null;
+    const match = /^Bearer\s+(.+)$/.exec(authorization.trim());
+    if (!match || match[1].includes('${')) return null;
+    return match[1].trim() || null;
+}
+
+/** Workspace env for terminal creation, healed from the authoritative MCP config. */
+export function loadWorkspaceTerminalEnv(workspacePath: string): Record<string, string> {
+    const env = loadWorkspaceEnvVars(workspacePath);
+    const token = readTynnMcpBearerToken(workspacePath);
+    return token ? { ...env, [TYNN_TOKEN_ENV_KEY]: token } : env;
+}
+
+/**
  * Quote a value as a single-quoted TOML literal for Codex's `-c key=value`
  * override. Single quotes are shell-portable inside the outer `"..."` (a literal
  * char in bash/pwsh/cmd). TOML literal strings have NO escape for a single quote,

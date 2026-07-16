@@ -36,7 +36,7 @@ import {
     type WhisperAgentType,
     type WhisperScope,
 } from '../whisper/types';
-import { loadWorkspaceEnvVars } from '../env-store';
+import { loadWorkspaceTerminalEnv } from '../mcp/agent-config';
 import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
 import { TerminalReadBuffer, type ReadResult } from './read-buffer';
@@ -292,7 +292,7 @@ export function createAgentTerminal(opts: {
     // launched here can call imDone etc.
     let env: Record<string, string> = {};
     const wsRoot = getWorkspace(opts.workspaceId)?.path;
-    env = wsRoot ? loadWorkspaceEnvVars(wsRoot) : {};
+    env = wsRoot ? loadWorkspaceTerminalEnv(wsRoot) : {};
     if (workspaceMcpEnabled(opts.workspaceId)) {
         const mcpUrl = registerTerminalEndpoint(id);
         if (mcpUrl) {
@@ -575,13 +575,14 @@ export function registerTerminalIpc(): void {
                     args: buildProcessArgs(opts.shell ?? '', spec.meta.command),
                 };
             }
-            // Load the workspace `.env` so an agent here resolves the refs the
-            // tynn `.mcp.json` entry uses (${TYNN_AGENT_TOKEN}). Lowest precedence
-            // — the spec's own opts.env wins on any key collision.
+            // Load workspace env and reconstruct TYNN_AGENT_TOKEN from the
+            // authoritative literal MCP config when `.env` is missing/stale.
+            // This path covers restored/resumed terminals; explicit opts.env
+            // still wins on any collision.
             const wsRoot = spec?.workspace_id
                 ? getWorkspace(spec.workspace_id)?.path
                 : undefined;
-            const envFileVars = wsRoot ? loadWorkspaceEnvVars(wsRoot) : {};
+            const envFileVars = wsRoot ? loadWorkspaceTerminalEnv(wsRoot) : {};
             if (Object.keys(envFileVars).length) {
                 opts = { ...opts, env: { ...envFileVars, ...opts.env } };
             }
