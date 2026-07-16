@@ -140,6 +140,26 @@ export function resolveShippedRuntime(): ServiceRuntime | null {
         try {
             const nodePath = path.join(root, nodeBin);
             if (!fs.existsSync(nodePath)) continue;
+
+            // MATERIALIZE the runtime into a per-user versioned copy OUTSIDE the
+            // install dir (packaged builds only). The auto-updater replaces the
+            // install dir wholesale, so a host executing the shipped node[.exe]
+            // IN PLACE gets its own runtime overwritten mid-update — the thing
+            // that kept killing live terminals on every upgrade even though the
+            // teardown correctly left the standalone host running. From the
+            // user-data copy the swap never touches the host. Dev builds keep
+            // using the repo runtime directly (no update concern; no stale-copy
+            // masking of runtime rebuilds).
+            let effectiveRoot = root;
+            let source = `shipped:${root}`;
+            if (app.isPackaged) {
+                const materialized = materializeRuntimeToUserData(root, nodeBin);
+                if (materialized) {
+                    effectiveRoot = materialized;
+                    source = `user-data:${materialized} (from ${root})`;
+                }
+            }
+
             // node-pty (ABI-matched) ships as a package directory at
             // `<root>/node-pty/`. The service sets `NODE_PATH = runtime.nodePtyDir`
             // and the host does `require('node-pty')`, which Node resolves as
@@ -147,12 +167,12 @@ export function resolveShippedRuntime(): ServiceRuntime | null {
             // CONTAINS `node-pty/` — i.e. `<root>` itself, NOT `<root>/node-pty`.
             // (Pointing NODE_PATH straight at the package dir makes the bare
             // `require('node-pty')` resolve to `<root>/node-pty/node-pty` and fail.)
-            const nodePtyPkg = path.join(root, 'node-pty');
+            const nodePtyPkg = path.join(effectiveRoot, 'node-pty');
             const hasNodePty = fs.existsSync(nodePtyPkg);
             return {
-                nodePath,
-                ...(hasNodePty ? { nodePtyDir: root } : {}),
-                source: `shipped:${root}`,
+                nodePath: path.join(effectiveRoot, nodeBin),
+                ...(hasNodePty ? { nodePtyDir: effectiveRoot } : {}),
+                source,
             };
         } catch {
             /* probe next root */
@@ -165,6 +185,98 @@ export function resolveShippedRuntime(): ServiceRuntime | null {
         return resolveServiceRuntime();
     } catch {
         return null;
+    }
+}
+
+/**
+ * The versioned directory key for a materialized runtime copy: the shipped
+ * `version.txt` (pinned node version + platform-arch) when present, else a
+ * size-derived fallback for pre-marker builds. Sanitised to a safe dir name.
+ * Pure → unit-testable.
+ */
+export function runtimeKeyFor(versionTxt: string | null, nodeSize: number): string {
+    const raw = (versionTxt ?? '').trim() || `sz${nodeSize}`;
+    return raw.replace(/[^A-Za-z0-9._-]/g, '_');
+}
+
+/**
+ * Materialize the SHIPPED runtime into a per-user, VERSIONED copy under
+ * `<baseDir>/<key>/` (default `<userData>/runtime/<key>/`) and return that
+ * root — or null on any failure, so the caller falls back to the shipped
+ * in-place runtime (everything still works, minus update-survival).
+ *
+ * Same key ⇒ the existing copy is reused untouched, so across a normal update
+ * the running host keeps executing the exact same files and is never disturbed.
+ * A NEW runtime version lands in a NEW dir — an old host keeps running its old
+ * copy while new launches use the new one. Superseded version dirs are LEFT in
+ * place (deleting files a live host may still lazily read is not worth the
+ * ~80 MB); only crashed `.staging-*` leftovers are pruned.
+ *
+ * The copy is staged into `<key>.staging-<pid>` then renamed into place with a
+ * `.complete` marker, so a torn half-copy can never masquerade as complete.
+ */
+export function materializeRuntimeToUserData(
+    shippedRoot: string,
+    nodeBin: string,
+    baseDir?: string,
+): string | null {
+    try {
+        const shippedNode = path.join(shippedRoot, nodeBin);
+        if (!fs.existsSync(shippedNode)) return null;
+
+        let versionTxt: string | null = null;
+        try {
+            versionTxt = fs.readFileSync(path.join(shippedRoot, 'version.txt'), 'utf8');
+        } catch {
+            /* pre-marker build — size fallback below */
+        }
+        const key = runtimeKeyFor(versionTxt, fs.statSync(shippedNode).size);
+
+        const base = baseDir ?? path.join(app.getPath('userData'), 'runtime');
+        const dest = path.join(base, key);
+
+        if (
+            fs.existsSync(path.join(dest, '.complete')) &&
+            fs.existsSync(path.join(dest, nodeBin))
+        ) {
+            pruneRuntimeStaging(base);
+            return dest;
+        }
+
+        const staging = path.join(base, `${key}.staging-${process.pid}`);
+        fs.rmSync(staging, { recursive: true, force: true });
+        fs.mkdirSync(staging, { recursive: true });
+        fs.cpSync(shippedRoot, staging, { recursive: true });
+        fs.writeFileSync(path.join(staging, '.complete'), new Date().toISOString());
+        fs.rmSync(dest, { recursive: true, force: true }); // clear a torn earlier attempt
+        fs.renameSync(staging, dest);
+        pruneRuntimeStaging(base);
+        logHostService(`runtime materialized to user-data → ${dest}`);
+        return dest;
+    } catch (e) {
+        logHostService(
+            `runtime materialize failed — host will run the shipped in-place runtime (no update-survival): ${
+                e instanceof Error ? e.message : String(e)
+            }`,
+        );
+        return null;
+    }
+}
+
+/** Remove crashed `.staging-*` leftovers (never in use). Completed version dirs
+ *  are kept — see materializeRuntimeToUserData. */
+function pruneRuntimeStaging(base: string): void {
+    try {
+        for (const name of fs.readdirSync(base)) {
+            if (!name.includes('.staging-')) continue;
+            try {
+                fs.rmSync(path.join(base, name), { recursive: true, force: true });
+            } catch {
+                /* best-effort */
+            }
+        }
+    } catch {
+        /* base may not exist yet */
     }
 }
 
@@ -245,6 +357,143 @@ export function logHostService(line: string): void {
         );
     } catch {
         /* logging is best-effort — never let it break activation */
+    }
+}
+
+/* ─── Windows Run-key autostart — the policy-blocked-schtasks fallback ────────
+ *
+ * Managed Windows machines commonly DENY `schtasks /Create` (the log shows
+ * "ERROR: Access is denied" on every boot), so the task-based per-user service
+ * can never install there — and retrying each boot just burns ~1.5s and spams
+ * the log. Once a denial is CONFIRMED we persist a marker and switch to a
+ * per-user `HKCU\...\Run` autostart instead: it needs no elevation and policy
+ * can't deny it. The Run key launches the SAME unit script the scheduled task
+ * would have (the package's own descriptor is the single source of truth for
+ * HOW the host starts) via a windowless wscript wrapper.
+ *
+ * Combined with the user-data runtime (materializeRuntimeToUserData) the
+ * detached host then has FULL service semantics on locked-down Windows:
+ *   - survives auto-updates  (its node.exe lives outside the install dir)
+ *   - survives reboots       (the Run key relaunches it at logon)
+ *   - survives app restarts  (detached — it never dies with Genie)
+ * Double-launch is safe: the pty-host is single-instance on its socket (a
+ * second instance sees EADDRINUSE against a live incumbent and exits).
+ */
+
+const RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
+const SERVICE_BLOCKED_MARKER = 'ptyhost-service-blocked';
+
+function serviceBlockedMarker(userDataDir: string): string {
+    return path.join(userDataDir, SERVICE_BLOCKED_MARKER);
+}
+
+/** True once a schtasks policy denial has been confirmed on this machine. The
+ *  marker is a plain file — delete it to retry the task-based service after a
+ *  policy change. */
+export function isServiceBlocked(userDataDir: string): boolean {
+    try {
+        return fs.existsSync(serviceBlockedMarker(userDataDir));
+    } catch {
+        return false;
+    }
+}
+
+function markServiceBlocked(userDataDir: string, reason: string): void {
+    try {
+        fs.writeFileSync(
+            serviceBlockedMarker(userDataDir),
+            `${new Date().toISOString()} ${reason}\n`,
+        );
+    } catch {
+        /* best-effort */
+    }
+}
+
+/** The windowless launcher: a Run-key entry that points straight at a `.cmd`
+ *  flashes a console at logon; `wscript` runs it hidden (second arg 0). VBS
+ *  escapes an embedded quote by doubling it. Pure → unit-testable. */
+export function runKeyVbsContents(unitPath: string): string {
+    return `CreateObject("WScript.Shell").Run """${unitPath}""", 0, False\r\n`;
+}
+
+/** The `reg add` argv registering the autostart. Pure → unit-testable. */
+export function runKeyRegAddArgv(vbsPath: string): string[] {
+    return [
+        'reg',
+        'add',
+        RUN_KEY,
+        '/v',
+        HOST_SERVICE_LABEL,
+        '/t',
+        'REG_SZ',
+        '/d',
+        `wscript.exe "${vbsPath}"`,
+        '/f',
+    ];
+}
+
+/**
+ * Ensure the HKCU Run-key autostart is registered and its unit script current.
+ * Rewritten every boot (cheap + idempotent) so a new runtime key or app path is
+ * picked up. Returns ok:false with a reason on any failure — the caller falls
+ * back to the plain detached host either way.
+ */
+export async function ensureRunKeyAutostart(deps: {
+    userDataDir: string;
+    runtime: ServiceRuntime;
+}): Promise<{ ok: boolean; reason?: string }> {
+    if (process.platform !== 'win32') return { ok: false, reason: 'win32 only' };
+    try {
+        let hostScript: string | undefined;
+        try {
+            hostScript = ptyHostScriptPath() ?? undefined;
+        } catch {
+            hostScript = undefined;
+        }
+        const desc = buildServiceDescriptor(
+            resolveServiceConfig({
+                label: HOST_SERVICE_LABEL,
+                userDataDir: deps.userDataDir,
+                runtime: deps.runtime,
+                ...(hostScript ? { hostScript } : {}),
+            }),
+        );
+        const io = genieServiceIo();
+        await io.writeFile(desc.unitPath, desc.unitContents, { mode: 0o700 });
+
+        const vbsPath = path.join(deps.userDataDir, `${HOST_SERVICE_LABEL}.vbs`);
+        await io.writeFile(vbsPath, runKeyVbsContents(desc.unitPath), { mode: 0o700 });
+
+        const res = await io.run(runKeyRegAddArgv(vbsPath));
+        if (res.code !== 0) {
+            return {
+                ok: false,
+                reason: `reg add failed (${res.code}): ${res.stderr.trim() || res.stdout.trim()}`,
+            };
+        }
+        logHostService(
+            `Run-key autostart ensured → ${RUN_KEY}\\${HOST_SERVICE_LABEL} → ${vbsPath}`,
+        );
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+    }
+}
+
+/** Best-effort removal, for when detached terminals are turned OFF. No-op when
+ *  the autostart was never registered (the vbs wrapper is the cheap witness),
+ *  so in-process users don't get a failed `reg delete` in the log every boot. */
+export async function removeRunKeyAutostart(userDataDir: string): Promise<void> {
+    if (process.platform !== 'win32') return;
+    try {
+        const vbsPath = path.join(userDataDir, `${HOST_SERVICE_LABEL}.vbs`);
+        if (!fs.existsSync(vbsPath)) return;
+        const io = genieServiceIo();
+        await io.run(['reg', 'delete', RUN_KEY, '/v', HOST_SERVICE_LABEL, '/f']);
+        await io.rm(vbsPath);
+        logHostService('Run-key autostart removed (detached terminals disabled)');
+    } catch {
+        /* best-effort */
     }
 }
 
@@ -344,6 +593,23 @@ export async function activateHostService(
         hostScript = undefined;
     }
 
+    // A machine with a CONFIRMED schtasks policy denial can never install the
+    // task-based service — skip the doomed (and slow) attempt entirely and keep
+    // the Run-key autostart current instead. The detached host that the caller
+    // falls back to carries full service semantics here: it runs the user-data
+    // runtime (survives updates) and the Run key relaunches it at logon
+    // (survives reboots). Delete <userData>/ptyhost-service-blocked to retry
+    // schtasks after a policy change.
+    if (process.platform === 'win32' && isServiceBlocked(deps.userDataDir)) {
+        const rk = await ensureRunKeyAutostart({ userDataDir: deps.userDataDir, runtime });
+        return {
+            ok: false,
+            reason: rk.ok
+                ? 'scheduled-task service policy-blocked — Run-key autostart active; detached host carries service semantics'
+                : `scheduled-task service policy-blocked and Run-key registration failed (${rk.reason}) — using the plain detached host`,
+        };
+    }
+
     // WORKAROUND (win32 stale-state): the package treats "installed" as "the
     // unit file exists", not "the OS task is actually registered". A pre-fix
     // run (when the old shell:true io mangled the schtasks /TR quoting) could
@@ -404,6 +670,20 @@ export async function activateHostService(
     if (!result.ok) {
         const reason =
             result.error ?? `service not ready (action=${result.action})`;
+        // A policy denial (managed Windows) will never succeed on a later boot.
+        // Persist the fact and register the Run-key autostart NOW, so the
+        // detached host the caller falls back to already has logon relaunch —
+        // and every subsequent boot short-circuits above instead of re-running
+        // the doomed schtasks dance.
+        if (process.platform === 'win32' && /access is denied/i.test(reason)) {
+            markServiceBlocked(deps.userDataDir, reason);
+            const rk = await ensureRunKeyAutostart({ userDataDir: deps.userDataDir, runtime });
+            logHostService(
+                rk.ok
+                    ? 'schtasks policy-blocked → HKCU Run-key autostart registered; detached host carries service semantics'
+                    : `schtasks policy-blocked and Run-key registration failed: ${rk.reason}`,
+            );
+        }
         logHostService(`service NOT ready → falling back to detached: ${reason}`);
         return { ok: false, reason, result };
     }

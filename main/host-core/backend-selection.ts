@@ -1,4 +1,8 @@
-import { selectTerminalBackend, activateHostService } from '../terminal/host-service';
+import {
+    selectTerminalBackend,
+    activateHostService,
+    removeRunKeyAutostart,
+} from '../terminal/host-service';
 import { getSnapshotStore } from '../terminal/genie-adapter';
 import { initTerminalBackend, isHostBacked } from '@particle-academy/fancy-term-host';
 
@@ -24,6 +28,11 @@ export interface BackendSelectionOptions {
 }
 
 export async function runBackendSelection(opts: BackendSelectionOptions) {
+    // Detached terminals turned OFF → the host shouldn't keep relaunching at
+    // logon either. Best-effort, fire-and-forget (win32 Run-key fallback only).
+    if (!opts.detachedEnabled) {
+        void removeRunKeyAutostart(opts.userDataDir);
+    }
     return selectTerminalBackend({
         detachedEnabled: opts.detachedEnabled,
         activateService: () =>

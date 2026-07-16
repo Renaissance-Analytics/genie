@@ -1446,13 +1446,13 @@ app.whenReady().then(async () => {
     //     pty-host OWNS the ptys and must OUTLIVE the quit so the next launch
     //     reattaches live sessions. We snapshot first (T1 floor) but DO NOT kill.
     //   • NORMAL quit, in-process    → stopAllTerminals() (kill the ptys we own).
-    //   • UPDATE quit, host-backed   → the host PINS Genie's binary (it runs as
-    //     execPath), so NSIS can't overwrite it. Snapshot every host terminal
-    //     (so restore replays history, not fresh) then GRACEFULLY shut the host
-    //     down (killHostForUpdate → shutdownHost(): the host kills its own ptys,
-    //     cleans up pidfile/socket, exits) and WAIT (bounded) before
-    //     quitAndInstall's installer runs, with a defensive pidfile-kill fallback
-    //     if the graceful path doesn't take.
+    //   • UPDATE quit, host-backed   → ONLY an electron-mode detached host (the
+    //     no-runtime fallback, which PINS Genie's binary as execPath) is
+    //     snapshotted + gracefully shut down so NSIS can overwrite the binary.
+    //     The normal case — a host on the user-data standalone runtime, or the
+    //     OS service — pins NOTHING the updater touches and is LEFT RUNNING, so
+    //     live terminals + their agents SURVIVE the upgrade and the relaunched
+    //     Genie reattaches them.
     //   • UPDATE quit, in-process    → stopAllTerminals() (no host to worry about).
     //
     // Returns a promise so the before-quit second phase can AWAIT the bounded

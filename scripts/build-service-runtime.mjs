@@ -334,10 +334,21 @@ async function main() {
 
         verifyLoads(nodePath);
 
+        // Version marker, read by resolveShippedRuntime() to key the per-user
+        // MATERIALIZED copy of this runtime (<userData>/runtime/<key>/). The host
+        // runs from that copy — OUTSIDE the install dir — so an auto-update
+        // replacing the app never disturbs a running host. Same version ⇒ same
+        // key ⇒ the running host's copy is reused untouched across updates.
+        await fs.writeFile(
+            path.join(RUNTIME_DIR, 'version.txt'),
+            `${NODE_VERSION}-${platform}-${arch}\n`,
+        );
+
         log('\x1b[32mresources/runtime/ built successfully.\x1b[0m');
         log(`layout:`);
         log(`  resources/runtime/${NODE_BIN_NAME}`);
         log(`  resources/runtime/node-pty/  (incl. prebuilds/${platform}-${arch})`);
+        log(`  resources/runtime/version.txt  (${NODE_VERSION}-${platform}-${arch})`);
     } finally {
         await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }

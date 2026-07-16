@@ -265,11 +265,14 @@ export { terminalManager };
  * Tear down the detached pty-host on the AUTO-UPDATE path so the NSIS installer
  * can overwrite Genie's binary.
  *
- * The detached pty-host runs as Genie's `process.execPath` (+ ELECTRON_RUN_AS_NODE)
- * so it PINS Genie's executable open. On a NORMAL quit that's the point — the host
- * survives so terminals come back live (background.ts uses
- * disconnectHostLeaveRunning). But on the AUTO-UPDATE path NSIS must OVERWRITE
- * that binary, and a surviving host blocks it.
+ * ONLY for the ELECTRON-mode fallback host — the one spawned as Genie's
+ * `process.execPath` (+ ELECTRON_RUN_AS_NODE), which PINS Genie's executable so
+ * NSIS can't overwrite it. The NORMAL detached host runs the user-data
+ * standalone Node runtime (see materializeRuntimeToUserData) — it pins nothing
+ * the updater touches and is LEFT RUNNING across the update (background.ts
+ * gates this call on detachedHostPinsBinary()), so live terminals and their
+ * agents survive the upgrade. On a NORMAL quit no host is ever killed
+ * (disconnectHostLeaveRunning).
  *
  * fancy-term-host@^0.1.2 exposes a GRACEFUL `shutdownHost()`: it sends a
  * `shutdown` wire message, the host runs its OWN cleanup (kills its ptys, removes
