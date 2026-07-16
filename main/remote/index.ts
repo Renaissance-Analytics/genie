@@ -290,14 +290,18 @@ export function recordKnownHost(host: RemoteHost): void {
     writeKnownHosts(store);
 }
 
-/** The persisted known hosts, each tagged with whether it's currently connected. */
-export function listKnownHosts(): Array<KnownHost & { connKey: string; connected: boolean }> {
+/** The persisted known hosts, tagged with live connection + attached terminals. */
+export function listKnownHosts(): Array<KnownHost & { connKey: string; connected: boolean; activeTerminals: boolean }> {
     const store = readKnownHosts();
-    return Object.entries(store).map(([connKey, h]) => ({
-        ...h,
-        connKey,
-        connected: connections.has(connKey),
-    }));
+    return Object.entries(store).map(([connKey, h]) => {
+        const connection = connections.get(connKey);
+        return {
+            ...h,
+            connKey,
+            connected: !!connection,
+            activeTerminals: (connection?.attachedTerminals.size ?? 0) > 0,
+        };
+    });
 }
 
 /** Set a host's friendly name (or clear it with ''). */

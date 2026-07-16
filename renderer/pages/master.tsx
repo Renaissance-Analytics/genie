@@ -42,6 +42,7 @@ import {
     connectableWorkstationIds,
     newlyConnectableWorkstationIds,
 } from '../lib/workstation-status';
+import { cloudHostVisual, cloudWorkstationsOnly } from '../lib/cloud-host-visual';
 import {
     IconBox,
     IconColumns,
@@ -2720,6 +2721,7 @@ interface HostRow {
     /** Known (persisted, can Forget) vs only just discovered on the tailnet. */
     known: boolean;
     connected: boolean;
+    activeTerminals: boolean;
     online: boolean;
 }
 
@@ -2752,6 +2754,7 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                     connKey: k.connKey,
                     known: true,
                     connected: k.connected,
+                    activeTerminals: k.activeTerminals,
                     online: false,
                 });
             }
@@ -2777,19 +2780,15 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                         connKey: d.connKey,
                         known: false,
                         connected: false,
+                        activeTerminals: false,
                         online: true,
                     });
             }
             const nextRows = [...byKey.values()];
-            const localHostNames = new Set(
-                nextRows.flatMap((row) => [row.name, row.hostname])
-                    .filter((name): name is string => Boolean(name))
-                    .map((name) => name.trim().toLocaleLowerCase()),
-            );
             setRows(nextRows);
-            setWorkstations(ws.filter((workstation) =>
-                !workstation.is_local || !localHostNames.has(workstation.name.trim().toLocaleLowerCase()),
-            ));
+            // Desktop Genie registrations are already represented by discovery.
+            // Only actual Genie Cloud machines belong in this unified host list.
+            setWorkstations(cloudWorkstationsOnly(ws));
         } finally {
             setLoading(false);
         }
@@ -2929,11 +2928,21 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                             // Tynn's `connectable` flag — a down host must never offer a
                             // Connect that ends in "relay handshake timed out".
                             const st = workstationConnectState(ws);
+                            const liveRow = rows.find((row) =>
+                                row.connected &&
+                                [row.name, row.hostname]
+                                    .filter(Boolean)
+                                    .some((name) => name!.trim().toLocaleLowerCase() === ws.name.trim().toLocaleLowerCase()),
+                            );
+                            const visual = cloudHostVisual(ws, !!liveRow, liveRow?.activeTerminals ?? false);
                             return (
                             <div key={`ws:${ws.id}`} style={{ borderRadius: 8, padding: '7px 8px', marginBottom: 2, background: '#1b1b21' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                    <span style={{ width: 7, height: 7, borderRadius: 999, flex: '0 0 auto', background: st.dotColor }} title={st.title} />
-                                    {!ws.is_local && <span title="Cloud workstation" aria-label="Cloud workstation" style={{ color: '#60a5fa', lineHeight: 1 }}>☁</span>}
+                                    <span
+                                        title={visual.title}
+                                        aria-label={`Cloud host — ${visual.title}`}
+                                        className={`hosts-cloud-icon is-${visual.color}${visual.pulse ? ' is-pulsing' : ''}`}
+                                    >☁</span>
                                     <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                         <span style={{ fontWeight: 600 }}>{ws.name}</span>
                                         {ws.capability && <span style={{ color: '#71717a', marginLeft: 6 }}>{ws.capability}</span>}

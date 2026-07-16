@@ -13,6 +13,22 @@
 }
 
 /* Terminal palette — fixed dark regardless of app theme. */
+.hosts-cloud-icon {
+    flex: 0 0 auto;
+    font-size: 14px;
+    line-height: 1;
+    filter: drop-shadow(0 0 3px color-mix(in srgb, currentColor 45%, transparent));
+}
+.hosts-cloud-icon.is-green { color: #22c55e; }
+.hosts-cloud-icon.is-yellow { color: #eab308; }
+.hosts-cloud-icon.is-red { color: #ef4444; }
+.hosts-cloud-icon.is-blue { color: #3b82f6; }
+.hosts-cloud-icon.is-pulsing { animation: hosts-cloud-pulse 1.4s ease-in-out infinite; }
+@keyframes hosts-cloud-pulse {
+    0%, 100% { opacity: 0.55; transform: scale(0.92); }
+    50% { opacity: 1; transform: scale(1.12); }
+}
+
 .gwrap {
     --term-bg: #0b0b0f;
     --term-head: #101015;

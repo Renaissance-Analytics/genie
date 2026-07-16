@@ -654,6 +654,8 @@ export interface KnownHost {
     connKey: string;
     /** Whether this host currently has a live connection (a host window open). */
     connected: boolean;
+    /** Whether that live connection currently has terminal streams attached. */
+    activeTerminals: boolean;
 }
 
 /** A Virtual Workstation the signed-in member may connect to (Hosts picker).
