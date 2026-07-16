@@ -376,12 +376,6 @@ export interface Settings {
     detached_terminals?: 'on' | 'off';
     /** Whether Genie launches minimized to the tray (default 'off' = start open). */
     start_minimized?: 'on' | 'off';
-    /** Prepend the bundled tynn-cli bin to terminal PATH + inject GENIE_* env.
-     *  Defaults ON; 'off' disables. */
-    cli_tools_in_terminals?: 'on' | 'off';
-    /** Install the bundled toolkit system-wide on startup (bash + Windows
-     *  cmd/PowerShell shims), once per build. Defaults ON; 'off' opts out. */
-    cli_install_systemwide?: 'on' | 'off';
     /** Play a chime when an agent calls imDone. Defaults 'off'. */
     notify_sound?: 'on' | 'off';
     /** Show an OS notification (tray popup) when an agent calls imDone.
@@ -668,6 +662,7 @@ export interface ConnectableWorkstation {
     id: string;
     name: string;
     status: string;
+    is_local: boolean;
     relay_endpoint: string;
     connectable: boolean;
     capability: string | null;
@@ -1935,12 +1930,6 @@ export interface GenieApi {
         clearLog: (id: string) => Promise<{ ok: boolean }>;
         /** Every process across every workspace (+ System) for the Task Manager. */
         list: () => Promise<ProcessListItem[]>;
-    };
-    cli: {
-        /** Whether the tynn-cli toolkit is shipped with this build + its home dir. */
-        info: () => Promise<{ shipped: boolean; home: string | null }>;
-        /** Run the bundled install.sh to add the tools to PATH system-wide (Git Bash). */
-        install: () => Promise<{ ok: boolean; output: string }>;
     };
     updater: {
         mode: () => Promise<'phase1' | 'phase2'>;

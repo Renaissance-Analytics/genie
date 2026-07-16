@@ -647,6 +647,17 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v25 — tynn-cli was removed from Genie. Drop its retired toggles so
+            // remote settings payloads and future diagnostics cannot resurrect
+            // stale product state from pre-removal builds.
+            version: 25,
+            runner: (db) => {
+                db.prepare(
+                    `DELETE FROM settings WHERE key IN ('cli_tools_in_terminals', 'cli_install_systemwide')`,
+                ).run();
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -725,16 +736,6 @@ export interface Settings {
      *  window. Defaults 'off' — Genie starts OPEN. 'on' starts in the tray only
      *  (the window opens on the first tray click / global hotkey). */
     start_minimized?: 'on' | 'off';
-    /** Prepend the bundled tynn-cli bin to terminal PATH + inject GENIE_* env.
-     *  'off' disables it; anything else (incl. unset) is ON. */
-    cli_tools_in_terminals?: 'on' | 'off';
-    /** Install the bundled tynn-cli toolkit system-wide on startup — copies it to
-     *  `~/.genie/tynn-cli`, adds bin/ to `~/.bashrc`, and (on Windows) generates
-     *  cmd/PowerShell `.cmd` shims + puts them on the User PATH — so the tools are
-     *  available in EVERY shell, not just Genie terminals. Idempotent: runs once
-     *  per build. Defaults ON (unset → on); 'off' opts out. Distinct from
-     *  `cli_tools_in_terminals` (which only affects Genie's own terminals). */
-    cli_install_systemwide?: 'on' | 'off';
     /** Play a chime when an agent calls imDone. Defaults 'off'. */
     notify_sound?: 'on' | 'off';
     /** Show an OS notification (tray popup) when an agent calls imDone.
@@ -889,8 +890,6 @@ export function getAllSettings(): Settings {
         track_cwd: (out['track_cwd'] as 'on' | 'off') ?? 'on',
         detached_terminals: (out['detached_terminals'] as 'on' | 'off') ?? 'on',
         start_minimized: (out['start_minimized'] as 'on' | 'off') ?? 'off',
-        cli_install_systemwide:
-            (out['cli_install_systemwide'] as 'on' | 'off') ?? 'on',
         notify_sound: (out['notify_sound'] as 'on' | 'off') ?? 'off',
         notify_toast: (out['notify_toast'] as 'on' | 'off') ?? 'off',
         sound_imdone:

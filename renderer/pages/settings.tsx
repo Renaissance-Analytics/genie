@@ -54,9 +54,6 @@ export default function SettingsPage() {
     const [shellDefault, setShellDefault] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
     const [savedAt, setSavedAt] = useState<number | null>(null);
-    const [cliShipped, setCliShipped] = useState<boolean | null>(null);
-    const [cliBusy, setCliBusy] = useState(false);
-    const [cliMsg, setCliMsg] = useState<string | null>(null);
     // Opened FROM a remote/host window? Then restrict to the connection-relevant
     // subset (see settings-nav.ts). Constant per window (reads the ?remote=1 flag).
     const restricted = isRestrictedSettings();
@@ -74,8 +71,6 @@ export default function SettingsPage() {
             }));
             setShells(det.shells);
             setShellDefault(det.defaultId);
-            const info = await api().cli.info().catch(() => ({ shipped: false }));
-            setCliShipped(info.shipped);
         })();
     }, []);
 
@@ -268,123 +263,6 @@ export default function SettingsPage() {
                         )}
                         {show('tools') && (
                             <SearchGroup label="Tools" searching={searching}>
-
-            <SetSection
-                title="Tools"
-                desc="The bundled tynn-cli toolkit in Genie terminals"
-                host={restricted}
-            >
-                <SettingRow
-                    label="Make tynn-cli tools available in terminals"
-                    desc={
-                        <>
-                            Prepends the bundled toolkit (<code>resetme</code>,{' '}
-                            <code>reload</code>, <code>puse</code>, <code>sandbox</code>,
-                            …) to each terminal&apos;s PATH and injects{' '}
-                            <code>GENIE_WORKSPACE</code> / <code>GENIE_ENVELOPE_ROOT</code>{' '}
-                            / <code>GENIE_REPO</code>. Bash-family shells only (Git Bash
-                            on Windows).
-                            {cliShipped === false && (
-                                <>
-                                    {' '}
-                                    <strong>Not bundled in this build.</strong>
-                                </>
-                            )}
-                        </>
-                    }
-                    keywords="cli tools tynn-cli resetme reload puse sandbox path terminal toolkit bundled"
-                >
-                    <Switch
-                        checked={s.cli_tools_in_terminals !== 'off'}
-                        onCheckedChange={(on: boolean) =>
-                            patch({ cli_tools_in_terminals: on ? 'on' : 'off' })
-                        }
-                    />
-                </SettingRow>
-
-                {/* Auto-install toggle acts on THIS machine (edits ~/.bashrc + the
-                    Windows User PATH), so hide it in a remote/host settings window
-                    where it would target the client, not the host. */}
-                {!restricted && (
-                    <SettingRow
-                        label="Install system-wide automatically"
-                        desc={
-                            <>
-                                On startup, install the toolkit to{' '}
-                                <code>~/.genie/tynn-cli</code> so its commands work in
-                                every shell — Git Bash via <code>~/.bashrc</code>, and
-                                cmd / PowerShell via generated <code>.cmd</code> shims on
-                                your User PATH. Runs once per Genie build; open a new
-                                shell to pick up PATH changes.
-                            </>
-                        }
-                        keywords="install system-wide automatic startup cli tools bashrc path powershell cmd shims global"
-                    >
-                        <Switch
-                            checked={s.cli_install_systemwide !== 'off'}
-                            onCheckedChange={(on: boolean) =>
-                                patch({ cli_install_systemwide: on ? 'on' : 'off' })
-                            }
-                        />
-                    </SettingRow>
-                )}
-
-                {/* Install system-wide runs on THIS machine's ~/.bashrc via
-                    api().cli.install() (not bridged) — hidden in a remote window,
-                    where it would install on the client, not the host. The toggle
-                    above is host-sourced and configures the host's terminals. */}
-                {!restricted && (
-                    <SettingRow
-                        label="Install system-wide"
-                        desc={
-                            <>
-                                Copies the toolkit to <code>~/.genie/tynn-cli</code> and adds
-                                it to your <code>~/.bashrc</code> — so <code>resetme</code>{' '}
-                                works in any terminal, not just Genie&apos;s.
-                            </>
-                        }
-                        keywords="install system-wide cli tools bashrc global terminal"
-                        grow
-                    >
-                        <div
-                            style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 12,
-                                flexWrap: 'wrap',
-                                justifyContent: 'flex-end',
-                            }}
-                        >
-                            {cliMsg && (
-                                <Text size="xs" className="text-zinc-500">
-                                    {cliMsg}
-                                </Text>
-                            )}
-                            <Action
-                                variant="ghost"
-                                icon="download"
-                                disabled={cliBusy || cliShipped === false}
-                                onClick={async () => {
-                                    setCliBusy(true);
-                                    setCliMsg(null);
-                                    try {
-                                        const r = await api().cli.install();
-                                        setCliMsg(
-                                            r.ok
-                                                ? 'Installed system-wide. Open a new Git Bash session to use the tools everywhere.'
-                                                : `Install failed: ${r.output}`,
-                                        );
-                                    } finally {
-                                        setCliBusy(false);
-                                    }
-                                }}
-                            >
-                                {cliBusy ? 'Installing…' : 'Install system-wide…'}
-                            </Action>
-                        </div>
-                    </SettingRow>
-                )}
-            </SetSection>
 
             <SetSection
                 title="Specialized terminals"

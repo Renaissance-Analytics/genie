@@ -44,7 +44,7 @@ import {
 } from './issue-watch';
 import { getToken } from './github/storage';
 import { detectFolder } from './workspace/detect';
-import { ensureTynnCliInstalledOnce } from './cli/tynn-cli';
+import { cleanupLegacyTynnCliInstall } from './cli/legacy-cleanup';
 import type {
     WorkspaceMap,
     WorkspaceRepoInfo,
@@ -928,6 +928,19 @@ app.whenReady().then(async () => {
     // workspace's full-filesystem access (files/ipc.ts) — impossible headless.
     markDesktopRuntime();
 
+    // One-time upgrade migration: remove the system-wide tynn-cli installation
+    // created by older Genie builds before terminals/processes inherit its PATH.
+    const cliCleanup = await cleanupLegacyTynnCliInstall();
+    if (cliCleanup.error) {
+        console.error(`[tynn-cli cleanup] ${cliCleanup.error}`);
+    } else if (cliCleanup.cleaned) {
+        console.log(
+            `[tynn-cli cleanup] removed legacy toolkit${
+                cliCleanup.backupDir ? `; user files preserved at ${cliCleanup.backupDir}` : ''
+            }`,
+        );
+    }
+
     // Persistent session under "persist:tynn" so cookies survive restarts.
     // tynn-api.ts uses this session for all outbound calls.
     session.fromPartition('persist:tynn');
@@ -1135,32 +1148,6 @@ app.whenReady().then(async () => {
     // + best-effort so it never blocks startup (the token may settle first).
     // Skipped under E2E — the mock owns the capability channels + state.
     if (!isE2E()) setTimeout(() => void runBootCapabilityCheck(), 4000).unref?.();
-    // Install the bundled tynn-cli toolkit system-wide, ONCE per build, so its
-    // commands (resetme / puse / sandbox / …) are on the machine's PATH in
-    // EVERY shell (bash + — via generated .cmd shims — cmd + PowerShell), not
-    // just Genie terminals. Idempotent: skips when this build already installed
-    // it (marker check), so it never re-edits ~/.bashrc / the User PATH on a
-    // normal launch. Best-effort + deferred + unref'd — it must NEVER block or
-    // crash boot; a failure (no Git Bash, no toolkit) is logged and ignored.
-    // Opt out with the `cli_install_systemwide` setting.
-    if (
-        !isE2E() &&
-        (getAllSettings() as Record<string, string>)['cli_install_systemwide'] !== 'off'
-    ) {
-        setTimeout(() => {
-            void ensureTynnCliInstalledOnce(app.getVersion())
-                .then((r) => {
-                    if (r.skipped) return; // already installed / not bundled — quiet
-                    // eslint-disable-next-line no-console
-                    console.log(
-                        `[tynn-cli] system-wide install ${r.installed ? 'ok' : 'failed'}: ${r.output}`,
-                    );
-                })
-                .catch((e) =>
-                    console.error('[tynn-cli] system-wide install error', e),
-                );
-        }, 6000).unref?.();
-    }
     // Start background Process service runners flagged autostart. Headless —
     // they run in the pty backend with no panel; the supervisor broadcasts
     // status to the workspace-row indicator + inline manager.

@@ -38,6 +38,7 @@ export interface ConnectableWorkstation {
     id: string;
     name: string;
     status: string;
+    is_local: boolean;
     relay_endpoint: string;
     connectable: boolean;
     capability: string | null;

@@ -1,2 +1,0 @@
-Vendored from repos/tynn-cli by scripts/bundle-tynn-cli.mjs.
-Do not edit here — edit tynn-cli and re-run the bundler.

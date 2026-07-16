@@ -82,7 +82,6 @@ describe('host-sourced (bucket 2) classification', () => {
         expect([...HOST_SOURCED_SETTINGS_KEYS].sort()).toEqual(
             [
                 'ai_system',
-                'cli_tools_in_terminals',
                 'mcp_port',
                 'mcp_sync_agents',
                 'mcp_sync_claude',
@@ -102,7 +101,6 @@ describe('host-sourced (bucket 2) classification', () => {
     it('classifies keys: agent-env → host, device prefs → local', () => {
         for (const k of [
             'ai_system',
-            'cli_tools_in_terminals',
             'mcp_port',
             'mcp_sync_claude',
             'mcp_sync_cursor',

@@ -184,8 +184,8 @@ export function defaultE2EState(): E2EState {
             },
             repos: [
                 {
-                    owner: 'wishborn',
-                    repo: 'tynn-cli',
+                    owner: 'Renaissance-Analytics',
+                    repo: 'guardian',
                     enabled: true,
                     unread: 0,
                     error: 'unauthenticated',

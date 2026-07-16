@@ -14,7 +14,6 @@ describe('pickHostSettings — host-sourced allow-list', () => {
         expect([...HOST_SOURCED_SETTINGS_KEYS].sort()).toEqual(
             [
                 'ai_system',
-                'cli_tools_in_terminals',
                 'mcp_port',
                 'mcp_sync_agents',
                 'mcp_sync_claude',
@@ -34,7 +33,6 @@ describe('pickHostSettings — host-sourced allow-list', () => {
         const all = {
             // bucket 2 — kept:
             ai_system: 'Prefer TypeScript.',
-            cli_tools_in_terminals: 'on',
             mcp_port: '51717',
             mcp_sync_claude: 'on',
             mcp_sync_cursor: 'off',
@@ -60,7 +58,6 @@ describe('pickHostSettings — host-sourced allow-list', () => {
 
         expect(picked).toEqual({
             ai_system: 'Prefer TypeScript.',
-            cli_tools_in_terminals: 'on',
             mcp_port: '51717',
             mcp_sync_claude: 'on',
             mcp_sync_cursor: 'off',

@@ -91,9 +91,6 @@ export const HOST_SOURCED_SETTINGS_KEYS = [
     // Ai.System — the workspace-instructions injected into every host workspace's
     // AGENTS.md (read lazily on the host at doc-sync time).
     'ai_system',
-    // Host terminal environment: prepend the bundled toolkit + inject GENIE_* env
-    // into the pty the agent runs in (read on the host at terminal spawn).
-    'cli_tools_in_terminals',
     // Agent-MCP config: the loopback port the HOST binds + which agent configs it
     // keeps synced into its workspaces.
     'mcp_port',

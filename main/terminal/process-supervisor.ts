@@ -4,14 +4,12 @@ import {
     resolveDefaultShell,
 } from '@particle-academy/fancy-term-host';
 import {
-    getAllSettings,
     getTerminalSpec,
     listTerminalSpecs,
     updateTerminalSpec,
 } from '../db';
 import { dbSettingsProvider } from './genie-adapter';
 import { buildProcessArgs } from './process-spawn';
-import { buildTynnCliEnv } from '../cli/tynn-cli';
 import { decideOnExit, type ProcessStatus } from './process-lifecycle';
 import { mobileEmit } from '../mobile/server';
 import { broadcastLocal } from '../remote';
@@ -164,12 +162,10 @@ export function startProcess(specId: string): void {
     const resolved = resolveDefaultShell(dbSettingsProvider());
     const shell = spec.shell || resolved.command;
     const args = buildProcessArgs(shell, spec.meta.command);
-    const cliEnabled = getAllSettings().cli_tools_in_terminals !== 'off';
     // A service runs at its CONFIGURED cwd every time — never a tracked live_cwd
     // (processes don't meaningfully track cwd, and a stale one is the "doesn't
     // open in the correct location" bug). Normalize for the platform.
     const cwd = path.normalize(spec.cwd);
-    const env = buildTynnCliEnv(cwd, cliEnabled);
 
     // Make the launch context visible in the hover log as CONTEXT, not as
     // commands — location first, then the human command (not the full
@@ -183,7 +179,7 @@ export function startProcess(specId: string): void {
     );
 
     try {
-        terminalManager().create({ id: specId, cwd, shell, args, env });
+        terminalManager().create({ id: specId, cwd, shell, args });
         setStatus(specId, 'running');
         // Record the running intent so this process is restored on next launch
         // if Genie goes down (quit/update/crash) while it's up.

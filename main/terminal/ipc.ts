@@ -36,7 +36,6 @@ import {
     type WhisperAgentType,
     type WhisperScope,
 } from '../whisper/types';
-import { buildTynnCliEnv } from '../cli/tynn-cli';
 import { loadWorkspaceEnvVars } from '../env-store';
 import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
@@ -211,8 +210,8 @@ export function readTerminalOutput(
  * Spawn a HEADLESS terminal for an agent (manageTerminals.create / runAgent.start)
  * — a real pty with NO window owner, like the Process runners. It gets a persisted
  * terminal spec (so it shows up in the workspace's terminal list and survives like
- * any other), the bundled tynn-cli env, and — when the workspace has the agent MCP
- * enabled — the GENIE_MCP_URL / GENIE_TERMINAL_ID env so a launched coding agent can
+ * any other), and — when the workspace has the agent MCP enabled — the
+ * GENIE_MCP_URL / GENIE_TERMINAL_ID env so a launched coding agent can
  * itself reach Genie. Returns the new terminal id + its initial scrollback. The
  * APPROVAL GATE is enforced by the caller (background.ts) BEFORE this runs.
  */
@@ -289,15 +288,11 @@ export function createAgentTerminal(opts: {
     }
 
     // Env: the workspace `.env` (so an agent resolves ${TYNN_AGENT_TOKEN} etc.)
-    // + bundled tynn-cli (behind its setting) + the workspace's agent MCP
-    // endpoint when enabled, so a coding agent launched here can call imDone etc.
+    // plus the workspace's agent MCP endpoint when enabled, so a coding agent
+    // launched here can call imDone etc.
     let env: Record<string, string> = {};
-    const cliEnabled = getAllSettings().cli_tools_in_terminals !== 'off';
     const wsRoot = getWorkspace(opts.workspaceId)?.path;
-    env = {
-        ...(wsRoot ? loadWorkspaceEnvVars(wsRoot) : {}),
-        ...buildTynnCliEnv(opts.cwd, cliEnabled),
-    };
+    env = wsRoot ? loadWorkspaceEnvVars(wsRoot) : {};
     if (workspaceMcpEnabled(opts.workspaceId)) {
         const mcpUrl = registerTerminalEndpoint(id);
         if (mcpUrl) {
@@ -580,21 +575,15 @@ export function registerTerminalIpc(): void {
                     args: buildProcessArgs(opts.shell ?? '', spec.meta.command),
                 };
             }
-            // Make the bundled tynn-cli (resetme/reload/…) available + inject
-            // GENIE_* workspace context. Additive + behind a setting (default
-            // on); user-supplied opts.env wins on any key collision.
-            const cliEnabled =
-                getAllSettings().cli_tools_in_terminals !== 'off';
-            const cliEnv = buildTynnCliEnv(opts.cwd, cliEnabled);
             // Load the workspace `.env` so an agent here resolves the refs the
             // tynn `.mcp.json` entry uses (${TYNN_AGENT_TOKEN}). Lowest precedence
-            // — cliEnv + the spec's own opts.env still win on any key collision.
+            // — the spec's own opts.env wins on any key collision.
             const wsRoot = spec?.workspace_id
                 ? getWorkspace(spec.workspace_id)?.path
                 : undefined;
             const envFileVars = wsRoot ? loadWorkspaceEnvVars(wsRoot) : {};
-            if (Object.keys(cliEnv).length || Object.keys(envFileVars).length) {
-                opts = { ...opts, env: { ...envFileVars, ...cliEnv, ...opts.env } };
+            if (Object.keys(envFileVars).length) {
+                opts = { ...opts, env: { ...envFileVars, ...opts.env } };
             }
             // Agent-integration MCP: when the spec's workspace has opted in, mint
             // this terminal's auto-wired endpoint and expose it as GENIE_MCP_URL

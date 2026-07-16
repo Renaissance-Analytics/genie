@@ -2740,7 +2740,6 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                 api().workmode.discoverHosts().catch(() => [] as GenieHost[]),
                 api().workstations.connectable().catch(() => [] as ConnectableWorkstation[]),
             ]);
-            setWorkstations(ws);
             const byKey = new Map<string, HostRow>();
             for (const k of known) {
                 byKey.set(k.connKey, {
@@ -2781,7 +2780,16 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                         online: true,
                     });
             }
-            setRows([...byKey.values()]);
+            const nextRows = [...byKey.values()];
+            const localHostNames = new Set(
+                nextRows.flatMap((row) => [row.name, row.hostname])
+                    .filter((name): name is string => Boolean(name))
+                    .map((name) => name.trim().toLocaleLowerCase()),
+            );
+            setRows(nextRows);
+            setWorkstations(ws.filter((workstation) =>
+                !workstation.is_local || !localHostNames.has(workstation.name.trim().toLocaleLowerCase()),
+            ));
         } finally {
             setLoading(false);
         }
@@ -2916,10 +2924,7 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                         )}
                     </div>
                 ))}
-                {workstations.length > 0 && (
-                    <>
-                        <div style={{ padding: '8px 6px 6px', fontSize: 11, letterSpacing: '0.04em', color: '#a1a1aa' }}>WORKSTATIONS</div>
-                        {workstations.map((ws) => {
+                {workstations.map((ws) => {
                             // Gate Connect on the GCC/Tynn readiness `status`, not just
                             // Tynn's `connectable` flag — a down host must never offer a
                             // Connect that ends in "relay handshake timed out".
@@ -2928,6 +2933,7 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                             <div key={`ws:${ws.id}`} style={{ borderRadius: 8, padding: '7px 8px', marginBottom: 2, background: '#1b1b21' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                     <span style={{ width: 7, height: 7, borderRadius: 999, flex: '0 0 auto', background: st.dotColor }} title={st.title} />
+                                    {!ws.is_local && <span title="Cloud workstation" aria-label="Cloud workstation" style={{ color: '#60a5fa', lineHeight: 1 }}>☁</span>}
                                     <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                         <span style={{ fontWeight: 600 }}>{ws.name}</span>
                                         {ws.capability && <span style={{ color: '#71717a', marginLeft: 6 }}>{ws.capability}</span>}
@@ -2950,8 +2956,6 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                             </div>
                             );
                         })}
-                    </>
-                )}
             </div>
         </>
     );

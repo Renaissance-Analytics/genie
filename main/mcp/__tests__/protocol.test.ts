@@ -920,6 +920,8 @@ describe('handleMcpMessage', () => {
             .text;
         expect(text).toContain('imDone');
         expect(text).toContain('ForceTheQuestion');
+        expect(text).not.toContain('tynn-cli');
+        expect(text).not.toContain('resetme');
         // The full guide tells the agent how to self-configure an on-finish hook.
         expect(text).toContain('Automate imDone');
         expect(text).toContain('Stop');

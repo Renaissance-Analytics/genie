@@ -151,7 +151,6 @@ import {
     testingBrowserRefreshSites,
 } from './testing-browser';
 import QRCode from 'qrcode';
-import { tynnCliInfo, installTynnCliSystemWide } from './cli/tynn-cli';
 import { registerShortcuts } from './shortcuts';
 import { startSignIn, redeemCode } from './auth';
 import {
@@ -174,6 +173,8 @@ import {
 } from './backend/registry';
 import type { BackendKind } from './backend/backend';
 import { openWorkstationById } from './workstation-open';
+import { visibleConnectableWorkstations } from './tynn/connectable-workstations';
+import { readWorkstationIdentity } from './tynn/workstation-identity';
 import {
     getAutostart,
     isAutostartSupported,
@@ -748,8 +749,11 @@ export function registerIpcHandlers(): void {
     // dial the relay member session, and open its OWN native Floor window. The
     // grant + relay endpoint never reach the renderer; main holds them and runs
     // the heartbeat for the connection's lifetime.
-    ipcMain.handle('workstation:connectable', () =>
-        getTynnBackend().listConnectableWorkstations(),
+    ipcMain.handle('workstation:connectable', async () =>
+        visibleConnectableWorkstations(
+            await getTynnBackend().listConnectableWorkstations(),
+            readWorkstationIdentity()?.workstationId,
+        ),
     );
     ipcMain.handle('workstation:open', async (_e, workstationId: string, name: string) =>
         openWorkstationById(workstationId, name),
@@ -774,10 +778,6 @@ export function registerIpcHandlers(): void {
             return [];
         }
     });
-
-    // --- tynn-cli toolkit ----------------------------------------------
-    ipcMain.handle('cli:info', () => tynnCliInfo());
-    ipcMain.handle('cli:install', () => installTynnCliSystemWide());
 
     // --- AGI envelope ---------------------------------------------------
     ipcMain.handle('agi:detect', (_e, folder: string) => detectFolder(folder));

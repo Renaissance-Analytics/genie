@@ -86,7 +86,6 @@ export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
  */
 export const HOST_SOURCED_SETTINGS_KEYS = [
     'ai_system',
-    'cli_tools_in_terminals',
     'mcp_port',
     'mcp_sync_claude',
     'mcp_sync_cursor',

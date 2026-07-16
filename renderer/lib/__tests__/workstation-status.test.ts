@@ -18,6 +18,7 @@ const ws = (over: Partial<ConnectableWorkstation>): ConnectableWorkstation => ({
     id: 'ws1',
     name: 'NewDawn',
     status: 'active',
+    is_local: false,
     relay_endpoint: 'wss://relay.tynn.ai',
     connectable: true,
     capability: 'control',

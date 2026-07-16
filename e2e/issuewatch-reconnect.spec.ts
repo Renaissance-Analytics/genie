@@ -84,8 +84,8 @@ test('dead session → reconnect: user code survives polls, then feed recovers',
         };
         s.issueWatch.repos = [
             {
-                owner: 'wishborn',
-                repo: 'tynn-cli',
+                owner: 'Renaissance-Analytics',
+                repo: 'guardian',
                 enabled: true,
                 unread: 1,
                 error: null,
@@ -95,13 +95,13 @@ test('dead session → reconnect: user code survives polls, then feed recovers',
         s.issueWatch.feed = [
             {
                 kind: 'issue',
-                key: 'wishborn/tynn-cli#7',
+                key: 'Renaissance-Analytics/guardian#7',
                 number: 7,
-                title: 'resetme should accept --seed shorthand',
-                url: 'https://github.com/wishborn/tynn-cli/issues/7',
+                title: 'Guardian should reconnect cleanly',
+                url: 'https://github.com/Renaissance-Analytics/guardian/issues/7',
                 updatedAt: new Date().toISOString(),
-                owner: 'wishborn',
-                repo: 'tynn-cli',
+                owner: 'Renaissance-Analytics',
+                repo: 'guardian',
                 unread: true,
             },
         ];
@@ -110,7 +110,7 @@ test('dead session → reconnect: user code survives polls, then feed recovers',
     // The reconnect banner clears and the feed recovers — no app restart.
     await expect(page.locator('.iw-reauth')).toHaveCount(0);
     await expect(
-        page.getByText('resetme should accept --seed shorthand'),
+        page.getByText('Guardian should reconnect cleanly'),
     ).toBeVisible();
     // The device code is gone (flow completed → idle).
     await expect(page.getByText('WXYZ-1234')).toHaveCount(0);

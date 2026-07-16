@@ -873,3 +873,20 @@ describe('db migration v24 (workspace-assignment deprovision marker)', () => {
         expect(cols(db, 'workspaces').has('assignment_managed')).toBe(true);
     });
 });
+
+describe('db migration v25 (retire tynn-cli settings)', () => {
+    it('deletes only the retired CLI toggles', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare('DELETE FROM schema_version WHERE version = 25').run();
+        const insert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
+        insert.run('cli_tools_in_terminals', 'on');
+        insert.run('cli_install_systemwide', 'on');
+        insert.run('notify_sound', 'on');
+
+        runMigrations(db);
+
+        const settings = db.prepare<[], { key: string }>('SELECT key FROM settings ORDER BY key').all();
+        expect(settings.map((row) => row.key)).toEqual(['notify_sound']);
+    });
+});

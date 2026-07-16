@@ -43,7 +43,6 @@ vi.mock('@particle-academy/fancy-term-host', () => ({
     resolveDefaultShell: () => ({ command: '/usr/bin/bash', args: [] }),
 }));
 vi.mock('../../db', () => ({
-    getAllSettings: () => ({ cli_tools_in_terminals: 'off' }),
     getTerminalSpec: (id: string) => specs.get(id) ?? null,
     listTerminalSpecs: () => [...specs.values()],
     updateTerminalSpec: (id: string, patch: { meta?: Record<string, unknown> }) => {
@@ -52,7 +51,6 @@ vi.mock('../../db', () => ({
     },
 }));
 vi.mock('../genie-adapter', () => ({ dbSettingsProvider: () => ({}) }));
-vi.mock('../cli/tynn-cli', () => ({ buildTynnCliEnv: () => ({}) }));
 
 import {
     startProcess,

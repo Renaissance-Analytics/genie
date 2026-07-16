@@ -769,19 +769,6 @@ const api = {
         list: () => ipcRenderer.invoke('process:list'),
     },
 
-    cli: {
-        info: () =>
-            ipcRenderer.invoke('cli:info') as Promise<{
-                shipped: boolean;
-                home: string | null;
-            }>,
-        install: () =>
-            ipcRenderer.invoke('cli:install') as Promise<{
-                ok: boolean;
-                output: string;
-            }>,
-    },
-
     terminalSpec: {
         list: () => ipcRenderer.invoke('terminal-spec:list'),
         create: (input: {

@@ -7,10 +7,9 @@
   "scripts": {
     "dev": "nextron",
     "build:runtime": "node scripts/build-service-runtime.mjs",
-    "build:tynn-cli": "node scripts/bundle-tynn-cli.mjs",
-    "build": "npm run build:runtime && npm run build:tynn-cli && nextron build",
-    "build:win": "npm run build:runtime && npm run build:tynn-cli && nextron build --win",
-    "build:mac": "npm run build:runtime && npm run build:tynn-cli && nextron build --mac",
+    "build": "npm run build:runtime && nextron build",
+    "build:win": "npm run build:runtime && nextron build --win",
+    "build:mac": "npm run build:runtime && nextron build --mac",
     "postinstall": "electron-builder install-app-deps || echo \"native rebuild skipped — using bundled prebuilds (install VS Build Tools on Windows for ABI-clean release builds)\"",
     "typecheck:main": "tsc --noEmit -p main/tsconfig.json",
     "typecheck:renderer": "tsc --noEmit -p renderer/tsconfig.json",
