@@ -14,6 +14,7 @@ import {
     terminalTypeById,
     type TerminalTypeId,
 } from '../../lib/terminal-types';
+import { anchoredPopoverTop } from '../../lib/anchored-popover';
 
 /**
  * The split "Add Terminal" button — generalizes the old AddViewButton. The MAIN
@@ -82,10 +83,24 @@ export default function TerminalTypeSplitButton({
     const place = () => {
         const r = ref.current?.getBoundingClientRect();
         if (!r) return;
-        setCoords(
+        const top = anchoredPopoverTop({
+            anchorTop: r.top,
+            anchorBottom: r.bottom,
+            popoverHeight: popRef.current?.getBoundingClientRect().height ?? 0,
+            viewportHeight: window.innerHeight,
+        });
+        const next =
             variant === 'row'
-                ? { top: r.bottom + 6, left: r.left }
-                : { top: r.bottom + 6, right: window.innerWidth - r.right },
+                ? { top, left: r.left }
+                : { top, right: window.innerWidth - r.right };
+        setCoords(
+            (current) =>
+                current &&
+                current.top === next.top &&
+                current.left === next.left &&
+                current.right === next.right
+                    ? current
+                    : next,
         );
     };
     // useLayoutEffect: coords are set BEFORE paint so the popover never flashes
@@ -98,6 +113,13 @@ export default function TerminalTypeSplitButton({
         place();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open]);
+
+    // The first pass establishes portal coordinates. Once the portal has
+    // mounted, measure its real height and flip it above the button if opening
+    // below would cross the viewport's bottom edge.
+    useLayoutEffect(() => {
+        if (open && coords && popRef.current) place();
+    });
 
     useEffect(() => {
         if (!open) return;
