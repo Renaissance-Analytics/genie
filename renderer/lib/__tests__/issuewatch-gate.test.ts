@@ -39,24 +39,24 @@ describe('issueWatchGate — remote (host) window', () => {
         expect(gate).toEqual({ view: 'feed', gatedCaps: ['issue-watch.dependabot'] });
     });
 
-    it('host dead session → reconnect scoped to the HOST (no local device flow)', () => {
+    it('ignores a legacy host GitHub reauth flag', () => {
         expect(
             issueWatchGate({
                 remote: true,
                 status: { ...okStatus, needsReauth: true },
                 localCaps: clientUnauthed,
             }),
-        ).toEqual({ view: 'reconnect', scope: 'host' });
+        ).toEqual({ view: 'feed', gatedCaps: [] });
     });
 
-    it('a live 401 from the host also routes to the host reconnect notice', () => {
+    it('ignores a legacy host GitHub 401', () => {
         expect(
             issueWatchGate({
                 remote: true,
                 status: { ...okStatus, error: 'unauthenticated' },
                 localCaps: clientUnauthed,
             }),
-        ).toEqual({ view: 'reconnect', scope: 'host' });
+        ).toEqual({ view: 'feed', gatedCaps: [] });
     });
 
     it('host genuinely disconnected → connect scoped to the HOST', () => {
@@ -80,14 +80,14 @@ describe('issueWatchGate — remote (host) window', () => {
 });
 
 describe('issueWatchGate — local window (unchanged behavior)', () => {
-    it('dead session → the device-flow reconnect (scope local)', () => {
+    it('never offers the local GitHub device-flow reconnect', () => {
         expect(
             issueWatchGate({
                 remote: false,
                 status: { ...okStatus, needsReauth: true },
                 localCaps: { connected: true, missing: [] },
             }),
-        ).toEqual({ view: 'reconnect', scope: 'local' });
+        ).toEqual({ view: 'feed', gatedCaps: [] });
     });
 
     it('not connected → the connect-in-Settings copy (scope local)', () => {
@@ -100,14 +100,14 @@ describe('issueWatchGate — local window (unchanged behavior)', () => {
         ).toEqual({ view: 'connect', scope: 'local' });
     });
 
-    it('connected → the feed gated by the CLIENT\'s own capabilities, NOT the host status', () => {
+    it('connected → the feed ignores the client GitHub token and uses Tynn capability state', () => {
         const gate = issueWatchGate({
             remote: false,
             // A host missingCapabilities value must be IGNORED in a local window.
             status: { ...okStatus, missingCapabilities: ['issue-watch.dependabot'] },
             localCaps: { connected: true, missing: ['issue-watch.pulls'] },
         });
-        expect(gate).toEqual({ view: 'feed', gatedCaps: ['issue-watch.pulls'] });
+        expect(gate).toEqual({ view: 'feed', gatedCaps: ['issue-watch.dependabot'] });
     });
 
     it('connected but the client caps snapshot is not yet connected → gate inert', () => {

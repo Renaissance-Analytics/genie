@@ -49,6 +49,7 @@ import {
     getWorkspaceFeed,
     getWorkspaceStatus,
     isServerFed,
+    setIssueWatchServiceState,
 } from '../index';
 
 const delta = (over: Partial<Parameters<typeof applyPushedDelta>[0]> = {}) => ({
@@ -66,6 +67,7 @@ beforeEach(() => {
 });
 
 describe('server-fed IssueWatch override (#197)', () => {
+    beforeEach(() => setIssueWatchServiceState('connecting'));
     it('applyPushedDelta makes a workspace server-fed and serves Tynn counts + feed', async () => {
         applyPushedDelta(delta());
 
@@ -86,15 +88,25 @@ describe('server-fed IssueWatch override (#197)', () => {
         expect(await getOpenCounts()).toEqual({ 'ws-1': { issue: 1, pr: 0, security: 2 } });
     });
 
-    it('clearPushedDelta reverts the workspace to local polling', async () => {
+    it('clearing a snapshot never re-enables local GitHub IssueWatch', async () => {
         applyPushedDelta(delta());
         expect(isServerFed('ws-1')).toBe(true);
 
         clearPushedDelta('ws-1');
         expect(isServerFed('ws-1')).toBe(false);
-        // With no token + not server-fed, it now reports NOT connected (local path).
-        TOKEN = null;
+        setIssueWatchServiceState('disconnected');
         expect((await getWorkspaceStatus('ws-1')).connected).toBe(false);
+        expect(await getWorkspaceFeed('ws-1')).toEqual([]);
+    });
+
+    it('reports explicit Tynn stream health without consulting the local GitHub token', async () => {
+        TOKEN = 'local-token-that-must-not-matter';
+        setIssueWatchServiceState('disabled');
+        expect(await getWorkspaceStatus('ws-1')).toMatchObject({
+            connected: false,
+            needsReauth: false,
+            serviceState: 'disabled',
+        });
     });
 
     it('zero-count server-fed workspace is omitted from the counts map (no dark pill regressions)', async () => {

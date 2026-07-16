@@ -16,20 +16,21 @@ Dependabot"** (it shows an unread badge).
   (Issue / PR / Dependabot / Code scan / Secret) with its title, repo, number,
   and severity.
 
-## Connecting GitHub
+## Connecting Tynn
 
-Issue Watch reads through your GitHub connection (the **"Genie IDE" GitHub App**;
-see **[Sign in & integrations](10-sign-in-and-integrations.md)**). Genie tells
-you exactly what's missing when it can't read:
+Issue Watch is a Tynn service. Tynn polls each registered workspace repository
+once with its GitHub App installation token, caches the result, and pushes
+deltas to Genie. Genie's optional GitHub device-flow connection is used for
+repository operations and is never required for Issue Watch.
 
-- Not connected → *"Connect GitHub in Settings → Connections to watch issues,
-  PRs, and Dependabot alerts."*
-- No GitHub repo in the workspace → *"No GitHub repos detected in this workspace
-  (no git remote pointing at github.com)."*
-- Session expired → *"GitHub session expired — reconnect to restore Issue
-  Watch."*
-- Missing App permissions → a note listing the missing capabilities and a
-  **Resolve…** button.
+Genie reports the Tynn service state directly:
+
+- Signed out → sign in to Tynn in Genie.
+- Feature disabled → enable IssueWatch for the Tynn account.
+- Connecting/disconnected → the panel says the Tynn IssueWatch stream is not
+  connected; it never asks you to reconnect Genie's GitHub account.
+- Missing Tynn GitHub App permissions → review the installation permissions from
+  Tynn's GitHub integration UI.
 
 When everything's connected and nothing is open, it reads *"Nothing open on the
 watched repos."*

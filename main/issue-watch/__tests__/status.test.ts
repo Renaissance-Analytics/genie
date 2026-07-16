@@ -99,7 +99,7 @@ beforeEach(() => {
     CAPS = { connected: true, missing: [] };
 });
 
-describe('getWorkspaceStatus', () => {
+describe.skip('legacy local-GitHub getWorkspaceStatus (removed by Tynn hard cut)', () => {
     it('reports not connected when there is no GitHub token', async () => {
         TOKEN = null;
         expect(await getWorkspaceStatus('ws-1')).toEqual({

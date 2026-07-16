@@ -34,6 +34,7 @@ export interface WorkstationPusherHandlers {
     onConnected: () => void;
     /** Fires per pushed `issuewatch.delta` for this workstation's channel. */
     onIssueWatchDelta: (delta: IssueWatchDeltaPush) => void;
+    onDisconnected?: () => void;
 }
 
 export interface WorkstationPusherTransportOptions {
@@ -181,6 +182,7 @@ export class WorkstationPusherTransport {
 
     private onDrop(): void {
         this.ws = null;
+        this.handlers?.onDisconnected?.();
         this.scheduleReconnect();
     }
 

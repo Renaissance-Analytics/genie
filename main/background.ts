@@ -41,6 +41,7 @@ import {
     resolveWorkspaceRepos,
     getWorkspaceFeed,
     getOpenCounts,
+    setIssueWatchServiceState,
 } from './issue-watch';
 import { getToken } from './github/storage';
 import { detectFolder } from './workspace/detect';
@@ -51,7 +52,7 @@ import type {
     IssueWatchSnapshot,
     IssueWatchItem,
 } from './mcp/protocol';
-import { registerProtocolHandler, handleGenieUrl } from './auth';
+import { registerProtocolHandler, handleGenieUrl, isSignedIn, onAuthChanged } from './auth';
 import {
     registerTerminalIpc,
     stopAllTerminals,
@@ -1239,19 +1240,28 @@ app.whenReady().then(async () => {
     // any failure just leaves IssueWatch on its local poller — no regression.
     // Skipped under E2E (no live Tynn) so a Playwright run never self-registers.
     //
-    // GATED on Genie Remote being ON: a Workstation IS a Genie HOST. A machine that
-    // is only a CLIENT (remote_enabled off — it just connects OUT to other hosts)
-    // must NOT self-register, or every desktop that ever opens Genie litters Tynn's
-    // Workstations list (the "why is my client machine a workstation" bug). Enabling
-    // Genie Remote registers it (see the remote:set-enabled handler); disabling it
-    // deregisters. mobile_enabled ALSO makes the machine a reachable host, so either
-    // toggle qualifies — matching the host-server bind condition below.
-    const s = getAllSettings() as Record<string, string>;
-    const isRemoteHost = s['remote_enabled'] === 'on' || s['mobile_enabled'] === 'on';
-    if (!isE2E() && isRemoteHost) {
-        void startLocalWorkstation({
-            log: (m) => console.log('[workstation]', m),
-        }).catch((e) => console.error('[workstation] failed to start', e));
+    // IssueWatch is a Tynn service for every signed-in local Genie. It must not
+    // depend on whether this machine exposes Genie Remote/Mobile hosting.
+    if (!isE2E()) {
+        let issueWatchHandle: Awaited<ReturnType<typeof startLocalWorkstation>> = null;
+        const startIssueWatch = async () => {
+            issueWatchHandle?.stop();
+            issueWatchHandle = await startLocalWorkstation({
+                log: (m) => console.log('[workstation]', m),
+            });
+        };
+        void isSignedIn().then((signedIn) => {
+            if (signedIn) return startIssueWatch();
+            setIssueWatchServiceState('signed-out');
+        });
+        onAuthChanged((signedIn) => {
+            if (signedIn) void startIssueWatch();
+            else {
+                issueWatchHandle?.stop();
+                issueWatchHandle = null;
+                setIssueWatchServiceState('signed-out');
+            }
+        });
     }
     // Mobile remote-control server (Settings → Mobile, opt-in). Bound ONLY to the
     // Tailscale IP — fail closed if no tailnet. Reuses the SAME terminal/process/

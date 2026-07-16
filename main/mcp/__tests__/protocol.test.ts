@@ -1099,7 +1099,7 @@ describe('handleMcpMessage', () => {
             }),
         );
         expect((notConnected?.result as { content: Array<{ text: string }> }).content[0].text).toContain(
-            'GitHub is not connected',
+            'Tynn IssueWatch stream is not connected',
         );
 
         const noWorkspace = await handleMcpMessage(

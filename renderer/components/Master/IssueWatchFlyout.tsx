@@ -128,6 +128,7 @@ export default function IssueWatchFlyout({
     const [detail, setDetail] = useState<WatchErrorDetail | null>(null);
     /** The stored GitHub session is dead — show the Reconnect banner + CTA. */
     const [needsReauth, setNeedsReauth] = useState(false);
+    const [serviceState, setServiceState] = useState<string>('connecting');
     const [loading, setLoading] = useState(false);
     /**
      * False until the FIRST status read for the current workspace resolves. The
@@ -172,11 +173,13 @@ export default function IssueWatchFlyout({
                     detail: null,
                     needsReauth: false,
                     missingCapabilities: [],
+                    serviceState: 'disconnected' as const,
                 }));
             setConnected(!!st.connected);
             setError(st.error ?? null);
             setDetail(st.detail ?? null);
             setNeedsReauth(!!st.needsReauth);
+            setServiceState(st.serviceState ?? (st.connected ? 'connected' : 'disconnected'));
             // Remote only: the host-sourced missing-capability set feeds the gate
             // (a local window uses its own useGithubCapabilities instead, so
             // leaving this untouched keeps local render behavior identical).
@@ -333,15 +336,19 @@ export default function IssueWatchFlyout({
                             />
                         )
                     ) : gate.view === 'connect' ? (
-                        gate.scope === 'host' ? (
-                            // Remote window: connect GitHub on the HOST, not here.
-                            <RemoteHostGithubNotice kind="disconnected" detail={null} />
-                        ) : (
-                            <div className="iw-muted">
-                                Connect GitHub in Settings → Connections to watch issues,
-                                PRs, and Dependabot alerts.
+                        <div className="iw-gate" role="status">
+                            <div className="iw-gate-head">
+                                <IconAlert size={13} />
+                                <span>IssueWatch is not connected to Tynn.</span>
                             </div>
-                        )
+                            <div className="iw-muted">
+                                {serviceState === 'disabled'
+                                    ? 'IssueWatch is not enabled for this Tynn account.'
+                                    : serviceState === 'connecting'
+                                      ? 'Connecting to the Tynn IssueWatch stream…'
+                                      : 'Check your Tynn sign-in and connection. Genie GitHub access is not required for IssueWatch.'}
+                            </div>
+                        </div>
                     ) : (
                         <>
                             {gatedIw.length > 0 && (

@@ -1369,7 +1369,7 @@ export function formatIssueWatchFeed(snap: IssueWatchSnapshot): string {
         return "IssueWatch — couldn't resolve this terminal to a Genie workspace. Pass your GENIE_TERMINAL_ID as `terminalId`, or run this from a terminal inside a workspace.";
     }
     if (!snap.connected) {
-        return 'IssueWatch — GitHub is not connected, so there are no items to show. Connect GitHub in Genie → Settings to enable issue/PR/security-alert watching.';
+        return 'IssueWatch — the Tynn IssueWatch stream is not connected, so current items are unavailable. Check the Genie Tynn sign-in and IssueWatch entitlement; Genie GitHub access is not required.';
     }
     if (snap.items.length === 0) {
         return 'IssueWatch — nothing open across this workspace\'s repos (no Issues, PRs, or security alerts).';

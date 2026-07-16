@@ -53,8 +53,7 @@ import { renderAgentResume } from '../whisper/session-capture';
 import { detectFolder } from '../workspace/detect';
 import { workspaceDocHealth } from '../workspace/create-agi';
 import { openWorkspace } from '../workspace/open';
-import { resolveWorkspaceRepos, getWorkspaceFeed, getOpenCounts } from '../issue-watch';
-import { getToken } from '../github/storage';
+import { resolveWorkspaceRepos, getWorkspaceFeed, getOpenCounts, getWorkspaceStatus } from '../issue-watch';
 import { forceQuestion } from '../ask/force-question';
 import { resolveTargetWorkspace, type TargetDecision } from './target-workspace';
 import { readTynnLink } from '../tynn/provision';
@@ -223,8 +222,8 @@ export async function describeWorkspaceForMcp(
  * Back the checkIssues MCP tool AND the IssueWatch counts folded into imDone.
  * Resolves the workspace from the (already terminal-resolved) caller, then
  * returns its open Issues / PRs / security alerts from the IssueWatch feed cache
- * plus the per-bucket counts. Reports `connected: false` when GitHub has no
- * token (nothing is polled) and `workspaceResolved: false` when the terminal
+ * plus the per-bucket counts. Reports `connected: false` when the Tynn
+ * IssueWatch stream is unavailable and `workspaceResolved: false` when the terminal
  * maps to no workspace — so the formatter can explain an empty result honestly
  * instead of implying "nothing open".
  */
@@ -232,9 +231,10 @@ export async function checkIssuesForMcp(terminalId: string): Promise<IssueWatchS
     const empty = { issue: 0, pr: 0, security: 0 };
     const wsId = terminalId ? getTerminalSpec(terminalId)?.workspace_id ?? null : null;
     if (!wsId || !getWorkspace(wsId)) {
-        return { connected: !!getToken(), workspaceResolved: false, counts: empty, items: [] };
+        return { connected: false, workspaceResolved: false, counts: empty, items: [] };
     }
-    if (!getToken()) {
+    const status = await getWorkspaceStatus(wsId);
+    if (!status.connected) {
         return { connected: false, workspaceResolved: true, counts: empty, items: [] };
     }
     const feed = await getWorkspaceFeed(wsId).catch(() => []);
