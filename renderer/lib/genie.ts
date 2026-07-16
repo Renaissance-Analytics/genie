@@ -250,6 +250,7 @@ export interface WorkspaceWatchStatus {
      * breaking. Empty when GitHub isn't connected.
      */
     missingCapabilities?: GithubCapabilityKey[];
+    serviceState?: 'connecting' | 'connected' | 'signed-out' | 'disabled' | 'disconnected';
 }
 
 /** Issue Watch: one feed item (issue / PR / security alert). */

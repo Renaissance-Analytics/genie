@@ -1,5 +1,5 @@
 import { TynnBackend } from '../backend/tynn';
-import { applyPushedDelta, type PushedIssueWatchDelta } from '../issue-watch';
+import { applyPushedDelta, setIssueWatchServiceState, type PushedIssueWatchDelta } from '../issue-watch';
 import {
     ensureLocalWorkstation,
     readWorkstationIdentity,
@@ -87,6 +87,7 @@ export interface WorkstationTransportLike {
     open(handlers: {
         onConnected: () => void;
         onIssueWatchDelta: (delta: IssueWatchDeltaPush) => void;
+        onDisconnected?: () => void;
     }): WorkstationSubscriptionHandle;
 }
 
@@ -158,6 +159,7 @@ export async function startLocalWorkstation(
     const log = deps.log ?? (() => {});
     const backend = deps.backend ?? new TynnBackend();
     const fetchImpl = deps.fetchImpl ?? fetch;
+    setIssueWatchServiceState('connecting');
 
     try {
         // 1) Idempotent self-register + enroll (#2).
@@ -175,6 +177,7 @@ export async function startLocalWorkstation(
         const features = await (deps.features ?? (() => backend.fetchFeatures()))();
         if (!features.issuewatch) {
             log('IssueWatch feature off (FMS) — not subscribing');
+            setIssueWatchServiceState('disabled');
             return null;
         }
 
@@ -186,7 +189,8 @@ export async function startLocalWorkstation(
                     fromTynn: () => backend.fetchBroadcastConfig(),
                 })))();
         if (!cfg) {
-            log('no Pusher broadcast config resolved — IssueWatch push off (local poll fallback)');
+            log('no Pusher broadcast config resolved — IssueWatch disconnected');
+            setIssueWatchServiceState('disconnected');
             return null;
         }
 
@@ -220,6 +224,7 @@ export async function startLocalWorkstation(
             // On every (re)connect: reconcile the full server-side snapshot so a
             // workspace whose delta was pushed while we were offline is caught up.
             onConnected: () => {
+                setIssueWatchServiceState('connected');
                 void (async () => {
                     try {
                         const deltas = await fetchSnapshot(identity, tynnApiBaseUrl);
@@ -238,12 +243,14 @@ export async function startLocalWorkstation(
                     log(`applyPushedDelta failed: ${e instanceof Error ? e.message : String(e)}`);
                 }
             },
+            onDisconnected: () => setIssueWatchServiceState('disconnected'),
         });
 
         log(`subscribed to private-workstation.${identity.workstationId}`);
         return { workstationId: identity.workstationId, stop: () => handle.close() };
     } catch (e) {
         log(`startLocalWorkstation failed: ${e instanceof Error ? e.message : String(e)}`);
+        setIssueWatchServiceState('disconnected');
         return null;
     }
 }

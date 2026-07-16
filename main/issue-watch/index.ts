@@ -166,6 +166,14 @@ export interface PushedIssueWatchDelta {
  */
 const pushedByWorkspace = new Map<string, { counts: TypeCounts; feed: WorkspaceFeedItem[] }>();
 
+export type IssueWatchServiceState = 'connecting' | 'connected' | 'signed-out' | 'disabled' | 'disconnected';
+let serviceState: IssueWatchServiceState = 'connecting';
+
+/** Transport health for the Tynn-owned IssueWatch service. */
+export function setIssueWatchServiceState(state: IssueWatchServiceState): void {
+    serviceState = state;
+}
+
 /**
  * Apply a server-side IssueWatch delta for a workspace (Tynn → the assignment
  * transport → here). Stores the snapshot (switching the workspace to server-fed)
@@ -190,6 +198,7 @@ export function applyPushedDelta(delta: PushedIssueWatchDelta): void {
             }) as WorkspaceFeedItem,
     );
     pushedByWorkspace.set(delta.workspaceId, { counts: { ...delta.counts }, feed });
+    serviceState = 'connected';
     void broadcastUpdate();
 }
 
@@ -429,6 +438,8 @@ export interface WorkspaceWatchStatus {
      *  remote window gate on the HOST's capabilities instead of the client's.
      *  Empty when GitHub isn't connected. No token/secret — just the key list. */
     missingCapabilities: CapabilityKey[];
+    /** Tynn IssueWatch stream state; local GitHub auth is never part of this. */
+    serviceState?: IssueWatchServiceState;
 }
 
 /** The Issue Watch capability keys the flyout gates on (a subset of the full
@@ -579,6 +590,10 @@ export async function getWorkspaceFeed(
     const pushed = pushedByWorkspace.get(workspaceId);
     if (pushed) return pushed.feed;
 
+    // Hard cut: Tynn is the only IssueWatch source. A missing snapshot means the
+    // stream is not ready; never read GitHub through Genie's device token.
+    return [];
+
     const watches = listIssueWatches(workspaceId);
     const seenByKey = new Map(watches.map((w) => [cacheKey(w.owner, w.repo), w.seen_at]));
     const granularity = getWorkspaceIssuewatchGranularity(workspaceId);
@@ -680,37 +695,18 @@ export async function getOpenCounts(): Promise<Record<string, TypeCounts>> {
 export async function getWorkspaceStatus(
     workspaceId: string,
 ): Promise<WorkspaceWatchStatus> {
-    // Server-fed: Tynn holds the credential + does the reads, so this is connected
-    // and error-free from the client's view regardless of any LOCAL GitHub token.
-    if (pushedByWorkspace.has(workspaceId)) {
+    // Tynn holds the credential and performs every GitHub read. Connection is a
+    // Tynn transport fact, independent of Genie's optional GitHub login.
+    if (serviceState === 'connected') {
         return { connected: true, error: null, detail: null, needsReauth: false, missingCapabilities: [] };
     }
-    if (!getToken()) {
-        // No token at all. A dead session (revoked / refresh exhausted) still
-        // leaves the reauth flag set, so report it: the flyout shows Reconnect
-        // rather than the plain "connect in Settings" copy.
-        return {
-            connected: false,
-            error: null,
-            detail: null,
-            needsReauth: needsReauth(),
-            missingCapabilities: [],
-        };
-    }
-    const views = await getWorkspaceRepoViews(workspaceId).catch(() => []);
-    const detail = worstViewDetail(views);
-    // An auth failure surfaces a Reconnect CTA: either a read came back
-    // unauthenticated (a live 401), or gh() already flagged the stored session
-    // dead on an earlier call.
-    const reauth = needsReauth() || detail?.error === 'unauthenticated';
     return {
-        connected: true,
-        error: detail?.error ?? null,
-        detail,
-        needsReauth: reauth,
-        // Carry the App's missing IW capabilities so a REMOTE window's flyout can
-        // gate on the HOST's grants (host-sourced via /api/desktop/issue-watch/status).
-        missingCapabilities: missingIssueWatchCapabilities(),
+        connected: false,
+        error: null,
+        detail: null,
+        needsReauth: false,
+        missingCapabilities: [],
+        serviceState,
     };
 }
 
@@ -803,10 +799,9 @@ export async function markWorkspaceSeen(workspaceId: string): Promise<void> {
     await broadcastUpdate();
 }
 
-/** Register IPC + start the background poller. Idempotent. */
+/** Register IPC. IssueWatch is Tynn-fed; there is no local GitHub poller. */
 export function registerIssueWatchIpc(): void {
     ipcMain.handle('issue-watch:repos', async (_e, workspaceId: string) => {
-        await pollWorkspace(workspaceId); // refresh on view
         return getWorkspaceRepoViews(workspaceId);
     });
     ipcMain.handle(
@@ -828,13 +823,4 @@ export function registerIssueWatchIpc(): void {
         getWorkspaceStatus(workspaceId),
     );
 
-    if (!pollTimer) {
-        pollTimer = setInterval(
-            () => void pollNextWorkspace(),
-            ROUND_ROBIN_INTERVAL_MS,
-        );
-        // Kick the first workspace shortly after startup (token may settle
-        // first); subsequent ticks advance round-robin through the rest.
-        setTimeout(() => void pollNextWorkspace(), 8000);
-    }
 }

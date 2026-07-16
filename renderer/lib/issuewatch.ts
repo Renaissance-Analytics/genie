@@ -120,18 +120,16 @@ export interface IwGateInput {
 export function issueWatchGate(input: IwGateInput): IwGateView {
     const { remote, status, localCaps } = input;
     const scope: 'local' | 'host' = remote ? 'host' : 'local';
-    // A dead session (flagged reauth, or a live 401 read) takes priority — the
-    // App permissions are fine; the fix is a re-mint (on whichever machine).
-    const authFailed = status.needsReauth || status.error === 'unauthenticated';
-    if (authFailed) return { view: 'reconnect', scope };
+    // Legacy host/client GitHub token failures are intentionally ignored.
+    // IssueWatch is authenticated by Tynn, never Genie's device-flow token.
     if (!status.connected) return { view: 'connect', scope };
     // Connected & authed → the feed, minus any capabilities the App can't grant.
     // Remote gates on the HOST's missing set; local on the client's own caps
     // (unchanged: an unconnected client caps snapshot leaves the gate inert).
-    const gatedCaps = remote
-        ? IW_CAPABILITY_KEYS.filter((k) => (status.missingCapabilities ?? []).includes(k))
-        : localCaps.connected
-          ? IW_CAPABILITY_KEYS.filter((k) => localCaps.missing.includes(k))
-          : [];
+    // IssueWatch is Tynn-served in every window. Genie's optional GitHub device
+    // token is for repository operations and never gates this feed.
+    const gatedCaps = IW_CAPABILITY_KEYS.filter((k) =>
+        (status.missingCapabilities ?? []).includes(k),
+    );
     return { view: 'feed', gatedCaps };
 }
