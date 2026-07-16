@@ -4,14 +4,47 @@ import {
     autoUpdaterInstance,
     updaterMode,
     type AutoUpdaterStatus,
+    type RestartInterruption,
 } from './auto-updater';
 import { planUpdateNotification } from './update-surface';
-import { getAllSettings, setSettings } from '../db';
+import { getAllSettings, setSettings, getTerminalSpec } from '../db';
 import { setUpdateAvailable } from '../tray';
 import { showSettingsWindow, showMasterWindow } from '../background';
 import { getChangelog, type Changelog } from './changelog';
 import { hostBackendKind, detachedHostPinsBinary } from '../terminal/host-service';
+import { liveHostTerminals } from '../terminal/quit-confirm';
 import { mobileEmit } from '../mobile/bus';
+
+/**
+ * What a restart-to-apply would tear down RIGHT NOW — the probe the auto-updater
+ * consults before its hands-free apply. Mirrors `willRestartPtyHost` (only a
+ * binary-pinning detached host is torn down by the swap; a service host SURVIVES
+ * it), so a surviving-host update reports NO interruption and applies seamlessly.
+ * Otherwise it counts the live host terminals, flagging the agent-backed ones.
+ */
+export function describeRestartInterruption(): RestartInterruption {
+    let restartsHost = false;
+    try {
+        restartsHost = hostBackendKind() === 'detached' && detachedHostPinsBinary();
+    } catch {
+        restartsHost = false;
+    }
+    // Service host survives the swap → terminals live through it → nothing lost.
+    // (In-process terminals die with the app but aren't enumerable via the host
+    // client; they're the degraded, non-persisted fallback tier.)
+    if (!restartsHost) return { terminals: 0, agentChats: 0 };
+
+    const live = liveHostTerminals();
+    let agentChats = 0;
+    for (const t of live) {
+        try {
+            if (getTerminalSpec(t.id)?.meta?.agent) agentChats++;
+        } catch {
+            /* a missing spec just means "not a known agent terminal" */
+        }
+    }
+    return { terminals: live.length, agentChats };
+}
 
 /**
  * Unified IPC for the updater. The renderer doesn't know whether it's
@@ -53,6 +86,10 @@ export function registerUpdaterIpc(): void {
     u.setConfig({ repo, pollHours: Number.isFinite(pollHours) ? pollHours : 6 });
 
     const a = autoUpdaterInstance();
+    // Teach the auto-updater what a restart would interrupt, so its hands-free
+    // apply HOLDS (and the pill asks the user to confirm) instead of silently
+    // killing live agent terminals during an upgrade.
+    a.setInterruptionProbe(describeRestartInterruption);
 
     // Kick off automatic checks for the ACTIVE backend. Packaged builds
     // (phase2) previously never auto-polled — updates only showed after a

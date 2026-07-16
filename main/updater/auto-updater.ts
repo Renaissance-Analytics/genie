@@ -56,6 +56,40 @@ export interface AutoUpdaterStatus {
      * to download. Null when auto-update is healthy.
      */
     manualDownloadUrl: string | null;
+    /**
+     * Set at 'ready-to-restart' ONLY when applying the update would INTERRUPT live
+     * work — restarting Genie (and the pty-host it pins) tears down running
+     * terminals / agent chats. When present, the hands-free auto-apply is HELD:
+     * the update stays staged and the UI asks the user to confirm the restart (or
+     * defer), so an upgrade never silently kills a live agent session. Null when
+     * nothing live would be interrupted (idle, or a service-host that survives the
+     * swap) — then the apply runs hands-free as before.
+     */
+    interruption: RestartInterruption | null;
+}
+
+/**
+ * What a restart-to-apply would tear down. Counts are of LIVE work at the moment
+ * the build finished downloading. `agentChats` is the subset of `terminals` that
+ * are running an AI agent (the data-loss-sensitive ones we lead the warning with).
+ */
+export interface RestartInterruption {
+    terminals: number;
+    agentChats: number;
+}
+
+/**
+ * Pure gate for an ARMED (installWhenReady) update-downloaded: apply hands-free
+ * only when nothing live would be interrupted; otherwise HOLD the staged build so
+ * the user is warned and can defer. Exported so the decision is unit-testable
+ * without electron-updater. Stack-safe by construction: it runs on EVERY
+ * download-complete, so whichever build lands (even one that superseded an earlier
+ * staged one) is gated the same way.
+ */
+export function decideDownloadedApply(
+    interruption: RestartInterruption | null,
+): 'apply' | 'hold' {
+    return interruption && interruption.terminals > 0 ? 'hold' : 'apply';
 }
 
 const LOG_MAX = 2000;
@@ -79,6 +113,13 @@ class AutoUpdater extends EventEmitter {
      * poll re-check (state 'checking'), and refusing there wedged the pill.
      */
     private inflightCheck: Promise<void> | null = null;
+    /**
+     * Injected probe (set by the updater IPC layer, which can reach the terminal
+     * domain) that reports what a restart-to-apply would tear down RIGHT NOW. Kept
+     * as an injection so this module stays decoupled from the pty-host. Null → the
+     * gate sees no interruption and applies hands-free (the pre-existing behaviour).
+     */
+    private interruptionProbe: (() => RestartInterruption) | null = null;
 
     constructor() {
         super();
@@ -92,8 +133,18 @@ class AutoUpdater extends EventEmitter {
             error: null,
             progress: null,
             manualDownloadUrl: null,
+            interruption: null,
         };
         this.bind();
+    }
+
+    /**
+     * Wire the "what would a restart interrupt?" probe. Called once at IPC setup.
+     * Without it the gate can't see live terminals and falls back to hands-free
+     * apply — so this MUST be set for the warn-before-restart behaviour to engage.
+     */
+    setInterruptionProbe(fn: () => RestartInterruption): void {
+        this.interruptionProbe = fn;
     }
 
     getStatus(): AutoUpdaterStatus {
@@ -160,7 +211,7 @@ class AutoUpdater extends EventEmitter {
                 ? this.status.latestVersion
                 : null;
 
-        this.setStatus({ state: 'checking', error: null, manualDownloadUrl: null });
+        this.setStatus({ state: 'checking', error: null, manualDownloadUrl: null, interruption: null });
 
         // Linux AppImage updater is INERT when APPIMAGE is unset — electron-
         // updater's checkForUpdates() then no-ops and would falsely report "up to
@@ -263,7 +314,7 @@ class AutoUpdater extends EventEmitter {
             throw new Error('No update available to install.');
         }
         this.installWhenReady = true;
-        this.setStatus({ state: 'downloading', progress: 0, error: null });
+        this.setStatus({ state: 'downloading', progress: 0, error: null, interruption: null });
         try {
             await autoUpdater.downloadUpdate();
             // On success the `update-downloaded` handler in bind() flips us to
@@ -332,17 +383,28 @@ class AutoUpdater extends EventEmitter {
         });
         autoUpdater.on('update-downloaded', (info) => {
             this.appendLog(`update-downloaded ${info.version}`);
+            // What a restart would tear down right now. Runs on EVERY download-
+            // complete, so the gate is stack-safe (a build that superseded an
+            // earlier staged one is checked the same way).
+            let interruption: RestartInterruption | null = null;
+            try {
+                const probed = this.interruptionProbe?.() ?? null;
+                interruption = probed && probed.terminals > 0 ? probed : null;
+            } catch {
+                /* a broken probe must never wedge the update — treat as no interruption */
+            }
             this.setStatus({
                 state: 'ready-to-restart',
                 latestVersion: info.version,
                 progress: 1,
+                interruption,
             });
-            // Hands-free finish: the user clicked "Update", so apply the moment
-            // the build lands — no separate "Restart" click. If the flag is NOT
-            // set (a download we didn't initiate — shouldn't happen with
-            // autoDownload off), we simply rest at 'ready-to-restart' and wait
-            // for an explicit restartAndApply, never force-quitting on our own.
-            if (this.installWhenReady) {
+            // Hands-free finish ONLY when nothing live would be interrupted. If a
+            // restart would kill running terminals / agent chats, HOLD the staged
+            // build: stay 'ready-to-restart' with the interruption surfaced and let
+            // the UI ask the user to confirm the restart (or defer). An update must
+            // never silently tear down a live agent session.
+            if (this.installWhenReady && decideDownloadedApply(interruption) === 'apply') {
                 this.installWhenReady = false;
                 try {
                     this.restartAndApply();
@@ -353,6 +415,13 @@ class AutoUpdater extends EventEmitter {
                         manualDownloadUrl: this.manualUrlForPlatform(),
                     });
                 }
+            } else if (this.installWhenReady) {
+                // Held for confirmation — disarm the auto-apply so the user's
+                // explicit restartAndApply (via the pill) is what applies it.
+                this.installWhenReady = false;
+                this.appendLog(
+                    `restart held — ${interruption?.agentChats ?? 0} agent chat(s) / ${interruption?.terminals ?? 0} terminal(s) live; awaiting user confirm`,
+                );
             }
         });
         autoUpdater.on('error', (err) => {

@@ -123,6 +123,24 @@ export function renderAgentResume(
     return `${base} --resume ${sessionId}`;
 }
 
+/**
+ * Resume the MOST-RECENT chat in the terminal's cwd via `--continue` (`-c`) — the
+ * robust fallback when a captured session id can't be resumed by exact id. Claude
+ * scopes `-c` to the current project dir, so it reconnects the last conversation
+ * there without needing the (possibly drifted) id. Used when the stored
+ * `chat_session_id` has no transcript on disk: `--resume <that id>` would dead-end
+ * "No conversation found", so we continue the latest instead of scaring the user.
+ * Claude-only (codex/custom have no generic continue) — null otherwise.
+ */
+export function renderAgentContinue(
+    agent: WhisperAgentType,
+    baseCommand: string,
+): string | null {
+    if (agent !== 'claude') return null;
+    const base = stripSessionFlags(baseCommand) || 'claude';
+    return `${base} --continue`;
+}
+
 /** The agent-relevant slice of a terminal spec's meta (loose so this stays free of
  *  the heavy db types). */
 interface AgentSpecLike {
@@ -149,14 +167,34 @@ interface AgentSpecLike {
 export function agentRelaunchDecision(
     spec: AgentSpecLike | null,
     existing: boolean,
+    sessionExists?: (sessionId: string) => boolean,
 ): { command: string; newSessionId?: string } | null {
     if (existing || !spec) return null;
     const agent = spec.meta?.agent as WhisperAgentType | undefined;
     if (!agent) return null;
     const baseCmd = spec.meta?.agent_command ?? '';
     const sid = spec.meta?.chat_session_id ?? null;
-    const resume = sid ? renderAgentResume(agent, baseCmd, sid) : null;
-    if (resume) return { command: resume };
+
+    // A captured session id: resume it by EXACT id only when its transcript
+    // actually exists on disk. The stored id can DRIFT from the live conversation
+    // (the user recovered a killed chat with `-c`, or claude regenerated the id),
+    // and `--resume <a phantom id>` dead-ends with "No conversation found" — worse
+    // than useless, it looks like lost work. When the id can't be verified, fall
+    // back to `--continue` (resume the most-recent chat in this cwd), which is
+    // robust to that drift. `sessionExists` is injected (the fs check lives in the
+    // caller); omitted → trust the id (preserves the pre-verification behaviour).
+    if (sid) {
+        const verified = sessionExists ? sessionExists(sid) : true;
+        if (verified) {
+            const resume = renderAgentResume(agent, baseCmd, sid);
+            if (resume) return { command: resume };
+        } else {
+            const cont = renderAgentContinue(agent, baseCmd);
+            if (cont) return { command: cont };
+            // Non-claude with a stale id can't continue — fall through to fresh.
+        }
+    }
+
     const r = renderAgentLaunch(agent, baseCmd);
     if (!r.command) return null;
     return r.chatSessionId && !sid

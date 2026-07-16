@@ -748,6 +748,13 @@ export interface UpdaterStatus {
      * shows a "Download manually" button pointing here instead of a dead error.
      */
     manualDownloadUrl?: string | null;
+    /**
+     * Present at 'ready-to-restart' ONLY when applying would INTERRUPT live work
+     * (running terminals / agent chats the restart tears down). When set, the
+     * hands-free auto-apply is HELD: the pill shows an explicit "Restart & update"
+     * confirm with the count, so an upgrade never silently kills a live session.
+     */
+    interruption?: { terminals: number; agentChats: number } | null;
 }
 
 export interface UpdaterConfig {

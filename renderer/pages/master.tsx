@@ -1953,6 +1953,11 @@ function UpdatePill() {
             // can't install it on this build. The pill shows a Download button
             // instead (handled in the render).
             manualDownloadUrl: status.manualDownloadUrl ?? null,
+            // The backend HELD the hands-free apply because a restart would kill
+            // live agent chats — don't auto-drive it; the render shows a confirm.
+            interruptionPending:
+                status.state === 'ready-to-restart' &&
+                (status.interruption?.terminals ?? 0) > 0,
         });
         if (step === 'reset') {
             appliedRef.current = false;
@@ -2030,6 +2035,26 @@ function UpdatePill() {
                     ? `Downloading…${pct !== null ? ` ${pct}%` : ''}`
                     : 'Upgrading…';
 
+    // A HELD restart: the build is downloaded, but the backend won't apply it
+    // hands-free because a restart would tear down live agent chats. We show an
+    // explicit confirm (never auto-restart) so the user can finish work first or
+    // restart now. The count leads with agent chats (the data-loss-sensitive ones).
+    const interruption = status.interruption ?? null;
+    const heldTerminals = interruption?.terminals ?? 0;
+    const heldChats = interruption?.agentChats ?? 0;
+    const interruptionPending = ready && heldTerminals > 0;
+    const heldNoun =
+        heldChats > 0
+            ? `${heldChats} active agent chat${heldChats === 1 ? '' : 's'}`
+            : `${heldTerminals} terminal${heldTerminals === 1 ? '' : 's'}`;
+    const confirmHeldRestart = (): void => {
+        restartedRef.current = true;
+        void (async () => {
+            const r = await api().updater.restart();
+            if (!r.ok) await api().app.quit();
+        })();
+    };
+
     return (
         <div
             className="update-pill-wrap"
@@ -2045,6 +2070,18 @@ function UpdatePill() {
                 >
                     <span className="up-dot" />
                     Download{version ? ` v${version}` : ''}
+                </button>
+            ) : interruptionPending ? (
+                // Held for confirmation: restarting now would close live agent
+                // chats. One explicit click applies; leaving it staged defers.
+                <button
+                    type="button"
+                    className="update-pill ready"
+                    title={`Restarting to update v${version} will close ${heldNoun}. Finish or save your work first, or restart now.`}
+                    onClick={confirmHeldRestart}
+                >
+                    <span className="up-dot" />
+                    Restart &amp; update{heldChats > 0 ? ` · ${heldChats} chat${heldChats === 1 ? '' : 's'}` : ''}
                 </button>
             ) : actionable ? (
                 <button
@@ -2073,6 +2110,8 @@ function UpdatePill() {
                     changelog={changelog}
                     ready={ready}
                     willRestartPtyHost={!!status.willRestartPtyHost}
+                    heldChats={heldChats}
+                    heldTerminals={heldTerminals}
                 />
             )}
         </div>
@@ -2164,26 +2203,49 @@ function UpdatePopover({
     changelog,
     ready,
     willRestartPtyHost,
+    heldChats = 0,
+    heldTerminals = 0,
 }: {
     version: string;
     changelog: Changelog | null;
     ready: boolean;
     willRestartPtyHost: boolean;
+    heldChats?: number;
+    heldTerminals?: number;
 }) {
+    const held = heldTerminals > 0;
     return (
         <div className="update-popover" role="tooltip">
             <div className="up-head">
                 <strong>Genie v{version}</strong>
-                <span>{ready ? 'downloaded — restart to install' : 'available'}</span>
+                <span>
+                    {held
+                        ? 'downloaded — waiting for you'
+                        : ready
+                            ? 'downloaded — restart to install'
+                            : 'available'}
+                </span>
             </div>
-            {willRestartPtyHost && (
+            {held ? (
+                // The build is downloaded but HELD — a restart would close live
+                // agent chats, so it won't apply on its own.
+                <div className="up-warn" role="alert">
+                    This update is downloaded and waiting. Installing it restarts
+                    Genie and closes{' '}
+                    {heldChats > 0
+                        ? `${heldChats} active agent chat${heldChats === 1 ? '' : 's'}`
+                        : `${heldTerminals} terminal${heldTerminals === 1 ? '' : 's'}`}
+                    . It won't restart on its own — finish or save your work, then
+                    click <strong>Restart &amp; update</strong>.
+                </div>
+            ) : willRestartPtyHost ? (
                 <div className="up-warn" role="alert">
                     Applying this update restarts your background terminals.
                     Running sessions will be restored from a snapshot (command
                     history is kept; live processes stop). Save or close anything
                     important first.
                 </div>
-            )}
+            ) : null}
             {!changelog ? (
                 <div className="up-muted">Loading changes…</div>
             ) : changelog.groups.length === 0 ? (

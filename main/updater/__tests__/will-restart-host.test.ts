@@ -16,25 +16,35 @@ let backendKind: 'service' | 'detached' | 'inprocess' = 'inprocess';
 // Whether the detached host pins Genie's binary (electron-spawn) — true unless
 // it ran on the standalone Node. Conservative default mirrors production.
 let pinsBinary = true;
+// Controllable host state for the describeRestartInterruption tests.
+let liveTerminals: Array<{ id: string; pid: number; shell: string }> = [];
+let specs: Record<string, { meta?: { agent?: string } }> = {};
 
 vi.mock('../../terminal/host-service', () => ({
     hostBackendKind: () => backendKind,
     detachedHostPinsBinary: () => pinsBinary,
 }));
+vi.mock('../../terminal/quit-confirm', () => ({
+    liveHostTerminals: () => liveTerminals,
+}));
 
 // registerUpdaterIpc transitively imports these; keep them inert so the module
-// graph loads. We only exercise the pure withHostFlag helper here.
+// graph loads. We only exercise the pure helpers here.
 vi.mock('../git-updater', () => ({ updater: () => ({}) }));
 vi.mock('../auto-updater', () => ({
     autoUpdaterInstance: () => ({}),
     updaterMode: () => 'phase2',
 }));
-vi.mock('../../db', () => ({ getAllSettings: () => ({}), setSettings: () => {} }));
+vi.mock('../../db', () => ({
+    getAllSettings: () => ({}),
+    setSettings: () => {},
+    getTerminalSpec: (id: string) => specs[id] ?? null,
+}));
 vi.mock('../../tray', () => ({ setUpdateAvailable: () => {} }));
 vi.mock('../../background', () => ({ showSettingsWindow: () => {} }));
 vi.mock('../changelog', () => ({ getChangelog: async () => ({}) }));
 
-import { withHostFlag } from '../ipc';
+import { withHostFlag, describeRestartInterruption } from '../ipc';
 
 const baseStatus = {
     state: 'ready-to-restart' as const,
@@ -46,11 +56,14 @@ const baseStatus = {
     error: null,
     progress: 1,
     manualDownloadUrl: null,
+    interruption: null,
 };
 
 beforeEach(() => {
     backendKind = 'inprocess';
     pinsBinary = true;
+    liveTerminals = [];
+    specs = {};
 });
 
 afterEach(() => {
@@ -85,5 +98,45 @@ describe('withHostFlag', () => {
     it('sets willRestartPtyHost=false when in-process (no host at all)', () => {
         backendKind = 'inprocess';
         expect(withHostFlag(baseStatus).willRestartPtyHost).toBe(false);
+    });
+});
+
+describe('describeRestartInterruption — what a restart would tear down', () => {
+    it('reports NO interruption when the host survives the update (service-backed)', () => {
+        backendKind = 'service';
+        liveTerminals = [{ id: 't1', pid: 1, shell: 'bash' }];
+        specs = { t1: { meta: { agent: 'claude' } } };
+        // Service host reconnects after the swap — its terminals live through it.
+        expect(describeRestartInterruption()).toEqual({ terminals: 0, agentChats: 0 });
+    });
+
+    it('reports NO interruption in-process (no enumerable host terminals)', () => {
+        backendKind = 'inprocess';
+        liveTerminals = [{ id: 't1', pid: 1, shell: 'bash' }]; // not reachable via host client in prod
+        expect(describeRestartInterruption()).toEqual({ terminals: 0, agentChats: 0 });
+    });
+
+    it('counts live host terminals and flags the agent-backed ones when the host WILL restart', () => {
+        backendKind = 'detached';
+        pinsBinary = true; // binary-pinning detached host → killed + restarted by the swap
+        liveTerminals = [
+            { id: 'a', pid: 1, shell: 'bash' },
+            { id: 'b', pid: 2, shell: 'bash' },
+            { id: 'c', pid: 3, shell: 'bash' },
+        ];
+        specs = {
+            a: { meta: { agent: 'claude' } },
+            b: { meta: { agent: 'codex' } },
+            c: { meta: {} }, // a plain shell, not an agent
+        };
+        expect(describeRestartInterruption()).toEqual({ terminals: 3, agentChats: 2 });
+    });
+
+    it('reports NO interruption when a detached host runs on standalone Node (does not pin)', () => {
+        backendKind = 'detached';
+        pinsBinary = false; // survives the swap like a service host
+        liveTerminals = [{ id: 'a', pid: 1, shell: 'bash' }];
+        specs = { a: { meta: { agent: 'claude' } } };
+        expect(describeRestartInterruption()).toEqual({ terminals: 0, agentChats: 0 });
     });
 });

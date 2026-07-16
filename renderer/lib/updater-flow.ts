@@ -47,6 +47,12 @@ export function planCommitStep(opts: {
     restarted: boolean;
     /** Set when auto-apply can't run on this build (manual download only). */
     manualDownloadUrl: string | null;
+    /**
+     * True when a restart would interrupt live work (the backend HELD the
+     * hands-free apply). We must NOT auto-drive the restart then — the pill
+     * shows an explicit "Restart & update" confirm and the user decides when.
+     */
+    interruptionPending?: boolean;
 }): CommitStep {
     if (!opts.committed) return 'none';
     // The update this commit was riding is gone — failed ('error') or moot
@@ -55,6 +61,10 @@ export function planCommitStep(opts: {
     if (opts.state === 'available' && !opts.manualDownloadUrl && !opts.applied) {
         return 'apply';
     }
-    if (opts.state === 'ready-to-restart' && !opts.restarted) return 'restart';
+    // A held restart (live work would be interrupted) is user-confirmed, never
+    // auto-driven — the pill renders the confirm button and calls restart itself.
+    if (opts.state === 'ready-to-restart' && !opts.restarted && !opts.interruptionPending) {
+        return 'restart';
+    }
     return 'none';
 }

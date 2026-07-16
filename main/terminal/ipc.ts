@@ -1,4 +1,6 @@
 import { BrowserWindow, ipcMain, WebContents } from 'electron';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
     terminalManager,
     subscribeBackendEvents,
@@ -21,7 +23,12 @@ import {
 } from '../db';
 import { whisperBroker } from '../whisper/broker';
 import { workspaceSlug } from '../whisper/slug';
-import { renderAgentLaunch, captureSessionByDetect, agentRelaunchDecision } from '../whisper/session-capture';
+import {
+    renderAgentLaunch,
+    captureSessionByDetect,
+    agentRelaunchDecision,
+    transcriptDirFor,
+} from '../whisper/session-capture';
 import { buildSubmitBytes } from './keystrokes';
 import {
     normalizePurpose,
@@ -343,14 +350,32 @@ export function createAgentTerminal(opts: {
  * session when there is one. The first launch is done by createAgent; a warm reattach
  * still has the agent running. See {@link agentRelaunchDecision}.
  */
+/**
+ * True when a Claude transcript for `sid` actually exists in the spec's cwd
+ * project dir — so `--resume <sid>` won't dead-end "No conversation found". The
+ * captured id can drift from the live chat (recovered via `-c`, or regenerated),
+ * so we verify on disk and let agentRelaunchDecision fall back to `--continue`
+ * when it's missing. Uses the last reported cwd (OSC-7) if we have one, else the
+ * spec's launch cwd — that's the dir Claude scopes its transcripts by.
+ */
+function agentSessionTranscriptExists(spec: TerminalSpecRow | null, sid: string): boolean {
+    const cwd = spec?.live_cwd || spec?.cwd;
+    if (!cwd) return false; // can't verify → treat as missing → fall back to -c
+    try {
+        return fs.existsSync(path.join(transcriptDirFor(cwd), `${sid}.jsonl`));
+    } catch {
+        return false;
+    }
+}
+
 function maybeRelaunchAgent(id: string, existing: boolean): void {
-    const decision = agentRelaunchDecision(getTerminalSpec(id), existing);
+    const spec = getTerminalSpec(id);
+    const decision = agentRelaunchDecision(spec, existing, (sid) =>
+        agentSessionTranscriptExists(spec, sid),
+    );
     if (!decision) return;
-    if (decision.newSessionId) {
-        const spec = getTerminalSpec(id);
-        if (spec) {
-            updateTerminalSpec(id, { meta: { ...spec.meta, chat_session_id: decision.newSessionId } });
-        }
+    if (decision.newSessionId && spec) {
+        updateTerminalSpec(id, { meta: { ...spec.meta, chat_session_id: decision.newSessionId } });
     }
     const bytes = buildSubmitBytes(decision.command, true);
     // Let the fresh shell settle (profile load) before submitting the boot command.

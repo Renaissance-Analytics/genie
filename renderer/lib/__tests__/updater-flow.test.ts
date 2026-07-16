@@ -84,6 +84,27 @@ describe('planCommitStep', () => {
         ).toBe('none');
     });
 
+    it("does NOT auto-drive the restart when it's HELD (live agent chats would be interrupted) — the pill shows a confirm instead", () => {
+        // The backend held the hands-free apply because a restart would kill live
+        // work. Auto-driving here would defeat the warn-and-defer gate: the user
+        // must click "Restart & update" themselves.
+        expect(
+            planCommitStep({
+                ...base,
+                state: 'ready-to-restart',
+                interruptionPending: true,
+            }),
+        ).toBe('none');
+        // With nothing to interrupt, it drives the restart as before.
+        expect(
+            planCommitStep({
+                ...base,
+                state: 'ready-to-restart',
+                interruptionPending: false,
+            }),
+        ).toBe('restart');
+    });
+
     it("RESETS a committed cycle when the update dies — 'error' must disarm, or the pill wedges on \"Upgrading…\"", () => {
         // The wedge: download failed → 'error' → (later re-check) → 'available'
         // with the refs still armed. 'error' must return 'reset' so that next

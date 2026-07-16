@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     renderAgentLaunch,
     renderAgentResume,
+    renderAgentContinue,
     agentRelaunchDecision,
     appendLaunchFlags,
     extractSessionId,
@@ -220,5 +221,58 @@ describe('agentRelaunchDecision — fresh vs continue on agent-terminal reattach
                 false,
             ),
         ).toEqual({ command: 'codex' });
+    });
+});
+
+describe('renderAgentContinue — most-recent fallback', () => {
+    it('builds `claude --continue`, stripping any stale session/resume flag', () => {
+        expect(renderAgentContinue('claude', 'claude')).toBe('claude --continue');
+        expect(renderAgentContinue('claude', 'claude --resume abcd1234-5678-90ab')).toBe(
+            'claude --continue',
+        );
+        expect(
+            renderAgentContinue('claude', 'claude --model opus --session-id abcd1234-5678-90ab'),
+        ).toBe('claude --model opus --continue');
+    });
+
+    it('refuses (null) for non-claude agents', () => {
+        expect(renderAgentContinue('codex', 'codex')).toBeNull();
+        expect(renderAgentContinue('custom', 'my-wrapper.sh')).toBeNull();
+    });
+});
+
+describe('agentRelaunchDecision — verify the captured id before --resume', () => {
+    const claude = (extra: Record<string, string> = {}) => ({
+        meta: { agent: 'claude', agent_command: 'claude', ...extra },
+    });
+
+    it('RESUMES by exact id when the transcript exists on disk', () => {
+        expect(
+            agentRelaunchDecision(claude({ chat_session_id: 'sess-1' }), false, () => true),
+        ).toEqual({ command: 'claude --resume sess-1' });
+    });
+
+    it('CONTINUES (-c) instead of dead-ending when the captured id has NO transcript', () => {
+        // The stored id drifted from the live chat (recovered via -c / regenerated).
+        // `--resume <phantom>` would 404 "No conversation found" — continue instead.
+        expect(
+            agentRelaunchDecision(claude({ chat_session_id: 'phantom' }), false, () => false),
+        ).toEqual({ command: 'claude --continue' });
+    });
+
+    it('a non-claude agent with a missing id falls through to a fresh launch (no -c)', () => {
+        expect(
+            agentRelaunchDecision(
+                { meta: { agent: 'codex', agent_command: 'codex', chat_session_id: 'phantom' } },
+                false,
+                () => false,
+            ),
+        ).toEqual({ command: 'codex' });
+    });
+
+    it('trusts the id when no verifier is passed (pre-verification behaviour preserved)', () => {
+        expect(agentRelaunchDecision(claude({ chat_session_id: 'sess-1' }), false)).toEqual({
+            command: 'claude --resume sess-1',
+        });
     });
 });
