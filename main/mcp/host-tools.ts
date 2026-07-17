@@ -1176,11 +1176,24 @@ export function updateWhisperChannel(
     if (!spec) return { ok: false, error: 'Terminal not found.' };
     const agentId = spec.meta?.agent_id;
     if (!agentId) return { ok: false, error: 'That terminal is not a whisper agent.' };
+
+    // A purpose rename must also refresh the DISPLAY LABEL (`<agent> · <purpose>`),
+    // which drives the terminal header, sidebar row, AND WhisperChat — otherwise
+    // it stays frozen at the creation-time value. Only recompute an AUTO-DERIVED
+    // label (still `<agent> · …`); never clobber a custom label passed at creation.
+    let nextLabel: string | undefined;
+    if (patch.purpose !== undefined) {
+        const agent = spec.meta?.agent;
+        const looksDerived = agent != null && spec.label.startsWith(`${agent} · `);
+        if (looksDerived) nextLabel = `${agent} · ${normalizePurpose(patch.purpose)}`;
+    }
+
     whisperBroker.setAccessibility(agentId, {
         scope: patch.scope,
         workspaces: patch.scope_workspaces,
         purpose: patch.purpose,
         wakeOnDm: patch.wake_on_dm,
+        label: nextLabel,
     });
     // Persist the durable bits to the spec meta + refresh the sidebar row.
     const meta = { ...spec.meta };
@@ -1188,7 +1201,7 @@ export function updateWhisperChannel(
     if (patch.scope !== undefined) meta.whisper_scope = patch.scope;
     if (patch.scope_workspaces !== undefined) meta.whisper_workspaces = patch.scope_workspaces;
     if (patch.wake_on_dm !== undefined) meta.whisper_wake_on_dm = patch.wake_on_dm;
-    updateTerminalSpec(specId, { meta });
+    updateTerminalSpec(specId, nextLabel !== undefined ? { meta, label: nextLabel } : { meta });
     broadcastTerminalSpecsChanged();
     return { ok: true };
 }

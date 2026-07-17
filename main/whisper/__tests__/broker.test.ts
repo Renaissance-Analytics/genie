@@ -150,6 +150,23 @@ describe('WhisperBroker — channels', () => {
         // The old room is gone (no members left).
         expect(b.channels().map((c) => c.key)).toEqual(['w1:backend']);
     });
+
+    it('updates the display label when the caller supplies a renamed one', () => {
+        const b = fresh();
+        b.join(input({ agentId: 'A', workspaceId: 'w1', purpose: 'general', label: 'claude · general' }));
+        // The host recomputes an auto-derived label on a purpose rename and passes
+        // it here so WhisperChat (which prefers `label`) reflects it, not the stale one.
+        const info = b.setAccessibility('A', { purpose: 'tynn', label: 'claude · tynn' });
+        expect(info?.purpose).toBe('tynn');
+        expect(info?.label).toBe('claude · tynn');
+    });
+
+    it('leaves the label untouched when none is supplied (scope-only edit)', () => {
+        const b = fresh();
+        b.join(input({ agentId: 'A', workspaceId: 'w1', label: 'Custom Bot' }));
+        const info = b.setAccessibility('A', { scope: 'none' });
+        expect(info?.label).toBe('Custom Bot');
+    });
 });
 
 describe('WhisperBroker — cursor + inbox', () => {

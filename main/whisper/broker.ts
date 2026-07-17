@@ -419,7 +419,13 @@ export class WhisperBroker {
      */
     setAccessibility(
         agentId: string,
-        patch: { scope?: WhisperScope; workspaces?: string[]; purpose?: string; wakeOnDm?: boolean },
+        patch: {
+            scope?: WhisperScope;
+            workspaces?: string[];
+            purpose?: string;
+            wakeOnDm?: boolean;
+            label?: string;
+        },
     ): WhisperAgentInfo | null {
         const a = this.agents.get(agentId);
         if (!a) return null;
@@ -434,6 +440,9 @@ export class WhisperBroker {
         if (patch.scope !== undefined) a.scope = patch.scope;
         if (patch.workspaces !== undefined) a.scopeWorkspaces = [...patch.workspaces];
         if (patch.wakeOnDm !== undefined) a.wakeOnDm = patch.wakeOnDm;
+        // Keep the display label in sync so WhisperChat reflects a renamed purpose
+        // (the broker prefers `label` over `slug:purpose` everywhere it renders).
+        if (patch.label !== undefined) a.label = patch.label;
         this.emitPresence(a);
         return this.toInfo(a);
     }
