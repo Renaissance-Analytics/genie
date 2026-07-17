@@ -77,8 +77,8 @@ async function startUpstreams(): Promise<void> {
     });
     const httpPort = await listen(httpUpstream);
     const wsPort = await listen(wsHttp);
-    enabledSites.set('sitehttp', { hostname: 'tynn.test', scheme: 'http', port: httpPort });
-    enabledSites.set('sitews', { hostname: 'tynn.test', scheme: 'http', port: wsPort });
+    enabledSites.set('sitehttp', { workspaceId: 'workspace-1', hostname: 'tynn.test', scheme: 'http', port: httpPort });
+    enabledSites.set('sitews', { workspaceId: 'workspace-1', hostname: 'tynn.test', scheme: 'http', port: wsPort });
     // 'ghost' is deliberately NOT registered — an enabled `.gen` whose host-side
     // siteId doesn't resolve, to prove the HOST allowlist bites over the relay.
 }
@@ -391,7 +391,14 @@ describe('relay site-proxy — carrier routing', () => {
         const carrier = getSiteCarrier(tailnetConnKey);
         expect(carrier).not.toBeNull();
         // The tailnet carrier dials the host DIRECTLY, injecting the Bearer in main.
-        const call = carrier!.forward({ method: 'GET', path: '/api/site/sitehttp/', headers: {}, body: Readable.from([]) });
+        const call = carrier!.forward({
+            method: 'GET',
+            path: '/api/site/sitehttp/',
+            headers: {},
+            body: Readable.from([]),
+            workspaceId: 'workspace-1',
+            siteId: 'sitehttp',
+        });
         const { status, body } = await call.response;
         const chunks: Buffer[] = [];
         for await (const c of body) chunks.push(c as Buffer);
@@ -403,7 +410,11 @@ describe('relay site-proxy — carrier routing', () => {
 describe('relay site-proxy — .gen request over the relay (held-until)', () => {
     it('round-trips a .gen GET into handleSiteProxy and back; Bearer injected host-side only', async () => {
         const ca = new SessionCa();
-        const genMap = new Map<string, GenTarget>([['tynn.gen', { siteId: 'sitehttp', hostname: 'tynn.test' }]]);
+        const genMap = new Map<string, GenTarget>([['tynn.gen', {
+            workspaceId: 'workspace-1',
+            siteId: 'sitehttp',
+            hostname: 'tynn.test',
+        }]]);
         const shim = await makeShim(ca, genMap);
         try {
             const res = await fetchThroughShim(shim, 'tynn.gen', '/hello?x=1', ca.caPem);
@@ -426,7 +437,11 @@ describe('relay site-proxy — .gen request over the relay (held-until)', () => 
         const ca = new SessionCa();
         // `ghost.gen` passes the shim gate (it IS in genMap) but its siteId is not
         // registered host-side ⇒ handleSiteProxy resolveSite → null → 404.
-        const genMap = new Map<string, GenTarget>([['ghost.gen', { siteId: 'ghost', hostname: 'ghost.test' }]]);
+        const genMap = new Map<string, GenTarget>([['ghost.gen', {
+            workspaceId: 'workspace-1',
+            siteId: 'ghost',
+            hostname: 'ghost.test',
+        }]]);
         const shim = await makeShim(ca, genMap);
         try {
             const res = await fetchThroughShim(shim, 'ghost.gen', '/', ca.caPem);
@@ -438,7 +453,11 @@ describe('relay site-proxy — .gen request over the relay (held-until)', () => 
 
     it('honours the kill-switch over the relay (isLocked → 423, even on GET)', async () => {
         const ca = new SessionCa();
-        const genMap = new Map<string, GenTarget>([['tynn.gen', { siteId: 'sitehttp', hostname: 'tynn.test' }]]);
+        const genMap = new Map<string, GenTarget>([['tynn.gen', {
+            workspaceId: 'workspace-1',
+            siteId: 'sitehttp',
+            hostname: 'tynn.test',
+        }]]);
         const shim = await makeShim(ca, genMap);
         try {
             setLocked(true);
@@ -458,6 +477,8 @@ describe('relay site-proxy — WebSocket upgrade over the relay', () => {
         const key = crypto.randomBytes(16).toString('base64');
         const call = carrier!.upgradeWs({
             path: '/api/site/sitews/socket',
+            workspaceId: 'workspace-1',
+            siteId: 'sitews',
             headers: {
                 upgrade: 'websocket',
                 connection: 'Upgrade',

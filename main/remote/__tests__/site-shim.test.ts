@@ -214,7 +214,11 @@ async function fetchThroughShim(
 describe('shim end-to-end (no display)', () => {
     it('MITM-terminates an enabled .gen and forwards with the Bearer + preserve-origin', async () => {
         const ca = new SessionCa();
-        const genMap = new Map<string, GenTarget>([[GEN, { siteId: SITE_ID, hostname: HOSTNAME }]]);
+        const genMap = new Map<string, GenTarget>([[GEN, {
+            workspaceId: 'workspace-1',
+            siteId: SITE_ID,
+            hostname: HOSTNAME,
+        }]]);
         const shim = await makeShim(ca, genMap);
         try {
             const res = await fetchThroughShim(shim, GEN, '/', ca.caPem);
@@ -232,7 +236,11 @@ describe('shim end-to-end (no display)', () => {
 
     it('applies the .test⇄.gen rewrite and preserves HSTS + Secure', async () => {
         const ca = new SessionCa();
-        const genMap = new Map<string, GenTarget>([[GEN, { siteId: SITE_ID, hostname: HOSTNAME }]]);
+        const genMap = new Map<string, GenTarget>([[GEN, {
+            workspaceId: 'workspace-1',
+            siteId: SITE_ID,
+            hostname: HOSTNAME,
+        }]]);
         const shim = await makeShim(ca, genMap);
         try {
             const res = await fetchThroughShim(shim, GEN, '/redir', ca.caPem);
@@ -248,7 +256,11 @@ describe('shim end-to-end (no display)', () => {
 
     it('REFUSES a non-.gen host and a disabled/unknown .gen at CONNECT', async () => {
         const ca = new SessionCa();
-        const genMap = new Map<string, GenTarget>([[GEN, { siteId: SITE_ID, hostname: HOSTNAME }]]);
+        const genMap = new Map<string, GenTarget>([[GEN, {
+            workspaceId: 'workspace-1',
+            siteId: SITE_ID,
+            hostname: HOSTNAME,
+        }]]);
         const shim = await makeShim(ca, genMap);
         try {
             await expect(connectTunnel(shim.port, 'evil.com:443')).rejects.toThrow('CONNECT 403');
@@ -261,7 +273,11 @@ describe('shim end-to-end (no display)', () => {
     it('isolates two connections: a leaf from one CA is not trusted via the other', async () => {
         const caA = new SessionCa();
         const caB = new SessionCa();
-        const genMap = new Map<string, GenTarget>([[GEN, { siteId: SITE_ID, hostname: HOSTNAME }]]);
+        const genMap = new Map<string, GenTarget>([[GEN, {
+            workspaceId: 'workspace-1',
+            siteId: SITE_ID,
+            hostname: HOSTNAME,
+        }]]);
         const shimA = await makeShim(caA, genMap);
         try {
             // Trusting hostA's OWN CA works.

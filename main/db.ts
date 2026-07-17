@@ -766,6 +766,10 @@ export interface Settings {
      *  'on'. Independent of mobile_enabled — either binds the host server; the phone
      *  UI route is gated on mobile_enabled, so remote works with mobile off. */
     remote_enabled?: 'on' | 'off';
+    remote_network_local?: 'on' | 'off';
+    remote_network_lan?: 'on' | 'off';
+    remote_network_tailscale?: 'on' | 'off';
+    remote_network_tynn?: 'on' | 'off';
     /** Fixed port for the mobile server, bound on the Tailscale IP. String-
      *  encoded; default '51718' (obscure, beside the MCP port). Same Integer/
      *  range guard as mcp_port. Changing it requires restarting the server. */
@@ -901,6 +905,10 @@ export function getAllSettings(): Settings {
         sound_forcequestion_custom: out['sound_forcequestion_custom'] ?? '',
         mcp_port: out['mcp_port'] ?? '51717',
         mobile_enabled: (out['mobile_enabled'] as 'on' | 'off') ?? 'off',
+        remote_network_local: (out['remote_network_local'] as 'on' | 'off') ?? 'on',
+        remote_network_lan: (out['remote_network_lan'] as 'on' | 'off') ?? 'off',
+        remote_network_tailscale: (out['remote_network_tailscale'] as 'on' | 'off') ?? 'on',
+        remote_network_tynn: (out['remote_network_tynn'] as 'on' | 'off') ?? 'on',
         mobile_port: out['mobile_port'] ?? '51718',
         local_sites_enabled:
             (out['local_sites_enabled'] as 'on' | 'off') ?? 'off',

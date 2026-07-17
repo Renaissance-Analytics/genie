@@ -118,12 +118,56 @@ export interface StartLocalWorkstationDeps {
     applyDelta?: (delta: IssueWatchDeltaPush) => void;
     /** Injectable fetch for the snapshot (host-authed, no cookies). Default: global fetch. */
     fetchImpl?: typeof fetch;
+    /** Current local workspace + enabled-site inventory. Synced to Tynn with
+     * workstation auth so share policy never depends on a Tynn project row. */
+    inventory?: () => Promise<WorkstationInventory>;
     log?: (msg: string) => void;
+}
+
+export interface WorkstationInventory {
+    workspaces: Array<{
+        id: string;
+        name: string;
+        projectId?: string | null;
+        sites: Array<{ id: string; name: string; hostname: string }>;
+    }>;
 }
 
 export interface LocalWorkstationHandle {
     workstationId: string;
     stop(): void;
+}
+
+export async function syncWorkstationInventory(
+    identity: WorkstationIdentity,
+    tynnApiBaseUrl: string,
+    inventory: WorkstationInventory,
+    fetchImpl: typeof fetch,
+): Promise<void> {
+    const base = tynnApiBaseUrl.replace(/\/+$/, '');
+    const url = `${base}/api/v1/workstations/${encodeURIComponent(identity.workstationId)}/inventory`;
+    const body = JSON.stringify({
+        workspaces: inventory.workspaces.map((workspace) => ({
+            workspace_id: workspace.id,
+            name: workspace.name,
+            project_id: workspace.projectId || null,
+            sites: workspace.sites.map((site) => ({
+                site_id: site.id,
+                name: site.name,
+                hostname: site.hostname,
+            })),
+        })),
+    });
+    const res = await fetchImpl(url, {
+        method: 'PUT',
+        headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+            authorization: identity.authHeader(),
+        },
+        body,
+    });
+    if (!res.ok) throw new Error(`workstation inventory sync failed: HTTP ${res.status}`);
 }
 
 /**
@@ -172,6 +216,17 @@ export async function startLocalWorkstation(
             log('no workstation identity after enroll — IssueWatch push off');
             return null;
         }
+        const tynnApiBaseUrl = (deps.tynnApiBaseUrl ?? (() => backend.host()))();
+        const syncInventory = async (): Promise<void> => {
+            if (!deps.inventory) return;
+            await syncWorkstationInventory(identity, tynnApiBaseUrl, await deps.inventory(), fetchImpl);
+        };
+        try {
+            await syncInventory();
+            if (deps.inventory) log('workstation inventory synced');
+        } catch (e) {
+            log(`inventory sync failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
 
         // 2) FMS gate — only ride the channel when IssueWatch is entitled.
         const features = await (deps.features ?? (() => backend.fetchFeatures()))();
@@ -195,7 +250,6 @@ export async function startLocalWorkstation(
         }
 
         // 4) One persistent subscription to our OWN workstation channel.
-        const tynnApiBaseUrl = (deps.tynnApiBaseUrl ?? (() => backend.host()))();
         const transport: WorkstationTransportLike = deps.makeTransport
             ? deps.makeTransport({
                   appKey: cfg.appKey,
@@ -227,6 +281,7 @@ export async function startLocalWorkstation(
                 setIssueWatchServiceState('connected');
                 void (async () => {
                     try {
+                        await syncInventory();
                         const deltas = await fetchSnapshot(identity, tynnApiBaseUrl);
                         for (const d of deltas) applyDelta(d);
                         log(`reconciled ${deltas.length} workspace IssueWatch snapshot(s)`);

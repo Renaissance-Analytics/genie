@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     applyAgentsSection,
     applyCodexMcpLaunchArgs,
+    applyCodexServerBlock,
     applyGenieServer,
     claudeEntry,
     codexMcpLaunchArgs,
@@ -71,6 +72,29 @@ describe('applyGenieServer', () => {
 });
 
 describe('Codex MCP launch overrides', () => {
+    it('merges a managed project MCP block without clobbering other Codex settings', () => {
+        const existing = 'model = "gpt-5"\n';
+        const next = applyCodexServerBlock(existing, 'genie', URL, null, true);
+        expect(next).toContain(existing);
+        expect(next).toContain('# BEGIN GENIE MCP: genie');
+        expect(next).toContain('[mcp_servers.genie]');
+        expect(next).toContain(`url = '${URL}'`);
+        expect(applyCodexServerBlock(next, 'genie', URL, null, true)).toBe(next);
+        expect(applyCodexServerBlock(next, 'genie', URL, null, false)).toBe(existing);
+    });
+
+    it('uses an environment-backed bearer token for Tynn project config', () => {
+        const next = applyCodexServerBlock(
+            '',
+            'tynn',
+            'https://tynn.test/mcp/project',
+            'TYNN_AGENT_TOKEN',
+            true,
+        );
+        expect(next).toContain(`bearer_token_env_var = 'TYNN_AGENT_TOKEN'`);
+        expect(next).not.toContain('Bearer ');
+    });
+
     it('renders Genie and Tynn as Codex -c overrides without embedding the Tynn token', () => {
         const out = codexMcpLaunchArgs({
             genieUrl: 'http://127.0.0.1:51717/mcp/abc123',

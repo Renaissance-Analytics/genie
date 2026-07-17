@@ -572,6 +572,15 @@ export default function SettingsPage() {
                 onEnabledChange={(on) => patch({ mobile_enabled: on ? 'on' : 'off' })}
                 remoteEnabled={s.remote_enabled === 'on'}
                 onRemoteEnabledChange={(on) => patch({ remote_enabled: on ? 'on' : 'off' })}
+                networkAccess={{
+                    local: s.remote_network_local !== 'off',
+                    lan: s.remote_network_lan === 'on',
+                    tailscale: s.remote_network_tailscale !== 'off',
+                    tynn: s.remote_network_tynn !== 'off',
+                }}
+                onNetworkAccessChange={(network, on) => patch({
+                    [`remote_network_${network}`]: on ? 'on' : 'off',
+                })}
                 port={s.mobile_port ?? '51718'}
                 onPortChange={(v) => patch({ mobile_port: v })}
                 localSitesEnabled={s.local_sites_enabled === 'on'}
@@ -3498,6 +3507,8 @@ function MobileSection({
     onEnabledChange,
     remoteEnabled,
     onRemoteEnabledChange,
+    networkAccess,
+    onNetworkAccessChange,
     port,
     onPortChange,
     localSitesEnabled,
@@ -3508,6 +3519,8 @@ function MobileSection({
     onEnabledChange: (on: boolean) => void;
     remoteEnabled: boolean;
     onRemoteEnabledChange: (on: boolean) => void;
+    networkAccess: { local: boolean; lan: boolean; tailscale: boolean; tynn: boolean };
+    onNetworkAccessChange: (network: 'local' | 'lan' | 'tailscale' | 'tynn', on: boolean) => void;
     port: string;
     onPortChange: (v: string) => void;
     localSitesEnabled: boolean;
@@ -3709,6 +3722,33 @@ function MobileSection({
             </SettingRow>
 
             <SettingRow
+                label="Allowed networks"
+                keywords="local lan tailscale tynn network access remote exposure"
+                desc="Choose every transport allowed to reach this workstation. Local has owner priority; LAN is off by default; Tynn uses the authenticated relay and does not open a local socket."
+            >
+                <div className="grid gap-2">
+                    {([
+                        ['local', 'Local'],
+                        ['lan', 'LAN'],
+                        ['tailscale', 'Tailscale'],
+                        ['tynn', 'Tynn'],
+                    ] as const).map(([network, label]) => (
+                        <label key={network} className="flex items-center justify-between gap-4 text-sm">
+                            <span>{label}</span>
+                            <Switch
+                                checked={networkAccess[network]}
+                                disabled={busy}
+                                onCheckedChange={(on: boolean) => {
+                                    onNetworkAccessChange(network, on);
+                                    void persistSettings().then(restart);
+                                }}
+                            />
+                        </label>
+                    ))}
+                </div>
+            </SettingRow>
+
+            <SettingRow
                 label="Serve local dev sites"
                 keywords="local sites serve tunnel gen herd valet loopback dev site work mode"
                 desc="Off by default. Lets this host expose its loopback dev sites (e.g. tynn.test, served by Herd/Valet) to a remote Genie as *.gen. A separate opt-in from mobile remote control — and each site is still individually enabled on the .gen Sites page before anything is tunnelled."
@@ -3735,6 +3775,21 @@ function MobileSection({
                     Port {status.configuredPort} is in use — pick another port and
                     Restart. Genie won&apos;t silently fall back to a random port so
                     the phone URL stays stable.
+                </div>
+            )}
+
+            {!!status?.listeners?.length && (
+                <div className="set-note">
+                    <div className="mb-1 font-medium">Active listeners</div>
+                    {status.listeners.map((listener) => (
+                        <div key={`${listener.network}:${listener.ip}`}>
+                            {listener.network}: {listener.secure ? 'https' : 'http'}://{listener.ip}:{listener.port}
+                        </div>
+                    ))}
+                    {networkAccess.tynn && <div>Tynn: authenticated relay enabled</div>}
+                    {networkAccess.lan && (
+                        <div>LAN: awaiting secure certificate enrollment (no plaintext listener)</div>
+                    )}
                 </div>
             )}
 

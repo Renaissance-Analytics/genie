@@ -107,6 +107,22 @@ export function loadWorkspaceTerminalEnv(workspacePath: string): Record<string, 
     return token ? { ...env, [TYNN_TOKEN_ENV_KEY]: token } : env;
 }
 
+export function syncWorkspaceCodexTynnMcp(workspacePath: string): boolean {
+    const url = readTynnMcpUrl(workspacePath);
+    const token = readTynnMcpBearerToken(workspacePath);
+    if (!url || !token) return false;
+    let enabled = true;
+    try {
+        enabled = getAllSettings().mcp_sync_codex !== 'off';
+    } catch {
+        /* default on */
+    }
+    if (!enabled) return false;
+    writeTynnTokenEnv(workspacePath, token);
+    syncCodexServer(workspacePath, TYNN_SERVER_NAME, url, TYNN_TOKEN_ENV_KEY, true);
+    return true;
+}
+
 /**
  * Quote a value as a single-quoted TOML literal for Codex's `-c key=value`
  * override. Single quotes are shell-portable inside the outer `"..."` (a literal
@@ -119,11 +135,85 @@ function tomlLiteral(value: string): string {
     return `'${value.replace(/'/g, '%27')}'`;
 }
 
+export function applyCodexServerBlock(
+    existing: string,
+    name: string,
+    url: string,
+    bearerTokenEnvVar: string | null,
+    enabled: boolean,
+): string {
+    const begin = `# BEGIN GENIE MCP: ${name}`;
+    const end = `# END GENIE MCP: ${name}`;
+    const escapedBegin = begin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escapedEnd = end.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const without = existing.replace(
+        new RegExp(`${escapedBegin}\\r?\\n[\\s\\S]*?${escapedEnd}(?:\\r?\\n)?`, 'g'),
+        '',
+    );
+    if (!enabled || !url) return without;
+    const block = [
+        begin,
+        `[mcp_servers.${name}]`,
+        `url = ${tomlLiteral(url)}`,
+        ...(bearerTokenEnvVar
+            ? [`bearer_token_env_var = ${tomlLiteral(bearerTokenEnvVar)}`]
+            : []),
+        end,
+        '',
+    ].join('\n');
+    return `${without}${without && !without.endsWith('\n') ? '\n' : ''}${block}`;
+}
+
+function syncCodexServer(
+    workspacePath: string,
+    name: string,
+    url: string,
+    bearerTokenEnvVar: string | null,
+    enabled: boolean,
+): void {
+    ensureCodexConfigGitignored(workspacePath);
+    const file = path.join(workspacePath, '.codex', 'config.toml');
+    let existing = '';
+    try {
+        existing = fs.readFileSync(file, 'utf8');
+    } catch {
+        /* absent — created below */
+    }
+    const next = applyCodexServerBlock(existing, name, url, bearerTokenEnvVar, enabled);
+    if (next === existing) return;
+    try {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, next);
+    } catch {
+        /* best-effort — launch-time overrides remain the fallback */
+    }
+}
+
+function ensureCodexConfigGitignored(workspacePath: string): void {
+    const file = path.join(workspacePath, '.gitignore');
+    const rule = '.codex/config.toml';
+    try {
+        let existing = '';
+        try {
+            existing = fs.readFileSync(file, 'utf8');
+        } catch {
+            /* absent — created below */
+        }
+        if (existing.split(/\r?\n/).map((line) => line.trim()).includes(rule)) return;
+        const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
+        fs.writeFileSync(
+            file,
+            `${existing}${prefix}\n# Genie: machine-local Codex MCP endpoints\n${rule}\n`,
+        );
+    } catch {
+        /* best-effort */
+    }
+}
+
 /**
- * Codex 0.144 does not read a workspace-local `.codex/config.toml`; it reads
- * global `~/.codex/config.toml` plus command-line `-c` overrides. Genie must not
- * mutate a user's global Codex config for a workspace, so Codex Agent Terminals
- * get project-scoped MCP by appending these overrides at launch.
+ * Launch-time overrides remain a compatibility fallback for Codex versions
+ * predating project `.codex/config.toml`, and for commands launched before the
+ * workspace sync completes.
  */
 export function codexMcpLaunchArgs(input: {
     genieUrl?: string | null;
@@ -331,10 +421,14 @@ export function writeWorkspaceTynnMcp(
 ): void {
     if (!workspacePath) return;
     if (enabled && (!opts?.url || !opts?.token)) return; // never write a broken/empty entry
-    let sync = { claude: true, cursor: true };
+    let sync = { claude: true, cursor: true, codex: true };
     try {
         const s = getAllSettings();
-        sync = { claude: s.mcp_sync_claude !== 'off', cursor: s.mcp_sync_cursor !== 'off' };
+        sync = {
+            claude: s.mcp_sync_claude !== 'off',
+            cursor: s.mcp_sync_cursor !== 'off',
+            codex: s.mcp_sync_codex !== 'off',
+        };
     } catch {
         /* default to syncing if settings can't be read */
     }
@@ -353,6 +447,15 @@ export function writeWorkspaceTynnMcp(
     if (sync.cursor) {
         const entry = enabled && opts ? tynnEntry(opts.url, opts.token, 'cursor') : {};
         upsert(path.join(workspacePath, '.cursor', 'mcp.json'), TYNN_SERVER_NAME, entry, enabled);
+    }
+    if (sync.codex) {
+        syncCodexServer(
+            workspacePath,
+            TYNN_SERVER_NAME,
+            opts?.url ?? '',
+            TYNN_TOKEN_ENV_KEY,
+            enabled,
+        );
     }
 }
 
@@ -495,12 +598,13 @@ export function writeWorkspaceAgentMcp(
     url: string | null,
 ): void {
     if (!workspacePath) return;
-    let sync = { claude: true, cursor: true, agents: true };
+    let sync = { claude: true, cursor: true, codex: true, agents: true };
     try {
         const s = getAllSettings();
         sync = {
             claude: s.mcp_sync_claude !== 'off',
             cursor: s.mcp_sync_cursor !== 'off',
+            codex: s.mcp_sync_codex !== 'off',
             agents: s.mcp_sync_agents !== 'off',
         };
     } catch {
@@ -529,6 +633,7 @@ export function writeWorkspaceAgentMcp(
                 false,
             );
         }
+        if (sync.codex) syncCodexServer(workspacePath, GENIE_SERVER_NAME, '', null, false);
         if (sync.agents) syncAgentsMd(workspacePath, true);
         return;
     }
@@ -542,6 +647,9 @@ export function writeWorkspaceAgentMcp(
             cursorEntry(url ?? ''),
             enabled,
         );
+    }
+    if (sync.codex) {
+        syncCodexServer(workspacePath, GENIE_SERVER_NAME, url ?? '', null, enabled);
     }
     if (sync.agents) syncAgentsMd(workspacePath, enabled);
 }

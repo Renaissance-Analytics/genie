@@ -3,7 +3,11 @@ import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { detectTailnetIp } from './tailnet';
+import { detectTailnetIp, isCgnatIp } from './tailnet';
+import {
+    resolveNetworkListeners,
+    type RemoteNetworkAccess,
+} from './network-access';
 import { ensureCert, buildMobileUrl, shouldRenew, type MobileCert } from './tls';
 import { handleApi, terminalServable, type MobileDataDeps } from './api';
 import {
@@ -75,6 +79,9 @@ export interface MobileServerDeps {
     remoteEnabled?: boolean;
     /** The user-configured fixed port (Settings → Mobile). */
     configuredPort: () => number;
+    /** Explicit network exposure policy. Omitted preserves the legacy
+     * Tailscale-only listener for compatibility. */
+    networkAccess?: RemoteNetworkAccess;
     /** Reused terminal/process/workspace/question functions (built in background.ts). */
     data: MobileDataDeps;
     /**
@@ -94,8 +101,8 @@ export interface MobileServerDeps {
     bindIpOverride?: string;
 }
 
-let server: http.Server | https.Server | null = null;
-let wss: WebSocketServer | null = null;
+const servers = new Map<string, http.Server | https.Server>();
+const websocketServers = new Set<WebSocketServer>();
 let boundIp: string | null = null;
 let boundPort: number | null = null;
 /** True when bound over HTTPS (a Tailscale cert was issued); false = http. */
@@ -244,10 +251,24 @@ function clientIp(req: http.IncomingMessage): string {
  * `http://<ip>:<port>`. The scheme here is what a rewritten `Location` inherits,
  * so it also drives the http-fallback downgrade.
  */
-function proxyOriginString(): string {
-    const scheme = boundSecure ? 'https' : 'http';
-    const host = boundSecure && boundDnsName ? boundDnsName : boundIp ?? '127.0.0.1';
-    return `${scheme}://${host}:${boundPort ?? 0}`;
+export function proxyOriginForRequest(
+    req: {
+        headers: http.IncomingHttpHeaders;
+        socket: {
+            encrypted?: boolean;
+            localAddress?: string;
+            localPort?: number;
+        };
+    },
+    tlsDnsName: string | null = null,
+): string {
+    const socket = req.socket;
+    const secure = socket.encrypted === true;
+    const host = secure && tlsDnsName
+        ? tlsDnsName
+        : socket.localAddress ?? '127.0.0.1';
+    const port = socket.localPort ?? boundPort ?? 0;
+    return `${secure ? 'https' : 'http'}://${host}:${port}`;
 }
 
 async function handle(
@@ -277,7 +298,7 @@ async function handle(
     // loopback upstream itself.
     if (deps.siteProxy && pathname.startsWith(SITE_PROXY_PREFIX)) {
         await handleSiteProxy(req, res, deps.siteProxy, {
-            proxyOrigin: proxyOriginString(),
+            proxyOrigin: proxyOriginForRequest(req, boundDnsName),
         });
         return;
     }
@@ -326,6 +347,7 @@ function originAllowed(req: http.IncomingMessage): boolean {
         // the dnsname as its Origin, not the raw ip). Any port is fine (same
         // machine); a rebinding attacker's page would carry its OWN origin.
         return (
+            servers.has(u.hostname) ||
             u.hostname === boundIp ||
             (!!boundDnsName && u.hostname === boundDnsName)
         );
@@ -337,7 +359,8 @@ function originAllowed(req: http.IncomingMessage): boolean {
 /** Wire the WS server onto the http upgrade event. Two endpoints, token-gated.
  *  Works on http OR https servers (both emit 'upgrade'; TLS terminates first). */
 function attachWebSocket(srv: http.Server | https.Server): void {
-    wss = new WebSocketServer({ noServer: true });
+    const socketServer = new WebSocketServer({ noServer: true });
+    websocketServers.add(socketServer);
     setEventSockets(eventSockets);
 
     srv.on('upgrade', (req, socket, head) => {
@@ -365,7 +388,7 @@ function attachWebSocket(srv: http.Server | https.Server): void {
 
         if (pathname === '/ws/events') {
             const ip = req.socket.remoteAddress ?? 'unknown';
-            wss!.handleUpgrade(req, socket, head, (ws) => {
+            socketServer.handleUpgrade(req, socket, head, (ws) => {
                 eventSockets.add(ws);
                 peerByEventSocket.set(ws, { ip, since: Date.now() });
                 const drop = () => {
@@ -393,7 +416,7 @@ function attachWebSocket(srv: http.Server | https.Server): void {
                 socket.destroy();
                 return;
             }
-            wss!.handleUpgrade(req, socket, head, (ws) => {
+            socketServer.handleUpgrade(req, socket, head, (ws) => {
                 attachTerminalSocketAndDrive(ws, terminalId, token!);
             });
             return;
@@ -486,9 +509,18 @@ function persistState(): void {
  * Resolve the bind IP: the test override (127.0.0.1, no tailnet needed) or the
  * detected Tailscale IP. Returns null when no tailnet is present (fail closed).
  */
-function resolveBindIp(): string | null {
-    if (deps?.bindIpOverride) return deps.bindIpOverride;
-    return detectTailnetIp();
+function resolveBindIps(): string[] {
+    if (deps?.bindIpOverride) return [deps.bindIpOverride];
+    if (deps?.networkAccess) {
+        return resolveNetworkListeners(deps.networkAccess)
+            // LAN must not carry bearer sessions over plaintext HTTP. It remains
+            // fail-closed until the host certificate/enrollment phase can give
+            // direct LAN peers an authenticated TLS path.
+            .filter((listener) => listener.network !== 'lan')
+            .map((listener) => listener.ip);
+    }
+    const tailnet = detectTailnetIp();
+    return tailnet ? [tailnet] : [];
 }
 
 /** Bind the server on `ip:port`, flagging a conflict on EADDRINUSE (no fallback).
@@ -498,7 +530,9 @@ async function bind(ip: string, wantPort: number): Promise<void> {
     // Try a Tailscale cert for HTTPS. Skipped under the test bind-override (no real
     // tailnet — and we must never issue a real cert from the integration test).
     activeCert =
-        deps && !deps.bindIpOverride ? await ensureCert(deps.userDataDir) : null;
+        deps && !deps.bindIpOverride && isCgnatIp(ip)
+            ? await ensureCert(deps.userDataDir)
+            : null;
 
     const onRequest = (req: http.IncomingMessage, res: http.ServerResponse) => {
         void handle(req, res).catch(() => {
@@ -542,10 +576,13 @@ async function bind(ip: string, wantPort: number): Promise<void> {
             resolve(); // give up this run; status surfaces the conflict
         });
         srv.listen(wantPort, ip, () => {
-            server = srv;
-            boundIp = ip;
+            servers.set(ip, srv);
             const addr = srv.address();
-            boundPort = typeof addr === 'object' && addr ? addr.port : wantPort;
+            const listeningPort = typeof addr === 'object' && addr ? addr.port : wantPort;
+            if (boundIp === null || isCgnatIp(ip)) {
+                boundIp = ip;
+                boundPort = listeningPort;
+            }
             conflict = false;
             attachWebSocket(srv);
             persistState();
@@ -565,7 +602,7 @@ function scheduleCertRenewal(): void {
 }
 
 async function maybeRenewCert(): Promise<void> {
-    if (!server || !activeCert) return;
+    if (servers.size === 0 || !activeCert) return;
     if (!shouldRenew(activeCert.notAfter)) return;
     await restartMobileServer();
 }
@@ -590,22 +627,21 @@ export async function startMobileServer(d: MobileServerDeps): Promise<void> {
         onQuestionsChanged(() => mobileEmit('question:changed'));
         questionSubWired = true;
     }
-    if (server) return; // already running
+    if (servers.size > 0) return; // already running
 
     conflict = false;
     notDetected = false;
 
     if (!d.enabled) return; // opt-in — off by default
 
-    const ip = resolveBindIp();
-    if (!ip) {
-        // No tailnet → bind nothing. The phone URL is unreachable, but Genie is
-        // not exposed off-box. Surfaced as `notDetected` in the status.
-        notDetected = true;
+    const ips = resolveBindIps();
+    if (ips.length === 0) {
+        // No enabled/detected local listener → bind nothing.
+        notDetected = d.networkAccess?.tailscale ?? true;
         return;
     }
-    await bind(ip, d.configuredPort());
-    if (server) audit('server.start', `${ip}:${boundPort}`, 'desktop');
+    for (const ip of ips) await bind(ip, d.configuredPort());
+    if (servers.size > 0) audit('server.start', `${ips.join(',')}:${boundPort}`, 'desktop');
 }
 
 /** Stop the server + drop every socket. */
@@ -619,10 +655,10 @@ export function stopMobileServer(): void {
     }
     eventSockets.clear();
     setEventSockets(null);
-    wss?.close();
-    wss = null;
-    server?.close();
-    server = null;
+    for (const socketServer of websocketServers) socketServer.close();
+    websocketServers.clear();
+    for (const srv of servers.values()) srv.close();
+    servers.clear();
     boundIp = null;
     boundPort = null;
     boundSecure = false;
@@ -641,14 +677,14 @@ export async function restartMobileServer(): Promise<void> {
     stopMobileServer();
     // Re-read enabled/port via the live deps the caller passed at start.
     if (!deps.enabled) return;
-    const ip = resolveBindIp();
-    if (!ip) {
-        notDetected = true;
+    const ips = resolveBindIps();
+    if (ips.length === 0) {
+        notDetected = deps.networkAccess?.tailscale ?? true;
         return;
     }
     notDetected = false;
-    await bind(ip, deps.configuredPort());
-    if (server) audit('server.restart', `${ip}:${boundPort}`, 'desktop');
+    for (const ip of ips) await bind(ip, deps.configuredPort());
+    if (servers.size > 0) audit('server.restart', `${ips.join(',')}:${boundPort}`, 'desktop');
 }
 
 /** Update the phone-UI toggle (Settings → Mobile) + recompute the bind gate. The
@@ -711,6 +747,12 @@ export interface MobileServerState {
     locked: boolean;
     /** Remotes currently connected (drives the host's "remote session" overlay). */
     peers: MobilePeer[];
+    listeners: Array<{
+        network: 'local' | 'lan' | 'tailscale';
+        ip: string;
+        port: number;
+        secure: boolean;
+    }>;
 }
 
 export function mobileServerState(): MobileServerState {
@@ -721,7 +763,7 @@ export function mobileServerState(): MobileServerState {
         port: boundPort,
     });
     return {
-        running: server !== null,
+        running: servers.size > 0,
         enabled: deps?.enabled ?? false,
         mobileUiEnabled: (deps?.mobileUiEnabled ?? deps?.enabled) ?? false,
         remoteEnabled: deps?.remoteEnabled ?? false,
@@ -734,5 +776,18 @@ export function mobileServerState(): MobileServerState {
         tailnetNotDetected: notDetected,
         locked: isLocked(),
         peers: activeMobilePeers(),
+        listeners: [...servers.entries()].map(([ip, srv]) => {
+            const address = srv.address();
+            return {
+                network: ip === '127.0.0.1'
+                    ? 'local'
+                    : isCgnatIp(ip)
+                        ? 'tailscale'
+                        : 'lan',
+                ip,
+                port: typeof address === 'object' && address ? address.port : boundPort ?? 0,
+                secure: isCgnatIp(ip) && boundSecure,
+            };
+        }),
     };
 }

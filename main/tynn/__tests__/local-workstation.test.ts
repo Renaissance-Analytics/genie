@@ -25,6 +25,7 @@ import {
     parseIssueWatchSnapshot,
     resolveBroadcastConfig,
     startLocalWorkstation,
+    syncWorkstationInventory,
     type WorkstationTransportLike,
 } from '../local-workstation';
 import type { IssueWatchDeltaPush } from '../workspace-assignment';
@@ -245,6 +246,39 @@ describe('parseIssueWatchSnapshot', () => {
 function identity(id = 'ws-1'): WorkstationIdentity {
     return { workstationId: id, authHeader: () => 'Workstation 1:sig' };
 }
+
+it('syncs workspace-owned site inventory with workstation authentication', async () => {
+    const request = vi.fn(async () => new Response('{}', { status: 200 }));
+    await syncWorkstationInventory(
+        identity(),
+        'https://tynn.test/',
+        {
+            workspaces: [{
+                id: 'local-1',
+                name: 'Local only',
+                projectId: null,
+                sites: [{ id: 'site-1', name: 'app.gen', hostname: 'app.test' }],
+            }],
+        },
+        request as typeof fetch,
+    );
+
+    expect(request).toHaveBeenCalledWith(
+        'https://tynn.test/api/v1/workstations/ws-1/inventory',
+        expect.objectContaining({
+            method: 'PUT',
+            headers: expect.objectContaining({ authorization: 'Workstation 1:sig' }),
+            body: JSON.stringify({
+                workspaces: [{
+                    workspace_id: 'local-1',
+                    name: 'Local only',
+                    project_id: null,
+                    sites: [{ site_id: 'site-1', name: 'app.gen', hostname: 'app.test' }],
+                }],
+            }),
+        }),
+    );
+});
 
 /** A fake transport that captures the handlers so the test can drive connect/push. */
 function fakeTransport() {

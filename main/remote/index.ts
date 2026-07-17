@@ -1736,6 +1736,8 @@ export function disconnectConnKey(connKey: string): void {
 /** An enabled `.gen` site for a connection: the browser-facing `.gen` name mapped
  *  to its opaque host-side `siteId` + the upstream loopback `.test` hostname. */
 export interface EnabledGenSite {
+    /** The host workspace that owns this site; authorization never drops it. */
+    workspaceId: string;
     genName: string;
     siteId: string;
     hostname: string;
@@ -1812,6 +1814,7 @@ export async function remoteListEnabledGenSites(connKey: string): Promise<Enable
     return (data?.sites ?? [])
         .filter((s) => !!s.genName)
         .map((s) => ({
+            workspaceId: s.workspaceId,
             genName: s.genName.toLowerCase(),
             siteId: s.siteId,
             hostname: s.hostname,

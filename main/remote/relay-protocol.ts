@@ -241,6 +241,8 @@ export function decodePopChallenge(frame: Frame): PopChallenge | null {
 /** Member→host: open a site-proxy stream (an HTTP request, or a WS `upgrade`
  *  when `upgrade` is true). `path` is the host proxy's `/api/site/<siteId>/…`. */
 export interface SiteOpenPayload {
+    workspaceId: string;
+    siteId: string;
     method: string;
     path: string;
     headers: Record<string, string | string[]>;

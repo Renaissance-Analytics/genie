@@ -103,6 +103,8 @@ const HOP_BY_HOP = new Set([
  * {@link SiteProxyDeps.resolveSite}. Never assembled from remote input.
  */
 export interface ResolvedSite {
+    /** Workspace ownership is retained through lookup for the access gate. */
+    workspaceId: string;
     /** The vhost name to force into `Host` (and, for https, TLS SNI). */
     hostname: string;
     /** The scheme the site is served under on loopback. */

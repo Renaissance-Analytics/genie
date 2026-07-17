@@ -171,9 +171,9 @@ async function startUpstreams(): Promise<void> {
     const wsPort = await listen(wsHttp);
     const secretPort = await listen(secretServer);
 
-    enabledSites.set('sitehttp', { hostname: HOSTNAME, scheme: 'http', port: httpPort });
-    enabledSites.set('sitehttps', { hostname: HOSTNAME, scheme: 'https', port: httpsPort });
-    enabledSites.set('sitews', { hostname: HOSTNAME, scheme: 'http', port: wsPort });
+    enabledSites.set('sitehttp', { workspaceId: 'workspace-1', hostname: HOSTNAME, scheme: 'http', port: httpPort });
+    enabledSites.set('sitehttps', { workspaceId: 'workspace-1', hostname: HOSTNAME, scheme: 'https', port: httpsPort });
+    enabledSites.set('sitews', { workspaceId: 'workspace-1', hostname: HOSTNAME, scheme: 'http', port: wsPort });
     // secretServer is intentionally NOT registered — it models an SSRF target.
     secretTarget = `127.0.0.1:${secretPort}`;
 }

@@ -31,7 +31,11 @@ import {
 } from './db';
 import { discoverSites } from './mobile/hosts';
 import { listLocalEnabledGenSites } from './sites/local-sites';
-import { writeWorkspaceAgentMcp, healTynnLiteralToken } from './mcp/agent-config';
+import {
+    writeWorkspaceAgentMcp,
+    healTynnLiteralToken,
+    syncWorkspaceCodexTynnMcp,
+} from './mcp/agent-config';
 import { resolveAlertSound, deliverAlertSound } from './notify-sound';
 import { demandWindowAttention, resolveAttentionWindow } from './attention-flash';
 import { workspaceDocHealth, repairWorkspaceDocs } from './workspace/create-agi';
@@ -1218,6 +1222,7 @@ app.whenReady().then(async () => {
     for (const ws of listWorkspaces()) {
         try {
             if (healTynnLiteralToken(ws.path)) ensureMcpGitignored(ws.path);
+            if (syncWorkspaceCodexTynnMcp(ws.path)) ensureMcpGitignored(ws.path);
         } catch (e) {
             console.error('[tynn] literal-token self-heal failed for', ws.path, e);
         }
@@ -1247,6 +1252,24 @@ app.whenReady().then(async () => {
         const startIssueWatch = async () => {
             issueWatchHandle?.stop();
             issueWatchHandle = await startLocalWorkstation({
+                inventory: async () => {
+                    const workspaces = listWorkspaces();
+                    const sites = await listLocalEnabledGenSites();
+                    return {
+                        workspaces: workspaces.map((workspace) => ({
+                            id: workspace.id,
+                            name: workspace.project_name,
+                            projectId: workspace.project_id || null,
+                            sites: sites
+                                .filter((site) => site.workspaceId === workspace.id)
+                                .map((site) => ({
+                                    id: site.siteId,
+                                    name: site.genName,
+                                    hostname: site.hostname,
+                                })),
+                        })),
+                    };
+                },
                 log: (m) => console.log('[workstation]', m),
             });
         };
@@ -1284,6 +1307,12 @@ app.whenReady().then(async () => {
             (getAllSettings() as Record<string, string>)['remote_enabled'] === 'on',
         mobileUiEnabled: (getAllSettings() as Record<string, string>)['mobile_enabled'] === 'on',
         remoteEnabled: (getAllSettings() as Record<string, string>)['remote_enabled'] === 'on',
+        networkAccess: {
+            local: (getAllSettings() as Record<string, string>)['remote_network_local'] !== 'off',
+            lan: (getAllSettings() as Record<string, string>)['remote_network_lan'] === 'on',
+            tailscale: (getAllSettings() as Record<string, string>)['remote_network_tailscale'] !== 'off',
+            tynn: (getAllSettings() as Record<string, string>)['remote_network_tynn'] !== 'off',
+        },
         configuredPort: () => {
             const raw = (getAllSettings() as Record<string, string>)['mobile_port'];
             const n = raw ? parseInt(raw, 10) : NaN;
@@ -1326,7 +1355,14 @@ app.whenReady().then(async () => {
                 for (const ws of listWorkspaces()) {
                     const views = await discoverSites(getWorkspaceTunnelSites(ws.id));
                     const hit = views.find((v) => v.siteId === siteId && v.enabled);
-                    if (hit) return { hostname: hit.hostname, scheme: hit.scheme, port: hit.port };
+                    if (hit) {
+                        return {
+                            workspaceId: ws.id,
+                            hostname: hit.hostname,
+                            scheme: hit.scheme,
+                            port: hit.port,
+                        };
+                    }
                 }
                 return null;
             },

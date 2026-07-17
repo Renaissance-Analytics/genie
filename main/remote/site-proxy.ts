@@ -67,6 +67,7 @@ const HOP_BY_HOP = new Set([
 /** A resolved ENABLED `.gen` target: its opaque host-side `siteId` (the URL
  *  selector) + the upstream `.test` hostname (for the `.test`⇄`.gen` rewrite). */
 export interface GenTarget {
+    workspaceId: string;
     siteId: string;
     /** The upstream loopback vhost name (e.g. `tynn.test`) the `.gen` maps to. */
     hostname: string;
@@ -312,6 +313,8 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
         const headers = buildForwardHeaders(req.headers);
         headers[PRESERVE_ORIGIN_HEADER] = '1';
         const call = deps.carrier.forward({
+            workspaceId: target.workspaceId,
+            siteId: target.siteId,
             method: req.method ?? 'GET',
             path: forwardPath(target.siteId, req.url),
             headers,
@@ -354,6 +357,8 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
         // The carrier owns WS auth (tailnet appends `?__genie_token=`; relay rides
         // the grant + host self-pair) so the Genie token never enters a renderer.
         const call = deps.carrier.upgradeWs({
+            workspaceId: target.workspaceId,
+            siteId: target.siteId,
             path: forwardPath(target.siteId, req.url),
             headers: buildForwardHeaders(req.headers, { keepUpgrade: true }),
         });

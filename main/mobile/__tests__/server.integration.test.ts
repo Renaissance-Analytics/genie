@@ -882,4 +882,30 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         expect(st.running).toBe(false);
         expect(st.tailnetNotDetected).toBe(true);
     });
+
+    it('binds loopback without Tailscale when Local access is explicitly enabled', async () => {
+        appDir = buildAppDir();
+        await startMobileServer({
+            serverVersion: '0.0.0-test',
+            userDataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mobile-ud-')),
+            appDir,
+            enabled: true,
+            configuredPort: () => 0,
+            networkAccess: {
+                local: true,
+                lan: false,
+                tailscale: false,
+                tynn: false,
+            },
+            data: deps(),
+            confirmPair: async () => true,
+        });
+        const st = mobileServerState();
+        expect(st.running).toBe(true);
+        expect(st.ip).toBe('127.0.0.1');
+        expect(st.listeners).toMatchObject([
+            { network: 'local', ip: '127.0.0.1', secure: false },
+        ]);
+        expect(st.tailnetNotDetected).toBe(false);
+    });
 });

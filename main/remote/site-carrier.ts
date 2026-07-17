@@ -44,6 +44,8 @@ import type { SiteOpenPayload } from './relay-protocol';
 
 /** An HTTP request to forward over the carrier to the host's `/api/site/…`. */
 export interface SiteForwardRequest {
+    workspaceId: string;
+    siteId: string;
     method: string;
     /** The host proxy path — `/api/site/<siteId>/<upstreamPath?query>`. */
     path: string;
@@ -70,6 +72,8 @@ export interface SiteForwardCall {
 
 /** A WS `upgrade` to forward over the carrier. */
 export interface SiteUpgradeRequest {
+    workspaceId: string;
+    siteId: string;
     path: string;
     headers: http.OutgoingHttpHeaders;
 }
@@ -224,7 +228,14 @@ export function createRelaySiteCarrier(opener: SiteStreamOpener): SiteCarrier {
             let relayAbort: () => void = () => {};
             const response = new Promise<SiteForwardResult>((resolve, reject) => {
                 const ctrl = opener.openSite(
-                    { method: req.method, path: req.path, headers: flattenHeaders(req.headers), upgrade: false },
+                    {
+                        workspaceId: req.workspaceId,
+                        siteId: req.siteId,
+                        method: req.method,
+                        path: req.path,
+                        headers: flattenHeaders(req.headers),
+                        upgrade: false,
+                    },
                     {
                         // A response head resolves; body chunks feed the PassThrough.
                         onResponse: (status, headers) => resolve({ status, headers, body }),
@@ -265,7 +276,14 @@ export function createRelaySiteCarrier(opener: SiteStreamOpener): SiteCarrier {
             let relayAbort: () => void = () => {};
             const upgrade = new Promise<SiteUpgradeResult>((resolve, reject) => {
                 const ctrl = opener.openSite(
-                    { method: 'GET', path: req.path, headers: flattenHeaders(req.headers), upgrade: true },
+                    {
+                        workspaceId: req.workspaceId,
+                        siteId: req.siteId,
+                        method: 'GET',
+                        path: req.path,
+                        headers: flattenHeaders(req.headers),
+                        upgrade: true,
+                    },
                     {
                         onUpgrade: (status, statusText, headers) => {
                             duplex = new RelaySiteDuplex(ctrl);

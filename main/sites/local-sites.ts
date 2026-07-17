@@ -26,6 +26,7 @@ export async function listLocalEnabledGenSites(): Promise<EnabledGenSite[]> {
         for (const v of views) {
             if (!v.enabled || byGen.has(v.genName)) continue;
             byGen.set(v.genName, {
+                workspaceId: ws.id,
                 genName: v.genName,
                 siteId: v.siteId,
                 hostname: v.hostname,

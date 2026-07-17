@@ -6,6 +6,7 @@ import {
     PRESERVE_ORIGIN_HEADER,
     type ResolvedSite,
 } from '../site-proxy';
+import { proxyOriginForRequest } from '../server';
 
 /**
  * Serve-local-sites Phase D — the HOST proxy's "preserve-origin" mode (design §4).
@@ -15,9 +16,26 @@ import {
  * map. We unit-test that seam (the wire path is exercised by the shim end-to-end
  * test + the Electron E2E gate).
  */
-const SITE: ResolvedSite = { hostname: 'tynn.test', scheme: 'https', port: 443 };
+const SITE: ResolvedSite = {
+    workspaceId: 'workspace-1',
+    hostname: 'tynn.test',
+    scheme: 'https',
+    port: 443,
+};
 
 describe('host proxy preserve-origin mode', () => {
+    it('uses the request listener origin instead of another active listener', () => {
+        expect(proxyOriginForRequest({
+            headers: { host: '127.0.0.1:51718' },
+            socket: { encrypted: false, localAddress: '127.0.0.1', localPort: 51718 },
+        })).toBe('http://127.0.0.1:51718');
+
+        expect(proxyOriginForRequest({
+            headers: { host: 'workstation.tailnet.ts.net:51718' },
+            socket: { encrypted: true, localAddress: '100.90.10.2', localPort: 51718 },
+        }, 'workstation.tailnet.ts.net')).toBe('https://workstation.tailnet.ts.net:51718');
+    });
+
     it('buildUpstreamHeaders strips the preserve-origin control header (never leaks upstream)', () => {
         const out = buildUpstreamHeaders(
             { host: 'ignored', [PRESERVE_ORIGIN_HEADER]: '1', 'x-keep': 'yes' },

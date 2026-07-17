@@ -297,7 +297,13 @@ async function refreshSites(inst: TestingBrowserInstance): Promise<void> {
         ? await listLocalEnabledGenSites().catch(() => [])
         : await remoteListEnabledGenSites(inst.connKey);
     inst.genMap.clear();
-    for (const s of sites) inst.genMap.set(s.genName, { siteId: s.siteId, hostname: s.hostname });
+    for (const s of sites) {
+        inst.genMap.set(s.genName, {
+            workspaceId: s.workspaceId,
+            siteId: s.siteId,
+            hostname: s.hostname,
+        });
+    }
     inst.sites = sites;
     if (inst.isLocal) {
         inst.localTargets.clear();

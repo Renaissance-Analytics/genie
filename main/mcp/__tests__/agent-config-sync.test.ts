@@ -24,13 +24,14 @@ vi.mock('fs', () => ({
 vi.mock('../../db', () => ({ getAllSettings: () => settings }));
 
 import path from 'node:path';
-import { writeWorkspaceAgentMcp } from '../agent-config';
+import { writeWorkspaceAgentMcp, writeWorkspaceTynnMcp } from '../agent-config';
 
 // Build keys with path.join so they match the separators agent-config uses
 // (backslashes on Windows, forward slashes elsewhere).
 const WS = path.join('/ws', 'demo');
 const mcpJson = path.join(WS, '.mcp.json');
 const cursorJson = path.join(WS, '.cursor', 'mcp.json');
+const codexToml = path.join(WS, '.codex', 'config.toml');
 const URL = 'http://127.0.0.1:51717/mcp/tok';
 
 beforeEach(() => {
@@ -44,6 +45,8 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
         writeWorkspaceAgentMcp(WS, true, URL);
         expect(files.has(mcpJson)).toBe(true);
         expect(files.has(cursorJson)).toBe(true);
+        expect(files.get(codexToml)).toContain('[mcp_servers.genie]');
+        expect(files.get(codexToml)).toContain(`url = '${URL}'`);
         expect(JSON.parse(files.get(mcpJson)!).mcpServers.genie.url).toBe(URL);
     });
 
@@ -71,5 +74,22 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
         writeWorkspaceAgentMcp(WS, true, URL);
         expect(files.has(mcpJson)).toBe(false);
         expect(files.has(cursorJson)).toBe(true); // Cursor default-on
+    });
+
+    it('leaves project Codex config untouched when mcp_sync_codex is off', () => {
+        files.set(codexToml, 'model = "gpt-5"\n');
+        settings = { mcp_sync_codex: 'off' };
+        writeWorkspaceAgentMcp(WS, true, URL);
+        expect(files.get(codexToml)).toBe('model = "gpt-5"\n');
+    });
+
+    it('writes Tynn to project Codex config using the environment token', () => {
+        writeWorkspaceTynnMcp(WS, true, {
+            url: 'https://tynn.test/mcp/project',
+            token: 'rpk_SECRET',
+        });
+        expect(files.get(codexToml)).toContain('[mcp_servers.tynn]');
+        expect(files.get(codexToml)).toContain("bearer_token_env_var = 'TYNN_AGENT_TOKEN'");
+        expect(files.get(codexToml)).not.toContain('rpk_SECRET');
     });
 });

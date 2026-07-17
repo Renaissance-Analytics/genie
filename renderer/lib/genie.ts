@@ -403,6 +403,10 @@ export interface Settings {
      *  Opt-in: 'off' (default) | 'on'. Independent of `mobile_enabled`: either can be
      *  on alone; the host server binds while either is on. */
     remote_enabled?: 'on' | 'off';
+    remote_network_local?: 'on' | 'off';
+    remote_network_lan?: 'on' | 'off';
+    remote_network_tailscale?: 'on' | 'off';
+    remote_network_tynn?: 'on' | 'off';
     /** Fixed port for the mobile server (bound on the Tailscale IP). String-
      *  encoded; default '51718'. Changing it requires restarting the server. */
     mobile_port?: string;
@@ -519,6 +523,12 @@ export interface MobileStatus {
     conflict: boolean;
     /** True when enabled but no Tailscale interface was detected (fail closed). */
     tailnetNotDetected: boolean;
+    listeners: Array<{
+        network: 'local' | 'lan' | 'tailscale';
+        ip: string;
+        port: number;
+        secure: boolean;
+    }>;
     /** True when the global kill-switch ("Lock") is engaged. */
     locked: boolean;
     /** The 6-digit pairing PIN (shown big + in the QR). */

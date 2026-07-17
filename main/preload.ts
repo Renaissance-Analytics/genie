@@ -51,6 +51,12 @@ interface MobileStatus {
     url: string | null;
     conflict: boolean;
     tailnetNotDetected: boolean;
+    listeners: Array<{
+        network: 'local' | 'lan' | 'tailscale';
+        ip: string;
+        port: number;
+        secure: boolean;
+    }>;
     locked: boolean;
     pin: string;
     qrDataUrl: string | null;
