@@ -24,6 +24,12 @@ export interface AgentFormValues {
     /** Opt-in: a direct whisper to this agent while it's idle injects a nudge so it
      *  starts a turn and reads the message (issue #9). Default off. */
     wakeOnDm: boolean;
+    /** Opt-in: this agent participates in its workspace's IssueWatch pings. Off by
+     *  default — no ping is delivered. */
+    issuewatchHandle: boolean;
+    /** How the agent reacts to an IssueWatch ping — `notify` glows its terminal;
+     *  `wake` injects an idle-only nudge. Only meaningful when handling is on. */
+    issuewatchAction: 'notify' | 'wake';
 }
 
 const SCOPE_OPTIONS: Array<{ value: WhisperScope; label: string; desc: string }> = [
@@ -96,6 +102,12 @@ export default function AgentTerminalForm({
     );
     const [command, setCommand] = useState(() => initial?.command ?? '');
     const [wakeOnDm, setWakeOnDm] = useState(() => initial?.wakeOnDm ?? false);
+    const [issuewatchHandle, setIssuewatchHandle] = useState(
+        () => initial?.issuewatchHandle ?? false,
+    );
+    const [issuewatchAction, setIssuewatchAction] = useState<'notify' | 'wake'>(
+        () => initial?.issuewatchAction ?? 'notify',
+    );
 
     const ownWorkspace = useMemo(
         () => workspaces.find((w) => w.id === ownWorkspaceId),
@@ -135,6 +147,8 @@ export default function AgentTerminalForm({
             scopeWorkspaces: scope === 'specific' ? scopeWorkspaces : [],
             command: command.trim(),
             wakeOnDm,
+            issuewatchHandle,
+            issuewatchAction,
         });
     };
 
@@ -232,6 +246,43 @@ export default function AgentTerminalForm({
                     </span>
                 </span>
             </label>
+
+            <label className="agent-form-wake">
+                <input
+                    type="checkbox"
+                    checked={issuewatchHandle}
+                    onChange={(e) => setIssuewatchHandle(e.target.checked)}
+                />
+                <span className="agent-form-wake-text">
+                    <span className="agent-form-label">Handle IssueWatch pings</span>
+                    <span className="agent-form-scope-desc">
+                        When a watched GitHub issue, PR, or alert changes in this workspace, ping
+                        this agent so it can react. If the workspace designates specific handlers,
+                        only those are pinged; otherwise every agent that handles pings is.
+                    </span>
+                </span>
+            </label>
+
+            {issuewatchHandle && (
+                <label className="agent-form-field">
+                    <span className="agent-form-label">On a ping</span>
+                    <select
+                        className="input"
+                        value={issuewatchAction}
+                        onChange={(e) =>
+                            setIssuewatchAction(e.target.value as 'notify' | 'wake')
+                        }
+                    >
+                        <option value="notify">Notify — glow this terminal</option>
+                        <option value="wake">Wake — nudge a turn when idle</option>
+                    </select>
+                    <span className="agent-form-scope-desc">
+                        {issuewatchAction === 'wake'
+                            ? 'Injects a one-line nudge so an idle agent starts a turn and looks — only when it is provably idle, never mid-turn.'
+                            : 'Glows this terminal in the sidebar so you (or the agent) notice on the next turn — nothing is injected.'}
+                    </span>
+                </label>
+            )}
 
             <div className="agent-form-preview">
                 Channel: <code>{`${slug}:${previewPurpose}`}</code>

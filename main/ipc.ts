@@ -19,6 +19,9 @@ import {
     getWorkspaceIssuewatchGranularity,
     setWorkspaceIssuewatchGranularity,
     type IssuewatchGranularity,
+    getWorkspaceIssuewatchHandlers,
+    setWorkspaceIssuewatchHandlers,
+    listWorkspaceIssuewatchAgents,
     getWorkspaceTunnelSites,
     setWorkspaceTunnelSite,
     setSettings,
@@ -419,6 +422,21 @@ export function registerIpcHandlers(): void {
             // Refresh the rail pills immediately — the read paths gate on the live
             // granularity, so a re-broadcast reflects the new setting without a poll.
             await broadcastIssueWatchUpdate().catch(() => {});
+            return { ok: true };
+        },
+    );
+    // IssueWatch handler DESIGNATION: which of a workspace's handle-enabled agents
+    // are the designated recipients of its pings. The getter returns BOTH the
+    // designated id set AND the candidate agents (so the UI renders checkboxes with
+    // each agent's live handle/action state); the setter persists the chosen set.
+    ipcMain.handle('workspaces:get-issuewatch-handlers', (_e, id: string) => ({
+        designated: getWorkspaceIssuewatchHandlers(id),
+        agents: listWorkspaceIssuewatchAgents(id),
+    }));
+    ipcMain.handle(
+        'workspaces:set-issuewatch-handlers',
+        (_e, id: string, terminalIds: string[]) => {
+            setWorkspaceIssuewatchHandlers(id, Array.isArray(terminalIds) ? terminalIds : []);
             return { ok: true };
         },
     );
@@ -898,6 +916,8 @@ export function registerIpcHandlers(): void {
                 scope: WhisperScope;
                 scope_workspaces?: string[];
                 wake_on_dm?: boolean;
+                issuewatch_handle?: boolean;
+                issuewatch_action?: 'notify' | 'wake';
             },
         ) => createSpecializedAgentTerminal(input),
     );
@@ -955,6 +975,8 @@ export function registerIpcHandlers(): void {
                 scope?: WhisperScope;
                 scope_workspaces?: string[];
                 wake_on_dm?: boolean;
+                issuewatch_handle?: boolean;
+                issuewatch_action?: 'notify' | 'wake';
             },
         ) => updateWhisperChannel(specId, patch),
     );

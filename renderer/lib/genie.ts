@@ -1716,6 +1716,23 @@ export interface GenieApi {
             id: string,
             granularity: IssuewatchGranularity,
         ) => Promise<{ ok: boolean }>;
+        /** This workspace's DESIGNATED IssueWatch handler set + the candidate agents
+         *  to choose from (their live handle/action state), for the designation UI. */
+        getIssuewatchHandlers: (id: string) => Promise<{
+            designated: string[];
+            agents: Array<{
+                terminalId: string;
+                label: string;
+                handle: boolean;
+                action: 'notify' | 'wake';
+            }>;
+        }>;
+        /** Persist the designated IssueWatch handler set (empty = fan out to all
+         *  handle-enabled agents). */
+        setIssuewatchHandlers: (
+            id: string,
+            terminalIds: string[],
+        ) => Promise<{ ok: boolean }>;
         /** Repo subfolder names under the workspace envelope (for Add Process cwd). */
         repos: (id: string) => Promise<string[]>;
         open: (id: string) => Promise<{ ok: boolean }>;
@@ -1994,6 +2011,10 @@ export interface GenieApi {
             scope_workspaces?: string[];
             /** Opt-in wake-on-DM: a direct whisper wakes this agent when idle (issue #9). */
             wake_on_dm?: boolean;
+            /** IssueWatch pings: participate in this workspace's IssueWatch deltas. */
+            issuewatch_handle?: boolean;
+            /** IssueWatch pings: react by glow (`notify`) or idle-wake (`wake`). */
+            issuewatch_action?: 'notify' | 'wake';
         }) => Promise<{ ok: boolean; spec?: TerminalSpec; error?: string }>;
     };
     /**
@@ -2038,6 +2059,10 @@ export interface GenieApi {
                 scope_workspaces?: string[];
                 /** Opt-in wake-on-DM (issue #9): a direct whisper wakes this agent when idle. */
                 wake_on_dm?: boolean;
+                /** IssueWatch pings: participate in this workspace's IssueWatch deltas. */
+                issuewatch_handle?: boolean;
+                /** IssueWatch pings: react by glow (`notify`) or idle-wake (`wake`). */
+                issuewatch_action?: 'notify' | 'wake';
             },
         ) => Promise<{ ok: boolean; error?: string }>;
     };

@@ -184,6 +184,52 @@ describe('whisper durable inbox (Track B)', () => {
         expect(woken).toEqual(['t-b']); // unchanged
     });
 
+    it('wakeTerminalIfIdle (IssueWatch): wakes an IDLE agent regardless of the whisper opt-in, but NEVER mid-turn', () => {
+        let clock = 1_000_000;
+        const b = new WhisperBroker();
+        b.setStore(store);
+        b.setClock(() => clock);
+        const woken: Array<{ terminalId: string; text: string }> = [];
+        b.setWakeSink((terminalId, text) => woken.push({ terminalId, text }));
+
+        // 'b' has NOT opted into wake-on-DM — the IssueWatch opt-in is independent.
+        join(b, 'b');
+
+        // Never finished a turn → not provably idle → no wake.
+        expect(b.wakeTerminalIfIdle('t-b', 'iw')).toBe(false);
+        expect(woken).toHaveLength(0);
+
+        // Turn ended but still inside the quiet window → no wake yet.
+        b.markTurnEnd('t-b');
+        expect(b.wakeTerminalIfIdle('t-b', 'iw')).toBe(false);
+        expect(woken).toHaveLength(0);
+
+        // Past the quiet window + genuinely idle → wakes with the IssueWatch text.
+        clock += WAKE_QUIET_MS + 1;
+        expect(b.wakeTerminalIfIdle('t-b', 'iw text')).toBe(true);
+        expect(woken).toEqual([{ terminalId: 't-b', text: 'iw text' }]);
+
+        // One wake per idle period — a second ping doesn't re-nudge.
+        expect(b.wakeTerminalIfIdle('t-b', 'iw again')).toBe(false);
+        expect(woken).toHaveLength(1);
+
+        // Output after the turn end (new turn / human typing) → fail closed forever
+        // this idle period, even in a fresh quiet window.
+        b.markTurnEnd('t-b');
+        clock += WAKE_QUIET_MS + 1;
+        b.noteOutput('t-b');
+        clock += WAKE_QUIET_MS + 1;
+        expect(b.wakeTerminalIfIdle('t-b', 'iw mid-turn')).toBe(false);
+        expect(woken).toHaveLength(1);
+    });
+
+    it('wakeTerminalIfIdle: an unknown terminal is a safe no-op', () => {
+        const b = new WhisperBroker();
+        b.setStore(store);
+        b.setWakeSink(() => {});
+        expect(b.wakeTerminalIfIdle('nope', 'iw')).toBe(false);
+    });
+
     it('read-receipts: a sent DM is unseen until the recipient receives it (#9)', async () => {
         const b = new WhisperBroker();
         b.setStore(store);

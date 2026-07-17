@@ -1116,6 +1116,10 @@ export function createSpecializedAgentTerminal(input: {
     scope: WhisperScope;
     scope_workspaces?: string[];
     wake_on_dm?: boolean;
+    /** IssueWatch pings: participate in this workspace's IssueWatch deltas. */
+    issuewatch_handle?: boolean;
+    /** IssueWatch pings: how to react — glow (`notify`) or idle-wake (`wake`). */
+    issuewatch_action?: 'notify' | 'wake';
 }): { ok: boolean; spec?: TerminalSpecRow; error?: string } {
     const ws = getWorkspace(input.workspace_id);
     if (!ws) return { ok: false, error: 'Workspace not found.' };
@@ -1148,6 +1152,10 @@ export function createSpecializedAgentTerminal(input: {
             scopeWorkspaces: input.scope_workspaces,
             wakeOnDm: input.wake_on_dm,
         },
+        issuewatch: {
+            handle: input.issuewatch_handle,
+            action: input.issuewatch_action,
+        },
     });
     // Launch the agent CLI in the fresh shell (the session-captured form).
     writeToTerminal(id, buildSubmitBytes(launchCommand ?? command, true));
@@ -1170,6 +1178,10 @@ export function updateWhisperChannel(
         scope?: WhisperScope;
         scope_workspaces?: string[];
         wake_on_dm?: boolean;
+        /** IssueWatch pings: participate in this workspace's IssueWatch deltas. */
+        issuewatch_handle?: boolean;
+        /** IssueWatch pings: how to react — glow (`notify`) or idle-wake (`wake`). */
+        issuewatch_action?: 'notify' | 'wake';
     },
 ): { ok: boolean; error?: string } {
     const spec = getTerminalSpec(specId);
@@ -1182,12 +1194,16 @@ export function updateWhisperChannel(
         purpose: patch.purpose,
         wakeOnDm: patch.wake_on_dm,
     });
-    // Persist the durable bits to the spec meta + refresh the sidebar row.
+    // Persist the durable bits to the spec meta + refresh the sidebar row. The
+    // IssueWatch prefs live only in spec meta (no broker state) — the routing path
+    // reads them off the spec when a delta lands.
     const meta = { ...spec.meta };
     if (patch.purpose !== undefined) meta.whisper_purpose = normalizePurpose(patch.purpose);
     if (patch.scope !== undefined) meta.whisper_scope = patch.scope;
     if (patch.scope_workspaces !== undefined) meta.whisper_workspaces = patch.scope_workspaces;
     if (patch.wake_on_dm !== undefined) meta.whisper_wake_on_dm = patch.wake_on_dm;
+    if (patch.issuewatch_handle !== undefined) meta.issuewatch_handle = patch.issuewatch_handle;
+    if (patch.issuewatch_action !== undefined) meta.issuewatch_action = patch.issuewatch_action;
     updateTerminalSpec(specId, { meta });
     broadcastTerminalSpecsChanged();
     return { ok: true };

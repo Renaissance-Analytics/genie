@@ -878,7 +878,10 @@ describe('db migration v25 (retire tynn-cli settings)', () => {
     it('deletes only the retired CLI toggles', () => {
         const db = new Database(':memory:');
         runMigrations(db);
-        db.prepare('DELETE FROM schema_version WHERE version = 25').run();
+        // Force v25 to re-run: drop every schema_version row at/above 25 so the
+        // high-water mark falls below 25 and the runner re-applies from there
+        // (later ADD COLUMN migrations are idempotent, so re-running them no-ops).
+        db.prepare('DELETE FROM schema_version WHERE version >= 25').run();
         const insert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
         insert.run('cli_tools_in_terminals', 'on');
         insert.run('cli_install_systemwide', 'on');
@@ -888,5 +891,48 @@ describe('db migration v25 (retire tynn-cli settings)', () => {
 
         const settings = db.prepare<[], { key: string }>('SELECT key FROM settings ORDER BY key').all();
         expect(settings.map((row) => row.key)).toEqual(['notify_sound']);
+    });
+});
+
+describe('db migration v26 (IssueWatch designated handlers column)', () => {
+    const insertWs = (db: Database.Database, id: string) =>
+        db.prepare(
+            `INSERT INTO workspaces
+               (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, last_opened_at, created_by_genie)
+             VALUES (@id, 'tynn', 'p', 'P', 'p', 'P', 'agi', @path, NULL, 1)`,
+        ).run({ id, path: `/tmp/${id}` });
+
+    it('adds the issuewatch_handlers column to workspaces', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(cols(db, 'workspaces').has('issuewatch_handlers')).toBe(true);
+    });
+
+    it('a raw workspace row defaults issuewatch_handlers to NULL (not designated)', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        insertWs(db, 'w-iw');
+        const row = db
+            .prepare<[string], { issuewatch_handlers: string | null }>(
+                'SELECT issuewatch_handlers FROM workspaces WHERE id = ?',
+            )
+            .get('w-iw');
+        expect(row?.issuewatch_handlers).toBeNull();
+    });
+
+    it('round-trips a JSON handler array', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        insertWs(db, 'w-iw2');
+        db.prepare('UPDATE workspaces SET issuewatch_handlers = ? WHERE id = ?').run(
+            JSON.stringify(['term-a', 'term-b']),
+            'w-iw2',
+        );
+        const row = db
+            .prepare<[string], { issuewatch_handlers: string | null }>(
+                'SELECT issuewatch_handlers FROM workspaces WHERE id = ?',
+            )
+            .get('w-iw2');
+        expect(JSON.parse(row?.issuewatch_handlers ?? 'null')).toEqual(['term-a', 'term-b']);
     });
 });
