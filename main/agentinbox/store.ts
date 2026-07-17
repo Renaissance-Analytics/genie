@@ -1,27 +1,27 @@
 import { getDb } from '../db';
-import type { WhisperMessage } from './types';
+import type { AgentInboxMessage } from './types';
 
 /**
- * Durable persistence port for the WhisperChat broker.
+ * Durable persistence port for the AgentInbox broker.
  *
  * The broker keeps its live working set (inboxes, channel/DM logs, membership,
  * long-poll waiters) in memory for speed. This store is the durability
  * backstop: every message is appended here, per-agent ACK cursors are
  * persisted, and on boot the broker rehydrates its logs + undelivered inboxes
- * from here — so a queued whisper survives an app restart, the human panel
+ * from here — so a queued message survives an app restart, the human panel
  * keeps its history, and unACKed-urgent escalation (Track C) has a durable
  * position to check. The default is a NO-OP so the broker stays pure (tests
- * and any in-memory-only mode work with zero wiring); {@link dbWhisperStore}
+ * and any in-memory-only mode work with zero wiring); {@link dbAgentInboxStore}
  * is installed at boot in the main process.
  */
-export interface WhisperStore {
+export interface AgentInboxStore {
     /** Persist a delivered message. */
-    append(msg: WhisperMessage): void;
+    append(msg: AgentInboxMessage): void;
     /** The highest persisted seq — the broker resumes its global counter here so
      *  cursors stay valid across restarts. */
     maxSeq(): number;
     /** Recent messages (oldest→newest), capped, for rehydrating the logs. */
-    loadRecent(limit: number): WhisperMessage[];
+    loadRecent(limit: number): AgentInboxMessage[];
     /** The agent's persisted ACK cursor (0 if never received). */
     getCursor(agentId: string): number;
     /** Advance the agent's ACK cursor (monotonic — never moves backwards). */
@@ -29,7 +29,7 @@ export interface WhisperStore {
     /** Undelivered messages targeting an agent — a DM to it, or a channel it is a
      *  member of — with seq > cursor, excluding the agent's own sends. Used to
      *  rebuild an inbox on boot so nothing queued is lost. */
-    undeliveredFor(agentId: string, channelKeys: string[], cursor: number): WhisperMessage[];
+    undeliveredFor(agentId: string, channelKeys: string[], cursor: number): AgentInboxMessage[];
     /** Read-receipts for the DMs an agent SENT (newest first, capped): each with
      *  whether the recipient has SEEN it (their ACK cursor has passed the message's
      *  seq). Lets a sender tell 'queued' from 'seen' and decide whether to escalate
@@ -48,7 +48,7 @@ export interface DmReceipt {
 }
 
 /** No-op store — the broker's default (pure / in-memory-only; used by tests). */
-export const noopWhisperStore: WhisperStore = {
+export const noopAgentInboxStore: AgentInboxStore = {
     append() {},
     maxSeq() {
         return 0;
@@ -81,7 +81,7 @@ interface Row {
     interrupt: number;
 }
 
-function toMsg(r: Row): WhisperMessage {
+function toMsg(r: Row): AgentInboxMessage {
     return {
         seq: r.seq,
         id: r.id,
@@ -97,7 +97,7 @@ function toMsg(r: Row): WhisperMessage {
 }
 
 /** The genie.db-backed store — installed at boot (main process). */
-export const dbWhisperStore: WhisperStore = {
+export const dbAgentInboxStore: AgentInboxStore = {
     append(msg) {
         getDb()
             .prepare(

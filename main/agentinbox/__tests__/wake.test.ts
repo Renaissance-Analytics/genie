@@ -90,9 +90,9 @@ describe('shouldWakeAgent — fail-closed safety gates (NEVER inject mid-turn)',
 
 describe('wakeNudgeText', () => {
     it('is a benign, self-describing one-liner (singular/plural)', () => {
-        expect(wakeNudgeText(1)).toContain('1 unread WhisperChat message;');
+        expect(wakeNudgeText(1)).toContain('1 unread AgentInbox message;');
         expect(wakeNudgeText(1)).toContain('receive');
-        expect(wakeNudgeText(3)).toContain('3 unread WhisperChat messages;');
+        expect(wakeNudgeText(3)).toContain('3 unread AgentInbox messages;');
         // Never reports zero.
         expect(wakeNudgeText(0)).toContain('1 unread');
     });

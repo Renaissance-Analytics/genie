@@ -338,7 +338,7 @@ describe('startLocalWorkstation', () => {
         const handle = await startLocalWorkstation({
             ensure: async () => ({ status: 'exists', workstationId: 'ws-1' }),
             identity: () => identity(),
-            features: async () => ({ issuewatch: false, whisperchat: true }),
+            features: async () => ({ issuewatch: false, agentinbox: true }),
             makeTransport: make as never,
         });
         expect(handle).toBeNull();
@@ -350,7 +350,7 @@ describe('startLocalWorkstation', () => {
         const handle = await startLocalWorkstation({
             ensure: async () => ({ status: 'enrolled', workstationId: 'ws-1' }),
             identity: () => identity(),
-            features: async () => ({ issuewatch: true, whisperchat: false }),
+            features: async () => ({ issuewatch: true, agentinbox: false }),
             broadcastConfig: async () => null,
             makeTransport: make as never,
         });
@@ -369,7 +369,7 @@ describe('startLocalWorkstation', () => {
         const handle = await startLocalWorkstation({
             ensure: async () => ({ status: 'exists', workstationId: 'ws-1' }),
             identity: () => identity(),
-            features: async () => ({ issuewatch: true, whisperchat: false }),
+            features: async () => ({ issuewatch: true, agentinbox: false }),
             broadcastConfig: async () => ({ appKey: 'k', cluster: 'us2' }),
             tynnApiBaseUrl: () => 'https://tynn.test',
             makeTransport: () => transport,

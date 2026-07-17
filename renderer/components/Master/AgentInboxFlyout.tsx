@@ -3,25 +3,25 @@ import { IconRefresh, IconX } from './icons';
 import {
     api,
     hasGenieBridge,
-    type WhisperAgentInfo,
-    type WhisperChannelInfo,
-    type WhisperDmThreadInfo,
-    type WhisperEscalationEvent,
-    type WhisperMessage,
+    type AgentInboxAgentInfo,
+    type AgentInboxChannelInfo,
+    type AgentInboxDmThreadInfo,
+    type AgentInboxEscalationEvent,
+    type AgentInboxMessage,
 } from '../../lib/genie';
 
 /**
- * WhisperChat human panel. Right-side slide-in (reuses the Docs / Task Manager
+ * AgentInbox human panel. Right-side slide-in (reuses the Docs / Task Manager
  * flyout chrome) with panes: the AGENT DIRECTORY (label / type / purpose /
  * status / workspace), the DIRECT-MESSAGE thread list (every DM pair with
  * messages — the human's OWN DMs AND agent↔agent threads), the CHANNEL list
  * (`slug:purpose`), and the message STREAM for the selection plus a composer that
- * posts as the human. Loads on open and stays live via `on.whisperPresence` /
- * `on.whisperMessage`. WhisperChat is local-only in v1, so it's guarded behind the
+ * posts as the human. Loads on open and stays live via `on.agentInboxPresence` /
+ * `on.agentInboxMessage`. AgentInbox is local-only in v1, so it's guarded behind the
  * Genie bridge.
  */
 
-/** The human panel's sender identity token (mirrors the broker's `WHISPER_HUMAN`). */
+/** The human panel's sender identity token (mirrors the broker's `AGENTINBOX_HUMAN`). */
 const HUMAN = 'human';
 
 type Selection =
@@ -30,7 +30,7 @@ type Selection =
     // An agent↔agent thread — the human watches it read-only.
     | { kind: 'dmPair'; a: string; b: string; title: string };
 
-const STATUS_LABEL: Record<WhisperAgentInfo['status'], string> = {
+const STATUS_LABEL: Record<AgentInboxAgentInfo['status'], string> = {
     online: 'online',
     away: 'away',
     offline: 'offline',
@@ -63,32 +63,32 @@ function eventMatches(
     );
 }
 
-export default function WhisperFlyout({
+export default function AgentInboxFlyout({
     open,
     onClose,
 }: {
     open: boolean;
     onClose: () => void;
 }) {
-    const [agents, setAgents] = useState<WhisperAgentInfo[]>([]);
-    const [channels, setChannels] = useState<WhisperChannelInfo[]>([]);
-    const [threads, setThreads] = useState<WhisperDmThreadInfo[]>([]);
+    const [agents, setAgents] = useState<AgentInboxAgentInfo[]>([]);
+    const [channels, setChannels] = useState<AgentInboxChannelInfo[]>([]);
+    const [threads, setThreads] = useState<AgentInboxDmThreadInfo[]>([]);
     const [sel, setSel] = useState<Selection | null>(null);
-    const [messages, setMessages] = useState<WhisperMessage[]>([]);
+    const [messages, setMessages] = useState<AgentInboxMessage[]>([]);
     const [draft, setDraft] = useState('');
     const [loading, setLoading] = useState(false);
     const [posting, setPosting] = useState(false);
     // Track C — unACKed urgent DMs, keyed by messageId. Populated by
-    // `on.whisperEscalation`; each is a "waiting on <agent>" oversight alert.
-    const [escalations, setEscalations] = useState<Map<string, WhisperEscalationEvent>>(new Map());
+    // `on.agentInboxEscalation`; each is a "waiting on <agent>" oversight alert.
+    const [escalations, setEscalations] = useState<Map<string, AgentInboxEscalationEvent>>(new Map());
     const streamEndRef = useRef<HTMLDivElement>(null);
 
     const loadDirectory = useCallback(async () => {
         if (!hasGenieBridge()) return;
         const [d, c, t] = await Promise.all([
-            api().whisper.directory().catch(() => ({ agents: [] as WhisperAgentInfo[] })),
-            api().whisper.channels().catch(() => ({ channels: [] as WhisperChannelInfo[] })),
-            api().whisper.dmThreads().catch(() => ({ threads: [] as WhisperDmThreadInfo[] })),
+            api().agentInbox.directory().catch(() => ({ agents: [] as AgentInboxAgentInfo[] })),
+            api().agentInbox.channels().catch(() => ({ channels: [] as AgentInboxChannelInfo[] })),
+            api().agentInbox.dmThreads().catch(() => ({ threads: [] as AgentInboxDmThreadInfo[] })),
         ]);
         setAgents(d.agents);
         setChannels(c.channels);
@@ -100,14 +100,14 @@ export default function WhisperFlyout({
         setLoading(true);
         try {
             const res = await api()
-                .whisper.history(
+                .agentInbox.history(
                     s.kind === 'channel'
                         ? { channelKey: s.key }
                         : s.kind === 'dmPair'
                           ? { dmPair: [s.a, s.b] }
                           : { agentId: s.agentId },
                 )
-                .catch(() => ({ messages: [] as WhisperMessage[] }));
+                .catch(() => ({ messages: [] as AgentInboxMessage[] }));
             setMessages(res.messages);
         } finally {
             setLoading(false);
@@ -117,7 +117,7 @@ export default function WhisperFlyout({
     // Select a DM thread from the list: the human's OWN DM reuses the human↔agent
     // path (so the composer posts to that agent); an agent↔agent thread opens as a
     // read-only `dmPair` view.
-    const selectThread = useCallback((t: WhisperDmThreadInfo) => {
+    const selectThread = useCallback((t: AgentInboxDmThreadInfo) => {
         if (t.withHuman) {
             const agentId = t.a === HUMAN ? t.b : t.a;
             const title = t.a === HUMAN ? t.bLabel : t.aLabel;
@@ -136,8 +136,8 @@ export default function WhisperFlyout({
     // Keep the directory + open thread live while the panel is open.
     useEffect(() => {
         if (!open) return;
-        const offPresence = api().on.whisperPresence?.(() => void loadDirectory());
-        const offMessage = api().on.whisperMessage?.((ev) => {
+        const offPresence = api().on.agentInboxPresence?.(() => void loadDirectory());
+        const offMessage = api().on.agentInboxMessage?.((ev) => {
             void loadDirectory();
             setSel((cur) => {
                 if (cur && eventMatches(cur, ev)) void loadHistory(cur);
@@ -145,7 +145,7 @@ export default function WhisperFlyout({
             });
         });
         // Track C — raise / clear "waiting on <agent>" oversight alerts.
-        const offEscalation = api().on.whisperEscalation?.((ev) => {
+        const offEscalation = api().on.agentInboxEscalation?.((ev) => {
             setEscalations((prev) => {
                 const next = new Map(prev);
                 if (ev.resolved) next.delete(ev.messageId);
@@ -194,7 +194,7 @@ export default function WhisperFlyout({
         setPosting(true);
         try {
             const res = await api()
-                .whisper.post(
+                .agentInbox.post(
                     sel.kind === 'channel'
                         ? { channelKey: sel.key, text }
                         : { toAgentId: sel.agentId, text },
@@ -213,13 +213,13 @@ export default function WhisperFlyout({
         <div className={`docs-flyout-root${open ? ' open' : ''}`} aria-hidden={!open}>
             <div className="docs-scrim" onClick={onClose} />
             <aside
-                className="docs-flyout whisper-flyout"
+                className="docs-flyout agentinbox-flyout"
                 role="dialog"
-                aria-label="WhisperChat"
+                aria-label="AgentInbox"
                 aria-modal="false"
             >
                 <div className="docs-head">
-                    <span className="docs-title">WhisperChat</span>
+                    <span className="docs-title">AgentInbox</span>
                     <span className="grow" />
                     <button
                         type="button"
@@ -234,8 +234,8 @@ export default function WhisperFlyout({
                         type="button"
                         className="gicon"
                         onClick={onClose}
-                        title="Close WhisperChat"
-                        aria-label="Close WhisperChat"
+                        title="Close AgentInbox"
+                        aria-label="Close AgentInbox"
                     >
                         <IconX />
                     </button>
@@ -243,13 +243,13 @@ export default function WhisperFlyout({
 
                 {/* Track C — oversight: urgent DMs a peer hasn't picked up. */}
                 {hasGenieBridge() && escalations.size > 0 && (
-                    <div className="whisper-escalations">
+                    <div className="agentinbox-escalations">
                         {[...escalations.values()].map((e) => (
-                            <div key={e.messageId} className="whisper-escalation" role="alert">
-                                <span className="whisper-escalation-dot" />
-                                <span className="whisper-escalation-text">
+                            <div key={e.messageId} className="agentinbox-escalation" role="alert">
+                                <span className="agentinbox-escalation-dot" />
+                                <span className="agentinbox-escalation-text">
                                     Waiting on <b>{e.targetLabel ?? 'an agent'}</b> — {e.fromLabel ?? 'an'} urgent message is unread
-                                    {e.sinceTs ? <span className="whisper-escalation-age"> · {relTime(e.sinceTs)}</span> : null}
+                                    {e.sinceTs ? <span className="agentinbox-escalation-age"> · {relTime(e.sinceTs)}</span> : null}
                                 </span>
                             </div>
                         ))}
@@ -257,24 +257,24 @@ export default function WhisperFlyout({
                 )}
 
                 {!hasGenieBridge() ? (
-                    <div className="whisper-body">
+                    <div className="agentinbox-body">
                         <div className="iw-muted" style={{ padding: 16 }}>
-                            WhisperChat runs inside Genie.
+                            AgentInbox runs inside Genie.
                         </div>
                     </div>
                 ) : (
-                    <div className="whisper-body">
-                        <div className="whisper-nav">
-                            <div className="whisper-nav-head">Agents</div>
+                    <div className="agentinbox-body">
+                        <div className="agentinbox-nav">
+                            <div className="agentinbox-nav-head">Agents</div>
                             {agents.length === 0 ? (
-                                <div className="whisper-empty">No agents online yet.</div>
+                                <div className="agentinbox-empty">No agents online yet.</div>
                             ) : (
-                                <ul className="whisper-list">
+                                <ul className="agentinbox-list">
                                     {agents.map((a) => (
                                         <li key={a.agentId}>
                                             <button
                                                 type="button"
-                                                className={`whisper-agent${
+                                                className={`agentinbox-agent${
                                                     sel?.kind === 'dm' &&
                                                     sel.agentId === a.agentId
                                                         ? ' on'
@@ -290,13 +290,13 @@ export default function WhisperFlyout({
                                                 title={`DM ${a.label} · ${STATUS_LABEL[a.status]}`}
                                             >
                                                 <span
-                                                    className={`whisper-dot whisper-${a.status}`}
+                                                    className={`agentinbox-dot agentinbox-${a.status}`}
                                                 />
-                                                <span className="whisper-agent-main">
-                                                    <span className="whisper-agent-label">
+                                                <span className="agentinbox-agent-main">
+                                                    <span className="agentinbox-agent-label">
                                                         {a.label}
                                                     </span>
-                                                    <span className="whisper-agent-sub">
+                                                    <span className="agentinbox-agent-sub">
                                                         {a.agentType} · {a.purpose} ·{' '}
                                                         {a.workspaceName}
                                                     </span>
@@ -307,11 +307,11 @@ export default function WhisperFlyout({
                                 </ul>
                             )}
 
-                            <div className="whisper-nav-head">Direct messages</div>
+                            <div className="agentinbox-nav-head">Direct messages</div>
                             {threads.length === 0 ? (
-                                <div className="whisper-empty">No direct messages yet.</div>
+                                <div className="agentinbox-empty">No direct messages yet.</div>
                             ) : (
-                                <ul className="whisper-list">
+                                <ul className="agentinbox-list">
                                     {threads.map((t) => {
                                         const active =
                                             (sel?.kind === 'dmPair' &&
@@ -324,19 +324,19 @@ export default function WhisperFlyout({
                                             <li key={t.key}>
                                                 <button
                                                     type="button"
-                                                    className={`whisper-dm${active ? ' on' : ''}`}
+                                                    className={`agentinbox-dm${active ? ' on' : ''}`}
                                                     onClick={() => selectThread(t)}
                                                     title={`${t.aLabel} ↔ ${t.bLabel}`}
                                                 >
-                                                    <span className="whisper-dm-main">
-                                                        <span className="whisper-dm-label">
+                                                    <span className="agentinbox-dm-main">
+                                                        <span className="agentinbox-dm-label">
                                                             {t.aLabel} ↔ {t.bLabel}
                                                         </span>
-                                                        <span className="whisper-dm-sub">
+                                                        <span className="agentinbox-dm-sub">
                                                             {t.lastFromLabel}: {t.lastPreview}
                                                         </span>
                                                     </span>
-                                                    <span className="whisper-dm-time">
+                                                    <span className="agentinbox-dm-time">
                                                         {relTime(t.lastTs)}
                                                     </span>
                                                 </button>
@@ -346,16 +346,16 @@ export default function WhisperFlyout({
                                 </ul>
                             )}
 
-                            <div className="whisper-nav-head">Channels</div>
+                            <div className="agentinbox-nav-head">Channels</div>
                             {channels.length === 0 ? (
-                                <div className="whisper-empty">No channels yet.</div>
+                                <div className="agentinbox-empty">No channels yet.</div>
                             ) : (
-                                <ul className="whisper-list">
+                                <ul className="agentinbox-list">
                                     {channels.map((c) => (
                                         <li key={c.key}>
                                             <button
                                                 type="button"
-                                                className={`whisper-channel${
+                                                className={`agentinbox-channel${
                                                     sel?.kind === 'channel' &&
                                                     sel.key === c.key
                                                         ? ' on'
@@ -370,10 +370,10 @@ export default function WhisperFlyout({
                                                 }
                                                 title={`${c.slug}:${c.purpose} · ${c.workspaceName}`}
                                             >
-                                                <span className="whisper-channel-name">
+                                                <span className="agentinbox-channel-name">
                                                     {c.slug}:{c.purpose}
                                                 </span>
-                                                <span className="whisper-channel-count">
+                                                <span className="agentinbox-channel-count">
                                                     {c.memberCount}
                                                 </span>
                                             </button>
@@ -383,15 +383,15 @@ export default function WhisperFlyout({
                             )}
                         </div>
 
-                        <div className="whisper-main">
+                        <div className="agentinbox-main">
                             {!sel ? (
-                                <div className="whisper-empty whisper-placeholder">
+                                <div className="agentinbox-empty agentinbox-placeholder">
                                     Pick an agent, a DM thread, or a channel to see the
                                     conversation.
                                 </div>
                             ) : (
                                 <>
-                                    <div className="whisper-thread-head">
+                                    <div className="agentinbox-thread-head">
                                         {sel.kind === 'channel'
                                             ? '#'
                                             : sel.kind === 'dm'
@@ -402,28 +402,28 @@ export default function WhisperFlyout({
                                             <span className="iw-muted"> · loading…</span>
                                         )}
                                     </div>
-                                    <div className="whisper-stream">
+                                    <div className="agentinbox-stream">
                                         {messages.length === 0 ? (
-                                            <div className="whisper-empty">
+                                            <div className="agentinbox-empty">
                                                 No messages yet.
                                             </div>
                                         ) : (
                                             messages.map((m) => (
                                                 <div
                                                     key={m.id}
-                                                    className={`whisper-msg${
+                                                    className={`agentinbox-msg${
                                                         m.from === 'human' ? ' is-human' : ''
                                                     }`}
                                                 >
-                                                    <div className="whisper-msg-meta">
-                                                        <span className="whisper-msg-from">
+                                                    <div className="agentinbox-msg-meta">
+                                                        <span className="agentinbox-msg-from">
                                                             {m.fromLabel}
                                                         </span>
-                                                        <span className="whisper-msg-time">
+                                                        <span className="agentinbox-msg-time">
                                                             {relTime(m.ts)}
                                                         </span>
                                                     </div>
-                                                    <div className="whisper-msg-text">
+                                                    <div className="agentinbox-msg-text">
                                                         {m.text}
                                                     </div>
                                                 </div>
@@ -432,13 +432,13 @@ export default function WhisperFlyout({
                                         <div ref={streamEndRef} />
                                     </div>
                                     {sel.kind === 'dmPair' ? (
-                                        <div className="whisper-readonly">
+                                        <div className="agentinbox-readonly">
                                             Agent-to-agent thread — read-only.
                                         </div>
                                     ) : (
-                                        <div className="whisper-composer">
+                                        <div className="agentinbox-composer">
                                             <textarea
-                                                className="input whisper-input"
+                                                className="input agentinbox-input"
                                                 value={draft}
                                                 onChange={(e) => setDraft(e.target.value)}
                                                 onKeyDown={(e) => {
@@ -452,7 +452,7 @@ export default function WhisperFlyout({
                                             />
                                             <button
                                                 type="button"
-                                                className="whisper-send"
+                                                className="agentinbox-send"
                                                 onClick={() => void post()}
                                                 disabled={!draft.trim() || posting}
                                             >

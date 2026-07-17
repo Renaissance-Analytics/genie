@@ -205,12 +205,12 @@ describe('TynnBackend.enrollWorkstation', () => {
 describe('TynnBackend.fetchFeatures', () => {
     it('GETs /api/v1/features and maps the FMS toggles', async () => {
         const captured: CapturedRequest[] = [];
-        mockFetch(captured, () => json({ features: { issuewatch: true, whisperchat: false } }));
+        mockFetch(captured, () => json({ features: { issuewatch: true, agentinbox: false } }));
 
         const out = await new TynnBackend().fetchFeatures();
         expect(captured[0].url).toBe('https://tynn.test/api/v1/features');
         expect(captured[0].method ?? 'GET').toBe('GET');
-        expect(out).toEqual({ issuewatch: true, whisperchat: false });
+        expect(out).toEqual({ issuewatch: true, agentinbox: false });
     });
 
     it('returns both OFF when the call fails (dead session / unreachable Tynn)', async () => {
@@ -218,7 +218,7 @@ describe('TynnBackend.fetchFeatures', () => {
         mockFetch(captured, () => json({ error: 'unauthenticated' }, 401));
         await expect(new TynnBackend().fetchFeatures()).resolves.toEqual({
             issuewatch: false,
-            whisperchat: false,
+            agentinbox: false,
         });
     });
 });

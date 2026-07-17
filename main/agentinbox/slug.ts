@@ -1,7 +1,7 @@
 import { readProjectJson } from '../workspace/project-json';
 
 /**
- * A display SLUG for a workspace, used to label whisper channels (`slug:purpose`)
+ * A display SLUG for a workspace, used to label AgentInbox channels (`slug:purpose`)
  * and agent rows. Resolution order (all synchronous — no backend round-trip):
  *
  *   1. The Tynn project slug when the envelope is Tynn-linked — `project.json`'s

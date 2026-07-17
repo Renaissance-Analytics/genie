@@ -15,7 +15,7 @@ import {
     manageTerminalsForMcp,
     runAgentForMcp,
     manageWorkspacesForMcp,
-    whisperForMcp,
+    agentInboxForMcp,
     knowledgeForMcp,
     isOpsProjectFor,
     workspaceRootForTerminal,
@@ -23,8 +23,8 @@ import {
 import { openFileForUserForMcp } from '../editor/open-file';
 import { applySetEnv, applyCheckEnv } from '../env-store';
 import { pluginToolDescriptors, dispatchPluginTool } from '../plugins/registry';
-import { whisperBroker } from '../whisper/broker';
-import { formatWhisperMailLine } from '../mcp/protocol';
+import { agentInboxBroker } from '../agentinbox/broker';
+import { formatAgentInboxMailLine } from '../mcp/protocol';
 import type { ServerDeps } from '../mcp/server';
 import type { HostCorePorts } from './ports';
 
@@ -66,7 +66,7 @@ export function buildHostServerDeps(
             broadcastTerminalAttention(terminalId, true);
             // Wake-on-DM idle signal (issue #9): imDone = the agent's turn ended, so
             // it's now at its prompt. A later DM may wake it IF no output follows.
-            whisperBroker.markTurnEnd(terminalId);
+            agentInboxBroker.markTurnEnd(terminalId);
             const wsId = workspaceIdOfTerminal(terminalId);
             if (wsId) broadcastWorkspacePulse(wsId);
             // The user-facing notification (chime/toast/window-flash on desktop;
@@ -77,8 +77,8 @@ export function buildHostServerDeps(
             mobileEmit('notify:imdone', { label: getTerminalSpec(terminalId)?.label });
         },
         checkIssues: (terminalId) => checkIssuesForMcp(terminalId),
-        whisperMailLine: (terminalId) =>
-            formatWhisperMailLine(whisperBroker.unreadForTerminal(terminalId)),
+        agentInboxMailLine: (terminalId) =>
+            formatAgentInboxMailLine(agentInboxBroker.unreadForTerminal(terminalId)),
         onForceQuestion: (terminalId, questions) => {
             let workspaceLabel: string | undefined;
             try {
@@ -97,7 +97,7 @@ export function buildHostServerDeps(
         manageTerminals: (terminalId, req) => manageTerminalsForMcp(terminalId, req),
         runAgent: (terminalId, req) => runAgentForMcp(terminalId, req),
         manageWorkspaces: (terminalId, req) => manageWorkspacesForMcp(terminalId, req),
-        whisper: (terminalId, req) => whisperForMcp(terminalId, req),
+        agentInbox: (terminalId, req) => agentInboxForMcp(terminalId, req),
         knowledge: (terminalId, req) => knowledgeForMcp(terminalId, req),
         openFileForUser: (terminalId, req) => openFileForUserForMcp(terminalId, req),
         setEnv: (terminalId, req) => {

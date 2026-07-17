@@ -315,21 +315,21 @@ export class TynnBackend implements Backend {
 
     /**
      * The user's FMS feature toggles (GET /api/v1/features) — the per-account
-     * entitlements that gate the connected services (WhisperChat, IssueWatch) on
+     * entitlements that gate the connected services (AgentInbox, IssueWatch) on
      * top of the free local host. Returns both OFF on a dead session / failure, so
      * a missing/unreachable Tynn simply leaves the connected services off.
      */
-    async fetchFeatures(): Promise<{ issuewatch: boolean; whisperchat: boolean }> {
+    async fetchFeatures(): Promise<{ issuewatch: boolean; agentinbox: boolean }> {
         try {
             const data = await this.fetch<{
-                features?: { issuewatch?: boolean; whisperchat?: boolean };
+                features?: { issuewatch?: boolean; agentinbox?: boolean };
             }>('/api/v1/features');
             return {
                 issuewatch: !!data.features?.issuewatch,
-                whisperchat: !!data.features?.whisperchat,
+                agentinbox: !!data.features?.agentinbox,
             };
         } catch {
-            return { issuewatch: false, whisperchat: false };
+            return { issuewatch: false, agentinbox: false };
         }
     }
 

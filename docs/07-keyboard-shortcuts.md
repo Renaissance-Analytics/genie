@@ -13,7 +13,7 @@ On macOS use **⌘ (Command)**; on Windows and Linux use **Ctrl**.
 | **⌘/Ctrl + ,** | Anywhere in the window | Open **Settings**. Works even while a terminal is focused. |
 | **⌘/Ctrl + S** | A focused **Files** panel | Save the active file (or plugin tab). |
 | **Quick-capture hotkey** | System-wide (global) | Pop the **Capture a wish** window. Default **Ctrl + Shift + W** (⌘ + Shift + W on macOS); change it in Settings. |
-| **Esc** | An open flyout / dialog | Close the flyout (Docs, WhisperChat, Task Manager, Issue Watch…) or dismiss the current dialog. |
+| **Esc** | An open flyout / dialog | Close the flyout (Docs, AgentInbox, Task Manager, Issue Watch…) or dismiss the current dialog. |
 
 ## The quick-capture hotkey
 

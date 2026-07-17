@@ -138,8 +138,8 @@ workspace from Genie — never deletes anything on disk). Targets are limited to
 your own or a governed workspace. To CREATE missing child workspaces, use
 \`provisionWorkspaces\`.
 
-### whisper
-**Coordinate with the OTHER AI agents in this Genie** — WhisperChat, a LOCAL
+### agentinbox
+**Coordinate with the OTHER AI agents in this Genie** — AgentInbox, a LOCAL
 inter-agent messaging network. Discover peer agents, DM them 1:1, and broadcast
 on shared CHANNELS. Delivery is **PULL-based** — you POLL for messages; nothing is
 ever injected into your terminal (that would corrupt your turn). Actions (\`action\`):

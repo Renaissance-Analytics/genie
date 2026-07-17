@@ -1,10 +1,10 @@
 /**
- * Shared WhisperChat data types — the wire shapes crossing the main↔renderer IPC
+ * Shared AgentInbox data types — the wire shapes crossing the main↔renderer IPC
  * boundary AND the in-memory broker's records. Pure (no electron / no I/O) so the
  * broker + MCP protocol can import them freely and the whole surface stays
  * unit-testable.
  *
- * WhisperChat is the LOCAL inter-agent messaging network: agents in this Genie
+ * AgentInbox is the LOCAL inter-agent messaging network: agents in this Genie
  * instance discover peers (subject to an accessibility SCOPE), DM each other, and
  * broadcast on per-workspace CHANNELS; a human panel watches + joins. Everything
  * is in-memory in the main process (the durable identity rides
@@ -12,24 +12,24 @@
  */
 
 /** Who can see / DM an agent. `self` (default) = its own workspace only. */
-export type WhisperScope = 'none' | 'self' | 'specific' | 'all';
+export type AgentInboxScope = 'none' | 'self' | 'specific' | 'all';
 
 /** Liveness of an agent's terminal. `away` = pty exited but the spec is retained
  *  (revivable); `offline` = the terminal was killed / the spec removed. */
-export type WhisperStatus = 'online' | 'away' | 'offline';
+export type AgentInboxStatus = 'online' | 'away' | 'offline';
 
 /** The AI TUI an agent terminal runs. Mirrors `AgentType` (mcp/protocol). */
-export type WhisperAgentType = 'claude' | 'codex' | 'custom';
+export type AgentInboxAgentType = 'claude' | 'codex' | 'custom';
 
 /** A message's kind — a 1:1 direct message or a channel broadcast. */
-export type WhisperKind = 'dm' | 'channel';
+export type AgentInboxKind = 'dm' | 'channel';
 
 /** The human panel's sender identity token. An agent sender is its `agentId`. */
-export const WHISPER_HUMAN = 'human';
+export const AGENTINBOX_HUMAN = 'human';
 
 /** A discoverable agent as the directory / presence surfaces report it. */
-export interface WhisperAgentInfo {
-    /** Stable whisper identity (uuid), persisted in the spec's `meta.agent_id`. */
+export interface AgentInboxAgentInfo {
+    /** Stable AgentInbox identity (uuid), persisted in the spec's `meta.agent_id`. */
     agentId: string;
     /** The owning terminal spec id. */
     terminalId: string;
@@ -37,15 +37,15 @@ export interface WhisperAgentInfo {
     workspaceName: string;
     /** Display slug for the workspace (Tynn slug → envelope slug → kebab name). */
     slug: string;
-    agentType: WhisperAgentType;
+    agentType: AgentInboxAgentType;
     /** The terminal's label. */
     label: string;
     /** The agent's channel purpose (kebab), e.g. `general`, `frontend`. */
     purpose: string;
-    scope: WhisperScope;
+    scope: AgentInboxScope;
     /** Workspace ids this agent is visible to when `scope: 'specific'`. */
     scopeWorkspaces: string[];
-    status: WhisperStatus;
+    status: AgentInboxStatus;
     /** The captured AI chat-session uuid, or null when unknown/uncaptured. */
     chatSessionId: string | null;
 }
@@ -55,7 +55,7 @@ export interface WhisperAgentInfo {
  * Covers BOTH human↔agent AND agent↔agent pairs — the human owns the workstation
  * and sees every thread. Keyed by the order-independent `pairKey`.
  */
-export interface WhisperDmThreadInfo {
+export interface AgentInboxDmThreadInfo {
     /** Order-independent pair key (`idA|idB`, ids sorted). */
     key: string;
     /** The two participant ids (either may be the literal `human`). */
@@ -79,7 +79,7 @@ export interface WhisperDmThreadInfo {
 
 /** A channel as the channel list reports it. Keyed internally by
  *  `workspaceId:purpose`; displayed as `slug:purpose`. */
-export interface WhisperChannelInfo {
+export interface AgentInboxChannelInfo {
     /** Internal key `workspaceId:purpose` (unique; two workspaces can share a slug). */
     key: string;
     /** Display slug for the owning workspace. */
@@ -93,7 +93,7 @@ export interface WhisperChannelInfo {
 
 /** A delivered message — the full record kept in the per-channel / per-DM log and
  *  handed to an agent's `receive`. */
-export interface WhisperMessage {
+export interface AgentInboxMessage {
     /** Monotonic global sequence — the cursor an agent pages `receive` with. */
     seq: number;
     /** Stable message uuid. */
@@ -102,7 +102,7 @@ export interface WhisperMessage {
     from: string;
     /** Human-readable sender label (`You` for the human; else the agent's label). */
     fromLabel: string;
-    kind: WhisperKind;
+    kind: AgentInboxKind;
     /** Channel messages: the channel key. */
     channel?: string;
     /** DM messages: the recipient's `agentId` (or `human`). */
@@ -114,9 +114,9 @@ export interface WhisperMessage {
     interrupt?: boolean;
 }
 
-/** The `whisper:message` push preview (never the full text stream). */
-export interface WhisperMessagePreview {
-    kind: WhisperKind;
+/** The `agentInbox:message` push preview (never the full text stream). */
+export interface AgentInboxMessagePreview {
+    kind: AgentInboxKind;
     /** Channel messages: the channel key. */
     channelKey?: string;
     /** DM messages: the recipient's `agentId`. */
@@ -129,8 +129,8 @@ export interface WhisperMessagePreview {
     preview: string;
 }
 
-/** The `whisper:presence` push payload for an agent that LEFT (spec removed). */
-export interface WhisperPresenceOffline {
+/** The `agentInbox:presence` push payload for an agent that LEFT (spec removed). */
+export interface AgentInboxPresenceOffline {
     agentId: string;
     status: 'offline';
     left: true;
@@ -141,19 +141,19 @@ export interface WhisperPresenceOffline {
  * (which owns the db/fs I/O) and handed to the pure broker. `status` defaults to
  * `online`; rehydrate passes `away` (liveness unknown until the agent acts).
  */
-export interface WhisperJoinInput {
+export interface AgentInboxJoinInput {
     agentId: string;
     terminalId: string;
     workspaceId: string;
     workspaceName: string;
     slug: string;
-    agentType: WhisperAgentType;
+    agentType: AgentInboxAgentType;
     label: string;
     purpose: string;
-    scope: WhisperScope;
+    scope: AgentInboxScope;
     scopeWorkspaces: string[];
     chatSessionId: string | null;
-    status?: WhisperStatus;
+    status?: AgentInboxStatus;
     /** Opt-in wake-on-DM (issue #9), restored from spec meta on (re)join. Default false. */
     wakeOnDm?: boolean;
 }
@@ -162,7 +162,7 @@ export interface WhisperJoinInput {
  *  surface — the target didn't drain it within the escalation window (Track C).
  *  `resolved` clears a previously-raised "waiting on X" indicator once the target
  *  finally receives (its cursor passes the message). */
-export interface WhisperEscalation {
+export interface AgentInboxEscalation {
     messageId: string;
     targetAgentId: string;
     targetLabel: string;
@@ -176,12 +176,12 @@ export interface WhisperEscalation {
 
 /** The broker's outbound event, mapped by presence.ts to the local broadcast +
  *  mobile push channels (and the terminal attention glow for `interrupt`). */
-export type WhisperBrokerEvent =
-    | { type: 'presence'; agent: WhisperAgentInfo }
+export type AgentInboxBrokerEvent =
+    | { type: 'presence'; agent: AgentInboxAgentInfo }
     | { type: 'offline'; agentId: string }
-    | { type: 'message'; preview: WhisperMessagePreview }
+    | { type: 'message'; preview: AgentInboxMessagePreview }
     | { type: 'interrupt'; terminalId: string }
-    | { type: 'escalation'; escalation: WhisperEscalation }
+    | { type: 'escalation'; escalation: AgentInboxEscalation }
     | { type: 'escalation-resolved'; messageId: string; targetAgentId: string };
 
 /** A short preview excerpt for the message push (cap the body). */

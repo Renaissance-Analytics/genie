@@ -35,7 +35,7 @@ Tray icon  ──►  Genie window
                  ├── Sidebar (the "chooser")   pick / add workspaces + terminals
                  ├── View grid                 terminals + agents + Files, tiled
                  ├── Toolbar                    layout, add views, active workspace
-                 └── Title bar                  Knowledge Graph · WhisperChat ·
+                 └── Title bar                  Knowledge Graph · AgentInbox ·
                                                 Task Manager · Issue Watch ·
                                                 .gen sites · Hosts · update pill ·
                                                 Docs · Settings

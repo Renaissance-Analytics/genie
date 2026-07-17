@@ -21,7 +21,7 @@ import { anchoredPopoverTop } from '../../lib/anchored-popover';
  * button repeats the LAST-USED terminal type (`settings.last_terminal_type`,
  * default `regular`); the caret opens the full type registry (Regular / Claude
  * Code / Codex / Custom). Picking a plain terminal creates it straight away;
- * picking a SPECIALIZED type opens an inline WhisperChat form (purpose / scope /
+ * picking a SPECIALIZED type opens an inline AgentInbox form (purpose / scope /
  * command) that calls `terminalSpec.createAgent`. "Add Files…" (an editor) stays a
  * DISTINCT action — in the toolbar it rides in this menu (`includeFiles`), and in
  * the sidebar it keeps its own adjacent button. Closes on outside-click / Escape.

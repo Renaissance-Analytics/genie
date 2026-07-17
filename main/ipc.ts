@@ -68,9 +68,9 @@ import {
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
 import { broadcastTerminalSpecsChanged } from './terminal/ipc';
 import { agentPulse } from './terminal/agent-pulse';
-import { createSpecializedAgentTerminal, updateWhisperChannel } from './mcp/host-tools';
-import { whisperBroker } from './whisper/broker';
-import { type WhisperScope } from './whisper/types';
+import { createSpecializedAgentTerminal, updateAgentInboxChannel } from './mcp/host-tools';
+import { agentInboxBroker } from './agentinbox/broker';
+import { type AgentInboxScope } from './agentinbox/types';
 import { getKnowledgeStore } from './knowledge/store';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import {
@@ -894,10 +894,10 @@ export function registerIpcHandlers(): void {
         return { ok: true };
     });
 
-    // --- Specialized Terminals + WhisperChat ----------------------------
+    // --- Specialized Terminals + AgentInbox ----------------------------
     // Create an AI-TUI terminal FROM THE UI (the split Add-Terminal button) via
     // the SHARED create-agent path — resolve the agent's CLI command, spawn a
-    // headless agent terminal (stamping its captured chat-session id + whisper
+    // headless agent terminal (stamping its captured chat-session id + AgentInbox
     // identity/accessibility, joining the broker), and launch it. No approval gate
     // — the human is creating it directly. The same helper backs the host endpoint
     // (POST /api/desktop/terminal-spec/create-agent) so a REMOTE host window
@@ -913,7 +913,7 @@ export function registerIpcHandlers(): void {
                 cwd?: string;
                 label?: string;
                 purpose: string;
-                scope: WhisperScope;
+                scope: AgentInboxScope;
                 scope_workspaces?: string[];
                 wake_on_dm?: boolean;
                 issuewatch_handle?: boolean;
@@ -922,22 +922,22 @@ export function registerIpcHandlers(): void {
         ) => createSpecializedAgentTerminal(input),
     );
 
-    // The human WhisperChat panel: read the agent directory, channel list, and a
+    // The human AgentInbox panel: read the agent directory, channel list, and a
     // channel / human↔agent DM history; post as the human; and edit an agent's
     // accessibility (re-keys its channel + re-emits presence). The live push
-    // (whisper:presence / whisper:message) rides the broker's presence emitter.
+    // (agentInbox:presence / agentInbox:message) rides the broker's presence emitter.
     // AgentPulse — the last-60s per-workspace byte buckets, fetched once when the
     // workspace menu opens to backfill each sparkline; live `agent-pulse` pushes
     // advance it from there.
     ipcMain.handle('agent-pulse:snapshot', () => ({ pulses: agentPulse.snapshot() }));
 
-    ipcMain.handle('whisper:directory', () => ({ agents: whisperBroker.directory() }));
-    ipcMain.handle('whisper:channels', () => ({ channels: whisperBroker.channels() }));
+    ipcMain.handle('agentinbox:directory', () => ({ agents: agentInboxBroker.directory() }));
+    ipcMain.handle('agentinbox:channels', () => ({ channels: agentInboxBroker.channels() }));
     // Every DM thread (human↔agent AND agent↔agent) so the panel can view the
     // agent-to-agent conversations that fire the unread badge but were unviewable.
-    ipcMain.handle('whisper:dm-threads', () => ({ threads: whisperBroker.dmThreads() }));
+    ipcMain.handle('agentinbox:dm-threads', () => ({ threads: agentInboxBroker.dmThreads() }));
     ipcMain.handle(
-        'whisper:history',
+        'agentinbox:history',
         (
             _e,
             opts: {
@@ -947,16 +947,16 @@ export function registerIpcHandlers(): void {
                 limit?: number;
                 before?: number;
             },
-        ) => ({ messages: whisperBroker.history(opts ?? {}) }),
+        ) => ({ messages: agentInboxBroker.history(opts ?? {}) }),
     );
     ipcMain.handle(
-        'whisper:post',
+        'agentinbox:post',
         (_e, input: { channelKey?: string; toAgentId?: string; text: string }) => {
             if (!input?.text?.trim()) return { ok: false, error: 'Message is empty.' };
             if (!input.channelKey && !input.toAgentId) {
                 return { ok: false, error: 'Pick a channel or an agent to message.' };
             }
-            const r = whisperBroker.send({
+            const r = agentInboxBroker.send({
                 human: true,
                 channelArg: input.channelKey,
                 toAgentId: input.toAgentId,
@@ -966,19 +966,19 @@ export function registerIpcHandlers(): void {
         },
     );
     ipcMain.handle(
-        'whisper:update-channel',
+        'agentinbox:update-channel',
         (
             _e,
             specId: string,
             patch: {
                 purpose?: string;
-                scope?: WhisperScope;
+                scope?: AgentInboxScope;
                 scope_workspaces?: string[];
                 wake_on_dm?: boolean;
                 issuewatch_handle?: boolean;
                 issuewatch_action?: 'notify' | 'wake';
             },
-        ) => updateWhisperChannel(specId, patch),
+        ) => updateAgentInboxChannel(specId, patch),
     );
 
     // --- Knowledge Graph (workstation-wide local memory store) -----------

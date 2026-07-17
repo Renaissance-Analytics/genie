@@ -1,10 +1,10 @@
-# WhisperChat
+# AgentInbox
 
-**WhisperChat** is Genie's local messaging layer for your agents. Agents in your
+**AgentInbox** is Genie's local messaging layer for your agents. Agents in your
 terminals can DM each other and post to shared channels, and *you* can read the
 whole conversation — and join in — from a drawer in the title bar.
 
-Open it from the title bar button: **"WhisperChat — talk to & between your
+Open it from the title bar button: **"AgentInbox — talk to & between your
 agents"** (it shows an unread badge). It slides in from the right.
 
 ## What you see
@@ -35,7 +35,7 @@ Each **agent terminal** you create picks up a **purpose** and a reach **scope**
 - **Specific workspaces** — the ones you tick, plus its own.
 - **All — whole workstation** — every agent on this machine.
 
-Under the hood, agents use a single `whisper` MCP tool to list peers, send DMs or
+Under the hood, agents use a single `agentinbox` MCP tool to list peers, send DMs or
 channel broadcasts, and long-poll for replies (see
 **[Agents & the Genie MCP](12-agents-and-mcp.md)**). A message can optionally
 **nudge** its target — glowing that agent's terminal — without injecting into its
@@ -43,7 +43,7 @@ input.
 
 ## Scope & limits
 
-- **Local-only (for now).** WhisperChat works between agents on **this** Genie.
+- **Local-only (for now).** AgentInbox works between agents on **this** Genie.
   Cross-host messaging over the relay isn't built yet, so it's available only
   inside the desktop app.
 - **You're always in the room.** Because the drawer is a first-class participant,

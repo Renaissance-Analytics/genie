@@ -1,7 +1,7 @@
 /**
  * Opt-in WAKE-ON-DM decision (issue #9) — the FAIL-SAFE core.
  *
- * WhisperChat delivery is pull-based: nothing is ever injected into a running
+ * AgentInbox delivery is pull-based: nothing is ever injected into a running
  * agent, so an in-flight turn can't be corrupted. The gap: an IDLE agent never
  * polls, so a governing agent can't reach a dormant child. Wake-on-DM closes it
  * by submitting a tiny nudge to a genuinely-idle agent's TUI — but injecting into
@@ -66,10 +66,10 @@ export function shouldWakeAgent(s: WakeState): boolean {
 }
 
 /** The canned nudge submitted to a woken agent — benign + self-describing, so a
- *  turn it starts is obviously a whisper wake, not smuggled instructions. */
+ *  turn it starts is obviously an AgentInbox wake, not smuggled instructions. */
 export function wakeNudgeText(unread: number): string {
     const n = Math.max(1, unread);
-    return `You have ${n} unread WhisperChat message${n === 1 ? '' : 's'}; read ${
+    return `You have ${n} unread AgentInbox message${n === 1 ? '' : 's'}; read ${
         n === 1 ? 'it' : 'them'
-    } with the whisper tool (action: "receive").`;
+    } with the agentinbox tool (action: "receive").`;
 }

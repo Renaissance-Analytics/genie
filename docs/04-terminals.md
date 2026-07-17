@@ -35,8 +35,8 @@ a short form first:
 - **Purpose** — a few words describing what this agent is for (e.g. `frontend`).
   Genie kebab-cases it and uses it to name the agent's chat channel, shown live
   as `‹workspace›:‹purpose›`. Agents talk to each other on these channels — see
-  **[WhisperChat](13-whisperchat.md)**.
-- **Who can reach this agent** — the agent's discoverability for WhisperChat:
+  **[AgentInbox](13-agentinbox.md)**.
+- **Who can reach this agent** — the agent's discoverability for AgentInbox:
   - **None — hidden** — no other agent can find or message it.
   - **This workspace (default)** — agents in the same workspace can reach it.
   - **Specific workspaces** — the ones you tick, plus its own.

@@ -33,7 +33,7 @@ renders these same pages with a navigable sidebar.
     grants, plugin editor tabs, agent tools, signing & Developer Mode.
 13. **[Agents & the Genie MCP](12-agents-and-mcp.md)** — how your agents reach
     you (`imDone` glow, `ForceTheQuestion`), the tool surface, and approvals.
-14. **[WhisperChat](13-whisperchat.md)** — local messaging between your agents,
+14. **[AgentInbox](13-agentinbox.md)** — local messaging between your agents,
     channels & DMs, the drawer, and reach scopes.
 15. **[Processes & the Task Manager](14-processes.md)** — supervised background
     services vs terminals, start / stop / restart, the cross-workspace view.

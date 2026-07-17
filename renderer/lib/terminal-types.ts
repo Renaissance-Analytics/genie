@@ -3,7 +3,7 @@
  * a fifth type is one entry here — the split button, its dropdown, and the
  * last-used-type persistence all read this list. A "regular" entry is a plain
  * shell; the rest are SPECIALIZED (an AI TUI launched with a captured chat
- * session + a WhisperChat identity).
+ * session + an AgentInbox identity).
  */
 import type { ComponentType } from 'react';
 import { IconBox, IconCode, IconTerminal, IconTynn } from '../components/Master/icons';

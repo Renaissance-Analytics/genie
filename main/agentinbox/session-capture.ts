@@ -2,12 +2,12 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
-import type { WhisperAgentType } from './types';
+import type { AgentInboxAgentType } from './types';
 
 /**
  * Capture an AI TUI's CHAT-SESSION identity when Genie launches it, so a
  * specialized terminal can be tied back to its conversation (surfaced on the
- * agent list + whisper).
+ * agent list + AgentInbox).
  *
  * Two strategies, per a small per-agent PROFILE:
  *   - `flag`   — the CLI accepts a session-id flag on launch. We MINT a uuid and
@@ -33,7 +33,7 @@ interface LaunchProfile {
 /** Per-agent launch profiles. `claude` uses the confirmed `--session-id` flag;
  *  `custom` best-effort DETECTs from the Claude transcript dir (a custom command
  *  is often a claude wrapper); `codex` has no capture in v1. */
-export const LAUNCH_PROFILES: Record<WhisperAgentType, LaunchProfile> = {
+export const LAUNCH_PROFILES: Record<AgentInboxAgentType, LaunchProfile> = {
     claude: { strategy: 'flag', flagTemplate: '--session-id {id}' },
     codex: { strategy: 'none' },
     custom: { strategy: 'detect' },
@@ -66,7 +66,7 @@ export interface RenderedLaunch {
  * is injectable for tests (defaults to a real uuid).
  */
 export function renderAgentLaunch(
-    agent: WhisperAgentType,
+    agent: AgentInboxAgentType,
     command: string,
     genId: () => string = () => crypto.randomUUID(),
 ): RenderedLaunch {
@@ -111,7 +111,7 @@ function stripSessionFlags(command: string): string {
  * the caller REFUSES rather than silently launching a fresh, context-less session.
  */
 export function renderAgentResume(
-    agent: WhisperAgentType,
+    agent: AgentInboxAgentType,
     baseCommand: string,
     sessionId: string | null,
 ): string | null {
@@ -133,7 +133,7 @@ export function renderAgentResume(
  * Claude-only (codex/custom have no generic continue) — null otherwise.
  */
 export function renderAgentContinue(
-    agent: WhisperAgentType,
+    agent: AgentInboxAgentType,
     baseCommand: string,
 ): string | null {
     if (agent !== 'claude') return null;
@@ -170,7 +170,7 @@ export function agentRelaunchDecision(
     sessionExists?: (sessionId: string) => boolean,
 ): { command: string; newSessionId?: string } | null {
     if (existing || !spec) return null;
-    const agent = spec.meta?.agent as WhisperAgentType | undefined;
+    const agent = spec.meta?.agent as AgentInboxAgentType | undefined;
     if (!agent) return null;
     const baseCmd = spec.meta?.agent_command ?? '';
     const sid = spec.meta?.chat_session_id ?? null;

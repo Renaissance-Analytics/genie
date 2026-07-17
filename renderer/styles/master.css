@@ -3951,25 +3951,25 @@ body.gutter-dragging .grid-gutter {
     white-space: nowrap;
 }
 
-/* ===== WhisperChat flyout ============================================== */
-.whisper-btn {
+/* ===== AgentInbox flyout ============================================== */
+.agentinbox-btn {
     position: relative;
 }
-.whisper-flyout {
+.agentinbox-flyout {
     width: min(760px, 84vw);
 }
-.whisper-body {
+.agentinbox-body {
     display: flex;
     flex: 1;
     min-height: 0;
 }
 /* Track C — unACKed-urgent oversight alerts, stacked above the body. */
-.whisper-escalations {
+.agentinbox-escalations {
     flex: 0 0 auto;
     border-bottom: 1px solid var(--border-1);
     background: color-mix(in srgb, var(--rose-500, #f43f5e) 8%, transparent);
 }
-.whisper-escalation {
+.agentinbox-escalation {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -3977,10 +3977,10 @@ body.gutter-dragging .grid-gutter {
     font-size: 12px;
     color: var(--fg-2);
 }
-.whisper-escalation + .whisper-escalation {
+.agentinbox-escalation + .agentinbox-escalation {
     border-top: 1px solid var(--border-1);
 }
-.whisper-escalation-dot {
+.agentinbox-escalation-dot {
     flex: 0 0 auto;
     width: 7px;
     height: 7px;
@@ -3988,21 +3988,21 @@ body.gutter-dragging .grid-gutter {
     background: var(--rose-500, #f43f5e);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--rose-500, #f43f5e) 20%, transparent);
 }
-.whisper-escalation-text b {
+.agentinbox-escalation-text b {
     color: var(--fg-1);
     font-weight: 600;
 }
-.whisper-escalation-age {
+.agentinbox-escalation-age {
     color: var(--fg-4);
 }
-.whisper-nav {
+.agentinbox-nav {
     flex: 0 0 244px;
     width: 244px;
     border-right: 1px solid var(--border-1);
     overflow-y: auto;
     padding: 10px 8px;
 }
-.whisper-nav-head {
+.agentinbox-nav-head {
     font-size: 10.5px;
     font-weight: 600;
     text-transform: uppercase;
@@ -4010,21 +4010,21 @@ body.gutter-dragging .grid-gutter {
     color: var(--fg-4);
     margin: 10px 6px 4px;
 }
-.whisper-nav-head:first-child {
+.agentinbox-nav-head:first-child {
     margin-top: 2px;
 }
-.whisper-empty {
+.agentinbox-empty {
     padding: 6px 8px;
     font-size: 12px;
     color: var(--fg-4);
 }
-.whisper-list {
+.agentinbox-list {
     list-style: none;
     margin: 0;
     padding: 0;
 }
-.whisper-agent,
-.whisper-channel {
+.agentinbox-agent,
+.agentinbox-channel {
     width: 100%;
     display: flex;
     align-items: center;
@@ -4039,54 +4039,54 @@ body.gutter-dragging .grid-gutter {
     text-align: left;
     cursor: pointer;
 }
-.whisper-agent:hover,
-.whisper-channel:hover {
+.agentinbox-agent:hover,
+.agentinbox-channel:hover {
     background: var(--bg-2);
 }
-.whisper-agent.on,
-.whisper-channel.on {
+.agentinbox-agent.on,
+.agentinbox-channel.on {
     background: var(--agent-soft);
     color: var(--fg-1);
 }
-.whisper-dot {
+.agentinbox-dot {
     width: 8px;
     height: 8px;
     border-radius: 50%;
     flex: 0 0 auto;
     background: var(--fg-4);
 }
-.whisper-dot.whisper-online {
+.agentinbox-dot.agentinbox-online {
     background: #10b981;
     box-shadow: 0 0 5px rgba(16, 185, 129, 0.6);
 }
-.whisper-dot.whisper-away {
+.agentinbox-dot.agentinbox-away {
     background: var(--term-warn, #e2c08d);
 }
-.whisper-dot.whisper-offline {
+.agentinbox-dot.agentinbox-offline {
     background: var(--fg-4);
     opacity: 0.5;
 }
-.whisper-agent-main {
+.agentinbox-agent-main {
     display: flex;
     flex-direction: column;
     gap: 1px;
     min-width: 0;
 }
-.whisper-agent-label {
+.agentinbox-agent-label {
     font-size: 12.5px;
     color: var(--fg-1);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.whisper-agent-sub {
+.agentinbox-agent-sub {
     font-size: 10.5px;
     color: var(--fg-4);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.whisper-channel-name {
+.agentinbox-channel-name {
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -4094,7 +4094,7 @@ body.gutter-dragging .grid-gutter {
     white-space: nowrap;
     font-size: 12.5px;
 }
-.whisper-channel-count {
+.agentinbox-channel-count {
     flex: 0 0 auto;
     font-size: 10.5px;
     color: var(--fg-4);
@@ -4103,7 +4103,7 @@ body.gutter-dragging .grid-gutter {
     padding: 0 7px;
     line-height: 16px;
 }
-.whisper-dm {
+.agentinbox-dm {
     width: 100%;
     display: flex;
     align-items: center;
@@ -4118,65 +4118,65 @@ body.gutter-dragging .grid-gutter {
     text-align: left;
     cursor: pointer;
 }
-.whisper-dm:hover {
+.agentinbox-dm:hover {
     background: var(--bg-2);
 }
-.whisper-dm.on {
+.agentinbox-dm.on {
     background: var(--agent-soft);
     color: var(--fg-1);
 }
-.whisper-dm-main {
+.agentinbox-dm-main {
     display: flex;
     flex-direction: column;
     gap: 1px;
     min-width: 0;
     flex: 1;
 }
-.whisper-dm-label {
+.agentinbox-dm-label {
     font-size: 12.5px;
     color: var(--fg-1);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.whisper-dm-sub {
+.agentinbox-dm-sub {
     font-size: 10.5px;
     color: var(--fg-4);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.whisper-dm-time {
+.agentinbox-dm-time {
     flex: 0 0 auto;
     font-size: 10.5px;
     color: var(--fg-4);
 }
-.whisper-readonly {
+.agentinbox-readonly {
     padding: 10px 12px;
     border-top: 1px solid var(--border-1);
     font-size: 11.5px;
     color: var(--fg-4);
     font-style: italic;
 }
-.whisper-main {
+.agentinbox-main {
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
 }
-.whisper-placeholder {
+.agentinbox-placeholder {
     margin: auto;
     text-align: center;
     max-width: 260px;
 }
-.whisper-thread-head {
+.agentinbox-thread-head {
     padding: 12px 16px;
     border-bottom: 1px solid var(--border-1);
     font-size: 12.5px;
     font-weight: 600;
     color: var(--fg-1);
 }
-.whisper-stream {
+.agentinbox-stream {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
@@ -4185,43 +4185,43 @@ body.gutter-dragging .grid-gutter {
     flex-direction: column;
     gap: 10px;
 }
-.whisper-msg {
+.agentinbox-msg {
     display: flex;
     flex-direction: column;
     gap: 2px;
 }
-.whisper-msg-meta {
+.agentinbox-msg-meta {
     display: flex;
     align-items: baseline;
     gap: 8px;
 }
-.whisper-msg-from {
+.agentinbox-msg-from {
     font-size: 11.5px;
     font-weight: 600;
     color: var(--fg-2);
 }
-.whisper-msg.is-human .whisper-msg-from {
+.agentinbox-msg.is-human .agentinbox-msg-from {
     color: var(--agent, #818cf8);
 }
-.whisper-msg-time {
+.agentinbox-msg-time {
     font-size: 10px;
     color: var(--fg-4);
 }
-.whisper-msg-text {
+.agentinbox-msg-text {
     font-size: 12.5px;
     line-height: 1.45;
     color: var(--fg-1);
     white-space: pre-wrap;
     word-break: break-word;
 }
-.whisper-composer {
+.agentinbox-composer {
     display: flex;
     gap: 8px;
     padding: 10px 12px;
     border-top: 1px solid var(--border-1);
     align-items: flex-end;
 }
-.whisper-input {
+.agentinbox-input {
     flex: 1;
     resize: none;
     font-size: 12.5px;
@@ -4233,11 +4233,11 @@ body.gutter-dragging .grid-gutter {
     font-family: inherit;
     line-height: 1.4;
 }
-.whisper-input:focus {
+.agentinbox-input:focus {
     outline: none;
     border-color: var(--blue-500, #3b82f6);
 }
-.whisper-send {
+.agentinbox-send {
     flex: 0 0 auto;
     font-size: 12px;
     padding: 8px 14px;
@@ -4247,7 +4247,7 @@ body.gutter-dragging .grid-gutter {
     color: var(--fg-1);
     cursor: pointer;
 }
-.whisper-send:disabled {
+.agentinbox-send:disabled {
     opacity: 0.5;
     cursor: not-allowed;
 }

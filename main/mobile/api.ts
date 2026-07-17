@@ -46,7 +46,7 @@ import {
     setWorkspaceWatch,
     pollWorkspace,
 } from '../issue-watch';
-import { whisperBroker } from '../whisper/broker';
+import { agentInboxBroker } from '../agentinbox/broker';
 import { listAllProjects, getTynnBackend } from '../backend/registry';
 import {
     provisionWorkspaceTynn,
@@ -243,7 +243,7 @@ export interface MobileDataDeps {
     /**
      * Create a SPECIALIZED (AI-TUI) terminal on the host — resolves the agent's
      * launch command, spawns the agent pty with its captured chat-session id +
-     * WhisperChat identity, and launches it (the shared create-agent path). Backs
+     * AgentInbox identity, and launches it (the shared create-agent path). Backs
      * the `POST /api/desktop/terminal-spec/create-agent` host endpoint so a REMOTE
      * host window creates specialized terminals identically to a local one.
      * OPTIONAL — only a full desktop host wires it; absent ⇒ the endpoint 501s.
@@ -262,12 +262,12 @@ export interface MobileDataDeps {
         issuewatch_action?: 'notify' | 'wake';
     }) => { ok: boolean; spec?: TerminalSpecRow; error?: string };
     /**
-     * Edit a specialized (agent) terminal's WhisperChat settings — purpose / scope /
+     * Edit a specialized (agent) terminal's AgentInbox settings — purpose / scope /
      * wake-on-DM — on the HOST (live broker + persisted spec meta). Lets a REMOTE
      * window drive the host's "Agent settings…" edit. OPTIONAL — only a full desktop
      * host wires it; absent ⇒ the endpoint 501s.
      */
-    updateWhisperChannel?: (
+    updateAgentInboxChannel?: (
         specId: string,
         patch: {
             purpose?: string;
@@ -1345,8 +1345,8 @@ export async function handleApi(
         return true;
     }
 
-    // --- host-sourced WhisperChat — for a remote DESKTOP driving this host ------
-    // The WhisperFlyout on a remote window reads the HOST broker's directory /
+    // --- host-sourced AgentInbox — for a remote DESKTOP driving this host ------
+    // The AgentInboxFlyout on a remote window reads the HOST broker's directory /
     // channels / DM threads / history and posts as the human to the HOST broker
     // (the agents + pty live on the host). Reads are auth-only; posting is a
     // "drive the host" mutation, so it's kill-switch-gated like the other
@@ -1354,17 +1354,17 @@ export async function handleApi(
     // and are re-emitted client-side via PASSTHROUGH_EVENTS (see main/remote).
     // The human panel is unscoped by design ("the human owns the workstation"),
     // matching the local IPC handlers in main/ipc.ts.
-    if (pathname.startsWith('/api/desktop/whisper/')) {
-        if (pathname === '/api/desktop/whisper/directory' && method === 'GET') {
-            sendJson(res, 200, { agents: whisperBroker.directory() });
+    if (pathname.startsWith('/api/desktop/agentinbox/')) {
+        if (pathname === '/api/desktop/agentinbox/directory' && method === 'GET') {
+            sendJson(res, 200, { agents: agentInboxBroker.directory() });
             return true;
         }
-        if (pathname === '/api/desktop/whisper/channels' && method === 'GET') {
-            sendJson(res, 200, { channels: whisperBroker.channels() });
+        if (pathname === '/api/desktop/agentinbox/channels' && method === 'GET') {
+            sendJson(res, 200, { channels: agentInboxBroker.channels() });
             return true;
         }
-        if (pathname === '/api/desktop/whisper/dm-threads' && method === 'GET') {
-            sendJson(res, 200, { threads: whisperBroker.dmThreads() });
+        if (pathname === '/api/desktop/agentinbox/dm-threads' && method === 'GET') {
+            sendJson(res, 200, { threads: agentInboxBroker.dmThreads() });
             return true;
         }
         if (method !== 'POST') {
@@ -1395,9 +1395,9 @@ export async function handleApi(
             sendJson(res, 400, { error: 'invalid body' });
             return true;
         }
-        if (pathname === '/api/desktop/whisper/history') {
+        if (pathname === '/api/desktop/agentinbox/history') {
             sendJson(res, 200, {
-                messages: whisperBroker.history({
+                messages: agentInboxBroker.history({
                     channelKey: wb.channelKey,
                     agentId: wb.agentId,
                     dmPair: wb.dmPair,
@@ -1407,7 +1407,7 @@ export async function handleApi(
             });
             return true;
         }
-        if (pathname === '/api/desktop/whisper/post') {
+        if (pathname === '/api/desktop/agentinbox/post') {
             if (guardLocked()) return true;
             if (!wb.text || !wb.text.trim()) {
                 sendJson(res, 200, { ok: false, error: 'Message is empty.' });
@@ -1417,7 +1417,7 @@ export async function handleApi(
                 sendJson(res, 200, { ok: false, error: 'Pick a channel or an agent to message.' });
                 return true;
             }
-            const r = whisperBroker.send({
+            const r = agentInboxBroker.send({
                 human: true,
                 channelArg: wb.channelKey,
                 toAgentId: wb.toAgentId,
@@ -1426,12 +1426,12 @@ export async function handleApi(
             sendJson(res, 200, r.ok ? { ok: true } : { ok: false, error: r.error });
             return true;
         }
-        if (pathname === '/api/desktop/whisper/update-channel') {
+        if (pathname === '/api/desktop/agentinbox/update-channel') {
             // "Drive the host" mutation (edit the host agent's identity) — kill-switch
-            // gated like post. Routes to the SAME updateWhisperChannel the local IPC
+            // gated like post. Routes to the SAME updateAgentInboxChannel the local IPC
             // handler uses, so a remote "Agent settings…" edit is byte-identical.
             if (guardLocked()) return true;
-            if (!deps.updateWhisperChannel) {
+            if (!deps.updateAgentInboxChannel) {
                 sendJson(res, 501, {
                     ok: false,
                     error: 'Agent settings cannot be edited on this host.',
@@ -1442,10 +1442,10 @@ export async function handleApi(
                 sendJson(res, 200, { ok: false, error: 'Terminal not found.' });
                 return true;
             }
-            sendJson(res, 200, deps.updateWhisperChannel(wb.specId, wb.patch ?? {}));
+            sendJson(res, 200, deps.updateAgentInboxChannel(wb.specId, wb.patch ?? {}));
             return true;
         }
-        sendJson(res, 404, { error: 'unknown whisper route' });
+        sendJson(res, 404, { error: 'unknown agentinbox route' });
         return true;
     }
 
@@ -1551,7 +1551,7 @@ export async function handleApi(
             }
             // Specialized (AI-TUI) terminal — routes through the SAME create-agent
             // path as the local IPC (command resolution + session-id capture +
-            // whisper broker join), so a remote host window creates one identically.
+            // AgentInbox broker join), so a remote host window creates one identically.
             if (pathname === '/api/desktop/terminal-spec/create-agent' && d.input) {
                 if (!deps.createSpecializedAgentTerminal) {
                     sendJson(res, 501, {

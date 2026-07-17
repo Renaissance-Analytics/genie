@@ -119,7 +119,7 @@ export function hasNewOrChangedItems(
 }
 
 /** The canned wake nudge injected to an idle handler when an IssueWatch ping
- *  fires — benign + self-describing, like the WhisperChat wake text, so a turn it
+ *  fires — benign + self-describing, like the AgentInbox wake text, so a turn it
  *  starts is obviously an IssueWatch wake and not smuggled instructions. */
 export function issueWatchWakeText(): string {
     return 'A watched GitHub item changed (IssueWatch); open the IssueWatch panel to see what needs attention.';

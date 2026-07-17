@@ -38,7 +38,7 @@ The MCP server is enabled per workspace and runs on a fixed loopback port (see
 | **manageTerminals** | Spawns and drives other terminals. *High-power — approval-gated by default.* |
 | **runAgent** | Launches and steers another coding agent. *High-power — approval-gated by default.* |
 | **manageWorkspaces** | Lists / opens / activates / removes workspaces. |
-| **whisper** | Talks to other agents — see **[WhisperChat](13-whisperchat.md)**. |
+| **agentinbox** | Talks to other agents — see **[AgentInbox](13-agentinbox.md)**. |
 | **knowledge** | Reads and writes your **[Knowledge Graph](15-knowledge-graph.md)**. |
 | **checkIssues** | Reads the workspace's open GitHub issues, PRs, and security alerts — see **[Issue Watch](16-issue-watch.md)**. |
 | **openFileForUser** | Opens a file in Genie's built-in **[Files](06-files.md)** editor for you. |

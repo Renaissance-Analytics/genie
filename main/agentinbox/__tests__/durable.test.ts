@@ -1,19 +1,19 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { WhisperBroker } from '../broker';
-import type { WhisperStore } from '../store';
-import type { WhisperJoinInput, WhisperMessage } from '../types';
+import { AgentInboxBroker } from '../broker';
+import type { AgentInboxStore } from '../store';
+import type { AgentInboxJoinInput, AgentInboxMessage } from '../types';
 import { WAKE_QUIET_MS } from '../wake';
-import { formatWhisperMailLine } from '../../mcp/protocol';
+import { formatAgentInboxMailLine } from '../../mcp/protocol';
 
 /**
  * Track B — durable inbox. The broker write-throughs every message to a store,
  * persists a per-agent ACK cursor, and on boot rehydrates its logs + undelivered
- * inboxes so a restart loses neither history nor a queued whisper.
+ * inboxes so a restart loses neither history nor a queued message.
  */
 
-/** A tiny in-memory WhisperStore standing in for genie.db. */
-function makeStore(): WhisperStore & { rows: WhisperMessage[]; cursors: Map<string, number> } {
-    const rows: WhisperMessage[] = [];
+/** A tiny in-memory AgentInboxStore standing in for genie.db. */
+function makeStore(): AgentInboxStore & { rows: AgentInboxMessage[]; cursors: Map<string, number> } {
+    const rows: AgentInboxMessage[] = [];
     const cursors = new Map<string, number>();
     return {
         rows,
@@ -60,8 +60,8 @@ function makeStore(): WhisperStore & { rows: WhisperMessage[]; cursors: Map<stri
     };
 }
 
-function join(b: WhisperBroker, id: string, extra: Partial<WhisperJoinInput> = {}): void {
-    const input: WhisperJoinInput = {
+function join(b: AgentInboxBroker, id: string, extra: Partial<AgentInboxJoinInput> = {}): void {
+    const input: AgentInboxJoinInput = {
         agentId: id,
         terminalId: `t-${id}`,
         workspaceId: 'ws1',
@@ -78,7 +78,7 @@ function join(b: WhisperBroker, id: string, extra: Partial<WhisperJoinInput> = {
     b.join(input);
 }
 
-describe('whisper durable inbox (Track B)', () => {
+describe('AgentInbox durable inbox (Track B)', () => {
     let store: ReturnType<typeof makeStore>;
 
     beforeEach(() => {
@@ -86,7 +86,7 @@ describe('whisper durable inbox (Track B)', () => {
     });
 
     it('write-throughs a DM to the store', () => {
-        const b = new WhisperBroker();
+        const b = new AgentInboxBroker();
         b.setStore(store);
         join(b, 'a');
         join(b, 'b');
@@ -97,7 +97,7 @@ describe('whisper durable inbox (Track B)', () => {
 
     it('wake-on-DM: nudges an opted-in IDLE target, once, and NEVER after output (#9)', () => {
         let clock = 1_000_000;
-        const b = new WhisperBroker();
+        const b = new AgentInboxBroker();
         b.setStore(store);
         b.setClock(() => clock);
         const woken: Array<{ terminalId: string; text: string }> = [];
@@ -116,7 +116,7 @@ describe('whisper durable inbox (Track B)', () => {
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping2' });
         expect(woken).toHaveLength(1);
         expect(woken[0].terminalId).toBe('t-b');
-        expect(woken[0].text).toContain('unread WhisperChat');
+        expect(woken[0].text).toContain('unread AgentInbox');
 
         // One wake per idle period — a further DM doesn't re-nudge.
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping3' });
@@ -133,7 +133,7 @@ describe('whisper durable inbox (Track B)', () => {
 
     it('wake-on-DM: an opted-OUT agent (default) is never woken', () => {
         let clock = 1_000_000;
-        const b = new WhisperBroker();
+        const b = new AgentInboxBroker();
         b.setStore(store);
         b.setClock(() => clock);
         const woken: string[] = [];
@@ -148,11 +148,11 @@ describe('whisper durable inbox (Track B)', () => {
     });
 
     it('wake-on-DM: setAccessibility live-toggles the opt-in on a RUNNING agent (#9)', () => {
-        // The "Wake on direct whisper" agent-settings toggle edits the channel
-        // (whisper:update-channel → setAccessibility) — it must take effect on the
+        // The "Wake on direct message" agent-settings toggle edits the channel
+        // (agentInbox:update-channel → setAccessibility) — it must take effect on the
         // already-running agent, not only after a restart/rejoin.
         let clock = 1_000_000;
-        const b = new WhisperBroker();
+        const b = new AgentInboxBroker();
         b.setStore(store);
         b.setClock(() => clock);
         const woken: string[] = [];
@@ -184,9 +184,9 @@ describe('whisper durable inbox (Track B)', () => {
         expect(woken).toEqual(['t-b']); // unchanged
     });
 
-    it('wakeTerminalIfIdle (IssueWatch): wakes an IDLE agent regardless of the whisper opt-in, but NEVER mid-turn', () => {
+    it('wakeTerminalIfIdle (IssueWatch): wakes an IDLE agent regardless of the AgentInbox opt-in, but NEVER mid-turn', () => {
         let clock = 1_000_000;
-        const b = new WhisperBroker();
+        const b = new AgentInboxBroker();
         b.setStore(store);
         b.setClock(() => clock);
         const woken: Array<{ terminalId: string; text: string }> = [];
@@ -224,14 +224,14 @@ describe('whisper durable inbox (Track B)', () => {
     });
 
     it('wakeTerminalIfIdle: an unknown terminal is a safe no-op', () => {
-        const b = new WhisperBroker();
+        const b = new AgentInboxBroker();
         b.setStore(store);
         b.setWakeSink(() => {});
         expect(b.wakeTerminalIfIdle('nope', 'iw')).toBe(false);
     });
 
     it('read-receipts: a sent DM is unseen until the recipient receives it (#9)', async () => {
-        const b = new WhisperBroker();
+        const b = new AgentInboxBroker();
         b.setStore(store);
         join(b, 'a');
         join(b, 'b');
@@ -253,14 +253,14 @@ describe('whisper durable inbox (Track B)', () => {
 
     it('re-queues an undelivered DM after a restart', async () => {
         // First boot: a DMs b, but b never receives it before the app dies.
-        const b1 = new WhisperBroker();
+        const b1 = new AgentInboxBroker();
         b1.setStore(store);
         join(b1, 'a');
         join(b1, 'b');
         b1.send({ fromAgentId: 'a', toAgentId: 'b', text: 'you have mail' });
 
         // Restart: fresh broker, SAME store, identities rehydrated, then messages.
-        const b2 = new WhisperBroker();
+        const b2 = new AgentInboxBroker();
         b2.setStore(store);
         join(b2, 'a');
         join(b2, 'b');
@@ -272,13 +272,13 @@ describe('whisper durable inbox (Track B)', () => {
     });
 
     it('resumes the global seq across a restart (cursors stay valid)', () => {
-        const b1 = new WhisperBroker();
+        const b1 = new AgentInboxBroker();
         b1.setStore(store);
         join(b1, 'a');
         join(b1, 'b');
         const first = b1.send({ fromAgentId: 'a', toAgentId: 'b', text: 'm1' });
 
-        const b2 = new WhisperBroker();
+        const b2 = new AgentInboxBroker();
         b2.setStore(store);
         join(b2, 'a');
         join(b2, 'b');
@@ -291,7 +291,7 @@ describe('whisper durable inbox (Track B)', () => {
     });
 
     it('persists an agent ACK cursor on receive (Track C foundation)', async () => {
-        const b = new WhisperBroker();
+        const b = new AgentInboxBroker();
         b.setStore(store);
         join(b, 'a');
         join(b, 'b');
@@ -306,7 +306,7 @@ describe('whisper durable inbox (Track B)', () => {
     });
 
     it('reports unread mail for a terminal, cleared after receive (Track A signal)', async () => {
-        const b = new WhisperBroker();
+        const b = new AgentInboxBroker();
         b.setStore(store);
         join(b, 'a', { label: 'claude·general' });
         join(b, 'b');
@@ -321,12 +321,12 @@ describe('whisper durable inbox (Track B)', () => {
     });
 
     it('rebuilds channel history after a restart', () => {
-        const b1 = new WhisperBroker();
+        const b1 = new AgentInboxBroker();
         b1.setStore(store);
         join(b1, 'a');
         b1.send({ fromAgentId: 'a', channelArg: 'general', text: 'channel note' });
 
-        const b2 = new WhisperBroker();
+        const b2 = new AgentInboxBroker();
         b2.setStore(store);
         join(b2, 'a');
         b2.rehydrateMessages();
@@ -340,7 +340,7 @@ describe('whisper durable inbox (Track B)', () => {
 describe('unACKed-urgent escalation (Track C)', () => {
     function collectingBroker() {
         const events: Array<{ type: string; escalation?: { targetLabel: string; fromLabel: string } }> = [];
-        const b = new WhisperBroker();
+        const b = new AgentInboxBroker();
         b.setEmitter((ev) => events.push(ev as never));
         b._setEscalationMs(15);
         return { b, events };
@@ -389,15 +389,15 @@ describe('unACKed-urgent escalation (Track C)', () => {
     });
 });
 
-describe('imDone whisper-mail nudge (Track A)', () => {
+describe('imDone agentinbox-mail nudge (Track A)', () => {
     it('formats a nudge when there is unread mail, null when there is none', () => {
-        expect(formatWhisperMailLine({ count: 0, fromLabels: [] })).toBeNull();
-        const one = formatWhisperMailLine({ count: 1, fromLabels: ['claude·frontend'] });
-        expect(one).toContain('1 unread whisper');
+        expect(formatAgentInboxMailLine({ count: 0, fromLabels: [] })).toBeNull();
+        const one = formatAgentInboxMailLine({ count: 1, fromLabels: ['claude·frontend'] });
+        expect(one).toContain('1 unread AgentInbox message');
         expect(one).toContain('claude·frontend');
         expect(one).toContain('receive');
-        const many = formatWhisperMailLine({ count: 3, fromLabels: ['a', 'b'] });
-        expect(many).toContain('3 unread whispers');
+        const many = formatAgentInboxMailLine({ count: 3, fromLabels: ['a', 'b'] });
+        expect(many).toContain('3 unread AgentInbox messages');
         expect(many).toContain('from a, b');
     });
 });

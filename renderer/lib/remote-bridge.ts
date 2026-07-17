@@ -12,10 +12,10 @@ import type {
     WatchFeedItem,
     WorkspaceWatchStatus,
     SiteView,
-    WhisperAgentInfo,
-    WhisperChannelInfo,
-    WhisperDmThreadInfo,
-    WhisperMessage,
+    AgentInboxAgentInfo,
+    AgentInboxChannelInfo,
+    AgentInboxDmThreadInfo,
+    AgentInboxMessage,
 } from './genie';
 import { isHostSourcedSettingKey } from './settings-nav';
 
@@ -183,8 +183,8 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 json: { id },
             })) as { ok: boolean },
         // A specialized (AI-TUI) terminal is spawned on the machine that owns the
-        // pty + the whisper broker — the HOST — so this routes through the bridge
-        // like `create`. (WhisperChat itself is local-only in v1, but creating an
+        // pty + the AgentInbox broker — the HOST — so this routes through the bridge
+        // like `create`. (AgentInbox itself is local-only in v1, but creating an
         // agent terminal in a host window must target the host, not the client.)
         createAgent: async (input) =>
             (await req('/api/desktop/terminal-spec/create-agent', {
@@ -475,35 +475,35 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         },
     };
 
-    // Host-sourced WhisperChat. The agents + the broker live on the HOST, so a
-    // remote window's WhisperFlyout must read the HOST broker's directory /
+    // Host-sourced AgentInbox. The agents + the broker live on the HOST, so a
+    // remote window's AgentInboxFlyout must read the HOST broker's directory /
     // channels / DM threads / history and post to IT — not the client's own empty
     // local broker (which is why remote showed "no agents"). Live presence/message
     // updates arrive on the SAME local channels (main re-emits the host's
-    // /ws/events `whisper:presence` / `whisper:message` — see PASSTHROUGH_EVENTS),
-    // so the spread's `on.whisper*` subscriptions need no change. `updateChannel`
+    // /ws/events `agentInbox:presence` / `agentInbox:message` — see PASSTHROUGH_EVENTS),
+    // so the spread's `on.agentInbox*` subscriptions need no change. `updateChannel`
     // (the "Agent settings…" edit) ALSO targets the host — the agent + its spec live
     // there — so a remote window edits the host agent's purpose/scope/wake-on-DM
     // through the host route, not the client's own empty broker.
-    const whisper: GenieApi['whisper'] = {
-        ...local.whisper,
+    const agentInbox: GenieApi['agentInbox'] = {
+        ...local.agentInbox,
         directory: async () =>
-            (await req('/api/desktop/whisper/directory')) as { agents: WhisperAgentInfo[] },
+            (await req('/api/desktop/agentinbox/directory')) as { agents: AgentInboxAgentInfo[] },
         channels: async () =>
-            (await req('/api/desktop/whisper/channels')) as { channels: WhisperChannelInfo[] },
+            (await req('/api/desktop/agentinbox/channels')) as { channels: AgentInboxChannelInfo[] },
         dmThreads: async () =>
-            (await req('/api/desktop/whisper/dm-threads')) as { threads: WhisperDmThreadInfo[] },
+            (await req('/api/desktop/agentinbox/dm-threads')) as { threads: AgentInboxDmThreadInfo[] },
         history: async (opts) =>
-            (await req('/api/desktop/whisper/history', { method: 'POST', json: opts })) as {
-                messages: WhisperMessage[];
+            (await req('/api/desktop/agentinbox/history', { method: 'POST', json: opts })) as {
+                messages: AgentInboxMessage[];
             },
         post: async (input) =>
-            (await req('/api/desktop/whisper/post', { method: 'POST', json: input })) as {
+            (await req('/api/desktop/agentinbox/post', { method: 'POST', json: input })) as {
                 ok: boolean;
                 error?: string;
             },
         updateChannel: async (specId, patch) =>
-            (await req('/api/desktop/whisper/update-channel', {
+            (await req('/api/desktop/agentinbox/update-channel', {
                 method: 'POST',
                 json: { specId, patch },
             })) as { ok: boolean; error?: string },
@@ -565,7 +565,7 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         issueWatch,
         sites,
         settings,
-        whisper,
+        agentInbox,
         tynn,
         tynnHost,
     };

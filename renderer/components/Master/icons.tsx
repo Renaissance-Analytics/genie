@@ -423,7 +423,7 @@ export const IconGraph = ({ size = 16, ...p }: Props) =>
         p.className,
         p.style,
     );
-/** Speech bubbles — WhisperChat (inter-agent messaging) titlebar button. */
+/** Speech bubbles — AgentInbox (inter-agent messaging) titlebar button. */
 export const IconMessage = ({ size = 16, ...p }: Props) =>
     wrap(
         size,

@@ -67,16 +67,16 @@ import {
     terminalHasWindow,
     killTerminalById,
     reapOrphanTerminals,
-    rehydrateWhisper,
+    rehydrateAgentInbox,
     installAgentPulse,
     createAgentTerminal,
     writeToTerminal,
     readTerminalOutput,
     broadcastTerminalAttention,
 } from './terminal/ipc';
-import { installWhisperPresence } from './whisper/presence';
-import { whisperBroker } from './whisper/broker';
-import { dbWhisperStore } from './whisper/store';
+import { installAgentInboxPresence } from './agentinbox/presence';
+import { agentInboxBroker } from './agentinbox/broker';
+import { dbAgentInboxStore } from './agentinbox/store';
 import { installKnowledgeBroadcast } from './knowledge/presence';
 import {
     buildSubmitBytes,
@@ -175,7 +175,7 @@ import { registerOpenFile } from './editor/open-file';
 import {
     registerHostTools,
     createSpecializedAgentTerminal,
-    updateWhisperChannel,
+    updateAgentInboxChannel,
 } from './mcp/host-tools';
 import { isQuittingForUpdate } from './updater/quit-state';
 import { markDesktopRuntime, isHeadless } from './runtime-mode';
@@ -1058,23 +1058,23 @@ app.whenReady().then(async () => {
             /* best-effort */
         }
     }, 8000).unref?.();
-    // WhisperChat: wire the presence/message fan-out + the durable store, then
-    // re-register every persisted whisper agent (durable identity rides
+    // AgentInbox: wire the presence/message fan-out + the durable store, then
+    // re-register every persisted AgentInbox agent (durable identity rides
     // terminal_specs.meta) and rehydrate their messages/inboxes from genie.db so
-    // a restart loses neither the agent directory nor a queued whisper.
+    // a restart loses neither the agent directory nor a queued message.
     try {
-        installWhisperPresence();
-        whisperBroker.setStore(dbWhisperStore);
+        installAgentInboxPresence();
+        agentInboxBroker.setStore(dbAgentInboxStore);
         // Wake-on-DM (issue #9): the broker decides IF an idle opted-in agent should
         // be woken (fail-safe); this sink does the actual injection — submit the
         // nudge to the agent's pty, like a bracketed-paste send.
-        whisperBroker.setWakeSink((terminalId, text) => {
+        agentInboxBroker.setWakeSink((terminalId, text) => {
             writeToTerminal(terminalId, buildSubmitBytes(text, true));
         });
-        rehydrateWhisper();
-        whisperBroker.rehydrateMessages();
+        rehydrateAgentInbox();
+        agentInboxBroker.rehydrateMessages();
     } catch {
-        /* best-effort — whisper is additive; a failure never blocks startup */
+        /* best-effort — AgentInbox is additive; a failure never blocks startup */
     }
     // AgentPulse: wire the terminal-activity tracker's broadcast (rail glow +
     // live sparkline). Additive; a failure never blocks startup.
@@ -1115,7 +1115,7 @@ app.whenReady().then(async () => {
     // rule + change-dedup are pure in issue-watch/ping.ts.
     setIssueWatchPingSinks({
         notify: (terminalId) => broadcastTerminalAttention(terminalId, true),
-        wake: (terminalId) => whisperBroker.wakeTerminalIfIdle(terminalId, issueWatchWakeText()),
+        wake: (terminalId) => agentInboxBroker.wakeTerminalIfIdle(terminalId, issueWatchWakeText()),
     });
     // E2E test mode (GENIE_E2E=1): OVERRIDE the GitHub + Issue Watch channels
     // with scriptable mocks so a Playwright test can drive the device-flow /
@@ -1407,7 +1407,7 @@ app.whenReady().then(async () => {
             restartProcess: (id) => restartProcess(id),
             createAgentTerminal: (opts) => createAgentTerminal(opts),
             createSpecializedAgentTerminal: (input) => createSpecializedAgentTerminal(input),
-            updateWhisperChannel: (specId, patch) => updateWhisperChannel(specId, patch),
+            updateAgentInboxChannel: (specId, patch) => updateAgentInboxChannel(specId, patch),
             killTerminalById: (id) => killTerminalById(id),
             writeToTerminal: (id, data) => writeToTerminal(id, data),
             readTerminalOutput: (id, o) => readTerminalOutput(id, o),

@@ -592,12 +592,15 @@ export function runMigrations(d: Database.Database): void {
             },
         },
         {
-            // v23 — WhisperChat durable inbox. Messages were in-memory only (lost on
+            // v23 — AgentInbox durable inbox. Messages were in-memory only (lost on
             // restart, silently dropped past the 200 cap). Persist every message +
-            // a per-agent ACK cursor so a queued whisper survives a restart, the
+            // a per-agent ACK cursor so a queued message survives a restart, the
             // human panel keeps its history, and unACKed-urgent escalation (Track C)
             // has a durable position to check. `seq` is the broker's monotonic global
             // sequence (resumed from MAX(seq) on boot so cursors stay valid).
+            // BACK-COMPAT: the `whisper_messages` / `whisper_cursors` table + index
+            // names are RETAINED after the WhisperChat → AgentInbox rename — they are
+            // shipped schema, so renaming them would need a data migration.
             version: 23,
             runner: (db) => {
                 db.exec(`
@@ -1435,7 +1438,7 @@ export function setWorkspaceIssuewatchHandlers(id: string, terminalIds: string[]
 
 /** A workspace's agent terminals with their IssueWatch ping settings — the
  *  candidate recipients the router resolves against. Only agent terminals (those
- *  with a whisper `agent_id`) are candidates; `handle` defaults off and `action`
+ *  with an AgentInbox `agent_id`) are candidates; `handle` defaults off and `action`
  *  defaults `notify`. */
 export function listWorkspaceIssuewatchAgents(
     workspaceId: string,
@@ -1619,11 +1622,15 @@ export interface TerminalSpecMeta {
     /** Agent terminals: the CLI command line that was launched (display). */
     agent_command?: string;
     /**
-     * WhisperChat identity + accessibility (Specialized Terminals). These ride
-     * the spec's meta so an agent's whisper registration is durable across a
+     * AgentInbox identity + accessibility (Specialized Terminals). These ride
+     * the spec's meta so an agent's AgentInbox registration is durable across a
      * restart (the in-memory broker rehydrates from them) — NO migration.
+     *
+     * BACK-COMPAT: the stored `whisper_*` meta key names are RETAINED (the feature
+     * was renamed WhisperChat → AgentInbox; renaming these persisted keys would
+     * need a data migration of existing installs, so the wire names stay).
      */
-    /** Stable whisper identity (uuid). Present ⇒ this terminal is a whisper agent. */
+    /** Stable AgentInbox identity (uuid). Present ⇒ this terminal is an AgentInbox agent. */
     agent_id?: string;
     /** Channel purpose (kebab). Default `general`. */
     whisper_purpose?: string;

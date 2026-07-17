@@ -2,12 +2,12 @@ import { useMemo, useState } from 'react';
 import {
     workspaceSlug,
     type AgentType,
-    type WhisperScope,
+    type AgentInboxScope,
     type WorkspaceRow,
 } from '../../lib/genie';
 
 /**
- * The shared create/edit form for a specialized (AI-agent) terminal's WhisperChat
+ * The shared create/edit form for a specialized (AI-agent) terminal's AgentInbox
  * identity — Purpose, accessibility Scope, the workspace multiselect (when scope
  * is `specific`), and a command field for a `custom` agent. Modelled on the inline
  * Add-Process form. Used both by the split-button create popover and the
@@ -17,11 +17,11 @@ import {
 
 export interface AgentFormValues {
     purpose: string;
-    scope: WhisperScope;
+    scope: AgentInboxScope;
     scopeWorkspaces: string[];
     /** Only meaningful for a `custom` agent. */
     command: string;
-    /** Opt-in: a direct whisper to this agent while it's idle injects a nudge so it
+    /** Opt-in: a direct message to this agent while it's idle injects a nudge so it
      *  starts a turn and reads the message (issue #9). Default off. */
     wakeOnDm: boolean;
     /** Opt-in: this agent participates in its workspace's IssueWatch pings. Off by
@@ -32,7 +32,7 @@ export interface AgentFormValues {
     issuewatchAction: 'notify' | 'wake';
 }
 
-const SCOPE_OPTIONS: Array<{ value: WhisperScope; label: string; desc: string }> = [
+const SCOPE_OPTIONS: Array<{ value: AgentInboxScope; label: string; desc: string }> = [
     {
         value: 'none',
         label: 'None — hidden',
@@ -96,7 +96,7 @@ export default function AgentTerminalForm({
     customPlaceholder?: string;
 }) {
     const [purpose, setPurpose] = useState(() => initial?.purpose ?? '');
-    const [scope, setScope] = useState<WhisperScope>(() => initial?.scope ?? 'self');
+    const [scope, setScope] = useState<AgentInboxScope>(() => initial?.scope ?? 'self');
     const [scopeWorkspaces, setScopeWorkspaces] = useState<string[]>(
         () => initial?.scopeWorkspaces ?? [],
     );
@@ -175,7 +175,7 @@ export default function AgentTerminalForm({
                 <select
                     className="input"
                     value={scope}
-                    onChange={(e) => setScope(e.target.value as WhisperScope)}
+                    onChange={(e) => setScope(e.target.value as AgentInboxScope)}
                 >
                     {SCOPE_OPTIONS.map((o) => (
                         <option key={o.value} value={o.value}>
@@ -238,9 +238,9 @@ export default function AgentTerminalForm({
                     onChange={(e) => setWakeOnDm(e.target.checked)}
                 />
                 <span className="agent-form-wake-text">
-                    <span className="agent-form-label">Wake on direct whisper</span>
+                    <span className="agent-form-label">Wake on direct message</span>
                     <span className="agent-form-scope-desc">
-                        When this agent is idle, a direct whisper injects a one-line nudge so it
+                        When this agent is idle, a direct message injects a one-line nudge so it
                         starts a turn and reads it — no manual check needed. Only ever fires when
                         it's provably idle at its prompt, so it can't interrupt a running turn.
                     </span>

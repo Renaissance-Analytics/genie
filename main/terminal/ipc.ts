@@ -21,21 +21,21 @@ import {
     type TerminalSpecRow,
     type TerminalSpecMeta,
 } from '../db';
-import { whisperBroker } from '../whisper/broker';
-import { workspaceSlug } from '../whisper/slug';
+import { agentInboxBroker } from '../agentinbox/broker';
+import { workspaceSlug } from '../agentinbox/slug';
 import {
     renderAgentLaunch,
     captureSessionByDetect,
     agentRelaunchDecision,
     transcriptDirFor,
-} from '../whisper/session-capture';
+} from '../agentinbox/session-capture';
 import { buildSubmitBytes } from './keystrokes';
 import {
     normalizePurpose,
-    type WhisperJoinInput,
-    type WhisperAgentType,
-    type WhisperScope,
-} from '../whisper/types';
+    type AgentInboxJoinInput,
+    type AgentInboxAgentType,
+    type AgentInboxScope,
+} from '../agentinbox/types';
 import { loadWorkspaceTerminalEnv } from '../mcp/agent-config';
 import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
@@ -107,7 +107,7 @@ export function shouldKillOnDetach(input: {
  * windowless) must be REFUSED by the MAX_RETAINED cap.
  *
  * AGENT terminals are EXEMPT: the owner deliberately runs MANY hidden-but-alive
- * agents, and losing one (its shell, MCP endpoint, and WhisperChat membership)
+ * agents, and losing one (its shell, MCP endpoint, and AgentInbox membership)
  * discards live work — so an agent terminal neither counts toward the cap nor is
  * ever blocked by it. Only PLAIN terminals are capped, among themselves (a
  * runaway of windowless shells still can't grow unbounded). An already-retained
@@ -231,12 +231,12 @@ export function createAgentTerminal(opts: {
     args?: string[];
     /** Marks this terminal as running an agent (surfaced in the list). */
     agentMeta?: { agent: 'claude' | 'codex' | 'custom'; command: string };
-    /** Specialized terminals: WhisperChat accessibility to stamp + join with. */
-    whisper?: {
+    /** Specialized terminals: AgentInbox accessibility to stamp + join with. */
+    agentInbox?: {
         purpose?: string;
-        scope?: WhisperScope;
+        scope?: AgentInboxScope;
         scopeWorkspaces?: string[];
-        /** Opt-in wake-on-DM (issue #9): a direct whisper wakes this agent when idle. */
+        /** Opt-in wake-on-DM (issue #9): a direct message wakes this agent when idle. */
         wakeOnDm?: boolean;
     };
     /** Specialized terminals: IssueWatch ping handling to stamp on the spec meta. */
@@ -250,7 +250,7 @@ export function createAgentTerminal(opts: {
     const id = opts.id ?? crypto.randomUUID();
     const resolved = resolveDefaultShell(dbSettingsProvider());
 
-    // Agent terminals capture their chat-session id at launch + get a whisper
+    // Agent terminals capture their chat-session id at launch + get an AgentInbox
     // identity so they can coordinate. Render the (possibly session-augmented)
     // launch command from the agent's capture profile; a plain terminal has no
     // agentMeta and gets none of this.
@@ -269,12 +269,14 @@ export function createAgentTerminal(opts: {
             agent: opts.agentMeta.agent,
             agent_command: opts.agentMeta.command,
             agent_id: agentId,
-            whisper_purpose: normalizePurpose(opts.whisper?.purpose),
-            whisper_scope: opts.whisper?.scope ?? 'self',
-            ...(opts.whisper?.scopeWorkspaces?.length
-                ? { whisper_workspaces: opts.whisper.scopeWorkspaces }
+            // BACK-COMPAT: stored `whisper_*` meta keys are kept after the
+            // WhisperChat → AgentInbox rename (renaming them needs a data migration).
+            whisper_purpose: normalizePurpose(opts.agentInbox?.purpose),
+            whisper_scope: opts.agentInbox?.scope ?? 'self',
+            ...(opts.agentInbox?.scopeWorkspaces?.length
+                ? { whisper_workspaces: opts.agentInbox.scopeWorkspaces }
                 : {}),
-            ...(opts.whisper?.wakeOnDm ? { whisper_wake_on_dm: true } : {}),
+            ...(opts.agentInbox?.wakeOnDm ? { whisper_wake_on_dm: true } : {}),
             ...(opts.issuewatch?.handle ? { issuewatch_handle: true } : {}),
             ...(opts.issuewatch?.handle && opts.issuewatch.action
                 ? { issuewatch_action: opts.issuewatch.action }
@@ -325,12 +327,12 @@ export function createAgentTerminal(opts: {
     // Tell every window the spec set changed so the new terminal appears live.
     broadcastTerminalSpecsChanged();
 
-    // WhisperChat: register the fresh agent so peers can discover/DM it. When the
+    // AgentInbox: register the fresh agent so peers can discover/DM it. When the
     // session id wasn't captured by a launch flag (detect / a custom wrapper),
     // briefly watch the transcript dir and backfill it.
     if (agentId) {
         const input = joinInputFromSpec(getTerminalSpec(id));
-        if (input) whisperBroker.join(input);
+        if (input) agentInboxBroker.join(input);
         if (strategy === 'detect' && !chatSessionId) {
             captureSessionByDetect(opts.cwd)
                 .then((sid) => {
@@ -338,7 +340,7 @@ export function createAgentTerminal(opts: {
                     const cur = getTerminalSpec(id);
                     if (!cur) return;
                     updateTerminalSpec(id, { meta: { ...cur.meta, chat_session_id: sid } });
-                    whisperBroker.setChatSession(agentId!, sid);
+                    agentInboxBroker.setChatSession(agentId!, sid);
                     broadcastTerminalSpecsChanged();
                 })
                 .catch(() => {
@@ -398,11 +400,11 @@ function maybeRelaunchAgent(id: string, existing: boolean): void {
 }
 
 /**
- * Build a WhisperChat join input from a persisted agent spec — resolves the
+ * Build an AgentInbox join input from a persisted agent spec — resolves the
  * workspace + its display slug (the db/fs I/O the pure broker can't do). Null
- * when the spec isn't a whisper agent (no `agent_id`) or its workspace is gone.
+ * when the spec isn't an AgentInbox agent (no `agent_id`) or its workspace is gone.
  */
-function joinInputFromSpec(spec: TerminalSpecRow | null): WhisperJoinInput | null {
+function joinInputFromSpec(spec: TerminalSpecRow | null): AgentInboxJoinInput | null {
     if (!spec || !spec.workspace_id) return null;
     const agentId = spec.meta?.agent_id;
     if (!agentId) return null;
@@ -414,10 +416,10 @@ function joinInputFromSpec(spec: TerminalSpecRow | null): WhisperJoinInput | nul
         workspaceId: ws.id,
         workspaceName: ws.project_name,
         slug: workspaceSlug(ws),
-        agentType: (spec.meta?.agent as WhisperAgentType) ?? 'custom',
+        agentType: (spec.meta?.agent as AgentInboxAgentType) ?? 'custom',
         label: spec.label,
         purpose: normalizePurpose(spec.meta?.whisper_purpose),
-        scope: (spec.meta?.whisper_scope as WhisperScope) ?? 'self',
+        scope: (spec.meta?.whisper_scope as AgentInboxScope) ?? 'self',
         scopeWorkspaces: Array.isArray(spec.meta?.whisper_workspaces)
             ? (spec.meta.whisper_workspaces as string[])
             : [],
@@ -427,19 +429,19 @@ function joinInputFromSpec(spec: TerminalSpecRow | null): WhisperJoinInput | nul
 }
 
 /**
- * Re-register every persisted whisper agent into the in-memory broker at boot
+ * Re-register every persisted AgentInbox agent into the in-memory broker at boot
  * (its durable identity rides `terminal_specs.meta`). Agents come back `away`
  * (their pty's liveness is unknown until they next act). Called near
  * reapOrphanTerminals.
  */
-export function rehydrateWhisper(): void {
-    const inputs: WhisperJoinInput[] = [];
+export function rehydrateAgentInbox(): void {
+    const inputs: AgentInboxJoinInput[] = [];
     for (const spec of listTerminalSpecs()) {
         if (!spec.meta?.agent_id) continue;
         const input = joinInputFromSpec(spec);
         if (input) inputs.push({ ...input, status: 'away' });
     }
-    whisperBroker.rehydrate(inputs);
+    agentInboxBroker.rehydrate(inputs);
 }
 
 /** Send input to a terminal (manageTerminals.write / runAgent.send). */
@@ -470,7 +472,7 @@ function feedTerminalData(id: string, data: string): void {
     if (pulseWs) agentPulse.note(pulseWs, data.length);
     // Wake-on-DM idle signal (issue #9): any output means the agent is active — so
     // a DM wake fails closed until it's genuinely quiet again. Cheap (a timestamp).
-    whisperBroker.noteOutput(id);
+    agentInboxBroker.noteOutput(id);
     // Mirror to any attached mobile /ws/term socket (no-op when off / unwatched).
     mobileTermFanout(id, data);
 }
@@ -480,9 +482,9 @@ function feedTerminalExit(id: string, payload: { exitCode: number; signal?: numb
     onProcessPtyExit(id, payload);
     // The pty is gone — drop its agent read buffer so it can't leak.
     agentReadBuffer.forget(id);
-    // WhisperChat: the pty exited but the spec is retained (revivable) — mark the
+    // AgentInbox: the pty exited but the spec is retained (revivable) — mark the
     // agent `away` (no-op for a non-agent terminal).
-    whisperBroker.away(id);
+    agentInboxBroker.away(id);
     // Tell any attached mobile /ws/term socket the pty exited + drop it.
     mobileTermClose(id, payload);
 }
@@ -852,9 +854,9 @@ export function killTerminalById(id: string): boolean {
     agentReadBuffer.forget(id);
     // Drop the per-terminal MCP endpoint so its token stops resolving.
     unregisterTerminalEndpoint(id);
-    // WhisperChat: a killed terminal is a hard leave — drop the agent from the
+    // AgentInbox: a killed terminal is a hard leave — drop the agent from the
     // registry + channels and push an offline presence (no-op for a non-agent).
-    whisperBroker.leaveByTerminal(id);
+    agentInboxBroker.leaveByTerminal(id);
     // kill() also clears the retained flag in the manager.
     const killed = terminalManager().kill(id);
     // Drop the Tier 1 snapshot too so a killed terminal can't resurrect on the
@@ -868,7 +870,7 @@ export function killTerminalById(id: string): boolean {
  * Fully tear down EVERY terminal + process belonging to a workspace — the safe
  * deprovision primitive behind workspace-assignment DETACH. Each is stopped via
  * killTerminalById, so a running agent's pty is killed, its MCP endpoint is
- * released, its WhisperChat presence goes offline, and its snapshot is dropped —
+ * released, its AgentInbox presence goes offline, and its snapshot is dropped —
  * nothing is orphaned. Does NOT touch the on-disk clone (uncommitted work is
  * left intact); disk removal is deliberately out of scope. Returns the ids torn
  * down (empty when the workspace had none). Best-effort per terminal.

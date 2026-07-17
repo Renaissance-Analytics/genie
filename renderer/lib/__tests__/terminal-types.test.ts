@@ -9,7 +9,7 @@ import { workspaceSlug } from '../genie';
 import { normalizePurpose } from '../../components/Master/AgentTerminalForm';
 
 /**
- * The split Add-Terminal button + the WhisperChat create form read from these
+ * The split Add-Terminal button + the AgentInbox create form read from these
  * pure helpers, so lock in the registry shape, the last-used fallback, the
  * channel-slug fallback resolution, and the purpose kebab/word-cap.
  */

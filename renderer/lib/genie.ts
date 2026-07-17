@@ -857,16 +857,16 @@ export interface ViewMeta {
     fancy_version?: string;
     /** Specialized terminal: the AI-TUI kind this terminal launches (claude /
      *  codex / custom). Set on agent terminals created via terminalSpec.createAgent;
-     *  absent on a plain shell. Gates the WhisperChat identity + the sidebar badge. */
+     *  absent on a plain shell. Gates the AgentInbox identity + the sidebar badge. */
     agent?: AgentType;
     /** Specialized terminal: the resolved command line the agent was launched with
      *  (informational — the launch profile / resolveAgentCommand fills this). */
     agent_command?: string;
-    /** WhisperChat: this agent's channel purpose (kebab, ≤6 words; default `general`). */
+    /** AgentInbox: this agent's channel purpose (kebab, ≤6 words; default `general`). */
     purpose?: string;
-    /** WhisperChat: who can discover / DM this agent — see {@link WhisperScope}. */
-    scope?: WhisperScope;
-    /** WhisperChat: the chosen workspace ids when `scope === 'specific'`. */
+    /** AgentInbox: who can discover / DM this agent — see {@link AgentInboxScope}. */
+    scope?: AgentInboxScope;
+    /** AgentInbox: the chosen workspace ids when `scope === 'specific'`. */
     scope_workspaces?: string[];
     [key: string]: unknown;
 }
@@ -875,17 +875,17 @@ export interface ViewMeta {
 export type AgentType = 'claude' | 'codex' | 'custom';
 
 /**
- * WhisperChat accessibility scope — who can DISCOVER + DM this agent:
+ * AgentInbox accessibility scope — who can DISCOVER + DM this agent:
  *  - `none`     — hidden (may still lurk-and-broadcast in a channel it joined),
  *  - `self`     — same-workspace agents only (DEFAULT),
  *  - `specific` — the workspaces the owner picks (∪ its own),
  *  - `all`      — every agent on the workstation.
  * Channel broadcasts reach members regardless of scope.
  */
-export type WhisperScope = 'none' | 'self' | 'specific' | 'all';
+export type AgentInboxScope = 'none' | 'self' | 'specific' | 'all';
 
-/** A discoverable WhisperChat agent (directory row / presence payload). */
-export interface WhisperAgentInfo {
+/** A discoverable AgentInbox agent (directory row / presence payload). */
+export interface AgentInboxAgentInfo {
     agentId: string;
     terminalId: string;
     workspaceId: string | null;
@@ -896,15 +896,15 @@ export interface WhisperAgentInfo {
     agentType: string;
     label: string;
     purpose: string;
-    scope: WhisperScope;
+    scope: AgentInboxScope;
     scopeWorkspaces: string[];
     status: 'online' | 'away' | 'offline';
     /** The captured AI chat-session uuid, or null when not yet detected. */
     chatSessionId: string | null;
 }
 
-/** A WhisperChat broadcast channel (`slug:purpose`), keyed internally by workspace. */
-export interface WhisperChannelInfo {
+/** An AgentInbox broadcast channel (`slug:purpose`), keyed internally by workspace. */
+export interface AgentInboxChannelInfo {
     /** Opaque internal key (`workspaceId:purpose`). */
     key: string;
     /** The workspace slug displayed in the `slug:purpose` label. */
@@ -915,9 +915,9 @@ export interface WhisperChannelInfo {
     memberCount: number;
 }
 
-/** A WhisperChat DM thread (a message-carrying pair) — human↔agent OR
+/** An AgentInbox DM thread (a message-carrying pair) — human↔agent OR
  *  agent↔agent — as the human panel's DMs list reports it. */
-export interface WhisperDmThreadInfo {
+export interface AgentInboxDmThreadInfo {
     /** Order-independent pair key (`idA|idB`). */
     key: string;
     /** Participant ids (either may be `'human'`). */
@@ -935,8 +935,8 @@ export interface WhisperDmThreadInfo {
     count: number;
 }
 
-/** One WhisperChat message (channel broadcast or 1:1 DM). */
-export interface WhisperMessage {
+/** One AgentInbox message (channel broadcast or 1:1 DM). */
+export interface AgentInboxMessage {
     seq: number;
     id: string;
     /** Sender agentId, or `'human'` for a message posted from the panel. */
@@ -952,12 +952,12 @@ export interface WhisperMessage {
 }
 
 /** Live presence event: a full agent snapshot, or a terse offline/left tick. */
-export type WhisperPresenceEvent =
-    | WhisperAgentInfo
+export type AgentInboxPresenceEvent =
+    | AgentInboxAgentInfo
     | { agentId: string; status: 'offline'; left: true };
 
 /** Live message event (preview only — the full body is fetched via history). */
-export interface WhisperMessageEvent {
+export interface AgentInboxMessageEvent {
     kind: 'dm' | 'channel';
     channelKey?: string;
     toAgentId?: string;
@@ -970,7 +970,7 @@ export interface WhisperMessageEvent {
 
 /** Track C — an unACKed urgent DM escalating to the human oversight surface, or
  *  (`resolved: true`) the clearing of a previously-raised alert. */
-export interface WhisperEscalationEvent {
+export interface AgentInboxEscalationEvent {
     messageId: string;
     targetAgentId: string;
     targetLabel?: string;
@@ -1993,8 +1993,8 @@ export interface GenieApi {
         /**
          * Create a SPECIALIZED (AI-TUI) terminal: main resolves the launch command
          * (`resolveAgentCommand` + the `agent_command_*` settings), spawns the pty,
-         * submits the boot command, stamps the WhisperChat identity/scope onto the
-         * spec meta, and joins the whisper broker. Returns the persisted spec so the
+         * submits the boot command, stamps the AgentInbox identity/scope onto the
+         * spec meta, and joins the AgentInbox broker. Returns the persisted spec so the
          * renderer can select it into view.
          */
         createAgent: (input: {
@@ -2006,10 +2006,10 @@ export interface GenieApi {
             label?: string;
             /** Channel purpose (kebab, ≤6 words). */
             purpose: string;
-            scope: WhisperScope;
+            scope: AgentInboxScope;
             /** The chosen workspace ids when `scope === 'specific'`. */
             scope_workspaces?: string[];
-            /** Opt-in wake-on-DM: a direct whisper wakes this agent when idle (issue #9). */
+            /** Opt-in wake-on-DM: a direct message wakes this agent when idle (issue #9). */
             wake_on_dm?: boolean;
             /** IssueWatch pings: participate in this workspace's IssueWatch deltas. */
             issuewatch_handle?: boolean;
@@ -2018,23 +2018,23 @@ export interface GenieApi {
         }) => Promise<{ ok: boolean; spec?: TerminalSpec; error?: string }>;
     };
     /**
-     * WhisperChat — the local inter-agent messaging network. Local-only in v1
+     * AgentInbox — the local inter-agent messaging network. Local-only in v1
      * (one Genie instance; no relay). The human panel reads the directory /
      * channels / history and posts as the human; live updates arrive on
-     * `on.whisperPresence` / `on.whisperMessage`.
+     * `on.agentInboxPresence` / `on.agentInboxMessage`.
      */
     agentPulse: {
         /** Last-60s per-workspace byte buckets (index 0 = 59s ago … 59 = now),
          *  fetched once when the workspace menu opens to backfill each sparkline. */
         snapshot: () => Promise<{ pulses: Record<string, number[]> }>;
     };
-    whisper: {
+    agentInbox: {
         /** Every discoverable agent (the directory pane). */
-        directory: () => Promise<{ agents: WhisperAgentInfo[] }>;
+        directory: () => Promise<{ agents: AgentInboxAgentInfo[] }>;
         /** Every broadcast channel (`slug:purpose`). */
-        channels: () => Promise<{ channels: WhisperChannelInfo[] }>;
+        channels: () => Promise<{ channels: AgentInboxChannelInfo[] }>;
         /** Every DM thread with messages — human↔agent AND agent↔agent. */
-        dmThreads: () => Promise<{ threads: WhisperDmThreadInfo[] }>;
+        dmThreads: () => Promise<{ threads: AgentInboxDmThreadInfo[] }>;
         /** Message history for a channel, an arbitrary DM `dmPair`, OR the
          *  human↔agent thread (`agentId`) — paginate via `before`. */
         history: (opts: {
@@ -2043,7 +2043,7 @@ export interface GenieApi {
             dmPair?: [string, string];
             limit?: number;
             before?: number;
-        }) => Promise<{ messages: WhisperMessage[] }>;
+        }) => Promise<{ messages: AgentInboxMessage[] }>;
         /** Post as the human — to a channel (`channelKey`) or an agent (`toAgentId`). */
         post: (input: {
             channelKey?: string;
@@ -2055,9 +2055,9 @@ export interface GenieApi {
             specId: string,
             patch: {
                 purpose?: string;
-                scope?: WhisperScope;
+                scope?: AgentInboxScope;
                 scope_workspaces?: string[];
-                /** Opt-in wake-on-DM (issue #9): a direct whisper wakes this agent when idle. */
+                /** Opt-in wake-on-DM (issue #9): a direct message wakes this agent when idle. */
                 wake_on_dm?: boolean;
                 /** IssueWatch pings: participate in this workspace's IssueWatch deltas. */
                 issuewatch_handle?: boolean;
@@ -2415,21 +2415,21 @@ export interface GenieApi {
         githubCapabilities: (
             cb: (payload: GithubCapabilities) => void,
         ) => () => void;
-        /** WhisperChat: an agent joined / changed accessibility / went offline —
+        /** AgentInbox: an agent joined / changed accessibility / went offline —
          *  the panel re-renders its directory + channel list live. */
-        whisperPresence: (
-            cb: (payload: WhisperPresenceEvent) => void,
+        agentInboxPresence: (
+            cb: (payload: AgentInboxPresenceEvent) => void,
         ) => () => void;
-        /** WhisperChat: a new message (preview only) — the panel bumps its unread
+        /** AgentInbox: a new message (preview only) — the panel bumps its unread
          *  badge and, if the relevant thread is open, re-fetches history. */
-        whisperMessage: (
-            cb: (payload: WhisperMessageEvent) => void,
+        agentInboxMessage: (
+            cb: (payload: AgentInboxMessageEvent) => void,
         ) => () => void;
-        /** WhisperChat (Track C): an urgent DM went unACKed past the window — the
+        /** AgentInbox (Track C): an urgent DM went unACKed past the window — the
          *  panel shows a "waiting on <agent>" oversight alert (cleared when the
          *  same event arrives with `resolved: true`). */
-        whisperEscalation: (
-            cb: (payload: WhisperEscalationEvent) => void,
+        agentInboxEscalation: (
+            cb: (payload: AgentInboxEscalationEvent) => void,
         ) => () => void;
         /** Knowledge Graph: any change (add / update / delete / link), INCLUDING
          *  an agent's MCP write — the window re-fetches its list + graph so the
@@ -2562,7 +2562,7 @@ export function hasProjectAssociation(ws: Pick<WorkspaceRow, 'project_id'>): boo
 }
 
 /**
- * A workspace's WhisperChat slug — the base of the `slug:purpose` channel name.
+ * A workspace's AgentInbox slug — the base of the `slug:purpose` channel name.
  * Mirrors main's slug resolution FALLBACK: the envelope folder leaf (minus a
  * `.agi` suffix), else the kebab of the project name. This is the renderer-side
  * PREVIEW; the authoritative slug (a Tynn-linked project's real slug) is computed

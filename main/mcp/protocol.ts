@@ -17,18 +17,18 @@ import type {
     CheckEnvResult,
 } from '../env-store';
 import type {
-    WhisperScope,
-    WhisperAgentInfo,
-    WhisperChannelInfo,
-    WhisperMessage,
-} from '../whisper/types';
+    AgentInboxScope,
+    AgentInboxAgentInfo,
+    AgentInboxChannelInfo,
+    AgentInboxMessage,
+} from '../agentinbox/types';
 import type {
     KnowledgeNode,
     KnowledgeSearchResult,
 } from '../knowledge/types';
 
 export type { SetEnvRequest, SetEnvResult, CheckEnvRequest, CheckEnvResult };
-export type { WhisperScope, WhisperAgentInfo, WhisperChannelInfo, WhisperMessage };
+export type { AgentInboxScope, AgentInboxAgentInfo, AgentInboxChannelInfo, AgentInboxMessage };
 export type { KnowledgeNode, KnowledgeSearchResult };
 
 export const MCP_PROTOCOL_VERSION = '2024-11-05';
@@ -279,22 +279,22 @@ export interface McpContext {
         req: ManageWorkspacesRequest,
     ) => Promise<ManageWorkspacesResult>;
     /**
-     * Local inter-agent messaging (the WhisperChat `whisper` tool): discover peers
+     * Local inter-agent messaging (the AgentInbox `agentinbox` tool): discover peers
      * (scope-filtered), DM, channel broadcast, long-poll receive, accessibility.
-     * Resolves the caller's whisper identity from the terminal (lazily joining a
+     * Resolves the caller's AgentInbox identity from the terminal (lazily joining a
      * plain terminal). `receive` + `wait` blocks (long-poll) — server.ts routes it
      * over the SSE keepalive path, like ForceTheQuestion.
      */
-    whisper: (terminalId: string, req: WhisperRequest) => Promise<WhisperResult>;
+    agentInbox: (terminalId: string, req: AgentInboxRequest) => Promise<AgentInboxResult>;
     /**
-     * A concise "you have N unread whisper(s)" nudge for the caller's terminal,
-     * folded into the `imDone` response so waiting WhisperChat messages surface at
+     * A concise "you have N unread AgentInbox message(s)" nudge for the caller's terminal,
+     * folded into the `imDone` response so waiting AgentInbox messages surface at
      * a TURN BOUNDARY (Track A) — the point an agent hands back — without ever
      * writing into its pty. Returns null when there's nothing unread (or the
-     * terminal isn't a whisper agent). Optional: consumers that don't wire it just
+     * terminal isn't an AgentInbox agent). Optional: consumers that don't wire it just
      * omit the line.
      */
-    whisperMailLine?: (terminalId: string) => string | null;
+    agentInboxMailLine?: (terminalId: string) => string | null;
     /**
      * The workstation Knowledge Graph (the `knowledge` tool): a workstation-wide,
      * local knowledge/memory store shared across every workspace on this Genie.
@@ -588,9 +588,9 @@ export interface ManageWorkspacesResult {
     affectedId?: string;
 }
 
-// --- whisper -----------------------------------------------------------------
+// --- agentinbox -----------------------------------------------------------------
 
-export interface WhisperRequest {
+export interface AgentInboxRequest {
     /** `list` (discovery), `send`, `receive`, `receipts`, `setAccessibility`, `join`, `leave`. */
     action: 'list' | 'send' | 'receive' | 'receipts' | 'setAccessibility' | 'join' | 'leave';
     /** send: DM this agent id (mutually exclusive with `channel`). */
@@ -608,7 +608,7 @@ export interface WhisperRequest {
     /** receive (optional): long-poll window in ms (default ~55s, capped). */
     timeoutMs?: number;
     /** setAccessibility: who can see/DM you. */
-    scope?: WhisperScope;
+    scope?: AgentInboxScope;
     /** setAccessibility (scope `specific`): the workspace ids you're visible to. */
     workspaces?: string[];
     /** setAccessibility (optional): change your channel purpose (re-keys the room). */
@@ -620,8 +620,8 @@ export interface WhisperRequest {
     limit?: number;
 }
 
-/** One sent-DM read-receipt (whisper `receipts`): the message + whether SEEN. */
-export interface WhisperReceipt {
+/** One sent-DM read-receipt (AgentInbox `receipts`): the message + whether SEEN. */
+export interface AgentInboxReceipt {
     seq: number;
     id: string;
     to: string;
@@ -630,24 +630,24 @@ export interface WhisperReceipt {
     seen: boolean;
 }
 
-export interface WhisperResult {
+export interface AgentInboxResult {
     ok: boolean;
     /** Set when ok is false (bad args, unreachable target, unknown channel, …). */
     error?: string;
     /** list / setAccessibility: the caller's own agent info. */
-    self?: WhisperAgentInfo;
+    self?: AgentInboxAgentInfo;
     /** list: the peers discoverable by the caller (scope-filtered). */
-    agents?: WhisperAgentInfo[];
+    agents?: AgentInboxAgentInfo[];
     /** list / join / leave: the caller's channels. */
-    channels?: WhisperChannelInfo[];
+    channels?: AgentInboxChannelInfo[];
     /** receive: the new messages since the cursor. */
-    messages?: WhisperMessage[];
+    messages?: AgentInboxMessage[];
     /** receive: the cursor to pass to the NEXT receive. */
     cursor?: number;
     /** send: how many recipients the message reached. */
     delivered?: number;
     /** receipts: the caller's recent sent DMs, each with a `seen` flag. */
-    receipts?: WhisperReceipt[];
+    receipts?: AgentInboxReceipt[];
 }
 
 // --- knowledge ---------------------------------------------------------------
@@ -1071,10 +1071,10 @@ const MANAGE_WORKSPACES_TOOL = {
     },
 };
 
-const WHISPER_TOOL = {
-    name: 'whisper',
+const AGENTINBOX_TOOL = {
+    name: 'agentinbox',
     description:
-        "Coordinate with OTHER AI agents running in this Genie instance — WhisperChat, a LOCAL inter-agent messaging network. Discover peer agents (in your workspace, or across the workstation when they allow it), DM them 1:1, and broadcast on shared CHANNELS. Delivery is PULL-based — you POLL for messages, they're never injected into your terminal (which would corrupt your turn). Actions (`action`): `list` (discovery — returns YOUR agent info `self`, the peers you can reach `agents`, and your `channels`); `send` (message a peer with `to` = their agentId, OR broadcast with `channel` = a purpose like `frontend` (your workspace's room) or `slug:purpose` (another workspace's) — needs `text`; optional `interrupt:true` also glows a DM target's terminal so they notice); `receive` (fetch NEW messages — pass a `cursor` from a prior receive to page forward; set `wait:true` to LONG-POLL until a message arrives (optional `timeoutMs`), so you can block waiting for a peer's reply); `receipts` (read-receipts for the DMs YOU sent — each with a `seen` flag that's true once the recipient has received it, so you can tell 'queued' from 'seen' and decide whether to escalate; optional `limit`, default 20); `setAccessibility` (`scope`: `none` hidden / `self` your workspace only (default) / `specific` + `workspaces` a chosen set / `all` the whole workstation — governs who can see + DM you; optional `purpose` renames your channel); `join`/`leave` (`channel`) to opt in/out of a channel. Your identity + accessibility are remembered across restarts. Local-only — no relay, no cross-host.",
+        "Coordinate with OTHER AI agents running in this Genie instance — AgentInbox, a LOCAL inter-agent messaging network. Discover peer agents (in your workspace, or across the workstation when they allow it), DM them 1:1, and broadcast on shared CHANNELS. Delivery is PULL-based — you POLL for messages, they're never injected into your terminal (which would corrupt your turn). Actions (`action`): `list` (discovery — returns YOUR agent info `self`, the peers you can reach `agents`, and your `channels`); `send` (message a peer with `to` = their agentId, OR broadcast with `channel` = a purpose like `frontend` (your workspace's room) or `slug:purpose` (another workspace's) — needs `text`; optional `interrupt:true` also glows a DM target's terminal so they notice); `receive` (fetch NEW messages — pass a `cursor` from a prior receive to page forward; set `wait:true` to LONG-POLL until a message arrives (optional `timeoutMs`), so you can block waiting for a peer's reply); `receipts` (read-receipts for the DMs YOU sent — each with a `seen` flag that's true once the recipient has received it, so you can tell 'queued' from 'seen' and decide whether to escalate; optional `limit`, default 20); `setAccessibility` (`scope`: `none` hidden / `self` your workspace only (default) / `specific` + `workspaces` a chosen set / `all` the whole workstation — governs who can see + DM you; optional `purpose` renames your channel); `join`/`leave` (`channel`) to opt in/out of a channel. Your identity + accessibility are remembered across restarts. Local-only — no relay, no cross-host.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -1328,16 +1328,16 @@ export function formatIssueCountsLine(snap: IssueWatchSnapshot): string | null {
 }
 
 /**
- * The concise WhisperChat nudge folded into an `imDone` response (Track A). Turns
- * an unread summary into e.g. `📬 2 unread whisper(s) from claude·general, codex —
- * call whisper(action:"receive") before you stop.` Returns null when nothing is
+ * The concise AgentInbox nudge folded into an `imDone` response (Track A). Turns
+ * an unread summary into e.g. `📬 2 unread AgentInbox message(s) from claude·general,
+ * codex — call agentinbox(action:"receive") before you stop.` Returns null when nothing is
  * waiting, so the line is omitted rather than printing a noisy "0".
  */
-export function formatWhisperMailLine(unread: { count: number; fromLabels: string[] }): string | null {
+export function formatAgentInboxMailLine(unread: { count: number; fromLabels: string[] }): string | null {
     if (!unread || unread.count <= 0) return null;
     const who = unread.fromLabels.length ? ` from ${unread.fromLabels.join(', ')}` : '';
     const n = unread.count;
-    return `📬 ${n} unread whisper${n === 1 ? '' : 's'}${who} — call whisper(action:"receive") to read ${n === 1 ? 'it' : 'them'} before you stop.`;
+    return `📬 ${n} unread AgentInbox message${n === 1 ? '' : 's'}${who} — call agentinbox(action:"receive") to read ${n === 1 ? 'it' : 'them'} before you stop.`;
 }
 
 /** Human label for a feed item kind (used in the grouped checkIssues list). */
@@ -1561,7 +1561,7 @@ export async function handleMcpMessage(
                     MANAGE_TERMINALS_TOOL,
                     RUN_AGENT_TOOL,
                     MANAGE_WORKSPACES_TOOL,
-                    WHISPER_TOOL,
+                    AGENTINBOX_TOOL,
                     KNOWLEDGE_TOOL,
                     OPEN_FILE_TOOL,
                     SET_ENV_TOOL,
@@ -1608,12 +1608,12 @@ export async function handleMcpMessage(
                 } catch {
                     /* best-effort — the glow is the point, counts are a bonus */
                 }
-                // Track A — surface any waiting WhisperChat mail at this turn
+                // Track A — surface any waiting AgentInbox mail at this turn
                 // boundary so a queued ping actually LANDS (agents call imDone at
                 // every finish). No pty injection — it rides the tool response.
                 let mailLine: string | null = null;
                 try {
-                    mailLine = ctx.whisperMailLine?.(ctx.terminalId) ?? null;
+                    mailLine = ctx.agentInboxMailLine?.(ctx.terminalId) ?? null;
                 } catch {
                     /* best-effort */
                 }
@@ -1864,8 +1864,8 @@ export async function handleMcpMessage(
                     ],
                 });
             }
-            if (params.name === 'whisper') {
-                const a = (params.arguments ?? {}) as Partial<WhisperRequest>;
+            if (params.name === 'agentinbox') {
+                const a = (params.arguments ?? {}) as Partial<AgentInboxRequest>;
                 const action = a.action;
                 if (
                     action !== 'list' &&
@@ -1879,10 +1879,10 @@ export async function handleMcpMessage(
                     return err(
                         msg.id,
                         -32602,
-                        'whisper requires `action`: list | send | receive | receipts | setAccessibility | join | leave.',
+                        'agentinbox requires `action`: list | send | receive | receipts | setAccessibility | join | leave.',
                     );
                 }
-                const result = await ctx.whisper(ctx.terminalId, {
+                const result = await ctx.agentInbox(ctx.terminalId, {
                     action,
                     to: a.to,
                     channel: a.channel,
@@ -1899,7 +1899,7 @@ export async function handleMcpMessage(
                 });
                 let summary: string;
                 if (!result.ok) {
-                    summary = `whisper failed: ${result.error ?? 'unknown error'}`;
+                    summary = `agentinbox failed: ${result.error ?? 'unknown error'}`;
                 } else if (action === 'list') {
                     summary = `${result.agents?.length ?? 0} agent(s) reachable, ${
                         result.channels?.length ?? 0
@@ -1912,7 +1912,7 @@ export async function handleMcpMessage(
                     const rs = result.receipts ?? [];
                     summary = `${rs.length} sent DM(s); ${rs.filter((r) => r.seen).length} seen.`;
                 } else {
-                    summary = `whisper ${action} ok.`;
+                    summary = `agentinbox ${action} ok.`;
                 }
                 return ok(msg.id, {
                     content: [

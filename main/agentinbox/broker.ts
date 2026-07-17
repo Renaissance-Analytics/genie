@@ -2,25 +2,25 @@ import crypto from 'crypto';
 import {
     normalizePurpose,
     previewText,
-    WHISPER_HUMAN,
-    type WhisperAgentInfo,
-    type WhisperBrokerEvent,
-    type WhisperChannelInfo,
-    type WhisperDmThreadInfo,
-    type WhisperEscalation,
-    type WhisperJoinInput,
-    type WhisperMessage,
-    type WhisperScope,
+    AGENTINBOX_HUMAN,
+    type AgentInboxAgentInfo,
+    type AgentInboxBrokerEvent,
+    type AgentInboxChannelInfo,
+    type AgentInboxDmThreadInfo,
+    type AgentInboxEscalation,
+    type AgentInboxJoinInput,
+    type AgentInboxMessage,
+    type AgentInboxScope,
 } from './types';
-import { noopWhisperStore, type WhisperStore } from './store';
+import { noopAgentInboxStore, type AgentInboxStore } from './store';
 import { shouldWakeAgent, wakeNudgeText } from './wake';
 
 /**
- * WhisperChat broker — the in-memory registry + channels + inboxes powering the
+ * AgentInbox broker — the in-memory registry + channels + inboxes powering the
  * local inter-agent messaging network. PURE: no electron, no db, no fs. All
  * durable identity (agent_id, purpose, scope, workspaces, chat_session_id) rides
  * `terminal_specs.meta`; the caller resolves that (+ workspace slug/name) and
- * hands the broker plain {@link WhisperJoinInput}s, and rehydrates them at boot.
+ * hands the broker plain {@link AgentInboxJoinInput}s, and rehydrates them at boot.
  *
  * Delivery is PULL-based: `send` appends to each recipient's capped inbox (and a
  * capped per-channel / per-DM LOG for the human panel's history), and `receive`
@@ -53,18 +53,18 @@ interface PendingEscalation {
     timer: ReturnType<typeof setTimeout> | null;
     /** Whether the escalation event has already fired to the human. */
     fired: boolean;
-    payload: WhisperEscalation;
+    payload: AgentInboxEscalation;
 }
 
 interface Waiter {
-    resolve: (msgs: WhisperMessage[]) => void;
+    resolve: (msgs: AgentInboxMessage[]) => void;
     cursor: number;
     timer: ReturnType<typeof setTimeout> | null;
 }
 
-interface WhisperAgent extends WhisperAgentInfo {
+interface AgentInboxAgent extends AgentInboxAgentInfo {
     /** Queued messages awaiting `receive` (capped). */
-    inbox: WhisperMessage[];
+    inbox: AgentInboxMessage[];
     /** The single live long-poll resolver, or null. */
     waiter: Waiter | null;
     /** Highest seq this agent has received (its ACK position). Persisted to the
@@ -86,30 +86,30 @@ function pairKey(a: string, b: string): string {
     return [a, b].sort().join('|');
 }
 
-export class WhisperBroker {
-    private agents = new Map<string, WhisperAgent>();
+export class AgentInboxBroker {
+    private agents = new Map<string, AgentInboxAgent>();
     private byTerminal = new Map<string, string>(); // terminalId → agentId
     private channelMembers = new Map<string, Set<string>>(); // channelKey → agentIds
     /** workspaceId → { slug, name }, learned from every join (for channel labels). */
     private wsInfo = new Map<string, { slug: string; name: string }>();
-    private channelLogs = new Map<string, WhisperMessage[]>();
-    private dmLogs = new Map<string, WhisperMessage[]>();
+    private channelLogs = new Map<string, AgentInboxMessage[]>();
+    private dmLogs = new Map<string, AgentInboxMessage[]>();
     private seq = 0;
-    private emit: (ev: WhisperBrokerEvent) => void = () => {};
+    private emit: (ev: AgentInboxBrokerEvent) => void = () => {};
     /** Durability backstop (genie.db in production, no-op for tests). */
-    private store: WhisperStore = noopWhisperStore;
+    private store: AgentInboxStore = noopAgentInboxStore;
     /** Urgent DMs awaiting ACK, keyed by messageId (Track C). */
     private escalations = new Map<string, PendingEscalation>();
     /** Escalation delay — overridable in tests so they don't wait 5 minutes. */
     private escalationMs = ESCALATION_MS;
 
     /** Wire the outbound event sink (presence.ts installs the real one at boot). */
-    setEmitter(fn: (ev: WhisperBrokerEvent) => void): void {
+    setEmitter(fn: (ev: AgentInboxBrokerEvent) => void): void {
         this.emit = fn;
     }
 
     /** Wire the durable store (background.ts installs the genie.db one at boot). */
-    setStore(store: WhisperStore): void {
+    setStore(store: AgentInboxStore): void {
         this.store = store;
     }
 
@@ -144,7 +144,7 @@ export class WhisperBroker {
         if (a) a.lastOutputAt = this.now();
     }
 
-    private agentForTerminal(terminalId: string): WhisperAgent | null {
+    private agentForTerminal(terminalId: string): AgentInboxAgent | null {
         const id = this.byTerminal.get(terminalId);
         return id ? this.agents.get(id) ?? null : null;
     }
@@ -157,7 +157,7 @@ export class WhisperBroker {
      * harmless: the sender still sees the DM unseen via `receipts` and can nudge by
      * hand. Best-effort; a failed inject is swallowed.
      */
-    private maybeWake(target: WhisperAgent): void {
+    private maybeWake(target: AgentInboxAgent): void {
         if (!this.wakeSink || !target.terminalId) return;
         const wake = shouldWakeAgent({
             wakeOnDm: target.wakeOnDm,
@@ -177,13 +177,13 @@ export class WhisperBroker {
     }
 
     /**
-     * Wake a terminal's agent for a NON-whisper reason (e.g. an IssueWatch ping),
+     * Wake a terminal's agent for a NON-AgentInbox reason (e.g. an IssueWatch ping),
      * reusing the EXACT same fail-safe idle gate + pty injection as wake-on-DM.
      * The caller's OWN opt-in is the gate here (an agent whose `issuewatch_action`
      * is `wake`), so `wakeOnDm` is forced true — but every other safety condition
      * ({@link shouldWakeAgent}: turn ended, quiet window, no output since, one wake
      * per idle period) still applies, so this can never inject mid-turn. Works for
-     * any agent terminal, since every agent terminal registers a whisper identity
+     * any agent terminal, since every agent terminal registers an AgentInbox identity
      * (its idle timestamps are tracked via markTurnEnd/noteOutput). Returns true
      * iff a nudge was actually sent (the agent was provably idle).
      */
@@ -212,7 +212,7 @@ export class WhisperBroker {
      * Rehydrate the in-memory logs + inboxes from the store at boot — call AFTER
      * {@link rehydrate} (identities) and {@link setStore}. Resumes the global seq
      * (so cursors stay valid), rebuilds the human-panel channel/DM history, and
-     * re-queues each known agent's undelivered messages so a whisper sent while
+     * re-queues each known agent's undelivered messages so a message sent while
      * the app was down still lands on the next `receive`.
      */
     rehydrateMessages(limit = 2000): void {
@@ -245,9 +245,9 @@ export class WhisperBroker {
     }
 
     /** Unread summary for the agent bound to a TERMINAL — powers the turn-boundary
-     *  nudge folded into `imDone` (Track A): surface waiting whispers at the exact
+     *  nudge folded into `imDone` (Track A): surface waiting messages at the exact
      *  point an agent hands back, without ever writing into its pty. Empty when the
-     *  terminal isn't a whisper agent or has nothing waiting. */
+     *  terminal isn't an AgentInbox agent or has nothing waiting. */
     unreadForTerminal(terminalId: string): { count: number; fromLabels: string[] } {
         const agentId = this.byTerminal.get(terminalId);
         const a = agentId ? this.agents.get(agentId) : undefined;
@@ -258,7 +258,7 @@ export class WhisperBroker {
 
     /** Advance + persist an agent's ACK cursor (monotonic), and resolve any urgent
      *  DMs the agent has now received (Track C). */
-    private ackCursor(agent: WhisperAgent, cursor: number): void {
+    private ackCursor(agent: AgentInboxAgent, cursor: number): void {
         if (cursor > agent.cursor) {
             agent.cursor = cursor;
             this.store.setCursor(agent.agentId, cursor);
@@ -268,8 +268,8 @@ export class WhisperBroker {
 
     /** Track an urgent DM: if the target hasn't received it within the escalation
      *  window, surface a "waiting on X" alert to the human (Track C). */
-    private registerEscalation(msg: WhisperMessage, target: WhisperAgent): void {
-        const payload: WhisperEscalation = {
+    private registerEscalation(msg: AgentInboxMessage, target: AgentInboxAgent): void {
+        const payload: AgentInboxEscalation = {
             messageId: msg.id,
             targetAgentId: target.agentId,
             targetLabel: target.label || `${target.slug}:${target.purpose}`,
@@ -324,7 +324,7 @@ export class WhisperBroker {
         return `${workspaceId}:${normalizePurpose(purpose)}`;
     }
 
-    private toInfo(a: WhisperAgent): WhisperAgentInfo {
+    private toInfo(a: AgentInboxAgent): AgentInboxAgentInfo {
         return {
             agentId: a.agentId,
             terminalId: a.terminalId,
@@ -341,7 +341,7 @@ export class WhisperBroker {
         };
     }
 
-    private emitPresence(a: WhisperAgent): void {
+    private emitPresence(a: AgentInboxAgent): void {
         this.emit({ type: 'presence', agent: this.toInfo(a) });
     }
 
@@ -353,14 +353,14 @@ export class WhisperBroker {
      * edit). Auto-joins the agent's own `workspaceId:purpose` channel. Returns the
      * public info.
      */
-    join(input: WhisperJoinInput): WhisperAgentInfo {
+    join(input: AgentInboxJoinInput): AgentInboxAgentInfo {
         this.wsInfo.set(input.workspaceId, {
             slug: input.slug,
             name: input.workspaceName,
         });
         const purpose = normalizePurpose(input.purpose);
         const existing = this.agents.get(input.agentId);
-        const agent: WhisperAgent = {
+        const agent: AgentInboxAgent = {
             agentId: input.agentId,
             terminalId: input.terminalId,
             workspaceId: input.workspaceId,
@@ -393,13 +393,13 @@ export class WhisperBroker {
     }
 
     /** Re-register a set of agents at boot (from persisted specs). */
-    rehydrate(inputs: WhisperJoinInput[]): void {
+    rehydrate(inputs: AgentInboxJoinInput[]): void {
         for (const input of inputs) {
             this.join({ ...input, status: input.status ?? 'away' });
         }
     }
 
-    /** Mark an agent's terminal alive again (it's actively calling whisper). */
+    /** Mark an agent's terminal alive again (it's actively calling agentinbox). */
     markOnline(agentId: string): void {
         const a = this.agents.get(agentId);
         if (!a || a.status === 'online') return;
@@ -452,13 +452,13 @@ export class WhisperBroker {
     setAccessibility(
         agentId: string,
         patch: {
-            scope?: WhisperScope;
+            scope?: AgentInboxScope;
             workspaces?: string[];
             purpose?: string;
             wakeOnDm?: boolean;
             label?: string;
         },
-    ): WhisperAgentInfo | null {
+    ): AgentInboxAgentInfo | null {
         const a = this.agents.get(agentId);
         if (!a) return null;
         if (patch.purpose !== undefined) {
@@ -472,7 +472,7 @@ export class WhisperBroker {
         if (patch.scope !== undefined) a.scope = patch.scope;
         if (patch.workspaces !== undefined) a.scopeWorkspaces = [...patch.workspaces];
         if (patch.wakeOnDm !== undefined) a.wakeOnDm = patch.wakeOnDm;
-        // Keep the display label in sync so WhisperChat reflects a renamed purpose
+        // Keep the display label in sync so AgentInbox reflects a renamed purpose
         // (the broker prefers `label` over `slug:purpose` everywhere it renders).
         if (patch.label !== undefined) a.label = patch.label;
         this.emitPresence(a);
@@ -550,7 +550,7 @@ export class WhisperBroker {
         return true;
     }
 
-    private channelInfo(key: string): WhisperChannelInfo {
+    private channelInfo(key: string): AgentInboxChannelInfo {
         const idx = key.indexOf(':');
         const workspaceId = idx >= 0 ? key.slice(0, idx) : key;
         const purpose = idx >= 0 ? key.slice(idx + 1) : key;
@@ -566,8 +566,8 @@ export class WhisperBroker {
     }
 
     /** Every non-empty channel (the human panel's full list). */
-    channels(): WhisperChannelInfo[] {
-        const out: WhisperChannelInfo[] = [];
+    channels(): AgentInboxChannelInfo[] {
+        const out: AgentInboxChannelInfo[] = [];
         for (const [key, members] of this.channelMembers) {
             if (members.size > 0) out.push(this.channelInfo(key));
         }
@@ -575,8 +575,8 @@ export class WhisperBroker {
     }
 
     /** The channels an agent is a member of (its agent-facing `list`). */
-    channelsForAgent(agentId: string): WhisperChannelInfo[] {
-        const out: WhisperChannelInfo[] = [];
+    channelsForAgent(agentId: string): AgentInboxChannelInfo[] {
+        const out: AgentInboxChannelInfo[] = [];
         for (const [key, members] of this.channelMembers) {
             if (members.has(agentId)) out.push(this.channelInfo(key));
         }
@@ -586,7 +586,7 @@ export class WhisperBroker {
     // --- discovery ---------------------------------------------------------
 
     /** Whether `target` is discoverable/DM-able BY `caller` under target's scope. */
-    private visible(caller: WhisperAgent, target: WhisperAgent): boolean {
+    private visible(caller: AgentInboxAgent, target: AgentInboxAgent): boolean {
         if (caller.agentId === target.agentId) return true; // always sees itself
         switch (target.scope) {
             case 'all':
@@ -605,15 +605,15 @@ export class WhisperBroker {
     }
 
     /** Every agent (the human panel's directory — the human sees all, no scope). */
-    directory(): WhisperAgentInfo[] {
+    directory(): AgentInboxAgentInfo[] {
         return [...this.agents.values()].map((a) => this.toInfo(a));
     }
 
     /** The peers discoverable BY an agent (excludes itself; honours scope). */
-    discoverableFor(callerAgentId: string): WhisperAgentInfo[] {
+    discoverableFor(callerAgentId: string): AgentInboxAgentInfo[] {
         const caller = this.agents.get(callerAgentId);
         if (!caller) return [];
-        const out: WhisperAgentInfo[] = [];
+        const out: AgentInboxAgentInfo[] = [];
         for (const target of this.agents.values()) {
             if (target.agentId === callerAgentId) continue;
             if (this.visible(caller, target)) out.push(this.toInfo(target));
@@ -622,14 +622,14 @@ export class WhisperBroker {
     }
 
     /** The public info for one agent (or null). */
-    getInfo(agentId: string): WhisperAgentInfo | null {
+    getInfo(agentId: string): AgentInboxAgentInfo | null {
         const a = this.agents.get(agentId);
         return a ? this.toInfo(a) : null;
     }
 
     // --- delivery ----------------------------------------------------------
 
-    private push(agent: WhisperAgent, msg: WhisperMessage): void {
+    private push(agent: AgentInboxAgent, msg: AgentInboxMessage): void {
         agent.inbox.push(msg);
         if (agent.inbox.length > INBOX_CAP) {
             agent.inbox.splice(0, agent.inbox.length - INBOX_CAP);
@@ -637,7 +637,7 @@ export class WhisperBroker {
         this.settleWaiter(agent);
     }
 
-    private appendLog(map: Map<string, WhisperMessage[]>, key: string, msg: WhisperMessage): void {
+    private appendLog(map: Map<string, AgentInboxMessage[]>, key: string, msg: AgentInboxMessage): void {
         let log = map.get(key);
         if (!log) {
             log = [];
@@ -647,7 +647,7 @@ export class WhisperBroker {
         if (log.length > LOG_CAP) log.splice(0, log.length - LOG_CAP);
     }
 
-    private emitMessage(msg: WhisperMessage): void {
+    private emitMessage(msg: AgentInboxMessage): void {
         this.emit({
             type: 'message',
             preview: {
@@ -676,15 +676,15 @@ export class WhisperBroker {
         channelArg?: string;
         text: string;
         interrupt?: boolean;
-    }): { ok: true; delivered: number; message: WhisperMessage } | { ok: false; error: string } {
+    }): { ok: true; delivered: number; message: AgentInboxMessage } | { ok: false; error: string } {
         const text = String(input.text ?? '');
         if (!text.trim()) return { ok: false, error: 'A message needs non-empty text.' };
 
         let from: string;
         let fromLabel: string;
-        let sender: WhisperAgent | null = null;
+        let sender: AgentInboxAgent | null = null;
         if (input.human) {
-            from = WHISPER_HUMAN;
+            from = AGENTINBOX_HUMAN;
             fromLabel = 'You';
         } else {
             sender = input.fromAgentId ? this.agents.get(input.fromAgentId) ?? null : null;
@@ -714,7 +714,7 @@ export class WhisperBroker {
             if (sender && !this.visible(sender, target)) {
                 return { ok: false, error: 'That agent is not reachable from your workspace.' };
             }
-            const msg: WhisperMessage = {
+            const msg: AgentInboxMessage = {
                 ...base,
                 seq: ++this.seq,
                 kind: 'dm',
@@ -754,7 +754,7 @@ export class WhisperBroker {
                 if (key) this.addToChannel(sender!.agentId, key);
             }
             if (!key) return { ok: false, error: `Unknown channel "${input.channelArg}".` };
-            const msg: WhisperMessage = {
+            const msg: AgentInboxMessage = {
                 ...base,
                 seq: ++this.seq,
                 kind: 'channel',
@@ -795,7 +795,7 @@ export class WhisperBroker {
 
     // --- receive (pull + long-poll) ---------------------------------------
 
-    private settleWaiter(agent: WhisperAgent): void {
+    private settleWaiter(agent: AgentInboxAgent): void {
         const w = agent.waiter;
         if (!w) return;
         agent.waiter = null;
@@ -815,13 +815,13 @@ export class WhisperBroker {
     receive(
         agentId: string,
         opts: { cursor?: number; wait?: boolean; timeoutMs?: number } = {},
-    ): Promise<{ messages: WhisperMessage[]; cursor: number }> {
+    ): Promise<{ messages: AgentInboxMessage[]; cursor: number }> {
         const agent = this.agents.get(agentId);
         const cursor = opts.cursor ?? 0;
         if (!agent) return Promise.resolve({ messages: [], cursor });
 
         const pending = agent.inbox.filter((m) => m.seq > cursor);
-        const nextCursor = (msgs: WhisperMessage[]): number =>
+        const nextCursor = (msgs: AgentInboxMessage[]): number =>
             msgs.length ? msgs[msgs.length - 1].seq : cursor;
 
         if (pending.length > 0 || !opts.wait) {
@@ -837,7 +837,7 @@ export class WhisperBroker {
             MAX_WAIT_MS,
         );
         return new Promise((resolve) => {
-            const finish = (msgs: WhisperMessage[]): void => {
+            const finish = (msgs: AgentInboxMessage[]): void => {
                 const c = nextCursor(msgs);
                 this.ackCursor(agent, c);
                 resolve({ messages: msgs, cursor: c });
@@ -859,7 +859,7 @@ export class WhisperBroker {
      * 'queued' from 'seen' and decide whether to escalate to a nudge (issue #9).
      * Durable-store backed (survives restart); newest first, capped.
      */
-    receipts(agentId: string, limit = 20): ReturnType<WhisperStore['sentDmReceipts']> {
+    receipts(agentId: string, limit = 20): ReturnType<AgentInboxStore['sentDmReceipts']> {
         const cap = Math.min(Math.max(1, limit), 100);
         return this.store.sentDmReceipts(agentId, cap);
     }
@@ -872,8 +872,8 @@ export class WhisperBroker {
      * that has already LEFT is recovered from the label it stamped on a message
      * in `log` (else the raw id, so the thread is never label-less).
      */
-    private dmLabelFor(id: string, log: WhisperMessage[]): string {
-        if (id === WHISPER_HUMAN) return 'You';
+    private dmLabelFor(id: string, log: AgentInboxMessage[]): string {
+        if (id === AGENTINBOX_HUMAN) return 'You';
         const live = this.agents.get(id);
         if (live) return live.label || `${live.slug}:${live.purpose}`;
         for (let i = log.length - 1; i >= 0; i--) {
@@ -888,8 +888,8 @@ export class WhisperBroker {
      * {@link directory}) there is NO scope filter. Each entry carries both
      * participants' labels and a last-message preview, sorted newest-first.
      */
-    dmThreads(): WhisperDmThreadInfo[] {
-        const out: WhisperDmThreadInfo[] = [];
+    dmThreads(): AgentInboxDmThreadInfo[] {
+        const out: AgentInboxDmThreadInfo[] = [];
         for (const [key, log] of this.dmLogs) {
             if (log.length === 0) continue;
             const sep = key.indexOf('|');
@@ -902,7 +902,7 @@ export class WhisperBroker {
                 b,
                 aLabel: this.dmLabelFor(a, log),
                 bLabel: this.dmLabelFor(b, log),
-                withHuman: a === WHISPER_HUMAN || b === WHISPER_HUMAN,
+                withHuman: a === AGENTINBOX_HUMAN || b === AGENTINBOX_HUMAN,
                 lastFromLabel: last.fromLabel,
                 lastPreview: previewText(last.text),
                 lastSeq: last.seq,
@@ -928,14 +928,14 @@ export class WhisperBroker {
         dmPair?: [string, string];
         limit?: number;
         before?: number;
-    }): WhisperMessage[] {
-        let log: WhisperMessage[] = [];
+    }): AgentInboxMessage[] {
+        let log: AgentInboxMessage[] = [];
         if (opts.channelKey) {
             log = this.channelLogs.get(opts.channelKey) ?? [];
         } else if (opts.dmPair) {
             log = this.dmLogs.get(pairKey(opts.dmPair[0], opts.dmPair[1])) ?? [];
         } else if (opts.agentId) {
-            log = this.dmLogs.get(pairKey(WHISPER_HUMAN, opts.agentId)) ?? [];
+            log = this.dmLogs.get(pairKey(AGENTINBOX_HUMAN, opts.agentId)) ?? [];
         }
         let out = log;
         if (opts.before !== undefined) out = out.filter((m) => m.seq < opts.before!);
@@ -961,4 +961,4 @@ export class WhisperBroker {
  * The process-wide singleton. Everyone (MCP host-tools, terminal lifecycle, IPC
  * handlers) shares this instance; presence.ts installs the real emitter at boot.
  */
-export const whisperBroker = new WhisperBroker();
+export const agentInboxBroker = new AgentInboxBroker();

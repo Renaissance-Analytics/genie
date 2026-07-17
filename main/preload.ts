@@ -798,7 +798,7 @@ const api = {
         get: (id: string) => ipcRenderer.invoke('terminal-spec:get', id),
         touch: (id: string) => ipcRenderer.invoke('terminal-spec:touch', id),
         /** Create an AI-TUI terminal from the split Add-Terminal button — spawns a
-         *  headless agent terminal (captured chat-session id + whisper identity)
+         *  headless agent terminal (captured chat-session id + AgentInbox identity)
          *  and launches it. Returns the created spec. */
         createAgent: (input: {
             workspace_id: string;
@@ -815,20 +815,20 @@ const api = {
         }) => ipcRenderer.invoke('terminal-spec:create-agent', input),
     },
 
-    /** WhisperChat — the local inter-agent messaging network's human panel. */
+    /** AgentInbox — the local inter-agent messaging network's human panel. */
     agentPulse: {
         /** Last-60s per-workspace byte buckets — fetched once when the workspace
          *  menu opens to backfill each sparkline; live `on.agentPulse` pushes
          *  advance it from there. */
         snapshot: () => ipcRenderer.invoke('agent-pulse:snapshot'),
     },
-    whisper: {
+    agentInbox: {
         /** All agents in this Genie (the human owns the workstation → no scope filter). */
-        directory: () => ipcRenderer.invoke('whisper:directory'),
+        directory: () => ipcRenderer.invoke('agentinbox:directory'),
         /** Every non-empty channel (`slug:purpose`). */
-        channels: () => ipcRenderer.invoke('whisper:channels'),
+        channels: () => ipcRenderer.invoke('agentinbox:channels'),
         /** Every DM thread with messages — human↔agent AND agent↔agent. */
-        dmThreads: () => ipcRenderer.invoke('whisper:dm-threads'),
+        dmThreads: () => ipcRenderer.invoke('agentinbox:dm-threads'),
         /** A channel log (`channelKey`), an arbitrary DM pair (`dmPair`), or the
          *  human↔agent DM thread (`agentId`). */
         history: (opts: {
@@ -837,10 +837,10 @@ const api = {
             dmPair?: [string, string];
             limit?: number;
             before?: number;
-        }) => ipcRenderer.invoke('whisper:history', opts),
+        }) => ipcRenderer.invoke('agentinbox:history', opts),
         /** Post as the human — to a channel (`channelKey`) or an agent (`toAgentId`). */
         post: (input: { channelKey?: string; toAgentId?: string; text: string }) =>
-            ipcRenderer.invoke('whisper:post', input),
+            ipcRenderer.invoke('agentinbox:post', input),
         /** Edit an agent's purpose/scope (re-keys its channel + re-emits presence). */
         updateChannel: (
             specId: string,
@@ -852,7 +852,7 @@ const api = {
                 issuewatch_handle?: boolean;
                 issuewatch_action?: 'notify' | 'wake';
             },
-        ) => ipcRenderer.invoke('whisper:update-channel', specId, patch),
+        ) => ipcRenderer.invoke('agentinbox:update-channel', specId, patch),
     },
 
     /** Knowledge Graph — Genie's workstation-wide local knowledge/memory store.
@@ -1226,17 +1226,17 @@ const api = {
             ipcRenderer.on('terminal-spec:changed', handler);
             return () => ipcRenderer.off('terminal-spec:changed', handler);
         },
-        /** WhisperChat presence — an agent joined/changed (full info), or LEFT
+        /** AgentInbox presence — an agent joined/changed (full info), or LEFT
          *  (`{ agentId, status:'offline', left:true }`). The panel updates its
          *  directory + channel list live. */
-        whisperPresence: (cb: (payload: unknown) => void) => {
+        agentInboxPresence: (cb: (payload: unknown) => void) => {
             const handler = (_e: unknown, payload: unknown) => cb(payload);
-            ipcRenderer.on('whisper:presence', handler);
-            return () => ipcRenderer.off('whisper:presence', handler);
+            ipcRenderer.on('agentinbox:presence', handler);
+            return () => ipcRenderer.off('agentinbox:presence', handler);
         },
-        /** WhisperChat message preview — a DM or channel message was delivered.
+        /** AgentInbox message preview — a DM or channel message was delivered.
          *  The panel appends it to the live stream (history has the full text). */
-        whisperMessage: (
+        agentInboxMessage: (
             cb: (payload: {
                 kind: 'dm' | 'channel';
                 channelKey?: string;
@@ -1249,13 +1249,13 @@ const api = {
             }) => void,
         ) => {
             const handler = (_e: unknown, payload: Parameters<typeof cb>[0]) => cb(payload);
-            ipcRenderer.on('whisper:message', handler);
-            return () => ipcRenderer.off('whisper:message', handler);
+            ipcRenderer.on('agentinbox:message', handler);
+            return () => ipcRenderer.off('agentinbox:message', handler);
         },
-        /** WhisperChat escalation (Track C) — an urgent DM went unACKed past the
+        /** AgentInbox escalation (Track C) — an urgent DM went unACKed past the
          *  window, or (`resolved`) was finally received. The panel shows/clears a
          *  "waiting on <agent>" oversight alert. */
-        whisperEscalation: (
+        agentInboxEscalation: (
             cb: (payload: {
                 messageId: string;
                 targetAgentId: string;
@@ -1267,8 +1267,8 @@ const api = {
             }) => void,
         ) => {
             const handler = (_e: unknown, payload: Parameters<typeof cb>[0]) => cb(payload);
-            ipcRenderer.on('whisper:escalation', handler);
-            return () => ipcRenderer.off('whisper:escalation', handler);
+            ipcRenderer.on('agentinbox:escalation', handler);
+            return () => ipcRenderer.off('agentinbox:escalation', handler);
         },
         /** The Knowledge Graph changed (a node added/updated/deleted or an edge
          *  linked — incl. an AGENT's write via the `knowledge` MCP tool). The

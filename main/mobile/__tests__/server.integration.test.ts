@@ -44,10 +44,10 @@ let updateReady = false;
 // flip `specializedWired` false to simulate a host that doesn't support it (501).
 let specializedWired = true;
 const specializedInputs: Array<Record<string, unknown>> = [];
-// Agent-settings host edit (whisper/update-channel): records the plumbed (specId,
-// patch); flip `whisperUpdateWired` false to simulate a host without the dep (501).
-let whisperUpdateWired = true;
-const whisperUpdates: Array<{ specId: string; patch: Record<string, unknown> }> = [];
+// Agent-settings host edit (agentinbox/update-channel): records the plumbed (specId,
+// patch); flip `agentInboxUpdateWired` false to simulate a host without the dep (501).
+let agentInboxUpdateWired = true;
+const agentInboxUpdates: Array<{ specId: string; patch: Record<string, unknown> }> = [];
 // Plain remote-spawn endpoint (/api/desktop/terminal-open): records the args the
 // server plumbed to createAgentTerminal — the id it honored + the confined cwd.
 const termOpens: Array<Record<string, unknown>> = [];
@@ -101,10 +101,10 @@ const deps = (): MobileDataDeps => ({
               },
           }
         : {}),
-    ...(whisperUpdateWired
+    ...(agentInboxUpdateWired
         ? {
-              updateWhisperChannel: (specId, patch) => {
-                  whisperUpdates.push({ specId, patch });
+              updateAgentInboxChannel: (specId, patch) => {
+                  agentInboxUpdates.push({ specId, patch });
                   return { ok: true };
               },
           }
@@ -233,8 +233,8 @@ beforeEach(() => {
     clipboardMode = 'desktop';
     specializedWired = true;
     specializedInputs.length = 0;
-    whisperUpdateWired = true;
-    whisperUpdates.length = 0;
+    agentInboxUpdateWired = true;
+    agentInboxUpdates.length = 0;
     termOpens.length = 0;
 });
 
@@ -793,10 +793,10 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         expect(r.status).toBe(401);
     });
 
-    it('edits agent settings on the host via whisper/update-channel (remote Agent settings…)', async () => {
+    it('edits agent settings on the host via agentinbox/update-channel (remote Agent settings…)', async () => {
         const port = await start();
         const token = await pair(port);
-        const r = await req(port, 'POST', '/api/desktop/whisper/update-channel', {
+        const r = await req(port, 'POST', '/api/desktop/agentinbox/update-channel', {
             token,
             body: {
                 specId: 't-agent',
@@ -805,8 +805,8 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         });
         expect(r.status).toBe(200);
         expect(r.json.ok).toBe(true);
-        // The edit was plumbed to the host's shared updateWhisperChannel untouched.
-        expect(whisperUpdates[0]).toEqual({
+        // The edit was plumbed to the host's shared updateAgentInboxChannel untouched.
+        expect(agentInboxUpdates[0]).toEqual({
             specId: 't-agent',
             patch: { purpose: 'reviewer', scope: 'all', wake_on_dm: true },
         });
@@ -816,20 +816,20 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         const port = await start();
         const token = await pair(port);
         setLocked(true);
-        const locked = await req(port, 'POST', '/api/desktop/whisper/update-channel', {
+        const locked = await req(port, 'POST', '/api/desktop/agentinbox/update-channel', {
             token,
             body: { specId: 't-agent', patch: { wake_on_dm: true } },
         });
         expect(locked.status).toBe(423);
-        expect(whisperUpdates).toHaveLength(0); // never reached the host
+        expect(agentInboxUpdates).toHaveLength(0); // never reached the host
         setLocked(false);
     });
 
     it('501s the agent-settings edit on a host that does not support it', async () => {
-        whisperUpdateWired = false;
+        agentInboxUpdateWired = false;
         const port = await start();
         const token = await pair(port);
-        const r = await req(port, 'POST', '/api/desktop/whisper/update-channel', {
+        const r = await req(port, 'POST', '/api/desktop/agentinbox/update-channel', {
             token,
             body: { specId: 't-agent', patch: { purpose: 'x' } },
         });
@@ -839,7 +839,7 @@ describe('mobile server (integration, 127.0.0.1)', () => {
 
     it('rejects the agent-settings edit without a token', async () => {
         const port = await start();
-        const r = await req(port, 'POST', '/api/desktop/whisper/update-channel', {
+        const r = await req(port, 'POST', '/api/desktop/agentinbox/update-channel', {
             body: { specId: 't-agent', patch: { purpose: 'x' } },
         });
         expect(r.status).toBe(401);

@@ -104,7 +104,7 @@ export interface StartLocalWorkstationDeps {
     /** Read the persisted identity (the host signer). Default: readWorkstationIdentity(). */
     identity?: () => WorkstationIdentity | null;
     /** The user's FMS toggles. Default: backend.fetchFeatures(). */
-    features?: () => Promise<{ issuewatch: boolean; whisperchat: boolean }>;
+    features?: () => Promise<{ issuewatch: boolean; agentinbox: boolean }>;
     /** Resolve the Pusher app key + cluster. Default: env → Tynn (resolveBroadcastConfig). */
     broadcastConfig?: () => Promise<BroadcastConfig | null>;
     /** Tynn API base URL. Default: backend.host(). */

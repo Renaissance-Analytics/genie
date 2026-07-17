@@ -18,8 +18,8 @@ import {
     type RunAgentResult,
     type ManageWorkspacesRequest,
     type ManageWorkspacesResult,
-    type WhisperRequest,
-    type WhisperResult,
+    type AgentInboxRequest,
+    type AgentInboxResult,
     type KnowledgeToolRequest,
     type KnowledgeToolResult,
     type OpenFileRequest,
@@ -78,9 +78,9 @@ export interface ServerDeps {
     onImDone: (terminalId: string) => void;
     /** Resolve the caller's workspace IssueWatch snapshot (checkIssues + imDone counts). */
     checkIssues: (terminalId: string) => Promise<IssueWatchSnapshot>;
-    /** A "you have N unread whispers" nudge for the caller's terminal, folded into
+    /** A "you have N unread AgentInbox messages" nudge for the caller's terminal, folded into
      *  imDone (Track A turn-boundary delivery). Optional. */
-    whisperMailLine?: (terminalId: string) => string | null;
+    agentInboxMailLine?: (terminalId: string) => string | null;
     /** Raise the OS-level question modal (ForceTheQuestion). */
     onForceQuestion: (
         terminalId: string,
@@ -113,8 +113,8 @@ export interface ServerDeps {
         terminalId: string,
         req: ManageWorkspacesRequest,
     ) => Promise<ManageWorkspacesResult>;
-    /** Local inter-agent messaging (whisper tool). `receive`+`wait` long-polls. */
-    whisper: (terminalId: string, req: WhisperRequest) => Promise<WhisperResult>;
+    /** Local inter-agent messaging (agentinbox tool). `receive`+`wait` long-polls. */
+    agentInbox: (terminalId: string, req: AgentInboxRequest) => Promise<AgentInboxResult>;
     /** Workstation Knowledge Graph — the shared local memory store (knowledge tool). */
     knowledge: (terminalId: string, req: KnowledgeToolRequest) => Promise<KnowledgeToolResult>;
     /** Open a file in Genie's built-in editor for the user (openFileForUser tool). */
@@ -275,8 +275,8 @@ function isBlockingCall(msg: JsonRpcRequest): boolean {
         const action = params?.arguments?.action;
         return action === 'start' || action === 'send';
     }
-    if (name === 'whisper') {
-        // Only a long-polling receive blocks; every other whisper action is a
+    if (name === 'agentinbox') {
+        // Only a long-polling receive blocks; every other agentinbox action is a
         // quick synchronous op that gets a single JSON response.
         const args = params?.arguments as { action?: unknown; wait?: unknown } | undefined;
         return args?.action === 'receive' && args?.wait === true;
@@ -440,7 +440,7 @@ async function handle(
         serverVersion: deps.serverVersion,
         onImDone: deps.onImDone,
         checkIssues: deps.checkIssues,
-        whisperMailLine: deps.whisperMailLine,
+        agentInboxMailLine: deps.agentInboxMailLine,
         onForceQuestion: deps.onForceQuestion,
         describeWorkspace: deps.describeWorkspace,
         manageProcess: deps.manageProcess,
@@ -448,7 +448,7 @@ async function handle(
         manageTerminals: deps.manageTerminals,
         runAgent: deps.runAgent,
         manageWorkspaces: deps.manageWorkspaces,
-        whisper: deps.whisper,
+        agentInbox: deps.agentInbox,
         knowledge: deps.knowledge,
         openFileForUser: deps.openFileForUser,
         setEnv: deps.setEnv,

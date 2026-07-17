@@ -17,14 +17,14 @@ import HostBuildNudge from '../components/Master/HostBuildNudge';
 import DocsFlyout from '../components/Master/DocsFlyout';
 import IssueWatchFlyout from '../components/Master/IssueWatchFlyout';
 import TaskManagerFlyout from '../components/Master/TaskManagerFlyout';
-import WhisperFlyout from '../components/Master/WhisperFlyout';
+import AgentInboxFlyout from '../components/Master/AgentInboxFlyout';
 import TerminalTypeSplitButton from '../components/Master/TerminalTypeSplitButton';
 import AgentTerminalForm from '../components/Master/AgentTerminalForm';
 import GithubCapabilitiesFlyout from '../components/Master/GithubCapabilitiesFlyout';
 import { useGithubCapabilities } from '../lib/githubCapabilities';
 import { terminalTypeById, type TerminalTypeId } from '../lib/terminal-types';
 import SignInPrompt from '../components/SignInPrompt';
-import type { AgentType, BackendUser, ViewType, WhisperScope } from '../lib/genie';
+import type { AgentType, BackendUser, ViewType, AgentInboxScope } from '../lib/genie';
 import { resolveShortcut } from '../lib/master-shortcuts';
 import { computeLaunchSelection } from '../lib/launch-restore';
 import {
@@ -284,21 +284,21 @@ function MasterInner() {
     useEffect(() => {
         return api().on.openTaskManager?.(() => setTaskManagerOpen(true));
     }, []);
-    // WhisperChat: the human panel + an unread badge on its titlebar button.
-    const [whisperOpen, setWhisperOpen] = useState(false);
-    const [whisperUnread, setWhisperUnread] = useState(0);
-    // Live unread tally: bump on each new whisper message while the panel is
+    // AgentInbox: the human panel + an unread badge on its titlebar button.
+    const [agentInboxOpen, setAgentInboxOpen] = useState(false);
+    const [agentInboxUnread, setAgentInboxUnread] = useState(0);
+    // Live unread tally: bump on each new AgentInbox message while the panel is
     // CLOSED; opening it clears the badge. The flyout owns its own live stream.
-    const whisperOpenRef = useRef(whisperOpen);
-    whisperOpenRef.current = whisperOpen;
+    const agentInboxOpenRef = useRef(agentInboxOpen);
+    agentInboxOpenRef.current = agentInboxOpen;
     useEffect(() => {
-        return api().on.whisperMessage?.(() => {
-            if (!whisperOpenRef.current) setWhisperUnread((n) => Math.min(999, n + 1));
+        return api().on.agentInboxMessage?.(() => {
+            if (!agentInboxOpenRef.current) setAgentInboxUnread((n) => Math.min(999, n + 1));
         });
     }, []);
     useEffect(() => {
-        if (whisperOpen) setWhisperUnread(0);
-    }, [whisperOpen]);
+        if (agentInboxOpen) setAgentInboxUnread(0);
+    }, [agentInboxOpen]);
     // Split Add-Terminal button: the last-used terminal type (persisted) + the
     // configured custom-agent command (for the create form's placeholder).
     const [lastTerminalType, setLastTerminalTypeState] = useState<TerminalTypeId>('regular');
@@ -309,7 +309,7 @@ function MasterInner() {
         setLastTerminalTypeState(id);
         void api().settings.set({ last_terminal_type: id }).catch(() => {});
     }, []);
-    // The spec whose WhisperChat purpose/scope is being edited (context menu →
+    // The spec whose AgentInbox purpose/scope is being edited (context menu →
     // "Agent settings…"), or null. Rendered as a modal reusing the create form.
     const [agentEditSpec, setAgentEditSpec] = useState<TerminalSpec | null>(null);
     // GitHub capability gate: which GitHub-powered features are unavailable
@@ -729,7 +729,7 @@ function MasterInner() {
     /**
      * Eyeball toggle — show/hide a view in the grid. HIDING a terminal (not a
      * Code view) must RETAIN its pty FIRST, so the shell — and any agent running
-     * in it, with its MCP endpoint + WhisperChat membership — stays ALIVE and
+     * in it, with its MCP endpoint + AgentInbox membership — stays ALIVE and
      * windowless, instead of the panel's unmount detaching → KILLING it (the
      * eyeball-hide crash). Showing releases retention (a visible panel isn't a
      * windowless retained one). Same retain-before-unmount ordering as disableSpec.
@@ -1524,8 +1524,8 @@ function MasterInner() {
                     }
                     onShowDocs={() => setDocsOpen((o) => !o)}
                     onShowTaskManager={() => setTaskManagerOpen((o) => !o)}
-                    onShowWhisper={() => setWhisperOpen((o) => !o)}
-                    whisperUnread={whisperUnread}
+                    onShowAgentInbox={() => setAgentInboxOpen((o) => !o)}
+                    agentInboxUnread={agentInboxUnread}
                     onShowKnowledge={() => {
                         // Header button → open the standalone Knowledge Graph
                         // window (main-owned, via knowledge.openWindow). Guarded
@@ -1671,9 +1671,9 @@ function MasterInner() {
                 open={taskManagerOpen}
                 onClose={() => setTaskManagerOpen(false)}
             />
-            <WhisperFlyout
-                open={whisperOpen}
-                onClose={() => setWhisperOpen(false)}
+            <AgentInboxFlyout
+                open={agentInboxOpen}
+                onClose={() => setAgentInboxOpen(false)}
             />
             <GithubCapabilitiesFlyout
                 open={githubCapsOpen}
@@ -1790,9 +1790,9 @@ function MasterInner() {
 }
 
 /**
- * Edit modal for a specialized (agent) terminal's WhisperChat identity — the same
+ * Edit modal for a specialized (agent) terminal's AgentInbox identity — the same
  * purpose / scope / command form as create, pre-filled from the spec's meta and
- * persisted via `whisper.updateChannel` (which re-emits presence). Opened from the
+ * persisted via `agentInbox.updateChannel` (which re-emits presence). Opened from the
  * spec context menu's "Agent settings…" item.
  */
 function AgentSettingsModal({
@@ -1836,12 +1836,12 @@ function AgentSettingsModal({
                     ownWorkspaceId={spec.workspace_id}
                     initial={{
                         // The persisted meta uses the `whisper_*` keys (see
-                        // createAgentTerminal / whisper:update-channel); read those, not the
+                        // createAgentTerminal / agentInbox:update-channel); read those, not the
                         // bare `purpose`/`scope`, or the edit pre-fill is blank and Save
                         // silently resets the agent's purpose→general and scope→self.
                         purpose:
                             typeof meta.whisper_purpose === 'string' ? meta.whisper_purpose : '',
-                        scope: (meta.whisper_scope as WhisperScope | undefined) ?? 'self',
+                        scope: (meta.whisper_scope as AgentInboxScope | undefined) ?? 'self',
                         scopeWorkspaces: Array.isArray(meta.whisper_workspaces)
                             ? (meta.whisper_workspaces as string[])
                             : [],
@@ -1858,7 +1858,7 @@ function AgentSettingsModal({
                         setBusy(true);
                         setError(null);
                         try {
-                            const res = await api().whisper.updateChannel(spec.id, {
+                            const res = await api().agentInbox.updateChannel(spec.id, {
                                 purpose: v.purpose,
                                 scope: v.scope,
                                 scope_workspaces:
@@ -2282,8 +2282,8 @@ function TitleBar({
     stageWorkspaceName,
     onShowDocs,
     onShowTaskManager,
-    onShowWhisper,
-    whisperUnread = 0,
+    onShowAgentInbox,
+    agentInboxUnread = 0,
     onShowKnowledge,
     onShowIssueWatch,
     issueWatchUnread = 0,
@@ -2294,8 +2294,8 @@ function TitleBar({
     stageWorkspaceName?: string;
     onShowDocs?: () => void;
     onShowTaskManager?: () => void;
-    onShowWhisper?: () => void;
-    whisperUnread?: number;
+    onShowAgentInbox?: () => void;
+    agentInboxUnread?: number;
     onShowKnowledge?: () => void;
     onShowIssueWatch?: () => void;
     issueWatchUnread?: number;
@@ -2353,15 +2353,15 @@ function TitleBar({
             </button>
             <button
                 type="button"
-                className="gicon whisper-btn"
-                title="WhisperChat — talk to & between your agents"
-                aria-label="WhisperChat"
-                onClick={() => onShowWhisper?.()}
+                className="gicon agentinbox-btn"
+                title="AgentInbox — talk to & between your agents"
+                aria-label="AgentInbox"
+                onClick={() => onShowAgentInbox?.()}
             >
                 <IconMessage size={16} />
-                {whisperUnread > 0 && (
+                {agentInboxUnread > 0 && (
                     <span className="iw-btn-badge">
-                        {whisperUnread > 99 ? '99+' : whisperUnread}
+                        {agentInboxUnread > 99 ? '99+' : agentInboxUnread}
                     </span>
                 )}
             </button>

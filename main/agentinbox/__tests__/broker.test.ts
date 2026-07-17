@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { WhisperBroker, INBOX_CAP } from '../broker';
-import type { WhisperBrokerEvent, WhisperJoinInput } from '../types';
+import { AgentInboxBroker, INBOX_CAP } from '../broker';
+import type { AgentInboxBrokerEvent, AgentInboxJoinInput } from '../types';
 
 /** Build a join input with sane defaults. */
-function input(over: Partial<WhisperJoinInput> & { agentId: string }): WhisperJoinInput {
+function input(over: Partial<AgentInboxJoinInput> & { agentId: string }): AgentInboxJoinInput {
     return {
         terminalId: `t-${over.agentId}`,
         workspaceId: 'w1',
@@ -19,11 +19,11 @@ function input(over: Partial<WhisperJoinInput> & { agentId: string }): WhisperJo
     };
 }
 
-function fresh(): WhisperBroker {
-    return new WhisperBroker();
+function fresh(): AgentInboxBroker {
+    return new AgentInboxBroker();
 }
 
-describe('WhisperBroker — discovery scopes', () => {
+describe('AgentInboxBroker — discovery scopes', () => {
     it('applies the four scopes (none invisible, self same-ws, specific list, all)', () => {
         const b = fresh();
         // Caller A in w1.
@@ -55,7 +55,7 @@ describe('WhisperBroker — discovery scopes', () => {
     });
 });
 
-describe('WhisperBroker — direct messages', () => {
+describe('AgentInboxBroker — direct messages', () => {
     it('delivers a DM to a discoverable peer and rejects an invisible one', () => {
         const b = fresh();
         b.join(input({ agentId: 'A', workspaceId: 'w1' }));
@@ -101,7 +101,7 @@ describe('WhisperBroker — direct messages', () => {
     });
 });
 
-describe('WhisperBroker — channels', () => {
+describe('AgentInboxBroker — channels', () => {
     it('fans a broadcast out to members with no self-echo', async () => {
         const b = fresh();
         // A, B, C all in w1 with purpose general → all in the w1:general room.
@@ -155,7 +155,7 @@ describe('WhisperBroker — channels', () => {
         const b = fresh();
         b.join(input({ agentId: 'A', workspaceId: 'w1', purpose: 'general', label: 'claude · general' }));
         // The host recomputes an auto-derived label on a purpose rename and passes
-        // it here so WhisperChat (which prefers `label`) reflects it, not the stale one.
+        // it here so AgentInbox (which prefers `label`) reflects it, not the stale one.
         const info = b.setAccessibility('A', { purpose: 'tynn', label: 'claude · tynn' });
         expect(info?.purpose).toBe('tynn');
         expect(info?.label).toBe('claude · tynn');
@@ -169,7 +169,7 @@ describe('WhisperBroker — channels', () => {
     });
 });
 
-describe('WhisperBroker — cursor + inbox', () => {
+describe('AgentInboxBroker — cursor + inbox', () => {
     it('pages by cursor monotonically', async () => {
         const b = fresh();
         b.join(input({ agentId: 'A' }));
@@ -204,7 +204,7 @@ describe('WhisperBroker — cursor + inbox', () => {
     });
 });
 
-describe('WhisperBroker — long-poll waiter', () => {
+describe('AgentInboxBroker — long-poll waiter', () => {
     it('resolves a waiting receive when a message arrives', async () => {
         const b = fresh();
         b.join(input({ agentId: 'A' }));
@@ -242,10 +242,10 @@ describe('WhisperBroker — long-poll waiter', () => {
     });
 });
 
-describe('WhisperBroker — presence + message events', () => {
+describe('AgentInboxBroker — presence + message events', () => {
     it('emits presence on join, offline on leave, and message on send', () => {
         const b = fresh();
-        const events: WhisperBrokerEvent[] = [];
+        const events: AgentInboxBrokerEvent[] = [];
         b.setEmitter((ev) => events.push(ev));
         b.join(input({ agentId: 'A' }));
         b.join(input({ agentId: 'B' }));
@@ -260,7 +260,7 @@ describe('WhisperBroker — presence + message events', () => {
 
     it('emits an interrupt event for an interrupt DM (no pty write)', () => {
         const b = fresh();
-        const events: WhisperBrokerEvent[] = [];
+        const events: AgentInboxBrokerEvent[] = [];
         b.setEmitter((ev) => events.push(ev));
         b.join(input({ agentId: 'A' }));
         b.join(input({ agentId: 'B', terminalId: 't-B' }));
@@ -270,7 +270,7 @@ describe('WhisperBroker — presence + message events', () => {
     });
 });
 
-describe('WhisperBroker — history', () => {
+describe('AgentInboxBroker — history', () => {
     it('returns the channel log and the human↔agent DM thread', () => {
         const b = fresh();
         b.join(input({ agentId: 'A', workspaceId: 'w1', purpose: 'general' }));
@@ -299,7 +299,7 @@ describe('WhisperBroker — history', () => {
     });
 });
 
-describe('WhisperBroker — dmThreads (human panel)', () => {
+describe('AgentInboxBroker — dmThreads (human panel)', () => {
     it('lists every DM thread — human↔agent AND agent↔agent — newest-first', () => {
         const b = fresh();
         b.join(input({ agentId: 'A', workspaceId: 'w1', label: 'Backend' }));

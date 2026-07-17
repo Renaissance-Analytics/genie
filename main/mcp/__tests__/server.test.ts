@@ -122,7 +122,7 @@ const deps = (
         ok: true,
         workspaces: [],
     }),
-    whisper: () => Promise<{
+    agentInbox: () => Promise<{
         ok: boolean;
         messages?: any[];
         cursor?: number;
@@ -147,7 +147,7 @@ const deps = (
     manageTerminals,
     runAgent,
     manageWorkspaces,
-    whisper,
+    agentInbox,
     knowledge,
     openFileForUser: async () => ({ ok: true, reused: false, openedNew: true }),
     setEnv: () => ({ ok: true, file: '.env' }),
@@ -433,10 +433,10 @@ describe('mcp server', () => {
         }
     });
 
-    it('serves a whisper RECEIVE+wait over SSE so a long-poll never times out', async () => {
+    it('serves an agentinbox RECEIVE+wait over SSE so a long-poll never times out', async () => {
         // A `receive` with wait:true parks a long-poll waiter; it must ride the
         // heartbeat SSE path (like ForceTheQuestion) so the client never times
-        // out. Simulate the wait with a whisper dep that resolves after a delay.
+        // out. Simulate the wait with an agentinbox dep that resolves after a delay.
         const prev = process.env.GENIE_MCP_HEARTBEAT_MS;
         process.env.GENIE_MCP_HEARTBEAT_MS = '20';
         try {
@@ -453,7 +453,7 @@ describe('mcp server', () => {
                     undefined,
                     undefined,
                     undefined,
-                    // whisper dep resolves after a delay (simulating the long-poll).
+                    // agentinbox dep resolves after a delay (simulating the long-poll).
                     () =>
                         new Promise((r) =>
                             setTimeout(
@@ -468,7 +468,7 @@ describe('mcp server', () => {
                 jsonrpc: '2.0',
                 id: 80,
                 method: 'tools/call',
-                params: { name: 'whisper', arguments: { action: 'receive', wait: true } },
+                params: { name: 'agentinbox', arguments: { action: 'receive', wait: true } },
             });
             expect(res.contentType).toContain('text/event-stream');
             expect(res.raw).toContain(': heartbeat'); // kept alive while polling
@@ -479,7 +479,7 @@ describe('mcp server', () => {
         }
     });
 
-    it('serves a whisper LIST as a single JSON response (no blocking path)', async () => {
+    it('serves an agentinbox LIST as a single JSON response (no blocking path)', async () => {
         const dir = tmpUserDir();
         await startMcpServer(deps(dir, 0, { ids: ['t-a'], lastActive: 't-a' }, () => {}));
         const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
@@ -487,14 +487,14 @@ describe('mcp server', () => {
             jsonrpc: '2.0',
             id: 81,
             method: 'tools/call',
-            params: { name: 'whisper', arguments: { action: 'list' } },
+            params: { name: 'agentinbox', arguments: { action: 'list' } },
         });
         expect(res.status).toBe(200);
         const body = JSON.parse(res.body);
         expect(body.id).toBe(81);
     });
 
-    it('serves a whisper RECEIVE without wait as a single JSON response', async () => {
+    it('serves an agentinbox RECEIVE without wait as a single JSON response', async () => {
         const dir = tmpUserDir();
         await startMcpServer(deps(dir, 0, { ids: ['t-a'], lastActive: 't-a' }, () => {}));
         const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
@@ -502,7 +502,7 @@ describe('mcp server', () => {
             jsonrpc: '2.0',
             id: 82,
             method: 'tools/call',
-            params: { name: 'whisper', arguments: { action: 'receive' } },
+            params: { name: 'agentinbox', arguments: { action: 'receive' } },
         });
         expect(res.status).toBe(200);
         expect(JSON.parse(res.body).id).toBe(82);

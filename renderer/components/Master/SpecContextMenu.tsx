@@ -29,7 +29,7 @@ interface Props {
     onDuplicate: () => void;
     onMoveToWorkspace: (workspaceId: string | null) => void;
     onDelete: () => void;
-    /** Edit a specialized (agent) terminal's WhisperChat purpose/scope. Only
+    /** Edit a specialized (agent) terminal's AgentInbox purpose/scope. Only
      *  offered when this spec is an agent terminal (`meta.agent` set). */
     onAgentSettings?: () => void;
 }
