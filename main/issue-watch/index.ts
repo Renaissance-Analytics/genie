@@ -169,9 +169,24 @@ const pushedByWorkspace = new Map<string, { counts: TypeCounts; feed: WorkspaceF
 export type IssueWatchServiceState = 'connecting' | 'connected' | 'signed-out' | 'disabled' | 'disconnected';
 let serviceState: IssueWatchServiceState = 'connecting';
 
+/**
+ * Whether the FIRST server snapshot has landed since the current connect. The
+ * transport is 'connected' the moment the channel subscribes, but the reconcile
+ * (or first live push) that carries the actual feed lands async — so between
+ * connect and that first delivery, a read would see an empty feed and falsely
+ * report "nothing open". Gate 'connected' on this so the race honestly reads
+ * "connected — loading" until data is authoritatively in hand.
+ */
+let reconcileDelivered = false;
+
 /** Transport health for the Tynn-owned IssueWatch service. */
 export function setIssueWatchServiceState(state: IssueWatchServiceState): void {
     serviceState = state;
+}
+
+/** Mark/unmark that the current connection has delivered its first snapshot. */
+export function setReconcileDelivered(delivered: boolean): void {
+    reconcileDelivered = delivered;
 }
 
 /**
@@ -199,6 +214,8 @@ export function applyPushedDelta(delta: PushedIssueWatchDelta): void {
     );
     pushedByWorkspace.set(delta.workspaceId, { counts: { ...delta.counts }, feed });
     serviceState = 'connected';
+    // A live delta IS authoritative delivery — the feed is now in hand.
+    reconcileDelivered = true;
     void broadcastUpdate();
 }
 
@@ -696,8 +713,10 @@ export async function getWorkspaceStatus(
     workspaceId: string,
 ): Promise<WorkspaceWatchStatus> {
     // Tynn holds the credential and performs every GitHub read. Connection is a
-    // Tynn transport fact, independent of Genie's optional GitHub login.
-    if (serviceState === 'connected') {
+    // Tynn transport fact, independent of Genie's optional GitHub login. Report
+    // connected only once the first snapshot has been delivered — otherwise the
+    // subscribe-but-pre-reconcile window reads as an empty feed ("nothing open").
+    if (serviceState === 'connected' && reconcileDelivered) {
         return { connected: true, error: null, detail: null, needsReauth: false, missingCapabilities: [] };
     }
     return {

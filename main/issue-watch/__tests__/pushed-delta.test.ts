@@ -50,6 +50,7 @@ import {
     getWorkspaceStatus,
     isServerFed,
     setIssueWatchServiceState,
+    setReconcileDelivered,
 } from '../index';
 
 const delta = (over: Partial<Parameters<typeof applyPushedDelta>[0]> = {}) => ({
@@ -64,6 +65,8 @@ const delta = (over: Partial<Parameters<typeof applyPushedDelta>[0]> = {}) => ({
 beforeEach(() => {
     TOKEN = 'tok';
     clearPushedDelta('ws-1');
+    // Real initial state each boot: channel not yet delivered a snapshot.
+    setReconcileDelivered(false);
 });
 
 describe('server-fed IssueWatch override (#197)', () => {
@@ -112,5 +115,30 @@ describe('server-fed IssueWatch override (#197)', () => {
     it('zero-count server-fed workspace is omitted from the counts map (no dark pill regressions)', async () => {
         applyPushedDelta(delta({ counts: { issue: 0, pr: 0, security: 0 } }));
         expect(await getOpenCounts()).toEqual({});
+    });
+});
+
+describe('reconcile-delivered gate — no false "connected" before the first snapshot lands', () => {
+    it('is NOT connected while the channel is up but the reconcile has not delivered', async () => {
+        // Subscription succeeded → serviceState 'connected', but the reconcile
+        // snapshot is still in flight (setReconcileDelivered(false) from beforeEach).
+        setIssueWatchServiceState('connected');
+        const s = await getWorkspaceStatus('ws-1');
+        expect(s.connected).toBe(false);
+        // serviceState stays 'connected' so the formatter routes the "loading"
+        // reason, NOT the misleading "nothing open".
+        expect(s.serviceState).toBe('connected');
+    });
+
+    it('becomes connected once the first reconcile is marked delivered (even with an empty feed)', async () => {
+        setIssueWatchServiceState('connected');
+        setReconcileDelivered(true);
+        expect((await getWorkspaceStatus('ws-1')).connected).toBe(true);
+    });
+
+    it('a live pushed delta counts as delivery — connected without a prior reconcile mark', async () => {
+        setIssueWatchServiceState('connecting');
+        applyPushedDelta(delta());
+        expect((await getWorkspaceStatus('ws-1')).connected).toBe(true);
     });
 });

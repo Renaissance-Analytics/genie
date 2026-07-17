@@ -1,5 +1,10 @@
 import { TynnBackend } from '../backend/tynn';
-import { applyPushedDelta, setIssueWatchServiceState, type PushedIssueWatchDelta } from '../issue-watch';
+import {
+    applyPushedDelta,
+    setIssueWatchServiceState,
+    setReconcileDelivered,
+    type PushedIssueWatchDelta,
+} from '../issue-watch';
 import {
     ensureLocalWorkstation,
     readWorkstationIdentity,
@@ -214,6 +219,9 @@ export async function startLocalWorkstation(
         const identity = (deps.identity ?? (() => readWorkstationIdentity()))();
         if (!identity) {
             log('no workstation identity after enroll — IssueWatch push off');
+            // Terminal for this boot — otherwise state is stuck at 'connecting'
+            // forever (we never subscribe), reading as "still connecting…".
+            setIssueWatchServiceState('disconnected');
             return null;
         }
         const tynnApiBaseUrl = (deps.tynnApiBaseUrl ?? (() => backend.host()))();
@@ -279,13 +287,21 @@ export async function startLocalWorkstation(
             // workspace whose delta was pushed while we were offline is caught up.
             onConnected: () => {
                 setIssueWatchServiceState('connected');
+                // Channel is up, but the feed lands with the reconcile below —
+                // gate 'connected' reads until it does (re-gate on every connect).
+                setReconcileDelivered(false);
                 void (async () => {
                     try {
                         await syncInventory();
                         const deltas = await fetchSnapshot(identity, tynnApiBaseUrl);
                         for (const d of deltas) applyDelta(d);
+                        // First snapshot in hand (even if empty = genuinely nothing) —
+                        // now reads honestly report connected instead of "loading".
+                        setReconcileDelivered(true);
                         log(`reconciled ${deltas.length} workspace IssueWatch snapshot(s)`);
                     } catch (e) {
+                        // Leave the gate closed — a reconnect re-reconciles, and a
+                        // live delta flips it if one arrives first.
                         log(`issue-watch reconcile failed: ${e instanceof Error ? e.message : String(e)}`);
                     }
                 })();
@@ -298,7 +314,10 @@ export async function startLocalWorkstation(
                     log(`applyPushedDelta failed: ${e instanceof Error ? e.message : String(e)}`);
                 }
             },
-            onDisconnected: () => setIssueWatchServiceState('disconnected'),
+            // A transport drop always schedules a re-dial (see onDrop), so the
+            // honest state is 'connecting', not a terminal 'disconnected' — the
+            // give-up paths (no config / startup catch) set 'disconnected' directly.
+            onDisconnected: () => setIssueWatchServiceState('connecting'),
         });
 
         log(`subscribed to private-workstation.${identity.workstationId}`);

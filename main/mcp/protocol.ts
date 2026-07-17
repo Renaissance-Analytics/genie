@@ -1375,7 +1375,7 @@ export function formatIssueWatchFeed(snap: IssueWatchSnapshot): string {
             disabled: 'IssueWatch is disabled by the Tynn account entitlement. Manage it at https://tynn.ai/account/issuewatch.',
             connecting: 'Genie is still connecting to the Tynn IssueWatch stream.',
             disconnected: 'The Tynn IssueWatch transport disconnected after startup. Check Tynn broadcasting and network connectivity.',
-            connected: 'The stream reports connected but no workspace snapshot is available yet.',
+            connected: 'Genie is connected to the Tynn IssueWatch stream and loading this workspace\'s issues.',
         }[snap.serviceState ?? 'disconnected'];
         return `IssueWatch — unavailable: ${reason} Genie GitHub access is not required.`;
     }

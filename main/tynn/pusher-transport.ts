@@ -182,6 +182,14 @@ export class WorkstationPusherTransport {
 
     private onDrop(): void {
         this.ws = null;
+        // An intentional close() (e.g. sign-out) already set its own terminal
+        // state and nulled the socket. Firing onDisconnected here would clobber
+        // that state ('signed-out' → 'disconnected') and scheduleReconnect would
+        // no-op anyway — so bail before touching either.
+        if (this.closed) return;
+        // A real drop always schedules a re-dial, so this is "reconnecting", not
+        // a terminal failure — the caller maps onDisconnected to a connecting
+        // state, reserving 'disconnected' for give-up paths (no config / startup).
         this.handlers?.onDisconnected?.();
         this.scheduleReconnect();
     }

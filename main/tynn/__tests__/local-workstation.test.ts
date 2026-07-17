@@ -191,6 +191,41 @@ describe('WorkstationPusherTransport', () => {
         sock.emit('message', frame({ event: 'issuewatch.delta', channel, data: frame({ counts: {} }) }));
         expect(onIssueWatchDelta).toHaveBeenCalledTimes(1);
     });
+
+    const baseOpts = (sockets: FakeSocket[]) => ({
+        appKey: 'k',
+        cluster: 'us2',
+        workstationId: 'ws-1',
+        tynnApiBaseUrl: 'https://tynn.test',
+        signer: { authHeader: () => 'Workstation 1:s' },
+        fetchImpl: (async () => ({ ok: true, json: async () => ({ auth: 'a' }) })) as unknown as typeof fetch,
+        reconnectDelayMs: 60_000,
+        wsFactory: () => {
+            const s = new FakeSocket();
+            sockets.push(s);
+            return s;
+        },
+    });
+
+    it('does NOT fire onDisconnected when the caller closes intentionally (e.g. sign-out)', () => {
+        const sockets: FakeSocket[] = [];
+        const transport = new WorkstationPusherTransport(baseOpts(sockets));
+        const onDisconnected = vi.fn();
+        const handle = transport.open({ onConnected: vi.fn(), onIssueWatchDelta: vi.fn(), onDisconnected });
+        // Intentional teardown sets closed=true, then the socket's 'close' fires
+        // onDrop — which must bail (else it clobbers the caller's 'signed-out').
+        handle.close();
+        expect(onDisconnected).not.toHaveBeenCalled();
+    });
+
+    it('fires onDisconnected on an UNINTENDED socket drop (transport re-dials)', () => {
+        const sockets: FakeSocket[] = [];
+        const transport = new WorkstationPusherTransport(baseOpts(sockets));
+        const onDisconnected = vi.fn();
+        transport.open({ onConnected: vi.fn(), onIssueWatchDelta: vi.fn(), onDisconnected });
+        sockets[0].emit('close'); // the socket dropped on its own
+        expect(onDisconnected).toHaveBeenCalledOnce();
+    });
 });
 
 // --- broadcast config resolution ------------------------------------------
