@@ -239,6 +239,13 @@ export function createAgentTerminal(opts: {
         /** Opt-in wake-on-DM (issue #9): a direct whisper wakes this agent when idle. */
         wakeOnDm?: boolean;
     };
+    /** Specialized terminals: IssueWatch ping handling to stamp on the spec meta. */
+    issuewatch?: {
+        /** Participate in this workspace's IssueWatch deltas (default off). */
+        handle?: boolean;
+        /** How to react — glow (`notify`) or idle-wake (`wake`); default `notify`. */
+        action?: 'notify' | 'wake';
+    };
 }): { id: string; scrollback: string; existing: boolean; command?: string; chatSessionId: string | null } {
     const id = opts.id ?? crypto.randomUUID();
     const resolved = resolveDefaultShell(dbSettingsProvider());
@@ -268,6 +275,10 @@ export function createAgentTerminal(opts: {
                 ? { whisper_workspaces: opts.whisper.scopeWorkspaces }
                 : {}),
             ...(opts.whisper?.wakeOnDm ? { whisper_wake_on_dm: true } : {}),
+            ...(opts.issuewatch?.handle ? { issuewatch_handle: true } : {}),
+            ...(opts.issuewatch?.handle && opts.issuewatch.action
+                ? { issuewatch_action: opts.issuewatch.action }
+                : {}),
             ...(chatSessionId ? { chat_session_id: chatSessionId } : {}),
         };
     }

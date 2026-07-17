@@ -567,6 +567,10 @@ const api = {
             ipcRenderer.invoke('workspaces:get-issuewatch-granularity', id),
         setIssuewatchGranularity: (id: string, granularity: unknown) =>
             ipcRenderer.invoke('workspaces:set-issuewatch-granularity', id, granularity),
+        getIssuewatchHandlers: (id: string) =>
+            ipcRenderer.invoke('workspaces:get-issuewatch-handlers', id),
+        setIssuewatchHandlers: (id: string, terminalIds: string[]) =>
+            ipcRenderer.invoke('workspaces:set-issuewatch-handlers', id, terminalIds),
         repos: (id: string) =>
             ipcRenderer.invoke('workspaces:repos', id) as Promise<string[]>,
         open: (id: string) => ipcRenderer.invoke('workspaces:open', id),
@@ -806,6 +810,8 @@ const api = {
             scope: 'none' | 'self' | 'specific' | 'all';
             scope_workspaces?: string[];
             wake_on_dm?: boolean;
+            issuewatch_handle?: boolean;
+            issuewatch_action?: 'notify' | 'wake';
         }) => ipcRenderer.invoke('terminal-spec:create-agent', input),
     },
 
@@ -843,6 +849,8 @@ const api = {
                 scope?: 'none' | 'self' | 'specific' | 'all';
                 scope_workspaces?: string[];
                 wake_on_dm?: boolean;
+                issuewatch_handle?: boolean;
+                issuewatch_action?: 'notify' | 'wake';
             },
         ) => ipcRenderer.invoke('whisper:update-channel', specId, patch),
     },

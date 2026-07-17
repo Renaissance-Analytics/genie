@@ -1847,6 +1847,8 @@ function AgentSettingsModal({
                             : [],
                         command: typeof meta.agent_command === 'string' ? meta.agent_command : '',
                         wakeOnDm: meta.whisper_wake_on_dm === true,
+                        issuewatchHandle: meta.issuewatch_handle === true,
+                        issuewatchAction: meta.issuewatch_action === 'wake' ? 'wake' : 'notify',
                     }}
                     submitLabel="Save"
                     busy={busy}
@@ -1862,6 +1864,8 @@ function AgentSettingsModal({
                                 scope_workspaces:
                                     v.scope === 'specific' ? v.scopeWorkspaces : [],
                                 wake_on_dm: v.wakeOnDm,
+                                issuewatch_handle: v.issuewatchHandle,
+                                issuewatch_action: v.issuewatchAction,
                             });
                             if (res.ok) onSaved();
                             else setError(res.error || 'Could not update the agent.');

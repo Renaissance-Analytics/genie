@@ -258,6 +258,8 @@ export interface MobileDataDeps {
         scope: 'none' | 'self' | 'specific' | 'all';
         scope_workspaces?: string[];
         wake_on_dm?: boolean;
+        issuewatch_handle?: boolean;
+        issuewatch_action?: 'notify' | 'wake';
     }) => { ok: boolean; spec?: TerminalSpecRow; error?: string };
     /**
      * Edit a specialized (agent) terminal's WhisperChat settings — purpose / scope /
@@ -272,6 +274,8 @@ export interface MobileDataDeps {
             scope?: 'none' | 'self' | 'specific' | 'all';
             scope_workspaces?: string[];
             wake_on_dm?: boolean;
+            issuewatch_handle?: boolean;
+            issuewatch_action?: 'notify' | 'wake';
         },
     ) => { ok: boolean; error?: string };
     killTerminalById: (id: string) => boolean;
@@ -1381,6 +1385,8 @@ export async function handleApi(
                 scope?: 'none' | 'self' | 'specific' | 'all';
                 scope_workspaces?: string[];
                 wake_on_dm?: boolean;
+                issuewatch_handle?: boolean;
+                issuewatch_action?: 'notify' | 'wake';
             };
         };
         try {

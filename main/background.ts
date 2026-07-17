@@ -46,7 +46,9 @@ import {
     getWorkspaceFeed,
     getOpenCounts,
     setIssueWatchServiceState,
+    setIssueWatchPingSinks,
 } from './issue-watch';
+import { issueWatchWakeText } from './issue-watch/ping';
 import { getToken } from './github/storage';
 import { detectFolder } from './workspace/detect';
 import { cleanupLegacyTynnCliInstall } from './cli/legacy-cleanup';
@@ -70,6 +72,7 @@ import {
     createAgentTerminal,
     writeToTerminal,
     readTerminalOutput,
+    broadcastTerminalAttention,
 } from './terminal/ipc';
 import { installWhisperPresence } from './whisper/presence';
 import { whisperBroker } from './whisper/broker';
@@ -1106,6 +1109,14 @@ app.whenReady().then(async () => {
     registerUpdaterIpc();
     // Issue Watch: per-workspace GitHub issue/PR/Dependabot watching + poller.
     registerIssueWatchIpc();
+    // IssueWatch → agent pings: a `notify` handler glows its terminal; a `wake`
+    // handler gets the SAME fail-safe idle-only nudge as wake-on-DM (never
+    // mid-turn). Both edges live here (electron glow + broker wake); the routing
+    // rule + change-dedup are pure in issue-watch/ping.ts.
+    setIssueWatchPingSinks({
+        notify: (terminalId) => broadcastTerminalAttention(terminalId, true),
+        wake: (terminalId) => whisperBroker.wakeTerminalIfIdle(terminalId, issueWatchWakeText()),
+    });
     // E2E test mode (GENIE_E2E=1): OVERRIDE the GitHub + Issue Watch channels
     // with scriptable mocks so a Playwright test can drive the device-flow /
     // reconnect UI deterministically (no GitHub, no OAuth, no keychain, no DB

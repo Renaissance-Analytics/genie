@@ -15,6 +15,8 @@ vi.mock('electron', () => ({
     ipcMain: { handle: () => {} },
 }));
 vi.mock('simple-git', () => ({ default: () => ({ getRemotes: async () => [] }) }));
+let DESIGNATED: string[] = [];
+let AGENTS: Array<{ terminalId: string; label: string; handle: boolean; action: 'notify' | 'wake' }> = [];
 vi.mock('../../db', () => ({
     getWorkspace: () => WS,
     listIssueWatches: () => [],
@@ -22,6 +24,8 @@ vi.mock('../../db', () => ({
     setIssueWatch: () => {},
     markIssueWatchSeen: () => {},
     getWorkspaceIssuewatchGranularity: () => ({ own: { issues: true, pulls: true, security: true }, upstream: 'none' }),
+    getWorkspaceIssuewatchHandlers: () => DESIGNATED,
+    listWorkspaceIssuewatchAgents: () => AGENTS,
     getForkUpstream: () => undefined,
     setForkUpstream: () => {},
 }));
@@ -51,6 +55,7 @@ import {
     isServerFed,
     setIssueWatchServiceState,
     setReconcileDelivered,
+    setIssueWatchPingSinks,
 } from '../index';
 
 const delta = (over: Partial<Parameters<typeof applyPushedDelta>[0]> = {}) => ({
@@ -140,5 +145,70 @@ describe('reconcile-delivered gate — no false "connected" before the first sna
         setIssueWatchServiceState('connecting');
         applyPushedDelta(delta());
         expect((await getWorkspaceStatus('ws-1')).connected).toBe(true);
+    });
+});
+
+describe('applyPushedDelta → agent pings', () => {
+    const notified: string[] = [];
+    const woken: string[] = [];
+    beforeEach(() => {
+        setIssueWatchServiceState('connecting');
+        notified.length = 0;
+        woken.length = 0;
+        DESIGNATED = [];
+        AGENTS = [];
+        setIssueWatchPingSinks({
+            notify: (id) => notified.push(id),
+            wake: (id) => {
+                woken.push(id);
+                return true;
+            },
+        });
+    });
+
+    it('the FIRST snapshot is a baseline — no ping — but a NEW item then pings the handler', () => {
+        AGENTS = [{ terminalId: 'term-a', label: 'A', handle: true, action: 'notify' }];
+
+        // Baseline snapshot (session's first for this workspace) → no ping.
+        applyPushedDelta(delta());
+        expect(notified).toEqual([]);
+
+        // A genuinely new item lands → the handle-enabled agent is notified.
+        applyPushedDelta(
+            delta({
+                items: [
+                    { kind: 'issue' as const, key: 'o/r:issue:1', number: 1, title: 'Bug', url: 'u', updatedAt: '2026-07-09T00:00:00Z', owner: 'o', repo: 'r', source: 'own' as const, unread: true },
+                    { kind: 'issue' as const, key: 'o/r:issue:2', number: 2, title: 'New', url: 'u', updatedAt: '2026-07-10T00:00:00Z', owner: 'o', repo: 'r', source: 'own' as const, unread: true },
+                ],
+            }),
+        );
+        expect(notified).toEqual(['term-a']);
+    });
+
+    it('an identical re-sent snapshot does not ping', () => {
+        AGENTS = [{ terminalId: 'term-a', label: 'A', handle: true, action: 'notify' }];
+        applyPushedDelta(delta()); // baseline
+        applyPushedDelta(delta()); // same item, unchanged
+        expect(notified).toEqual([]);
+    });
+
+    it('a non-empty designated set restricts pings to designated handle-enabled agents; wake routes to wake', () => {
+        AGENTS = [
+            { terminalId: 'term-a', label: 'A', handle: true, action: 'notify' },
+            { terminalId: 'term-b', label: 'B', handle: true, action: 'wake' },
+            { terminalId: 'term-c', label: 'C', handle: false, action: 'notify' },
+        ];
+        DESIGNATED = ['term-b', 'term-c']; // c designated but NOT handle-enabled → excluded
+
+        applyPushedDelta(delta()); // baseline
+        applyPushedDelta(
+            delta({
+                items: [
+                    { kind: 'issue' as const, key: 'o/r:issue:9', number: 9, title: 'Changed', url: 'u', updatedAt: '2026-07-11T00:00:00Z', owner: 'o', repo: 'r', source: 'own' as const, unread: true },
+                ],
+            }),
+        );
+        expect(notified).toEqual([]); // term-a not designated
+        expect(woken).toEqual(['term-b']); // only designated + handle-enabled + wake
     });
 });

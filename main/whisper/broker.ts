@@ -177,6 +177,38 @@ export class WhisperBroker {
     }
 
     /**
+     * Wake a terminal's agent for a NON-whisper reason (e.g. an IssueWatch ping),
+     * reusing the EXACT same fail-safe idle gate + pty injection as wake-on-DM.
+     * The caller's OWN opt-in is the gate here (an agent whose `issuewatch_action`
+     * is `wake`), so `wakeOnDm` is forced true — but every other safety condition
+     * ({@link shouldWakeAgent}: turn ended, quiet window, no output since, one wake
+     * per idle period) still applies, so this can never inject mid-turn. Works for
+     * any agent terminal, since every agent terminal registers a whisper identity
+     * (its idle timestamps are tracked via markTurnEnd/noteOutput). Returns true
+     * iff a nudge was actually sent (the agent was provably idle).
+     */
+    wakeTerminalIfIdle(terminalId: string, text: string): boolean {
+        if (!this.wakeSink) return false;
+        const a = this.agentForTerminal(terminalId);
+        if (!a) return false;
+        const wake = shouldWakeAgent({
+            wakeOnDm: true,
+            lastTurnEndAt: a.lastTurnEndAt,
+            lastOutputAt: a.lastOutputAt,
+            lastWokenAt: a.lastWokenAt,
+            now: this.now(),
+        });
+        if (!wake) return false;
+        a.lastWokenAt = this.now();
+        try {
+            this.wakeSink(terminalId, text);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
      * Rehydrate the in-memory logs + inboxes from the store at boot — call AFTER
      * {@link rehydrate} (identities) and {@link setStore}. Resumes the global seq
      * (so cursors stay valid), rebuilds the human-panel channel/DM history, and

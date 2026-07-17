@@ -331,6 +331,13 @@ export default function WorkspaceSettingsModal({
                         />
                     </Row>
                     <Row
+                        label="IssueWatch handlers"
+                        sub="Which agents get pinged when a watched item changes"
+                        vertical
+                    >
+                        <IssueWatchHandlersPanel workspaceId={workspace.id} />
+                    </Row>
+                    <Row
                         label="Background process approval"
                         sub="Approve before an agent starts a process (manageProcess)"
                     >
@@ -405,6 +412,92 @@ function Row({
                 {sub && <span className="set-row-desc">{sub}</span>}
             </div>
             <div className="set-row-control">{children}</div>
+        </div>
+    );
+}
+
+/**
+ * IssueWatch handler DESIGNATION — pick which of this workspace's ping-handling
+ * agents actually get pinged. Only agents that opted into "Handle IssueWatch
+ * pings" (in their own Agent settings) are candidates. When NONE are checked the
+ * ping fans out to EVERY handling agent (the default); checking a subset narrows
+ * it to just those, so one issue doesn't wake five terminals. Persisted per
+ * workspace; the ping router reads the same set when a delta lands.
+ */
+function IssueWatchHandlersPanel({ workspaceId }: { workspaceId: string }) {
+    const [designated, setDesignated] = useState<string[] | null>(null);
+    const [agents, setAgents] = useState<
+        Array<{ terminalId: string; label: string; handle: boolean; action: 'notify' | 'wake' }>
+    >([]);
+
+    useEffect(() => {
+        let alive = true;
+        void (async () => {
+            try {
+                const r = await api().workspaces.getIssuewatchHandlers(workspaceId);
+                if (alive) {
+                    setDesignated(r.designated);
+                    setAgents(r.agents);
+                }
+            } catch {
+                if (alive) {
+                    setDesignated([]);
+                    setAgents([]);
+                }
+            }
+        })();
+        return () => {
+            alive = false;
+        };
+    }, [workspaceId]);
+
+    const handling = agents.filter((a) => a.handle);
+    const chosen = designated ?? [];
+
+    const toggle = async (terminalId: string) => {
+        const cur = designated ?? [];
+        const next = cur.includes(terminalId)
+            ? cur.filter((x) => x !== terminalId)
+            : [...cur, terminalId];
+        setDesignated(next); // optimistic
+        try {
+            await api().workspaces.setIssuewatchHandlers(workspaceId, next);
+        } catch {
+            setDesignated(cur); // revert
+        }
+    };
+
+    if (designated === null) {
+        return <span className="set-row-desc">Loading…</span>;
+    }
+    if (handling.length === 0) {
+        return (
+            <span className="set-row-desc">
+                No agents handle IssueWatch pings yet. Turn on “Handle IssueWatch pings” in an
+                agent’s settings to make it a candidate here.
+            </span>
+        );
+    }
+    return (
+        <div className="agent-form-ws">
+            <span className="set-row-desc">
+                {chosen.length === 0
+                    ? 'No designated handlers — every agent below is pinged.'
+                    : 'Only the checked agents are pinged; the rest are skipped.'}
+            </span>
+            {handling.map((a) => (
+                <label key={a.terminalId} className="agent-form-ws-row">
+                    <input
+                        type="checkbox"
+                        checked={chosen.includes(a.terminalId)}
+                        onChange={() => void toggle(a.terminalId)}
+                    />
+                    <span>
+                        {a.label}
+                        <span className="agent-form-ws-note"> ({a.action})</span>
+                    </span>
+                </label>
+            ))}
         </div>
     );
 }

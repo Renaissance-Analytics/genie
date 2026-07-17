@@ -658,6 +658,23 @@ export function runMigrations(d: Database.Database): void {
                 ).run();
             },
         },
+        {
+            // v26 — per-workspace IssueWatch DESIGNATED handler set. A JSON array of
+            // agent terminal ids that should receive this workspace's IssueWatch
+            // pings; NULL/absent (the default) means "not designated" and the ping
+            // fans out to every `issuewatch_handle` agent instead (see
+            // getWorkspaceIssuewatchHandlers + resolveIssueWatchRecipients). The
+            // per-agent opt-in itself rides terminal_specs.meta_json (no migration).
+            // Idempotent ADD COLUMN like v24's `assignment_managed` (no CHECK on
+            // ALTER for SQLite < 3.25); pre-existing rows read back NULL.
+            version: 26,
+            runner: (db) => {
+                const ws = workspaceColumns(db);
+                if (!ws.has('issuewatch_handlers')) {
+                    db.exec(`ALTER TABLE workspaces ADD COLUMN issuewatch_handlers TEXT`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1386,6 +1403,53 @@ export function setWorkspaceIssuewatchGranularity(
         .run(JSON.stringify(granularity), id);
 }
 
+/**
+ * The workspace's DESIGNATED IssueWatch handler set — the agent terminal ids that
+ * should receive its pings. Empty (the default: NULL / corrupt / non-array blob)
+ * means "not designated", and the ping fans out to every `issuewatch_handle`
+ * agent instead. Always returns a fresh array of strings (hostile entries dropped).
+ */
+export function getWorkspaceIssuewatchHandlers(id: string): string[] {
+    const row = getDb()
+        .prepare<[string], { issuewatch_handlers: string | null } | undefined>(
+            'SELECT issuewatch_handlers FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    if (!row?.issuewatch_handlers) return [];
+    try {
+        const j = JSON.parse(row.issuewatch_handlers);
+        return Array.isArray(j) ? j.filter((x): x is string => typeof x === 'string') : [];
+    } catch {
+        return [];
+    }
+}
+
+/** Persist this workspace's designated IssueWatch handler set (JSON array). An
+ *  empty array clears the designation (fan-out to all handle-enabled agents). */
+export function setWorkspaceIssuewatchHandlers(id: string, terminalIds: string[]): void {
+    const clean = [...new Set(terminalIds.filter((x) => typeof x === 'string'))];
+    getDb()
+        .prepare('UPDATE workspaces SET issuewatch_handlers = ? WHERE id = ?')
+        .run(JSON.stringify(clean), id);
+}
+
+/** A workspace's agent terminals with their IssueWatch ping settings — the
+ *  candidate recipients the router resolves against. Only agent terminals (those
+ *  with a whisper `agent_id`) are candidates; `handle` defaults off and `action`
+ *  defaults `notify`. */
+export function listWorkspaceIssuewatchAgents(
+    workspaceId: string,
+): Array<{ terminalId: string; label: string; handle: boolean; action: 'notify' | 'wake' }> {
+    return listTerminalSpecs()
+        .filter((s) => s.workspace_id === workspaceId && !!s.meta?.agent_id)
+        .map((s) => ({
+            terminalId: s.id,
+            label: s.label,
+            handle: s.meta?.issuewatch_handle === true,
+            action: s.meta?.issuewatch_action === 'wake' ? 'wake' : 'notify',
+        }));
+}
+
 // Local-site tunnel settings (serve-local-sites Phase B) ----------------
 //
 // The §5 per-repo ALLOWLIST, stored per-workspace as a JSON blob keyed by the
@@ -1570,6 +1634,13 @@ export interface TerminalSpecMeta {
     /** Opt-in wake-on-DM (issue #9): a DM to an idle agent may inject a nudge to
      *  start a turn. Default off/absent. */
     whisper_wake_on_dm?: boolean;
+    /** IssueWatch pings (feature): this agent participates in its workspace's
+     *  IssueWatch deltas. Default off/absent — no ping is delivered. */
+    issuewatch_handle?: boolean;
+    /** IssueWatch pings: how this agent reacts to a ping — `notify` glows its
+     *  terminal, `wake` injects an idle-only nudge (same fail-safe gate as
+     *  wake-on-DM). Default `notify` when `issuewatch_handle` is on. */
+    issuewatch_action?: 'notify' | 'wake';
     /** The captured AI chat-session uuid (session-capture), when known. */
     chat_session_id?: string;
     [key: string]: unknown;

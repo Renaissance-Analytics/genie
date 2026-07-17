@@ -8,10 +8,19 @@ import {
     setIssueWatch,
     markIssueWatchSeen,
     getWorkspaceIssuewatchGranularity,
+    getWorkspaceIssuewatchHandlers,
+    listWorkspaceIssuewatchAgents,
     getForkUpstream,
     setForkUpstream,
     type IssuewatchGranularity,
 } from '../db';
+import {
+    resolveIssueWatchRecipients,
+    dispatchIssueWatchPings,
+    feedSignature,
+    hasNewOrChangedItems,
+    type IssueWatchDispatchSinks,
+} from './ping';
 import { detectFolder } from '../workspace/detect';
 import {
     fetchRepoWatchItemsResult,
@@ -166,6 +175,42 @@ export interface PushedIssueWatchDelta {
  */
 const pushedByWorkspace = new Map<string, { counts: TypeCounts; feed: WorkspaceFeedItem[] }>();
 
+/**
+ * Per-workspace signature of the last applied feed (item key → updatedAt) — the
+ * dedup baseline so a re-sent-but-unchanged delta (a reconnect, an unrelated
+ * poll) never fires an agent ping. The FIRST snapshot a workspace ever gets this
+ * session is a baseline that does NOT ping (see {@link hasNewOrChangedItems}).
+ */
+const iwSignatureByWorkspace = new Map<string, Map<string, string>>();
+
+/**
+ * The effectful ping sinks (glow a terminal / wake an idle agent). Injected at
+ * boot from background.ts — the electron/broker edges — so this module (and its
+ * tests) stay free of them. Null until wired, or in tests: pings become no-ops.
+ */
+let issueWatchPingSinks: IssueWatchDispatchSinks | null = null;
+
+/** Wire the IssueWatch → agent ping effects (background.ts installs the real
+ *  ones; a test can install fakes or leave it null to disable pinging). */
+export function setIssueWatchPingSinks(sinks: IssueWatchDispatchSinks | null): void {
+    issueWatchPingSinks = sinks;
+}
+
+/**
+ * Resolve + dispatch a workspace's IssueWatch ping to its handler agents. The
+ * recipient set follows the LOCKED rule: a non-empty designated set restricts to
+ * those (handle-enabled) agents, else every handle-enabled agent. No-op when no
+ * sinks are wired.
+ */
+function pingIssueWatchHandlers(workspaceId: string): void {
+    if (!issueWatchPingSinks) return;
+    const designated = getWorkspaceIssuewatchHandlers(workspaceId);
+    const agents = listWorkspaceIssuewatchAgents(workspaceId);
+    const recipients = resolveIssueWatchRecipients(designated, agents);
+    if (recipients.length === 0) return;
+    dispatchIssueWatchPings(recipients, issueWatchPingSinks);
+}
+
 export type IssueWatchServiceState = 'connecting' | 'connected' | 'signed-out' | 'disabled' | 'disconnected';
 let serviceState: IssueWatchServiceState = 'connecting';
 
@@ -212,10 +257,17 @@ export function applyPushedDelta(delta: PushedIssueWatchDelta): void {
                 unread: it.unread ?? false,
             }) as WorkspaceFeedItem,
     );
+    // Ping the workspace's handler agents — but ONLY on a genuinely new/changed
+    // item, and never on the session's first (baseline) snapshot, so a reconnect
+    // or an unrelated re-push can't spam. Compute the change against the prior
+    // signature BEFORE overwriting it.
+    const changed = hasNewOrChangedItems(iwSignatureByWorkspace.get(delta.workspaceId), feed);
+    iwSignatureByWorkspace.set(delta.workspaceId, feedSignature(feed));
     pushedByWorkspace.set(delta.workspaceId, { counts: { ...delta.counts }, feed });
     serviceState = 'connected';
     // A live delta IS authoritative delivery — the feed is now in hand.
     reconcileDelivered = true;
+    if (changed) pingIssueWatchHandlers(delta.workspaceId);
     void broadcastUpdate();
 }
 
@@ -224,6 +276,9 @@ export function applyPushedDelta(delta: PushedIssueWatchDelta): void {
  * local polling. No-op when it wasn't server-fed.
  */
 export function clearPushedDelta(workspaceId: string): void {
+    // Drop the dedup baseline too, so a later re-assignment re-baselines (its
+    // first snapshot won't ping) instead of diffing against a stale signature.
+    iwSignatureByWorkspace.delete(workspaceId);
     if (pushedByWorkspace.delete(workspaceId)) void broadcastUpdate();
 }
 
