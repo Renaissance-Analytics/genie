@@ -1093,13 +1093,14 @@ describe('handleMcpMessage', () => {
                 checkIssues: vi.fn().mockResolvedValue({
                     connected: false,
                     workspaceResolved: true,
+                    serviceState: 'disabled',
                     counts: { issue: 0, pr: 0, security: 0 },
                     items: [],
                 }),
             }),
         );
         expect((notConnected?.result as { content: Array<{ text: string }> }).content[0].text).toContain(
-            'Tynn IssueWatch stream is not connected',
+            'disabled by the Tynn account entitlement',
         );
 
         const noWorkspace = await handleMcpMessage(

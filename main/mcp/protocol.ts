@@ -162,6 +162,7 @@ export interface IssueWatchCounts {
 export interface IssueWatchSnapshot {
     connected: boolean;
     workspaceResolved: boolean;
+    serviceState?: 'connecting' | 'connected' | 'signed-out' | 'disabled' | 'disconnected';
     counts: IssueWatchCounts;
     items: IssueWatchItem[];
     /** The user's PER-BUCKET remediation preference (workspace settings), folded
@@ -1369,7 +1370,14 @@ export function formatIssueWatchFeed(snap: IssueWatchSnapshot): string {
         return "IssueWatch — couldn't resolve this terminal to a Genie workspace. Pass your GENIE_TERMINAL_ID as `terminalId`, or run this from a terminal inside a workspace.";
     }
     if (!snap.connected) {
-        return 'IssueWatch — the Tynn IssueWatch stream is not connected, so current items are unavailable. Check the Genie Tynn sign-in and IssueWatch entitlement; Genie GitHub access is not required.';
+        const reason = {
+            'signed-out': 'Genie is signed out of Tynn. Sign in to Tynn from Genie Settings.',
+            disabled: 'IssueWatch is disabled by the Tynn account entitlement. Manage it at https://tynn.ai/account/issuewatch.',
+            connecting: 'Genie is still connecting to the Tynn IssueWatch stream.',
+            disconnected: 'The Tynn IssueWatch transport disconnected after startup. Check Tynn broadcasting and network connectivity.',
+            connected: 'The stream reports connected but no workspace snapshot is available yet.',
+        }[snap.serviceState ?? 'disconnected'];
+        return `IssueWatch — unavailable: ${reason} Genie GitHub access is not required.`;
     }
     if (snap.items.length === 0) {
         return 'IssueWatch — nothing open across this workspace\'s repos (no Issues, PRs, or security alerts).';

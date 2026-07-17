@@ -235,7 +235,13 @@ export async function checkIssuesForMcp(terminalId: string): Promise<IssueWatchS
     }
     const status = await getWorkspaceStatus(wsId);
     if (!status.connected) {
-        return { connected: false, workspaceResolved: true, counts: empty, items: [] };
+        return {
+            connected: false,
+            workspaceResolved: true,
+            serviceState: status.serviceState,
+            counts: empty,
+            items: [],
+        };
     }
     const feed = await getWorkspaceFeed(wsId).catch(() => []);
     const allCounts = await getOpenCounts().catch(

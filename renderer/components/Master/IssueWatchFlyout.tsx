@@ -343,10 +343,12 @@ export default function IssueWatchFlyout({
                             </div>
                             <div className="iw-muted">
                                 {serviceState === 'disabled'
-                                    ? 'IssueWatch is not enabled for this Tynn account.'
+                                    ? 'IssueWatch is disabled by this Tynn account entitlement. Manage it at tynn.ai/account/issuewatch.'
                                     : serviceState === 'connecting'
                                       ? 'Connecting to the Tynn IssueWatch stream…'
-                                      : 'Check your Tynn sign-in and connection. Genie GitHub access is not required for IssueWatch.'}
+                                      : serviceState === 'signed-out'
+                                        ? 'Genie is signed out of Tynn. Sign in from Settings.'
+                                        : 'The Tynn IssueWatch transport disconnected. Check Tynn broadcasting and network connectivity. Genie GitHub access is not required.'}
                             </div>
                         </div>
                     ) : (
