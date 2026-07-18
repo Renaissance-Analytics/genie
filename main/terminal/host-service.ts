@@ -281,6 +281,196 @@ function pruneRuntimeStaging(base: string): void {
 }
 
 /**
+ * The versioned directory key for a materialized PTY-HOST copy (the host script
+ * + its co-located node-pty). Keyed by the fancy-term-host + node-pty package
+ * VERSIONS — NOT the node runtime version — so a Genie release that bumps
+ * fancy-term-host or node-pty lands in a NEW dir even when the shipped node.exe
+ * is unchanged (nesting it under the node-runtime key would reuse a stale host
+ * copy on such a release). Sanitised to a safe dir name. Pure → unit-testable.
+ */
+export function hostKeyFor(
+    fthVersion: string | null,
+    nodePtyVersion: string | null,
+): string {
+    const fth = (fthVersion ?? '').trim() || 'x';
+    const npty = (nodePtyVersion ?? '').trim() || 'x';
+    return `fth${fth}-npty${npty}`.replace(/[^A-Za-z0-9._-]/g, '_');
+}
+
+/**
+ * Materialize the pty-host SCRIPT + node-pty into a per-user, VERSIONED copy laid
+ * out so the host's `import 'node-pty'` resolves to the USER-DATA node-pty — NOT
+ * the install-dir one. Returns the materialized `pty-host.js` path to LAUNCH, or
+ * null on any failure (caller falls back to the in-place script).
+ *
+ * WHY THIS EXISTS — the update-kills-terminals root cause: the pty-host script
+ * ships UNPACKED in the install dir, and `import 'node-pty'` from there resolves,
+ * via the ordinary node_modules walk, to the INSTALL-DIR `node_modules/node-pty`
+ * — BEFORE `NODE_PATH` is ever consulted (and `NODE_PATH` is CJS-only; the ESM
+ * host ignores it entirely, so the shipped user-data node-pty was silently
+ * SHADOWED). The running host then MEMORY-MAPS that install-dir `conpty.node` /
+ * `conpty.dll`. The NSIS auto-update replaces the whole install dir wholesale;
+ * Windows can't overwrite those locked mapped files, so the installer KILLS the
+ * host to free them → live terminals die on every update.
+ *
+ * The materialized layout puts node-pty where the host's OWN node_modules walk
+ * finds it FIRST, so the running host maps ONLY user-data files and the installer
+ * overwrites the install dir untouched:
+ *
+ *   <baseDir>/<hostKey>/node_modules/@particle-academy/fancy-term-host/dist/pty-host.js
+ *   <baseDir>/<hostKey>/node_modules/node-pty/      (+ build/Release/*.node,*.dll)
+ *
+ * The WHOLE fancy-term-host package dir is copied — its sibling `chunk-*.js` AND
+ * the `package.json` that marks it `"type":"module"` (without which node would
+ * parse the ESM host as CommonJS and its `import`s would throw). Same `.complete`
+ * + versioned-key + staging-rename discipline as materializeRuntimeToUserData: an
+ * existing complete copy is reused byte-for-byte (a live host is never disturbed),
+ * a torn/half copy can never masquerade as complete, and superseded version dirs
+ * are LEFT in place (an old host may still be running one).
+ */
+export function materializeHostToUserData(
+    deps: {
+        hostScriptSource: string;
+        packageRoot: string;
+        packageName: string;
+        nodePtySource: string;
+        hostKey: string;
+    },
+    baseDir?: string,
+): string | null {
+    try {
+        if (!fs.existsSync(deps.hostScriptSource)) return null;
+        if (!fs.existsSync(deps.nodePtySource)) return null;
+
+        const base = baseDir ?? path.join(app.getPath('userData'), 'pty-host');
+        const dest = path.join(base, deps.hostKey);
+        const nameParts = deps.packageName.split('/').filter(Boolean);
+        const scriptRel = path.relative(deps.packageRoot, deps.hostScriptSource);
+        const materializedScript = path.join(dest, 'node_modules', ...nameParts, scriptRel);
+
+        if (
+            fs.existsSync(path.join(dest, '.complete')) &&
+            fs.existsSync(materializedScript)
+        ) {
+            pruneRuntimeStaging(base);
+            return materializedScript;
+        }
+
+        const staging = path.join(base, `${deps.hostKey}.staging-${process.pid}`);
+        fs.rmSync(staging, { recursive: true, force: true });
+        const stagingPkg = path.join(staging, 'node_modules', ...nameParts);
+        fs.mkdirSync(path.dirname(stagingPkg), { recursive: true });
+        fs.cpSync(deps.packageRoot, stagingPkg, { recursive: true });
+        fs.cpSync(deps.nodePtySource, path.join(staging, 'node_modules', 'node-pty'), {
+            recursive: true,
+        });
+        fs.writeFileSync(path.join(staging, '.complete'), new Date().toISOString());
+        fs.rmSync(dest, { recursive: true, force: true }); // clear a torn earlier attempt
+        fs.renameSync(staging, dest);
+        pruneRuntimeStaging(base);
+        logHostService(`pty-host materialized to user-data → ${materializedScript}`);
+        return materializedScript;
+    } catch (e) {
+        logHostService(
+            `pty-host materialize failed — host will run the in-place script (maps install-dir node-pty; no update-survival): ${
+                e instanceof Error ? e.message : String(e)
+            }`,
+        );
+        return null;
+    }
+}
+
+/** Walk up from `startDir` to the nearest ancestor that holds a package.json
+ *  (the package root). Bounded so a bad path can't loop. */
+function findUpPackageRoot(startDir: string): string | null {
+    let dir = startDir;
+    for (let i = 0; i < 8; i++) {
+        try {
+            if (fs.existsSync(path.join(dir, 'package.json'))) return dir;
+        } catch {
+            /* keep walking */
+        }
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+    }
+    return null;
+}
+
+/**
+ * Resolve the pty-host script to LAUNCH: the user-data materialized copy when
+ * possible (so the host maps user-data node-pty and survives an auto-update),
+ * else null → the caller uses the in-place script.
+ *
+ * Packaged builds only — dev runs the in-place tree (no update concern, and a
+ * stale copy must not mask a host / node-pty rebuild). Derives the fancy-term-host
+ * package root + its sibling node-pty from `ptyHostScriptPath()`, keys the copy by
+ * both package versions, and delegates to materializeHostToUserData. NEVER throws.
+ */
+export function resolveMaterializedHostScript(): string | null {
+    try {
+        if (!app.isPackaged) return null;
+
+        let src: string | null = null;
+        try {
+            src = ptyHostScriptPath() ?? null;
+        } catch {
+            src = null;
+        }
+        if (!src || !fs.existsSync(src)) return null;
+
+        const packageRoot = findUpPackageRoot(path.dirname(src));
+        if (!packageRoot) return null;
+
+        let packageName = '@particle-academy/fancy-term-host';
+        let fthVersion: string | null = null;
+        try {
+            const pj = JSON.parse(
+                fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'),
+            );
+            if (typeof pj.name === 'string') packageName = pj.name;
+            if (typeof pj.version === 'string') fthVersion = pj.version;
+        } catch {
+            /* keep defaults — nodePtySource existence still gates below */
+        }
+
+        // The node_modules that HOLDS the package: 2 levels up for a scoped name
+        // (@scope/pkg), 1 for an unscoped one. node-pty is its sibling there — the
+        // same install-dir node-pty the running host maps today.
+        const nodeModulesDir = packageName.startsWith('@')
+            ? path.dirname(path.dirname(packageRoot))
+            : path.dirname(packageRoot);
+        const nodePtySource = path.join(nodeModulesDir, 'node-pty');
+        if (!fs.existsSync(nodePtySource)) return null;
+
+        let nptyVersion: string | null = null;
+        try {
+            const npj = JSON.parse(
+                fs.readFileSync(path.join(nodePtySource, 'package.json'), 'utf8'),
+            );
+            if (typeof npj.version === 'string') nptyVersion = npj.version;
+        } catch {
+            /* version-absence-tolerant — key falls back to 'x' */
+        }
+
+        return materializeHostToUserData({
+            hostScriptSource: src,
+            packageRoot,
+            packageName,
+            nodePtySource,
+            hostKey: hostKeyFor(fthVersion, nptyVersion),
+        });
+    } catch (e) {
+        logHostService(
+            `host-script materialize resolve failed — using the in-place script: ${
+                e instanceof Error ? e.message : String(e)
+            }`,
+        );
+        return null;
+    }
+}
+
+/**
  * Try to bring up the per-user OS service and CONNECT a HostClient to it.
  *
  * Returns:
@@ -444,9 +634,12 @@ export async function ensureRunKeyAutostart(deps: {
 }): Promise<{ ok: boolean; reason?: string }> {
     if (process.platform !== 'win32') return { ok: false, reason: 'win32 only' };
     try {
+        // Prefer the user-data materialized host script so the persisted Run-key
+        // `.cmd` launches the copy whose node-pty resolves to user-data (survives
+        // the auto-update). Falls back to the in-place script when unavailable.
         let hostScript: string | undefined;
         try {
-            hostScript = ptyHostScriptPath() ?? undefined;
+            hostScript = resolveMaterializedHostScript() ?? ptyHostScriptPath() ?? undefined;
         } catch {
             hostScript = undefined;
         }
@@ -586,9 +779,15 @@ export async function activateHostService(
         };
     }
 
+    // Prefer the user-data materialized host script (its co-located node-pty
+    // resolves to user-data → survives the auto-update); fall back to the
+    // in-place script. The service `.cmd`/unit runs `node.exe <hostScript>`, and
+    // node.exe is already the user-data-materialized runtime (resolveShippedRuntime),
+    // so both the runtime AND the host code the service launches live outside the
+    // install dir.
     let hostScript: string | undefined;
     try {
-        hostScript = ptyHostScriptPath() ?? undefined;
+        hostScript = resolveMaterializedHostScript() ?? ptyHostScriptPath() ?? undefined;
     } catch {
         hostScript = undefined;
     }

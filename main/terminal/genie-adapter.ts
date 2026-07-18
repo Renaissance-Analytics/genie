@@ -22,6 +22,7 @@ import {
 } from '@particle-academy/fancy-term-host';
 import {
     resolveShippedRuntime,
+    resolveMaterializedHostScript,
     writeDetachedMode,
     logHostService,
 } from './host-service';
@@ -132,14 +133,26 @@ export function electronHostSpawner(_dirname: string): HostSpawner {
         },
         userDataDir: () => app.getPath('userData'),
         spawnDetached: (scriptPath: string, env: Record<string, string>) => {
+            // Launch the pty-host from a USER-DATA copy (script + co-located
+            // node-pty) so the host's `import 'node-pty'` resolves to the
+            // user-data node-pty, not the install-dir one. The install-dir
+            // node-pty's conpty.node/conpty.dll would otherwise be memory-mapped
+            // by the running host and BLOCK the NSIS auto-update from overwriting
+            // the install dir — forcing the installer to KILL the host, which is
+            // why every update killed live terminals even though the standalone
+            // teardown correctly LEFT the host running. Falls back to the in-place
+            // script when the copy isn't available (dev, or a materialize failure).
+            const script = resolveMaterializedHostScript() ?? scriptPath;
+
             // PREFER the shipped standalone Node runtime. Running the detached
             // host on its OWN node.exe (not Genie's Electron binary) means it does
             // NOT pin genie.exe — so an auto-update can overwrite Genie while the
             // host stays alive and terminals survive (the same property the OS
             // service has, but with no schtasks/launchd/systemd install — which is
-            // exactly what's blocked on locked-down Windows). The shipped node-pty
-            // (N-API) loads via NODE_PATH=<runtime>. We record the mode so the
-            // update-teardown + the willRestartPtyHost warning know it won't pin.
+            // exactly what's blocked on locked-down Windows). node-pty (N-API) now
+            // resolves co-located to the user-data copy; NODE_PATH is kept as a
+            // belt-and-suspenders (CJS-only; the ESM host ignores it). We record
+            // the mode so the update-teardown + willRestartPtyHost know it won't pin.
             const rt = resolveShippedRuntime();
             if (rt?.nodePath) {
                 const standaloneEnv: Record<string, string | undefined> = {
@@ -149,7 +162,7 @@ export function electronHostSpawner(_dirname: string): HostSpawner {
                 };
                 // Make sure no inherited Electron flag confuses standalone Node.
                 delete standaloneEnv.ELECTRON_RUN_AS_NODE;
-                const child = spawn(rt.nodePath, [scriptPath], {
+                const child = spawn(rt.nodePath, [script], {
                     detached: true,
                     // Hide the host's console window. node.exe is a console-
                     // subsystem app, so without this a `detached` spawn pops a
@@ -170,8 +183,10 @@ export function electronHostSpawner(_dirname: string): HostSpawner {
                 return;
             }
             // Fallback: no standalone runtime shipped → run as Genie's execPath
-            // child (pins the binary; the update will kill + restart it).
-            const child = spawn(process.execPath, [scriptPath], {
+            // child (pins the binary; the update will kill + restart it). Still
+            // launches the materialized script so the host maps user-data node-pty
+            // (the binary pin, not node-pty, is what forces the kill here).
+            const child = spawn(process.execPath, [script], {
                 detached: true,
                 // Belt-and-suspenders: electron.exe is GUI-subsystem so it won't
                 // create a console anyway, but keep the flag consistent with the

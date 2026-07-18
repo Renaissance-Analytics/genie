@@ -42,6 +42,8 @@ vi.mock('@particle-academy/fancy-term-host/service', () => ({
 import {
     runtimeKeyFor,
     materializeRuntimeToUserData,
+    hostKeyFor,
+    materializeHostToUserData,
     runKeyVbsContents,
     runKeyRegAddArgv,
     isServiceBlocked,
@@ -67,6 +69,55 @@ function makeShipped(version?: string): string {
     fs.writeFileSync(path.join(root, 'node-pty', 'index.js'), 'module.exports={}');
     if (version) fs.writeFileSync(path.join(root, 'version.txt'), `${version}\n`);
     return root;
+}
+
+/**
+ * A fake INSTALL-DIR tree (mirrors app.asar.unpacked/node_modules): the
+ * `@particle-academy/fancy-term-host` package (dist/pty-host.js + a sibling
+ * chunk + the `type:module` package.json) and a sibling `node-pty` package with
+ * a native binding under build/Release. Returns the source paths the resolver
+ * derives at runtime.
+ */
+function makeHostSources(opts: {
+    fthVersion: string;
+    nptyVersion: string;
+}): {
+    hostScriptSource: string;
+    packageRoot: string;
+    packageName: string;
+    nodePtySource: string;
+} {
+    const packageName = '@particle-academy/fancy-term-host';
+    const nm = path.join(tmp, 'install', 'node_modules');
+    const packageRoot = path.join(nm, '@particle-academy', 'fancy-term-host');
+    fs.mkdirSync(path.join(packageRoot, 'dist'), { recursive: true });
+    fs.writeFileSync(
+        path.join(packageRoot, 'package.json'),
+        JSON.stringify({ name: packageName, version: opts.fthVersion, type: 'module' }),
+    );
+    fs.writeFileSync(
+        path.join(packageRoot, 'dist', 'pty-host.js'),
+        "import { spawn } from 'node-pty';\nimport './chunk-abc.js';\n",
+    );
+    fs.writeFileSync(path.join(packageRoot, 'dist', 'chunk-abc.js'), '// sibling chunk');
+
+    const nodePtySource = path.join(nm, 'node-pty');
+    fs.mkdirSync(path.join(nodePtySource, 'build', 'Release'), { recursive: true });
+    fs.mkdirSync(path.join(nodePtySource, 'lib'), { recursive: true });
+    fs.writeFileSync(
+        path.join(nodePtySource, 'package.json'),
+        JSON.stringify({ name: 'node-pty', version: opts.nptyVersion, main: './lib/index.js' }),
+    );
+    fs.writeFileSync(path.join(nodePtySource, 'lib', 'index.js'), 'module.exports={}');
+    fs.writeFileSync(path.join(nodePtySource, 'build', 'Release', 'conpty.node'), 'FAKE-NODE');
+    fs.writeFileSync(path.join(nodePtySource, 'build', 'Release', 'conpty.dll'), 'FAKE-DLL');
+
+    return {
+        hostScriptSource: path.join(packageRoot, 'dist', 'pty-host.js'),
+        packageRoot,
+        packageName,
+        nodePtySource,
+    };
 }
 
 describe('runtimeKeyFor — the versioned copy key', () => {
@@ -148,6 +199,136 @@ describe('materializeRuntimeToUserData — the update-survival copy', () => {
         const root = path.join(tmp, 'empty');
         fs.mkdirSync(root, { recursive: true });
         expect(materializeRuntimeToUserData(root, 'node.exe', path.join(tmp, 'b'))).toBeNull();
+    });
+});
+
+describe('hostKeyFor — the pty-host copy key (package versions, not node version)', () => {
+    it('keys by fancy-term-host + node-pty versions', () => {
+        expect(hostKeyFor('0.3.0', '1.1.0')).toBe('fth0.3.0-npty1.1.0');
+    });
+
+    it('falls back to a placeholder when a version is missing', () => {
+        expect(hostKeyFor(null, '1.1.0')).toBe('fthx-npty1.1.0');
+        expect(hostKeyFor('0.3.0', '   ')).toBe('fth0.3.0-nptyx');
+    });
+
+    it('sanitises unsafe characters to a valid dir name', () => {
+        expect(hostKeyFor('0.3.0 beta/1', '1.1.0')).toBe('fth0.3.0_beta_1-npty1.1.0');
+    });
+});
+
+describe('materializeHostToUserData — co-located node-pty so the host survives the update', () => {
+    it('lays out the host script + node-pty so require(node-pty) resolves to user-data', () => {
+        const src = makeHostSources({ fthVersion: '0.3.0', nptyVersion: '1.1.0' });
+        const base = path.join(tmp, 'pty-host');
+        const key = hostKeyFor('0.3.0', '1.1.0');
+
+        const script = materializeHostToUserData({ ...src, hostKey: key }, base);
+
+        const dest = path.join(base, key);
+        // The launched script sits at the standard package path under user-data.
+        expect(script).toBe(
+            path.join(
+                dest,
+                'node_modules',
+                '@particle-academy',
+                'fancy-term-host',
+                'dist',
+                'pty-host.js',
+            ),
+        );
+        expect(fs.existsSync(script!)).toBe(true);
+        // The `type:module` package.json AND the sibling chunk came along — without
+        // them node parses the ESM host as CJS and its imports throw.
+        expect(
+            fs.existsSync(
+                path.join(dest, 'node_modules', '@particle-academy', 'fancy-term-host', 'package.json'),
+            ),
+        ).toBe(true);
+        expect(
+            fs.existsSync(
+                path.join(dest, 'node_modules', '@particle-academy', 'fancy-term-host', 'dist', 'chunk-abc.js'),
+            ),
+        ).toBe(true);
+        // node-pty (incl. its native conpty.node/conpty.dll) is co-located.
+        expect(fs.existsSync(path.join(dest, 'node_modules', 'node-pty', 'package.json'))).toBe(true);
+        expect(
+            fs.existsSync(path.join(dest, 'node_modules', 'node-pty', 'build', 'Release', 'conpty.node')),
+        ).toBe(true);
+        expect(
+            fs.existsSync(path.join(dest, 'node_modules', 'node-pty', 'build', 'Release', 'conpty.dll')),
+        ).toBe(true);
+        expect(fs.existsSync(path.join(dest, '.complete'))).toBe(true);
+
+        // THE INVARIANT: node's node_modules walk-up from the script's dir finds
+        // node-pty at the FIRST node_modules ancestor (nothing closer shadows it),
+        // i.e. the running host maps the user-data node-pty — never the install dir.
+        const walkTargetNodeModules = path.resolve(path.dirname(script!), '..', '..', '..');
+        expect(walkTargetNodeModules).toBe(path.join(dest, 'node_modules'));
+        expect(fs.existsSync(path.join(walkTargetNodeModules, 'node-pty'))).toBe(true);
+    });
+
+    it('REUSES an existing complete copy untouched — the running host is never disturbed', () => {
+        const src = makeHostSources({ fthVersion: '0.3.0', nptyVersion: '1.1.0' });
+        const base = path.join(tmp, 'pty-host');
+        const key = hostKeyFor('0.3.0', '1.1.0');
+        const first = materializeHostToUserData({ ...src, hostKey: key }, base)!;
+
+        // Canary inside the user-data copy must SURVIVE the next call (same key ⇒
+        // no re-copy — that's what keeps a live host's mapped files stable).
+        fs.writeFileSync(path.join(base, key, 'canary.txt'), 'still here');
+
+        const second = materializeHostToUserData({ ...src, hostKey: key }, base);
+        expect(second).toBe(first);
+        expect(fs.readFileSync(path.join(base, key, 'canary.txt'), 'utf8')).toBe('still here');
+    });
+
+    it('a fancy-term-host / node-pty bump lands in a NEW dir; the old copy is kept', () => {
+        const base = path.join(tmp, 'pty-host');
+        const oldSrc = makeHostSources({ fthVersion: '0.3.0', nptyVersion: '1.1.0' });
+        const oldKey = hostKeyFor('0.3.0', '1.1.0');
+        const oldScript = materializeHostToUserData({ ...oldSrc, hostKey: oldKey }, base)!;
+
+        // Ship a new fancy-term-host version (same node runtime — the node key
+        // would NOT change, which is exactly why the host copy is keyed separately).
+        fs.writeFileSync(
+            path.join(oldSrc.packageRoot, 'package.json'),
+            JSON.stringify({ name: oldSrc.packageName, version: '0.4.0', type: 'module' }),
+        );
+        const newKey = hostKeyFor('0.4.0', '1.1.0');
+        const newScript = materializeHostToUserData({ ...oldSrc, hostKey: newKey }, base)!;
+
+        expect(newKey).not.toBe(oldKey);
+        expect(newScript).not.toBe(oldScript);
+        // The superseded copy survives — an old host may still be running it.
+        expect(fs.existsSync(oldScript)).toBe(true);
+    });
+
+    it('prunes crashed .staging-* leftovers and recovers a torn copy', () => {
+        const src = makeHostSources({ fthVersion: '0.3.0', nptyVersion: '1.1.0' });
+        const base = path.join(tmp, 'pty-host');
+        const key = hostKeyFor('0.3.0', '1.1.0');
+        // A torn previous attempt (dest with no .complete) + a crashed staging dir.
+        fs.mkdirSync(path.join(base, key), { recursive: true });
+        fs.writeFileSync(path.join(base, key, 'garbage'), 'torn');
+        fs.mkdirSync(path.join(base, `${key}.staging-99999`), { recursive: true });
+
+        const script = materializeHostToUserData({ ...src, hostKey: key }, base);
+
+        expect(fs.existsSync(script!)).toBe(true);
+        expect(fs.existsSync(path.join(base, key, '.complete'))).toBe(true);
+        expect(fs.existsSync(path.join(base, key, 'garbage'))).toBe(false); // torn attempt replaced
+        expect(fs.existsSync(path.join(base, `${key}.staging-99999`))).toBe(false);
+    });
+
+    it('returns null when a source is missing (caller falls back to the in-place script)', () => {
+        const src = makeHostSources({ fthVersion: '0.3.0', nptyVersion: '1.1.0' });
+        const base = path.join(tmp, 'pty-host');
+        // Remove node-pty → cannot co-locate → null.
+        fs.rmSync(src.nodePtySource, { recursive: true, force: true });
+        expect(
+            materializeHostToUserData({ ...src, hostKey: hostKeyFor('0.3.0', '1.1.0') }, base),
+        ).toBeNull();
     });
 });
 
