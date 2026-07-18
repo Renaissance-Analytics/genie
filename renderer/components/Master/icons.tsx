@@ -449,3 +449,61 @@ export const IconGrip = ({ size = 12, ...p }: Props) =>
         p.className,
         p.style,
     );
+/** Clock — "waiting on an agent" / thread age. */
+export const IconClock = ({ size = 12, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <circle cx="12" cy="12" r="9" />
+            <polyline points="12 7 12 12 15.5 14" />
+        </>,
+        p.className,
+        p.style,
+    );
+/** Double check — a thread the human has already read. */
+export const IconCheckCheck = ({ size = 12, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <path d="M2 12.5 6 16.5 13 8.5" />
+            <path d="M10.5 14.5 12.5 16.5 20 7.5" />
+        </>,
+        p.className,
+        p.style,
+    );
+/** Horizontal ellipsis — overflow menu. */
+export const IconMore = ({ size = 14, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <circle cx="5" cy="12" r="1.2" />
+            <circle cx="12" cy="12" r="1.2" />
+            <circle cx="19" cy="12" r="1.2" />
+        </>,
+        p.className,
+        p.style,
+    );
+/** Reply arrow — break into an observed thread. */
+export const IconReply = ({ size = 13, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <polyline points="9 14 4 9 9 4" />
+            <path d="M4 9h9a7 7 0 0 1 7 7v4" />
+        </>,
+        p.className,
+        p.style,
+    );
+/** Swap arrows — the ⇆ between two DM participants. */
+export const IconSwap = ({ size = 12, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <polyline points="16 4 20 8 16 12" />
+            <path d="M20 8H4" />
+            <polyline points="8 12 4 16 8 20" />
+            <path d="M4 16h16" />
+        </>,
+        p.className,
+        p.style,
+    );

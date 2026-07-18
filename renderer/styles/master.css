@@ -3952,28 +3952,85 @@ body.gutter-dragging .grid-gutter {
 }
 
 /* ===== AgentInbox flyout ============================================== */
+/* Two-pane inbox: a full-width header over a LEFT list pane (search, filter
+   chips, waiting summary, sectioned rows) and a RIGHT thread pane (header,
+   inbox status, message stream, fixed footer). Sender identity is carried by
+   colour throughout — claude purple, codex cyan, anything else neutral — so
+   the tones live as tokens here rather than as per-rule hexes. */
 .agentinbox-btn {
     position: relative;
 }
 .agentinbox-flyout {
-    width: min(760px, 84vw);
+    width: min(1040px, 92vw);
+
+    --ai-purple: var(--agent, #818cf8);
+    --ai-cyan: #38bdf8;
+    --ai-amber: #fbbf24;
+    --ai-green: #34d399;
+    --ai-neutral: var(--fg-3);
+    --ai-pane: var(--card);
+    --ai-raise: var(--card-hover);
+    --ai-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
 }
 .agentinbox-body {
     display: flex;
     flex: 1;
     min-height: 0;
 }
-/* Track C — unACKed-urgent oversight alerts, stacked above the body. */
+
+/* --- header ------------------------------------------------------------ */
+.agentinbox-head {
+    gap: 10px;
+}
+.agentinbox-brand {
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    border-radius: var(--radius-lg);
+    background: linear-gradient(
+        140deg,
+        var(--ai-purple),
+        color-mix(in srgb, var(--ai-purple) 55%, #000)
+    );
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+.agentinbox-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 9px;
+    border-radius: var(--radius-full);
+    border: 1px solid color-mix(in srgb, var(--ai-green) 32%, transparent);
+    background: color-mix(in srgb, var(--ai-green) 12%, transparent);
+    color: var(--ai-green);
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.agentinbox-live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--ai-green);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ai-green) 20%, transparent);
+}
+
+/* --- Track C oversight banner ------------------------------------------ */
 .agentinbox-escalations {
     flex: 0 0 auto;
     border-bottom: 1px solid var(--border-1);
-    background: color-mix(in srgb, var(--rose-500, #f43f5e) 8%, transparent);
+    background: color-mix(in srgb, var(--ai-amber) 9%, transparent);
 }
 .agentinbox-escalation {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 7px 12px;
+    padding: 7px 14px;
     font-size: 12px;
     color: var(--fg-2);
 }
@@ -3985,8 +4042,8 @@ body.gutter-dragging .grid-gutter {
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: var(--rose-500, #f43f5e);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--rose-500, #f43f5e) 20%, transparent);
+    background: var(--ai-amber);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ai-amber) 20%, transparent);
 }
 .agentinbox-escalation-text b {
     color: var(--fg-1);
@@ -3995,26 +4052,131 @@ body.gutter-dragging .grid-gutter {
 .agentinbox-escalation-age {
     color: var(--fg-4);
 }
+
+/* --- left pane --------------------------------------------------------- */
 .agentinbox-nav {
-    flex: 0 0 244px;
-    width: 244px;
+    flex: 0 0 34%;
+    max-width: 360px;
+    min-width: 260px;
     border-right: 1px solid var(--border-1);
-    overflow-y: auto;
-    padding: 10px 8px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 12px 10px 0;
+    gap: 10px;
 }
-.agentinbox-nav-head {
-    font-size: 10.5px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+.agentinbox-search {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 10px;
+    height: 32px;
+    border-radius: 10px;
+    border: 1px solid var(--border-1);
+    background: var(--ai-pane);
     color: var(--fg-4);
-    margin: 10px 6px 4px;
 }
-.agentinbox-nav-head:first-child {
+.agentinbox-search:focus-within {
+    border-color: color-mix(in srgb, var(--ai-purple) 55%, transparent);
+}
+.agentinbox-search-input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    background: none;
+    outline: none;
+    color: var(--fg-1);
+    font: inherit;
+    font-size: 12.5px;
+}
+.agentinbox-search-input::placeholder {
+    color: var(--fg-4);
+}
+.agentinbox-chips {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 6px;
+}
+.agentinbox-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 9px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border-1);
+    background: var(--ai-pane);
+    color: var(--fg-3);
+    font: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-out),
+        border-color var(--dur-fast) var(--ease-out);
+}
+.agentinbox-chip:hover {
+    background: var(--ai-raise);
+}
+.agentinbox-chip.on {
+    border-color: color-mix(in srgb, var(--ai-purple) 55%, transparent);
+    background: color-mix(in srgb, var(--ai-purple) 18%, transparent);
+    color: #fff;
+}
+.agentinbox-chip-count {
+    font-size: 10.5px;
+    color: var(--fg-4);
+}
+.agentinbox-chip.on .agentinbox-chip-count {
+    color: color-mix(in srgb, #fff 70%, transparent);
+}
+.agentinbox-waiting-line {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    color: var(--fg-4);
+}
+.agentinbox-waiting-line svg {
+    color: var(--ai-amber);
+    flex: 0 0 auto;
+}
+.agentinbox-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: 12px;
+}
+
+/* --- section headers --------------------------------------------------- */
+.agentinbox-sec {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 14px 2px 6px;
+}
+.agentinbox-scroll > .agentinbox-sec:first-child {
     margin-top: 2px;
 }
+.agentinbox-sec-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--fg-4);
+    white-space: nowrap;
+}
+.agentinbox-sec-count {
+    font-size: 10px;
+    color: var(--fg-4);
+    opacity: 0.75;
+}
+.agentinbox-sec-rule {
+    flex: 1;
+    height: 1px;
+    background: var(--border-1);
+}
 .agentinbox-empty {
-    padding: 6px 8px;
+    padding: 6px 4px;
     font-size: 12px;
     color: var(--fg-4);
 }
@@ -4023,141 +4185,204 @@ body.gutter-dragging .grid-gutter {
     margin: 0;
     padding: 0;
 }
-.agentinbox-agent,
-.agentinbox-channel {
+
+/* --- list rows --------------------------------------------------------- */
+.agentinbox-row {
+    position: relative;
     width: 100%;
     display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
-    margin-bottom: 2px;
-    border: none;
-    border-radius: var(--radius-md);
+    align-items: flex-start;
+    gap: 9px;
+    padding: 8px 10px 8px 12px;
+    margin-bottom: 3px;
+    border: 1px solid transparent;
+    border-radius: 10px;
     background: transparent;
     color: var(--fg-2);
     font: inherit;
     text-align: left;
     cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-out),
+        border-color var(--dur-fast) var(--ease-out);
 }
-.agentinbox-agent:hover,
-.agentinbox-channel:hover {
-    background: var(--bg-2);
+.agentinbox-row:hover {
+    background: var(--ai-pane);
+    border-color: var(--border-1);
 }
-.agentinbox-agent.on,
-.agentinbox-channel.on {
-    background: var(--agent-soft);
+.agentinbox-row.on {
+    background: color-mix(in srgb, var(--ai-purple) 15%, transparent);
+    border-color: color-mix(in srgb, var(--ai-purple) 32%, transparent);
     color: var(--fg-1);
 }
+/* Unread / waiting rows carry an amber edge on their far-left border. */
+.agentinbox-row.alert::before {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 9px;
+    bottom: 9px;
+    width: 2.5px;
+    border-radius: 2px;
+    background: var(--ai-amber);
+}
+.agentinbox-row-av {
+    position: relative;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    padding-top: 1px;
+}
+.agentinbox-row-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.agentinbox-row-top,
+.agentinbox-row-bot {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+.agentinbox-row-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--fg-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.agentinbox-row-name svg {
+    flex: 0 0 auto;
+    color: var(--fg-4);
+}
+.agentinbox-ws {
+    flex: 0 0 auto;
+    max-width: 40%;
+    padding: 1px 6px;
+    border-radius: var(--radius-md);
+    background: var(--bg-2);
+    color: var(--fg-3);
+    font-family: var(--ai-mono);
+    font-size: 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.agentinbox-row-time {
+    margin-left: auto;
+    flex: 0 0 auto;
+    font-size: 10.5px;
+    color: var(--fg-4);
+}
+.agentinbox-row-preview {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--fg-4);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.agentinbox-waiting,
+.agentinbox-read {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10.5px;
+    white-space: nowrap;
+}
+.agentinbox-waiting {
+    padding: 1px 7px;
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--ai-amber) 14%, transparent);
+    color: var(--ai-amber);
+}
+.agentinbox-read {
+    color: var(--fg-4);
+    opacity: 0.75;
+}
+
+/* --- avatars + identity tones ------------------------------------------ */
+.agentinbox-av {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    font-family: var(--ai-mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    text-transform: lowercase;
+}
+.agentinbox-av-pair {
+    display: inline-flex;
+    align-items: center;
+}
+.agentinbox-av-pair .agentinbox-av + .agentinbox-av {
+    margin-left: -7px;
+}
+.agentinbox-tone-claude,
+.agentinbox-tone-human {
+    background: color-mix(in srgb, var(--ai-purple) 22%, var(--bg-0));
+    border-color: color-mix(in srgb, var(--ai-purple) 45%, transparent);
+    color: var(--ai-purple);
+}
+.agentinbox-tone-codex {
+    background: color-mix(in srgb, var(--ai-cyan) 20%, var(--bg-0));
+    border-color: color-mix(in srgb, var(--ai-cyan) 45%, transparent);
+    color: var(--ai-cyan);
+}
+.agentinbox-tone-neutral,
+.agentinbox-tone-hash {
+    background: var(--bg-2);
+    border-color: var(--border-1);
+    color: var(--fg-3);
+}
+.agentinbox-name-claude,
+.agentinbox-name-human {
+    color: var(--ai-purple);
+}
+.agentinbox-name-codex {
+    color: var(--ai-cyan);
+}
+.agentinbox-name-neutral {
+    color: var(--fg-2);
+}
+
+/* Presence pip, tucked into the corner of a directory avatar. */
 .agentinbox-dot {
+    position: absolute;
+    right: -2px;
+    bottom: -1px;
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    flex: 0 0 auto;
+    border: 2px solid var(--shell);
     background: var(--fg-4);
 }
 .agentinbox-dot.agentinbox-online {
-    background: #10b981;
-    box-shadow: 0 0 5px rgba(16, 185, 129, 0.6);
+    background: var(--ai-green);
 }
 .agentinbox-dot.agentinbox-away {
-    background: var(--term-warn, #e2c08d);
+    background: var(--ai-amber);
 }
 .agentinbox-dot.agentinbox-offline {
     background: var(--fg-4);
-    opacity: 0.5;
+    opacity: 0.6;
 }
-.agentinbox-agent-main {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    min-width: 0;
-}
-.agentinbox-agent-label {
-    font-size: 12.5px;
-    color: var(--fg-1);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.agentinbox-agent-sub {
-    font-size: 10.5px;
-    color: var(--fg-4);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.agentinbox-channel-name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 12.5px;
-}
-.agentinbox-channel-count {
-    flex: 0 0 auto;
-    font-size: 10.5px;
-    color: var(--fg-4);
-    background: var(--bg-2);
-    border-radius: 999px;
-    padding: 0 7px;
-    line-height: 16px;
-}
-.agentinbox-dm {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
-    margin-bottom: 2px;
-    border: none;
-    border-radius: var(--radius-md);
-    background: transparent;
-    color: var(--fg-2);
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-}
-.agentinbox-dm:hover {
-    background: var(--bg-2);
-}
-.agentinbox-dm.on {
-    background: var(--agent-soft);
-    color: var(--fg-1);
-}
-.agentinbox-dm-main {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    min-width: 0;
-    flex: 1;
-}
-.agentinbox-dm-label {
-    font-size: 12.5px;
-    color: var(--fg-1);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.agentinbox-dm-sub {
-    font-size: 10.5px;
-    color: var(--fg-4);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.agentinbox-dm-time {
-    flex: 0 0 auto;
-    font-size: 10.5px;
-    color: var(--fg-4);
-}
-.agentinbox-readonly {
-    padding: 10px 12px;
-    border-top: 1px solid var(--border-1);
-    font-size: 11.5px;
-    color: var(--fg-4);
-    font-style: italic;
-}
+
+/* --- right pane -------------------------------------------------------- */
 .agentinbox-main {
     flex: 1;
     min-width: 0;
@@ -4170,17 +4395,118 @@ body.gutter-dragging .grid-gutter {
     max-width: 260px;
 }
 .agentinbox-thread-head {
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--border-1);
-    font-size: 12.5px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+}
+.agentinbox-thread-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.agentinbox-thread-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--fg-1);
+    flex-wrap: wrap;
 }
+.agentinbox-thread-title svg {
+    color: var(--fg-4);
+}
+.agentinbox-thread-ws {
+    color: var(--fg-4);
+    font-family: var(--ai-mono);
+    font-size: 11px;
+    font-weight: 400;
+}
+.agentinbox-thread-sub {
+    font-size: 11px;
+    color: var(--fg-4);
+}
+.agentinbox-menu-wrap {
+    position: relative;
+    flex: 0 0 auto;
+}
+.agentinbox-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 3;
+    min-width: 150px;
+    padding: 4px;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-1);
+    background: var(--ai-raise);
+    box-shadow: var(--shadow-xl);
+    display: flex;
+    flex-direction: column;
+}
+.agentinbox-menu button {
+    padding: 6px 9px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: none;
+    color: var(--fg-2);
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+}
+.agentinbox-menu button:hover {
+    background: var(--bg-2);
+    color: var(--fg-1);
+}
+.agentinbox-inbox-status {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 14px 12px;
+    border-bottom: 1px solid var(--border-1);
+    flex-wrap: wrap;
+}
+.agentinbox-inbox-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--fg-4);
+}
+.agentinbox-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 9px 3px 4px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border-1);
+    background: var(--ai-pane);
+    color: var(--fg-3);
+    font-size: 11px;
+}
+.agentinbox-status-pill.warn {
+    border-color: color-mix(in srgb, var(--ai-amber) 35%, transparent);
+    background: color-mix(in srgb, var(--ai-amber) 12%, transparent);
+    color: var(--ai-amber);
+}
+.agentinbox-status-pill .agentinbox-av {
+    width: 18px;
+    height: 18px;
+    border-radius: 6px;
+    font-size: 8.5px;
+}
+
+/* --- message stream ---------------------------------------------------- */
 .agentinbox-stream {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 12px 16px;
+    padding: 14px;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -4188,66 +4514,171 @@ body.gutter-dragging .grid-gutter {
 .agentinbox-msg {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 6px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border-1);
+    border-left: 2px solid var(--fg-4);
+    background: var(--ai-pane);
+}
+.agentinbox-bar-claude,
+.agentinbox-bar-human {
+    border-left-color: var(--ai-purple);
+}
+.agentinbox-bar-codex {
+    border-left-color: var(--ai-cyan);
 }
 .agentinbox-msg-meta {
     display: flex;
-    align-items: baseline;
-    gap: 8px;
+    align-items: center;
+    gap: 7px;
+}
+.agentinbox-msg-meta .agentinbox-av {
+    width: 18px;
+    height: 18px;
+    border-radius: 6px;
+    font-size: 8.5px;
 }
 .agentinbox-msg-from {
     font-size: 11.5px;
     font-weight: 600;
-    color: var(--fg-2);
 }
-.agentinbox-msg.is-human .agentinbox-msg-from {
-    color: var(--agent, #818cf8);
+.agentinbox-msg-ws {
+    font-family: var(--ai-mono);
+    font-size: 10.5px;
+    color: var(--fg-4);
+}
+.agentinbox-msg-meta .grow {
+    flex: 1;
 }
 .agentinbox-msg-time {
-    font-size: 10px;
+    font-size: 10.5px;
     color: var(--fg-4);
 }
 .agentinbox-msg-text {
     font-size: 12.5px;
-    line-height: 1.45;
+    line-height: 1.55;
     color: var(--fg-1);
     white-space: pre-wrap;
     word-break: break-word;
 }
-.agentinbox-composer {
+.agentinbox-more {
+    align-self: flex-start;
+    border: none;
+    background: none;
+    padding: 0;
+    color: var(--ai-purple);
+    font: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+}
+.agentinbox-more:hover {
+    text-decoration: underline;
+}
+.agentinbox-tags {
     display: flex;
-    gap: 8px;
-    padding: 10px 12px;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+.agentinbox-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border-1);
+    background: var(--bg-2);
+    color: var(--fg-3);
+    font-size: 10.5px;
+}
+.agentinbox-tag-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+}
+.agentinbox-tag-ref {
+    font-family: var(--ai-mono);
+}
+.agentinbox-tag-branch {
+    font-family: var(--ai-mono);
+    border-color: color-mix(in srgb, var(--ai-purple) 30%, transparent);
+    background: color-mix(in srgb, var(--ai-purple) 12%, transparent);
+    color: var(--ai-purple);
+}
+.agentinbox-tag-amber {
+    border-color: color-mix(in srgb, var(--ai-amber) 32%, transparent);
+    background: color-mix(in srgb, var(--ai-amber) 12%, transparent);
+    color: var(--ai-amber);
+}
+.agentinbox-tag-green {
+    border-color: color-mix(in srgb, var(--ai-green) 30%, transparent);
+    background: color-mix(in srgb, var(--ai-green) 12%, transparent);
+    color: var(--ai-green);
+}
+
+/* --- footer (composer / read-only bar) --------------------------------- */
+.agentinbox-foot,
+.agentinbox-composer {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 10px;
+    padding: 10px 14px;
     border-top: 1px solid var(--border-1);
+    align-items: center;
+}
+.agentinbox-composer {
     align-items: flex-end;
+}
+.agentinbox-foot .grow {
+    flex: 1;
+}
+.agentinbox-readonly {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11.5px;
+    color: var(--fg-4);
+}
+.agentinbox-readonly svg {
+    flex: 0 0 auto;
 }
 .agentinbox-input {
     flex: 1;
     resize: none;
     font-size: 12.5px;
-    padding: 7px 9px;
-    background: var(--bg-1);
+    padding: 8px 10px;
+    background: var(--ai-pane);
     color: var(--fg-1);
     border: 1px solid var(--border-1);
-    border-radius: var(--radius-md);
+    border-radius: 10px;
     font-family: inherit;
-    line-height: 1.4;
+    line-height: 1.45;
 }
 .agentinbox-input:focus {
     outline: none;
-    border-color: var(--blue-500, #3b82f6);
+    border-color: color-mix(in srgb, var(--ai-purple) 55%, transparent);
 }
-.agentinbox-send {
+.agentinbox-primary {
     flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font: inherit;
     font-size: 12px;
+    font-weight: 500;
     padding: 8px 14px;
-    border-radius: var(--radius-md);
-    border: 1px solid var(--blue-500, #3b82f6);
-    background: color-mix(in srgb, #3b82f6 18%, var(--bg-1));
-    color: var(--fg-1);
+    border-radius: 9px;
+    border: 1px solid color-mix(in srgb, var(--ai-purple) 60%, transparent);
+    background: var(--ai-purple);
+    color: #fff;
     cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-out);
 }
-.agentinbox-send:disabled {
-    opacity: 0.5;
+.agentinbox-primary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--ai-purple) 82%, #fff);
+}
+.agentinbox-primary:disabled {
+    opacity: 0.45;
     cursor: not-allowed;
 }
