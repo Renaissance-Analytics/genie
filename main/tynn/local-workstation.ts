@@ -6,6 +6,7 @@ import {
     type PushedIssueWatchDelta,
 } from '../issue-watch';
 import {
+    clearWorkstationIdentity,
     ensureLocalWorkstation,
     readWorkstationIdentity,
     type WorkstationIdentity,
@@ -103,6 +104,8 @@ export interface StartLocalWorkstationDeps {
     ensure?: () => Promise<{ status: 'exists' | 'enrolled'; workstationId: string }>;
     /** Read the persisted identity (the host signer). Default: readWorkstationIdentity(). */
     identity?: () => WorkstationIdentity | null;
+    /** Clear a rejected identity before a one-time re-enrollment. */
+    resetIdentity?: () => void;
     /** The user's FMS toggles. Default: backend.fetchFeatures(). */
     features?: () => Promise<{ issuewatch: boolean; agentinbox: boolean }>;
     /** Resolve the Pusher app key + cluster. Default: env → Tynn (resolveBroadcastConfig). */
@@ -143,6 +146,22 @@ export interface LocalWorkstationHandle {
     stop(): void;
 }
 
+export class WorkstationHostHttpError extends Error {
+    constructor(
+        public readonly status: number,
+        operation: string,
+    ) {
+        super(`${operation} failed: HTTP ${status}`);
+        this.name = 'WorkstationHostHttpError';
+    }
+}
+
+function isStaleWorkstationError(error: unknown): boolean {
+    // A 404 definitively means Tynn no longer has this workstation row. A 401
+    // can also be caused by clock skew, so rotating credentials would not help.
+    return error instanceof WorkstationHostHttpError && error.status === 404;
+}
+
 export async function syncWorkstationInventory(
     identity: WorkstationIdentity,
     tynnApiBaseUrl: string,
@@ -172,7 +191,7 @@ export async function syncWorkstationInventory(
         },
         body,
     });
-    if (!res.ok) throw new Error(`workstation inventory sync failed: HTTP ${res.status}`);
+    if (!res.ok) throw new WorkstationHostHttpError(res.status, 'workstation inventory sync');
 }
 
 /**
@@ -192,7 +211,7 @@ async function defaultFetchSnapshot(
         method: 'GET',
         headers: { accept: 'application/json', authorization: identity.authHeader() },
     });
-    if (!res.ok) throw new Error(`issue-watch reconcile failed: HTTP ${res.status}`);
+    if (!res.ok) throw new WorkstationHostHttpError(res.status, 'issue-watch reconcile');
     return parseIssueWatchSnapshot(await res.json());
 }
 
@@ -213,10 +232,11 @@ export async function startLocalWorkstation(
     try {
         // 1) Idempotent self-register + enroll (#2).
         const ensure = deps.ensure ?? (() => ensureLocalWorkstation(backend));
-        const { workstationId, status } = await ensure();
+        let { workstationId, status } = await ensure();
         log(`workstation ${status}: ${workstationId}`);
 
-        const identity = (deps.identity ?? (() => readWorkstationIdentity()))();
+        const readIdentity = deps.identity ?? (() => readWorkstationIdentity());
+        let identity = readIdentity();
         if (!identity) {
             log('no workstation identity after enroll — IssueWatch push off');
             // Terminal for this boot — otherwise state is stuck at 'connecting'
@@ -225,15 +245,29 @@ export async function startLocalWorkstation(
             return null;
         }
         const tynnApiBaseUrl = (deps.tynnApiBaseUrl ?? (() => backend.host()))();
-        const syncInventory = async (): Promise<void> => {
+        const syncInventory = async (currentIdentity: WorkstationIdentity): Promise<void> => {
             if (!deps.inventory) return;
-            await syncWorkstationInventory(identity, tynnApiBaseUrl, await deps.inventory(), fetchImpl);
+            await syncWorkstationInventory(currentIdentity, tynnApiBaseUrl, await deps.inventory(), fetchImpl);
         };
         try {
-            await syncInventory();
+            await syncInventory(identity);
             if (deps.inventory) log('workstation inventory synced');
         } catch (e) {
-            log(`inventory sync failed: ${e instanceof Error ? e.message : String(e)}`);
+            if (status === 'exists' && isStaleWorkstationError(e)) {
+                log('saved workstation identity was rejected by Tynn — re-enrolling once');
+                (deps.resetIdentity ?? clearWorkstationIdentity)();
+                ({ workstationId, status } = await ensure());
+                identity = readIdentity();
+                if (!identity) {
+                    log('no workstation identity after re-enrollment — IssueWatch push off');
+                    setIssueWatchServiceState('disconnected');
+                    return null;
+                }
+                await syncInventory(identity);
+                if (deps.inventory) log('workstation inventory synced after re-enrollment');
+            } else {
+                log(`inventory sync failed: ${e instanceof Error ? e.message : String(e)}`);
+            }
         }
 
         // 2) FMS gate — only ride the channel when IssueWatch is entitled.
@@ -292,7 +326,7 @@ export async function startLocalWorkstation(
                 setReconcileDelivered(false);
                 void (async () => {
                     try {
-                        await syncInventory();
+                        await syncInventory(identity);
                         const deltas = await fetchSnapshot(identity, tynnApiBaseUrl);
                         for (const d of deltas) applyDelta(d);
                         // First snapshot in hand (even if empty = genuinely nothing) —

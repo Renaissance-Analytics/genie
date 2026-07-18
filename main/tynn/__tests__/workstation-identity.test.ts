@@ -3,6 +3,7 @@ import { createPublicKey, verify } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+    clearWorkstationIdentity,
     buildWorkstationAuthHeader,
     ensureLocalWorkstation,
     fingerprintSpki,
@@ -165,5 +166,16 @@ describe('storeWorkstationIdentity', () => {
         const write = vi.fn();
         expect(() => storeWorkstationIdentity('ws-1', 'PEM', write)).toThrow(/encryption is unavailable/);
         expect(write).not.toHaveBeenCalled();
+    });
+});
+
+describe('clearWorkstationIdentity', () => {
+    it('clears both persisted identity fields so the next ensure re-enrolls', () => {
+        const write = vi.fn();
+        clearWorkstationIdentity(write);
+        expect(write).toHaveBeenCalledWith({
+            workstation_id: '',
+            workstation_key_enc: '',
+        });
     });
 });

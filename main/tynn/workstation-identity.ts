@@ -128,6 +128,13 @@ export function storeWorkstationIdentity(
     write({ [ID_KEY]: workstationId, [KEY_ENC_KEY]: enc } as Partial<Settings>);
 }
 
+/** Remove a persisted identity so the next ensure performs a fresh enrollment. */
+export function clearWorkstationIdentity(
+    write: (patch: Partial<Settings>) => void = (p) => void setSettings(p),
+): void {
+    write({ [ID_KEY]: '', [KEY_ENC_KEY]: '' } as Partial<Settings>);
+}
+
 /** The Tynn calls `ensureLocalWorkstation` drives — a subset of `TynnBackend`, so
  *  tests inject a fake and the module stays free of the electron-bound backend. */
 export interface WorkstationEnroller {

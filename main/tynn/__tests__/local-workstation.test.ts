@@ -333,6 +333,66 @@ function fakeTransport() {
 }
 
 describe('startLocalWorkstation', () => {
+    it('re-enrolls once when the persisted workstation no longer exists on Tynn', async () => {
+        const { transport } = fakeTransport();
+        const stale = identity('ws-stale');
+        const fresh = identity('ws-fresh');
+        const ensure = vi.fn()
+            .mockResolvedValueOnce({ status: 'exists', workstationId: 'ws-stale' })
+            .mockResolvedValueOnce({ status: 'enrolled', workstationId: 'ws-fresh' });
+        const readIdentity = vi.fn()
+            .mockReturnValueOnce(stale)
+            .mockReturnValueOnce(fresh);
+        const resetIdentity = vi.fn();
+        const fetchImpl = vi.fn()
+            .mockResolvedValueOnce({ ok: false, status: 404 })
+            .mockResolvedValueOnce({ ok: true, status: 200 });
+        const makeTransport = vi.fn(() => transport);
+
+        const handle = await startLocalWorkstation({
+            ensure,
+            identity: readIdentity,
+            resetIdentity,
+            features: async () => ({ issuewatch: true, agentinbox: false }),
+            broadcastConfig: async () => ({ appKey: 'k', cluster: 'us2' }),
+            tynnApiBaseUrl: () => 'https://tynn.test',
+            inventory: async () => ({ workspaces: [] }),
+            fetchImpl: fetchImpl as never,
+            makeTransport,
+        });
+
+        expect(resetIdentity).toHaveBeenCalledTimes(1);
+        expect(ensure).toHaveBeenCalledTimes(2);
+        expect(readIdentity).toHaveBeenCalledTimes(2);
+        expect(fetchImpl).toHaveBeenCalledTimes(2);
+        expect(makeTransport).toHaveBeenCalledWith(
+            expect.objectContaining({ workstationId: 'ws-fresh' }),
+        );
+        expect(handle?.workstationId).toBe('ws-fresh');
+    });
+
+    it('does not rotate workstation identity for a transient inventory failure', async () => {
+        const { transport } = fakeTransport();
+        const resetIdentity = vi.fn();
+        const ensure = vi.fn().mockResolvedValue({ status: 'exists', workstationId: 'ws-1' });
+
+        const handle = await startLocalWorkstation({
+            ensure,
+            identity: () => identity('ws-1'),
+            resetIdentity,
+            features: async () => ({ issuewatch: true, agentinbox: false }),
+            broadcastConfig: async () => ({ appKey: 'k', cluster: 'us2' }),
+            tynnApiBaseUrl: () => 'https://tynn.test',
+            inventory: async () => ({ workspaces: [] }),
+            fetchImpl: vi.fn().mockRejectedValue(new Error('network down')) as never,
+            makeTransport: () => transport,
+        });
+
+        expect(resetIdentity).not.toHaveBeenCalled();
+        expect(ensure).toHaveBeenCalledTimes(1);
+        expect(handle?.workstationId).toBe('ws-1');
+    });
+
     it('does NOT subscribe when the IssueWatch feature is off (FMS gate)', async () => {
         const make = vi.fn();
         const handle = await startLocalWorkstation({
