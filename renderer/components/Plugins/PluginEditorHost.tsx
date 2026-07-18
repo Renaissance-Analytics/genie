@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { IconCheck, IconMaximize, IconMinimize, IconX } from '../Master/icons';
 import PluginEditorBody from './PluginEditorBody';
 import { type TerminalSpec, type WorkspaceRow } from '../../lib/genie';
+import type { PanelDragHandlers } from '../../lib/panel-reorder';
 
 /**
  * STANDALONE panel host for a plugin-declared Fancy editor — kept for
@@ -21,6 +22,13 @@ interface Props {
     attention?: boolean;
     maximized?: boolean;
     style?: CSSProperties;
+    /**
+     * Panel drag-reorder wiring (TerminalGrid owns the state). `draggable` +
+     * start/end sit on the panel HEAD so dragging never competes with text
+     * selection in the body; over/drop sit on the panel ROOT so the whole tile
+     * is a drop target.
+     */
+    drag?: PanelDragHandlers;
 }
 
 export default function PluginEditorHost({
@@ -33,6 +41,7 @@ export default function PluginEditorHost({
     attention,
     maximized,
     style,
+    drag,
 }: Props) {
     const root = workspace?.path ?? spec.cwd;
     const file = String(spec.meta?.file ?? spec.meta?.file_path ?? '');
@@ -62,10 +71,20 @@ export default function PluginEditorHost({
 
     return (
         <section
-            className={`tpanel${focused ? ' focus' : ''}${attention ? ' attention' : ''}`}
+            className={`tpanel${focused ? ' focus' : ''}${attention ? ' attention' : ''}${
+                drag?.dragging ? ' dragging' : ''
+            }`}
             style={style}
+            onDragOver={drag?.onDragOver}
+            onDrop={drag?.onDrop}
         >
-            <div className="tpanel-head">
+            <div
+                className={`tpanel-head${drag ? ' draggable' : ''}`}
+                draggable={!!drag}
+                onDragStart={drag?.onDragStart}
+                onDragEnd={drag?.onDragEnd}
+                title={drag ? 'Drag onto another panel to reorder' : undefined}
+            >
                 <span className="pdot" style={{ background: '#8b5cf6' }} />
                 <span className="pn">
                     <span className="nm">{spec.label}</span>

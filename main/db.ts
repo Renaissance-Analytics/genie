@@ -1895,6 +1895,23 @@ export function touchTerminalSpec(id: string): void {
         .run(new Date().toISOString(), id);
 }
 
+/**
+ * Persist a user-defined PANEL order (the grid's drag-reorder). `ids` is the
+ * full ordered list of spec ids for one workspace; each gets its index as
+ * sort_order, which is exactly what listTerminalSpecs() sorts by. Unknown ids
+ * are ignored. One transaction so the grid never reads a partial reorder —
+ * mirrors reorderWorkspaces() for the sidebar.
+ */
+export function reorderTerminalSpecs(ids: string[]): void {
+    const stmt = getDb().prepare(
+        'UPDATE terminal_specs SET sort_order = ? WHERE id = ?',
+    );
+    const tx = getDb().transaction((order: string[]) => {
+        order.forEach((id, i) => stmt.run(i, id));
+    });
+    tx(ids);
+}
+
 // Issue Watch ----------------------------------------------------------------
 
 export interface IssueWatchRow {

@@ -89,13 +89,85 @@
     --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* The window is TWO full-height columns side by side: the chooser column
+   (icon rail + sidebar) on the left, running header to footer, and everything
+   else — header, workspace title/toolbar, panels, status bar — stacked in the
+   right column. */
 .winframe {
     width: 100%;
     height: 100vh;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     background: var(--shell);
     overflow: hidden;
+}
+/* No left column (the signed-out screen) — stack the full-width title bar over
+   the content the way the frame did before the two-column split. */
+.winframe.stacked {
+    flex-direction: column;
+}
+
+/* ===== Left column (chooser, full window height) ======================== */
+/* Width lives HERE, not on .chooser: inside this column flexbox the chooser's
+   own `flex-basis` would size its HEIGHT, so the column owns the horizontal
+   size and the chooser just fills it. */
+.gleft {
+    flex: 0 0 auto;
+    width: 56px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--rail);
+    /* The UNPINNED chooser flyout is absolutely positioned and deliberately
+       overhangs this column, so never clip here. z-index lifts the whole
+       column (and that overhang) above the right column. */
+    position: relative;
+    z-index: 20;
+}
+.gleft.pinned {
+    width: 338px;
+}
+
+/* The left column's own top strip — same height as the title bar, so the two
+   columns' headers line up. This is the window's top-LEFT corner: it must stay
+   a DRAG region (it's how you grab the window from the left) and on macOS it
+   holds the traffic-light pad. */
+.gleft-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: var(--titlebar-h);
+    padding: 0 10px;
+    flex: 0 0 auto;
+    background: var(--shell);
+    border-bottom: 1px solid var(--border-1);
+    border-right: 1px solid var(--border-1);
+    overflow: hidden;
+    user-select: none;
+    -webkit-app-region: drag;
+}
+.gleft-top button,
+.gleft-top a,
+.gleft-top input {
+    -webkit-app-region: no-drag;
+}
+/* The wordmark only fits once the sidebar is pinned open; collapsed, the lamp
+   alone marks the corner. */
+.gleft .glogo-text {
+    display: none;
+}
+.gleft.pinned .glogo-text {
+    display: inline;
+}
+
+/* ===== Right column (header, toolbar, panels, status bar) =============== */
+.gright {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--shell);
 }
 
 /* ===== Title bar ======================================================== */
@@ -1559,6 +1631,19 @@
     width: 338px;
     display: flex;
 }
+/* Inside the full-height left column the chooser fills the column instead of
+   sizing itself — .gleft owns the width (see the .gleft block above). Declared
+   after .chooser.pinned so it wins the equal-specificity tie. */
+.gleft .chooser,
+.gleft .chooser.pinned {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0;
+    height: auto;
+    /* Flex (not block) in both states so .chooser-rail stretches to the
+       column's full height without depending on a percentage height. */
+    display: flex;
+}
 .chooser.pinned .chooser-rail {
     flex: 0 0 56px;
 }
@@ -2520,6 +2605,23 @@ body.gutter-dragging .grid-gutter {
     flex: 0 0 auto;
     background: var(--term-head);
     border-bottom: 1px solid var(--term-border);
+}
+/* Drag-to-reorder: the HEAD is the handle (so dragging never competes with
+   selecting text in the terminal or editor below it); the whole tile is the
+   drop target. Grab-cursor on the head, and the tile being dragged dims so
+   it's obvious which one is moving. */
+.tpanel-head.draggable {
+    cursor: grab;
+}
+.tpanel-head.draggable:active {
+    cursor: grabbing;
+}
+/* The head's own controls stay pointers — they're buttons, not the handle. */
+.tpanel-head.draggable button {
+    cursor: pointer;
+}
+.tpanel.dragging {
+    opacity: 0.55;
 }
 .tpanel-head .pdot {
     width: 8px;

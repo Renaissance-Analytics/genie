@@ -9,6 +9,7 @@ import {
     type TerminalSpec,
     type WorkspaceRow,
 } from '../../lib/genie';
+import type { PanelDragHandlers } from '../../lib/panel-reorder';
 
 interface Props {
     spec: TerminalSpec;
@@ -31,6 +32,13 @@ interface Props {
     style?: CSSProperties;
     onMarkActive: () => void;
     onMarkInactive: () => void;
+    /**
+     * Panel drag-reorder wiring (TerminalGrid owns the state). `draggable` +
+     * start/end sit on the panel HEAD so dragging never competes with text
+     * selection in the body; over/drop sit on the panel ROOT so the whole tile
+     * is a drop target.
+     */
+    drag?: PanelDragHandlers;
 }
 
 function toProfile(s: ShellDetection): ShellProfile {
@@ -66,6 +74,7 @@ export default function TerminalPanel({
     style,
     onMarkActive,
     onMarkInactive,
+    drag,
 }: Props) {
     // Fire onMarkActive exactly once on mount, regardless of how many
     // times the panel rerenders. Cleaner than wiring this into XTerm.
@@ -129,8 +138,12 @@ export default function TerminalPanel({
 
     return (
         <section
-            className={`tpanel${focused ? ' focus' : ''}${attention ? ' attention' : ''}`}
+            className={`tpanel${focused ? ' focus' : ''}${attention ? ' attention' : ''}${
+                drag?.dragging ? ' dragging' : ''
+            }`}
             style={style}
+            onDragOver={drag?.onDragOver}
+            onDrop={drag?.onDrop}
             // Clear this terminal's imDone glow on ANY real interaction with the
             // panel — focusin (onFocus), a click anywhere in it (onMouseDown), or
             // a keystroke (onKeyDownCapture). onFocus alone misses the common
@@ -144,7 +157,13 @@ export default function TerminalPanel({
             onMouseDownCapture={attention ? onAttentionClear : undefined}
             onKeyDownCapture={attention ? onAttentionClear : undefined}
         >
-            <div className="tpanel-head">
+            <div
+                className={`tpanel-head${drag ? ' draggable' : ''}`}
+                draggable={!!drag}
+                onDragStart={drag?.onDragStart}
+                onDragEnd={drag?.onDragEnd}
+                title={drag ? 'Drag onto another panel to reorder' : undefined}
+            >
                 <span className="pdot" style={{ background: '#10b981' }} />
                 <span className="pn">
                     <span className="nm">{spec.label}</span>

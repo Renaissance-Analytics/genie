@@ -27,6 +27,11 @@ import {
     type LayoutMode,
     type ResolvedMode,
 } from '../../lib/terminal-grid-layout';
+import {
+    applyPanelOrder,
+    movePanel,
+    type PanelDragHandlers,
+} from '../../lib/panel-reorder';
 
 export type { LayoutMode } from '../../lib/terminal-grid-layout';
 
@@ -61,6 +66,11 @@ interface Props {
     addDisabled?: boolean;
     /** Tooltip shown on the disabled add tile. */
     addDisabledReason?: string;
+    /**
+     * Commit a drag-reorder of the active workspace's panels: the full ordered
+     * spec-id list. Omit to disable panel dragging entirely.
+     */
+    onReorder?: (orderedIds: string[]) => void;
 }
 
 const MIN_PANEL_PX = 160;
@@ -115,22 +125,82 @@ export default function TerminalGrid({
     layoutMode,
     addDisabled,
     addDisabledReason,
+    onReorder,
 }: Props) {
+    // --- Panel drag-reorder ------------------------------------------------
+    // Live preview while dragging (the tiles move under the cursor), committed
+    // to `onReorder` on dragend — the same preview-then-commit shape the
+    // sidebar's workspace reorder uses. `dragOrderRef` mirrors `dragOrder` so
+    // the dragover handler always reads the latest order without depending on
+    // a re-render having landed first.
+    const [dragOrder, setDragOrder] = useState<string[] | null>(null);
+    const [draggingId, setDraggingId] = useState<string | null>(null);
+    const dragOrderRef = useRef<string[] | null>(null);
+    const draggingIdRef = useRef<string | null>(null);
+
+    const panelDrag = useCallback(
+        (id: string): PanelDragHandlers | undefined => {
+            if (!onReorder) return undefined;
+            return {
+                dragging: draggingId === id,
+                onDragStart: (e) => {
+                    draggingIdRef.current = id;
+                    setDraggingId(id);
+                    e.dataTransfer.effectAllowed = 'move';
+                    // Chromium needs SOME payload for the drag to start.
+                    e.dataTransfer.setData('text/plain', id);
+                },
+                onDragOver: (e) => {
+                    // Only claim drags WE started — a file dropped onto a
+                    // terminal must still fall through to its own handling.
+                    const dragging = draggingIdRef.current;
+                    if (!dragging) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    if (dragging === id) return;
+                    const base = dragOrderRef.current ?? specs.map((s) => s.id);
+                    const next = movePanel(base, dragging, id);
+                    if (next === base) return;
+                    dragOrderRef.current = next;
+                    setDragOrder(next);
+                },
+                onDrop: (e) => {
+                    if (draggingIdRef.current) e.preventDefault();
+                },
+                onDragEnd: () => {
+                    // dragend always fires (drop, cancel, released off-window),
+                    // so commit the order the user was shown.
+                    const list = dragOrderRef.current;
+                    draggingIdRef.current = null;
+                    dragOrderRef.current = null;
+                    setDraggingId(null);
+                    setDragOrder(null);
+                    if (list) onReorder(list);
+                },
+            };
+        },
+        [onReorder, draggingId, specs],
+    );
+
     // The resolved mode + ordering come from the ACTIVE workspace's visible
     // specs only. With an empty active workspace, `specs` is empty: mode is
     // 'g1', `ordered` is empty, and the unified list is all-background (every
     // entry display:none). The add-tiles render as an OVERLAY sibling so the
     // single keyed panel map stays mounted in the same parent — background
     // panels don't remount when switching to/from an empty workspace.
-    const mode: ResolvedMode = resolveMode(layoutMode, specs.length);
-    const ordered = orderForMode(mode, specs, focusId);
-    const empty = specs.length === 0;
+    // While a drag is in flight the PREVIEW order lays the grid out, so the
+    // tiles shuffle live under the cursor.
+    const laidOut = dragOrder ? applyPanelOrder(specs, dragOrder) : specs;
+    const mode: ResolvedMode = resolveMode(layoutMode, laidOut.length);
+    const ordered = orderForMode(mode, laidOut, focusId);
+    const empty = laidOut.length === 0;
     const showAddTile = !empty && mode === '2x2' && ordered.length < 4;
 
     return (
         <ResizableGrid
             mode={mode}
             ordered={ordered}
+            panelDrag={panelDrag}
             background={backgroundSpecs}
             empty={empty}
             workspacesById={workspacesById}
@@ -179,6 +249,8 @@ interface ResizableGridProps {
     showAddTile: boolean;
     addDisabled?: boolean;
     addDisabledReason?: string;
+    /** Per-panel drag wiring; returns undefined when reordering is disabled. */
+    panelDrag: (id: string) => PanelDragHandlers | undefined;
 }
 
 function evenTracks(n: number): number[] {
@@ -207,6 +279,7 @@ const ResizableGrid = ({
     showAddTile,
     addDisabled,
     addDisabledReason,
+    panelDrag,
 }: ResizableGridProps) => {
     const count = ordered.length;
     const { cols, rows } = dims(mode, count);
@@ -415,6 +488,9 @@ const ResizableGrid = ({
                             onDisable={onDisable ? () => onDisable(p.spec.id) : undefined}
                             onMarkActive={() => onMarkActive(p.spec.id)}
                             onMarkInactive={() => onMarkInactive(p.spec.id)}
+                            // Off-workspace (display:none) panels aren't on
+                            // screen — no drag wiring for them.
+                            drag={p.visible ? panelDrag(p.spec.id) : undefined}
                         />
                     </ErrorBoundary>
                 ))}
@@ -596,6 +672,8 @@ interface PanelForProps {
     onDisable?: () => void;
     onMarkActive: () => void;
     onMarkInactive: () => void;
+    /** Drag-reorder wiring for this tile (undefined = not reorderable). */
+    drag?: PanelDragHandlers;
 }
 
 /**
@@ -617,6 +695,7 @@ function PanelFor({
     onDisable,
     onMarkActive,
     onMarkInactive,
+    drag,
 }: PanelForProps) {
     const workspace = spec.workspace_id
         ? workspacesById.get(spec.workspace_id)
@@ -634,6 +713,7 @@ function PanelFor({
                 onClose={onClose}
                 onMaximize={onMaximize}
                 onMinimize={onMinimize}
+                drag={drag}
             />
         );
     }
@@ -650,6 +730,7 @@ function PanelFor({
                 onClose={onClose}
                 onMaximize={onMaximize}
                 onMinimize={onMinimize}
+                drag={drag}
             />
         );
     }
@@ -669,6 +750,7 @@ function PanelFor({
             onDisable={onDisable}
             onMarkActive={onMarkActive}
             onMarkInactive={onMarkInactive}
+            drag={drag}
         />
     );
 }

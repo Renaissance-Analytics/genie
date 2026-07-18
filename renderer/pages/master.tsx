@@ -27,6 +27,7 @@ import SignInPrompt from '../components/SignInPrompt';
 import type { AgentType, BackendUser, ViewType, AgentInboxScope } from '../lib/genie';
 import { resolveShortcut } from '../lib/master-shortcuts';
 import { computeLaunchSelection } from '../lib/launch-restore';
+import { applyPanelOrder } from '../lib/panel-reorder';
 import {
     overlayOwnConnKey,
     parseViewStateStore,
@@ -608,6 +609,18 @@ function MasterInner() {
             return next;
         });
         void api().workspaces.reorder(realIds).catch(() => {});
+    }, []);
+
+    /**
+     * Persist a user-defined PANEL order for the active workspace (the grid's
+     * drag-reorder). Same shape as the sidebar reorder above: apply locally
+     * first so the tiles settle instantly, then persist — main writes each
+     * index to `terminal_specs.sort_order`, which is what the next list()
+     * sorts by, so the order survives a reload.
+     */
+    const reorderSpecs = useCallback((orderedIds: string[]) => {
+        setSpecs((prev) => applyPanelOrder(prev, orderedIds));
+        void api().terminalSpec.reorder(orderedIds).catch(() => {});
     }, []);
 
     const refreshAuth = useCallback(async () => {
@@ -1467,7 +1480,10 @@ function MasterInner() {
     if (authChecked && !signedIn) {
         return (
             <div className="gwrap" id="app">
-                <div className="winframe">
+                {/* Signed out: no left column, so the frame stacks
+                    vertically and the title bar spans the full width (it
+                    paints the corner itself — see AppCorner). */}
+                <div className="winframe stacked">
                     <TitleBar isStage={false} />
                     <div
                         style={{
@@ -1514,59 +1530,20 @@ function MasterInner() {
 
     return (
         <div className="gwrap" id="app">
+            {/* TWO FULL-HEIGHT COLUMNS:
+                  LEFT  — the workspace chooser (icon rail + search/list
+                          sidebar), under a drag strip that owns the window's
+                          top-LEFT corner (where macOS paints its traffic
+                          lights). Runs header to footer.
+                  RIGHT — the app header, the workspace title + toolbar, the
+                          panels, and the status bar.
+                So the rail/sidebar span the whole window height and the
+                workspace title + panels always sit to the right of them. */}
             <div className="winframe">
-                <TitleBar
-                    isStage={isStage}
-                    stageWorkspaceName={
-                        stageSeedWorkspace
-                            ? workspacesById.get(stageSeedWorkspace)?.project_name
-                            : undefined
-                    }
-                    onShowDocs={() => setDocsOpen((o) => !o)}
-                    onShowTaskManager={() => setTaskManagerOpen((o) => !o)}
-                    onShowAgentInbox={() => setAgentInboxOpen((o) => !o)}
-                    agentInboxUnread={agentInboxUnread}
-                    onShowKnowledge={() => {
-                        // Header button → open the standalone Knowledge Graph
-                        // window (main-owned, via knowledge.openWindow). Guarded
-                        // so it no-ops if the preload bridge isn't wired yet.
-                        if (hasGenieBridge()) {
-                            void api().knowledge.openWindow().catch(() => {});
-                        }
-                    }}
-                    onShowIssueWatch={() =>
-                        activeWorkspaceId && openIssueWatch(activeWorkspaceId)
-                    }
-                    issueWatchUnread={(() => {
-                        const c = activeWorkspaceId
-                            ? issueWatchCounts[activeWorkspaceId]
-                            : undefined;
-                        return c ? c.issue + c.pr + c.security : 0;
-                    })()}
-                    githubNeedsResolve={githubNeedsResolve}
-                    onShowGithubCaps={() => setGithubCapsOpen((o) => !o)}
-                />
-                <UpdateReadyBanner />
-                <Toolbar
-                    activeWorkspace={
-                        activeWorkspaceId
-                            ? workspacesById.get(activeWorkspaceId)
-                            : undefined
-                    }
-                    workspaces={workspaces}
-                    layoutMode={layoutMode}
-                    onLayoutMode={setLayoutMode}
-                    onAddView={(type) =>
-                        activeWorkspaceId && void addSpec(activeWorkspaceId, type)
-                    }
-                    addDisabled={atMaxViews}
-                    addDisabledReason={maxViewsReason}
-                    lastTerminalType={lastTerminalType}
-                    onLastTerminalType={setLastTerminalType}
-                    onAgentCreated={selectAgentSpec}
-                    agentCustomCommand={agentCustomCommand}
-                />
-                <div className="gbody">
+                <div className={`gleft${chooserPinned ? ' pinned' : ''}`}>
+                    <div className="gleft-top">
+                        <AppCorner />
+                    </div>
                     <Chooser
                         workspaces={displayWorkspaces}
                         specs={specs}
@@ -1624,37 +1601,94 @@ function MasterInner() {
                         onAgentCreated={selectAgentSpec}
                         agentCustomCommand={agentCustomCommand}
                     />
-                    <TerminalGrid
-                        specs={selectedSpecs}
-                        backgroundSpecs={backgroundSpecs}
-                        workspacesById={workspacesById}
-                        activeWorkspaceId={activeWorkspaceId}
+                </div>
+                <div className="gright">
+                    <TitleBar
+                        cornerInRail
+                        isStage={isStage}
+                        stageWorkspaceName={
+                            stageSeedWorkspace
+                                ? workspacesById.get(stageSeedWorkspace)?.project_name
+                                : undefined
+                        }
+                        onShowDocs={() => setDocsOpen((o) => !o)}
+                        onShowTaskManager={() => setTaskManagerOpen((o) => !o)}
+                        onShowAgentInbox={() => setAgentInboxOpen((o) => !o)}
+                        agentInboxUnread={agentInboxUnread}
+                        onShowKnowledge={() => {
+                            // Header button → open the standalone Knowledge Graph
+                            // window (main-owned, via knowledge.openWindow). Guarded
+                            // so it no-ops if the preload bridge isn't wired yet.
+                            if (hasGenieBridge()) {
+                                void api().knowledge.openWindow().catch(() => {});
+                            }
+                        }}
+                        onShowIssueWatch={() =>
+                            activeWorkspaceId && openIssueWatch(activeWorkspaceId)
+                        }
+                        issueWatchUnread={(() => {
+                            const c = activeWorkspaceId
+                                ? issueWatchCounts[activeWorkspaceId]
+                                : undefined;
+                            return c ? c.issue + c.pr + c.security : 0;
+                        })()}
+                        githubNeedsResolve={githubNeedsResolve}
+                        onShowGithubCaps={() => setGithubCapsOpen((o) => !o)}
+                    />
+                    <UpdateReadyBanner />
+                    <Toolbar
+                        activeWorkspace={
+                            activeWorkspaceId
+                                ? workspacesById.get(activeWorkspaceId)
+                                : undefined
+                        }
+                        workspaces={workspaces}
+                        layoutMode={layoutMode}
+                        onLayoutMode={setLayoutMode}
+                        onAddView={(type) =>
+                            activeWorkspaceId && void addSpec(activeWorkspaceId, type)
+                        }
                         addDisabled={atMaxViews}
                         addDisabledReason={maxViewsReason}
-                        focusId={focusId}
-                        attentionIds={attentionIds}
-                        onAttentionClear={clearAttention}
-                        maximizedId={maximizedId}
-                        onClose={closeSelected}
-                        onFocus={(id) => setFocusId((cur) => (cur === id ? null : id))}
-                        onToggleMaximize={toggleMaximize}
-                        onDisable={(id) => void disableSpec(id)}
-                        onAddTerminal={() =>
-                            activeWorkspaceId && void addSpec(activeWorkspaceId, 'terminal')
-                        }
-                        onAddCode={() =>
-                            activeWorkspaceId && void addSpec(activeWorkspaceId, 'code')
-                        }
-                        onMarkActive={markActive}
-                        onMarkInactive={markInactive}
-                        layoutMode={layoutMode}
+                        lastTerminalType={lastTerminalType}
+                        onLastTerminalType={setLastTerminalType}
+                        onAgentCreated={selectAgentSpec}
+                        agentCustomCommand={agentCustomCommand}
+                    />
+                    <div className="gbody">
+                        <TerminalGrid
+                            specs={selectedSpecs}
+                            backgroundSpecs={backgroundSpecs}
+                            workspacesById={workspacesById}
+                            activeWorkspaceId={activeWorkspaceId}
+                            addDisabled={atMaxViews}
+                            addDisabledReason={maxViewsReason}
+                            focusId={focusId}
+                            attentionIds={attentionIds}
+                            onAttentionClear={clearAttention}
+                            maximizedId={maximizedId}
+                            onClose={closeSelected}
+                            onFocus={(id) => setFocusId((cur) => (cur === id ? null : id))}
+                            onToggleMaximize={toggleMaximize}
+                            onDisable={(id) => void disableSpec(id)}
+                            onAddTerminal={() =>
+                                activeWorkspaceId && void addSpec(activeWorkspaceId, 'terminal')
+                            }
+                            onAddCode={() =>
+                                activeWorkspaceId && void addSpec(activeWorkspaceId, 'code')
+                            }
+                            onMarkActive={markActive}
+                            onMarkInactive={markInactive}
+                            layoutMode={layoutMode}
+                            onReorder={reorderSpecs}
+                        />
+                    </div>
+                    <StatusBar
+                        panelCount={selectedSpecs.length}
+                        projectCount={projectsActive.size}
+                        activeCount={activeIds.size}
                     />
                 </div>
-                <StatusBar
-                    panelCount={selectedSpecs.length}
-                    projectCount={projectsActive.size}
-                    activeCount={activeIds.size}
-                />
             </div>
 
             <DocsFlyout open={docsOpen} onClose={() => setDocsOpen(false)} />
@@ -2277,6 +2311,42 @@ function UpdatePopover({
     );
 }
 
+/**
+ * The window's top-LEFT corner: the macOS traffic-light pad plus the Genie
+ * wordmark.
+ *
+ * In the master layout the rail + sidebar run header-to-footer, so the LEFT
+ * column owns that corner and renders this at the top of its drag strip. The
+ * signed-out screen has no left column, so its TitleBar spans the full width
+ * and renders the corner inline instead (`cornerInRail` omitted). Either way
+ * exactly ONE of them paints it, and it always sits over the real traffic
+ * lights on macOS.
+ */
+function isMacPlatform(): boolean {
+    return (
+        typeof navigator !== 'undefined' &&
+        /Mac/i.test(navigator.platform ?? navigator.userAgent ?? '')
+    );
+}
+
+function AppCorner() {
+    const isMac = isMacPlatform();
+    return (
+        <>
+            {/* macOS: the REAL traffic lights overlay this corner — reserve
+                their space rather than painting fakes. */}
+            {isMac && <span className="traffic-pad" />}
+            <span className="glogo">
+                {/* The PNG ships in resources/logo.png; Next copies it into
+                    renderer/public at build time. Use the relative path so it
+                    works under file:// (packaged) and http://localhost (dev). */}
+                <img className="lamp" src="./logo.png" alt="" width={22} height={22} />
+                <span className="glogo-text">Genie</span>
+            </span>
+        </>
+    );
+}
+
 function TitleBar({
     isStage,
     stageWorkspaceName,
@@ -2289,6 +2359,7 @@ function TitleBar({
     issueWatchUnread = 0,
     githubNeedsResolve = false,
     onShowGithubCaps,
+    cornerInRail = false,
 }: {
     isStage: boolean;
     stageWorkspaceName?: string;
@@ -2302,24 +2373,27 @@ function TitleBar({
     /** True when GitHub permissions are missing — shows a persistent warning. */
     githubNeedsResolve?: boolean;
     onShowGithubCaps?: () => void;
+    /**
+     * True in the master layout, where this bar is the RIGHT column's header
+     * and the LEFT column already owns the window's top-left corner (traffic
+     * pad + wordmark). False (default) when the bar spans the full width and
+     * must paint the corner itself.
+     */
+    cornerInRail?: boolean;
 }) {
-    const isMac =
-        typeof navigator !== 'undefined' &&
-        /Mac/i.test(navigator.platform ?? navigator.userAgent ?? '');
+    const isMac = isMacPlatform();
     return (
         <div className="titlebar">
             {/* The native title bar is hidden (titleBarStyle: 'hidden') — this
-                row IS the window chrome. On macOS the REAL traffic lights
-                overlay the top-left corner, so pad past them rather than
-                painting fakes. */}
-            {isMac && <span className="traffic-pad" />}
-            <span className="glogo">
-                {/* The PNG ships in resources/logo.png; Next copies it into
-                    renderer/public at build time. Use the relative path so it
-                    works under file:// (packaged) and http://localhost (dev). */}
-                <img className="lamp" src="./logo.png" alt="" width={22} height={22} />
-                Genie
-            </span>
+                row IS the window chrome: it drags the window and pads right for
+                the native min/max/close overlay. */}
+            {!cornerInRail && <AppCorner />}
+            {/* macOS + left column: the real traffic lights are ~78px wide but
+                a COLLAPSED rail is only 56px, so they spill past the column and
+                onto this bar. A drag region over them swallows their clicks
+                (see .traffic-pad), so pad the spill no-drag here too — the
+                column's own pad covers the rest. */}
+            {cornerInRail && isMac && <span className="traffic-pad" />}
             <RemoteIndicator />
             <HostSessionOverlay />
             {/* No internal view codenames in the UI — a Stage window shows its

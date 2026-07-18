@@ -797,6 +797,9 @@ const api = {
         remove: (id: string) => ipcRenderer.invoke('terminal-spec:delete', id),
         get: (id: string) => ipcRenderer.invoke('terminal-spec:get', id),
         touch: (id: string) => ipcRenderer.invoke('terminal-spec:touch', id),
+        /** Persist the grid's drag-reorder: the full ordered spec-id list for
+         *  one workspace (index → sort_order). */
+        reorder: (ids: string[]) => ipcRenderer.invoke('terminal-spec:reorder', ids),
         /** Create an AI-TUI terminal from the split Add-Terminal button — spawns a
          *  headless agent terminal (captured chat-session id + AgentInbox identity)
          *  and launches it. Returns the created spec. */

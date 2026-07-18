@@ -31,6 +31,7 @@ import {
     updateTerminalSpec,
     deleteTerminalSpec,
     touchTerminalSpec,
+    reorderTerminalSpecs,
     getAllSettings,
     setSettings,
     AI_SYSTEM_MAX,
@@ -1531,6 +1532,8 @@ export async function handleApi(
             id?: string;
             input?: Parameters<typeof createTerminalSpec>[0];
             patch?: Parameters<typeof updateTerminalSpec>[1];
+            /** Ordered spec ids for a grid drag-reorder. */
+            ids?: unknown[];
         };
         try {
             d = await readJsonBody(req);
@@ -1578,6 +1581,14 @@ export async function handleApi(
             }
             if (pathname === '/api/desktop/terminal-spec/touch') {
                 touchTerminalSpec(String(d.id ?? ''));
+                sendJson(res, 200, { ok: true });
+                return true;
+            }
+            // Grid drag-reorder from a remote window — panel order is HOST state
+            // (it lives on the host's terminal_specs rows), so it persists here.
+            if (pathname === '/api/desktop/terminal-spec/reorder') {
+                const ids = Array.isArray(d.ids) ? d.ids.map((x) => String(x)) : [];
+                reorderTerminalSpecs(ids);
                 sendJson(res, 200, { ok: true });
                 return true;
             }

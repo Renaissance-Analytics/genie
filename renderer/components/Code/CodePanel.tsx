@@ -26,6 +26,7 @@ import {
     type ViewMeta,
     type WorkspaceRow,
 } from '../../lib/genie';
+import type { PanelDragHandlers } from '../../lib/panel-reorder';
 
 interface Props {
     spec: TerminalSpec;
@@ -38,6 +39,13 @@ interface Props {
     attention?: boolean;
     maximized?: boolean;
     style?: CSSProperties;
+    /**
+     * Panel drag-reorder wiring (TerminalGrid owns the state). `draggable` +
+     * start/end sit on the panel HEAD so dragging never competes with text
+     * selection in the body; over/drop sit on the panel ROOT so the whole tile
+     * is a drop target.
+     */
+    drag?: PanelDragHandlers;
 }
 
 /** Per-tab editor state: the file's text, its language, and unsaved flag.
@@ -132,6 +140,7 @@ export default function CodePanel({
     attention,
     maximized,
     style,
+    drag,
 }: Props) {
     const workspacePath = workspace?.path ?? spec.cwd;
     // The System workspace (desktop only) browses the WHOLE machine — its file
@@ -667,10 +676,20 @@ export default function CodePanel({
 
     return (
         <section
-            className={`tpanel${focused ? ' focus' : ''}${attention ? ' attention' : ''}`}
+            className={`tpanel${focused ? ' focus' : ''}${attention ? ' attention' : ''}${
+                drag?.dragging ? ' dragging' : ''
+            }`}
             style={style}
+            onDragOver={drag?.onDragOver}
+            onDrop={drag?.onDrop}
         >
-            <div className="tpanel-head">
+            <div
+                className={`tpanel-head${drag ? ' draggable' : ''}`}
+                draggable={!!drag}
+                onDragStart={drag?.onDragStart}
+                onDragEnd={drag?.onDragEnd}
+                title={drag ? 'Drag onto another panel to reorder' : undefined}
+            >
                 {/* LEFT cluster: tree-toggle + pin sit where the tree opens. */}
                 <span className="pa pa-left">
                     <button

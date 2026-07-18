@@ -182,6 +182,14 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 method: 'POST',
                 json: { id },
             })) as { ok: boolean },
+        // Panel order lives on the HOST's terminal_specs rows (WORK/CONTENT
+        // state), so a remote window's drag-reorder writes through the bridge —
+        // same as create/update/remove above.
+        reorder: async (ids) =>
+            (await req('/api/desktop/terminal-spec/reorder', {
+                method: 'POST',
+                json: { ids },
+            })) as { ok: boolean },
         // A specialized (AI-TUI) terminal is spawned on the machine that owns the
         // pty + the AgentInbox broker — the HOST — so this routes through the bridge
         // like `create`. (AgentInbox itself is local-only in v1, but creating an

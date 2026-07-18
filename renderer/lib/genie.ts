@@ -2008,6 +2008,13 @@ export interface GenieApi {
         get: (id: string) => Promise<TerminalSpec | null>;
         touch: (id: string) => Promise<{ ok: boolean }>;
         /**
+         * Persist the grid's drag-reorder. `ids` is the full ordered list of
+         * spec ids for ONE workspace; each index becomes that spec's
+         * sort_order, which is what `list()` sorts by. Mirrors
+         * `workspaces.reorder` for the sidebar.
+         */
+        reorder: (ids: string[]) => Promise<{ ok: boolean }>;
+        /**
          * Create a SPECIALIZED (AI-TUI) terminal: main resolves the launch command
          * (`resolveAgentCommand` + the `agent_command_*` settings), spawns the pty,
          * submits the boot command, stamps the AgentInbox identity/scope onto the
