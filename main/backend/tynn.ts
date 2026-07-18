@@ -53,6 +53,8 @@ export interface WorkstationConnectGrant {
     token: string;
     workstation_id: string;
     relay_endpoint: string;
+    /** Enrolled host Ed25519 SPKI DER (base64), pinned by Tynn for site E2E. */
+    host_public_key: string;
     capability: string;
     scopes: string[];
     source: WorkstationEntitlementSource;

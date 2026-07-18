@@ -24,6 +24,7 @@ import { _resetAuthForTest, currentPin } from '../../mobile/auth';
 import { _resetAuditForTest, recentAudit } from '../../mobile/audit';
 import { _resetSiteProxyForTest, type ResolvedSite, type SiteProxyDeps } from '../../mobile/site-proxy';
 import type { MobileDataDeps } from '../../mobile/api';
+import { SitePayloadCipher } from '../site-e2e';
 
 /**
  * Serve-local-sites Phase E — the RELAY carrier, end-to-end (design §2.0/§8-E).
@@ -185,9 +186,15 @@ function startSiteRelayStub(getMobile: () => { port: number; token: string }) {
     const httpReqs = new Map<string, http.ClientRequest>();
     const wsSocks = new Map<string, Duplex>();
     const openHeaders: Record<string, Record<string, unknown>> = {};
+    const hostIdentity = crypto.generateKeyPairSync('ed25519');
+    let siteCipher: SitePayloadCipher | null = null;
 
     const send = (frame: object): void => {
-        if (socket && socket.readyState === socket.OPEN) socket.send(JSON.stringify(frame));
+        const outbound =
+            siteCipher && (frame as { channel?: string }).channel === 'site'
+                ? siteCipher.seal(frame as Parameters<SitePayloadCipher['seal']>[0])
+                : frame;
+        if (socket && socket.readyState === socket.OPEN) socket.send(JSON.stringify(outbound));
     };
     const siteData = (reqId: string, payload: unknown): void =>
         send({ kind: 'data', channel: 'site', sid, reqId, payload });
@@ -260,6 +267,50 @@ function startSiteRelayStub(getMobile: () => { port: number; token: string }) {
             const msg = JSON.parse(String(raw)) as { type?: string; channel?: string; kind?: string; reqId?: string; payload?: any };
             if (msg.type === 'member-hello') {
                 ws.send(JSON.stringify({ type: 'member-welcome', sid }));
+                send({ kind: 'data', channel: 'control', sid, payload: { type: 'site-key-ready' } });
+                return;
+            }
+            if (
+                msg.channel === 'control' &&
+                msg.kind === 'data' &&
+                msg.payload?.type === 'site-key-init'
+            ) {
+                const memberPublic = crypto.createPublicKey({
+                    key: Buffer.from(msg.payload.publicKey, 'base64'),
+                    type: 'spki',
+                    format: 'der',
+                });
+                const ephemeral = crypto.generateKeyPairSync('x25519');
+                const hostPublicKey = ephemeral.publicKey
+                    .export({ type: 'spki', format: 'der' })
+                    .toString('base64');
+                const shared = crypto.diffieHellman({
+                    privateKey: ephemeral.privateKey,
+                    publicKey: memberPublic,
+                });
+                const material = Buffer.from(
+                    crypto.hkdfSync(
+                        'sha256',
+                        shared,
+                        Buffer.from(msg.payload.nonce, 'base64'),
+                        Buffer.from(`genie-site-e2e-v1\n${sid}\n${WS_ID}`),
+                        64,
+                    ),
+                );
+                siteCipher = new SitePayloadCipher(material.subarray(32), material.subarray(0, 32));
+                const signed = Buffer.from(
+                    `genie-site-e2e-v1\n${sid}\n${WS_ID}\n${msg.payload.publicKey}\n${hostPublicKey}\n${msg.payload.nonce}`,
+                );
+                send({
+                    kind: 'data',
+                    channel: 'control',
+                    sid,
+                    payload: {
+                        type: 'site-key-accept',
+                        publicKey: hostPublicKey,
+                        signature: crypto.sign(null, signed, hostIdentity.privateKey).toString('base64'),
+                    },
+                });
                 return;
             }
             if (
@@ -271,7 +322,13 @@ function startSiteRelayStub(getMobile: () => { port: number; token: string }) {
                 send({ kind: 'data', channel: 'rest', sid, reqId: msg.reqId, payload: { status: 200, body: JSON.stringify([]) } });
                 return;
             }
-            if (msg.channel === 'site') handleSite(msg as { kind: string; reqId?: string; payload?: any });
+            if (msg.channel === 'site' && siteCipher) {
+                try {
+                    handleSite(siteCipher.open(msg as any) as { kind: string; reqId?: string; payload?: any });
+                } catch {
+                    return;
+                }
+            }
         });
     });
 
@@ -282,6 +339,7 @@ function startSiteRelayStub(getMobile: () => { port: number; token: string }) {
             return `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`;
         },
         openHeaders,
+        hostPublicKeyB64: hostIdentity.publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
         close(): Promise<void> {
             for (const r of httpReqs.values()) try { r.destroy(); } catch { /* gone */ }
             for (const s of wsSocks.values()) try { s.destroy(); } catch { /* gone */ }
@@ -355,12 +413,18 @@ beforeEach(async () => {
     hostToken = await pair(mobilePort);
     stub = startSiteRelayStub(() => ({ port: mobilePort, token: hostToken }));
     await stub.ready;
-    const res = await connectWorkstation({ workstationId: WS_ID, name: 'Studio Box', relayUrl: stub.url, grant: 'jws.test.grant' });
+    const res = await connectWorkstation({
+        workstationId: WS_ID,
+        name: 'Studio Box',
+        relayUrl: stub.url,
+        grant: 'jws.test.grant',
+        hostPublicKeyB64: stub.hostPublicKeyB64,
+    });
     expect(res).toEqual({ ok: true, connKey: RELAY_CONN_KEY });
 });
 
 afterEach(async () => {
-    setRelaySiteTunnelingEnabled(false); // restore the production-default gate
+    setRelaySiteTunnelingEnabled(true); // restore the production default
     disconnectConnKey(RELAY_CONN_KEY);
     if (tailnetConnKey) disconnectConnKey(tailnetConnKey);
     tailnetConnKey = null;

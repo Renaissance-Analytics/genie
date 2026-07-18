@@ -1546,6 +1546,8 @@ export interface WorkstationConnectInput {
     name: string;
     relayUrl: string;
     grant: string;
+    /** Tynn-pinned enrolled host identity key for the site E2E handshake. */
+    hostPublicKeyB64?: string;
     /** The ephemeral PoP keypair the grant is bound to (P4.5) — answers the
      *  host's post-welcome pop-challenge. Generated in the IPC layer (its public
      *  JWK went to Tynn as `pop_jwk`); the private key is discarded on teardown. */
@@ -1595,6 +1597,7 @@ async function connectWorkstationInner(
             workstationId: input.workstationId,
             grant: input.grant,
             popKeypair: input.popKeypair,
+            hostPublicKeyB64: input.hostPublicKeyB64,
         });
     } catch (e) {
         try {
@@ -1751,10 +1754,11 @@ export interface EnabledGenSite {
 // and tested (Phase E) but MUST NOT ship enabled until the Phase-F blind-relay
 // E2E rung exists — its baseline has Tynn terminate TLS and see the site-proxy
 // plaintext, which the owner declined to ship. The tailnet carrier (WireGuard-E2E)
-// is unaffected. Default OFF; the relay plumbing tests flip it on to exercise the
-// built path. Flip to on only once the blind-relay (WebRTC / app-layer-E2E) carrier
-// ships (or the owner explicitly accepts the plaintext baseline).
-let relaySiteTunnelingEnabled = false;
+// is unaffected. The carrier is enabled only because the relay member client
+// now completes a host-authenticated application-layer E2E handshake first.
+// Site relay is production-enabled only because RelayMemberClient now refuses
+// every site frame until its host-authenticated E2E channel is established.
+let relaySiteTunnelingEnabled = true;
 export function setRelaySiteTunnelingEnabled(v: boolean): void {
     relaySiteTunnelingEnabled = v;
 }

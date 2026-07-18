@@ -58,6 +58,7 @@ export async function openWorkstationById(
         name: displayName,
         relayUrl: grant.relay_endpoint,
         grant: grant.token,
+        hostPublicKeyB64: grant.host_public_key,
         popKeypair,
         heartbeatIntervalMs:
             grant.heartbeat_interval > 0 ? grant.heartbeat_interval * 1000 : undefined,

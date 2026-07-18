@@ -16,6 +16,12 @@ import {
 } from './relay-mux';
 import type { SiteOpenPayload } from './relay-protocol';
 import type { PopKeypair } from './relay-pop';
+import {
+    completeSiteKey,
+    initiateSiteKey,
+    type SiteKeyAccept,
+    type SitePayloadCipher,
+} from './site-e2e';
 
 /**
  * The desktop MEMBER client for a Virtual Workstation connection over the Tynn
@@ -40,6 +46,8 @@ export interface RelayConnectOpts {
      * Omit for a connection with no PoP binding (the host then mustn't challenge).
      */
     popKeypair?: PopKeypair;
+    /** Tynn-pinned enrolled host identity key. Required before site frames flow. */
+    hostPublicKeyB64?: string;
     /** Handshake timeout (ms). */
     timeoutMs?: number;
 }
@@ -50,6 +58,9 @@ export class RelayMemberClient {
     private sid: string | null = null;
     private popKeypair: PopKeypair | null = null;
     private workstationId: string | null = null;
+    private hostPublicKeyB64: string | null = null;
+    private pendingSiteKey: ReturnType<typeof initiateSiteKey>['pending'] | null = null;
+    private siteCipher: SitePayloadCipher | null = null;
 
     /** The relay-assigned member-session id (after connect). */
     get sessionId(): string | null {
@@ -63,6 +74,7 @@ export class RelayMemberClient {
         const url = opts.relayUrl.replace(/\/+$/, '') + '/ws/member';
         this.popKeypair = opts.popKeypair ?? null;
         this.workstationId = opts.workstationId;
+        this.hostPublicKeyB64 = opts.hostPublicKeyB64 ?? null;
         return new Promise<void>((resolve, reject) => {
             let ws: WebSocket;
             try {
@@ -73,8 +85,15 @@ export class RelayMemberClient {
             }
             this.ws = ws;
             let welcomed = false;
+            let connected = false;
+            const finishConnect = (): void => {
+                if (connected) return;
+                connected = true;
+                clearTimeout(timer);
+                resolve();
+            };
             const timer = setTimeout(() => {
-                if (!welcomed) {
+                if (!connected) {
                     try {
                         ws.close();
                     } catch {
@@ -115,12 +134,15 @@ export class RelayMemberClient {
                         return;
                     }
                     welcomed = true;
-                    clearTimeout(timer);
                     this.sid = ctrl.sid;
                     this.mux = new RelayFrameMux(ctrl.sid, (frame) => {
-                        if (ws.readyState === WebSocket.OPEN) ws.send(encodeFrame(frame));
+                        const outbound =
+                            frame.channel === 'site'
+                                ? this.requireSiteCipher().seal(frame)
+                                : frame;
+                        if (ws.readyState === WebSocket.OPEN) ws.send(encodeFrame(outbound));
                     });
-                    resolve();
+                    if (!this.hostPublicKeyB64) finishConnect();
                     return;
                 }
                 // Post-welcome: a routed frame. `control`-channel frames carry
@@ -138,6 +160,8 @@ export class RelayMemberClient {
                         const challenge = decodePopChallenge(frame);
                         if (challenge) {
                             this.respondToPopChallenge(ws, challenge.nonce, challenge.sid);
+                        } else {
+                            this.handleSiteKeyControl(ws, frame, finishConnect);
                         }
                     } catch {
                         // malformed pop-challenge payload — drop; the host
@@ -145,18 +169,74 @@ export class RelayMemberClient {
                     }
                     return;
                 }
+                if (frame.channel === 'site') {
+                    try {
+                        frame = this.requireSiteCipher().open(frame);
+                    } catch {
+                        return;
+                    }
+                }
                 this.mux?.handle(frame);
             });
             ws.on('error', (e: Error) => {
-                if (!welcomed) {
+                if (!connected) {
                     clearTimeout(timer);
                     reject(e);
                 }
             });
             ws.on('close', () => {
+                if (!connected) {
+                    clearTimeout(timer);
+                    reject(new Error('relay connection closed during secure handshake'));
+                }
                 this.mux?.rejectAll('relay connection closed');
             });
         });
+    }
+
+    private handleSiteKeyControl(
+        ws: WebSocket,
+        frame: { sid: string; payload?: unknown },
+        onReady: () => void,
+    ): void {
+        const payload =
+            frame.payload && typeof frame.payload === 'object'
+                ? (frame.payload as Record<string, unknown>)
+                : {};
+        if (payload.type === 'site-key-ready' && this.hostPublicKeyB64 && this.workstationId) {
+            const started = initiateSiteKey();
+            this.pendingSiteKey = started.pending;
+            ws.send(encodeFrame({
+                kind: 'data',
+                channel: 'control',
+                sid: frame.sid,
+                payload: started.init,
+            }));
+            return;
+        }
+        if (
+            payload.type === 'site-key-accept' &&
+            this.pendingSiteKey &&
+            this.hostPublicKeyB64 &&
+            this.workstationId
+        ) {
+            this.siteCipher = completeSiteKey(
+                this.pendingSiteKey,
+                payload as unknown as SiteKeyAccept,
+                {
+                    sid: frame.sid,
+                    workstationId: this.workstationId,
+                    hostPublicKeyB64: this.hostPublicKeyB64,
+                },
+            );
+            this.pendingSiteKey = null;
+            onReady();
+        }
+    }
+
+    private requireSiteCipher(): SitePayloadCipher {
+        if (!this.siteCipher) throw new Error('site E2E channel is not established');
+        return this.siteCipher;
     }
 
     /** Sign the host's PoP challenge with the ephemeral key and send the proof.
@@ -225,5 +305,8 @@ export class RelayMemberClient {
         this.popKeypair?.discard();
         this.popKeypair = null;
         this.workstationId = null;
+        this.hostPublicKeyB64 = null;
+        this.pendingSiteKey = null;
+        this.siteCipher = null;
     }
 }
