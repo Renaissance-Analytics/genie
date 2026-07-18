@@ -148,6 +148,7 @@ export async function launchGenieTunnelE2E(): Promise<{
 
 export interface TunnelProbe {
     ready: boolean;
+    transport?: 'tailscale';
     origin: string;
     absoluteScript: boolean;
     absoluteStyle: boolean;

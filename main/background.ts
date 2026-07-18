@@ -206,7 +206,11 @@ import {
     registerE2EMocks,
     startMobileE2EServer,
 } from './e2e/mock';
-import { isE2ETunnel, startTunnelE2EHarness } from './e2e/tunnel';
+import {
+    isE2ETailscaleTunnel,
+    isE2ETunnel,
+    startTunnelE2EHarness,
+} from './e2e/tunnel';
 
 /**
  * Genie — Tynn desktop companion.
@@ -1316,7 +1320,7 @@ app.whenReady().then(async () => {
     // Non-fatal: a failed bind just means no mobile endpoint.
     // Skipped under the mobile E2E harness, which already started the singleton
     // above with mock deps — this production call would overwrite `deps`.
-    if (!isE2EMobile()) await startMobileServer({
+    if (!isE2EMobile() && !isE2ETailscaleTunnel()) await startMobileServer({
         serverVersion: app.getVersion(),
         userDataDir: app.getPath('userData'),
         // The compiled app dir holding mobile.html + the static export.

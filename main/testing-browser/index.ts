@@ -121,7 +121,7 @@ export function installTestingBrowserE2ESites(sites: EnabledGenSite[]): void {
 /** Active content id for the Playwright main-process probe (E2E only). */
 export function testingBrowserContentIdForE2E(): number | null {
     if (process.env.GENIE_E2E_TUNNEL !== '1') return null;
-    const inst = instances.get(LOCAL_CONN_KEY);
+    const inst = instances.get(LOCAL_CONN_KEY) ?? instances.values().next().value;
     return inst?.tabs.find((tab) => tab.id === inst.activeTabId)?.view.webContents.id ?? null;
 }
 

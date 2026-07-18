@@ -9,6 +9,8 @@
 
 import { webContents } from 'electron';
 import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import { AddressInfo } from 'node:net';
 import { WebSocketServer } from 'ws';
 import {
@@ -17,6 +19,11 @@ import {
     openTestingBrowser,
     testingBrowserContentIdForE2E,
 } from '../testing-browser';
+import { connectRemote, type EnabledGenSite } from '../remote';
+import { currentPin } from '../mobile/auth';
+import { mobileServerState, startMobileServer } from '../mobile/server';
+import type { MobileDataDeps } from '../mobile/api';
+import type { ResolvedSite, SiteProxyDeps } from '../mobile/site-proxy';
 
 const SITE_ID = 'e2e-app-test';
 const VITE_SITE_ID = 'e2e-vite-test';
@@ -26,6 +33,11 @@ const WORKSPACE_ID = 'e2e-workspace';
 
 export function isE2ETunnel(): boolean {
     return process.env.GENIE_E2E === '1' && process.env.GENIE_E2E_TUNNEL === '1';
+}
+
+/** Optional real-tailnet rung: set to this workstation's Tailscale IP. */
+export function isE2ETailscaleTunnel(): boolean {
+    return isE2ETunnel() && !!process.env.GENIE_E2E_TAILSCALE_IP;
 }
 
 function fixtureHtml(): string {
@@ -355,7 +367,7 @@ export async function startTunnelE2EHarness(): Promise<void> {
     const vite = await startViteFixture();
     handle.fixturePort = fixture.port;
     handle.vitePort = vite.port;
-    installTestingBrowserE2ESites([
+    const sites: EnabledGenSite[] = [
         {
             workspaceId: WORKSPACE_ID,
             genName: 'app.gen',
@@ -372,6 +384,7 @@ export async function startTunnelE2EHarness(): Promise<void> {
             scheme: 'http',
             port: vite.port,
             loopback: '::1',
+            allowedOrigins: ['app.test'],
         },
         {
             workspaceId: WORKSPACE_ID,
@@ -381,6 +394,7 @@ export async function startTunnelE2EHarness(): Promise<void> {
             scheme: 'http',
             port: vite.port,
             loopback: '::1',
+            allowedOrigins: ['app.test'],
         },
         {
             workspaceId: WORKSPACE_ID,
@@ -390,10 +404,96 @@ export async function startTunnelE2EHarness(): Promise<void> {
             scheme: 'http',
             port: vite.port,
             loopback: '::1',
+            allowedOrigins: ['app.test'],
         },
-    ]);
+    ];
+    let connKey = LOCAL_CONN_KEY;
+    if (isE2ETailscaleTunnel()) {
+        const byId = new Map<string, ResolvedSite>(
+            sites.map((site) => [
+                site.siteId,
+                {
+                    workspaceId: site.workspaceId,
+                    hostname: site.hostname,
+                    scheme: site.scheme,
+                    port: site.port,
+                    loopback: site.loopback,
+                    allowedOrigins: site.allowedOrigins,
+                },
+            ]),
+        );
+        const siteProxy: SiteProxyDeps = {
+            localSitesEnabled: () => true,
+            resolveSite: (siteId) => byId.get(siteId) ?? null,
+        };
+        const data = {
+            listWorkspaces: () => [{ id: WORKSPACE_ID, project_name: 'Tunnel E2E', path: process.cwd() }],
+            listTerminalSpecs: () => [],
+            listAllProcesses: () => [],
+            liveTerminalIds: () => [],
+            startProcess: () => {},
+            stopProcess: () => {},
+            restartProcess: () => {},
+            createAgentTerminal: () => ({ id: 't', scrollback: '', existing: false }),
+            killTerminalById: () => true,
+            writeToTerminal: () => true,
+            readTerminalOutput: () => ({ data: '', cursor: 0, dropped: false }),
+            getScrollback: () => '',
+            resize: () => true,
+            listPendingQuestions: () => [],
+            answerPendingQuestion: () => true,
+            updateStatus: () => ({
+                state: 'up-to-date',
+                currentVersion: 'e2e',
+                latestVersion: null,
+                readyToInstall: false,
+            }),
+            installUpdate: () => ({ ok: false, reason: 'not-ready' as const }),
+            checkUpdate: async () => ({
+                state: 'up-to-date',
+                currentVersion: 'e2e',
+                latestVersion: null,
+                readyToInstall: false,
+            }),
+            listEnabledSites: async () => sites,
+        } as unknown as MobileDataDeps;
+        await startMobileServer({
+            serverVersion: 'e2e-tailnet',
+            userDataDir:
+                process.env.GENIE_E2E_USERDATA ||
+                path.join(os.tmpdir(), `genie-e2e-tailnet-${process.pid}`),
+            appDir: __dirname,
+            enabled: true,
+            configuredPort: () => 0,
+            confirmPair: async () => true,
+            bindIpOverride: process.env.GENIE_E2E_TAILSCALE_IP,
+            data,
+            siteProxy,
+        });
+        const mobile = mobileServerState();
+        if (!mobile.running || !mobile.port) throw new Error('tailnet E2E mobile server did not bind');
+        const remote = await connectRemote(
+            {
+                ip: process.env.GENIE_E2E_TAILSCALE_IP!,
+                port: mobile.port,
+                hostname: 'tailnet-e2e',
+            },
+            currentPin(),
+        );
+        if (!remote.ok || !remote.connKey) {
+            throw new Error(`tailnet E2E connect failed: ${remote.error ?? 'unknown'}`);
+        }
+        connKey = remote.connKey;
+        handle.tailnet = {
+            ip: process.env.GENIE_E2E_TAILSCALE_IP,
+            mobilePort: mobile.port,
+            connKey,
+        };
+    } else {
+        installTestingBrowserE2ESites(sites);
+    }
     const opened = await openTestingBrowser(
-        LOCAL_CONN_KEY,
+        connKey,
         'E2E tunnel fixture',
         'https://app.test/',
     );
@@ -422,6 +522,7 @@ export async function startTunnelE2EHarness(): Promise<void> {
                 'window.__tunnelProbe ? JSON.parse(JSON.stringify(window.__tunnelProbe)) : null',
                 true,
             );
+            if (isE2ETailscaleTunnel() && probe) probe.transport = 'tailscale';
             handle.probe = probe;
             if (probe?.ready) clearInterval(timer);
         } catch {

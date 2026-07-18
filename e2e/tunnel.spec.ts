@@ -43,6 +43,9 @@ test('Testing Browser preserves a dev site origin across the tunnel', async () =
             reverb: true,
             errors: [],
         });
+        if (process.env.GENIE_E2E_TAILSCALE_IP) {
+            expect(probe?.transport).toBe('tailscale');
+        }
     } finally {
         await app.close();
     }
