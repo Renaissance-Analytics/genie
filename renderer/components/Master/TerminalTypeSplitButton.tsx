@@ -135,22 +135,35 @@ export default function TerminalTypeSplitButton({
                 setFormAgent(null);
             }
         };
-        // A portaled popover can't track its anchor's position, so a scroll
-        // (the sidebar list, most likely) or resize just closes it — matching
+        // A portaled popover can't track its anchor's position, so an ANCESTOR
+        // scroll (the sidebar list, most likely) or a resize closes it — matching
         // AgiHealth's popover in Chooser.tsx.
-        const onScrollResize = () => {
+        //
+        // But this listener is CAPTURE-phase on window, so it also sees scrolls
+        // that happen INSIDE the popover — e.g. scrolling the "who can reach this
+        // agent" workspace list in the agent form. Those don't move the anchor, so
+        // dismissing on them made the form impossible to fill in: it vanished the
+        // moment you scrolled that list. Ignore any scroll originating within the
+        // popover (or the anchor) and only dismiss on a genuine outside scroll.
+        const onScroll = (e: Event) => {
+            const t = e.target as Node | null;
+            if (t && (popRef.current?.contains(t) || ref.current?.contains(t))) return;
+            setMenuOpen(false);
+            setFormAgent(null);
+        };
+        const onResize = () => {
             setMenuOpen(false);
             setFormAgent(null);
         };
         document.addEventListener('mousedown', onAway);
         document.addEventListener('keydown', onEsc);
-        window.addEventListener('resize', onScrollResize);
-        window.addEventListener('scroll', onScrollResize, true);
+        window.addEventListener('resize', onResize);
+        window.addEventListener('scroll', onScroll, true);
         return () => {
             document.removeEventListener('mousedown', onAway);
             document.removeEventListener('keydown', onEsc);
-            window.removeEventListener('resize', onScrollResize);
-            window.removeEventListener('scroll', onScrollResize, true);
+            window.removeEventListener('resize', onResize);
+            window.removeEventListener('scroll', onScroll, true);
         };
     }, [open]);
 
