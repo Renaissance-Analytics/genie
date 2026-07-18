@@ -75,6 +75,8 @@ export interface CompanionEndpointConfig {
     hostname: string;
     scheme: SiteScheme;
     port: number;
+    /** Explicit destination family; both values are literal loopback only. */
+    loopback?: '127.0.0.1' | '::1';
 }
 
 /** A workspace's per-site tunnel settings, keyed by the opaque {@link siteIdFor}. */
@@ -283,7 +285,14 @@ export function sanitizeTunnelPatch(patch: TunnelSiteConfig | null | undefined):
                 continue;
             }
             seen.add(id);
-            companions.push({ id, enabled: true, hostname, scheme: raw.scheme, port });
+            companions.push({
+                id,
+                enabled: true,
+                hostname,
+                scheme: raw.scheme,
+                port,
+                ...(raw.loopback === '::1' ? { loopback: '::1' as const } : {}),
+            });
         }
         if (companions.length) out.companions = companions;
     }

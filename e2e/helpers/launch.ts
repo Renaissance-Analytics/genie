@@ -169,6 +169,12 @@ export interface TunnelProbe {
         hmr: boolean;
         debugger: boolean;
     };
+    next: {
+        module: boolean;
+        sourceMap: boolean;
+        fastRefresh: boolean;
+    };
+    reverb: boolean;
     errors: string[];
 }
 

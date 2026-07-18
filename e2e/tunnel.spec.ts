@@ -35,6 +35,12 @@ test('Testing Browser preserves a dev site origin across the tunnel', async () =
                 hmr: true,
                 debugger: true,
             },
+            next: {
+                module: true,
+                sourceMap: true,
+                fastRefresh: true,
+            },
+            reverb: true,
             errors: [],
         });
     } finally {

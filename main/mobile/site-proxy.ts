@@ -115,6 +115,10 @@ export interface ResolvedSite {
     scheme: SiteScheme;
     /** The loopback port to dial (always at `127.0.0.1`). */
     port: number;
+    /** Literal loopback destination only. */
+    loopback?: '127.0.0.1' | '::1';
+    /** Exact browser origins allowed to open this endpoint's WebSockets. */
+    allowedOrigins?: string[];
 }
 
 /**
@@ -438,7 +442,7 @@ function proxyHttp(
 ): void {
     const isHttps = site.scheme === 'https';
     const options: https.RequestOptions = {
-        host: LOOPBACK, // ALWAYS loopback — never the discovered IP or remote input
+        host: site.loopback ?? LOOPBACK, // ALWAYS a validated literal loopback
         port: site.port,
         method: req.method,
         path: upstreamPath,
@@ -524,7 +528,13 @@ export async function handleSiteProxyUpgrade(
     }
     if (transportToken !== undefined && origin) {
         try {
-            if (new URL(origin).hostname.toLowerCase() !== site.hostname.toLowerCase()) {
+            const originHost = new URL(origin).hostname.toLowerCase();
+            const allowed = new Set(
+                (site.allowedOrigins?.length ? site.allowedOrigins : [site.hostname]).map((h) =>
+                    h.toLowerCase(),
+                ),
+            );
+            if (!allowed.has(originHost)) {
                 rejectSocket(socket, 401);
                 return true;
             }
@@ -556,7 +566,7 @@ function proxyUpgrade(
 ): void {
     const isHttps = site.scheme === 'https';
     const options: https.RequestOptions = {
-        host: LOOPBACK,
+        host: site.loopback ?? LOOPBACK,
         port: site.port,
         method: req.method ?? 'GET',
         path: upstreamPath,

@@ -210,6 +210,7 @@ describe('sanitizeTunnelPatch', () => {
                         hostname: 'docs.api.example.dev',
                         scheme: 'http',
                         port: 3001,
+                        loopback: '::1',
                     },
                     {
                         id: '../escape',
@@ -235,6 +236,7 @@ describe('sanitizeTunnelPatch', () => {
                     hostname: 'docs.api.example.dev',
                     scheme: 'http',
                     port: 3001,
+                    loopback: '::1',
                 },
             ],
         });

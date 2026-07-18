@@ -20,6 +20,8 @@ import {
 
 const SITE_ID = 'e2e-app-test';
 const VITE_SITE_ID = 'e2e-vite-test';
+const NEXT_SITE_ID = 'e2e-next-test';
+const REVERB_SITE_ID = 'e2e-reverb-test';
 const WORKSPACE_ID = 'e2e-workspace';
 
 export function isE2ETunnel(): boolean {
@@ -49,6 +51,8 @@ function fixtureHtml(): string {
     stream: false,
     websocket: false,
     vite: { manifest: false, module: false, sourceMap: false, hmr: false, debugger: false },
+    next: { module: false, sourceMap: false, fastRefresh: false },
+    reverb: false,
     errors: [],
   };
   const p = window.__tunnelProbe;
@@ -114,6 +118,37 @@ function fixtureHtml(): string {
         clearTimeout(timeout);
         const message = JSON.parse(String(event.data));
         p.vite.hmr = message.type === 'connected';
+        socket.close();
+        resolve();
+      };
+      socket.onerror = () => { clearTimeout(timeout); reject(new Error('failed')); };
+    }));
+    await attempt('next-module', async () => {
+      await import('https://next.dev.app.test/_next/static/chunks/app.js');
+      p.next.module = window.__nextDevChunkLoaded === true;
+      const response = await fetch('https://next.dev.app.test/_next/static/chunks/app.js.map');
+      const sourceMap = await response.json();
+      p.next.sourceMap = sourceMap.sources.includes('webpack://app/page.tsx');
+    });
+    await attempt('next-fast-refresh', () => new Promise((resolve, reject) => {
+      const socket = new WebSocket('wss://next.dev.app.test/_next/webpack-hmr');
+      const timeout = setTimeout(() => { socket.close(); reject(new Error('timeout')); }, 3000);
+      socket.onmessage = (event) => {
+        clearTimeout(timeout);
+        const message = JSON.parse(String(event.data));
+        p.next.fastRefresh = message.action === 'sync';
+        socket.close();
+        resolve();
+      };
+      socket.onerror = () => { clearTimeout(timeout); reject(new Error('failed')); };
+    }));
+    await attempt('reverb', () => new Promise((resolve, reject) => {
+      const socket = new WebSocket('wss://ws.app.test/app/e2e-key?protocol=7&client=js');
+      const timeout = setTimeout(() => { socket.close(); reject(new Error('timeout')); }, 3000);
+      socket.onmessage = (event) => {
+        clearTimeout(timeout);
+        const message = JSON.parse(String(event.data));
+        p.reverb = message.event === 'pusher:connection_established';
         socket.close();
         resolve();
       };
@@ -253,6 +288,35 @@ async function startViteFixture(): Promise<{ server: http.Server; port: number }
             res.end(body);
             return;
         }
+        if (path === '/_next/static/chunks/app.js') {
+            const body =
+                'window.__nextDevChunkLoaded = true;\n' +
+                'export const nextDevFixture = true;\n' +
+                '//# sourceMappingURL=app.js.map\n';
+            res.writeHead(200, {
+                ...cors,
+                'Content-Type': 'application/javascript',
+                'Content-Length': Buffer.byteLength(body),
+            });
+            res.end(body);
+            return;
+        }
+        if (path === '/_next/static/chunks/app.js.map') {
+            const body = JSON.stringify({
+                version: 3,
+                file: 'app.js',
+                sources: ['webpack://app/page.tsx'],
+                names: [],
+                mappings: '',
+            });
+            res.writeHead(200, {
+                ...cors,
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body),
+            });
+            res.end(body);
+            return;
+        }
         res.writeHead(404, cors);
         res.end();
     });
@@ -260,8 +324,22 @@ async function startViteFixture(): Promise<{ server: http.Server; port: number }
         server,
         handleProtocols: (protocols) => (protocols.has('vite-hmr') ? 'vite-hmr' : false),
     });
-    sockets.on('connection', (socket) => socket.send(JSON.stringify({ type: 'connected' })));
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    sockets.on('connection', (socket, request) => {
+        const path = new URL(request.url ?? '/', 'http://fixture.invalid').pathname;
+        if (path === '/_next/webpack-hmr') {
+            socket.send(JSON.stringify({ action: 'sync', hash: 'e2e' }));
+        } else if (path.startsWith('/app/')) {
+            socket.send(
+                JSON.stringify({
+                    event: 'pusher:connection_established',
+                    data: JSON.stringify({ socket_id: '1.1', activity_timeout: 30 }),
+                }),
+            );
+        } else {
+            socket.send(JSON.stringify({ type: 'connected' }));
+        }
+    });
+    await new Promise<void>((resolve) => server.listen(0, '::1', resolve));
     return { server, port: (server.address() as AddressInfo).port };
 }
 
@@ -293,6 +371,25 @@ export async function startTunnelE2EHarness(): Promise<void> {
             hostname: 'assets.dev.app.test',
             scheme: 'http',
             port: vite.port,
+            loopback: '::1',
+        },
+        {
+            workspaceId: WORKSPACE_ID,
+            genName: 'next.dev.app.gen',
+            siteId: NEXT_SITE_ID,
+            hostname: 'next.dev.app.test',
+            scheme: 'http',
+            port: vite.port,
+            loopback: '::1',
+        },
+        {
+            workspaceId: WORKSPACE_ID,
+            genName: 'ws.app.gen',
+            siteId: REVERB_SITE_ID,
+            hostname: 'ws.app.test',
+            scheme: 'http',
+            port: vite.port,
+            loopback: '::1',
         },
     ]);
     const opened = await openTestingBrowser(

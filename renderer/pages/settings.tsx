@@ -3515,7 +3515,7 @@ function LocalSitesList({ workspaceId }: { workspaceId: string }) {
                                             key={`${endpoint.id}-${index}`}
                                             style={{
                                                 display: 'grid',
-                                                gridTemplateColumns: '1fr 108px 92px auto',
+                                                gridTemplateColumns: '1fr 108px 92px 96px auto',
                                                 gap: 6,
                                                 alignItems: 'center',
                                             }}
@@ -3598,6 +3598,27 @@ function LocalSitesList({ workspaceId }: { workspaceId: string }) {
                                                     })
                                                 }
                                                 aria-label={`Companion port ${index + 1}`}
+                                            />
+                                            <Select
+                                                value={endpoint.loopback ?? '127.0.0.1'}
+                                                onValueChange={(loopback) => {
+                                                    const companions = (s.companions ?? []).map(
+                                                        (c, i) =>
+                                                            i === index
+                                                                ? {
+                                                                      ...c,
+                                                                      loopback: loopback as
+                                                                          | '127.0.0.1'
+                                                                          | '::1',
+                                                                  }
+                                                                : c,
+                                                    );
+                                                    void patchSite(s.siteId, { companions });
+                                                }}
+                                                list={[
+                                                    { value: '127.0.0.1', label: 'IPv4' },
+                                                    { value: '::1', label: 'IPv6' },
+                                                ]}
                                             />
                                             <Action
                                                 size="sm"

@@ -198,6 +198,7 @@ export interface SiteView {
         hostname: string;
         scheme: SiteScheme;
         port: number;
+        loopback?: '127.0.0.1' | '::1';
         siteId?: string;
     }>;
 }
@@ -236,6 +237,7 @@ export interface TunnelSiteConfig {
         hostname: string;
         scheme: SiteScheme;
         port: number;
+        loopback?: '127.0.0.1' | '::1';
     }>;
 }
 

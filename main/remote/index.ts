@@ -1743,6 +1743,8 @@ export interface EnabledGenSite {
     hostname: string;
     scheme: SiteScheme;
     port: number;
+    loopback?: '127.0.0.1' | '::1';
+    allowedOrigins?: string[];
 }
 
 // Owner-gated (design §8 decision #4): the RELAY site-tunneling carrier is built
@@ -1820,6 +1822,8 @@ export async function remoteListEnabledGenSites(connKey: string): Promise<Enable
             hostname: s.hostname,
             scheme: s.scheme,
             port: s.port,
+            loopback: s.loopback,
+            allowedOrigins: s.allowedOrigins,
         }));
 }
 

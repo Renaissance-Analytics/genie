@@ -37,6 +37,7 @@ export interface LocalTarget {
     hostname: string;
     /** The loopback port to dial. */
     port: number;
+    loopback?: '127.0.0.1' | '::1';
 }
 
 /** Split `/api/site/<siteId><path>` and resolve the target it selects. */
@@ -60,7 +61,7 @@ function dialOptions(
 ): https.RequestOptions {
     const isTls = target.scheme === 'https';
     return {
-        host: LOOPBACK, // ALWAYS loopback — the siteId is the only selector (SSRF-safe)
+        host: target.loopback ?? LOOPBACK, // validated literal loopback only
         port: target.port,
         method: keepUpgrade ? 'GET' : undefined,
         path: upstreamPath,

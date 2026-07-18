@@ -1394,6 +1394,8 @@ app.whenReady().then(async () => {
                                 hostname: endpoint.hostname,
                                 scheme: endpoint.scheme,
                                 port: endpoint.port,
+                                loopback: endpoint.loopback,
+                                allowedOrigins: [owner.hostname, endpoint.hostname],
                             };
                         }
                     }

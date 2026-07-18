@@ -44,6 +44,8 @@ export async function listLocalEnabledGenSites(): Promise<EnabledGenSite[]> {
                     hostname: endpoint.hostname,
                     scheme: endpoint.scheme,
                     port: endpoint.port,
+                    loopback: endpoint.loopback,
+                    allowedOrigins: [v.hostname, endpoint.hostname],
                 });
             }
         }
@@ -56,7 +58,12 @@ export async function listLocalEnabledGenSites(): Promise<EnabledGenSite[]> {
 export function localTargetsBySiteId(sites: EnabledGenSite[]): Map<string, LocalTarget> {
     const m = new Map<string, LocalTarget>();
     for (const s of sites) {
-        m.set(s.siteId, { scheme: s.scheme, hostname: s.hostname, port: s.port });
+        m.set(s.siteId, {
+            scheme: s.scheme,
+            hostname: s.hostname,
+            port: s.port,
+            loopback: s.loopback,
+        });
     }
     return m;
 }
