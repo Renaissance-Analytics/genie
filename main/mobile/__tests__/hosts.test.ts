@@ -5,6 +5,7 @@ import {
     deriveGenName,
     siteIdFor,
     mergeSites,
+    companionSiteIdFor,
     sanitizeTunnelPatch,
     parseTunnelSites,
     DEFAULT_PROBE,
@@ -192,6 +193,52 @@ describe('sanitizeTunnelPatch', () => {
             sanitizeTunnelPatch({ enabled: true, scheme: 'https', port: 8443, genName: '  x.gen ' }),
         ).toEqual({ enabled: true, scheme: 'https', port: 8443, genName: 'x.gen' });
     });
+    it('keeps only explicitly enabled, loopback companion endpoints', () => {
+        expect(
+            sanitizeTunnelPatch({
+                companions: [
+                    {
+                        id: 'vite',
+                        enabled: true,
+                        hostname: 'vite.test',
+                        scheme: 'http',
+                        port: 5173,
+                    },
+                    {
+                        id: 'docs',
+                        enabled: true,
+                        hostname: 'docs.api.example.dev',
+                        scheme: 'http',
+                        port: 3001,
+                    },
+                    {
+                        id: '../escape',
+                        enabled: true,
+                        hostname: 'not a hostname',
+                        scheme: 'http',
+                        port: 80,
+                    },
+                ],
+            }),
+        ).toEqual({
+            companions: [
+                {
+                    id: 'vite',
+                    enabled: true,
+                    hostname: 'vite.test',
+                    scheme: 'http',
+                    port: 5173,
+                },
+                {
+                    id: 'docs',
+                    enabled: true,
+                    hostname: 'docs.api.example.dev',
+                    scheme: 'http',
+                    port: 3001,
+                },
+            ],
+        });
+    });
     it('drops junk (bad scheme, out-of-range port, empty name, non-object)', () => {
         expect(
             sanitizeTunnelPatch({
@@ -203,6 +250,18 @@ describe('sanitizeTunnelPatch', () => {
         ).toEqual({});
         expect(sanitizeTunnelPatch(null)).toEqual({});
         expect(sanitizeTunnelPatch(undefined)).toEqual({});
+    });
+});
+
+describe('companion endpoint identity', () => {
+    it('is stable and scoped to both the owning site and endpoint id', () => {
+        expect(companionSiteIdFor('site-a', 'vite')).toBe(
+            companionSiteIdFor('site-a', 'vite'),
+        );
+        expect(companionSiteIdFor('site-a', 'vite')).not.toBe(
+            companionSiteIdFor('site-b', 'vite'),
+        );
+        expect(companionSiteIdFor('site-a', 'vite')).toHaveLength(16);
     });
 });
 

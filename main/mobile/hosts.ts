@@ -60,6 +60,21 @@ export interface TunnelSiteConfig {
     scheme?: SiteScheme;
     /** Manual port override; absent ⇒ the probed (or convention-default) port. */
     port?: number;
+    /** Explicit loopback services owned by this site (Vite, Reverb, Next dev,
+     * etc.). Each receives its own browser-facing hostname and opaque route id. */
+    companions?: CompanionEndpointConfig[];
+}
+
+export interface CompanionEndpointConfig {
+    /** Stable, human-readable key within the owning site. */
+    id: string;
+    /** Strict opt-in. */
+    enabled?: boolean;
+    /** User-selected browser-facing hostname (including nested subdomains),
+     * resolved only inside this Testing Browser session. */
+    hostname: string;
+    scheme: SiteScheme;
+    port: number;
 }
 
 /** A workspace's per-site tunnel settings, keyed by the opaque {@link siteIdFor}. */
@@ -76,6 +91,11 @@ export interface SiteView {
     /** Resolved `*.gen` name (stored override, else derived). */
     genName: string;
     /** The opaque allowlist key (also the settings map key). */
+    siteId: string;
+    companions?: CompanionEndpointView[];
+}
+
+export interface CompanionEndpointView extends CompanionEndpointConfig {
     siteId: string;
 }
 
@@ -210,6 +230,15 @@ export function siteIdFor(hostname: string): string {
     return crypto.createHash('sha256').update(hostname.toLowerCase()).digest('hex').slice(0, 16);
 }
 
+/** Opaque route identity for a companion, scoped to its owning site. */
+export function companionSiteIdFor(ownerSiteId: string, endpointId: string): string {
+    return crypto
+        .createHash('sha256')
+        .update(`${ownerSiteId}\0${endpointId}`)
+        .digest('hex')
+        .slice(0, 16);
+}
+
 /**
  * PURE. Normalize an untrusted tunnel-config patch: only well-typed fields
  * survive, port is clamped to 1..65535, scheme to `http`/`https`, genName is
@@ -228,7 +257,50 @@ export function sanitizeTunnelPatch(patch: TunnelSiteConfig | null | undefined):
         const g = patch.genName.trim().slice(0, 255);
         if (g) out.genName = g;
     }
+    if (Array.isArray(patch.companions)) {
+        const companions: CompanionEndpointConfig[] = [];
+        const seen = new Set<string>();
+        for (const raw of patch.companions.slice(0, 16)) {
+            if (!raw || typeof raw !== 'object') continue;
+            const id = typeof raw.id === 'string' ? raw.id.trim().toLowerCase() : '';
+            const hostname =
+                typeof raw.hostname === 'string'
+                    ? raw.hostname.trim().toLowerCase().replace(/\.$/, '')
+                    : '';
+            const port =
+                typeof raw.port === 'number' && Number.isFinite(raw.port)
+                    ? Math.trunc(raw.port)
+                    : 0;
+            if (
+                !/^[a-z0-9][a-z0-9_-]{0,31}$/.test(id) ||
+                seen.has(id) ||
+                raw.enabled !== true ||
+                (raw.scheme !== 'http' && raw.scheme !== 'https') ||
+                port < 1 ||
+                port > 65535 ||
+                !isValidMappedHostname(hostname)
+            ) {
+                continue;
+            }
+            seen.add(id);
+            companions.push({ id, enabled: true, hostname, scheme: raw.scheme, port });
+        }
+        if (companions.length) out.companions = companions;
+    }
     return out;
+}
+
+/** Exact browser-facing DNS name validation. The destination remains loopback;
+ * this name is only a session-local routing key and may use any valid domain. */
+export function isValidMappedHostname(hostname: string): boolean {
+    if (!hostname || hostname.length > 253 || hostname.includes('..')) return false;
+    if (net.isIP(hostname)) return false;
+    return hostname.split('.').every(
+        (label) =>
+            label.length >= 1 &&
+            label.length <= 63 &&
+            /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label),
+    );
 }
 
 /**
@@ -270,6 +342,10 @@ export function mergeSites(
         const scheme = cfg.scheme ?? probe?.scheme ?? DEFAULT_PROBE.scheme;
         const port = cfg.port ?? probe?.port ?? DEFAULT_PROBE.port;
         const genName = (cfg.genName ?? '').trim() || deriveGenName(d.hostname);
+        const companions = (cfg.companions ?? []).map((endpoint) => ({
+            ...endpoint,
+            siteId: companionSiteIdFor(d.siteId, endpoint.id),
+        }));
         return {
             hostname: d.hostname,
             scheme,
@@ -278,6 +354,7 @@ export function mergeSites(
             enabled: cfg.enabled === true,
             genName,
             siteId: d.siteId,
+            ...(companions.length ? { companions } : {}),
         };
     });
 }

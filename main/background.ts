@@ -206,6 +206,7 @@ import {
     registerE2EMocks,
     startMobileE2EServer,
 } from './e2e/mock';
+import { isE2ETunnel, startTunnelE2EHarness } from './e2e/tunnel';
 
 /**
  * Genie — Tynn desktop companion.
@@ -936,6 +937,17 @@ app.whenReady().then(async () => {
     // workspace's full-filesystem access (files/ipc.ts) — impossible headless.
     markDesktopRuntime();
 
+    // The Testing Browser E2E owns a completely isolated window + loopback
+    // fixture and needs none of the normal desktop database/terminal startup.
+    // Start it before native backends so the release-facing browser contract
+    // cannot be hidden by an unrelated developer-machine service failure.
+    if (isE2ETunnel()) {
+        await startTunnelE2EHarness().catch((e) =>
+            console.error('[e2e] tunnel harness failed to start', e),
+        );
+        return;
+    }
+
     // One-time upgrade migration: remove the system-wide tynn-cli installation
     // created by older Genie builds before terminals/processes inherit its PATH.
     const cliCleanup = await cleanupLegacyTynnCliInstall();
@@ -1373,6 +1385,17 @@ app.whenReady().then(async () => {
                             scheme: hit.scheme,
                             port: hit.port,
                         };
+                    }
+                    for (const owner of views.filter((v) => v.enabled)) {
+                        const endpoint = owner.companions?.find((c) => c.siteId === siteId);
+                        if (endpoint) {
+                            return {
+                                workspaceId: ws.id,
+                                hostname: endpoint.hostname,
+                                scheme: endpoint.scheme,
+                                port: endpoint.port,
+                            };
+                        }
                     }
                 }
                 return null;

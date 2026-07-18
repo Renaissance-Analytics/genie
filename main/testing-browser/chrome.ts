@@ -1,4 +1,4 @@
-import { isGenHost, stripHostPort } from '../remote/site-proxy';
+import { stripHostPort } from '../remote/site-proxy';
 
 /**
  * Display-independent logic for the Testing Browser (serve-local-sites Phase D,
@@ -42,25 +42,25 @@ export function devicePreset(id: string): DevicePreset {
  */
 export function normalizeNavUrl(
     input: string,
-    enabledGenHosts: ReadonlySet<string>,
+    enabledHosts: ReadonlySet<string>,
+    aliases: ReadonlyMap<string, string> = new Map(),
 ): { url: string } | { error: string } {
     const raw = (input ?? '').trim();
-    if (!raw) return { error: 'Enter a .gen address.' };
-    // A bare label with no dot/slash/space → try `<label>.gen`.
+    if (!raw) return { error: 'Enter an enabled development address.' };
     const looksBare = /^[a-z0-9-]+$/i.test(raw);
-    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
+    const aliasCandidate = looksBare ? `${raw.toLowerCase()}.gen` : raw;
+    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(aliasCandidate)
+        ? aliasCandidate
+        : `https://${aliasCandidate}`;
     let u: URL;
     try {
         u = new URL(withScheme);
     } catch {
         return { error: 'That is not a valid address.' };
     }
-    let host = stripHostPort(u.hostname);
-    if (!isGenHost(host) && looksBare) host = `${host}.gen`;
-    if (!isGenHost(host)) {
-        return { error: 'The testing browser only opens Genie tunnel (*.gen) sites.' };
-    }
-    if (!enabledGenHosts.has(host)) {
+    const inputHost = stripHostPort(u.hostname);
+    const host = aliases.get(inputHost) ?? inputHost;
+    if (!enabledHosts.has(host)) {
         return { error: `${host} is not an enabled tunnel on this host.` };
     }
     // Force https + the resolved host; keep path/query/hash.
@@ -70,6 +70,6 @@ export function normalizeNavUrl(
 /** PURE. The initial URL to open — the first enabled `.gen`, else null (the chrome
  *  then shows the empty-state with the enabled-site chips). */
 export function initialGenUrl(enabledGenHosts: readonly string[]): string | null {
-    const first = enabledGenHosts.find((h) => isGenHost(h));
+    const first = enabledGenHosts[0];
     return first ? `https://${first}/` : null;
 }

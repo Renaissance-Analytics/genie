@@ -203,7 +203,6 @@ export function buildForwardHeaders(
         if (v === undefined) continue;
         const lk = k.toLowerCase();
         if (lk === 'host') continue; // Node sets Host from the dial target
-        if (lk === 'authorization') continue; // we inject the Genie Bearer instead
         if (lk.startsWith('proxy-')) continue;
         if (HOP_BY_HOP.has(lk)) {
             if (opts.keepUpgrade && (lk === 'upgrade' || lk === 'connection')) out[k] = v;
@@ -235,15 +234,6 @@ export function buildForwardResponseHeaders(
         const lk = k.toLowerCase();
         if (HOP_BY_HOP.has(lk)) continue;
         if (connTokens.has(lk)) continue;
-        if (lk === 'location') {
-            out[k] = rewriteGenLocation(String(v), hostname, genHost);
-            continue;
-        }
-        if (lk === 'set-cookie') {
-            const cookies = Array.isArray(v) ? v : [String(v)];
-            out[k] = cookies.map((c) => rewriteGenSetCookieDomain(c, hostname, genHost));
-            continue;
-        }
         out[k] = v; // HSTS, content-type, Secure cookies, etc. all preserved
     }
     return out;
@@ -277,8 +267,8 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
             cert: defaultLeaf.certPem,
             SNICallback: (servername, cb) => {
                 const host = stripHostPort(servername);
-                if (!isGenHost(host) || !deps.resolveGen(host)) {
-                    cb(new Error('refused: not an enabled .gen site'));
+                if (!deps.resolveGen(host)) {
+                    cb(new Error('refused: not an enabled testing-browser origin'));
                     return;
                 }
                 try {
@@ -390,16 +380,16 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
             .catch(() => rejectSocket(socket, 502));
     }
 
-    // The public proxy endpoint. HTTPS `.gen` navigations arrive as CONNECT; a
+    // The public proxy endpoint. HTTPS origin navigations arrive as CONNECT; a
     // plain-http proxy request is REFUSED (we are not a general proxy).
     const proxy = http.createServer((req, res) => {
-        sendError(res, 400, 'the Genie testing browser only tunnels https://*.gen');
+        sendError(res, 400, 'the Genie testing browser only tunnels enabled origins');
     });
     proxy.on('connect', (req, clientSocket: Duplex, head: Buffer) => {
         const genHost = stripHostPort(req.url);
         // §5 allowlist: refuse everything not in the enabled `.gen` set — a
         // non-`.gen` host or a disabled/unknown `.gen` never gets a tunnel.
-        if (!isGenHost(genHost) || !deps.resolveGen(genHost)) {
+        if (!deps.resolveGen(genHost)) {
             rejectSocket(clientSocket, 403);
             return;
         }

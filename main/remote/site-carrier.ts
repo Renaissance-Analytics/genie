@@ -1,7 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import { Duplex, PassThrough, type Readable } from 'node:stream';
-import { GENIE_TOKEN_PARAM } from '../mobile/site-proxy';
+import { TRANSPORT_TOKEN_HEADER } from '../mobile/site-proxy';
 import type { SiteStreamController, SiteStreamHandlers } from './relay-mux';
 import type { SiteOpenPayload } from './relay-protocol';
 
@@ -116,13 +116,6 @@ function parseBase(hostBase: string): { host: string; port: number } {
     return { host: u.hostname, port: u.port ? Number(u.port) : 80 };
 }
 
-/** Append our namespaced WS token param to a `/api/site/…` path (a browser WS
- *  can't set Authorization; the host reads `?__genie_token=`). */
-function withTokenParam(path: string, token: string): string {
-    const sep = path.includes('?') ? '&' : '?';
-    return `${path}${sep}${GENIE_TOKEN_PARAM}=${encodeURIComponent(token)}`;
-}
-
 /** Serialize an upstream upgrade response's status line + headers verbatim. */
 function serializeHandshake(res: http.IncomingMessage): string {
     const lines = [`HTTP/1.1 ${res.statusCode} ${res.statusMessage}`];
@@ -174,7 +167,7 @@ export function createTailnetSiteCarrier(hostBase: string, bearer: () => string)
             let upReq: http.ClientRequest | null = null;
             const response = new Promise<SiteForwardResult>((resolve, reject) => {
                 const headers: http.OutgoingHttpHeaders = { ...req.headers };
-                headers['authorization'] = `Bearer ${bearer()}`; // token stays in MAIN
+                headers[TRANSPORT_TOKEN_HEADER] = bearer();
                 upReq = http.request(
                     { host: base.host, port: base.port, method: req.method, path: req.path, headers },
                     (upRes) => resolve({ status: upRes.statusCode ?? 502, headers: upRes.headers, body: upRes }),
@@ -192,8 +185,8 @@ export function createTailnetSiteCarrier(hostBase: string, bearer: () => string)
                     host: base.host,
                     port: base.port,
                     method: 'GET',
-                    path: withTokenParam(req.path, bearer()),
-                    headers: req.headers,
+                    path: req.path,
+                    headers: { ...req.headers, [TRANSPORT_TOKEN_HEADER]: bearer() },
                 });
                 upReq.on('upgrade', (upRes, upSocket, upHead) =>
                     resolve({ handshake: serializeHandshake(upRes), socket: upSocket, head: upHead }),

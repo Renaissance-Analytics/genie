@@ -9,7 +9,6 @@ import crypto from 'node:crypto';
 import { SessionCa } from '../remote/site-ca';
 import {
     createSiteShim,
-    isGenHost,
     stripHostPort,
     type GenTarget,
     type SiteShim,
@@ -104,6 +103,28 @@ const instances = new Map<string, TestingBrowserInstance>();
 /** chrome webContents.id → connKey, so the IPC handlers resolve their instance. */
 const chromeWcToConnKey = new Map<number, string>();
 
+/**
+ * E2E-only local-site source. The clean-VM Playwright tunnel spec cannot depend
+ * on a developer hosts file, Herd, or the settings DB, so it installs a
+ * deterministic loopback fixture here. The guard makes accidental production
+ * use fail loudly.
+ */
+let e2eLocalSites: EnabledGenSite[] | null = null;
+
+export function installTestingBrowserE2ESites(sites: EnabledGenSite[]): void {
+    if (process.env.GENIE_E2E_TUNNEL !== '1') {
+        throw new Error('Testing Browser E2E sites are only available under GENIE_E2E_TUNNEL');
+    }
+    e2eLocalSites = sites;
+}
+
+/** Active content id for the Playwright main-process probe (E2E only). */
+export function testingBrowserContentIdForE2E(): number | null {
+    if (process.env.GENIE_E2E_TUNNEL !== '1') return null;
+    const inst = instances.get(LOCAL_CONN_KEY);
+    return inst?.tabs.find((tab) => tab.id === inst.activeTabId)?.view.webContents.id ?? null;
+}
+
 function instanceForChrome(wcId: number): TestingBrowserInstance | null {
     const key = chromeWcToConnKey.get(wcId);
     return key ? instances.get(key) ?? null : null;
@@ -112,6 +133,17 @@ function instanceForChrome(wcId: number): TestingBrowserInstance | null {
 /** The enabled `.gen` host names (for the chrome's URL-bar allowlist). */
 function enabledGenSet(inst: TestingBrowserInstance): Set<string> {
     return new Set(inst.genMap.keys());
+}
+
+function aliasMap(inst: TestingBrowserInstance): Map<string, string> {
+    return new Map(inst.sites.map((site) => [site.genName.toLowerCase(), site.hostname.toLowerCase()]));
+}
+
+function normalizeForInstance(
+    inst: TestingBrowserInstance,
+    input: string,
+): { url: string } | { error: string } {
+    return normalizeNavUrl(input, enabledGenSet(inst), aliasMap(inst));
 }
 
 // --- open / teardown -------------------------------------------------------
@@ -133,7 +165,10 @@ export async function openTestingBrowser(
 ): Promise<{ ok: boolean; error?: string }> {
     const existing = instances.get(connKey);
     if (existing && !existing.window.isDestroyed()) {
-        if (initialUrl) openTab(existing, initialUrl);
+        if (initialUrl) {
+            const resolved = normalizeForInstance(existing, initialUrl);
+            if ('url' in resolved) openTab(existing, resolved.url);
+        }
         existing.window.show();
         existing.window.focus();
         return { ok: true };
@@ -182,7 +217,7 @@ export async function openTestingBrowser(
     // Trust a `*.gen` leaf ONLY when it chains to THIS session's CA — never OS-wide.
     ses.setCertificateVerifyProc((request, callback) => {
         const host = stripHostPort(request.hostname);
-        if (isGenHost(host) && ca.verifyLeaf(request.certificate.data)) {
+        if (genMap.has(host) && ca.verifyLeaf(request.certificate.data)) {
             callback(0); // trusted — our own session CA issued it
             return;
         }
@@ -261,8 +296,11 @@ export async function openTestingBrowser(
     inst.refreshTimer = setInterval(() => void refreshSites(inst), SITE_REFRESH_MS);
     inst.refreshTimer.unref?.();
 
-    const first = initialUrl ?? initialGenUrl([...inst.genMap.keys()]);
-    if (first) openTab(inst, first);
+    const requested = initialUrl ?? initialGenUrl([...inst.genMap.keys()]);
+    if (requested) {
+        const resolved = normalizeForInstance(inst, requested);
+        if ('url' in resolved) openTab(inst, resolved.url);
+    }
 
     return { ok: true };
 }
@@ -294,11 +332,11 @@ function teardown(connKey: string): void {
  *  failure (host locked/unreachable, or no local sites → []). */
 async function refreshSites(inst: TestingBrowserInstance): Promise<void> {
     const sites = inst.isLocal
-        ? await listLocalEnabledGenSites().catch(() => [])
+        ? e2eLocalSites ?? (await listLocalEnabledGenSites().catch(() => []))
         : await remoteListEnabledGenSites(inst.connKey);
     inst.genMap.clear();
     for (const s of sites) {
-        inst.genMap.set(s.genName, {
+        inst.genMap.set(s.hostname.toLowerCase(), {
             workspaceId: s.workspaceId,
             siteId: s.siteId,
             hostname: s.hostname,
@@ -353,7 +391,7 @@ function openTab(inst: TestingBrowserInstance, url: string): Tab {
     });
     // Keep new-window/target=_blank navigations inside the browser as a new tab.
     wc.setWindowOpenHandler(({ url: openUrl }) => {
-        const check = normalizeNavUrl(openUrl, enabledGenSet(inst));
+        const check = normalizeForInstance(inst, openUrl);
         if ('url' in check) openTab(inst, check.url);
         return { action: 'deny' };
     });
@@ -452,7 +490,7 @@ export function testingBrowserNavigate(
 ): { ok: boolean; error?: string } {
     const inst = instanceForChrome(wcId);
     if (!inst) return { ok: false, error: 'no testing browser' };
-    const check = normalizeNavUrl(input, enabledGenSet(inst));
+    const check = normalizeForInstance(inst, input);
     if ('error' in check) return { ok: false, error: check.error };
     const active = inst.tabs.find((t) => t.id === inst.activeTabId);
     if (active) void active.view.webContents.loadURL(check.url);
@@ -482,7 +520,7 @@ export function testingBrowserNewTab(wcId: number, input?: string): { ok: boolea
     if (!inst) return { ok: false, error: 'no testing browser' };
     const target =
         input && input.trim()
-            ? normalizeNavUrl(input, enabledGenSet(inst))
+            ? normalizeForInstance(inst, input)
             : { url: initialGenUrl([...inst.genMap.keys()]) ?? 'about:blank' };
     if ('error' in target) return { ok: false, error: target.error };
     openTab(inst, target.url);

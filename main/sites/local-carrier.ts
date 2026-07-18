@@ -66,6 +66,7 @@ function dialOptions(
         path: upstreamPath,
         headers: buildUpstreamHeaders(headers as http.IncomingHttpHeaders, target.hostname, {
             keepUpgrade,
+            preserveApplicationAuthorization: true,
         }),
         // Terminate the dev site's local TLS as a client with SNI = the vhost;
         // loopback has no MITM surface, so a self-signed .test cert is fine.

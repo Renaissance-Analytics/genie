@@ -30,6 +30,7 @@ import {
     type PluginDeveloperModeState,
     type SiteView,
     type SiteScheme,
+    type TunnelSiteConfig,
     type WorkspaceRow,
 } from '../lib/genie';
 import {
@@ -3331,7 +3332,7 @@ function LocalSitesList({ workspaceId }: { workspaceId: string }) {
     // never trusting a caller-supplied target.
     const patchSite = async (
         siteId: string,
-        patch: { enabled?: boolean; genName?: string; scheme?: SiteScheme; port?: number },
+        patch: TunnelSiteConfig,
     ) => {
         const prev = sites;
         setSites((cur) =>
@@ -3475,6 +3476,147 @@ function LocalSitesList({ workspaceId }: { workspaceId: string }) {
                                     />
                                 </div>
                             </div>
+                            {s.enabled && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                    <div
+                                        style={{
+                                            display: 'flex',
+                                            justifyContent: 'space-between',
+                                            alignItems: 'center',
+                                        }}
+                                    >
+                                        <Text size="xs" className="text-zinc-500">
+                                            Companion domain → loopback port
+                                        </Text>
+                                        <Action
+                                            size="sm"
+                                            variant="ghost"
+                                            icon="plus"
+                                            onClick={() => {
+                                                const companions = [
+                                                    ...(s.companions ?? []),
+                                                    {
+                                                        id: `endpoint${(s.companions?.length ?? 0) + 1}`,
+                                                        enabled: true,
+                                                        hostname: `dev.${s.hostname}`,
+                                                        scheme: 'http' as SiteScheme,
+                                                        port: 5173,
+                                                        siteId: '',
+                                                    },
+                                                ];
+                                                void patchSite(s.siteId, { companions });
+                                            }}
+                                        >
+                                            Add mapping
+                                        </Action>
+                                    </div>
+                                    {(s.companions ?? []).map((endpoint, index) => (
+                                        <div
+                                            key={`${endpoint.id}-${index}`}
+                                            style={{
+                                                display: 'grid',
+                                                gridTemplateColumns: '1fr 108px 92px auto',
+                                                gap: 6,
+                                                alignItems: 'center',
+                                            }}
+                                        >
+                                            <Input
+                                                value={endpoint.hostname}
+                                                onValueChange={(hostname: string) =>
+                                                    setSites((cur) =>
+                                                        (cur ?? []).map((site) =>
+                                                            site.siteId !== s.siteId
+                                                                ? site
+                                                                : {
+                                                                      ...site,
+                                                                      companions: (
+                                                                          site.companions ?? []
+                                                                      ).map((c, i) =>
+                                                                          i === index
+                                                                              ? { ...c, hostname }
+                                                                              : c,
+                                                                      ),
+                                                                  },
+                                                        ),
+                                                    )
+                                                }
+                                                onBlur={() =>
+                                                    void patchSite(s.siteId, {
+                                                        companions: s.companions,
+                                                    })
+                                                }
+                                                placeholder="vite.app.test"
+                                                aria-label={`Companion domain ${index + 1}`}
+                                            />
+                                            <Select
+                                                value={endpoint.scheme}
+                                                onValueChange={(scheme) => {
+                                                    const companions = (s.companions ?? []).map(
+                                                        (c, i) =>
+                                                            i === index
+                                                                ? {
+                                                                      ...c,
+                                                                      scheme: scheme as SiteScheme,
+                                                                  }
+                                                                : c,
+                                                    );
+                                                    void patchSite(s.siteId, { companions });
+                                                }}
+                                                list={[
+                                                    { value: 'https', label: 'https' },
+                                                    { value: 'http', label: 'http' },
+                                                ]}
+                                            />
+                                            <Input
+                                                type="number"
+                                                min={1}
+                                                max={65535}
+                                                value={String(endpoint.port)}
+                                                onValueChange={(value: string) => {
+                                                    const port = Number.parseInt(value, 10);
+                                                    if (!Number.isFinite(port)) return;
+                                                    setSites((cur) =>
+                                                        (cur ?? []).map((site) =>
+                                                            site.siteId !== s.siteId
+                                                                ? site
+                                                                : {
+                                                                      ...site,
+                                                                      companions: (
+                                                                          site.companions ?? []
+                                                                      ).map((c, i) =>
+                                                                          i === index
+                                                                              ? { ...c, port }
+                                                                              : c,
+                                                                      ),
+                                                                  },
+                                                        ),
+                                                    );
+                                                }}
+                                                onBlur={() =>
+                                                    void patchSite(s.siteId, {
+                                                        companions: s.companions,
+                                                    })
+                                                }
+                                                aria-label={`Companion port ${index + 1}`}
+                                            />
+                                            <Action
+                                                size="sm"
+                                                variant="ghost"
+                                                icon="x"
+                                                onClick={() =>
+                                                    void patchSite(s.siteId, {
+                                                        companions: (s.companions ?? []).filter(
+                                                            (_, i) => i !== index,
+                                                        ),
+                                                    })
+                                                }
+                                            >
+                                                Remove
+                                            </Action>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     ))}
                 </div>

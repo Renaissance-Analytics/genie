@@ -33,6 +33,19 @@ export async function listLocalEnabledGenSites(): Promise<EnabledGenSite[]> {
                 scheme: v.scheme,
                 port: v.port,
             });
+            for (const endpoint of v.companions ?? []) {
+                // Companion domains are exact session-local origins. Their
+                // opaque siteId resolves only to the stored loopback target.
+                if (byGen.has(endpoint.hostname)) continue;
+                byGen.set(endpoint.hostname, {
+                    workspaceId: ws.id,
+                    genName: endpoint.hostname,
+                    siteId: endpoint.siteId,
+                    hostname: endpoint.hostname,
+                    scheme: endpoint.scheme,
+                    port: endpoint.port,
+                });
+            }
         }
     }
     return [...byGen.values()];

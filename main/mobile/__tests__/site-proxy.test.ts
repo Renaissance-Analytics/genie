@@ -257,11 +257,13 @@ function rawReq(
     port: number,
     method: string,
     pathname: string,
-    opts: { token?: string } = {},
+    opts: { token?: string; transportToken?: string; applicationAuthorization?: string } = {},
 ): Promise<RawResponse> {
     return new Promise((resolve, reject) => {
         const headers: Record<string, string> = {};
         if (opts.token) headers['Authorization'] = `Bearer ${opts.token}`;
+        if (opts.transportToken) headers['X-Genie-Transport-Token'] = opts.transportToken;
+        if (opts.applicationAuthorization) headers['Authorization'] = opts.applicationAuthorization;
         const r = http.request({ host: '127.0.0.1', port, path: pathname, method, headers }, (res) => {
             let body = '';
             res.on('data', (c) => (body += c));
@@ -332,6 +334,17 @@ describe('site-proxy (Phase C, over the wire)', () => {
         expect(lastHttpAuth).toBeUndefined();
         // First hit per site is audited.
         expect(recentAudit().some((e) => e.action === 'site.open')).toBe(true);
+    });
+
+    it('(a2) separates Genie transport auth from application Authorization', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const res = await rawReq(port, 'GET', '/api/site/sitehttp/hello', {
+            transportToken: token,
+            applicationAuthorization: 'Bearer application-token',
+        });
+        expect(res.status).toBe(200);
+        expect(lastHttpAuth).toBe('Bearer application-token');
     });
 
     it('(b) terminates local TLS on loopback with SNI = the hostname (https site)', async () => {

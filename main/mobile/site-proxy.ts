@@ -76,6 +76,10 @@ export const GENIE_TOKEN_PARAM = '__genie_token';
  * reaches the local site.
  */
 export const PRESERVE_ORIGIN_HEADER = 'x-genie-preserve-origin';
+/** Dedicated carrier credential. It authenticates Genie-to-Genie transport and
+ * is always stripped before the application, leaving application Authorization
+ * untouched. */
+export const TRANSPORT_TOKEN_HEADER = 'x-genie-transport-token';
 
 /**
  * Hop-by-hop headers (RFC 7230 §6.1) plus the `Proxy-*` family — stripped on
@@ -194,7 +198,7 @@ export function stripTokenParam(upstreamPath: string): string {
 export function buildUpstreamHeaders(
     inbound: http.IncomingHttpHeaders,
     hostname: string,
-    opts: { keepUpgrade?: boolean } = {},
+    opts: { keepUpgrade?: boolean; preserveApplicationAuthorization?: boolean } = {},
 ): http.OutgoingHttpHeaders {
     const out: http.OutgoingHttpHeaders = {};
     const connTokens = connectionTokens(inbound['connection']);
@@ -202,8 +206,9 @@ export function buildUpstreamHeaders(
         if (v === undefined) continue;
         const lk = k.toLowerCase();
         if (lk === 'host') continue; // rewritten below (the crux)
-        if (lk === 'authorization') continue; // never leak the Genie token
+        if (lk === 'authorization' && !opts.preserveApplicationAuthorization) continue;
         if (lk === PRESERVE_ORIGIN_HEADER) continue; // Genie control header — never leaks upstream
+        if (lk === TRANSPORT_TOKEN_HEADER) continue;
         if (lk.startsWith('proxy-')) continue; // Proxy-* family
         if (HOP_BY_HOP.has(lk)) {
             if (opts.keepUpgrade && (lk === 'upgrade' || lk === 'connection')) {
@@ -375,7 +380,10 @@ export async function handleSiteProxy(
     }
 
     // 1. Token gate (Bearer). Unauthed ⇒ 401.
-    const session = sessionFromAuthHeader(req.headers['authorization']);
+    const transportToken = req.headers[TRANSPORT_TOKEN_HEADER];
+    const session =
+        validateSession(Array.isArray(transportToken) ? transportToken[0] : transportToken) ??
+        sessionFromAuthHeader(req.headers['authorization']);
     if (!session) {
         sendError(res, 401, 'unauthorised');
         return true;
@@ -412,6 +420,7 @@ export async function handleSiteProxy(
         stripTokenParam(parsed.upstreamPath),
         info.proxyOrigin,
         preserveOrigin,
+        transportToken !== undefined,
     );
     return true;
 }
@@ -425,6 +434,7 @@ function proxyHttp(
     upstreamPath: string,
     proxyOrigin: string,
     preserveOrigin: boolean,
+    preserveApplicationAuthorization: boolean,
 ): void {
     const isHttps = site.scheme === 'https';
     const options: https.RequestOptions = {
@@ -432,7 +442,9 @@ function proxyHttp(
         port: site.port,
         method: req.method,
         path: upstreamPath,
-        headers: buildUpstreamHeaders(req.headers, site.hostname),
+        headers: buildUpstreamHeaders(req.headers, site.hostname, {
+            preserveApplicationAuthorization,
+        }),
         // §3(a): terminate the site's local TLS on loopback as a TLS CLIENT with
         // SNI = the vhost name. Loopback (host is LOOPBACK) has no MITM surface, so
         // a dev proxy's self-signed .test/.gen cert (Herd/Caddy) is fine to accept —
@@ -481,12 +493,14 @@ export async function handleSiteProxyUpgrade(
         return true;
     }
     const url = new URL(req.url ?? '/', 'http://genie-proxy-base.invalid');
-    // Token from Bearer (programmatic) OR the namespaced query param (browser WS).
+    const transportToken = req.headers[TRANSPORT_TOKEN_HEADER];
+    // Dedicated carrier token, with the legacy Bearer/query forms retained for
+    // non-Testing-Browser clients during protocol rollout.
     const session =
+        validateSession(Array.isArray(transportToken) ? transportToken[0] : transportToken) ??
         sessionFromAuthHeader(req.headers['authorization']) ??
         validateSession(url.searchParams.get(GENIE_TOKEN_PARAM));
-    // DNS-rebinding + token gate BEFORE we accept the socket.
-    if (!info.originAllowed(req) || !session) {
+    if (!session) {
         rejectSocket(socket, 401);
         return true;
     }
@@ -503,8 +517,31 @@ export async function handleSiteProxyUpgrade(
         rejectSocket(socket, 404);
         return true;
     }
+    const origin = req.headers.origin;
+    if (transportToken === undefined && !info.originAllowed(req)) {
+        rejectSocket(socket, 401);
+        return true;
+    }
+    if (transportToken !== undefined && origin) {
+        try {
+            if (new URL(origin).hostname.toLowerCase() !== site.hostname.toLowerCase()) {
+                rejectSocket(socket, 401);
+                return true;
+            }
+        } catch {
+            rejectSocket(socket, 401);
+            return true;
+        }
+    }
     recordOpen(parsed.siteId, site.hostname, session.token);
-    proxyUpgrade(req, socket, head, site, stripTokenParam(parsed.upstreamPath));
+    proxyUpgrade(
+        req,
+        socket,
+        head,
+        site,
+        stripTokenParam(parsed.upstreamPath),
+        transportToken !== undefined,
+    );
     return true;
 }
 
@@ -515,6 +552,7 @@ function proxyUpgrade(
     head: Buffer,
     site: ResolvedSite,
     upstreamPath: string,
+    preserveApplicationAuthorization: boolean,
 ): void {
     const isHttps = site.scheme === 'https';
     const options: https.RequestOptions = {
@@ -522,7 +560,10 @@ function proxyUpgrade(
         port: site.port,
         method: req.method ?? 'GET',
         path: upstreamPath,
-        headers: buildUpstreamHeaders(req.headers, site.hostname, { keepUpgrade: true }),
+        headers: buildUpstreamHeaders(req.headers, site.hostname, {
+            keepUpgrade: true,
+            preserveApplicationAuthorization,
+        }),
         // Loopback (host is LOOPBACK=127.0.0.1) TLS-terminate for a WS upgrade — see
         // the note above: no MITM surface, self-signed local cert, cloud dev-envs
         // use real LetsEncrypt (§7).

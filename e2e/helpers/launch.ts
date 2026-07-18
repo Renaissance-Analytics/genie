@@ -121,6 +121,66 @@ export async function launchGenieMobileE2E(): Promise<{
 }
 
 /**
+ * Boot the real Electron Testing Browser against the deterministic tunnel
+ * fixture owned by main/e2e/tunnel.ts. The fixture and proxy bind loopback-only
+ * inside the disposable E2E process; no Herd, Tailscale installation, live
+ * workstation, or developer profile is involved.
+ */
+export async function launchGenieTunnelE2E(): Promise<{
+    app: ElectronApplication;
+}> {
+    const tunnelUserData = path.join(
+        os.tmpdir(),
+        `genie-e2e-tunnel-${process.pid}-${Date.now()}`,
+    );
+    const app = await electron.launch({
+        args: [MAIN_ENTRY, `--user-data-dir=${tunnelUserData}`],
+        env: {
+            ...process.env,
+            NODE_ENV: 'production',
+            GENIE_E2E: '1',
+            GENIE_E2E_TUNNEL: '1',
+            GENIE_E2E_USERDATA: '',
+        },
+    });
+    return { app };
+}
+
+export interface TunnelProbe {
+    ready: boolean;
+    origin: string;
+    absoluteScript: boolean;
+    absoluteStyle: boolean;
+    bearer: {
+        ok: boolean;
+        authorization: string | null;
+    };
+    cookie: boolean;
+    redirect: {
+        ok: boolean;
+        url: string;
+    };
+    stream: boolean;
+    websocket: boolean;
+    vite: {
+        manifest: boolean;
+        module: boolean;
+        sourceMap: boolean;
+        hmr: boolean;
+        debugger: boolean;
+    };
+    errors: string[];
+}
+
+/** Read the browser-content probe published by the E2E tunnel harness. */
+export async function readTunnelProbe(app: ElectronApplication): Promise<TunnelProbe | null> {
+    return app.evaluate(() => {
+        const handle = (globalThis as Record<string, any>).__GENIE_E2E_TUNNEL__;
+        return handle?.probe ?? null;
+    });
+}
+
+/**
  * Mutate the scriptable mock state from the MAIN process. The callback runs in
  * the Electron main context where `globalThis.__GENIE_E2E__` (set by
  * registerE2EMocks) exposes the live state object. Pass a plain function body;

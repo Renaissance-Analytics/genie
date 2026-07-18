@@ -192,6 +192,14 @@ export interface SiteView {
     genName: string;
     /** Opaque, stable allowlist key — pass it to `sites.set`. */
     siteId: string;
+    companions?: Array<{
+        id: string;
+        enabled?: boolean;
+        hostname: string;
+        scheme: SiteScheme;
+        port: number;
+        siteId?: string;
+    }>;
 }
 
 /** One local dev site in the header `.gen` popover — opens in the Testing
@@ -222,6 +230,13 @@ export interface TunnelSiteConfig {
     genName?: string;
     scheme?: SiteScheme;
     port?: number;
+    companions?: Array<{
+        id: string;
+        enabled?: boolean;
+        hostname: string;
+        scheme: SiteScheme;
+        port: number;
+    }>;
 }
 
 /** Per-bucket IssueWatch remediation policy (mirrors main/db.ts). The three count

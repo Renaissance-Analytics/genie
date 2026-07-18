@@ -73,7 +73,7 @@ describe('shim pure helpers', () => {
         expect(rewriteGenSetCookieDomain('a=1; Secure', 'tynn.test', 'tynn.gen')).toBe('a=1; Secure');
     });
 
-    it('buildForwardHeaders drops Host/Authorization/hop-by-hop; forwardPath prefixes siteId', () => {
+    it('buildForwardHeaders preserves application Authorization while dropping Host/hop-by-hop', () => {
         const out = buildForwardHeaders({
             host: 'tynn.gen',
             authorization: 'Bearer LEAK',
@@ -81,14 +81,14 @@ describe('shim pure helpers', () => {
             'x-custom': 'v',
         });
         expect(out['host']).toBeUndefined();
-        expect(out['authorization']).toBeUndefined();
+        expect(out['authorization']).toBe('Bearer LEAK');
         expect(out['connection']).toBeUndefined();
         expect(out['x-custom']).toBe('v');
         expect(forwardPath('abc123', '/foo?x=1')).toBe('/api/site/abc123/foo?x=1');
         expect(forwardPath('abc123', undefined)).toBe('/api/site/abc123/');
     });
 
-    it('buildForwardResponseHeaders keeps HSTS + rewrites origin headers', () => {
+    it('buildForwardResponseHeaders preserves real-origin headers and HSTS', () => {
         const out = buildForwardResponseHeaders(
             {
                 location: 'https://tynn.test/x',
@@ -99,8 +99,8 @@ describe('shim pure helpers', () => {
             'tynn.test',
             'tynn.gen',
         );
-        expect(out['location']).toBe('https://tynn.gen/x');
-        expect(out['set-cookie']).toEqual(['s=1; Secure; Domain=tynn.gen']);
+        expect(out['location']).toBe('https://tynn.test/x');
+        expect(out['set-cookie']).toEqual(['s=1; Secure; Domain=tynn.test']);
         expect(out['strict-transport-security']).toBe('max-age=63072000'); // HSTS preserved
         expect(out['connection']).toBeUndefined(); // hop-by-hop stripped
     });
@@ -115,15 +115,18 @@ const GEN = 'tynn.gen';
 let fakeHost: http.Server;
 let fakeHostPort = 0;
 let lastAuth: string | undefined;
+let lastTransport: string | undefined;
 let lastPreserve: string | undefined;
 let lastPath: string | undefined;
 
 beforeEach(async () => {
     lastAuth = undefined;
+    lastTransport = undefined;
     lastPreserve = undefined;
     lastPath = undefined;
     fakeHost = http.createServer((req, res) => {
         lastAuth = req.headers['authorization'];
+        lastTransport = req.headers['x-genie-transport-token'] as string | undefined;
         lastPreserve = req.headers['x-genie-preserve-origin'] as string | undefined;
         lastPath = req.url;
         if (req.url?.includes('/redir')) {
@@ -224,8 +227,8 @@ describe('shim end-to-end (no display)', () => {
             const res = await fetchThroughShim(shim, GEN, '/', ca.caPem);
             expect(res.status).toBe(200);
             expect(res.body).toBe('hello from the host site');
-            // Bearer injected IN MAIN on the host leg (never demanded from the browser).
-            expect(lastAuth).toBe('Bearer THE_SESSION_TOKEN');
+            expect(lastAuth).toBeUndefined();
+            expect(lastTransport).toBe('THE_SESSION_TOKEN');
             expect(lastPreserve).toBe('1');
             // Forwarded to the opaque siteId endpoint (SSRF-safe selector).
             expect(lastPath).toBe(`/api/site/${SITE_ID}/`);
@@ -234,7 +237,7 @@ describe('shim end-to-end (no display)', () => {
         }
     });
 
-    it('applies the .test⇄.gen rewrite and preserves HSTS + Secure', async () => {
+    it('preserves the application origin headers, HSTS, and Secure cookies', async () => {
         const ca = new SessionCa();
         const genMap = new Map<string, GenTarget>([[GEN, {
             workspaceId: 'workspace-1',
@@ -245,8 +248,8 @@ describe('shim end-to-end (no display)', () => {
         try {
             const res = await fetchThroughShim(shim, GEN, '/redir', ca.caPem);
             expect(res.status).toBe(302);
-            expect(res.headers['location']).toBe('https://tynn.gen/next?q=1');
-            expect(res.headers['set-cookie']).toContain('Domain=tynn.gen');
+            expect(res.headers['location']).toBe('https://tynn.test/next?q=1');
+            expect(res.headers['set-cookie']).toContain('Domain=tynn.test');
             expect(res.headers['set-cookie']).toContain('Secure'); // preserved (valid https)
             expect(res.headers['strict-transport-security']).toContain('max-age=63072000');
         } finally {
