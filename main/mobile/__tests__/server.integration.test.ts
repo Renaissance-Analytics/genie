@@ -51,6 +51,9 @@ const agentInboxUpdates: Array<{ specId: string; patch: Record<string, unknown> 
 // Plain remote-spawn endpoint (/api/desktop/terminal-open): records the args the
 // server plumbed to createAgentTerminal — the id it honored + the confined cwd.
 const termOpens: Array<Record<string, unknown>> = [];
+// Every grid the server actually drove the pty to, in order — so a test can assert
+// BOTH that a resize landed and that it was never clamped/dropped on the way.
+const resizes: Array<{ id: string; cols: number; rows: number }> = [];
 
 function buildAppDir(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mobile-it-'));
@@ -116,7 +119,10 @@ const deps = (): MobileDataDeps => ({
     },
     readTerminalOutput: () => ({ data: '', cursor: 0, dropped: false }),
     getScrollback: () => 'catch-up-scrollback',
-    resize: () => true,
+    resize: (id: string, cols: number, rows: number) => {
+        resizes.push({ id, cols, rows });
+        return true;
+    },
     // Desktop/linux wire the host write (recording the PNG); headless omits it
     // entirely so the route hits its `!deps.writeClipboardImage` fail-safe branch.
     // 'linux' additionally returns the temp-file `path` the route must pass back.
@@ -236,6 +242,7 @@ beforeEach(() => {
     agentInboxUpdateWired = true;
     agentInboxUpdates.length = 0;
     termOpens.length = 0;
+    resizes.length = 0;
 });
 
 afterEach(() => {
@@ -264,6 +271,33 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         expect(termOpens[0].id).toBe('client-term-1');
         // Confined: the pty cwd never escapes the served workspace root.
         expect(String(termOpens[0].cwd).startsWith(wsRoot)).toBe(true);
+    });
+
+    it('POST /api/desktop/terminal-open spawns AT the client grid (never the 80×24 default)', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/desktop/terminal-open', {
+            token,
+            body: { id: 'wide-1', workspaceId: 'ws-1', cwd: wsRoot, cols: 203, rows: 51 },
+        });
+        expect(r.status).toBe(200);
+        // The grid must reach the spawn. Dropping it here left the pty at the pty
+        // engine's 80×24 default while the remote window rendered ~150 cols, so a
+        // TUI wrapped at column 80 and redrew its status line at the wrong row.
+        expect(termOpens[0]).toMatchObject({ cols: 203, rows: 51 });
+    });
+
+    it('POST /api/desktop/terminal-open omits a bogus grid so the engine default applies', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/desktop/terminal-open', {
+            token,
+            body: { id: 'bad-1', workspaceId: 'ws-1', cwd: wsRoot, cols: 0, rows: -4 },
+        });
+        expect(r.status).toBe(200);
+        // Forwarding 0×-4 verbatim would spawn an unusable pty; the guard drops it.
+        expect(termOpens[0].cols).toBeUndefined();
+        expect(termOpens[0].rows).toBeUndefined();
     });
 
     it('POST /api/desktop/terminal-open rejects an unknown/unserved workspace (400, no spawn)', async () => {
@@ -451,6 +485,53 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         mobileTermFanout('t-1', 'hello from pty');
         await new Promise((r) => setTimeout(r, 60));
         expect(frames.some((f) => f.type === 'data' && f.data === 'hello from pty')).toBe(true);
+        ws.close();
+    });
+
+    it('/ws/term?client=desktop sizes the pty EXACTLY, including shrinking it', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const ws = await openWs(
+            `ws://127.0.0.1:${port}/ws/term?terminal=t-1&token=${token}&client=desktop`,
+        );
+        // A remote Genie window is a full driver, not a phone viewer: it owns the
+        // pty grid. Grow…
+        ws.send(JSON.stringify({ type: 'resize', cols: 200, rows: 50 }));
+        await new Promise((r) => setTimeout(r, 30));
+        // …then SHRINK. The phone's grow-only clamp would swallow this, leaving the
+        // pty wider than the window and wrapping the TUI past the visible edge.
+        ws.send(JSON.stringify({ type: 'resize', cols: 100, rows: 30 }));
+        await new Promise((r) => setTimeout(r, 30));
+        expect(resizes).toEqual([
+            { id: 't-1', cols: 200, rows: 50 },
+            { id: 't-1', cols: 100, rows: 30 },
+        ]);
+        ws.close();
+    });
+
+    it('/ws/term WITHOUT client=desktop keeps the phone grow-only clamp', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const ws = await openWs(`ws://127.0.0.1:${port}/ws/term?terminal=t-1&token=${token}`);
+        ws.send(JSON.stringify({ type: 'resize', cols: 200, rows: 50 }));
+        await new Promise((r) => setTimeout(r, 30));
+        // A narrow phone must NOT reflow the shared desktop pty down to its width.
+        ws.send(JSON.stringify({ type: 'resize', cols: 80, rows: 24 }));
+        await new Promise((r) => setTimeout(r, 30));
+        expect(resizes).toEqual([{ id: 't-1', cols: 200, rows: 50 }]);
+        ws.close();
+    });
+
+    it('/ws/term?client=desktop ignores a bogus grid', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const ws = await openWs(
+            `ws://127.0.0.1:${port}/ws/term?terminal=t-1&token=${token}&client=desktop`,
+        );
+        ws.send(JSON.stringify({ type: 'resize', cols: 0, rows: 0 }));
+        ws.send(JSON.stringify({ type: 'resize' }));
+        await new Promise((r) => setTimeout(r, 30));
+        expect(resizes).toEqual([]);
         ws.close();
     });
 

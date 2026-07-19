@@ -40,7 +40,7 @@ import { loadWorkspaceTerminalEnv } from '../mcp/agent-config';
 import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
 import { TerminalReadBuffer, type ReadResult } from './read-buffer';
-import { recordTerminalSize } from './size-tracker';
+import { recordTerminalSize, isUsableGrid } from './size-tracker';
 import {
     startProcess,
     stopProcess,
@@ -229,6 +229,16 @@ export function createAgentTerminal(opts: {
     /** Plain-terminal shell override; agent terminals ignore it (they submit a launch command). */
     shell?: string;
     args?: string[];
+    /**
+     * The client's ALREADY-FITTED grid, when it has one. A remote window knows its
+     * real viewport at create time, so spawning at it avoids a pty that starts at the
+     * engine default (80×24) and only corrects on a later resize — which, over a
+     * remote link, may never arrive (see remote/index.ts's open-flush). A TUI that
+     * draws its first frame against 80 cols in a 150-col viewport wraps and redraws
+     * at the wrong column. Omitted ⇒ the engine default, as before.
+     */
+    cols?: number;
+    rows?: number;
     /** Marks this terminal as running an agent (surfaced in the list). */
     agentMeta?: { agent: 'claude' | 'codex' | 'custom'; command: string };
     /** Specialized terminals: AgentInbox accessibility to stamp + join with. */
@@ -319,6 +329,9 @@ export function createAgentTerminal(opts: {
         shell: opts.shell ?? resolved.command,
         args: opts.args ?? resolved.args,
         env,
+        // Only forward a sane grid — a bogus/zero value would spawn an unusable pty,
+        // whereas omitting it falls back to the engine's 80×24.
+        ...(isUsableGrid(opts) ? { cols: opts.cols, rows: opts.rows } : {}),
     };
     // Idempotent on the id: if a live pty already owns it, this reattaches
     // (existing:true, scrollback replayed) instead of spawning a duplicate.

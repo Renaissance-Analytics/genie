@@ -8,6 +8,7 @@ import { encryptSecret, decryptSecret } from '../secrets/store';
 import { getAllSettings } from '../db';
 import { resolveAlertSound } from '../notify-sound';
 import { shouldForwardToDriver } from './forward-decision';
+import { isUsableGrid } from '../terminal/size-tracker';
 import {
     BRIDGE_PROTOCOL_VERSION,
     LIMBO_TIMEOUT_MS,
@@ -131,6 +132,18 @@ interface RemoteConnection {
     eventsFailures: number;
     /** Host terminal id → its `/ws/term` socket (viewer-only; never kills host pty). */
     termWs: Map<string, WebSocket>;
+    /**
+     * Terminal id → the grid the RENDERER wants the pty at. The desired size is
+     * connection STATE, not a one-shot event, because every send path here can
+     * silently drop: a `resize` issued right after attach hits a still-CONNECTING
+     * socket, and a reconnect brings up a fresh socket the old resize never reached.
+     * Fire-and-forget left the pty at the engine default (80×24) forever — the
+     * renderer only re-fits on an actual size CHANGE, so nothing ever re-sent it, and
+     * a TUI drawing against 80 cols in a 150-col viewport wrapped and redrew at the
+     * wrong column. Recorded on attach + every resize, and (re)applied whenever a
+     * term socket reaches `open`.
+     */
+    termSize: Map<string, { cols: number; rows: number }>;
     /**
      * Terminal ids the RENDERER wants attached (attach INTENT), distinct from
      * `termWs` (the live sockets, which drop on a host restart/upgrade/network
@@ -1175,7 +1188,10 @@ function relayAttachTerminal(conn: RemoteConnection, id: string, workspaceId?: s
 function openHostTermSocket(conn: RemoteConnection, id: string, replayReset: boolean): void {
     if (conn.termWs.has(id)) return;
     if (replayReset) emitToConn(conn, 'terminal:data', { id, data: '\x1bc' });
-    const url = `${hostWsBase(conn.host)}/ws/term?terminal=${encodeURIComponent(id)}&token=${encodeURIComponent(conn.token)}`;
+    // `client=desktop`: we're a full Genie window, not the phone viewer — the host
+    // applies our grid exactly instead of running it through the phone's grow-only
+    // clamp. An old host ignores the param and keeps the previous behavior.
+    const url = `${hostWsBase(conn.host)}/ws/term?terminal=${encodeURIComponent(id)}&token=${encodeURIComponent(conn.token)}&client=desktop`;
     let ws: WebSocket;
     try {
         ws = new WebSocket(url);
@@ -1183,6 +1199,10 @@ function openHostTermSocket(conn: RemoteConnection, id: string, replayReset: boo
         return;
     }
     conn.termWs.set(id, ws);
+    // The socket is CONNECTING here, so anything sent before `open` is discarded.
+    // Push the renderer's desired grid the moment it's writable — this is what
+    // makes the initial size (and a post-reconnect size) actually reach the pty.
+    ws.on('open', () => sendTermSize(conn, id));
     ws.on('message', (raw) => handleTermMessage(conn, id, String(raw)));
     ws.on('close', () => {
         if (conn.termWs.get(id) === ws) conn.termWs.delete(id);
@@ -1214,12 +1234,27 @@ function reattachTerminals(conn: RemoteConnection): void {
  *  relay term `open` frame so genie-cloud scopes it to the grant's workspaces;
  *  it's only meaningful on the relay transport (the tailnet path is Bearer-token
  *  authed against the whole host). */
-export function remoteAttachTerminal(wcId: number, id: string, workspaceId?: string): void {
+export function remoteAttachTerminal(
+    wcId: number,
+    id: string,
+    workspaceId?: string,
+    cols?: number,
+    rows?: number,
+): void {
     const conn = connForWebContents(wcId);
     if (!conn) return;
     conn.attachedTerminals.add(id);
+    // Record the caller's grid BEFORE opening the stream, so the `open` handler has
+    // a size to flush. Without this the first resize races the handshake and loses.
+    const grid = { cols, rows };
+    if (isUsableGrid(grid)) conn.termSize.set(id, grid);
     if (conn.transport === 'relay') {
         relayAttachTerminal(conn, id, workspaceId);
+        // The relay member socket is already established, so this goes out now. The
+        // host may still be opening its local `/ws/term` (genie-cloud's loopback
+        // proxy drops member data until then) — harmless, because the REST spawn
+        // above already created the pty AT this grid.
+        sendTermSize(conn, id);
         return;
     }
     openHostTermSocket(conn, id, false);
@@ -1255,26 +1290,41 @@ export function remoteTerminalInput(wcId: number, id: string, data: string): voi
     }
 }
 
-/** Forward a viewport resize to the host pty. */
-export function remoteTerminalResize(wcId: number, id: string, cols: number, rows: number): void {
-    const conn = connForWebContents(wcId);
-    if (!conn) return;
+/**
+ * Send the terminal's RECORDED grid over whichever transport is live. Safe to call
+ * at any time: with nothing recorded, or a stream that isn't writable yet, it's a
+ * no-op — the size stays in `termSize` and the next `open` re-sends it.
+ */
+function sendTermSize(conn: RemoteConnection, id: string): void {
+    const size = conn.termSize.get(id);
+    if (!size) return;
+    const frame = JSON.stringify({ type: 'resize', cols: size.cols, rows: size.rows });
     if (conn.transport === 'relay') {
         try {
-            conn.relayTerms.get(id)?.send(JSON.stringify({ type: 'resize', cols, rows }));
+            conn.relayTerms.get(id)?.send(frame);
         } catch {
-            /* dropped — replayed on the next resize */
+            /* stream died mid-send — re-sent when it re-opens */
         }
         return;
     }
     const ws = conn.termWs.get(id);
     if (ws && ws.readyState === WebSocket.OPEN) {
         try {
-            ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+            ws.send(frame);
         } catch {
-            /* dropped — replayed on the next resize */
+            /* socket died mid-send — re-sent when it re-opens */
         }
     }
+}
+
+/** Forward a viewport resize to the host pty, recording it as the desired grid so a
+ *  not-yet-open or later-reconnected stream still converges on it. */
+export function remoteTerminalResize(wcId: number, id: string, cols: number, rows: number): void {
+    const conn = connForWebContents(wcId);
+    if (!conn) return;
+    if (!isUsableGrid({ cols, rows })) return;
+    conn.termSize.set(id, { cols, rows });
+    sendTermSize(conn, id);
 }
 
 /** Detach the viewer from a host terminal (NEVER kills the host pty). */
@@ -1282,8 +1332,10 @@ export function remoteDetachTerminal(wcId: number, id: string): void {
     const conn = connForWebContents(wcId);
     if (!conn) return;
     // Drop the attach INTENT so a later bridge recovery doesn't resurrect a
-    // terminal the renderer deliberately closed.
+    // terminal the renderer deliberately closed — and the desired grid with it, so a
+    // reused id never re-applies a stale size.
     conn.attachedTerminals.delete(id);
+    conn.termSize.delete(id);
     if (conn.transport === 'relay') {
 
         const stream = conn.relayTerms.get(id);
@@ -1503,6 +1555,7 @@ async function connectRemoteInner(
         eventsRetry: null,
         eventsFailures: 0,
         termWs: new Map(),
+        termSize: new Map(),
         attachedTerminals: new Set(),
         controlLocked: seedLocked,
 
@@ -1626,6 +1679,7 @@ async function connectWorkstationInner(
         eventsRetry: null,
         eventsFailures: 0,
         termWs: new Map(),
+        termSize: new Map(),
         attachedTerminals: new Set(),
         controlLocked: false,
 

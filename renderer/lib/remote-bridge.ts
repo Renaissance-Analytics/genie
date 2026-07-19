@@ -393,6 +393,11 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                         cwd: opts.cwd,
                         shell: opts.shell,
                         args: opts.args,
+                        // Spawn at OUR fitted grid. Terminal.tsx has already fitted by
+                        // the time it calls create, so the pty starts the right width
+                        // instead of at the engine's 80×24 default.
+                        cols: opts.cols,
+                        rows: opts.rows,
                     },
                 })) as { existing?: boolean };
                 if (typeof spawned?.existing === 'boolean') existing = spawned.existing;
@@ -404,7 +409,11 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             // The attach itself replays scrollback (server-side catch-up), so return
             // '' here to avoid double-drawing — but surface the host's REAL `existing`
             // so Terminal.tsx frames a genuine cold spawn vs a warm reattach correctly.
-            await r.terminalAttach(opts.id, opts.workspaceId);
+            // Hand main our grid alongside the attach: the term socket is still
+            // CONNECTING when this returns, so a resize sent immediately after would
+            // be dropped on the floor. Main holds it and flushes on `open` (and
+            // re-sends it after a reconnect), which is what makes the size stick.
+            await r.terminalAttach(opts.id, opts.workspaceId, opts.cols, opts.rows);
             return { id: opts.id, pid: 0, shell: opts.shell ?? '', existing, scrollback: '' };
         },
         write: (id: string, data: string) => {

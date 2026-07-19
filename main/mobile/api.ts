@@ -9,6 +9,7 @@ import { audit, isLocked } from './audit';
 import type { SiteView, TunnelSiteConfig } from './hosts';
 import type { EnabledGenSite } from '../remote';
 import { isHeadless } from '../runtime-mode';
+import { isUsableGrid } from '../terminal/size-tracker';
 import { BRIDGE_PROTOCOL_VERSION } from '../remote/link-state';
 import {
     listTree,
@@ -240,6 +241,10 @@ export interface MobileDataDeps {
         label: string;
         shell?: string;
         args?: string[];
+        /** The remote client's fitted grid, so the pty spawns at its real size
+         *  instead of the engine default (80×24). */
+        cols?: number;
+        rows?: number;
     }) => { id: string; scrollback: string; existing: boolean };
     /**
      * Create a SPECIALIZED (AI-TUI) terminal on the host — resolves the agent's
@@ -849,6 +854,9 @@ export async function handleApi(
             label?: string;
             shell?: string;
             args?: string[];
+            /** The client's fitted grid — see createAgentTerminal's cols/rows. */
+            cols?: number;
+            rows?: number;
         };
         try {
             body = await readJsonBody(req);
@@ -869,6 +877,11 @@ export async function handleApi(
             label: body.label?.trim() || 'Terminal',
             shell: body.shell,
             args: body.args,
+            // Spawn AT the remote client's real viewport, so the pty never starts at
+            // 80×24 and wraps the TUI's first frame. This is untrusted wire input, so
+            // a bogus grid is dropped HERE (the caller then gets the engine default)
+            // rather than trusted to be caught further in.
+            ...(isUsableGrid(body) ? { cols: body.cols, rows: body.rows } : {}),
         });
         audit('terminal.open', `${created.id} in ${ws.project_name}`, actor);
         sendJson(res, 200, {

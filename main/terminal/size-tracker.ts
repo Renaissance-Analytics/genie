@@ -9,11 +9,26 @@
  */
 const sizes = new Map<string, { cols: number; rows: number }>();
 
+/**
+ * Is this a grid we can actually drive a pty to? Guards every size that crosses a
+ * process/wire boundary — a remote `create` body, a `resize` frame, a tracked size.
+ * `undefined` (caller simply has no grid yet) and garbage (NaN, 0, negative) are
+ * both rejected, so callers can fall back to the engine default instead of
+ * spawning an unusable 0-column pty.
+ */
+export function isUsableGrid<T extends { cols?: number; rows?: number }>(
+    grid: T,
+): grid is T & { cols: number; rows: number } {
+    const { cols, rows } = grid;
+    if (typeof cols !== 'number' || typeof rows !== 'number') return false;
+    if (!Number.isFinite(cols) || !Number.isFinite(rows)) return false;
+    return cols > 0 && rows > 0;
+}
+
 /** Record the size a resize just applied (call only on a successful resize). */
 export function recordTerminalSize(id: string, cols: number, rows: number): void {
     if (!id) return;
-    if (!Number.isFinite(cols) || !Number.isFinite(rows)) return;
-    if (cols <= 0 || rows <= 0) return;
+    if (!isUsableGrid({ cols, rows })) return;
     sizes.set(id, { cols, rows });
 }
 

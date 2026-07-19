@@ -300,8 +300,10 @@ const api = {
             return () => ipcRenderer.off('remote:control', handler);
         },
 
-        terminalAttach: (id: string, workspaceId?: string) =>
-            ipcRenderer.invoke('remote:terminal-attach', id, workspaceId) as Promise<{ ok: boolean }>,
+        terminalAttach: (id: string, workspaceId?: string, cols?: number, rows?: number) =>
+            ipcRenderer.invoke('remote:terminal-attach', id, workspaceId, cols, rows) as Promise<{
+                ok: boolean;
+            }>,
         terminalInput: (id: string, data: string) =>
             ipcRenderer.invoke('remote:terminal-input', id, data) as Promise<boolean>,
         terminalResize: (id: string, cols: number, rows: number) =>

@@ -24,6 +24,7 @@ import {
     nextPtyGrid,
     setTerminalRepaintHandler,
 } from './terminal-bridge';
+import { isUsableGrid } from '../terminal/size-tracker';
 import { initAuth, validateSession, type ConfirmPairHook } from './auth';
 import { initAudit, setLocked, isLocked, audit } from './audit';
 import { onQuestionsChanged } from '../ask/force-question';
@@ -416,8 +417,14 @@ function attachWebSocket(srv: http.Server | https.Server): void {
                 socket.destroy();
                 return;
             }
+            // `client=desktop` marks a remote GENIE WINDOW (as opposed to the phone
+            // web client). A desktop window is a full-size driver whose viewport IS
+            // the terminal, so it sizes the pty authoritatively; a phone is a viewer
+            // and only ever grows it. Absent ⇒ viewer, so old clients keep the
+            // phone-safe behavior.
+            const isDesktopClient = url.searchParams.get('client') === 'desktop';
             socketServer.handleUpgrade(req, socket, head, (ws) => {
-                attachTerminalSocketAndDrive(ws, terminalId, token!);
+                attachTerminalSocketAndDrive(ws, terminalId, token!, isDesktopClient);
             });
             return;
         }
@@ -442,6 +449,7 @@ function attachTerminalSocketAndDrive(
     ws: WebSocket,
     terminalId: string,
     token: string,
+    isDesktopClient = false,
 ): void {
     if (!deps) {
         ws.close();
@@ -475,13 +483,24 @@ function attachTerminalSocketAndDrive(
             deps.data.writeToTerminal(terminalId, msg.data);
             audit('terminal.write', `${terminalId} (${msg.data.length}b)`, actor);
         } else if (msg.type === 'resize') {
-            // The pty is SHARED with the desktop window. A phone in a narrow
-            // viewport must NOT shrink it (that reflows the desktop terminal
-            // down). nextPtyGrid enforces grow-only: it returns the size to
-            // apply ONLY when the phone would enlarge the pty, else null and we
-            // leave the shared pty alone (the phone scrolls horizontally).
-            const grid = nextPtyGrid(terminalId, Number(msg.cols), Number(msg.rows));
-            if (grid) deps.data.resize(terminalId, grid.cols, grid.rows);
+            const cols = Number(msg.cols);
+            const rows = Number(msg.rows);
+            if (isDesktopClient) {
+                // A remote Genie window drives the pty EXACTLY, like a local one
+                // (which resizes through terminalManager directly, unclamped). Running
+                // it through the phone's grow-only guard meant a desktop window that
+                // was merely narrower than some earlier viewer could never shrink the
+                // pty back, so its TUI wrapped past the visible edge.
+                if (isUsableGrid({ cols, rows })) deps.data.resize(terminalId, cols, rows);
+            } else {
+                // The pty is SHARED with the desktop window. A phone in a narrow
+                // viewport must NOT shrink it (that reflows the desktop terminal
+                // down). nextPtyGrid enforces grow-only: it returns the size to
+                // apply ONLY when the phone would enlarge the pty, else null and we
+                // leave the shared pty alone (the phone scrolls horizontally).
+                const grid = nextPtyGrid(terminalId, cols, rows);
+                if (grid) deps.data.resize(terminalId, grid.cols, grid.rows);
+            }
         }
     });
 

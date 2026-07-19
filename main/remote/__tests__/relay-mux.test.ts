@@ -70,7 +70,10 @@ describe('RelayFrameMux — events + term', () => {
             kind: 'open',
             channel: 'term',
             sid: 'sid-1',
-            payload: { path: '/ws/term?terminal=term-7' },
+            // `client=desktop` marks us as a full Genie window rather than the phone
+            // viewer, so the host applies our pty grid exactly instead of running it
+            // through the phone's grow-only clamp.
+            payload: { path: '/ws/term?terminal=term-7&client=desktop' },
         });
         // No workspaceId passed → the open frame omits it (fails closed to
         // host:all on the host side; wire-compatible with old clients).
@@ -90,7 +93,10 @@ describe('RelayFrameMux — events + term', () => {
             kind: 'open',
             channel: 'term',
             sid: 'sid-1',
-            payload: { path: '/ws/term?terminal=term-7', workspaceId: 'ws-42' },
+            payload: {
+                path: '/ws/term?terminal=term-7&client=desktop',
+                workspaceId: 'ws-42',
+            },
         });
         term.close();
     });

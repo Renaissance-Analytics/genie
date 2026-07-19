@@ -101,7 +101,10 @@ export class RelayFrameMux {
             channel: 'term',
             sid: this.sid,
             payload: {
-                path: `/ws/term?terminal=${encodeURIComponent(terminalId)}`,
+                // `client=desktop` — the only caller here is a remote Genie window,
+                // so the host sizes the pty to our grid exactly rather than applying
+                // the phone viewer's grow-only clamp.
+                path: `/ws/term?terminal=${encodeURIComponent(terminalId)}&client=desktop`,
                 ...(workspaceId ? { workspaceId } : {}),
             },
         });

@@ -1584,7 +1584,15 @@ export interface GenieApi {
          *  Drives the view-only banner + the remote-bridge input gate. */
         controlState: () => Promise<{ locked: boolean }>;
         onControl: (cb: (s: { locked: boolean }) => void) => () => void;
-        terminalAttach: (id: string, workspaceId?: string) => Promise<{ ok: boolean }>;
+        /** Attach to a host pty. `cols`/`rows` (the client's fitted grid, when known)
+         *  are held by main and applied once the term socket opens — a resize sent
+         *  before then would hit a CONNECTING socket and be discarded. */
+        terminalAttach: (
+            id: string,
+            workspaceId?: string,
+            cols?: number,
+            rows?: number,
+        ) => Promise<{ ok: boolean }>;
 
         terminalInput: (id: string, data: string) => Promise<boolean>;
         terminalResize: (id: string, cols: number, rows: number) => Promise<boolean>;
