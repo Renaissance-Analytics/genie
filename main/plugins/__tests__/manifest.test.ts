@@ -13,6 +13,7 @@ function validPlugin(): Record<string, unknown> {
         name: 'Hello World',
         version: '0.1.0',
         entry: { tools: 'tools.cjs' },
+        agent: { guide: 'Use this plugin when a greeting is requested.' },
         mcpTools: [
             {
                 name: 'greet',
@@ -32,6 +33,22 @@ describe('validatePluginManifest', () => {
         const res = validatePluginManifest(validPlugin());
         expect(res.ok).toBe(true);
         if (res.ok) expect(res.manifest.namespace).toBe('hello');
+    });
+
+    it('rejects MCP tools without an agent guide or skill', () => {
+        const manifest = validPlugin();
+        delete manifest.agent;
+        const res = validatePluginManifest(manifest);
+        expect(res.ok).toBe(false);
+        if (!res.ok) {
+            expect(res.errors).toContain('`agent.guide` is required when `mcpTools` are present');
+        }
+    });
+
+    it('rejects an empty plugin guide', () => {
+        const manifest = validPlugin();
+        manifest.agent = { guide: '' };
+        expect(validatePluginManifest(manifest).ok).toBe(false);
     });
 
     it('rejects a non-object', () => {

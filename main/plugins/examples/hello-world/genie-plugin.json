@@ -7,6 +7,9 @@
   "publisher": { "name": "Genie", "url": "https://github.com/Renaissance-Analytics/genie" },
   "engines": { "genie": ">=0.7.0" },
   "entry": { "tools": "tools.cjs" },
+  "agent": {
+    "guide": "Use hello.greet when the user asks for a greeting or when verifying that the Genie plugin MCP seam works."
+  },
   "mcpTools": [
     {
       "name": "greet",

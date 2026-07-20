@@ -90,6 +90,12 @@ export interface PluginCapabilities {
     genieApi?: string[];
 }
 
+/** Agent-facing operating guidance that accompanies MCP tools. */
+export interface PluginAgentGuidance {
+    /** Concise markdown operating guide, included in each contributed tool description. */
+    guide: string;
+}
+
 export interface PluginManifest {
     /** Reverse-DNS, globally unique (e.g. com.particle-academy.presentation). */
     id: string;
@@ -105,6 +111,8 @@ export interface PluginManifest {
     /** Named entry modules (relative paths), keyed by a tool's `run`. */
     entry?: { tools?: string };
     mcpTools?: PluginMcpTool[];
+    /** Required when mcpTools are present: agents need a workflow, not bare verbs. */
+    agent?: PluginAgentGuidance;
     editors?: PluginEditorMapping[];
     capabilities?: PluginCapabilities;
     /** npm deps the plugin needs (audited/pinned downstream). */
@@ -227,6 +235,15 @@ export function validatePluginManifest(raw: unknown): ValidationResult<PluginMan
             errors.push('`entry.tools` must be a non-empty string when present');
     }
 
+    if (raw.agent !== undefined) {
+        if (!isRecord(raw.agent)) {
+            errors.push('`agent` must be an object when present');
+        } else {
+            if (!nonEmpty(raw.agent.guide))
+                errors.push('`agent.guide` must be a non-empty string');
+        }
+    }
+
     // mcpTools --------------------------------------------------------------
     const toolNames = new Set<string>();
     if (raw.mcpTools !== undefined) {
@@ -266,6 +283,14 @@ export function validatePluginManifest(raw: unknown): ValidationResult<PluginMan
                 if (!entry || !nonEmpty(entry[runKey]))
                     errors.push(`${at} needs entry.${runKey} pointing at its tools module`);
             });
+        }
+    }
+    if (Array.isArray(raw.mcpTools) && raw.mcpTools.length > 0) {
+        const agent = isRecord(raw.agent) ? raw.agent : null;
+        if (!agent || !nonEmpty(agent.guide)) {
+            errors.push(
+                '`agent.guide` is required when `mcpTools` are present',
+            );
         }
     }
 

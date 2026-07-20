@@ -45,6 +45,7 @@ function helloManifest(namespace = 'hello'): string {
         name: 'Hello World',
         version: '0.1.0',
         entry: { tools: 'tools.cjs' },
+        agent: { guide: 'Use this plugin for greetings.' },
         mcpTools: [
             {
                 name: 'greet',
@@ -82,7 +83,9 @@ describe('pluginToolDescriptors', () => {
         store.rows = [row()];
         const tools = pluginToolDescriptors();
         expect(tools.map((t) => t.name)).toEqual(['hello.greet']);
-        expect(tools[0].description).toBe('Return a greeting.');
+        expect(tools[0].description).toContain('Return a greeting.');
+        expect(tools[0].description).toContain('Plugin guide:');
+        expect(tools[0].description).toContain('Use this plugin for greetings.');
     });
 
     it('contributes nothing when the plugin is DISABLED', () => {

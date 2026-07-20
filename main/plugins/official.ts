@@ -133,6 +133,9 @@ const PRESENTATION_SOURCE: BundledPluginSource = {
         publisher: { name: 'Genie', url: 'https://github.com/Renaissance-Analytics/genie' },
         engines: { genie: '>=0.7.0' },
         entry: { tools: 'tools.cjs' },
+        agent: {
+            guide: 'Use presentation.createDeck when the user asks to generate a PowerPoint deck. Gather or infer a title and ordered slide outline, write only within the workspace, then report the created path.',
+        },
         mcpTools: [
             {
                 name: 'createDeck',
@@ -261,6 +264,9 @@ const SPREADSHEET_SOURCE: BundledPluginSource = {
         publisher: { name: 'Genie', url: 'https://github.com/Renaissance-Analytics/genie' },
         engines: { genie: '>=0.7.0' },
         entry: { tools: 'tools.cjs' },
+        agent: {
+            guide: 'Use spreadsheet.createWorkbook when the user asks to generate an Excel workbook from structured rows, CSV, or sheets. Write only within the workspace, then report the created path.',
+        },
         mcpTools: [
             {
                 name: 'createWorkbook',

@@ -111,7 +111,9 @@ export function pluginToolDescriptors(): PluginToolDescriptor[] {
             for (const tool of manifest.mcpTools ?? []) {
                 out.push({
                     name: namespacedToolName(manifest.namespace, tool.name),
-                    description: tool.description,
+                    description: manifest.agent?.guide
+                        ? `${tool.description}\n\nPlugin guide:\n${manifest.agent.guide}`
+                        : tool.description,
                     inputSchema: tool.inputSchema,
                 });
             }

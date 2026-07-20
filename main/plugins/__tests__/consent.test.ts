@@ -28,6 +28,7 @@ const MANIFEST = {
     name: 'Consent Test',
     version: '0.1.0',
     entry: { tools: 'tools.cjs' },
+    agent: { guide: 'Use this plugin to create presentation decks.' },
     mcpTools: [
         { name: 'createDeck', description: 'd', inputSchema: { type: 'object' }, run: 'tools', process: 'worker' },
     ],

@@ -57,6 +57,7 @@ function makeFixture(): string {
                 version: '1.0.0',
                 publisher: { name: 'Example Co' },
                 entry: { tools: 'tools.cjs' },
+                agent: { guide: 'Use this plugin to say hello.' },
                 mcpTools: [{ name: 'hello', description: 'say hi', inputSchema: { type: 'object' } }],
             },
             null,

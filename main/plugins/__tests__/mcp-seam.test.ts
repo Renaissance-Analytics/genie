@@ -96,6 +96,7 @@ describe('tools/list plugin generalization', () => {
             'openFileForUser',
             'setEnv',
             'checkEnv',
+            'initializeWorkspace',
             'genieGuide',
         ]);
     });

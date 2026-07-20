@@ -40,6 +40,9 @@ plugin.
   "publisher": { "name": "Genie", "url": "https://github.com/Renaissance-Analytics/genie" },
   "engines": { "genie": ">=0.7.0" },
   "entry": { "tools": "tools.cjs" },
+  "agent": {
+    "guide": "Use hello.greet when the user asks for a greeting or when verifying the Genie plugin MCP seam."
+  },
   "mcpTools": [
     {
       "name": "greet",
@@ -114,6 +117,11 @@ list of problems, never half-loaded. The key fields:
   - `process` — isolation for this tool: `worker` (the secure default, a Genie
     utilityProcess) or `subprocess`.
   - `gated` — when `true`, each call is routed through install/per-call consent.
+- **`agent`** — required whenever `mcpTools` is non-empty. A plugin must ship
+  an `agent.guide`: concise Markdown included directly in every contributed MCP
+  tool description, so every MCP client can discover the workflow. A
+  platform-specific distribution may additionally package a native skill, but
+  the guide remains the portable fallback.
 - **`editors[]`** — optional. A plugin can **declare** (never ship) a first-party
   Fancy editor for a set of file extensions — a `package@version` + `export`
   that Genie loads from a vetted, integrity-pinned Fancy source. `hello-world`
