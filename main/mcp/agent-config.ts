@@ -4,6 +4,7 @@ import { GENIE_AGENTS_BRIEF } from './guide';
 import { getAllSettings } from '../db';
 import { upsertEnvLine } from '../env-file';
 import { ensureEnvGitignored, loadWorkspaceEnvVars } from '../env-store';
+import { pluginAgentSkills, type PluginSkill } from '../plugins/registry';
 
 /**
  * Write/remove the Genie MCP server entry in a workspace's agent config files
@@ -580,9 +581,26 @@ function syncAgentsMd(workspacePath: string, enabled: boolean): void {
     }
 }
 
-const GENIE_CODEX_SKILL_PATH = path.join('.agents', 'skills', 'genie', 'SKILL.md');
+/**
+ * Where each agent looks for repo-scoped skills. Codex reads `.agents/skills`,
+ * Claude Code reads `.claude/skills`; the SKILL.md format (YAML frontmatter +
+ * markdown body) is the same for both, so one body serves both roots.
+ */
+const SKILL_ROOTS: Record<'codex' | 'claude', string[]> = {
+    codex: ['.agents', 'skills'],
+    claude: ['.claude', 'skills'],
+};
 
-/** The repo-scoped Codex skill installed with Genie's MCP registration. */
+/**
+ * Prefix for the plugin skills Genie MANAGES. Everything under a skills root
+ * matching `genie-plugin-*` is Genie's to create, rewrite, and prune; anything
+ * else in that directory is the user's and is never touched. Without this marker
+ * pruning a removed plugin couldn't tell a Genie-written skill from a hand-authored
+ * one.
+ */
+const PLUGIN_SKILL_PREFIX = 'genie-plugin-';
+
+/** The repo-scoped Genie skill installed with Genie's MCP registration. */
 export function genieCodexSkill(): string {
     return `---
 name: genie
@@ -605,19 +623,79 @@ Always follow the workspace's AGENTS.md; it may impose stronger project-specific
 `;
 }
 
-function syncCodexSkill(workspacePath: string, enabled: boolean): void {
-    const file = path.join(workspacePath, GENIE_CODEX_SKILL_PATH);
+/** Render a plugin's guidance as a SKILL.md. */
+export function pluginSkillBody(skill: PluginSkill): string {
+    const tools = skill.tools.map((t) => `- \`${t.name}\` — ${t.description}`).join('\n');
+    // The description drives WHEN an agent loads this skill, so it names the
+    // plugin, its purpose, and its tools rather than restating the guide.
+    const description =
+        `Use when working with ${skill.name} or its Genie tools ` +
+        `(${skill.tools.map((t) => t.name).join(', ')}). ${skill.description}`;
+    return `---
+name: ${PLUGIN_SKILL_PREFIX}${skill.namespace}
+description: ${description.replace(/\s+/g, ' ').trim()}
+---
+
+# ${skill.name}
+
+${skill.guide}
+
+## Tools
+
+${tools}
+
+These tools are contributed by the ${skill.name} Genie plugin and are only
+available while it stays enabled in this workspace.
+`;
+}
+
+/** Write `file` only when its content would change (keeps mtimes stable). */
+function writeIfChanged(file: string, body: string): void {
+    if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === body) return;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, body);
+}
+
+/**
+ * Sync the repo-scoped skills for ONE agent: Genie's own workflow skill plus a
+ * skill per enabled plugin that declares `agent.guide`.
+ *
+ * Removal is deliberately asymmetric. The Genie skill is only deleted when it
+ * still matches exactly what we wrote (a user edit is theirs to keep), while
+ * plugin skills under the `genie-plugin-` prefix are fully managed — a plugin
+ * that's been disabled or uninstalled must not leave an agent believing tools
+ * exist that no longer resolve.
+ */
+function syncAgentSkills(
+    workspacePath: string,
+    agent: 'codex' | 'claude',
+    enabled: boolean,
+): void {
     try {
+        const root = path.join(workspacePath, ...SKILL_ROOTS[agent]);
+        const genieFile = path.join(root, 'genie', 'SKILL.md');
+        const skills = enabled ? pluginAgentSkills() : [];
+        const wanted = new Map(
+            skills.map((s) => [`${PLUGIN_SKILL_PREFIX}${s.namespace}`, pluginSkillBody(s)]),
+        );
+
         if (!enabled) {
-            if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === genieCodexSkill()) {
-                fs.rmSync(file);
+            if (fs.existsSync(genieFile) && fs.readFileSync(genieFile, 'utf8') === genieCodexSkill()) {
+                fs.rmSync(genieFile);
             }
-            return;
+        } else {
+            writeIfChanged(genieFile, genieCodexSkill());
+            for (const [name, body] of wanted) {
+                writeIfChanged(path.join(root, name, 'SKILL.md'), body);
+            }
         }
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        const next = genieCodexSkill();
-        if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === next) return;
-        fs.writeFileSync(file, next);
+
+        // Prune managed plugin skills that are no longer wanted.
+        if (!fs.existsSync(root)) return;
+        for (const entry of fs.readdirSync(root)) {
+            if (!entry.startsWith(PLUGIN_SKILL_PREFIX) || wanted.has(entry)) continue;
+            fs.rmSync(path.join(root, entry), { recursive: true, force: true });
+        }
     } catch {
         /* best-effort — MCP registration must still proceed */
     }
@@ -677,12 +755,16 @@ export function writeWorkspaceAgentMcp(
             );
         }
         if (sync.codex) syncCodexServer(workspacePath, GENIE_SERVER_NAME, '', null, false);
-        if (sync.codex) syncCodexSkill(workspacePath, true);
+        // Skills stay in sync even with the endpoint down — the workspace is still
+        // MCP-enabled, so the guidance is still correct; only the URL is missing.
+        if (sync.codex) syncAgentSkills(workspacePath, 'codex', true);
+        if (sync.claude) syncAgentSkills(workspacePath, 'claude', true);
         if (sync.agents) syncAgentsMd(workspacePath, true);
         return;
     }
     if (sync.claude) {
         upsert(path.join(workspacePath, '.mcp.json'), GENIE_SERVER_NAME, claudeEntry(url ?? ''), enabled);
+        syncAgentSkills(workspacePath, 'claude', enabled);
     }
     if (sync.cursor) {
         upsert(
@@ -694,7 +776,7 @@ export function writeWorkspaceAgentMcp(
     }
     if (sync.codex) {
         syncCodexServer(workspacePath, GENIE_SERVER_NAME, url ?? '', null, enabled);
-        syncCodexSkill(workspacePath, enabled);
+        syncAgentSkills(workspacePath, 'codex', enabled);
     }
     if (sync.agents) syncAgentsMd(workspacePath, enabled);
 }

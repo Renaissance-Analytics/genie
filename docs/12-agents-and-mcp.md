@@ -58,7 +58,9 @@ and attention tools (`imDone`, `ForceTheQuestion`) run freely.
 > URL. Claude Code reads it from `.mcp.json`, Cursor reads `.cursor/mcp.json`,
 > and Codex Agent Terminals launched by Genie receive equivalent project-scoped
 > `-c mcp_servers...` overrides because Codex does not currently read a
-> workspace-local MCP config file. Genie also writes a repo-scoped Codex skill
-> at `.agents/skills/genie/SKILL.md`, so Codex can discover the workflow without
-> relying on MCP prompt UI. Turn it on and set the port in
+> workspace-local MCP config file. Genie also writes repo-scoped agent skills —
+> `.agents/skills/` for Codex and `.claude/skills/` for Claude Code — covering
+> the Genie workflow itself plus one skill per enabled plugin that contributes
+> tools, so an agent can discover the workflow without relying on MCP prompt UI.
+> Plugin skills are Genie-managed and removed when the plugin is. Turn it on and set the port in
 > **[Settings → Agent MCP server](08-settings.md)**.

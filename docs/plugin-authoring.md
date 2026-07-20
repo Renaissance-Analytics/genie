@@ -118,10 +118,21 @@ list of problems, never half-loaded. The key fields:
     utilityProcess) or `subprocess`.
   - `gated` — when `true`, each call is routed through install/per-call consent.
 - **`agent`** — required whenever `mcpTools` is non-empty. A plugin must ship
-  an `agent.guide`: concise Markdown included directly in every contributed MCP
-  tool description, so every MCP client can discover the workflow. A
-  platform-specific distribution may additionally package a native skill, but
-  the guide remains the portable fallback.
+  an `agent.guide`: concise Markdown describing WHEN to reach for the plugin and
+  what workflow its tools fit into. It is delivered two ways:
+  - **In every contributed tool description** — the portable fallback, so any MCP
+    client discovers the workflow with no extra support.
+  - **As a repo-scoped agent skill**, written into the workspace whenever Genie
+    syncs its MCP registration: `.agents/skills/genie-plugin-<namespace>/SKILL.md`
+    for Codex and `.claude/skills/genie-plugin-<namespace>/SKILL.md` for Claude
+    Code. Skills load on demand rather than sitting in context permanently, so
+    this is the better home for a longer guide. Genie also writes its own
+    `genie` skill alongside them.
+
+  Everything under a skills root prefixed `genie-plugin-` is Genie-managed: it is
+  rewritten on sync and removed when the plugin is disabled or uninstalled, so a
+  stale skill never advertises tools that no longer resolve. Anything else in
+  those directories is yours and is never touched.
 - **`editors[]`** — optional. A plugin can **declare** (never ship) a first-party
   Fancy editor for a set of file extensions — a `package@version` + `export`
   that Genie loads from a vetted, integrity-pinned Fancy source. `hello-world`

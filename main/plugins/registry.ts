@@ -147,6 +147,56 @@ function resolvePluginTool(
 }
 
 /** True when `name` is a namespaced tool owned by some enabled plugin. */
+/** A plugin's agent-facing guidance, shaped for a SKILL.md. */
+export interface PluginSkill {
+    /** The plugin's tool namespace — also the skill's stable identity. */
+    namespace: string;
+    name: string;
+    /** The manifest's own description — optional there, so '' when absent. */
+    description: string;
+    /** The manifest's `agent.guide` body. */
+    guide: string;
+    /** The namespaced tools the guide is about, so the skill can list them. */
+    tools: Array<{ name: string; description: string }>;
+}
+
+/**
+ * Agent skills for every ENABLED plugin that declares `agent.guide`.
+ *
+ * The guide also rides on each tool DESCRIPTION (see pluginToolDescriptors), but
+ * descriptions are always in context and repeat once per tool. A skill is the
+ * on-demand form: written once per plugin, loaded by the agent only when it's
+ * actually reaching for that plugin. Same fail-closed contract as the tool
+ * descriptors — a malformed plugin is skipped, any unexpected error degrades to
+ * `[]`, and a bad plugin can never break a CORE skill.
+ */
+export function pluginAgentSkills(): PluginSkill[] {
+    try {
+        const out: PluginSkill[] = [];
+        for (const plugin of listEnabledPlugins()) {
+            if (!pluginRowIsSurfaceable(plugin)) continue;
+            const manifest = manifestOf(plugin);
+            if (!manifest) continue;
+            const guide = manifest.agent?.guide?.trim();
+            // No tools ⇒ nothing to guide (an editor-only plugin like `document`).
+            if (!guide || !manifest.mcpTools?.length) continue;
+            out.push({
+                namespace: manifest.namespace,
+                name: manifest.name,
+                description: manifest.description?.trim() ?? '',
+                guide,
+                tools: manifest.mcpTools.map((t) => ({
+                    name: namespacedToolName(manifest.namespace, t.name),
+                    description: t.description,
+                })),
+            });
+        }
+        return out;
+    } catch {
+        return [];
+    }
+}
+
 export function ownsPluginTool(name: string): boolean {
     return resolvePluginTool(name) !== null;
 }
