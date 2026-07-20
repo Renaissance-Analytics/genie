@@ -2,6 +2,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { Duplex, PassThrough, type Readable } from 'node:stream';
 import { TRANSPORT_TOKEN_HEADER } from '../mobile/site-proxy';
+import { carrierHttpAgent } from '../sites/local-carrier';
 import type { SiteStreamController, SiteStreamHandlers } from './relay-mux';
 import type { SiteOpenPayload } from './relay-protocol';
 
@@ -169,7 +170,11 @@ export function createTailnetSiteCarrier(hostBase: string, bearer: () => string)
                 const headers: http.OutgoingHttpHeaders = { ...req.headers };
                 headers[TRANSPORT_TOKEN_HEADER] = bearer();
                 upReq = http.request(
-                    { host: base.host, port: base.port, method: req.method, path: req.path, headers },
+                    // Dedicated pool, idle window below the upstream's — the
+                    // global agent's 5s exactly matches Node's default
+                    // server.keepAliveTimeout, so a reused socket can be dead on
+                    // arrival and there is no retry to absorb it.
+                    { agent: carrierHttpAgent, host: base.host, port: base.port, method: req.method, path: req.path, headers },
                     (upRes) => resolve({ status: upRes.statusCode ?? 502, headers: upRes.headers, body: upRes }),
                 );
                 upReq.on('error', reject);
@@ -182,6 +187,7 @@ export function createTailnetSiteCarrier(hostBase: string, bearer: () => string)
             let upReq: http.ClientRequest | null = null;
             const upgrade = new Promise<SiteUpgradeResult>((resolve, reject) => {
                 upReq = http.request({
+                    agent: carrierHttpAgent, // see forward() — never globalAgent
                     host: base.host,
                     port: base.port,
                     method: 'GET',
