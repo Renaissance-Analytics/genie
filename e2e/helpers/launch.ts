@@ -41,7 +41,13 @@ export const E2E_USERDATA = path.join(os.tmpdir(), 'genie-e2e-profile');
  * GithubCapabilitiesFlyout (per-install resolve flow). Maps to `GENIE_E2E_PAGE`,
  * which `showE2EWindow` (background.ts) reads to pick the route.
  */
-export type E2EHarnessPage = 'issuewatch' | 'ghcaps';
+export type E2EHarnessPage = 'issuewatch' | 'ghcaps' | 'agent-access';
+
+const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
+    issuewatch: 'e2e-issuewatch',
+    ghcaps: 'e2e-ghcaps',
+    'agent-access': 'e2e-agent-access',
+};
 
 export async function launchGenieE2E(
     harness: E2EHarnessPage = 'issuewatch',
@@ -55,8 +61,7 @@ export async function launchGenieE2E(
             ...process.env,
             NODE_ENV: 'production',
             GENIE_E2E: '1',
-            GENIE_E2E_PAGE:
-                harness === 'ghcaps' ? 'e2e-ghcaps' : 'e2e-issuewatch',
+            GENIE_E2E_PAGE: HARNESS_ROUTE[harness],
         },
     });
     // The harness window is opened on app.whenReady(); wait for it.
@@ -209,6 +214,29 @@ export async function scriptMock<T = void>(
     // electronApp.evaluate runs `fn` in main with the electron module as the
     // first arg; we reach the mock via the global handle inside fn.
     await app.evaluate(fn as never, arg as never);
+}
+
+/**
+ * Read the agent-access fixture the `e2e-agent-access` harness seeded (see
+ * main/e2e/agent-access.ts). Returns null if seeding never ran, so the spec can
+ * fail with a clear cause rather than asserting against undefined names.
+ */
+export async function readAgentAccessSeed(app: ElectronApplication): Promise<{
+    workspaceId: string;
+    workspaceName: string;
+    peerId: string;
+    peerName: string;
+} | null> {
+    return app.evaluate(() => {
+        return (
+            ((globalThis as Record<string, any>).__GENIE_E2E_AGENT_ACCESS__ as {
+                workspaceId: string;
+                workspaceName: string;
+                peerId: string;
+                peerName: string;
+            }) ?? null
+        );
+    });
 }
 
 /** Read the current mock state snapshot from the main process. */

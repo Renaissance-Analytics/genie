@@ -538,7 +538,7 @@ const AGENT_ACCESS_DESC: Record<WorkspaceAgentAccess, string> = {
  * Defaults to `all` because channels were previously ungoverned; tightening is
  * always an explicit choice so upgrades never silently sever a working setup.
  */
-function AgentAccessPanel({ workspaceId }: { workspaceId: string }) {
+export function AgentAccessPanel({ workspaceId }: { workspaceId: string }) {
     const [access, setAccess] = useState<WorkspaceAgentAccess | null>(null);
     const [allowed, setAllowed] = useState<string[]>([]);
     const [peers, setPeers] = useState<Array<{ id: string; name: string }>>([]);
@@ -593,7 +593,7 @@ function AgentAccessPanel({ workspaceId }: { workspaceId: string }) {
     if (access === null) return <span className="set-row-desc">Loading…</span>;
 
     return (
-        <div className="agent-form-ws">
+        <div className="agent-form-ws" data-testid="agent-access-root">
             <Select
                 value={access}
                 onValueChange={(v) => void save(v as WorkspaceAgentAccess, allowed)}
