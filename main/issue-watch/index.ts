@@ -53,13 +53,6 @@ import { mobileEmit } from '../mobile/bus';
  *     a titlebar badge (no OS toast). Reuses the existing `repo` OAuth token.
  */
 
-/**
- * Round-robin auto-refresh cadence. A single workspace is polled per tick (see
- * {@link pollNextWorkspace}), so ~60s/workspace keeps each tick cheap while
- * still covering every workspace within a few minutes for a typical handful.
- */
-const ROUND_ROBIN_INTERVAL_MS = 60 * 1000;
-
 /** Cached feed per `<owner>/<repo>` (the last poll's open items). */
 const feedCache = new Map<string, WatchItem[]>();
 /**
@@ -70,9 +63,6 @@ const feedCache = new Map<string, WatchItem[]>();
  * EXACT error ("GitHub returned 401: Bad credentials") instead of "no issues".
  */
 const errorCache = new Map<string, WatchErrorDetail | null>();
-let pollTimer: ReturnType<typeof setInterval> | null = null;
-/** Round-robin cursor into listWorkspaces() — which workspace polls next. */
-let roundRobinCursor = 0;
 
 export interface ResolvedRepo {
     owner: string;
@@ -512,6 +502,21 @@ export interface WorkspaceWatchStatus {
     missingCapabilities: CapabilityKey[];
     /** Tynn IssueWatch stream state; local GitHub auth is never part of this. */
     serviceState?: IssueWatchServiceState;
+    /**
+     * Whether Tynn has actually reported a snapshot FOR THIS WORKSPACE.
+     *
+     * `connected` is a TRANSPORT fact — the stream is up and a reconcile landed.
+     * It says nothing about whether the server knows this particular workspace,
+     * because a reconcile returning `{"workspaces": []}` is still a successful
+     * delivery. Without this flag a workspace the server has never heard of and a
+     * workspace with genuinely nothing open produced identical status, so a
+     * totally dead feed rendered as a confident "Nothing open on the watched
+     * repos" (genie#22 — the reason tynn.ai#105 went undiagnosed).
+     *
+     * False + connected ⇒ "connected, but Tynn isn't tracking this workspace" —
+     * a real, actionable state, not silence.
+     */
+    knownToServer: boolean;
 }
 
 /** The Issue Watch capability keys the flyout gates on (a subset of the full
@@ -614,36 +619,6 @@ export async function pollWorkspace(workspaceId: string): Promise<void> {
     );
 }
 
-/**
- * Round-robin tick: poll exactly ONE workspace's enabled/default-on repos, then
- * broadcast. Cycling a single workspace per tick — instead of polling EVERY
- * workspace at once — keeps each tick cheap and self-throttling: N workspaces
- * are covered over N ticks rather than firing every workspace's GitHub reads on
- * one timer fire (which choked with many workspaces). Goes through
- * `pollWorkspace`, so it still covers auto-detected, default-on repos that have
- * no persisted `issue_watches` row yet. The broadcast reflects EVERY workspace
- * (getOpenCounts/getWorkspaceErrors read the cache), so the pills fill in
- * progressively as each workspace's turn comes up and never go dark. The cursor
- * wraps and tolerates workspaces being added/removed between ticks.
- */
-async function pollNextWorkspace(): Promise<void> {
-    if (!getToken()) return;
-    const workspaces = listWorkspaces();
-    if (workspaces.length === 0) return;
-    if (roundRobinCursor >= workspaces.length) roundRobinCursor = 0;
-    const ws = workspaces[roundRobinCursor];
-    roundRobinCursor = (roundRobinCursor + 1) % workspaces.length;
-    // Source-switch: a server-fed workspace is NEVER polled locally — Tynn's push
-    // is authoritative. (The cursor already advanced, so the next tick moves on.)
-    if (!pushedByWorkspace.has(ws.id)) {
-        try {
-            await pollWorkspace(ws.id);
-        } catch {
-            /* best-effort — one workspace's failure shouldn't break the cycle */
-        }
-    }
-    await broadcastUpdate();
-}
 
 /** The flattened, unread-flagged feed for a workspace (newest first). */
 export async function getWorkspaceFeed(
@@ -662,46 +637,16 @@ export async function getWorkspaceFeed(
     const pushed = pushedByWorkspace.get(workspaceId);
     if (pushed) return pushed.feed;
 
-    // Hard cut: Tynn is the only IssueWatch source. A missing snapshot means the
-    // stream is not ready; never read GitHub through Genie's device token.
+    // Hard cut: Tynn is the ONLY IssueWatch source — Genie never reads GitHub
+    // through its own device token. A missing snapshot means Tynn has not
+    // reported this workspace (see `knownToServer` on the surfaced status),
+    // NOT that there is nothing open.
+    //
+    // There is deliberately no local-poller fallback here. ~35 lines of one
+    // used to sit after this `return`, unreachable, alongside a
+    // `pollNextWorkspace` that nothing called — which read as a safety net
+    // that did not exist and helped hide a totally dead feed (genie#22).
     return [];
-
-    const watches = listIssueWatches(workspaceId);
-    const seenByKey = new Map(watches.map((w) => [cacheKey(w.owner, w.repo), w.seen_at]));
-    const granularity = getWorkspaceIssuewatchGranularity(workspaceId);
-    const views = await getWorkspaceRepoViews(workspaceId);
-    const out: Array<
-        WatchItem & { repo: string; owner: string; source: 'own' | 'upstream'; unread: boolean }
-    > = [];
-    // Dedup by item key: when two forks in the same workspace share ONE upstream,
-    // each fork's poll caches that upstream item under its own key, so a naive
-    // flatten would list (and count) it twice + collide React keys. Emit each
-    // unique item once.
-    const seenKeys = new Set<string>();
-    for (const v of views) {
-        if (!v.enabled) continue;
-        const seenAt = seenByKey.get(cacheKey(v.owner, v.repo)) ?? EPOCH;
-        const items = filterByGranularity(
-            feedCache.get(cacheKey(v.owner, v.repo)) ?? [],
-            granularity,
-        );
-        for (const it of items) {
-            if (seenKeys.has(it.key)) continue;
-            seenKeys.add(it.key);
-            const isUpstream = (it.source ?? 'own') === 'upstream';
-            out.push({
-                ...it,
-                // Upstream items live in the parent repo — attribute them to its
-                // slug (carried on the item); own items use the watched repo.
-                owner: isUpstream ? it.owner ?? v.owner : v.owner,
-                repo: isUpstream ? it.repo ?? v.repo : v.repo,
-                source: isUpstream ? 'upstream' : 'own',
-                unread: it.updatedAt > seenAt,
-            });
-        }
-    }
-    out.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
-    return out;
 }
 
 /**
@@ -771,8 +716,21 @@ export async function getWorkspaceStatus(
     // Tynn transport fact, independent of Genie's optional GitHub login. Report
     // connected only once the first snapshot has been delivered — otherwise the
     // subscribe-but-pre-reconcile window reads as an empty feed ("nothing open").
+    // Whether the SERVER actually reported this workspace — independent of the
+    // transport being healthy. A reconcile listing zero workspaces is a
+    // successful delivery, so `connected` alone can't distinguish "nothing open"
+    // from "Tynn has never heard of this workspace".
+    const knownToServer = pushedByWorkspace.has(workspaceId);
+
     if (serviceState === 'connected' && reconcileDelivered) {
-        return { connected: true, error: null, detail: null, needsReauth: false, missingCapabilities: [] };
+        return {
+            connected: true,
+            error: null,
+            detail: null,
+            needsReauth: false,
+            missingCapabilities: [],
+            knownToServer,
+        };
     }
     return {
         connected: false,
@@ -781,6 +739,7 @@ export async function getWorkspaceStatus(
         needsReauth: false,
         missingCapabilities: [],
         serviceState,
+        knownToServer,
     };
 }
 

@@ -92,6 +92,10 @@ describe('server-fed IssueWatch override (#197)', () => {
 
         expect(await getWorkspaceStatus('ws-1')).toEqual({
             connected: true, error: null, detail: null, needsReauth: false, missingCapabilities: [],
+            // Server-fed ⇒ Tynn reported this workspace, so it IS known. Asserted
+            // explicitly rather than relaxed to toMatchObject: the whole point of
+            // the flag is that an empty feed can no longer masquerade as healthy.
+            knownToServer: true,
         });
         expect(await getOpenCounts()).toEqual({ 'ws-1': { issue: 1, pr: 0, security: 2 } });
     });
