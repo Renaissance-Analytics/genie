@@ -212,6 +212,7 @@ import {
     isE2ETunnel,
     startTunnelE2EHarness,
 } from './e2e/tunnel';
+import { seedAgentAccessE2E } from './e2e/agent-access';
 
 /**
  * Genie — Tynn desktop companion.
@@ -1730,7 +1731,20 @@ function showE2EWindow(): void {
     // Allowlist the harness routes so a stray env value can't load an arbitrary
     // page; default to the issue-watch harness for back-compat.
     const requested = process.env.GENIE_E2E_PAGE ?? 'e2e-issuewatch';
-    const page = requested === 'e2e-ghcaps' ? 'e2e-ghcaps' : 'e2e-issuewatch';
+    const ALLOWED = ['e2e-ghcaps', 'e2e-issuewatch', 'e2e-agent-access'] as const;
+    const page = (ALLOWED as readonly string[]).includes(requested)
+        ? requested
+        : 'e2e-issuewatch';
+    if (page === 'e2e-agent-access') {
+        // Seed the fixture workspaces BEFORE the window loads — the harness page
+        // resolves its target by listing on mount, so the rows must already exist.
+        // Also resets agent_access, since the E2E profile is reused across runs.
+        try {
+            seedAgentAccessE2E();
+        } catch (e) {
+            console.error('[e2e] agent-access seed failed', e);
+        }
+    }
     const win = new BrowserWindow({
         width: 900,
         height: 760,
