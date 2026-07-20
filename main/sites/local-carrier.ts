@@ -30,6 +30,43 @@ import type {
 
 const LOOPBACK = '127.0.0.1';
 
+/**
+ * Idle keep-alive window for carrier dials, deliberately BELOW the 5000 ms that
+ * is both Node's `http.globalAgent` default and its `server.keepAliveTimeout`
+ * default.
+ *
+ * Those two being equal is a race: the upstream closes an idle connection at the
+ * same instant the agent hands that socket to a new request, the write lands on
+ * a dead socket, and the dial fails with ECONNRESET. The carriers used the bare
+ * `http` / `https` modules — i.e. the shared global pool — and had no retry, so
+ * the reset became a hard 502.
+ *
+ * That surfaced as a `.gen` dev site intermittently failing a chunk load
+ * ("Failed to fetch dynamically imported module") or dropping an HMR socket in
+ * the Testing Browser, and as two tests written off as flaky (site-shim under
+ * full-suite load, tunnel.spec on the slowest CI runner).
+ *
+ * Expiring our side first means we never offer a socket the upstream may have
+ * already closed. Dedicated agents (not the global pool) also stop unrelated
+ * traffic from poisoning these dials.
+ */
+export const CARRIER_IDLE_TIMEOUT_MS = 2_000;
+
+/** Node's default for BOTH `http.globalAgent.timeout` and
+ *  `http.Server.keepAliveTimeout`. Their equality is the race; exported so the
+ *  test can assert our window is STRICTLY below it. */
+export const NODE_DEFAULT_IDLE_TIMEOUT_MS = 5_000;
+
+/** Dedicated pools for carrier dials — never `globalAgent`. */
+export const carrierHttpAgent = new http.Agent({
+    keepAlive: true,
+    timeout: CARRIER_IDLE_TIMEOUT_MS,
+});
+export const carrierHttpsAgent = new https.Agent({
+    keepAlive: true,
+    timeout: CARRIER_IDLE_TIMEOUT_MS,
+});
+
 /** A local dev site's loopback target — resolved from the enabled-site set. */
 export interface LocalTarget {
     scheme: SiteScheme;
@@ -61,6 +98,9 @@ function dialOptions(
 ): https.RequestOptions {
     const isTls = target.scheme === 'https';
     return {
+        // Dedicated pool with an idle window below the upstream's — see
+        // CARRIER_IDLE_TIMEOUT_MS. Never the global agent.
+        agent: isTls ? carrierHttpsAgent : carrierHttpAgent,
         host: target.loopback ?? LOOPBACK, // validated literal loopback only
         port: target.port,
         method: keepUpgrade ? 'GET' : undefined,
