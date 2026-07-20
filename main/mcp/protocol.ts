@@ -1079,7 +1079,7 @@ const MANAGE_WORKSPACES_TOOL = {
 const AGENTINBOX_TOOL = {
     name: 'agentinbox',
     description:
-        "Coordinate with OTHER AI agents running in this Genie instance — AgentInbox, a LOCAL inter-agent messaging network. Discover peer agents (in your workspace, or across the workstation when they allow it), DM them 1:1, and broadcast on shared CHANNELS. Delivery is PULL-based — you POLL for messages, they're never injected into your terminal (which would corrupt your turn). Actions (`action`): `list` (discovery — returns YOUR agent info `self`, the peers you can reach `agents`, and your `channels`); `send` (message a peer with `to` = their agentId, OR broadcast with `channel` = a purpose like `frontend` (your workspace's room) or `slug:purpose` (another workspace's) — needs `text`; optional `interrupt:true` also glows a DM target's terminal so they notice); `receive` (fetch NEW messages — pass a `cursor` from a prior receive to page forward; set `wait:true` to LONG-POLL until a message arrives (optional `timeoutMs`), so you can block waiting for a peer's reply); `receipts` (read-receipts for the DMs YOU sent — each with a `seen` flag that's true once the recipient has received it, so you can tell 'queued' from 'seen' and decide whether to escalate; optional `limit`, default 20); `setAccessibility` (`scope`: `none` hidden / `self` your workspace only (default) / `specific` + `workspaces` a chosen set / `all` the whole workstation — governs who can see + DM you; optional `purpose` renames your channel); `join`/`leave` (`channel`) to opt in/out of a channel. Your identity + accessibility are remembered across restarts. Local-only — no relay, no cross-host.",
+        "Coordinate with OTHER AI agents running in this Genie instance — AgentInbox, a LOCAL inter-agent messaging network. Discover peer agents (in your workspace, or across the workstation when they allow it), DM them 1:1, and broadcast on shared CHANNELS. Delivery is PULL-based — you FETCH messages; they're never injected mid-turn (which would corrupt it). To await a reply, make ONE blocking `receive` with `wait:true` rather than polling in a loop — it returns the moment a message lands. Actions (`action`): `list` (discovery — returns YOUR agent info `self`, the peers you can reach `agents`, and your `channels`); `send` (message a peer with `to` = their agentId, OR broadcast with `channel` = a purpose like `frontend` (your workspace's room) or `slug:purpose` (another workspace's) — needs `text`; optional `interrupt:true` also glows a DM target's terminal so they notice); `receive` (fetch NEW messages — pass a `cursor` from a prior receive to page forward; set `wait:true` to LONG-POLL until a message arrives (optional `timeoutMs`), so you can block waiting for a peer's reply); `receipts` (read-receipts for the DMs YOU sent — each with a `seen` flag that's true once the recipient has received it, so you can tell 'queued' from 'seen' and decide whether to escalate; optional `limit`, default 20); `setAccessibility` (`scope` — who may DM you: `self` your workspace only (default) / `specific` + `workspaces` a chosen set / `all` the whole workstation / `none` nobody, but you STAY LISTED to peers as unreachable so they can find you and ask / `hidden` nobody, and you're omitted from discovery entirely; optional `purpose` renames your channel); `join`/`leave` (`channel`) to opt in/out of a channel. Your identity + accessibility are remembered across restarts. Local-only — no relay, no cross-host.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -1119,17 +1119,18 @@ const AGENTINBOX_TOOL = {
             wait: {
                 type: 'boolean',
                 description:
-                    'receive (optional): LONG-POLL — block until a message arrives, you leave, or the timeout. Returns empty on timeout so you re-poll.',
+                    "receive (optional): LONG-POLL — block until a message arrives, you leave, or the timeout. Delivery WAKES this call the instant a message lands, so ONE blocking call is the right way to await a peer's reply — do NOT sit in a poll loop calling receive over and over. Only re-call if it returns empty (timed out) and you still want to wait.",
             },
             timeoutMs: {
                 type: 'number',
-                description: 'receive (optional): long-poll window in ms (default ~55s, capped).',
+                description:
+                    'receive (optional): long-poll window in ms (default ~4min, cap 10min). Pass a LARGE value when you expect a slow reply — blocking once beats repeated short polls.',
             },
             scope: {
                 type: 'string',
-                enum: ['none', 'self', 'specific', 'all'],
+                enum: ['none', 'self', 'specific', 'all', 'hidden'],
                 description:
-                    'setAccessibility: who can see/DM you — none (hidden) / self (your workspace, default) / specific (a chosen set) / all (the workstation).',
+                    "setAccessibility: who may DM you — self (your workspace, default) / specific (a chosen set) / all (the workstation) / none (nobody — but you remain LISTED to peers as unreachable, so they can discover you and request access) / hidden (nobody, and you're omitted from discovery entirely). Your workspace's own access setting still applies on top: it decides which workspaces may reach yours at all.",
             },
             workspaces: {
                 type: 'array',
@@ -1916,9 +1917,16 @@ export async function handleMcpMessage(
                 if (!result.ok) {
                     summary = `agentinbox failed: ${result.error ?? 'unknown error'}`;
                 } else if (action === 'list') {
-                    summary = `${result.agents?.length ?? 0} agent(s) reachable, ${
-                        result.channels?.length ?? 0
-                    } channel(s).`;
+                    // The directory now includes peers you can SEE but not message
+                    // (`reachable: false`), so report both counts — "N agents" alone
+                    // would imply you can DM all of them.
+                    const found = result.agents ?? [];
+                    const reachable = found.filter((x) => x.reachable).length;
+                    const blocked = found.length - reachable;
+                    summary =
+                        `${reachable} agent(s) reachable` +
+                        (blocked > 0 ? `, ${blocked} visible but unavailable` : '') +
+                        `, ${result.channels?.length ?? 0} channel(s).`;
                 } else if (action === 'receive') {
                     summary = `${result.messages?.length ?? 0} new message(s).`;
                 } else if (action === 'send') {

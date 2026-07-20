@@ -77,6 +77,7 @@ import {
 import { installAgentInboxPresence } from './agentinbox/presence';
 import { agentInboxBroker } from './agentinbox/broker';
 import { dbAgentInboxStore } from './agentinbox/store';
+import { getWorkspaceAgentAccess } from './db';
 import { installKnowledgeBroadcast } from './knowledge/presence';
 import {
     buildSubmitBytes,
@@ -1087,6 +1088,12 @@ app.whenReady().then(async () => {
         agentInboxBroker.setWakeSink((terminalId, text) => {
             writeToTerminal(terminalId, buildSubmitBytes(text, true));
         });
+        // AgentInbox OUTER tier: the broker asks the workspaces table who may reach
+        // into a given workspace. Kept a seam so the broker stays db-free (and
+        // permissive when unwired, e.g. in unit tests).
+        agentInboxBroker.setWorkspaceAccessResolver((workspaceId) =>
+            getWorkspaceAgentAccess(workspaceId),
+        );
         rehydrateAgentInbox();
         agentInboxBroker.rehydrateMessages();
     } catch {

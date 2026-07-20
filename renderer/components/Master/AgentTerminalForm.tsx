@@ -32,26 +32,33 @@ export interface AgentFormValues {
     issuewatchAction: 'notify' | 'wake';
 }
 
+// Who may DM this agent (the INNER tier). The workspace's own access setting
+// applies on top — see WorkspaceSettingsModal → "Agent access".
 const SCOPE_OPTIONS: Array<{ value: AgentInboxScope; label: string; desc: string }> = [
-    {
-        value: 'none',
-        label: 'None — hidden',
-        desc: 'Hidden — no other agent can discover or DM this one. It can still join a channel and broadcast.',
-    },
     {
         value: 'self',
         label: 'This workspace (default)',
-        desc: 'This workspace only — agents in the same workspace can discover and DM it.',
+        desc: 'This workspace only — agents in the same workspace can DM it. Others still see it listed as unavailable.',
     },
     {
         value: 'specific',
         label: 'Specific workspaces',
-        desc: 'Only the workspaces you pick — plus its own workspace.',
+        desc: 'Only the workspaces you pick — plus its own workspace. Others see it listed as unavailable.',
     },
     {
         value: 'all',
         label: 'All — whole workstation',
-        desc: 'Whole workstation — every agent, in any workspace, can discover and DM it.',
+        desc: 'Whole workstation — every agent, in any workspace, can DM it.',
+    },
+    {
+        value: 'none',
+        label: 'None — listed, but no DMs',
+        desc: 'Nobody can DM it, but peers still SEE it listed as unavailable so they know it exists and can ask for access. It can still join a channel and broadcast.',
+    },
+    {
+        value: 'hidden',
+        label: 'Hidden — invisible',
+        desc: 'Nobody can DM it and it is omitted from other agents’ discovery entirely. The true opt-out. It can still join a channel and broadcast.',
     },
 ];
 

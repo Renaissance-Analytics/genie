@@ -9,6 +9,7 @@ import type {
     IssuewatchGranularity,
     IssuewatchPolicy,
     IssuewatchPolicyBuckets,
+    WorkspaceAgentAccess,
 } from '../../lib/genie';
 import { api } from '../../lib/genie';
 
@@ -338,6 +339,13 @@ export default function WorkspaceSettingsModal({
                         <IssueWatchHandlersPanel workspaceId={workspace.id} />
                     </Row>
                     <Row
+                        label="Agent access"
+                        sub="Which other workspaces' agents may join this workspace's channels and see its agents"
+                        vertical
+                    >
+                        <AgentAccessPanel workspaceId={workspace.id} />
+                    </Row>
+                    <Row
                         label="Background process approval"
                         sub="Approve before an agent starts a process (manageProcess)"
                     >
@@ -498,6 +506,115 @@ function IssueWatchHandlersPanel({ workspaceId }: { workspaceId: string }) {
                     </span>
                 </label>
             ))}
+        </div>
+    );
+}
+
+const AGENT_ACCESS_OPTIONS: Array<{ value: WorkspaceAgentAccess; label: string }> = [
+    { value: 'all', label: 'All — any workspace' },
+    { value: 'specific', label: 'Specific workspaces' },
+    { value: 'self', label: 'This workspace only' },
+    { value: 'none', label: 'None — closed' },
+];
+
+const AGENT_ACCESS_DESC: Record<WorkspaceAgentAccess, string> = {
+    all: 'Any agent on the workstation may join this workspace’s channels and discover its agents. This is the default and matches how channels behaved before this setting existed.',
+    specific:
+        'Only agents from the workspaces you check below may reach in. Everyone else sees nothing from this workspace.',
+    self: 'Only this workspace’s own agents. Agents elsewhere cannot join its channels or see its agents at all.',
+    none: 'Closed to every other workspace — same as “this workspace only”, stated explicitly.',
+};
+
+/**
+ * The workspace's AgentInbox FRONT DOOR (the outer access tier) — who may reach
+ * INTO this workspace: join/post to its channels AND discover/DM its agents.
+ * Composes with each agent's own scope (in that agent's settings), which decides
+ * who may DM it; a caller must clear BOTH tiers.
+ *
+ * Denial here OMITS this workspace's agents from an outsider's directory rather
+ * than listing them as unavailable — a closed workspace shouldn't advertise its
+ * roster. (Per-agent denial inside an open workspace does list-as-unavailable.)
+ *
+ * Defaults to `all` because channels were previously ungoverned; tightening is
+ * always an explicit choice so upgrades never silently sever a working setup.
+ */
+function AgentAccessPanel({ workspaceId }: { workspaceId: string }) {
+    const [access, setAccess] = useState<WorkspaceAgentAccess | null>(null);
+    const [allowed, setAllowed] = useState<string[]>([]);
+    const [peers, setPeers] = useState<Array<{ id: string; name: string }>>([]);
+
+    useEffect(() => {
+        let alive = true;
+        void (async () => {
+            try {
+                const [cur, list] = await Promise.all([
+                    api().workspaces.getAgentAccess(workspaceId),
+                    api().workspaces.list(),
+                ]);
+                if (!alive) return;
+                setAccess(cur.access);
+                setAllowed(cur.workspaces);
+                setPeers(
+                    list
+                        .filter((w) => w.id !== workspaceId)
+                        .map((w) => ({ id: w.id, name: w.project_name })),
+                );
+            } catch {
+                if (alive) {
+                    setAccess('all'); // match the resolver's permissive default
+                    setAllowed([]);
+                }
+            }
+        })();
+        return () => {
+            alive = false;
+        };
+    }, [workspaceId]);
+
+    const save = async (next: WorkspaceAgentAccess, nextAllowed: string[]) => {
+        const prev = { access, allowed };
+        setAccess(next); // optimistic
+        setAllowed(nextAllowed);
+        try {
+            await api().workspaces.setAgentAccess(workspaceId, next, nextAllowed);
+        } catch {
+            setAccess(prev.access); // revert
+            setAllowed(prev.allowed);
+        }
+    };
+
+    const toggleWorkspace = (id: string) => {
+        const next = allowed.includes(id)
+            ? allowed.filter((x) => x !== id)
+            : [...allowed, id];
+        void save(access ?? 'all', next);
+    };
+
+    if (access === null) return <span className="set-row-desc">Loading…</span>;
+
+    return (
+        <div className="agent-form-ws">
+            <Select
+                value={access}
+                onValueChange={(v) => void save(v as WorkspaceAgentAccess, allowed)}
+                list={AGENT_ACCESS_OPTIONS}
+            />
+            <span className="set-row-desc">{AGENT_ACCESS_DESC[access]}</span>
+            {access === 'specific' &&
+                (peers.length === 0 ? (
+                    <span className="set-row-desc">No other workspaces to admit yet.</span>
+                ) : (
+                    peers.map((w) => (
+                        <label key={w.id} className="agent-form-ws-row">
+                            <input
+                                type="checkbox"
+                                checked={allowed.includes(w.id)}
+                                onChange={() => toggleWorkspace(w.id)}
+                            />
+                            <span>{w.name}</span>
+                        </label>
+                    ))
+                ))}
         </div>
     );
 }

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { TailscaleStatus } from './tailscale';
+import type { AgentInboxScope } from './agentinbox/types';
 
 /** Remote-link health pushed/read by a host window's overlay (see link-state.ts). */
 type RemoteLinkStatePayload = {
@@ -561,6 +562,9 @@ const api = {
             ipcRenderer.invoke('workspaces:set-process-approval', id, require),
         setTerminalApproval: (id: string, require: boolean) =>
             ipcRenderer.invoke('workspaces:set-terminal-approval', id, require),
+        getAgentAccess: (id: string) => ipcRenderer.invoke('workspaces:get-agent-access', id),
+        setAgentAccess: (id: string, access: string, workspaces?: string[]) =>
+            ipcRenderer.invoke('workspaces:set-agent-access', id, access, workspaces),
         getIssuewatchPolicy: (id: string) =>
             ipcRenderer.invoke('workspaces:get-issuewatch-policy', id),
         setIssuewatchPolicy: (id: string, buckets: unknown) =>
@@ -812,7 +816,7 @@ const api = {
             cwd?: string;
             label?: string;
             purpose: string;
-            scope: 'none' | 'self' | 'specific' | 'all';
+            scope: AgentInboxScope;
             scope_workspaces?: string[];
             wake_on_dm?: boolean;
             issuewatch_handle?: boolean;
@@ -851,7 +855,7 @@ const api = {
             specId: string,
             patch: {
                 purpose?: string;
-                scope?: 'none' | 'self' | 'specific' | 'all';
+                scope?: AgentInboxScope;
                 scope_workspaces?: string[];
                 wake_on_dm?: boolean;
                 issuewatch_handle?: boolean;

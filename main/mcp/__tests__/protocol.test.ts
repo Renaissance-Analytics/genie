@@ -736,7 +736,12 @@ describe('handleMcpMessage', () => {
         const agentInbox = vi.fn().mockResolvedValue({
             ok: true,
             self: { agentId: 'me', label: 'Me' },
-            agents: [{ agentId: 'peer', label: 'Peer' }],
+            agents: [
+                { agentId: 'peer', label: 'Peer', reachable: true },
+                // Visible but unavailable — reported separately in the summary so
+                // "N agents" never implies you can DM all of them.
+                { agentId: 'walled', label: 'Walled', reachable: false },
+            ],
             channels: [{ key: 'w1:general', slug: 'ws-one', purpose: 'general' }],
         });
         const res = await handleMcpMessage(
@@ -762,7 +767,7 @@ describe('handleMcpMessage', () => {
             purpose: undefined,
         });
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
-        expect(text).toContain('1 agent(s) reachable, 1 channel(s).');
+        expect(text).toContain('1 agent(s) reachable, 1 visible but unavailable, 1 channel(s).');
         expect(text).toContain('w1:general'); // the JSON block
     });
 

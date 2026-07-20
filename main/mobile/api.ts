@@ -1,4 +1,5 @@
 import type http from 'node:http';
+import type { AgentInboxScope } from '../agentinbox/types';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -261,7 +262,7 @@ export interface MobileDataDeps {
         cwd?: string;
         label?: string;
         purpose: string;
-        scope: 'none' | 'self' | 'specific' | 'all';
+        scope: AgentInboxScope;
         scope_workspaces?: string[];
         wake_on_dm?: boolean;
         issuewatch_handle?: boolean;
@@ -277,7 +278,7 @@ export interface MobileDataDeps {
         specId: string,
         patch: {
             purpose?: string;
-            scope?: 'none' | 'self' | 'specific' | 'all';
+            scope?: AgentInboxScope;
             scope_workspaces?: string[];
             wake_on_dm?: boolean;
             issuewatch_handle?: boolean;
@@ -1396,7 +1397,7 @@ export async function handleApi(
             specId?: string;
             patch?: {
                 purpose?: string;
-                scope?: 'none' | 'self' | 'specific' | 'all';
+                scope?: AgentInboxScope;
                 scope_workspaces?: string[];
                 wake_on_dm?: boolean;
                 issuewatch_handle?: boolean;

@@ -7,6 +7,7 @@ import {
     type TunnelSites,
     type TunnelSiteConfig,
 } from './mobile/hosts';
+import type { AgentInboxScope, WorkspaceAgentAccess } from './agentinbox/types';
 
 /**
  * Local SQLite store. Two tables:
@@ -678,6 +679,31 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v27 — per-workspace AGENT ACCESS: the OUTER tier of AgentInbox access
+            // control (the workspace's front door). Governs whether agents from
+            // ANOTHER workspace may reach into this one — join/post to its channels
+            // and discover/DM its agents. The per-agent `whisper_scope` (inner tier,
+            // in terminal_specs.meta) still decides who may DM a given agent; a
+            // caller must clear BOTH.
+            //
+            // DEFAULT IS 'all' — deliberately permissive. Channels were previously
+            // UNGOVERNED (any agent could join and broadcast into any workspace's
+            // room), so defaulting to anything stricter would silently sever working
+            // cross-workspace setups on upgrade. Users tighten per workspace.
+            version: 27,
+            runner: (db) => {
+                const ws = workspaceColumns(db);
+                if (!ws.has('agent_access')) {
+                    db.exec(
+                        `ALTER TABLE workspaces ADD COLUMN agent_access TEXT NOT NULL DEFAULT 'all'`,
+                    );
+                }
+                if (!ws.has('agent_access_workspaces')) {
+                    db.exec(`ALTER TABLE workspaces ADD COLUMN agent_access_workspaces TEXT`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1009,6 +1035,14 @@ export interface WorkspaceRow {
      *  agent. 1=require approval (default), 0=auto-run. Higher-power sibling of
      *  process_approval. */
     terminal_approval: number;
+    /** AgentInbox OUTER tier — who may reach INTO this workspace (its channels and
+     *  its agents) from another workspace. 'all' (default) preserves the
+     *  pre-feature behaviour where channels were ungoverned. Resolve via
+     *  {@link getWorkspaceAgentAccess}, never read raw. */
+    agent_access: WorkspaceAgentAccess;
+    /** Workspace ids admitted when `agent_access: 'specific'`, JSON-encoded.
+     *  NULL/absent = none admitted. Resolve via {@link getWorkspaceAgentAccess}. */
+    agent_access_workspaces?: string | null;
     /** LEGACY per-workspace IssueWatch remediation policy (single value for all
      *  kinds). Superseded by `issuewatch_policy_buckets`; still read as the
      *  per-bucket fallback for backward compat. NULL/absent reads as 'surface'. */
@@ -1106,12 +1140,14 @@ export function addWorkspace(
         | 'process_approval'
         | 'terminal_approval'
         | 'assignment_managed'
+        | 'agent_access'
     > & {
         sort_order?: number;
         mcp_enabled?: number;
         process_approval?: number;
         terminal_approval?: number;
         assignment_managed?: number;
+        agent_access?: WorkspaceAgentAccess;
     },
 ): WorkspaceRow {
     // Mirror project_id / project_name into the legacy tynn_* columns
@@ -1250,6 +1286,56 @@ export function workspaceTerminalApproval(id: string): boolean {
         )
         .get(id);
     return !row || row.terminal_approval !== 0;
+}
+
+const AGENT_ACCESS_VALUES: readonly WorkspaceAgentAccess[] = ['none', 'self', 'specific', 'all'];
+
+/**
+ * Set the workspace's AgentInbox front door (OUTER tier). `workspaces` is only
+ * meaningful for `specific` and is stored NULL otherwise, so a later widen →
+ * narrow round-trip can't resurrect a stale allow-list.
+ */
+export function setWorkspaceAgentAccess(
+    id: string,
+    access: WorkspaceAgentAccess,
+    workspaces: string[] = [],
+): void {
+    const safe: WorkspaceAgentAccess = AGENT_ACCESS_VALUES.includes(access) ? access : 'all';
+    const list =
+        safe === 'specific' ? JSON.stringify([...new Set(workspaces.map(String))]) : null;
+    getDb()
+        .prepare('UPDATE workspaces SET agent_access = ?, agent_access_workspaces = ? WHERE id = ?')
+        .run(safe, list, id);
+}
+
+/**
+ * Resolve a workspace's AgentInbox front door. Defaults to `all` — including for
+ * an unknown id — because channels were UNGOVERNED before this feature existed;
+ * failing closed here would sever working cross-workspace channels rather than
+ * protect anything. Tightening is an explicit user action.
+ */
+export function getWorkspaceAgentAccess(id: string): {
+    access: WorkspaceAgentAccess;
+    workspaces: string[];
+} {
+    const row = getDb()
+        .prepare<
+            [string],
+            { agent_access: string | null; agent_access_workspaces: string | null } | undefined
+        >('SELECT agent_access, agent_access_workspaces FROM workspaces WHERE id = ?')
+        .get(id);
+    const raw = (row?.agent_access ?? 'all') as WorkspaceAgentAccess;
+    const access = AGENT_ACCESS_VALUES.includes(raw) ? raw : 'all';
+    let workspaces: string[] = [];
+    if (access === 'specific' && row?.agent_access_workspaces) {
+        try {
+            const parsed: unknown = JSON.parse(row.agent_access_workspaces);
+            if (Array.isArray(parsed)) workspaces = parsed.filter((w): w is string => typeof w === 'string');
+        } catch {
+            workspaces = []; // corrupt JSON → admit nobody extra, never throw
+        }
+    }
+    return { access, workspaces };
 }
 
 export type IssuewatchPolicy = 'surface' | 'fix' | 'fix-and-ship';
@@ -1634,8 +1720,9 @@ export interface TerminalSpecMeta {
     agent_id?: string;
     /** Channel purpose (kebab). Default `general`. */
     whisper_purpose?: string;
-    /** Accessibility scope — who can see/DM this agent. Default `self`. */
-    whisper_scope?: 'none' | 'self' | 'specific' | 'all';
+    /** Accessibility scope — who can DM this agent. Default `self`. `hidden` also
+     *  removes it from peers' discovery; see AgentInboxScope for the full model. */
+    whisper_scope?: AgentInboxScope;
     /** Workspace ids this agent is visible to when `whisper_scope: 'specific'`. */
     whisper_workspaces?: string[];
     /** Opt-in wake-on-DM (issue #9): a DM to an idle agent may inject a nudge to

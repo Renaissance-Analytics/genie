@@ -65,6 +65,13 @@ export interface WorkspaceRow {
      *  a terminal, writes to one, or launches/drives a coding agent. 1=require
      *  approval (default), 0=auto-run. */
     terminal_approval?: number;
+    /** AgentInbox OUTER tier — who may reach INTO this workspace (its channels and
+     *  its agents) from another workspace. 'all' is the default and preserves the
+     *  pre-feature behaviour. Resolve via `workspaces.getAgentAccess`. */
+    agent_access?: WorkspaceAgentAccess;
+    /** Workspace ids admitted when `agent_access: 'specific'`, JSON-encoded.
+     *  Resolve via `workspaces.getAgentAccess` rather than parsing here. */
+    agent_access_workspaces?: string | null;
     /** Per-workspace IssueWatch remediation policy (null reads as 'surface'). */
     issuewatch_policy?: 'surface' | 'fix' | 'fix-and-ship' | null;
     /** Per-workspace IssueWatch granularity, JSON-encoded (null reads as the
@@ -892,14 +899,23 @@ export interface ViewMeta {
 export type AgentType = 'claude' | 'codex' | 'custom';
 
 /**
- * AgentInbox accessibility scope — who can DISCOVER + DM this agent:
- *  - `none`     — hidden (may still lurk-and-broadcast in a channel it joined),
+ * AgentInbox accessibility scope (INNER tier) — who may DM this agent:
  *  - `self`     — same-workspace agents only (DEFAULT),
  *  - `specific` — the workspaces the owner picks (∪ its own),
- *  - `all`      — every agent on the workstation.
- * Channel broadcasts reach members regardless of scope.
+ *  - `all`      — every agent on the workstation,
+ *  - `none`     — nobody, but the agent stays LISTED to peers as unreachable so
+ *                 they can discover it and ask for access,
+ *  - `hidden`   — nobody, and omitted from peers' discovery entirely (the true
+ *                 opt-out; `none` closes the mailbox, not the door).
+ * The workspace's own `agent_access` (OUTER tier) applies on top: it decides which
+ * workspaces may reach this one at all. A caller must clear BOTH.
+ * Channel broadcasts reach members regardless of this scope — cross-workspace
+ * channel access is governed by the workspace tier.
  */
-export type AgentInboxScope = 'none' | 'self' | 'specific' | 'all';
+export type AgentInboxScope = 'none' | 'self' | 'specific' | 'all' | 'hidden';
+
+/** Who may reach INTO a workspace (its channels + its agents) — the OUTER tier. */
+export type WorkspaceAgentAccess = 'none' | 'self' | 'specific' | 'all';
 
 /** A discoverable AgentInbox agent (directory row / presence payload). */
 export interface AgentInboxAgentInfo {
@@ -914,7 +930,11 @@ export interface AgentInboxAgentInfo {
     label: string;
     purpose: string;
     scope: AgentInboxScope;
+    /** Redacted (empty) for a caller that cannot reach this agent. */
     scopeWorkspaces: string[];
+    /** Whether the caller this row was built for may DM this agent. `false` = the
+     *  "visible but unavailable" state. Always true in the human panel directory. */
+    reachable: boolean;
     status: 'online' | 'away' | 'offline';
     /** The captured AI chat-session uuid, or null when not yet detected. */
     chatSessionId: string | null;
@@ -1725,6 +1745,17 @@ export interface GenieApi {
         setTerminalApproval: (
             id: string,
             require: boolean,
+        ) => Promise<{ ok: boolean }>;
+        /** This workspace's AgentInbox front door — who may reach into it. */
+        getAgentAccess: (
+            id: string,
+        ) => Promise<{ access: WorkspaceAgentAccess; workspaces: string[] }>;
+        /** Persist this workspace's AgentInbox front door. `workspaces` is only
+         *  meaningful for `specific` and is ignored otherwise. */
+        setAgentAccess: (
+            id: string,
+            access: WorkspaceAgentAccess,
+            workspaces?: string[],
         ) => Promise<{ ok: boolean }>;
         /** This workspace's resolved per-bucket IssueWatch remediation policy
          *  (legacy single value applied to all buckets as the fallback). */

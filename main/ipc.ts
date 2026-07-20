@@ -13,6 +13,8 @@ import {
     setWorkspaceMcp,
     setWorkspaceProcessApproval,
     setWorkspaceTerminalApproval,
+    getWorkspaceAgentAccess,
+    setWorkspaceAgentAccess,
     getWorkspaceIssuewatchPolicyBuckets,
     setWorkspaceIssuewatchPolicyBuckets,
     type IssuewatchPolicyBuckets,
@@ -400,6 +402,16 @@ export function registerIpcHandlers(): void {
         'workspaces:set-terminal-approval',
         (_e, id: string, require: boolean) => {
             setWorkspaceTerminalApproval(id, require);
+            return { ok: true };
+        },
+    );
+    ipcMain.handle('workspaces:get-agent-access', (_e, id: string) =>
+        getWorkspaceAgentAccess(id),
+    );
+    ipcMain.handle(
+        'workspaces:set-agent-access',
+        (_e, id: string, access: import('./agentinbox/types').WorkspaceAgentAccess, workspaces?: string[]) => {
+            setWorkspaceAgentAccess(id, access, workspaces ?? []);
             return { ok: true };
         },
     );

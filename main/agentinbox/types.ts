@@ -11,8 +11,36 @@
  * `terminal_specs.meta`), local-only — no relay, no cross-host.
  */
 
-/** Who can see / DM an agent. `self` (default) = its own workspace only. */
-export type AgentInboxScope = 'none' | 'self' | 'specific' | 'all';
+/**
+ * Who can DM an agent — the INNER tier of AgentInbox access control. `self`
+ * (default) = its own workspace only.
+ *
+ * `none` vs `hidden` is the load-bearing distinction: a `none` agent is still
+ * LISTED to peers (flagged `reachable: false`) so they can discover it exists and
+ * ask for access; a `hidden` agent is omitted from discovery entirely. `hidden`
+ * is the true opt-out — `none` only closes the mailbox, not the door.
+ *
+ * This tier composes with (never overrides) the workspace tier below: a caller
+ * must clear BOTH to reach an agent.
+ */
+export type AgentInboxScope = 'none' | 'self' | 'specific' | 'all' | 'hidden';
+
+/**
+ * Who may access a WORKSPACE — the OUTER tier, the front door. Governs whether
+ * agents from another workspace may reach into this one at all: join/post to its
+ * channels AND discover/DM its agents. Typically ops-only, but configurable.
+ *
+ * Denial here omits the workspace's agents from discovery entirely — a closed
+ * workspace must not advertise its roster or leak topology.
+ */
+export type WorkspaceAgentAccess = 'none' | 'self' | 'specific' | 'all';
+
+/** A workspace's resolved access policy (the outer tier). */
+export interface WorkspaceAccessPolicy {
+    access: WorkspaceAgentAccess;
+    /** Workspace ids allowed in when `access: 'specific'`. */
+    workspaces: string[];
+}
 
 /** Liveness of an agent's terminal. `away` = pty exited but the spec is retained
  *  (revivable); `offline` = the terminal was killed / the spec removed. */
@@ -43,8 +71,16 @@ export interface AgentInboxAgentInfo {
     /** The agent's channel purpose (kebab), e.g. `general`, `frontend`. */
     purpose: string;
     scope: AgentInboxScope;
-    /** Workspace ids this agent is visible to when `scope: 'specific'`. */
+    /** Workspace ids this agent is visible to when `scope: 'specific'`. REDACTED
+     *  (empty) for a caller that can't reach this agent — don't leak the ACL to
+     *  agents it excludes. The human panel always receives the real list. */
     scopeWorkspaces: string[];
+    /** Whether the CALLER this entry was built for may actually DM this agent —
+     *  i.e. it cleared both the workspace tier and this agent's scope. A listed
+     *  entry with `reachable: false` is the "visible but unavailable" state:
+     *  discoverable so peers know to request access, but not messageable.
+     *  Always true for the human panel's directory and for an agent's own `self`. */
+    reachable: boolean;
     status: AgentInboxStatus;
     /** The captured AI chat-session uuid, or null when unknown/uncaptured. */
     chatSessionId: string | null;

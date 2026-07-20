@@ -11,6 +11,7 @@ import {
     type AgentInboxJoinInput,
     type AgentInboxMessage,
     type AgentInboxScope,
+    type WorkspaceAccessPolicy,
 } from './types';
 import { noopAgentInboxStore, type AgentInboxStore } from './store';
 import { shouldWakeAgent, wakeNudgeText } from './wake';
@@ -37,9 +38,14 @@ import { shouldWakeAgent, wakeNudgeText } from './wake';
 export const INBOX_CAP = 200;
 /** Per-channel / per-DM-pair history log cap (for the human panel). */
 export const LOG_CAP = 500;
-/** Default long-poll window — sits under the SSE heartbeat's client keepalive so
- *  the poll returns empty and the agent re-polls rather than the socket timing. */
-export const DEFAULT_WAIT_MS = 55_000;
+/** Default long-poll window. The real ceiling is the MCP CLIENT's idle timeout
+ *  (~5min for HTTP transports); the SSE heartbeat + `notifications/progress` in
+ *  server.ts keep the socket alive up to it. We sit just under that so a waiting
+ *  agent BLOCKS IN ONE CALL instead of re-polling — a 55s default made agents
+ *  look like they were polling in a loop when the mechanism is push-on-delivery.
+ *  Raise toward MAX_WAIT_MS only once a client is confirmed to honour progress
+ *  as an idle-timeout reset (claude-code#58687 says it may not). */
+export const DEFAULT_WAIT_MS = 240_000;
 /** Hard cap on a requested long-poll window. */
 export const MAX_WAIT_MS = 600_000;
 /** How long an urgent (`interrupt`) DM may sit unACKed before it escalates to the
@@ -62,7 +68,9 @@ interface Waiter {
     timer: ReturnType<typeof setTimeout> | null;
 }
 
-interface AgentInboxAgent extends AgentInboxAgentInfo {
+// `reachable` is a per-CALLER verdict computed at read time, never agent state —
+// so the stored record deliberately omits it.
+interface AgentInboxAgent extends Omit<AgentInboxAgentInfo, 'reachable'> {
     /** Queued messages awaiting `receive` (capped). */
     inbox: AgentInboxMessage[];
     /** The single live long-poll resolver, or null. */
@@ -122,6 +130,16 @@ export class AgentInboxBroker {
 
     setWakeSink(fn: (terminalId: string, text: string) => void): void {
         this.wakeSink = fn;
+    }
+
+    /** Resolve a workspace's access policy (the OUTER tier). Injected by the host
+     *  at boot from the `workspaces` table; absent in tests / before wiring it
+     *  defaults PERMISSIVE (`all`), which is exactly the pre-feature behaviour —
+     *  channels were ungoverned — so nothing silently tightens on upgrade. */
+    private workspaceAccess: ((workspaceId: string) => WorkspaceAccessPolicy) | null = null;
+
+    setWorkspaceAccessResolver(fn: (workspaceId: string) => WorkspaceAccessPolicy): void {
+        this.workspaceAccess = fn;
     }
 
     /** Test seam for the wake-on-DM clock. */
@@ -324,7 +342,14 @@ export class AgentInboxBroker {
         return `${workspaceId}:${normalizePurpose(purpose)}`;
     }
 
-    private toInfo(a: AgentInboxAgent): AgentInboxAgentInfo {
+    /**
+     * Public view of an agent. `reachable` defaults true — the human panel owns
+     * the workstation and an agent always sees itself in full. Agent-facing
+     * directory entries pass the composed verdict, and an UNREACHABLE entry has
+     * its `scopeWorkspaces` ACL redacted: a caller the agent excluded has no
+     * business reading the allow-list that excluded it.
+     */
+    private toInfo(a: AgentInboxAgent, reachable = true): AgentInboxAgentInfo {
         return {
             agentId: a.agentId,
             terminalId: a.terminalId,
@@ -335,7 +360,8 @@ export class AgentInboxBroker {
             label: a.label,
             purpose: a.purpose,
             scope: a.scope,
-            scopeWorkspaces: [...a.scopeWorkspaces],
+            scopeWorkspaces: reachable ? [...a.scopeWorkspaces] : [],
+            reachable,
             status: a.status,
             chatSessionId: a.chatSessionId,
         };
@@ -528,12 +554,24 @@ export class AgentInboxBroker {
         return null;
     }
 
-    /** Opt an agent into an arbitrary channel (beyond its own purpose room). */
+    /** The workspace that owns a channel key (`<workspaceId>:<purpose>`). */
+    private workspaceOfKey(key: string): string {
+        const idx = key.indexOf(':');
+        return idx >= 0 ? key.slice(0, idx) : key;
+    }
+
+    /**
+     * Opt an agent into an arbitrary channel (beyond its own purpose room).
+     * Gated by the OUTER tier: joining another workspace's room requires that
+     * workspace to admit yours. Before this gate existed any agent could join —
+     * and broadcast into — any workspace's channel.
+     */
     joinChannel(agentId: string, channelArg: string): boolean {
         const a = this.agents.get(agentId);
         if (!a) return false;
         const key = this.resolveChannelKey(agentId, channelArg);
         if (!key) return false;
+        if (!this.workspaceAllows(a.workspaceId, this.workspaceOfKey(key))) return false;
         this.addToChannel(agentId, key);
         this.emitPresence(a);
         return true;
@@ -585,9 +623,30 @@ export class AgentInboxBroker {
 
     // --- discovery ---------------------------------------------------------
 
-    /** Whether `target` is discoverable/DM-able BY `caller` under target's scope. */
-    private visible(caller: AgentInboxAgent, target: AgentInboxAgent): boolean {
-        if (caller.agentId === target.agentId) return true; // always sees itself
+    /**
+     * OUTER TIER — may an agent in `callerWorkspaceId` reach into
+     * `targetWorkspaceId` at all? Governs channel join/post AND agent discovery.
+     * Same-workspace access is always allowed (a workspace never locks itself
+     * out). With no resolver wired this is permissive — see `workspaceAccess`.
+     */
+    workspaceAllows(callerWorkspaceId: string, targetWorkspaceId: string): boolean {
+        if (callerWorkspaceId === targetWorkspaceId) return true;
+        if (!this.workspaceAccess) return true; // unwired → pre-feature behaviour
+        const policy = this.workspaceAccess(targetWorkspaceId);
+        switch (policy.access) {
+            case 'all':
+                return true;
+            case 'specific':
+                return policy.workspaces.includes(callerWorkspaceId);
+            case 'self':
+            case 'none':
+            default:
+                return false;
+        }
+    }
+
+    /** INNER TIER — does `target`'s own scope admit a DM from `caller`? */
+    private scopeAllows(caller: AgentInboxAgent, target: AgentInboxAgent): boolean {
         switch (target.scope) {
             case 'all':
                 return true;
@@ -599,9 +658,28 @@ export class AgentInboxBroker {
                     target.scopeWorkspaces.includes(caller.workspaceId)
                 );
             case 'none':
+            case 'hidden':
             default:
                 return false;
         }
+    }
+
+    /**
+     * Whether `target` appears in `caller`'s directory AT ALL. Denial by the
+     * workspace tier, or an explicit `hidden` scope, omits the agent; every other
+     * agent is listed (possibly as unreachable) so peers can discover it and ask
+     * for access.
+     */
+    private visible(caller: AgentInboxAgent, target: AgentInboxAgent): boolean {
+        if (caller.agentId === target.agentId) return true; // always sees itself
+        if (target.scope === 'hidden') return false;
+        return this.workspaceAllows(caller.workspaceId, target.workspaceId);
+    }
+
+    /** Whether `caller` may actually DM `target` — BOTH tiers must admit it. */
+    private reachable(caller: AgentInboxAgent, target: AgentInboxAgent): boolean {
+        if (caller.agentId === target.agentId) return true;
+        return this.visible(caller, target) && this.scopeAllows(caller, target);
     }
 
     /** Every agent (the human panel's directory — the human sees all, no scope). */
@@ -609,14 +687,19 @@ export class AgentInboxBroker {
         return [...this.agents.values()].map((a) => this.toInfo(a));
     }
 
-    /** The peers discoverable BY an agent (excludes itself; honours scope). */
+    /**
+     * The peers an agent can DISCOVER (excludes itself). Includes agents it may
+     * not message — those carry `reachable: false` so the caller knows they exist
+     * and can request access, rather than the peer silently not existing.
+     */
     discoverableFor(callerAgentId: string): AgentInboxAgentInfo[] {
         const caller = this.agents.get(callerAgentId);
         if (!caller) return [];
         const out: AgentInboxAgentInfo[] = [];
         for (const target of this.agents.values()) {
             if (target.agentId === callerAgentId) continue;
-            if (this.visible(caller, target)) out.push(this.toInfo(target));
+            if (!this.visible(caller, target)) continue;
+            out.push(this.toInfo(target, this.scopeAllows(caller, target)));
         }
         return out;
     }
@@ -709,9 +792,11 @@ export class AgentInboxBroker {
         if (input.toAgentId) {
             const target = this.agents.get(input.toAgentId);
             if (!target) return { ok: false, error: `No agent "${input.toAgentId}".` };
-            // Agent senders may only DM a peer discoverable AT SEND TIME. The human
-            // panel owns the workstation, so it can DM anyone.
-            if (sender && !this.visible(sender, target)) {
+            // Agent senders may only DM a peer REACHABLE at send time (workspace
+            // tier AND the target's own scope). Re-checked here rather than
+            // trusted from a possibly-stale `list`. The human panel owns the
+            // workstation, so it can DM anyone.
+            if (sender && !this.reachable(sender, target)) {
                 return { ok: false, error: 'That agent is not reachable from your workspace.' };
             }
             const msg: AgentInboxMessage = {
@@ -750,6 +835,18 @@ export class AgentInboxBroker {
                     : this.resolveChannelKeyFromAny(input.channelArg);
             } else {
                 key = this.resolveChannelKey(sender!.agentId, input.channelArg);
+                // OUTER tier: broadcasting into another workspace's room requires
+                // that workspace to admit yours. Checked BEFORE the auto-join so a
+                // refused sender doesn't silently become a member.
+                if (
+                    key &&
+                    !this.workspaceAllows(sender!.workspaceId, this.workspaceOfKey(key))
+                ) {
+                    return {
+                        ok: false,
+                        error: `Channel "${input.channelArg}" belongs to a workspace that does not accept agents from yours.`,
+                    };
+                }
                 // Convenience: a sending agent auto-joins the channel it posts to.
                 if (key) this.addToChannel(sender!.agentId, key);
             }

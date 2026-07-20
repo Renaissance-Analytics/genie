@@ -23,28 +23,127 @@ function fresh(): AgentInboxBroker {
     return new AgentInboxBroker();
 }
 
-describe('AgentInboxBroker — discovery scopes', () => {
-    it('applies the four scopes (none invisible, self same-ws, specific list, all)', () => {
+describe('AgentInboxBroker — workspace access (outer tier)', () => {
+    /** A broker whose workspace front doors are set per workspace id. */
+    function withAccess(
+        policies: Record<string, { access: 'none' | 'self' | 'specific' | 'all'; workspaces?: string[] }>,
+    ): AgentInboxBroker {
         const b = fresh();
-        // Caller A in w1.
+        b.setWorkspaceAccessResolver((id) => ({
+            access: policies[id]?.access ?? 'all',
+            workspaces: policies[id]?.workspaces ?? [],
+        }));
+        return b;
+    }
+
+    it('defaults permissive when no resolver is wired (pre-feature behaviour)', () => {
+        const b = fresh();
+        expect(b.workspaceAllows('w1', 'w2')).toBe(true);
+    });
+
+    it('a closed workspace omits its agents from another workspace entirely', () => {
+        // Even scope:'all' can't escape a shut front door — the outer tier wins,
+        // and denial OMITS rather than listing-as-unavailable so a closed
+        // workspace never advertises its roster.
+        const b = withAccess({ w2: { access: 'self' } });
         b.join(input({ agentId: 'A', workspaceId: 'w1' }));
-        // Same workspace, self → visible.
+        b.join(input({ agentId: 'Z', workspaceId: 'w2', slug: 'ws-two', scope: 'all' }));
+        expect(b.discoverableFor('A').map((a) => a.agentId)).not.toContain('Z');
+        expect(b.send({ fromAgentId: 'A', toAgentId: 'Z', text: 'x' }).ok).toBe(false);
+    });
+
+    it('a workspace never locks out its own agents', () => {
+        const b = withAccess({ w1: { access: 'none' } });
+        b.join(input({ agentId: 'A', workspaceId: 'w1' }));
         b.join(input({ agentId: 'B', workspaceId: 'w1', scope: 'self' }));
-        // Other workspace, self → hidden.
+        expect(b.discoverableFor('A').map((a) => a.agentId)).toContain('B');
+        expect(b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'hi' }).ok).toBe(true);
+    });
+
+    it('`specific` admits only the listed workspaces', () => {
+        const b = withAccess({ w2: { access: 'specific', workspaces: ['w1'] } });
+        expect(b.workspaceAllows('w1', 'w2')).toBe(true);
+        expect(b.workspaceAllows('w3', 'w2')).toBe(false);
+    });
+
+    it('both tiers must admit a DM — an open door does not override agent scope', () => {
+        const b = withAccess({ w2: { access: 'all' } });
+        b.join(input({ agentId: 'A', workspaceId: 'w1' }));
+        // Workspace is open, but the agent itself only accepts its own workspace.
+        b.join(input({ agentId: 'S', workspaceId: 'w2', slug: 'ws-two', scope: 'self' }));
+        const entry = b.discoverableFor('A').find((a) => a.agentId === 'S');
+        expect(entry?.reachable).toBe(false); // listed, but unavailable
+        expect(b.send({ fromAgentId: 'A', toAgentId: 'S', text: 'x' }).ok).toBe(false);
+    });
+
+    it('blocks cross-workspace channel join and broadcast when the door is shut', () => {
+        const b = withAccess({ w2: { access: 'none' } });
+        b.join(input({ agentId: 'A', workspaceId: 'w1', purpose: 'general' }));
+        b.join(input({ agentId: 'V', workspaceId: 'w2', slug: 'ws-two', purpose: 'general' }));
+        // Previously ANY agent could join and broadcast into ANY workspace's room.
+        expect(b.joinChannel('A', 'ws-two:general')).toBe(false);
+        const sent = b.send({ fromAgentId: 'A', channelArg: 'ws-two:general', text: 'intrusion' });
+        expect(sent.ok).toBe(false);
+        // A refused sender must not have been auto-joined as a side effect.
+        expect(b.channelsForAgent('A').map((c) => c.key)).not.toContain('w2:general');
+    });
+
+    it('allows cross-workspace channel join when the door is open', () => {
+        const b = withAccess({ w2: { access: 'all' } });
+        b.join(input({ agentId: 'A', workspaceId: 'w1', purpose: 'general' }));
+        b.join(input({ agentId: 'V', workspaceId: 'w2', slug: 'ws-two', purpose: 'general' }));
+        expect(b.joinChannel('A', 'ws-two:general')).toBe(true);
+        expect(b.send({ fromAgentId: 'A', channelArg: 'ws-two:general', text: 'hello' }).ok).toBe(true);
+    });
+});
+
+describe('AgentInboxBroker — discovery scopes', () => {
+    it('lists un-DMable peers as unreachable, and omits only `hidden`', () => {
+        const b = fresh();
+        // Caller A in w1. (No workspace-access resolver wired → the OUTER tier is
+        // permissive, so this exercises the per-agent scope tier in isolation.)
+        b.join(input({ agentId: 'A', workspaceId: 'w1' }));
+        // Same workspace, self → reachable.
+        b.join(input({ agentId: 'B', workspaceId: 'w1', scope: 'self' }));
+        // Other workspace, self → LISTED but unreachable.
         b.join(input({ agentId: 'C', workspaceId: 'w2', slug: 'ws-two', scope: 'self' }));
-        // Other workspace, all → visible.
+        // Other workspace, all → reachable.
         b.join(input({ agentId: 'D', workspaceId: 'w2', slug: 'ws-two', scope: 'all' }));
-        // Other workspace, none → hidden even though it can lurk.
+        // Other workspace, none → LISTED but unreachable (discoverable so a peer
+        // can find it and ask for access; `none` closes the mailbox, not the door).
         b.join(input({ agentId: 'E', workspaceId: 'w2', slug: 'ws-two', scope: 'none' }));
-        // Other workspace, specific [w1] → visible to A.
+        // Other workspace, specific [w1] → reachable by A.
         b.join(
             input({ agentId: 'F', workspaceId: 'w2', slug: 'ws-two', scope: 'specific', scopeWorkspaces: ['w1'] }),
         );
+        // Other workspace, hidden → the true opt-out: omitted entirely.
+        b.join(input({ agentId: 'G', workspaceId: 'w2', slug: 'ws-two', scope: 'hidden' }));
 
-        const ids = b.discoverableFor('A').map((a) => a.agentId).sort();
-        expect(ids).toEqual(['B', 'D', 'F']);
+        const seen = b.discoverableFor('A');
+        const ids = seen.map((a) => a.agentId).sort();
+        // `hidden` is the ONLY scope that disappears; everything else is listed.
+        expect(ids).toEqual(['B', 'C', 'D', 'E', 'F']);
         // Never includes itself in the peer list.
         expect(ids).not.toContain('A');
+
+        const reachable = seen.filter((a) => a.reachable).map((a) => a.agentId).sort();
+        expect(reachable).toEqual(['B', 'D', 'F']);
+        const unavailable = seen.filter((a) => !a.reachable).map((a) => a.agentId).sort();
+        expect(unavailable).toEqual(['C', 'E']);
+    });
+
+    it('redacts the `specific` allow-list from callers it excludes', () => {
+        const b = fresh();
+        b.join(input({ agentId: 'A', workspaceId: 'w1' }));
+        // Admits w9, so A (in w1) is excluded — and must not read the ACL.
+        b.join(
+            input({ agentId: 'S', workspaceId: 'w2', slug: 'ws-two', scope: 'specific', scopeWorkspaces: ['w9'] }),
+        );
+        const entry = b.discoverableFor('A').find((a) => a.agentId === 'S');
+        expect(entry?.reachable).toBe(false);
+        expect(entry?.scopeWorkspaces).toEqual([]);
+        // The human panel still sees the real list — it owns the workstation.
+        expect(b.directory().find((a) => a.agentId === 'S')?.scopeWorkspaces).toEqual(['w9']);
     });
 
     it('the human directory sees every agent regardless of scope', () => {
@@ -130,15 +229,28 @@ describe('AgentInboxBroker — channels', () => {
         expect(fe.memberCount).toBe(2);
     });
 
-    it('a `none`-scope agent can still lurk + broadcast on a channel', async () => {
+    it('a `none`-scope agent broadcasts on a channel, and is listed as unreachable', async () => {
         const b = fresh();
         b.join(input({ agentId: 'A', workspaceId: 'w1', purpose: 'general' }));
         b.join(input({ agentId: 'L', workspaceId: 'w1', purpose: 'general', scope: 'none' }));
-        // Undiscoverable...
-        expect(b.discoverableFor('A').map((a) => a.agentId)).not.toContain('L');
-        // ...but its broadcast still reaches the room.
+        // Discoverable but un-DMable — so a peer receiving its broadcast can now
+        // actually find the sender in the directory instead of it appearing from
+        // an agent that exists nowhere.
+        const entry = b.discoverableFor('A').find((a) => a.agentId === 'L');
+        expect(entry?.reachable).toBe(false);
+        // Its broadcast reaches the room (scope governs DMs, not channels).
         b.send({ fromAgentId: 'L', channelArg: 'general', text: 'lurker speaks' });
         expect((await b.receive('A', { cursor: 0 })).messages.map((m) => m.text)).toEqual(['lurker speaks']);
+    });
+
+    it('a `hidden`-scope agent is omitted from discovery entirely', () => {
+        const b = fresh();
+        b.join(input({ agentId: 'A', workspaceId: 'w1' }));
+        b.join(input({ agentId: 'H', workspaceId: 'w1', scope: 'hidden' }));
+        expect(b.discoverableFor('A').map((a) => a.agentId)).not.toContain('H');
+        expect(b.send({ fromAgentId: 'A', toAgentId: 'H', text: 'x' }).ok).toBe(false);
+        // The human panel still sees it.
+        expect(b.directory().map((a) => a.agentId)).toContain('H');
     });
 
     it('re-keys the channel when an agent changes purpose', () => {
