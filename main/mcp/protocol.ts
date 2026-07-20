@@ -719,14 +719,14 @@ const TERMINAL_ID_PROP = {
     terminalId: {
         type: 'string',
         description:
-            "The terminal to act on. Pass the value of your GENIE_TERMINAL_ID environment variable so Genie targets exactly THIS terminal. If omitted, Genie falls back to the workspace's most-recently-active terminal.",
+            "The terminal to act on. Pass the value of your GENIE_TERMINAL_ID environment variable so Genie targets exactly THIS terminal. It is only optional when the workspace has a SINGLE terminal; with several, omitting it is an ERROR rather than a guess — Genie will not pick one for you.",
     },
 } as const;
 
 const IMDONE_TOOL = {
     name: 'imDone',
     description:
-        "Signal that the agent has finished its work in THIS terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row, and the panel border until you focus it. Pass `terminalId` (from your GENIE_TERMINAL_ID env) to target this exact terminal; omit it to use the workspace's most-recently-active terminal.",
+        "Signal that the agent has finished its work in THIS terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row, and the panel border until you focus it. Pass `terminalId` (from your GENIE_TERMINAL_ID env) to target this exact terminal. Required whenever the workspace has more than one terminal.",
     inputSchema: {
         type: 'object',
         properties: { ...TERMINAL_ID_PROP },
@@ -737,7 +737,7 @@ const IMDONE_TOOL = {
 const CHECK_ISSUES_TOOL = {
     name: 'checkIssues',
     description:
-        "Get a detailed list of the open GitHub Issues, Pull Requests, and SECURITY ALERTS (Dependabot, Code-scanning, Secret-scanning) that Genie's IssueWatch is tracking for THIS terminal's workspace — across every repo in the workspace. Use it to see what needs attention before you finish, or whenever you want the current open items with their numbers, titles, severities, and URLs. Read-only. (The same per-bucket counts are also appended to every `imDone` response.) Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; omit to use the most-recently-active terminal.",
+        "Get a detailed list of the open GitHub Issues, Pull Requests, and SECURITY ALERTS (Dependabot, Code-scanning, Secret-scanning) that Genie's IssueWatch is tracking for THIS terminal's workspace — across every repo in the workspace. Use it to see what needs attention before you finish, or whenever you want the current open items with their numbers, titles, severities, and URLs. Read-only. (The same per-bucket counts are also appended to every `imDone` response.) Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
     inputSchema: {
         type: 'object',
         properties: { ...TERMINAL_ID_PROP },
@@ -748,7 +748,7 @@ const CHECK_ISSUES_TOOL = {
 const OPEN_FILE_TOOL = {
     name: 'openFileForUser',
     description:
-        "Open a file in Genie's BUILT-IN editor for the USER to look at — surfaces it on the Floor in a Code panel. This REUSES an editor panel already open for this workspace (adds the file as a tab and focuses it — or just focuses the tab if the file is already open); if no editor panel is open for the workspace, it opens a NEW one with the file loaded. Use it to put a file in front of the user (a change you made, a result, something to review) instead of only describing it. Benign DISPLAY action — like imDone it just surfaces something, so there is NO approval prompt. `path` is workspace-relative (preferred) or absolute; for the System workspace pass an absolute/system path. Optional `line` reveals a 1-based line. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; omit to use the most-recently-active terminal. Available to System-workspace agents too.",
+        "Open a file in Genie's BUILT-IN editor for the USER to look at — surfaces it on the Floor in a Code panel. This REUSES an editor panel already open for this workspace (adds the file as a tab and focuses it — or just focuses the tab if the file is already open); if no editor panel is open for the workspace, it opens a NEW one with the file loaded. Use it to put a file in front of the user (a change you made, a result, something to review) instead of only describing it. Benign DISPLAY action — like imDone it just surfaces something, so there is NO approval prompt. `path` is workspace-relative (preferred) or absolute; for the System workspace pass an absolute/system path. Optional `line` reveals a 1-based line. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal. Available to System-workspace agents too.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -851,7 +851,7 @@ const INITIALIZE_WORKSPACE_PROMPT = {
 const MANAGE_PROCESS_TOOL = {
     name: 'manageProcess',
     description:
-        "Manage this workspace's background processes (Genie's Processes feature — long-running dev servers, queue workers, SSR, etc., supervised with status + crash auto-restart). Use it to set up or control processes you need while working. Actions: `list` (current processes + status); `create` (register a new one — needs `label` + `command`, optional `repo` to run inside repos/<repo>, optional `autostart` to start it now and on every launch); `start` / `stop` / `restart` (by `processId` from a prior list). Returns the resulting process list. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; omit to use the most-recently-active terminal.",
+        "Manage this workspace's background processes (Genie's Processes feature — long-running dev servers, queue workers, SSR, etc., supervised with status + crash auto-restart). Use it to set up or control processes you need while working. Actions: `list` (current processes + status); `create` (register a new one — needs `label` + `command`, optional `repo` to run inside repos/<repo>, optional `autostart` to start it now and on every launch); `start` / `stop` / `restart` (by `processId` from a prior list). Returns the resulting process list. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -896,7 +896,7 @@ const MANAGE_PROCESS_TOOL = {
 const PROVISION_WORKSPACES_TOOL = {
     name: 'provisionWorkspaces',
     description:
-        "Provision Genie workspaces for the child projects this Ops project governs. ONLY usable from an Ops project's workspace (returns an error elsewhere). An Ops project governs other (child) projects, each with its own `*.agi` envelope repo; this tool stands up a local Genie workspace for any governed child that doesn't have one yet. Actions: `status` (read-only — every governed child with status `present`/`missing`, the `*.agi` URL for each missing one, and `remote` — whether that repo actually EXISTS: `exists` → provisionable, `not-found` → the envelope was never published (use `scaffold`), `auth-required` → this Genie's git credentials can't reach it); `provision` (clone + register a workspace for every missing child whose envelope exists); `scaffold` (for each `remote:'not-found'` child with a registered source repo: build its `<slug>.agi` envelope locally around that source repo, CREATE the GitHub repo, push, and register the workspace — always blocks on your approval in Genie). It's provision-only — it never removes extra or un-governed workspaces. `provision` approval honours the `ops_auto_provision_workspaces` setting; `scaffold` ALWAYS asks. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; omit to use the most-recently-active terminal.",
+        "Provision Genie workspaces for the child projects this Ops project governs. ONLY usable from an Ops project's workspace (returns an error elsewhere). An Ops project governs other (child) projects, each with its own `*.agi` envelope repo; this tool stands up a local Genie workspace for any governed child that doesn't have one yet. Actions: `status` (read-only — every governed child with status `present`/`missing`, the `*.agi` URL for each missing one, and `remote` — whether that repo actually EXISTS: `exists` → provisionable, `not-found` → the envelope was never published (use `scaffold`), `auth-required` → this Genie's git credentials can't reach it); `provision` (clone + register a workspace for every missing child whose envelope exists); `scaffold` (for each `remote:'not-found'` child with a registered source repo: build its `<slug>.agi` envelope locally around that source repo, CREATE the GitHub repo, push, and register the workspace — always blocks on your approval in Genie). It's provision-only — it never removes extra or un-governed workspaces. `provision` approval honours the `ops_auto_provision_workspaces` setting; `scaffold` ALWAYS asks. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
     inputSchema: {
         type: 'object',
         properties: {

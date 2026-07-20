@@ -28,7 +28,7 @@ to the user. It's auto-wired for this workspace (a fixed local URL in
 **Targeting this exact terminal:** Genie sets \`GENIE_TERMINAL_ID\` in your
 environment. Pass it as the \`terminalId\` argument to \`imDone\` /
 \`ForceTheQuestion\` and Genie acts on precisely THIS terminal. If you omit it,
-Genie falls back to the workspace's most-recently-active terminal — usually
+Genie can only infer it when the workspace has a SINGLE terminal — usually
 still the right one, but passing \`GENIE_TERMINAL_ID\` is exact.
 
 **Use these tools whenever you need the user's attention — don't just print and
@@ -198,7 +198,7 @@ item shows its repo, number, title, severity (for security alerts), an unread
 flag, and URL, grouped by kind so it's easy to scan. Read-only. Use it to see
 what needs attention (e.g. before you finish). Pass \`terminalId\` (your
 \`GENIE_TERMINAL_ID\`) for exact workspace resolution; omit to use the
-most-recently-active terminal. It explains clearly when GitHub isn't connected,
+single terminal when there is only one. It explains clearly when GitHub isn't connected,
 the terminal maps to no workspace, or nothing is open. (The same per-bucket
 counts are also appended to every \`imDone\` response — see below.)
 
@@ -208,7 +208,7 @@ terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row
 and the panel border until the user focuses it — so they're drawn to the terminal
 that needs them even from another project. Pass \`terminalId\` (your
 \`GENIE_TERMINAL_ID\`) to target this exact terminal; omit it to use the
-workspace's most-recently-active one. Prefer this over silently ending: a
+workspace's only terminal when unambiguous. Prefer this over silently ending: a
 finished task the user never notices isn't really done. **Better yet, automate
 it** — see "Automate imDone" below to fire this on every finish via a harness
 hook. The response also reports your workspace's open IssueWatch counts (e.g.
@@ -224,7 +224,7 @@ a tab and focuses it; just focuses the tab if it's already open), or opens a NEW
 panel when none is open. Args: \`path\` (workspace-relative — preferred — or
 absolute; System-workspace agents pass an absolute/system path), optional \`line\`
 (1-based) to reveal, and the usual \`terminalId\` (your \`GENIE_TERMINAL_ID\`) for
-exact workspace resolution (omit → most-recently-active terminal). Benign DISPLAY
+exact workspace resolution (required when the workspace has several terminals). Benign DISPLAY
 action — like \`imDone\` it just surfaces something, so there's NO approval prompt.
 Returns whether it reused an existing panel or opened a new one + the resolved
 file. Available to System-workspace agents too.
@@ -348,7 +348,7 @@ multi-project workspace, an agent that waits silently is an agent that's stuck.
 export const GENIE_AGENTS_BRIEF = `You are running inside **Genie** — a desktop UX that hosts many projects at once, each with its own terminals, editors, and background processes. You are **one of several agents in different terminals, and the user is NOT watching this one.** Anything you print here — "done", a question, "I'm blocked" — goes **UNSEEN** and silently stalls the work. The local \`genie\` MCP server (a fixed URL in this workspace's \`.mcp.json\`) is your ONLY channel to the user. This protocol is **which tool to use, WHEN to reach for it, and HOW** — follow it:
 
 - **Fresh or newly converted workspace? → \`initializeWorkspace\`.** Call it once to receive the envelope/repo map and a numbered orientation plan. It is also available as an MCP prompt in clients that expose prompt pickers.
-- **Finished, or handing back? → \`imDone\` — ALWAYS, every time.** The instant you stop (done, blocked-and-waiting, or handing off), call it — otherwise your result sits unseen and the work stalls. Genie glows this terminal across the whole UI until the user looks. HOW: pass \`terminalId\` = your \`GENIE_TERMINAL_ID\` for exact targeting (omit it and Genie falls back to the last-active terminal). NEVER end a turn by just printing "done".
+- **Finished, or handing back? → \`imDone\` — ALWAYS, every time.** The instant you stop (done, blocked-and-waiting, or handing off), call it — otherwise your result sits unseen and the work stalls. Genie glows this terminal across the whole UI until the user looks. HOW: pass \`terminalId\` = your \`GENIE_TERMINAL_ID\` for exact targeting (required once the workspace has more than one terminal — Genie refuses to guess rather than glow the wrong one). NEVER end a turn by just printing "done".
 - **Need a decision, or blocked? → \`ForceTheQuestion\` — NEVER ask in plaintext and wait.** A plaintext question is invisible to the user; you'll hang forever. HOW: ONE call with 1–4 questions, each offering 2–4 options plus an always-available free-text note — **batch every open question together.** It pops an OS-level, always-on-top modal (above every app) and blocks until answered. Pass your \`terminalId\`.
   - **WRITE the question as MARKDOWN, structured.** The modal renders markdown: a short lead sentence, then blank-line paragraphs / bullet lists / **bold** for the key facts. Never one run-on paragraph.
   - **NAME THE ACTOR in every option.** The modal is read by the USER, so bare "I"/"you" invert and confuse. Convention: the agent = "Agent:"/"the agent", the user = "You:"/"you" — lead each option label with the actor (e.g. \`Agent: I create the repo and push\` vs \`You: you create the repo\`).
