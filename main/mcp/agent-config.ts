@@ -580,6 +580,49 @@ function syncAgentsMd(workspacePath: string, enabled: boolean): void {
     }
 }
 
+const GENIE_CODEX_SKILL_PATH = path.join('.agents', 'skills', 'genie', 'SKILL.md');
+
+/** The repo-scoped Codex skill installed with Genie's MCP registration. */
+export function genieCodexSkill(): string {
+    return `---
+name: genie
+description: Use whenever working inside Genie or when Genie MCP tools are available. Orients fresh .agi workspaces and routes completion, user questions, terminals, processes, workspaces, IssueWatch, and agent coordination through Genie.
+---
+
+# Genie workspace workflow
+
+1. In a fresh or newly converted workspace, call \`initializeWorkspace\` and follow its repository-orientation plan.
+2. Use the Genie tools for UI-visible coordination:
+   - \`imDone\` whenever handing work back.
+   - \`ForceTheQuestion\` when only the user can unblock a decision.
+   - \`manageTerminals\` and \`runAgent\` for terminals or coding agents.
+   - \`manageProcess\` for supervised long-running processes, subject to workspace instructions.
+   - \`checkIssues\` for the current IssueWatch feed.
+3. Pass \`GENIE_TERMINAL_ID\` as \`terminalId\` when available so actions target this exact terminal.
+4. Call \`genieGuide\` before using an unfamiliar Genie capability or when you need the complete safety and routing rules.
+
+Always follow the workspace's AGENTS.md; it may impose stronger project-specific rules.
+`;
+}
+
+function syncCodexSkill(workspacePath: string, enabled: boolean): void {
+    const file = path.join(workspacePath, GENIE_CODEX_SKILL_PATH);
+    try {
+        if (!enabled) {
+            if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === genieCodexSkill()) {
+                fs.rmSync(file);
+            }
+            return;
+        }
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        const next = genieCodexSkill();
+        if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === next) return;
+        fs.writeFileSync(file, next);
+    } catch {
+        /* best-effort — MCP registration must still proceed */
+    }
+}
+
 /**
  * Write or remove the genie entry in a workspace's Claude + Cursor MCP configs.
  * `url` is the workspace's stable endpoint (`http://127.0.0.1:<port>/mcp/<tok>`);
@@ -634,6 +677,7 @@ export function writeWorkspaceAgentMcp(
             );
         }
         if (sync.codex) syncCodexServer(workspacePath, GENIE_SERVER_NAME, '', null, false);
+        if (sync.codex) syncCodexSkill(workspacePath, true);
         if (sync.agents) syncAgentsMd(workspacePath, true);
         return;
     }
@@ -650,6 +694,7 @@ export function writeWorkspaceAgentMcp(
     }
     if (sync.codex) {
         syncCodexServer(workspacePath, GENIE_SERVER_NAME, url ?? '', null, enabled);
+        syncCodexSkill(workspacePath, enabled);
     }
     if (sync.agents) syncAgentsMd(workspacePath, enabled);
 }

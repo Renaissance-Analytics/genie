@@ -66,7 +66,7 @@ describe('handleMcpMessage', () => {
         ).toBeNull();
     });
 
-    it('lists provisionWorkspaces for an Ops project (full set; NOT initializeWorkspace — it is a prompt)', async () => {
+    it('lists provisionWorkspaces for an Ops project and the Codex-callable initializeWorkspace tool', async () => {
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 2, method: 'tools/list' },
             ctx({ isOpsProject: vi.fn().mockResolvedValue(true) }),
@@ -86,9 +86,9 @@ describe('handleMcpMessage', () => {
             'openFileForUser',
             'setEnv',
             'checkEnv',
+            'initializeWorkspace',
             'genieGuide',
         ]);
-        expect(tools.map((t) => t.name)).not.toContain('initializeWorkspace');
     });
 
     it('OMITS the ops-only provisionWorkspaces tool for a non-Ops workspace', async () => {
@@ -110,6 +110,7 @@ describe('handleMcpMessage', () => {
             'openFileForUser',
             'setEnv',
             'checkEnv',
+            'initializeWorkspace',
             'genieGuide',
         ]);
     });
@@ -177,6 +178,40 @@ describe('handleMcpMessage', () => {
         expect(text).toContain('acme/api'); // the repo's GitHub ref
         expect(text).toContain('How to learn this workspace'); // the numbered plan
         expect(text).toContain('"isAgiEnvelope": true'); // machine-parseable JSON block
+    });
+
+    it('tools/call initializeWorkspace returns the map + plan for clients without MCP prompts', async () => {
+        const describeWorkspace = vi.fn().mockResolvedValue({
+            root: '/ws/demo.agi',
+            isAgiEnvelope: true,
+            hasProjectJson: true,
+            hasGitmodules: true,
+            knowledgeDir: '/ws/demo.agi/.ai/knowledge',
+            envelopeAgents: '/ws/demo.agi/AGENTS.md',
+            envelopeClaude: '/ws/demo.agi/CLAUDE.md',
+            repos: [
+                {
+                    name: 'api',
+                    path: '/ws/demo.agi/repos/api',
+                    owner: 'acme',
+                    repo: 'api',
+                    orientation: { readme: true, agents: false, claude: false, manifests: ['composer.json'] },
+                },
+            ],
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 221,
+                method: 'tools/call',
+                params: { name: 'initializeWorkspace', arguments: {} },
+            },
+            ctx({ terminalId: 'term-X', describeWorkspace }),
+        );
+        expect(describeWorkspace).toHaveBeenCalledWith('term-X');
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('acme/api');
+        expect(text).toContain('How to learn this workspace');
     });
 
     it('prompts/get explains when the terminal maps to no workspace', async () => {

@@ -828,12 +828,17 @@ const GUIDE_TOOL = {
 };
 
 /**
- * The workspace-orientation PROMPT (was a tool through beta.3). It's USER-run —
- * the user invokes it from their client's prompt/slash-command UI on first boot
- * of a converted workspace — not something the agent calls autonomously. So it
- * lives under MCP prompts (prompts/list + prompts/get), not tools.
+ * Workspace orientation is exposed BOTH ways: as an MCP prompt for clients with
+ * prompt UIs and as a normal tool for clients such as Codex that surface MCP
+ * tools but do not give the user a prompt picker.
  */
 export const INITIALIZE_WORKSPACE_PROMPT_NAME = 'initializeWorkspace';
+const INITIALIZE_WORKSPACE_TOOL = {
+    name: INITIALIZE_WORKSPACE_PROMPT_NAME,
+    description:
+        'Orient yourself in the current Genie workspace. Returns a map of the .agi envelope and every repo (paths, GitHub refs, orientation files), followed by a numbered learning plan. Call this first in a fresh or newly converted workspace.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+};
 const INITIALIZE_WORKSPACE_PROMPT = {
     name: INITIALIZE_WORKSPACE_PROMPT_NAME,
     title: 'Initialize workspace',
@@ -1566,6 +1571,7 @@ export async function handleMcpMessage(
                     OPEN_FILE_TOOL,
                     SET_ENV_TOOL,
                     CHECK_ENV_TOOL,
+                    INITIALIZE_WORKSPACE_TOOL,
                     GUIDE_TOOL,
                     ...pluginTools,
                 ],
@@ -1638,6 +1644,15 @@ export async function handleMcpMessage(
             if (params.name === 'genieGuide') {
                 return ok(msg.id, {
                     content: [{ type: 'text', text: GENIE_MCP_GUIDE }],
+                });
+            }
+            if (params.name === INITIALIZE_WORKSPACE_PROMPT_NAME) {
+                const map = await ctx.describeWorkspace(ctx.terminalId);
+                const text = workspacePromptMessages(map)
+                    .map((message) => message.content.text)
+                    .join('\n\n');
+                return ok(msg.id, {
+                    content: [{ type: 'text', text }],
                 });
             }
             if (params.name === 'manageProcess') {

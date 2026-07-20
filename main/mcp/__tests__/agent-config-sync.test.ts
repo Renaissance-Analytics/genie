@@ -32,6 +32,7 @@ const WS = path.join('/ws', 'demo');
 const mcpJson = path.join(WS, '.mcp.json');
 const cursorJson = path.join(WS, '.cursor', 'mcp.json');
 const codexToml = path.join(WS, '.codex', 'config.toml');
+const codexSkill = path.join(WS, '.agents', 'skills', 'genie', 'SKILL.md');
 const URL = 'http://127.0.0.1:51717/mcp/tok';
 
 beforeEach(() => {
@@ -47,6 +48,8 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
         expect(files.has(cursorJson)).toBe(true);
         expect(files.get(codexToml)).toContain('[mcp_servers.genie]');
         expect(files.get(codexToml)).toContain(`url = '${URL}'`);
+        expect(files.get(codexSkill)).toContain('name: genie');
+        expect(files.get(codexSkill)).toContain('initializeWorkspace');
         expect(JSON.parse(files.get(mcpJson)!).mcpServers.genie.url).toBe(URL);
     });
 

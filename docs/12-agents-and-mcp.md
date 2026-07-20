@@ -32,6 +32,7 @@ The MCP server is enabled per workspace and runs on a fixed loopback port (see
 
 | Tool | What it does for you |
 |------|----------------------|
+| **initializeWorkspace** | Maps a fresh `.agi` envelope and its repos, then returns a numbered orientation plan. Also remains available as an MCP prompt for clients with prompt pickers. |
 | **imDone** | Glows this terminal in the sidebar when the agent is done or waiting. |
 | **ForceTheQuestion** | Pops an always-on-top modal to ask you 1–4 questions; blocks until you answer. |
 | **manageProcess** | Runs and supervises background processes (dev servers, workers) — see **[Processes](14-processes.md)**. |
@@ -57,5 +58,7 @@ and attention tools (`imDone`, `ForceTheQuestion`) run freely.
 > URL. Claude Code reads it from `.mcp.json`, Cursor reads `.cursor/mcp.json`,
 > and Codex Agent Terminals launched by Genie receive equivalent project-scoped
 > `-c mcp_servers...` overrides because Codex does not currently read a
-> workspace-local MCP config file. Turn it on and set the port in
+> workspace-local MCP config file. Genie also writes a repo-scoped Codex skill
+> at `.agents/skills/genie/SKILL.md`, so Codex can discover the workflow without
+> relying on MCP prompt UI. Turn it on and set the port in
 > **[Settings → Agent MCP server](08-settings.md)**.

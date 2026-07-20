@@ -36,14 +36,14 @@ wait.** Assume they can't see your terminal until you pull them to it.
 
 ## Orientation prompt (user-run, not a tool)
 
-**\`initializeWorkspace\`** is an MCP **prompt** the USER runs from their client's
-prompt / slash-command UI on first boot of a fresh or newly-converted Genie
-workspace — you do NOT call it yourself. When the user runs it, it hands you a
-MAP of the workspace — the \`.agi\` envelope, its \`.ai/knowledge\`, and (the main
-resource) every repo under \`repos/\` with its path, GitHub owner/repo, and which
-orientation files exist (README, AGENTS.md, CLAUDE.md, manifest) — plus a
-numbered plan for learning the project. Follow that plan with your own file
-tools; the repos are the primary resource.
+**\`initializeWorkspace\`** is both an agent-callable MCP tool and an MCP prompt.
+Call the tool on first boot of a fresh or newly-converted Genie workspace.
+Clients with prompt/slash-command UIs may invoke the prompt instead. It hands
+you a MAP of the workspace — the \`.agi\` envelope, its \`.ai/knowledge\`, and
+(the main resource) every repo under \`repos/\` with its path, GitHub owner/repo,
+and which orientation files exist (README, AGENTS.md, CLAUDE.md, manifest) —
+plus a numbered plan for learning the project. Follow that plan with your own
+file tools; the repos are the primary resource.
 
 ## Tools
 
@@ -338,8 +338,8 @@ multi-project workspace, an agent that waits silently is an agent that's stuck.
 ## Notes
 - The server is reached at a fixed local URL written into this workspace's
   \`.mcp.json\`. Pass \`GENIE_TERMINAL_ID\` as \`terminalId\` for exact targeting.
-- \`initializeWorkspace\` is an MCP **prompt** (\`prompts/list\` / \`prompts/get\`),
-  user-run — not in \`tools/list\`.
+- \`initializeWorkspace\` is available through both \`tools/call\` and MCP prompts
+  (\`prompts/list\` / \`prompts/get\`) for client compatibility.
 - More tools may appear over time, some contextual to the project type. Re-read this
   guide (or \`tools/list\`) if you need the current set.
 `;
@@ -347,6 +347,7 @@ multi-project workspace, an agent that waits silently is an agent that's stuck.
 /** Brief body synced into a workspace's AGENTS.md (points back to the full guide). */
 export const GENIE_AGENTS_BRIEF = `You are running inside **Genie** — a desktop UX that hosts many projects at once, each with its own terminals, editors, and background processes. You are **one of several agents in different terminals, and the user is NOT watching this one.** Anything you print here — "done", a question, "I'm blocked" — goes **UNSEEN** and silently stalls the work. The local \`genie\` MCP server (a fixed URL in this workspace's \`.mcp.json\`) is your ONLY channel to the user. This protocol is **which tool to use, WHEN to reach for it, and HOW** — follow it:
 
+- **Fresh or newly converted workspace? → \`initializeWorkspace\`.** Call it once to receive the envelope/repo map and a numbered orientation plan. It is also available as an MCP prompt in clients that expose prompt pickers.
 - **Finished, or handing back? → \`imDone\` — ALWAYS, every time.** The instant you stop (done, blocked-and-waiting, or handing off), call it — otherwise your result sits unseen and the work stalls. Genie glows this terminal across the whole UI until the user looks. HOW: pass \`terminalId\` = your \`GENIE_TERMINAL_ID\` for exact targeting (omit it and Genie falls back to the last-active terminal). NEVER end a turn by just printing "done".
 - **Need a decision, or blocked? → \`ForceTheQuestion\` — NEVER ask in plaintext and wait.** A plaintext question is invisible to the user; you'll hang forever. HOW: ONE call with 1–4 questions, each offering 2–4 options plus an always-available free-text note — **batch every open question together.** It pops an OS-level, always-on-top modal (above every app) and blocks until answered. Pass your \`terminalId\`.
   - **WRITE the question as MARKDOWN, structured.** The modal renders markdown: a short lead sentence, then blank-line paragraphs / bullet lists / **bold** for the key facts. Never one run-on paragraph.

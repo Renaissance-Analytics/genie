@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     applyAgentsSection,
+    genieCodexSkill,
     applyCodexMcpLaunchArgs,
     applyCodexServerBlock,
     applyGenieServer,
@@ -194,12 +195,11 @@ describe('applyAgentsSection', () => {
         expect(out).toContain(BEGIN);
         expect(out).toContain(END);
         expect(out).toContain('genieGuide');
-        // beta.5: the block lists ONLY agent-callable tools — the user-run
-        // initializeWorkspace prompt is gone; imDone/ForceTheQuestion/manageProcess stay.
+        // Orientation is callable by agents as well as available as an MCP prompt.
         expect(out).toContain('imDone');
         expect(out).toContain('ForceTheQuestion');
         expect(out).toContain('manageProcess');
-        expect(out).not.toContain('initializeWorkspace');
+        expect(out).toContain('initializeWorkspace');
     });
 
     it('is idempotent — re-running does not duplicate the block', () => {
@@ -270,6 +270,18 @@ describe('applyAgentsSection', () => {
         expect(out).not.toContain('### Ai.System');
         expect(out).toContain('# P');
         expect(out).toContain('body');
+    });
+});
+
+describe('genieCodexSkill', () => {
+    it('ships a valid repo-scoped Codex skill that teaches the Genie MCP workflow', () => {
+        const out = genieCodexSkill();
+        expect(out).toMatch(/^---\nname: genie\n/);
+        expect(out).toContain('description:');
+        expect(out).toContain('initializeWorkspace');
+        expect(out).toContain('imDone');
+        expect(out).toContain('ForceTheQuestion');
+        expect(out).toContain('genieGuide');
     });
 });
 
