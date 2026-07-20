@@ -50,7 +50,12 @@ const LOOPBACK = '127.0.0.1';
  * already closed. Dedicated agents (not the global pool) also stop unrelated
  * traffic from poisoning these dials.
  */
-const CARRIER_IDLE_TIMEOUT_MS = 2_000;
+export const CARRIER_IDLE_TIMEOUT_MS = 2_000;
+
+/** Node's default for BOTH `http.globalAgent.timeout` and
+ *  `http.Server.keepAliveTimeout`. Their equality is the race; exported so the
+ *  test can assert our window is STRICTLY below it. */
+export const NODE_DEFAULT_IDLE_TIMEOUT_MS = 5_000;
 
 /** Dedicated pools for carrier dials — never `globalAgent`. */
 export const carrierHttpAgent = new http.Agent({

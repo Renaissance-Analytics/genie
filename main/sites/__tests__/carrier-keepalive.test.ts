@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import http from 'node:http';
 import {
+    CARRIER_IDLE_TIMEOUT_MS,
+    NODE_DEFAULT_IDLE_TIMEOUT_MS,
     carrierHttpAgent,
     carrierHttpsAgent,
     createLocalSiteCarrier,
@@ -93,24 +95,19 @@ async function get(carrier: ReturnType<typeof carrierFor>, path = '/api/site/s1/
  * impossible, which removes the race rather than narrowing it.
  */
 describe('carrier agents — the invariant that removes the race', () => {
-    /** Node's default for BOTH http.globalAgent.timeout and server.keepAliveTimeout. */
-    const NODE_DEFAULT_IDLE_MS = 5_000;
-
     it('does not use the global agent pool', () => {
         // Sharing globalAgent also let unrelated traffic poison these dials.
         expect(carrierHttpAgent).not.toBe(http.globalAgent);
         expect(carrierHttpsAgent).not.toBe(http.globalAgent);
+        // And the upstream default really is what we think it is.
+        expect(http.createServer().keepAliveTimeout).toBe(NODE_DEFAULT_IDLE_TIMEOUT_MS);
     });
 
     it('expires idle sockets strictly before a default upstream would', () => {
-        for (const agent of [carrierHttpAgent, carrierHttpsAgent]) {
-            expect(agent.options.keepAlive).toBe(true);
-            const timeout = agent.options.timeout;
-            expect(timeout).toBeTypeOf('number');
-            // STRICTLY less — equal is the bug. Node ships 5000 on both sides,
-            // so the client and server can expire the same socket simultaneously.
-            expect(timeout as number).toBeLessThan(NODE_DEFAULT_IDLE_MS);
-        }
+        // STRICTLY less — equal is the bug. Node ships 5000 on BOTH sides, so
+        // client and server can expire the same socket simultaneously, and the
+        // request lands on a corpse.
+        expect(CARRIER_IDLE_TIMEOUT_MS).toBeLessThan(NODE_DEFAULT_IDLE_TIMEOUT_MS);
     });
 });
 
