@@ -122,6 +122,10 @@ export default function IssueWatchFlyout({
     const [repos, setRepos] = useState<WatchRepoView[]>([]);
     const [feed, setFeed] = useState<WatchFeedItem[]>([]);
     const [connected, setConnected] = useState(true);
+    // Whether Tynn actually reported THIS workspace. Defaults true so an older
+    // host that predates the field renders exactly as before rather than
+    // accusing every workspace of being untracked.
+    const [knownToServer, setKnownToServer] = useState(true);
     /** Worst read error across the workspace's enabled repos (null = all ok). */
     const [error, setError] = useState<WatchFetchError | null>(null);
     /** Raw detail (HTTP status + message) behind `error`, for the precise copy. */
@@ -174,8 +178,13 @@ export default function IssueWatchFlyout({
                     needsReauth: false,
                     missingCapabilities: [],
                     serviceState: 'disconnected' as const,
+                    // A failed status read tells us nothing about server-side
+                    // knowledge — don't accuse the workspace of being untracked
+                    // on top of an already-surfaced disconnection.
+                    knownToServer: true,
                 }));
             setConnected(!!st.connected);
+            setKnownToServer(st.knownToServer ?? true);
             setError(st.error ?? null);
             setDetail(st.detail ?? null);
             setNeedsReauth(!!st.needsReauth);
@@ -471,6 +480,18 @@ export default function IssueWatchFlyout({
                                                 : 'the watched repos',
                                             detail,
                                         )}
+                                    </div>
+                                ) : !knownToServer ? (
+                                    // Connected, but Tynn never reported THIS
+                                    // workspace — a reconcile listing zero
+                                    // workspaces is still a successful delivery.
+                                    // Saying "nothing open" here is a lie that hid
+                                    // a completely dead feed (genie#22).
+                                    <div className="iw-warn">
+                                        Tynn isn’t tracking this workspace yet, so there’s
+                                        nothing to show. Check that it’s linked to a Tynn
+                                        project and that the project has repositories
+                                        registered for IssueWatch.
                                     </div>
                                 ) : (
                                     <div className="iw-muted">

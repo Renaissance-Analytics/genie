@@ -275,6 +275,14 @@ export interface WorkspaceWatchStatus {
      */
     missingCapabilities?: GithubCapabilityKey[];
     serviceState?: 'connecting' | 'connected' | 'signed-out' | 'disabled' | 'disconnected';
+    /**
+     * Whether Tynn actually reported a snapshot for THIS workspace. `connected`
+     * only means the transport is healthy — a reconcile listing zero workspaces
+     * is still a successful delivery, so without this a workspace the server has
+     * never heard of looked identical to one with nothing open. Optional so an
+     * older host that predates the field degrades gracefully.
+     */
+    knownToServer?: boolean;
 }
 
 /** Issue Watch: one feed item (issue / PR / security alert). */

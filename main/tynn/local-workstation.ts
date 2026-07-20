@@ -54,9 +54,10 @@ export interface BroadcastConfig {
  * key + cluster (the same `VITE_PUSHER_APP_KEY` its own web bundle already ships —
  * a Pusher app key is public, it rides every browser) via a small session-authed
  * endpoint, so a local workstation subscribes without any build-time config. Until
- * that endpoint is deployed `fromTynn` yields null and the IssueWatch push simply
- * stays off — IssueWatch falls back to its local GitHub poller, so there is no
- * regression, just no server-fed acceleration yet.
+ * that endpoint is deployed `fromTynn` yields null and the IssueWatch push stays
+ * off — which means NO FEED AT ALL. There is no local-poller fallback: Tynn is the
+ * only IssueWatch source since the hard cut. (The comment here used to claim a
+ * fallback existed; it did not, and that claim helped hide a dead feed — genie#22.)
  */
 export async function resolveBroadcastConfig(deps: {
     env?: NodeJS.ProcessEnv;
