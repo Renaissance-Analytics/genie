@@ -15,6 +15,7 @@ import {
     HostClient,
     isHostBacked,
     ptyHostScriptPath,
+    readPidfile,
     setActiveBackend,
     socketPathFor,
 } from '@particle-academy/fancy-term-host';
@@ -509,11 +510,25 @@ export function resolveMaterializedHostScript(): string | null {
  */
 const DETACHED_MODE_FILE = 'ptyhost-mode';
 
-export function writeDetachedMode(mode: 'standalone' | 'electron'): void {
+interface DetachedHostIdentity {
+    mode: 'standalone' | 'electron';
+    pid: number;
+    scriptPath: string;
+}
+
+export function writeDetachedMode(
+    mode: 'standalone' | 'electron',
+    pid: number | undefined,
+    scriptPath: string,
+): void {
     try {
         fs.writeFileSync(
             path.join(app.getPath('userData'), DETACHED_MODE_FILE),
-            mode,
+            JSON.stringify({
+                mode,
+                pid: pid ?? 0,
+                scriptPath,
+            } satisfies DetachedHostIdentity),
         );
     } catch {
         /* best-effort */
@@ -521,17 +536,52 @@ export function writeDetachedMode(mode: 'standalone' | 'electron'): void {
 }
 
 /**
- * True unless we POSITIVELY know the detached host runs on the standalone Node.
- * Conservative on purpose: a missing/unknown marker is treated as pinning, so an
- * update still kills + warns rather than risk a stalled binary overwrite. Only a
- * confirmed 'standalone' marker flips a detached host to "survives the update".
+ * Decide whether the ACTIVE detached host can lock the install tree.
+ *
+ * The old marker was only the word `standalone`. That proved which node.exe the
+ * most recent spawn attempt used, but not WHICH host script the incumbent
+ * process had loaded. A beta.174 host could therefore keep running the unpacked
+ * install-dir script after beta.181 materialized a safe user-data copy; every
+ * later update trusted the stale marker, left that host alive, and NSIS killed
+ * it when its mapped conpty.dll blocked replacement.
+ *
+ * A safe marker must identify the live pid AND its script under the dedicated
+ * user-data pty-host tree. Anything legacy, stale, malformed, Electron-backed,
+ * or install-dir-backed is conservatively treated as pinning so the next update
+ * snapshots and replaces it once with a correctly materialized host.
  */
+export function detachedModePinsInstallTree(
+    markerContents: string,
+    activePid: number | null,
+    userDataDir: string,
+): boolean {
+    try {
+        const marker = JSON.parse(markerContents) as Partial<DetachedHostIdentity>;
+        if (marker.mode !== 'standalone') return true;
+        if (!activePid || marker.pid !== activePid) return true;
+        if (typeof marker.scriptPath !== 'string' || !marker.scriptPath.trim()) return true;
+
+        // Tests exercise Windows paths while Vitest runs in plain Node. Select
+        // the matching path implementation instead of depending on the host OS.
+        const paths = /^[A-Za-z]:[\\/]/.test(userDataDir) ? path.win32 : path;
+        const safeRoot = paths.resolve(userDataDir, 'pty-host');
+        const script = paths.resolve(marker.scriptPath);
+        const relative = paths.relative(safeRoot, script);
+        return relative === '' || relative.startsWith('..') || paths.isAbsolute(relative);
+    } catch {
+        return true;
+    }
+}
+
 export function detachedHostPinsBinary(): boolean {
     try {
-        const m = fs
-            .readFileSync(path.join(app.getPath('userData'), DETACHED_MODE_FILE), 'utf8')
-            .trim();
-        return m !== 'standalone';
+        const userDataDir = app.getPath('userData');
+        const marker = fs.readFileSync(
+            path.join(userDataDir, DETACHED_MODE_FILE),
+            'utf8',
+        );
+        const pid = readPidfile(userDataDir)?.pid ?? null;
+        return detachedModePinsInstallTree(marker, pid, userDataDir);
     } catch {
         return true;
     }

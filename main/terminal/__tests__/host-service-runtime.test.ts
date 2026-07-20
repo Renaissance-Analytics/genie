@@ -47,6 +47,7 @@ import {
     runKeyVbsContents,
     runKeyRegAddArgv,
     isServiceBlocked,
+    detachedModePinsInstallTree,
     HOST_SERVICE_LABEL,
 } from '../host-service';
 
@@ -329,6 +330,62 @@ describe('materializeHostToUserData — co-located node-pty so the host survives
         expect(
             materializeHostToUserData({ ...src, hostKey: hostKeyFor('0.3.0', '1.1.0') }, base),
         ).toBeNull();
+    });
+});
+
+describe('detachedModePinsInstallTree — active-host identity, not a stale launch-mode guess', () => {
+    const userData = 'C:\\Users\\g\\AppData\\Roaming\\genie';
+    const materializedScript =
+        'C:\\Users\\g\\AppData\\Roaming\\genie\\pty-host\\fth0.3.0-npty1.1.0\\node_modules\\@particle-academy\\fancy-term-host\\dist\\pty-host.js';
+
+    it('treats the legacy plain standalone marker as unsafe', () => {
+        // beta.174 wrote only "standalone". A host started then can still be
+        // running the INSTALL-DIR script even after beta.181 materializes the
+        // safe copy, so trusting this marker repeats the restart every update.
+        expect(detachedModePinsInstallTree('standalone', 42696, userData)).toBe(true);
+    });
+
+    it('allows a standalone host only when the marker identifies the live pid and user-data script', () => {
+        expect(
+            detachedModePinsInstallTree(
+                JSON.stringify({
+                    mode: 'standalone',
+                    pid: 42696,
+                    scriptPath: materializedScript,
+                }),
+                42696,
+                userData,
+            ),
+        ).toBe(false);
+    });
+
+    it('rejects a stale pid marker even when its script path is safe', () => {
+        expect(
+            detachedModePinsInstallTree(
+                JSON.stringify({
+                    mode: 'standalone',
+                    pid: 11111,
+                    scriptPath: materializedScript,
+                }),
+                42696,
+                userData,
+            ),
+        ).toBe(true);
+    });
+
+    it('rejects an install-dir script even on standalone Node', () => {
+        expect(
+            detachedModePinsInstallTree(
+                JSON.stringify({
+                    mode: 'standalone',
+                    pid: 42696,
+                    scriptPath:
+                        'C:\\Users\\g\\AppData\\Local\\Programs\\Genie\\resources\\app.asar.unpacked\\node_modules\\@particle-academy\\fancy-term-host\\dist\\pty-host.js',
+                }),
+                42696,
+                userData,
+            ),
+        ).toBe(true);
     });
 });
 

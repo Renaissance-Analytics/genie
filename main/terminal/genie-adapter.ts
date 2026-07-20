@@ -176,7 +176,7 @@ export function electronHostSpawner(_dirname: string): HostSpawner {
                     env: standaloneEnv,
                 });
                 child.unref();
-                writeDetachedMode('standalone');
+                writeDetachedMode('standalone', child.pid, script);
                 logHostService(
                     `detached host spawned on standalone Node — ${rt.nodePath}`,
                 );
@@ -200,7 +200,7 @@ export function electronHostSpawner(_dirname: string): HostSpawner {
                 },
             });
             child.unref();
-            writeDetachedMode('electron');
+            writeDetachedMode('electron', child.pid, script);
             logHostService(
                 'detached host spawned on Genie binary (no standalone runtime shipped)',
             );
