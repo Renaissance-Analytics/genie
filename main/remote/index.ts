@@ -553,7 +553,22 @@ async function syncForwardedQuestions(conn: RemoteConnection): Promise<void> {
     // Today every connection is a control driver; the grant model (later phase)
     // supplies readonly, at which point this guard stops forwarding actionable
     // prompts to a viewer.
-    if (!shouldForwardToDriver({ connected: true, capability: 'control' })) return;
+    // Not forwardable (readonly driver, or the host's kill-switch is engaged and
+    // will 423 every answer) ⇒ raise nothing, and RETRACT anything already raised,
+    // since the lock can engage while a forwarded modal is open. Dropping it at the
+    // SOURCE mirrors remoteTerminalInput dropping keystrokes, and keeps the prompt
+    // where it can actually be answered: on the host. Nothing is lost — unlocking
+    // re-syncs (setConnControl) and the still-pending question comes back.
+    if (
+        !shouldForwardToDriver({
+            connected: true,
+            capability: 'control',
+            controlLocked: conn.controlLocked,
+        })
+    ) {
+        dismissForwardedQuestionsForConn(conn.connKey);
+        return;
+    }
     let pending: PendingQuestion[];
     try {
         const data = (await connRequest(conn, '/api/questions')) as {
@@ -692,6 +707,13 @@ function setConnControl(conn: RemoteConnection, locked: boolean): void {
     if (conn.controlLocked === locked) return;
     conn.controlLocked = locked;
     emitToConn(conn, 'remote:control', { locked });
+    // Keep forwarded questions consistent with who currently holds control. The
+    // lock can engage while a forwarded modal is already open on the driver, and
+    // that modal is now unanswerable (the host refuses the answer POST) — so
+    // retract it rather than leave a prompt that silently cannot be submitted.
+    // Unlocking re-syncs, bringing anything still pending back.
+    if (locked) dismissForwardedQuestionsForConn(conn.connKey);
+    else void syncForwardedQuestions(conn);
 }
 
 /** Re-read the host's current control (kill-switch) state over the authed bridge
