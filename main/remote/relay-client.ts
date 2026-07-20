@@ -278,9 +278,10 @@ export class RelayMemberClient {
         terminalId: string,
         onData: (msg: string) => void,
         workspaceId?: string,
+        multiplex = false,
     ): { send: (input: string) => void; close: () => void } {
         if (!this.mux) throw new Error('relay client not connected');
-        return this.mux.openTerm(terminalId, onData, workspaceId);
+        return this.mux.openTerm(terminalId, onData, workspaceId, multiplex);
     }
 
     /** Open a site-proxy stream over the `site` channel (serve-local-sites Phase

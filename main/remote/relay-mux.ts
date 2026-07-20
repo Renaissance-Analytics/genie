@@ -51,7 +51,17 @@ export class RelayFrameMux {
         { resolve: (r: RestReplyPayload) => void; reject: (e: Error) => void }
     >();
     private eventsHandler: ((msg: string) => void) | null = null;
-    private termHandler: ((msg: string) => void) | null = null;
+    /**
+     * Live term streams keyed by their `reqId`, so a workstation can drive MANY
+     * terminals at once — the same shape `siteStreams` has always had. This was a
+     * single handler, which is why only the most-recently-attached terminal
+     * streamed and every other one went dead.
+     *
+     * The empty-string key is the LEGACY stream: a host proxy without
+     * `termMultiplex` keys everything as `sid:term`, so we open exactly one
+     * un-keyed stream and route its (reqId-less) frames here.
+     */
+    private readonly termStreams = new Map<string, (msg: string) => void>();
     /** Concurrent site-proxy streams, keyed by reqId (Phase E). Unlike
      *  events/term (single-stream), a page load runs many at once. */
     private readonly siteStreams = new Map<string, SiteStreamHandlers>();
@@ -90,16 +100,27 @@ export class RelayFrameMux {
      *  compatible: an old host ignores the field, and a term opened WITHOUT it
      *  (system/unattached terminal, or an old member) fails closed to `host:all`
      *  on the host side. */
+    /**
+     * `multiplex` reflects the HOST proxy's advertised `termMultiplex` capability
+     * (see RELAY_FEATURES_PATH). With it, each stream gets its own `reqId` and many
+     * terminals run concurrently. Without it the host would key every stream as
+     * `sid:term` and a second concurrent open would silently collide, so we stay on
+     * one un-keyed legacy stream — the caller is responsible for keeping to one.
+     */
     openTerm(
         terminalId: string,
         onData: (msg: string) => void,
         workspaceId?: string,
+        multiplex = false,
     ): { send: (input: string) => void; close: () => void } {
-        this.termHandler = onData;
+        const reqId = multiplex ? `t${++this.reqSeq}` : '';
+        const tag = reqId ? { reqId } : {};
+        this.termStreams.set(reqId, onData);
         this.send({
             kind: 'open',
             channel: 'term',
             sid: this.sid,
+            ...tag,
             payload: {
                 // `client=desktop` — the only caller here is a remote Genie window,
                 // so the host sizes the pty to our grid exactly rather than applying
@@ -110,10 +131,10 @@ export class RelayFrameMux {
         });
         return {
             send: (input: string) =>
-                this.send({ kind: 'data', channel: 'term', sid: this.sid, payload: input }),
+                this.send({ kind: 'data', channel: 'term', sid: this.sid, ...tag, payload: input }),
             close: () => {
-                this.termHandler = null;
-                this.send({ kind: 'close', channel: 'term', sid: this.sid });
+                this.termStreams.delete(reqId);
+                this.send({ kind: 'close', channel: 'term', sid: this.sid, ...tag });
             },
         };
     }
@@ -199,7 +220,9 @@ export class RelayFrameMux {
         }
         if (frame.channel === 'term') {
             if (frame.kind === 'data' && typeof frame.payload === 'string') {
-                this.termHandler?.(frame.payload);
+                // Route by the stream's reqId. A host that echoes none is the legacy
+                // single-stream proxy, whose frames belong to the '' stream.
+                this.termStreams.get(frame.reqId ?? '')?.(frame.payload);
             }
             // close/error: the stream is gone; the handler stops receiving.
             return;
@@ -213,6 +236,6 @@ export class RelayFrameMux {
         for (const [, h] of this.siteStreams) h.onError?.(reason);
         this.siteStreams.clear();
         this.eventsHandler = null;
-        this.termHandler = null;
+        this.termStreams.clear();
     }
 }

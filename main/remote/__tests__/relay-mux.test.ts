@@ -110,3 +110,83 @@ describe('RelayFrameMux — link drop', () => {
         await expect(p).rejects.toThrow(/relay connection closed/);
     });
 });
+
+/**
+ * MULTI-TERMINAL over the relay. The mux carried ONE term stream per session — a
+ * single `termHandler` field — so attaching a second terminal clobbered the first
+ * and every terminal past the most-recently-attached one went dead. `site` had
+ * solved this from the start by keying its streams on `reqId`; term simply never
+ * caught up.
+ *
+ * `multiplex` mirrors the HOST proxy's advertised capability, so these also pin
+ * the fallback: against an old proxy (which keys every stream `sid:term`) we must
+ * NOT start tagging frames, or they would collide with nothing compensating.
+ */
+describe('RelayFrameMux — concurrent term streams', () => {
+    it('routes each terminal to its OWN handler when multiplexing', () => {
+        const { mux, sent } = makeMux();
+        const a: string[] = [];
+        const b: string[] = [];
+        mux.openTerm('term-a', (m) => a.push(m), undefined, true);
+        mux.openTerm('term-b', (m) => b.push(m), undefined, true);
+
+        const idA = sent[0].reqId!;
+        const idB = sent[1].reqId!;
+        expect(idA).toBeTruthy();
+        expect(idA).not.toBe(idB);
+
+        mux.handle({ kind: 'data', channel: 'term', sid: 'sid-1', reqId: idB, payload: 'to-b' });
+        mux.handle({ kind: 'data', channel: 'term', sid: 'sid-1', reqId: idA, payload: 'to-a' });
+        // The whole bug in one assertion: b's output must not land in a.
+        expect(a).toEqual(['to-a']);
+        expect(b).toEqual(['to-b']);
+    });
+
+    it('tags input and close with the stream reqId so the host routes them', () => {
+        const { mux, sent } = makeMux();
+        const t = mux.openTerm('term-a', () => {}, undefined, true);
+        const reqId = sent[0].reqId!;
+        t.send('ls\n');
+        expect(sent[1]).toMatchObject({ kind: 'data', channel: 'term', reqId, payload: 'ls\n' });
+        t.close();
+        expect(sent[2]).toMatchObject({ kind: 'close', channel: 'term', reqId });
+    });
+
+    it('closing one stream leaves the other receiving', () => {
+        const { mux, sent } = makeMux();
+        const a: string[] = [];
+        const b: string[] = [];
+        const sa = mux.openTerm('term-a', (m) => a.push(m), undefined, true);
+        mux.openTerm('term-b', (m) => b.push(m), undefined, true);
+        const idA = sent[0].reqId!;
+        const idB = sent[1].reqId!;
+
+        sa.close();
+        mux.handle({ kind: 'data', channel: 'term', sid: 'sid-1', reqId: idA, payload: 'late-a' });
+        mux.handle({ kind: 'data', channel: 'term', sid: 'sid-1', reqId: idB, payload: 'to-b' });
+        expect(a).toEqual([]); // closed → dropped
+        expect(b).toEqual(['to-b']);
+    });
+
+    it('sends NO reqId against a host without termMultiplex (legacy single stream)', () => {
+        const { mux, sent } = makeMux();
+        const out: string[] = [];
+        const t = mux.openTerm('term-a', (m) => out.push(m));
+        expect(sent[0].reqId).toBeUndefined();
+        t.send('x');
+        expect(sent[1].reqId).toBeUndefined();
+        // An old proxy echoes no reqId either; those frames must still route.
+        mux.handle({ kind: 'data', channel: 'term', sid: 'sid-1', payload: 'legacy' });
+        expect(out).toEqual(['legacy']);
+    });
+
+    it('rejectAll drops every term stream (the link died)', () => {
+        const { mux, sent } = makeMux();
+        const out: string[] = [];
+        mux.openTerm('term-a', (m) => out.push(m), undefined, true);
+        const reqId = sent[0].reqId!;
+        mux.rejectAll('link lost');
+        mux.handle({ kind: 'data', channel: 'term', sid: 'sid-1', reqId, payload: 'after' });
+        expect(out).toEqual([]);
+    });
+});

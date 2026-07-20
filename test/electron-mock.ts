@@ -57,6 +57,14 @@ export class BrowserWindow {
 }
 
 export class Notification {
+    /**
+     * Real Electron exposes this static, and main-process code gates every toast
+     * on it (`if (!Notification.isSupported()) return`). Without it the stub
+     * throws a TypeError mid-call, which in an async catch-block swallows the
+     * REST of that block — e.g. the forwarded-answer failure path would skip its
+     * recovery re-sync purely because of a gap in the mock.
+     */
+    static isSupported = (): boolean => false;
     constructor(public opts?: unknown) {}
     show: Handler = noop;
     on: Handler = noop;

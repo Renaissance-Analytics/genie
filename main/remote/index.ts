@@ -120,6 +120,14 @@ interface RemoteConnection {
      * a per-terminal frame key or a session each — a later protocol step.
      */
     relayTerms: Map<string, { send: (input: string) => void; close: () => void }>;
+    /**
+     * The host proxy advertised `termMultiplex` (transport === 'relay' only), so
+     * term streams may be keyed per-`reqId` and many terminals run at once. Probed
+     * once on connect and fail-closed: an older proxy has no such endpoint, we
+     * leave this false, and `relayAttachTerminal` keeps the one-live-stream
+     * behaviour that old proxy actually supports.
+     */
+    relayTermMultiplex: boolean;
     /** Relay `/ws/events` unsubscribe (transport === 'relay' only). */
     relayEventsClose: (() => void) | null;
     /** Grant heartbeat timer (transport === 'relay' only) — polls Tynn's grant
@@ -614,8 +622,11 @@ async function syncForwardedQuestions(conn: RemoteConnection): Promise<void> {
                 // Recover rather than drop the answer: re-sync, which re-raises the
                 // still-pending question so it is visibly unanswered instead of
                 // silently lost.
-                notifyForwardedAnswerFailed(conn, err);
+                // Recovery FIRST. The notification is best-effort cosmetics; if it
+                // were to throw, ordering it ahead of the re-sync would take the
+                // primary recovery down with it.
                 void syncForwardedQuestions(conn);
+                notifyForwardedAnswerFailed(conn, err);
             }
         });
     }
@@ -1052,12 +1063,48 @@ function handleBridgeMessage(conn: RemoteConnection, raw: string): void {
  * increment; for now a dropped relay link fails in-flight requests and the host
  * window's link state stays `connected` until the user reconnects.
  */
+/** The relay proxy's self-reported capabilities. Answered by the proxy itself, so
+ *  it describes the component that actually implements the behaviour rather than
+ *  the genie build sitting behind it (they are separate deployables). */
+export interface RelayFeatures {
+    /** Term streams are keyed per-`reqId` ⇒ many terminals may stream at once. */
+    termMultiplex?: boolean;
+}
+
+/**
+ * Ask the host's relay proxy what it supports. FAIL-CLOSED by design: an older
+ * proxy has no such route and forwards the request to genie, which 404s (or
+ * returns a shape we don't recognise) — either way we keep every capability off
+ * and fall back to behaviour that proxy definitely supports. Assuming support and
+ * being wrong is the worse failure: term streams would collide on `sid:term` and
+ * every terminal past the first would silently go dead.
+ */
+export function readRelayFeatures(body: unknown): RelayFeatures {
+    if (!body || typeof body !== 'object') return {};
+    const features = (body as { features?: unknown }).features;
+    if (!features || typeof features !== 'object') return {};
+    const termMultiplex = (features as { termMultiplex?: unknown }).termMultiplex;
+    return { termMultiplex: termMultiplex === true };
+}
+
+async function probeRelayFeatures(conn: RemoteConnection): Promise<void> {
+    try {
+        const body = await connRequest(conn, '/api/relay/features');
+        conn.relayTermMultiplex = readRelayFeatures(body).termMultiplex === true;
+    } catch {
+        conn.relayTermMultiplex = false; // old proxy — legacy single term stream
+    }
+}
+
 function startRelayEventsBridge(conn: RemoteConnection): void {
     if (!conn.relay) return;
     conn.everConnected = true;
     conn.eventsFailures = 0;
     conn.reconnectAttempt = 0;
     conn.relayEventsClose = conn.relay.openEvents((raw) => handleBridgeMessage(conn, raw));
+    // Learn what this host's relay proxy supports BEFORE any terminal attaches, so
+    // the first attach already knows whether it may key its own stream.
+    void probeRelayFeatures(conn);
     // Pick up any questions the host already had pending before we attached (the
     // `question:changed` push only fires on a CHANGE, not on connect).
     void syncForwardedQuestions(conn);
@@ -1225,24 +1272,37 @@ function handleTermMessage(conn: RemoteConnection, id: string, raw: string): voi
 
 /**
  * Attach to a workstation terminal over the relay member session — the relay
- * analogue of the tailnet per-terminal WS. P4.1 carries ONE term stream per
- * session, so attaching a new terminal first closes any other live one (the relay
- * keys term by (sid, channel); a second concurrent open would collide). Only the
- * most-recently-attached terminal streams over the relay.
+ * analogue of the tailnet per-terminal WS.
+ *
+ * A host advertising `termMultiplex` keys each term stream by its own `reqId`, so
+ * every terminal streams concurrently, exactly like the tailnet transport. An
+ * OLDER host keys them all as `sid:term`, so a second concurrent open silently
+ * collides with the first — there we must keep the legacy behaviour of closing any
+ * other live stream, leaving only the most-recently-attached terminal live. That
+ * fallback is the ORIGINAL bug (terminals past the first went dead); it stays only
+ * because the alternative against an old host is worse — every stream but the
+ * first would be dropped with nothing compensating.
  */
 function relayAttachTerminal(conn: RemoteConnection, id: string, workspaceId?: string): void {
     if (!conn.relay || conn.relayTerms.has(id)) return;
-    for (const [otherId, stream] of conn.relayTerms) {
-        try {
-            stream.close();
-        } catch {
-            /* already closing */
+    if (!conn.relayTermMultiplex) {
+        for (const [otherId, stream] of conn.relayTerms) {
+            try {
+                stream.close();
+            } catch {
+                /* already closing */
+            }
+            conn.relayTerms.delete(otherId);
         }
-        conn.relayTerms.delete(otherId);
     }
     conn.relayTerms.set(
         id,
-        conn.relay.openTerm(id, (raw) => handleTermMessage(conn, id, raw), workspaceId),
+        conn.relay.openTerm(
+            id,
+            (raw) => handleTermMessage(conn, id, raw),
+            workspaceId,
+            conn.relayTermMultiplex,
+        ),
     );
 }
 
@@ -1614,6 +1674,8 @@ async function connectRemoteInner(
         transport: 'tailnet',
         relay: null,
         relayTerms: new Map(),
+        // Tailnet: no relay, so no multiplex capability to probe.
+        relayTermMultiplex: false,
         relayEventsClose: null,
         relayHeartbeat: null,
         eventsWs: null,
@@ -1738,6 +1800,8 @@ async function connectWorkstationInner(
         transport: 'relay',
         relay,
         relayTerms: new Map(),
+        // Fail-closed until the probe below confirms the host proxy supports it.
+        relayTermMultiplex: false,
         relayEventsClose: null,
         relayHeartbeat: null,
         eventsWs: null,
