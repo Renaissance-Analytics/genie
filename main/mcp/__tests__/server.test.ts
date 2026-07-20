@@ -178,7 +178,20 @@ describe('mcp server', () => {
         expect(url1).not.toContain('${');
     });
 
-    it('resolves a workspace endpoint to the last-active terminal for imDone', async () => {
+    /**
+     * Terminal resolution used to fall back to the LAST-ACTIVE terminal whenever a
+     * caller omitted `terminalId`. That is nondeterministic exactly when it matters
+     * — under concurrent orchestration "last active" is whatever another agent
+     * touched most recently. Worse, `agentinbox` mints an agent's durable identity
+     * onto whatever terminal resolves, so a busy workspace could attach identity to
+     * a stranger's pane (the "identity flips" in genie#17).
+     *
+     * The contract now: an explicit `terminalId` wins; a workspace with exactly ONE
+     * terminal is unambiguous and still resolves; anything else is an ERROR rather
+     * than a guess. Every pty already carries GENIE_TERMINAL_ID, so a caller that
+     * hits this needs fixing, not papering over.
+     */
+    it('refuses to guess when a workspace has several terminals and no terminalId', async () => {
         const dir = tmpUserDir();
         const seen: string[] = [];
         await startMcpServer(
@@ -197,8 +210,48 @@ describe('mcp server', () => {
             method: 'tools/call',
             params: { name: 'imDone', arguments: {} },
         });
-        expect(res.status).toBe(200);
-        expect(seen).toEqual(['t-b']); // fell back to last-active
+
+        // No side effect on ANY terminal — silently glowing the wrong one is the bug.
+        expect(seen).toEqual([]);
+        // And the caller is told why, naming the env var that fixes it.
+        const body = JSON.stringify(res.body);
+        expect(body).toContain('GENIE_TERMINAL_ID');
+    });
+
+    it('still resolves without a terminalId when the workspace has exactly one terminal', async () => {
+        // One candidate is not a guess. Keeping this avoids breaking every
+        // single-terminal workspace for a bug that only exists under ambiguity.
+        const dir = tmpUserDir();
+        const seen: string[] = [];
+        await startMcpServer(
+            deps(dir, 0, { ids: ['t-only'], lastActive: 't-only' }, (id) => seen.push(id)),
+        );
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+        await rpc(mcpServerPort()!, token, {
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/call',
+            params: { name: 'imDone', arguments: {} },
+        });
+        expect(seen).toEqual(['t-only']);
+    });
+
+    it('refuses a terminalId that is not a member of the token workspace', async () => {
+        // A stale id from another workspace must not silently fall back to a local
+        // terminal — that would be the same wrong-pane bug by another route.
+        const dir = tmpUserDir();
+        const seen: string[] = [];
+        await startMcpServer(
+            deps(dir, 0, { ids: ['t-a', 't-b'], lastActive: 't-b' }, (id) => seen.push(id)),
+        );
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+        await rpc(mcpServerPort()!, token, {
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/call',
+            params: { name: 'imDone', arguments: { terminalId: 't-elsewhere' } },
+        });
+        expect(seen).toEqual([]);
     });
 
     it('honours an explicit terminalId arg when it is a workspace member', async () => {

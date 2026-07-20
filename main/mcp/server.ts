@@ -376,14 +376,27 @@ function resolveTerminal(
     argTerminalId: string | undefined,
 ): string | null {
     const direct = tokens.get(token);
-    if (direct) return direct; // legacy per-terminal endpoint
+    if (direct) return direct; // legacy per-terminal endpoint — unambiguous
 
     const workspaceId = workspaceTokens.get(token);
     if (!workspaceId || !deps) return null;
-    const { ids, lastActive } = deps.workspaceTerminals(workspaceId);
-    if (argTerminalId && ids.includes(argTerminalId)) return argTerminalId;
-    if (lastActive && ids.includes(lastActive)) return lastActive;
-    return ids[0] ?? null;
+    const { ids } = deps.workspaceTerminals(workspaceId);
+
+    // An explicit id must be a MEMBER of this token's workspace. A stale id from
+    // elsewhere resolves to nothing rather than silently landing on a local
+    // terminal — that would be the same wrong-pane bug by another route.
+    if (argTerminalId) return ids.includes(argTerminalId) ? argTerminalId : null;
+
+    // Exactly one terminal is not a guess; keep working for the common case.
+    if (ids.length === 1) return ids[0];
+
+    // Otherwise REFUSE. This used to fall back to the workspace's last-active
+    // terminal, which is nondeterministic precisely when orchestration is busy —
+    // "last active" is whatever some other agent touched most recently. Since
+    // `agentinbox` mints an agent's durable identity onto whatever resolves here,
+    // that fallback could attach identity to a stranger's pane (genie#17). Every
+    // pty carries GENIE_TERMINAL_ID, so a caller that lands here needs fixing.
+    return null;
 }
 
 async function handle(
@@ -424,15 +437,32 @@ async function handle(
         return;
     }
 
-    // Per-call terminal resolution: the tool's optional `terminalId` arg picks
-    // the target; otherwise we fall back to the workspace's last-active one.
+    // Per-call terminal resolution: the tool's `terminalId` arg picks the target.
+    // Ambiguity is an ERROR, never a guess — see resolveTerminal.
     const argTerminalId = ((msg.params as { arguments?: { terminalId?: unknown } })
         ?.arguments?.terminalId);
-    const terminalId =
-        resolveTerminal(
-            token,
-            typeof argTerminalId === 'string' ? argTerminalId : undefined,
-        ) ?? '';
+    const resolved = resolveTerminal(
+        token,
+        typeof argTerminalId === 'string' ? argTerminalId : undefined,
+    );
+    if (resolved === null && msg.method === 'tools/call') {
+        // Actionable on purpose: name the env var that fixes it. Silently acting
+        // on the wrong terminal is worse than a call the agent can retry.
+        send(res, 200, {
+            jsonrpc: '2.0',
+            id: msg.id ?? null,
+            error: {
+                code: -32602,
+                message:
+                    'Could not determine which terminal to act on. Pass `terminalId` — ' +
+                    'its value is in your GENIE_TERMINAL_ID environment variable. ' +
+                    '(This workspace has several terminals, or the id given is not one ' +
+                    'of them, so Genie will not guess.)',
+            },
+        });
+        return;
+    }
+    const terminalId = resolved ?? '';
 
     const mcpCtx = {
         terminalId,
