@@ -520,6 +520,35 @@ const forwardedShown = new Map<string, Set<string>>();
  * (first-answer-wins). Driven by the host's `question:changed` push + once on
  * connect. No-op for a readonly driver (it can't act on a control prompt).
  */
+/**
+ * Tell the driver their answer never reached the host. Silence here is what made
+ * the original bug undiagnosable — the modal closed exactly as it does on success.
+ * A 423 is the host's kill-switch (remote control disabled on the desktop), which
+ * is actionable, so it gets its own wording.
+ */
+export function forwardedAnswerFailureMessage(err: unknown): string {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('423')) {
+        return 'The host has remote control disabled (kill-switch on), so it refused the answer. Answer on the host, or re-enable remote control there.';
+    }
+    if (msg.includes('401') || msg.includes('403')) {
+        return 'The host rejected this session. Reconnect and answer again.';
+    }
+    return `The host did not accept the answer (${msg}). It is still waiting — the question will reappear.`;
+}
+
+function notifyForwardedAnswerFailed(conn: RemoteConnection, err: unknown): void {
+    if (!Notification.isSupported()) return;
+    try {
+        new Notification({
+            title: 'Genie — answer not delivered',
+            body: `${conn.host.hostname}: ${forwardedAnswerFailureMessage(err)}`,
+        }).show();
+    } catch {
+        /* best-effort — the re-raised modal is the primary signal */
+    }
+}
+
 async function syncForwardedQuestions(conn: RemoteConnection): Promise<void> {
     // Today every connection is a control driver; the grant model (later phase)
     // supplies readonly, at which point this guard stops forwarding actionable
@@ -547,16 +576,31 @@ async function syncForwardedQuestions(conn: RemoteConnection): Promise<void> {
             hostId: q.id,
             questions: q.questions,
             workspaceLabel: q.workspaceLabel,
-        }).then((result) => {
+        }).then(async (result) => {
             shown.delete(q.id);
             // Only an actual answer goes back to the host. A cancel (the driver
             // dismissed it, OR the host resolved it first → we dismissed locally)
             // posts nothing — the host owner stays in control.
-            if (!result.cancelled) {
-                void connRequest(conn, `/api/questions/${encodeURIComponent(q.id)}/answer`, {
+            if (result.cancelled) return;
+            try {
+                await connRequest(conn, `/api/questions/${encodeURIComponent(q.id)}/answer`, {
                     method: 'POST',
                     json: { answers: result.answers },
-                }).catch(() => {});
+                });
+            } catch (err) {
+                // This POST used to be fire-and-forget with a swallowing catch, which
+                // made a failure INVISIBLE and indistinguishable from success: the
+                // driver's modal closed, the answer went nowhere, and the host sat
+                // waiting forever with its own modal still open. The GET that raised
+                // this question already proved the host reachable and authed, so a
+                // failure here is almost always the host's kill-switch (423) — which
+                // is exactly the case the driver needs told, not hidden.
+                //
+                // Recover rather than drop the answer: re-sync, which re-raises the
+                // still-pending question so it is visibly unanswered instead of
+                // silently lost.
+                notifyForwardedAnswerFailed(conn, err);
+                void syncForwardedQuestions(conn);
             }
         });
     }
