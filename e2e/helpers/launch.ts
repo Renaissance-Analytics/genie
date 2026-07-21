@@ -239,6 +239,21 @@ export async function readAgentAccessSeed(app: ElectronApplication): Promise<{
     });
 }
 
+/**
+ * Read the MCP server-push handle the booted app publishes under E2E — its live
+ * workspace endpoint URL plus hooks to drive a REAL broker delivery and read the
+ * push diagnostics. Returns null when the app never published it (which is
+ * exactly the failure the server-push spec must catch: no boot wiring).
+ */
+export async function readMcpPushHandle(app: ElectronApplication): Promise<{
+    endpointUrl: string;
+} | null> {
+    return app.evaluate(() => {
+        const h = (globalThis as Record<string, any>).__GENIE_E2E_MCP__;
+        return h ? { endpointUrl: h.endpointUrl as string } : null;
+    });
+}
+
 /** Read the current mock state snapshot from the main process. */
 export async function readMockState(app: ElectronApplication): Promise<{
     calls: { githubStatus: number; deviceStart: number; recheck: number };
