@@ -255,6 +255,17 @@ function mintSessionId(token: string): string {
     return id;
 }
 
+/**
+ * PROBE + routing: which TERMINAL an Mcp-Session-Id belongs to. Learned when a
+ * POST tool call carries BOTH the echoed session id (header) and a resolved
+ * terminalId (GENIE_TERMINAL_ID arg) — the moment the two are correlated. This
+ * is what lets a DM to one agent push to exactly that agent's GET stream
+ * (per-agent routing) instead of every agent in the workspace. If a client never
+ * echoes the session id, this map stays empty and callers fall back to
+ * workspace-wide — so routing degrades gracefully to what the client supports.
+ */
+const sessionTerminal = new Map<string, string>();
+
 /** PROBE log: what a client presented when it opened the GET stream. */
 function logGetStream(l: GetStreamLog): void {
     const tok = l.token.length > 8 ? l.token.slice(0, 8) + '…' : l.token;
@@ -275,6 +286,20 @@ export function pushToWorkspace(workspaceId: string, notification: ServerNotific
     const token = byWorkspace.get(workspaceId);
     if (!token) return 0;
     return pushNotification({ token }, notification);
+}
+
+/**
+ * Push to a SPECIFIC agent's GET stream(s), routed by the Mcp-Session-Id(s)
+ * correlated to its terminal. Returns 0 when no session maps to that terminal
+ * (client never echoed one, or the agent has no open stream) — the caller then
+ * falls back to {@link pushToWorkspace}.
+ */
+export function pushToTerminal(terminalId: string, notification: ServerNotification): number {
+    let reached = 0;
+    for (const [sessionId, term] of sessionTerminal) {
+        if (term === terminalId) reached += pushNotification({ sessionId }, notification);
+    }
+    return reached;
 }
 
 /**
@@ -522,6 +547,20 @@ async function handle(
     }
     const terminalId = resolved ?? '';
 
+    // Correlate the client-echoed session id with the terminal it's acting as, so
+    // a DM to this agent can push to exactly its GET stream. Also the live
+    // measurement of whether the client echoes Mcp-Session-Id on POSTs at all.
+    const sid = req.headers['mcp-session-id'];
+    if (typeof sid === 'string' && terminalId && msg.method === 'tools/call') {
+        if (sessionTerminal.get(sid) !== terminalId) {
+            sessionTerminal.set(sid, terminalId);
+            // eslint-disable-next-line no-console
+            console.log(
+                `[mcp-get-stream] session ${sid.slice(0, 8)}… ↔ terminal ${terminalId}`,
+            );
+        }
+    }
+
     const mcpCtx = {
         terminalId,
         serverName: SERVER_NAME,
@@ -672,6 +711,7 @@ export function stopMcpServer(): void {
     workspaceTokens.clear();
     byWorkspace.clear();
     sessionToken.clear();
+    sessionTerminal.clear();
 }
 
 /**

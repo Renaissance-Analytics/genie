@@ -12,6 +12,7 @@ import {
     workspaceEndpointUrl,
     registerTerminalEndpoint,
     pushToWorkspace,
+    pushToTerminal,
     DEFAULT_MCP_PORT,
 } from '../server';
 
@@ -792,5 +793,76 @@ describe('mcp server — GET server-push stream', () => {
         await startMcpServer(deps(dir, 0, { ids: ['t-a'], lastActive: 't-a' }, () => {}));
         // No GET stream opened — a push must report 0 reached.
         expect(pushToWorkspace('ws-1', { method: 'notifications/message' })).toBe(0);
+    });
+
+    /** POST that lets the caller set request headers (to echo Mcp-Session-Id). */
+    function postWithHeaders(
+        portNum: number,
+        token: string,
+        msg: unknown,
+        extra: Record<string, string>,
+    ): Promise<{ status: number }> {
+        return new Promise((resolve, reject) => {
+            const data = JSON.stringify(msg);
+            const req = http.request(
+                {
+                    host: '127.0.0.1',
+                    port: portNum,
+                    path: `/mcp/${token}`,
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Content-Length': Buffer.byteLength(data),
+                        ...extra,
+                    },
+                },
+                (res) => {
+                    res.on('data', () => {});
+                    res.on('end', () => resolve({ status: res.statusCode ?? 0 }));
+                },
+            );
+            req.on('error', reject);
+            req.end(data);
+        });
+    }
+
+    it('routes a push to ONE agent once its session↔terminal is correlated', async () => {
+        const dir = tmpUserDir();
+        await startMcpServer(
+            deps(dir, 0, { ids: ['t-a', 't-b'], lastActive: 't-b' }, () => {}),
+        );
+        const port = mcpServerPort()!;
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+        const sessionA = 'sess-A';
+
+        // The client echoes its session id on a tools/call naming terminal t-a —
+        // this is what correlates sessionA ↔ t-a server-side.
+        await postWithHeaders(
+            port,
+            token,
+            {
+                jsonrpc: '2.0',
+                id: 1,
+                method: 'tools/call',
+                params: { name: 'imDone', arguments: { terminalId: 't-a' } },
+            },
+            { 'Mcp-Session-Id': sessionA },
+        );
+
+        // t-a's stream carries that same session id.
+        const streamA = await openStream(port, token, { 'Mcp-Session-Id': sessionA });
+        try {
+            await until(() => streamA.read().includes(': open'));
+
+            // A DM to t-a routes to exactly this stream...
+            expect(pushToTerminal('t-a', { method: 'notifications/message', params: { data: 'for t-a' } })).toBe(1);
+            await until(() => streamA.read().includes('for t-a'));
+
+            // ...and a push aimed at t-b (no correlated session) reaches nobody,
+            // so the caller would fall back to workspace-wide.
+            expect(pushToTerminal('t-b', { method: 'notifications/message' })).toBe(0);
+        } finally {
+            streamA.close();
+        }
     });
 });

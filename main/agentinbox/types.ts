@@ -55,6 +55,18 @@ export type AgentInboxKind = 'dm' | 'channel';
 /** The human panel's sender identity token. An agent sender is its `agentId`. */
 export const AGENTINBOX_HUMAN = 'human';
 
+/**
+ * Where a just-delivered message landed — passed to the broker's server-push
+ * sink so the host can route an MCP `notifications/message` to the recipient's
+ * GET SSE stream (per-agent via its terminal, falling back to the whole
+ * workspace). Carries all three ids so the host can pick the routing it supports.
+ */
+export interface AgentInboxNotifyTarget {
+    workspaceId: string;
+    terminalId: string;
+    agentId: string;
+}
+
 /** A discoverable agent as the directory / presence surfaces report it. */
 export interface AgentInboxAgentInfo {
     /** Stable AgentInbox identity (uuid), persisted in the spec's `meta.agent_id`. */

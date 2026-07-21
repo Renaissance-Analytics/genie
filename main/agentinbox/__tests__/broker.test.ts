@@ -382,6 +382,72 @@ describe('AgentInboxBroker — presence + message events', () => {
     });
 });
 
+describe('AgentInboxBroker — server-push notify sink', () => {
+    it('fires on a live DM with the recipient workspace/terminal/agent', () => {
+        const b = fresh();
+        const seen: Array<{ target: { workspaceId: string; terminalId: string; agentId: string }; text: string }> = [];
+        b.setNotifySink((target, msg) => seen.push({ target, text: msg.text }));
+        b.join(input({ agentId: 'A', workspaceId: 'w1' }));
+        b.join(input({ agentId: 'B', workspaceId: 'w1' }));
+
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'ping B' });
+
+        expect(seen).toHaveLength(1);
+        expect(seen[0].target).toEqual({ workspaceId: 'w1', terminalId: 't-B', agentId: 'B' });
+        expect(seen[0].text).toBe('ping B');
+    });
+
+    it('fires per delivered member on a channel broadcast, never to the sender', () => {
+        const b = fresh();
+        const ids: string[] = [];
+        b.setNotifySink((target) => ids.push(target.agentId));
+        b.join(input({ agentId: 'A', workspaceId: 'w1', purpose: 'general' }));
+        b.join(input({ agentId: 'B', workspaceId: 'w1', purpose: 'general' }));
+        b.join(input({ agentId: 'C', workspaceId: 'w1', purpose: 'general' }));
+
+        b.send({ fromAgentId: 'A', channelArg: 'general', text: 'hello room' });
+
+        // Delivered to B and C; A (the sender) is never notified of its own message.
+        expect(ids.sort()).toEqual(['B', 'C']);
+    });
+
+    it('does NOT fire on rehydrate replay — a boot must not re-announce old mail', async () => {
+        // A store pre-loaded with an undelivered DM to B (as if from a prior run).
+        const stored = {
+            seq: 5,
+            id: 'm5',
+            from: 'A',
+            fromLabel: 'A',
+            kind: 'dm' as const,
+            to: 'B',
+            text: 'old dm',
+            ts: 1,
+        };
+        const store = {
+            append: () => {},
+            maxSeq: () => 5,
+            loadRecent: () => [stored],
+            getCursor: () => 0,
+            setCursor: () => {},
+            undeliveredFor: (agentId: string) => (agentId === 'B' ? [stored] : []),
+            sentDmReceipts: () => [],
+        };
+        const b = fresh();
+        b.join(input({ agentId: 'A', workspaceId: 'w1' }));
+        b.join(input({ agentId: 'B', workspaceId: 'w1' }));
+        b.setStore(store);
+
+        const seen: string[] = [];
+        b.setNotifySink((target) => seen.push(target.agentId));
+        b.rehydrateMessages();
+
+        // The DM is now in B's inbox (delivery happened)...
+        expect((await b.receive('B', { cursor: 0 })).messages.map((m) => m.text)).toEqual(['old dm']);
+        // ...but the sink was NOT fired — rehydrate is not a live delivery.
+        expect(seen).toEqual([]);
+    });
+});
+
 describe('AgentInboxBroker — history', () => {
     it('returns the channel log and the human↔agent DM thread', () => {
         const b = fresh();
