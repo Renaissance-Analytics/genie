@@ -262,6 +262,38 @@ export function withCodexMcpLaunch(
 }
 
 /**
+ * Weave the PER-TERMINAL genie MCP endpoint into a Codex launch command as a
+ * `-c "mcp_servers.genie.url=..."` override (genie #35).
+ *
+ * The genie endpoint is unlike the workspace-scoped Tynn overrides (applied
+ * earlier, in `resolveAgentLaunch`): it MUST be the terminal's OWN endpoint URL
+ * so its token self-identifies the terminal server-side (`server.ts`
+ * `resolveTerminal` resolves a per-terminal token directly and unambiguously).
+ * Pointed at the shared WORKSPACE endpoint instead, a multi-terminal workspace
+ * makes the server REFUSE every call that omits `terminalId` — so a Codex agent
+ * had to shell out for `$GENIE_TERMINAL_ID` before every targeted call. With the
+ * per-terminal URL it never needs to pass `terminalId` at all.
+ *
+ * This is applied at terminal-CREATE time, where the id (and thus the
+ * per-terminal endpoint) first exists — NOT in `resolveAgentLaunch`, which only
+ * has the workspace. The `-c` override takes precedence over the workspace
+ * `.codex/config.toml` genie block, which stays as a fallback for Codex versions
+ * predating that file and for launches before the workspace sync completes.
+ *
+ * Gated identically to {@link withCodexMcpLaunch}: only a Codex terminal, only
+ * when `mcp_sync_codex` is on, and only when an endpoint URL resolved; every
+ * other case returns the command unchanged. Pure (the caller mints the URL and
+ * reads the setting) so the gating is testable off the terminal pipeline.
+ */
+export function withCodexGenieMcpLaunch(
+    command: string,
+    input: { agent: string; mcpSyncCodexOff: boolean; genieUrl?: string | null },
+): string {
+    if (input.agent !== 'codex' || input.mcpSyncCodexOff || !input.genieUrl) return command;
+    return applyCodexMcpLaunchArgs(command, { genieUrl: input.genieUrl });
+}
+
+/**
  * ALSO land the Tynn token in the workspace `.env` (gitignored) under
  * `TYNN_AGENT_TOKEN`, preserving any other `.env` lines. The `.mcp.json` entry
  * now embeds the token as a literal (see `tynnEntry`), so the config no longer

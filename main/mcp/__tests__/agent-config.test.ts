@@ -14,6 +14,7 @@ import {
     GENIE_SERVER_NAME,
     readTynnMcpUrl,
     withCodexMcpLaunch,
+    withCodexGenieMcpLaunch,
 } from '../agent-config';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -147,6 +148,22 @@ describe('Codex MCP launch overrides', () => {
         expect(out).not.toContain("a''b"); // not the invalid TOML double-quote-escape
     });
 
+    it('workspace-scoped overrides carry Tynn but NOT genie (genie is per-terminal — genie #35)', () => {
+        // resolveAgentLaunch now passes ONLY tynnUrl through the workspace-scoped
+        // path; the genie endpoint is woven in per-terminal at create time. A
+        // workspace-scoped genie URL is exactly the ambiguous endpoint that makes
+        // the server REFUSE every multi-terminal call lacking `terminalId`, so it
+        // must never be baked here.
+        const out = withCodexMcpLaunch('codex', {
+            agent: 'codex',
+            mcpSyncCodexOff: false,
+            tynnUrl: 'https://tynn.test/mcp/project',
+        });
+        expect(out).toContain(`-c "mcp_servers.tynn.url='https://tynn.test/mcp/project'"`);
+        expect(out).toContain(`-c "mcp_servers.tynn.bearer_token_env_var='TYNN_AGENT_TOKEN'"`);
+        expect(out).not.toContain('mcp_servers.genie.url');
+    });
+
     it('reads the provisioned Tynn MCP URL from .mcp.json', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-tynn-url-'));
         fs.writeFileSync(
@@ -182,6 +199,66 @@ describe('Codex MCP launch overrides', () => {
         );
         expect(fs.existsSync(path.join(dir, '.env'))).toBe(false);
         expect(loadWorkspaceTerminalEnv(dir)).toEqual({ TYNN_AGENT_TOKEN: 'rpk_FROM_CONFIG' });
+    });
+});
+
+describe('withCodexGenieMcpLaunch (per-terminal genie endpoint — genie #35)', () => {
+    // A PER-TERMINAL endpoint token: server-side it resolves DIRECTLY to the
+    // terminal (server.ts resolveTerminal), so the agent never has to pass
+    // `terminalId`. This is the whole fix — Codex is pointed here, not at the
+    // ambiguous workspace endpoint.
+    const perTerminalUrl = 'http://127.0.0.1:51717/mcp/TERMINALTOKEN';
+
+    it('points a Codex launch at THIS terminal’s genie endpoint (no terminalId hunt)', () => {
+        const out = withCodexGenieMcpLaunch('codex --model gpt-5', {
+            agent: 'codex',
+            mcpSyncCodexOff: false,
+            genieUrl: perTerminalUrl,
+        });
+        expect(out).toBe(
+            `codex --model gpt-5 -c "mcp_servers.genie.url='${perTerminalUrl}'"`,
+        );
+        // It carries the terminal-scoped token — the reason no terminalId is needed.
+        expect(out).toContain('TERMINALTOKEN');
+    });
+
+    it('is a no-op for a non-Codex agent (Claude resolves via GENIE_TERMINAL_ID env)', () => {
+        expect(
+            withCodexGenieMcpLaunch('claude', {
+                agent: 'claude',
+                mcpSyncCodexOff: false,
+                genieUrl: perTerminalUrl,
+            }),
+        ).toBe('claude');
+    });
+
+    it('is a no-op when Codex MCP sync is off', () => {
+        expect(
+            withCodexGenieMcpLaunch('codex', {
+                agent: 'codex',
+                mcpSyncCodexOff: true,
+                genieUrl: perTerminalUrl,
+            }),
+        ).toBe('codex');
+    });
+
+    it('is a no-op when no endpoint url resolved (server down / MCP disabled)', () => {
+        expect(
+            withCodexGenieMcpLaunch('codex', {
+                agent: 'codex',
+                mcpSyncCodexOff: false,
+                genieUrl: null,
+            }),
+        ).toBe('codex');
+    });
+
+    it('adds ONLY the genie override — Tynn stays on the workspace-scoped path', () => {
+        const out = withCodexGenieMcpLaunch('codex', {
+            agent: 'codex',
+            mcpSyncCodexOff: false,
+            genieUrl: perTerminalUrl,
+        });
+        expect(out).not.toContain('mcp_servers.tynn');
     });
 });
 

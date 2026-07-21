@@ -36,7 +36,7 @@ import {
     type AgentInboxAgentType,
     type AgentInboxScope,
 } from '../agentinbox/types';
-import { loadWorkspaceTerminalEnv } from '../mcp/agent-config';
+import { loadWorkspaceTerminalEnv, withCodexGenieMcpLaunch } from '../mcp/agent-config';
 import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
 import { TerminalReadBuffer, type ReadResult } from './read-buffer';
@@ -207,6 +207,37 @@ export function readTerminalOutput(
 }
 
 /**
+ * Point a Codex agent's genie MCP `-c` launch override at THIS terminal's OWN
+ * endpoint, so the token self-identifies the terminal server-side and the agent
+ * never needs to pass `terminalId` (genie #35). Codex takes its genie URL from
+ * this launch override — NOT from the GENIE_MCP_URL env var, which only Claude's
+ * `.mcp.json` (via env resolution) and the harness consume.
+ *
+ * A no-op unless the terminal's workspace has agent-MCP enabled, the agent is
+ * codex, codex sync is on, and the loopback endpoint mints — mirroring the
+ * GENIE_MCP_URL env gate applied alongside it. The per-terminal token is stable
+ * across restarts (`registerTerminalEndpoint` reuses it), so a relaunch
+ * re-derives the same URL. Both the first launch (createAgentTerminal) and the
+ * restart relaunch (maybeRelaunchAgent) run the base `agent_command` — which no
+ * longer carries a genie override — through here, so both get the per-terminal URL.
+ */
+function withTerminalGenieUrlForCodex(
+    terminalId: string,
+    workspaceId: string | null | undefined,
+    agent: string | undefined,
+    command: string,
+): string {
+    if (agent !== 'codex' || !workspaceId || !workspaceMcpEnabled(workspaceId)) return command;
+    const mcpUrl = registerTerminalEndpoint(terminalId);
+    if (!mcpUrl) return command;
+    return withCodexGenieMcpLaunch(command, {
+        agent: 'codex',
+        mcpSyncCodexOff: getAllSettings().mcp_sync_codex === 'off',
+        genieUrl: mcpUrl,
+    });
+}
+
+/**
  * Spawn a HEADLESS terminal for an agent (manageTerminals.create / runAgent.start)
  * — a real pty with NO window owner, like the Process runners. It gets a persisted
  * terminal spec (so it shows up in the workspace's terminal list and survives like
@@ -322,6 +353,18 @@ export function createAgentTerminal(opts: {
             env = { ...env, GENIE_MCP_URL: mcpUrl, GENIE_TERMINAL_ID: id };
         }
     }
+    // Codex can't read GENIE_MCP_URL from its MCP config, so weave this terminal's
+    // own genie endpoint into its launch `-c` override — the token then identifies
+    // the terminal and the agent never has to pass `terminalId` (genie #35). A
+    // no-op for non-codex agents; the base command is stored unchanged in the spec.
+    if (opts.agentMeta && launchCommand) {
+        launchCommand = withTerminalGenieUrlForCodex(
+            id,
+            opts.workspaceId,
+            opts.agentMeta.agent,
+            launchCommand,
+        );
+    }
 
     const createOpts: CreateTerminalOpts = {
         id,
@@ -398,7 +441,16 @@ function maybeRelaunchAgent(id: string, existing: boolean): void {
     if (decision.newSessionId && spec) {
         updateTerminalSpec(id, { meta: { ...spec.meta, chat_session_id: decision.newSessionId } });
     }
-    const bytes = buildSubmitBytes(decision.command, true);
+    // A restart re-runs the stored base `agent_command`, which carries no genie
+    // override — re-point Codex at THIS terminal's endpoint so the relaunched
+    // agent keeps its terminal-scoped genie URL (genie #35). No-op for non-codex.
+    const command = withTerminalGenieUrlForCodex(
+        id,
+        spec?.workspace_id,
+        spec?.meta?.agent,
+        decision.command,
+    );
+    const bytes = buildSubmitBytes(command, true);
     // Let the fresh shell settle (profile load) before submitting the boot command.
     const timer = setTimeout(() => {
         try {
