@@ -2,7 +2,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { Duplex, PassThrough, type Readable } from 'node:stream';
 import { TRANSPORT_TOKEN_HEADER } from '../mobile/site-proxy';
-import { carrierHttpAgent } from '../sites/local-carrier';
+import { carrierHttpAgent, carrierHttpsAgent } from '../sites/local-carrier';
 import type { SiteStreamController, SiteStreamHandlers } from './relay-mux';
 import type { SiteOpenPayload } from './relay-protocol';
 
@@ -111,10 +111,25 @@ export interface SiteStreamOpener {
 
 // --- helpers ---------------------------------------------------------------
 
-/** Parse `http://host:port` into a dial `{ host, port }` (default port 80). */
-function parseBase(hostBase: string): { host: string; port: number } {
+/**
+ * Parse a host base URL into a dial target, PRESERVING the scheme.
+ *
+ * The scheme is load-bearing, not cosmetic: {@link hostHttpBase} yields
+ * `https://<dnsName>:<port>` for a host with a real (Tailscale-issued) cert and
+ * `http://<ip>:<port>` otherwise. Dropping it — as this used to — meant every
+ * site dial went out over plain `http.request`, so a TLS host was dialled in
+ * CLEARTEXT at its TLS port: a downgrade, and a broken connection.
+ *
+ * Default port follows the scheme (443 vs 80).
+ */
+export function parseBase(hostBase: string): { host: string; port: number; tls: boolean } {
     const u = new URL(hostBase);
-    return { host: u.hostname, port: u.port ? Number(u.port) : 80 };
+    const tls = u.protocol === 'https:';
+    return {
+        host: u.hostname,
+        port: u.port ? Number(u.port) : tls ? 443 : 80,
+        tls,
+    };
 }
 
 /** Serialize an upstream upgrade response's status line + headers verbatim. */
@@ -169,12 +184,20 @@ export function createTailnetSiteCarrier(hostBase: string, bearer: () => string)
             const response = new Promise<SiteForwardResult>((resolve, reject) => {
                 const headers: http.OutgoingHttpHeaders = { ...req.headers };
                 headers[TRANSPORT_TOKEN_HEADER] = bearer();
-                upReq = http.request(
-                    // Dedicated pool, idle window below the upstream's — the
-                    // global agent's 5s exactly matches Node's default
-                    // server.keepAliveTimeout, so a reused socket can be dead on
-                    // arrival and there is no retry to absorb it.
-                    { agent: carrierHttpAgent, host: base.host, port: base.port, method: req.method, path: req.path, headers },
+                // TLS when the host base says so — a host with a real cert is
+                // dialled over https, never downgraded to cleartext. Dedicated
+                // pool: the global agent's 5s idle window exactly matches Node's
+                // default server.keepAliveTimeout, so a reused socket can be dead
+                // on arrival with no retry to absorb it.
+                upReq = (base.tls ? https : http).request(
+                    {
+                        agent: base.tls ? carrierHttpsAgent : carrierHttpAgent,
+                        host: base.host,
+                        port: base.port,
+                        method: req.method,
+                        path: req.path,
+                        headers,
+                    },
                     (upRes) => resolve({ status: upRes.statusCode ?? 502, headers: upRes.headers, body: upRes }),
                 );
                 upReq.on('error', reject);
@@ -186,8 +209,10 @@ export function createTailnetSiteCarrier(hostBase: string, bearer: () => string)
         upgradeWs(req: SiteUpgradeRequest): SiteUpgradeCall {
             let upReq: http.ClientRequest | null = null;
             const upgrade = new Promise<SiteUpgradeResult>((resolve, reject) => {
-                upReq = http.request({
-                    agent: carrierHttpAgent, // see forward() — never globalAgent
+                // Same TLS decision as forward(): a websocket upgrade to a TLS
+                // host must ride wss, not be downgraded to ws.
+                upReq = (base.tls ? https : http).request({
+                    agent: base.tls ? carrierHttpsAgent : carrierHttpAgent,
                     host: base.host,
                     port: base.port,
                     method: 'GET',

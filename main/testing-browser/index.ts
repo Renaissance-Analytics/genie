@@ -130,13 +130,23 @@ function instanceForChrome(wcId: number): TestingBrowserInstance | null {
     return key ? instances.get(key) ?? null : null;
 }
 
-/** The enabled `.gen` host names (for the chrome's URL-bar allowlist). */
+/**
+ * The enabled `.gen` host names (for the chrome's URL-bar allowlist + the first
+ * tab's URL). Derived from the SITES, not from `genMap.keys()` — the shim's map
+ * also holds the upstream `.test` hostnames so a page's own absolute asset URLs
+ * still tunnel, and those must never surface as a browser-facing origin.
+ */
 function enabledGenSet(inst: TestingBrowserInstance): Set<string> {
-    return new Set(inst.genMap.keys());
+    return new Set(inst.sites.map((s) => s.genName.toLowerCase()));
 }
 
+/**
+ * Alias → canonical origin for the URL bar: the real `.test` vhost resolves TO
+ * its `.gen` name. Inverted (`.gen` → `.test`) this is what turned a typed
+ * `tynn.gen` into `https://tynn.test/` — the reported symptom in genie#29.
+ */
 function aliasMap(inst: TestingBrowserInstance): Map<string, string> {
-    return new Map(inst.sites.map((site) => [site.genName.toLowerCase(), site.hostname.toLowerCase()]));
+    return new Map(inst.sites.map((site) => [site.hostname.toLowerCase(), site.genName.toLowerCase()]));
 }
 
 function normalizeForInstance(
@@ -336,11 +346,23 @@ async function refreshSites(inst: TestingBrowserInstance): Promise<void> {
         : await remoteListEnabledGenSites(inst.connKey);
     inst.genMap.clear();
     for (const s of sites) {
-        inst.genMap.set(s.hostname.toLowerCase(), {
+        const target = {
             workspaceId: s.workspaceId,
             siteId: s.siteId,
             hostname: s.hostname,
-        });
+        };
+        // BOTH names resolve to the same target, deliberately:
+        //  - the `.gen` NAME is what the BROWSER navigates on (keying this map by
+        //    `hostname` alone is what made it navigate to `.test` and strand
+        //    remote clients — genie#29);
+        //  - the upstream `.test` hostname must ALSO resolve, because a dev
+        //    server emits ABSOLUTE asset/HMR URLs (`https://assets.dev.app.test/
+        //    @vite/client`, Next chunks, Reverb) and nothing rewrites response
+        //    BODIES. Dropping it breaks every companion.
+        // Browser-facing surfaces use enabledGenSet(), which is `.gen`-only, so
+        // the `.test` keys never leak into the URL bar or the first tab.
+        inst.genMap.set(s.genName.toLowerCase(), target);
+        inst.genMap.set(s.hostname.toLowerCase(), target);
     }
     inst.sites = sites;
     if (inst.isLocal) {

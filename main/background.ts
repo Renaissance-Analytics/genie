@@ -1476,7 +1476,14 @@ app.whenReady().then(async () => {
                                 scheme: endpoint.scheme,
                                 port: endpoint.port,
                                 loopback: endpoint.loopback,
-                                allowedOrigins: [owner.hostname, endpoint.hostname],
+                                // Include the owner's `.gen` name: the browser
+                                // sits on the `.gen` origin, so a `.test`-only
+                                // allowlist rejects its websocket (genie#29).
+                                allowedOrigins: [
+                                    owner.hostname,
+                                    owner.genName,
+                                    endpoint.hostname,
+                                ].filter(Boolean),
                             };
                         }
                     }

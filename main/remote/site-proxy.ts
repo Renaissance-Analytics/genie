@@ -234,6 +234,18 @@ export function buildForwardResponseHeaders(
         const lk = k.toLowerCase();
         if (HOP_BY_HOP.has(lk)) continue;
         if (connTokens.has(lk)) continue;
+        // Keep the browser ON the `.gen` origin. An upstream `Location` /
+        // `Set-Cookie Domain=` names the real `.test` vhost, which resolves ONLY
+        // on the host — leaking it strands a remote client entirely (genie#29).
+        if (lk === 'location') {
+            out[k] = rewriteGenLocation(String(v), hostname, genHost);
+            continue;
+        }
+        if (lk === 'set-cookie') {
+            const cookies = Array.isArray(v) ? v : [String(v)];
+            out[k] = cookies.map((c) => rewriteGenSetCookieDomain(c, hostname, genHost));
+            continue;
+        }
         out[k] = v; // HSTS, content-type, Secure cookies, etc. all preserved
     }
     return out;
@@ -267,6 +279,8 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
             cert: defaultLeaf.certPem,
             SNICallback: (servername, cb) => {
                 const host = stripHostPort(servername);
+                // Same allowlist as CONNECT (see there): enabled names only, which
+                // includes a site's upstream `.test` host for its own assets.
                 if (!deps.resolveGen(host)) {
                     cb(new Error('refused: not an enabled testing-browser origin'));
                     return;
@@ -387,8 +401,12 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
     });
     proxy.on('connect', (req, clientSocket: Duplex, head: Buffer) => {
         const genHost = stripHostPort(req.url);
-        // §5 allowlist: refuse everything not in the enabled `.gen` set — a
-        // non-`.gen` host or a disabled/unknown `.gen` never gets a tunnel.
+        // §5 allowlist: refuse everything not in the ENABLED set. That set holds
+        // both a site's `.gen` name (what the browser navigates on) and its
+        // upstream `.test` hostname (which a page's own absolute asset/HMR URLs
+        // still reference, since response BODIES are not rewritten) — so the
+        // resolver IS the allowlist. An `isGenHost` test here would refuse every
+        // companion asset; the allowlist, not the suffix, is what makes this safe.
         if (!deps.resolveGen(genHost)) {
             rejectSocket(clientSocket, 403);
             return;
