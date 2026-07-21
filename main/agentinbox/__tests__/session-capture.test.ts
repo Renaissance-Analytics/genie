@@ -4,6 +4,7 @@ import {
     renderAgentResume,
     renderAgentContinue,
     agentRelaunchDecision,
+    resolveRestartCommand,
     appendLaunchFlags,
     extractSessionId,
     transcriptDirFor,
@@ -221,6 +222,47 @@ describe('agentRelaunchDecision — fresh vs continue on agent-terminal reattach
                 false,
             ),
         ).toEqual({ command: 'codex' });
+    });
+});
+
+describe('resolveRestartCommand — graceful restart, never a phantom --resume', () => {
+    const claude = (extra: Record<string, string> = {}) => ({
+        meta: { agent: 'claude', agent_command: 'claude', ...extra },
+    });
+    const exists = () => true;
+    const missing = () => false;
+
+    it('resumes by id when the transcript exists on disk', () => {
+        expect(resolveRestartCommand(claude({ chat_session_id: 'sess-1' }), exists)).toEqual({
+            command: 'claude --resume sess-1',
+        });
+    });
+
+    it('falls back to --continue when the captured id has DRIFTED (no transcript)', () => {
+        // THE FIX: restartAgentTerminal used to call renderAgentResume directly,
+        // so a drifted id produced `claude --resume <phantom>` → "No conversation
+        // found", which reads as lost work. Verifying on disk yields --continue.
+        expect(resolveRestartCommand(claude({ chat_session_id: 'sess-gone' }), missing)).toEqual({
+            command: 'claude --continue',
+        });
+    });
+
+    it('REFUSES a claude agent with no captured session (would lose the chat)', () => {
+        const r = resolveRestartCommand(claude(), exists);
+        expect('error' in r).toBe(true);
+    });
+
+    it('REFUSES codex — no resume in v1, so a restart would drop context', () => {
+        const r = resolveRestartCommand(
+            { meta: { agent: 'codex', agent_command: 'codex', chat_session_id: 'x' } },
+            exists,
+        );
+        expect('error' in r).toBe(true);
+    });
+
+    it('REFUSES a non-agent terminal', () => {
+        expect('error' in resolveRestartCommand({ meta: {} }, exists)).toBe(true);
+        expect('error' in resolveRestartCommand(null, exists)).toBe(true);
     });
 });
 

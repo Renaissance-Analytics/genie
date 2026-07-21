@@ -36,6 +36,7 @@ import {
     createAgentTerminal,
     writeToTerminal,
     readTerminalOutput,
+    agentSessionTranscriptExists,
 } from '../terminal/ipc';
 import {
     buildSubmitBytes,
@@ -49,7 +50,7 @@ import {
     restartProcess,
     getProcessStatuses,
 } from '../terminal/process-supervisor';
-import { renderAgentResume } from '../agentinbox/session-capture';
+import { resolveRestartCommand } from '../agentinbox/session-capture';
 import { detectFolder } from '../workspace/detect';
 import { workspaceDocHealth } from '../workspace/create-agi';
 import { openWorkspace } from '../workspace/open';
@@ -1242,15 +1243,15 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
     if (!spec || !agent) {
         return { ok: false, error: `"${id}" is not an agent terminal.` };
     }
-    const resume = renderAgentResume(agent, spec.meta?.agent_command ?? '', spec.meta?.chat_session_id ?? null);
-    if (!resume) {
-        return {
-            ok: false,
-            error:
-                `Cannot gracefully restart "${agent}": no captured session to resume, so a restart would ` +
-                'lose the conversation. Only a claude agent with a captured session can be resumed.',
-        };
+    // Resolve the relaunch command with the ON-DISK transcript check, so a
+    // drifted session id falls back to `--continue` instead of dead-ending at
+    // `--resume <phantom>` ("No conversation found" — reads as lost work). Refuses
+    // when the terminal has no resumable conversation.
+    const decision = resolveRestartCommand(spec, (sid) => agentSessionTranscriptExists(spec, sid));
+    if ('error' in decision) {
+        return { ok: false, error: decision.error };
     }
+    const resume = decision.command;
 
     // Tear the old agent down FIRST (releases its pty + MCP endpoint + AgentInbox
     // presence) so two processes never share the session id, THEN relaunch the
@@ -1267,8 +1268,8 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
             scopeWorkspaces: spec.meta?.whisper_workspaces,
         },
     });
-    // renderAgentLaunch leaves a resume command untouched (it already carries the
-    // session), so restarted.command === resume — submit it to launch.
+    // renderAgentLaunch leaves a resume/continue command untouched (it already
+    // carries the session), so restarted.command === resume — submit it to launch.
     writeToTerminal(restarted.id, buildSubmitBytes(restarted.command ?? resume, true));
     return { ok: true, oldId: id, newId: restarted.id, agent, command: restarted.command ?? resume };
 }

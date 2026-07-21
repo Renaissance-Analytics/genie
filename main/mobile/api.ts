@@ -269,6 +269,17 @@ export interface MobileDataDeps {
         issuewatch_action?: 'notify' | 'wake';
     }) => { ok: boolean; spec?: TerminalSpecRow; error?: string };
     /**
+     * Gracefully restart an agent terminal on the HOST (resume the conversation,
+     * reconnect the TUI to the current MCP rig) so a REMOTE window can drive the
+     * host's "Restart agent" button. OPTIONAL — only a full desktop host wires it;
+     * absent ⇒ the endpoint 501s.
+     */
+    restartAgentTerminal?: (
+        id: string,
+    ) =>
+        | { ok: true; oldId: string; newId: string; agent: 'claude' | 'codex' | 'custom'; command: string }
+        | { ok: false; error: string };
+    /**
      * Edit a specialized (agent) terminal's AgentInbox settings — purpose / scope /
      * wake-on-DM — on the HOST (live broker + persisted spec meta). Lets a REMOTE
      * window drive the host's "Agent settings…" edit. OPTIONAL — only a full desktop
@@ -1581,6 +1592,17 @@ export async function handleApi(
                     NonNullable<MobileDataDeps['createSpecializedAgentTerminal']>
                 >[0];
                 sendJson(res, 200, deps.createSpecializedAgentTerminal(agentInput));
+                return true;
+            }
+            if (pathname === '/api/desktop/terminal-spec/restart-agent') {
+                if (!deps.restartAgentTerminal) {
+                    sendJson(res, 501, {
+                        ok: false,
+                        error: 'Agent restart is not available on this host.',
+                    });
+                    return true;
+                }
+                sendJson(res, 200, deps.restartAgentTerminal(String(d.id ?? '')));
                 return true;
             }
             if (pathname === '/api/desktop/terminal-spec/update') {

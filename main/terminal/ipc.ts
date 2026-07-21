@@ -379,7 +379,7 @@ export function createAgentTerminal(opts: {
  * when it's missing. Uses the last reported cwd (OSC-7) if we have one, else the
  * spec's launch cwd — that's the dir Claude scopes its transcripts by.
  */
-function agentSessionTranscriptExists(spec: TerminalSpecRow | null, sid: string): boolean {
+export function agentSessionTranscriptExists(spec: TerminalSpecRow | null, sid: string): boolean {
     const cwd = spec?.live_cwd || spec?.cwd;
     if (!cwd) return false; // can't verify → treat as missing → fall back to -c
     try {

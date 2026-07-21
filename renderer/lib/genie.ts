@@ -2087,6 +2087,16 @@ export interface GenieApi {
             /** IssueWatch pings: react by glow (`notify`) or idle-wake (`wake`). */
             issuewatch_action?: 'notify' | 'wake';
         }) => Promise<{ ok: boolean; spec?: TerminalSpec; error?: string }>;
+        /** Gracefully restart an agent terminal: reconnect its TUI to the current
+         *  MCP rig (fresh tools/protocol) while resuming the conversation. Resolves
+         *  to the old→new terminal ids, or `{ ok: false, error }` when the agent
+         *  can't be resumed (non-claude, or no captured session). */
+        restartAgent: (
+            id: string,
+        ) => Promise<
+            | { ok: true; oldId: string; newId: string; agent: AgentType; command: string }
+            | { ok: false; error: string }
+        >;
     };
     /**
      * AgentInbox — the local inter-agent messaging network. Local-only in v1

@@ -6,6 +6,7 @@ import {
     IconGlobe,
     IconMaximize,
     IconPlus,
+    IconRefresh,
     IconSettings,
     IconTerminal,
     IconTrash,
@@ -32,6 +33,10 @@ interface Props {
     /** Edit a specialized (agent) terminal's AgentInbox purpose/scope. Only
      *  offered when this spec is an agent terminal (`meta.agent` set). */
     onAgentSettings?: () => void;
+    /** Gracefully restart a claude agent terminal so its TUI reconnects to the
+     *  current MCP rig (fresh tools) while resuming the conversation. Only offered
+     *  for a claude agent — codex/custom can't resume, so the main side refuses. */
+    onRestartAgent?: () => void;
 }
 
 /**
@@ -55,8 +60,13 @@ export default function SpecContextMenu({
     onMoveToWorkspace,
     onDelete,
     onAgentSettings,
+    onRestartAgent,
 }: Props) {
     const isAgent = !!spec.meta?.agent;
+    // Only a claude agent can be gracefully resumed (codex/custom have no resume
+    // in v1); gating the item here keeps the menu honest instead of offering a
+    // button that always errors.
+    const isResumableAgent = spec.meta?.agent === 'claude';
     const menuRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -153,6 +163,16 @@ export default function SpecContextMenu({
                         label="Agent settings…"
                         onClick={() => {
                             onAgentSettings();
+                            onClose();
+                        }}
+                    />
+                )}
+                {isResumableAgent && onRestartAgent && (
+                    <CtxItem
+                        icon={<IconRefresh size={14} />}
+                        label="Restart agent (resume)"
+                        onClick={() => {
+                            onRestartAgent();
                             onClose();
                         }}
                     />

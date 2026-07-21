@@ -71,7 +71,11 @@ import {
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
 import { broadcastTerminalSpecsChanged } from './terminal/ipc';
 import { agentPulse } from './terminal/agent-pulse';
-import { createSpecializedAgentTerminal, updateAgentInboxChannel } from './mcp/host-tools';
+import {
+    createSpecializedAgentTerminal,
+    restartAgentTerminal,
+    updateAgentInboxChannel,
+} from './mcp/host-tools';
 import { agentInboxBroker } from './agentinbox/broker';
 import { type AgentInboxScope } from './agentinbox/types';
 import { getKnowledgeStore } from './knowledge/store';
@@ -945,6 +949,12 @@ export function registerIpcHandlers(): void {
             },
         ) => createSpecializedAgentTerminal(input),
     );
+
+    // Gracefully restart an agent terminal so its TUI reconnects to the current
+    // MCP rig (fresh tools/protocol) WITHOUT losing the conversation — resume the
+    // captured session, or refuse when it isn't resumable. Delegates to the same
+    // engine the `runAgent restart` MCP action uses.
+    ipcMain.handle('terminal-spec:restart-agent', (_e, id: string) => restartAgentTerminal(id));
 
     // The human AgentInbox panel: read the agent directory, channel list, and a
     // channel / human↔agent DM history; post as the human; and edit an agent's

@@ -1793,6 +1793,22 @@ function MasterInner() {
                             void moveSpecToWorkspace(target.id, wsId)
                         }
                         onAgentSettings={() => setAgentEditSpec(target)}
+                        onRestartAgent={async () => {
+                            const ok = await showPrompt({
+                                title: 'Restart agent',
+                                body:
+                                    `Restart "${target.label}"? Its process is relaunched and reconnects to the ` +
+                                    'current MCP tools; the conversation resumes, but any unsent input in the terminal is lost.',
+                                confirmLabel: 'Restart',
+                            });
+                            if (ok === null) return;
+                            const res = await api().terminalSpec.restartAgent(target.id);
+                            setToast(
+                                res.ok
+                                    ? 'Agent restarted — conversation resumed.'
+                                    : res.error || 'Could not restart the agent.',
+                            );
+                        }}
                         onDelete={async () => {
                             const ok = await showPrompt({
                                 title: 'Delete terminal',

@@ -12,6 +12,7 @@ import type {
     WatchFeedItem,
     WorkspaceWatchStatus,
     SiteView,
+    AgentType,
     AgentInboxAgentInfo,
     AgentInboxChannelInfo,
     AgentInboxDmThreadInfo,
@@ -199,6 +200,14 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 method: 'POST',
                 json: { input },
             })) as { ok: boolean; spec?: TerminalSpec; error?: string },
+        // Restart targets the HOST's agent (the terminal lives there), like create.
+        restartAgent: async (id) =>
+            (await req('/api/desktop/terminal-spec/restart-agent', {
+                method: 'POST',
+                json: { id },
+            })) as
+                | { ok: true; oldId: string; newId: string; agent: AgentType; command: string }
+                | { ok: false; error: string },
     };
 
     // The host's workspace files (keyed by the WorkspaceRow.path the desktop holds).

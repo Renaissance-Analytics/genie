@@ -203,6 +203,48 @@ export function agentRelaunchDecision(
 }
 
 /**
+ * The command a GRACEFUL RESTART (wish #88 / #216) should relaunch an agent with,
+ * or a refusal. Resumes the captured session by exact id ONLY when its transcript
+ * exists on disk; when that id has DRIFTED (verified false), falls back to
+ * `--continue` (resume the most-recent chat in the cwd) instead of the phantom
+ * `--resume <id>` that dead-ends with "No conversation found" — which reads to the
+ * user as lost work. REFUSES (returns an `error`, no command) when the terminal
+ * has no resumable conversation — a non-agent, a non-claude agent, or a claude
+ * with no captured session — so a restart can never silently drop the agent into
+ * a fresh, context-less session.
+ *
+ * Pure: the on-disk check is injected and the caller does the pty side-effects.
+ * This is the decision `restartAgentTerminal` uses; the earlier version called
+ * {@link renderAgentResume} directly and so skipped the drift check.
+ */
+export function resolveRestartCommand(
+    spec: AgentSpecLike | null,
+    sessionExists: (sessionId: string) => boolean,
+): { command: string } | { error: string } {
+    const agent = spec?.meta?.agent as AgentInboxAgentType | undefined;
+    if (!spec || !agent) return { error: 'Not an agent terminal.' };
+
+    const base = spec.meta?.agent_command ?? '';
+    const sid = spec.meta?.chat_session_id ?? null;
+    // Resumable ⇔ claude WITH a captured session (the render* helpers are
+    // claude-only and null otherwise). Same refuse guard as before.
+    if (!renderAgentResume(agent, base, sid)) {
+        return {
+            error:
+                `Cannot gracefully restart "${agent}": no captured session to resume, so a restart ` +
+                'would lose the conversation. Only a claude agent with a captured session can be resumed.',
+        };
+    }
+    // Verified id → --resume; drifted id → --continue. Never a fresh mint here
+    // (the guard above guarantees claude+sid, so the decision preserves the chat).
+    const decision = agentRelaunchDecision(spec, false, sessionExists);
+    if (!decision?.command) {
+        return { error: `Cannot resolve a resume command for "${agent}".` };
+    }
+    return { command: decision.command };
+}
+
+/**
  * Append a user's ALWAYS-ON launch flags to a base agent command. Both sides are
  * trimmed; empty/whitespace flags are a no-op. Pure so the flag behaviour is
  * unit-testable independent of the settings read. The session-id flag is added
