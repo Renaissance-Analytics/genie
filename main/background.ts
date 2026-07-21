@@ -176,6 +176,7 @@ import { registerOpenFile } from './editor/open-file';
 import {
     registerHostTools,
     createSpecializedAgentTerminal,
+    restartAgentTerminal,
     updateAgentInboxChannel,
 } from './mcp/host-tools';
 import { isQuittingForUpdate } from './updater/quit-state';
@@ -1444,6 +1445,7 @@ app.whenReady().then(async () => {
             restartProcess: (id) => restartProcess(id),
             createAgentTerminal: (opts) => createAgentTerminal(opts),
             createSpecializedAgentTerminal: (input) => createSpecializedAgentTerminal(input),
+            restartAgentTerminal: (id) => restartAgentTerminal(id),
             updateAgentInboxChannel: (specId, patch) => updateAgentInboxChannel(specId, patch),
             killTerminalById: (id) => killTerminalById(id),
             writeToTerminal: (id, data) => writeToTerminal(id, data),

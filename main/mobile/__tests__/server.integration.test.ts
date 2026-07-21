@@ -44,6 +44,7 @@ let updateReady = false;
 // flip `specializedWired` false to simulate a host that doesn't support it (501).
 let specializedWired = true;
 const specializedInputs: Array<Record<string, unknown>> = [];
+const restartedIds: string[] = [];
 // Agent-settings host edit (agentinbox/update-channel): records the plumbed (specId,
 // patch); flip `agentInboxUpdateWired` false to simulate a host without the dep (501).
 let agentInboxUpdateWired = true;
@@ -100,6 +101,20 @@ const deps = (): MobileDataDeps => ({
                           type: 'terminal',
                           cwd: '/tmp/demo',
                       } as unknown as import('../../db').TerminalSpecRow,
+                  };
+              },
+          }
+        : {}),
+    ...(specializedWired
+        ? {
+              restartAgentTerminal: (id: string) => {
+                  restartedIds.push(id);
+                  return {
+                      ok: true as const,
+                      oldId: id,
+                      newId: 't-agent-2',
+                      agent: 'claude' as const,
+                      command: 'claude --resume sess-1',
                   };
               },
           }
@@ -239,6 +254,7 @@ beforeEach(() => {
     clipboardMode = 'desktop';
     specializedWired = true;
     specializedInputs.length = 0;
+    restartedIds.length = 0;
     agentInboxUpdateWired = true;
     agentInboxUpdates.length = 0;
     termOpens.length = 0;
@@ -852,6 +868,31 @@ describe('mobile server (integration, 127.0.0.1)', () => {
             purpose: 'frontend',
             scope: 'self',
         });
+    });
+
+    it('restarts an agent terminal on the host (remote Restart agent)', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/desktop/terminal-spec/restart-agent', {
+            token,
+            body: { id: 't-agent' },
+        });
+        expect(r.status).toBe(200);
+        expect(r.json.ok).toBe(true);
+        expect(r.json.newId).toBe('t-agent-2');
+        expect(restartedIds).toEqual(['t-agent']);
+    });
+
+    it('501s the restart-agent endpoint on a host that does not support it', async () => {
+        specializedWired = false;
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/desktop/terminal-spec/restart-agent', {
+            token,
+            body: { id: 't-agent' },
+        });
+        expect(r.status).toBe(501);
+        expect(r.json.ok).toBe(false);
     });
 
     it('501s the create-agent endpoint on a host that does not support it', async () => {
