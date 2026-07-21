@@ -89,6 +89,7 @@ import {
     workspaceEndpointUrl,
     pushToWorkspace,
     pushToTerminal,
+    serverPushDiagnostics,
     DEFAULT_MCP_PORT,
 } from './mcp/server';
 import { startControlServer } from './control';
@@ -1260,6 +1261,52 @@ app.whenReady().then(async () => {
             electronPorts,
         ),
     ).catch((e) => console.error('[mcp] failed to start', e));
+    // E2E seam (GENIE_E2E=1 only): publish the LIVE MCP endpoint plus hooks to
+    // drive a REAL broker delivery, so a Playwright spec can prove the whole
+    // server-push chain in the compiled app — including that the boot above
+    // actually wired the notify sink. Published here (after startMcpServer) so
+    // the endpoint URL exists. Inert in a normal run.
+    if (isE2E()) {
+        const wsId = 'e2e-push-ws';
+        (globalThis as Record<string, unknown>).__GENIE_E2E_MCP__ = {
+            endpointUrl: workspaceEndpointUrl(wsId),
+            diagnostics: () => serverPushDiagnostics(),
+            /** Join two agents in that workspace and DM between them — the same
+             *  send() path an agent's `agentinbox` tool call takes. */
+            sendSelfTestDm: (): boolean => {
+                const base = {
+                    workspaceId: wsId,
+                    workspaceName: 'E2E Push',
+                    slug: 'e2e-push',
+                    agentType: 'claude' as const,
+                    purpose: 'general',
+                    scope: 'all' as const,
+                    scopeWorkspaces: [],
+                    chatSessionId: null,
+                };
+                agentInboxBroker.join({
+                    ...base,
+                    agentId: 'e2e-push-a',
+                    terminalId: 'e2e-push-t-a',
+                    label: 'E2E A',
+                });
+                agentInboxBroker.join({
+                    ...base,
+                    agentId: 'e2e-push-b',
+                    terminalId: 'e2e-push-t-b',
+                    label: 'E2E B',
+                });
+                const r = agentInboxBroker.send({
+                    fromAgentId: 'e2e-push-a',
+                    toAgentId: 'e2e-push-b',
+                    text: 'e2e server-push probe',
+                });
+                return r.ok === true && (r.delivered ?? 0) > 0;
+            },
+        };
+        // eslint-disable-next-line no-console
+        console.log('[e2e] MCP push handle published');
+    }
     // Backfill the genie MCP entry into the Claude/Cursor config of any
     // workspace already opted in — now with the stable workspace endpoint URL,
     // so older configs that carried the broken ${GENIE_MCP_URL} ref are
