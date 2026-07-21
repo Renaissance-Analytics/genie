@@ -250,7 +250,10 @@ async function startFixture(): Promise<{ server: http.Server; port: number }> {
 
 async function startViteFixture(): Promise<{ server: http.Server; port: number }> {
     const cors = {
-        'Access-Control-Allow-Origin': 'https://app.test',
+        // The browser is legitimately on the `.gen` origin, so a correctly
+        // configured dev server allows it (see the PR note: a REAL Vite/Next
+        // server needs its own CORS/origin config for this).
+        'Access-Control-Allow-Origin': 'https://app.gen',
         Vary: 'Origin',
     };
     const server = http.createServer((req, res) => {
@@ -384,7 +387,7 @@ export async function startTunnelE2EHarness(): Promise<void> {
             scheme: 'http',
             port: vite.port,
             loopback: '::1',
-            allowedOrigins: ['app.test'],
+            allowedOrigins: ['app.test', 'app.gen'],
         },
         {
             workspaceId: WORKSPACE_ID,
@@ -394,7 +397,7 @@ export async function startTunnelE2EHarness(): Promise<void> {
             scheme: 'http',
             port: vite.port,
             loopback: '::1',
-            allowedOrigins: ['app.test'],
+            allowedOrigins: ['app.test', 'app.gen'],
         },
         {
             workspaceId: WORKSPACE_ID,
@@ -404,7 +407,7 @@ export async function startTunnelE2EHarness(): Promise<void> {
             scheme: 'http',
             port: vite.port,
             loopback: '::1',
-            allowedOrigins: ['app.test'],
+            allowedOrigins: ['app.test', 'app.gen'],
         },
     ];
     let connKey = LOCAL_CONN_KEY;
@@ -513,7 +516,7 @@ export async function startTunnelE2EHarness(): Promise<void> {
                 });
                 await contents.executeJavaScript(
                     `window.__tunnelProbe.vite.debugger = ${
-                        evaluated?.result?.value === 'https://app.test'
+                        evaluated?.result?.value === 'https://app.gen'
                     }`,
                     true,
                 );
