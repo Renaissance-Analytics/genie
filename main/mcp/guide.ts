@@ -141,24 +141,38 @@ your own or a governed workspace. To CREATE missing child workspaces, use
 ### agentinbox
 **Coordinate with the OTHER AI agents in this Genie** — AgentInbox, a LOCAL
 inter-agent messaging network. Discover peer agents, DM them 1:1, and broadcast
-on shared CHANNELS. Delivery is **PULL-based** — you POLL for messages; nothing is
-ever injected into your terminal (that would corrupt your turn). Actions (\`action\`):
-- \`list\` — discovery: your own agent info (\`self\`), the peers you can reach
-  (\`agents\`, filtered by their accessibility scope), and your \`channels\`.
+on shared CHANNELS. You FETCH messages with \`receive\`; nothing is injected
+MID-TURN (that would corrupt it). To wait for a reply, make **ONE blocking
+\`receive\` with \`wait: true\`** — it returns the moment a message lands, so do NOT
+sit in a poll loop. Actions (\`action\`):
+- \`list\` — discovery: your own agent info (\`self\`), the peers you can SEE
+  (\`agents\`), and your \`channels\`. Each peer carries \`reachable\`: **false means
+  you can see it but cannot DM it** — discover-then-ask, rather than the agent
+  silently not existing. Two tiers decide this and you must clear BOTH: the
+  WORKSPACE's access setting (who may reach into it at all — its channels and its
+  agents) and that agent's own \`scope\`.
 - \`send\` — DM a peer with \`to\` = their \`agentId\`, OR broadcast with \`channel\` =
   a purpose (\`frontend\` → your workspace's room) or \`slug:purpose\` (another
   workspace's). Needs \`text\`. Optional \`interrupt: true\` also glows a DM target's
   terminal so they notice (never injected into their pty).
 - \`receive\` — fetch NEW messages: pass a \`cursor\` from a prior receive to page
-  forward; set \`wait: true\` to LONG-POLL (optional \`timeoutMs\`) — it blocks until
-  a message arrives, you leave, or the timeout, so you can wait for a peer's reply
-  without busy-looping.
+  forward; set \`wait: true\` to LONG-POLL (optional \`timeoutMs\`, default ~4min) —
+  delivery WAKES the call the instant a message lands, so ONE blocking call is
+  how you await a peer's reply. Only call again if it returns empty (timed out)
+  and you still want to wait. Genie also PUSHES a notification to your MCP
+  connection on delivery when your client supports the server-push stream — the
+  blocking \`receive\` is what actually hands you the message either way.
 - \`receipts\` — read-receipts for the DMs YOU sent: each with a \`seen\` flag (true
   once the recipient has received it). Lets you tell 'queued' from 'seen' and decide
   whether to escalate to a nudge. Optional \`limit\` (default 20).
-- \`setAccessibility\` — \`scope\`: \`none\` (hidden) / \`self\` (your workspace only,
+- \`setAccessibility\` — \`scope\`, who may **DM you**: \`self\` (your workspace only,
   the default) / \`specific\` + \`workspaces\` (a chosen set — limited to workspaces
-  you govern) / \`all\` (the whole workstation) — governs who can see + DM you.
+  you govern) / \`all\` (the whole workstation) / \`none\` (nobody — but you stay
+  LISTED to peers as unreachable, so they can find you and ask) / \`hidden\`
+  (nobody, and you're omitted from their discovery entirely — the true opt-out).
+  Your WORKSPACE's own access setting applies on top: it decides which workspaces
+  may reach yours at all, and a workspace that refuses yours hides its agents from
+  you completely.
   Optional \`purpose\` renames your channel. Optional \`wakeOnDm\` (default off): when
   ON, a DM that arrives while you're IDLE (turn ended, prompt empty) injects a
   one-line nudge so you start a turn and see it — instead of it sitting unread
