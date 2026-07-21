@@ -824,7 +824,11 @@ const GUIDE_TOOL = {
     name: 'genieGuide',
     description:
         'Return the full usage guide for the Genie MCP server (what each tool does, when to use it, and the zero-setup per-terminal contract). Call this when you want details beyond the brief in AGENTS.md.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    inputSchema: {
+        type: 'object',
+        properties: { ...TERMINAL_ID_PROP },
+        additionalProperties: false,
+    },
 };
 
 /**
@@ -837,7 +841,11 @@ const INITIALIZE_WORKSPACE_TOOL = {
     name: INITIALIZE_WORKSPACE_PROMPT_NAME,
     description:
         'Orient yourself in the current Genie workspace. Returns a map of the .agi envelope and every repo (paths, GitHub refs, orientation files), followed by a numbered learning plan. Call this first in a fresh or newly converted workspace.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    inputSchema: {
+        type: 'object',
+        properties: { ...TERMINAL_ID_PROP },
+        additionalProperties: false,
+    },
 };
 const INITIALIZE_WORKSPACE_PROMPT = {
     name: INITIALIZE_WORKSPACE_PROMPT_NAME,
@@ -928,6 +936,7 @@ const MANAGE_TERMINALS_TOOL = {
     inputSchema: {
         type: 'object',
         properties: {
+            ...TERMINAL_ID_PROP,
             ...TARGET_WORKSPACE_PROP,
             action: {
                 type: 'string',
@@ -994,6 +1003,7 @@ const RUN_AGENT_TOOL = {
     inputSchema: {
         type: 'object',
         properties: {
+            ...TERMINAL_ID_PROP,
             ...TARGET_WORKSPACE_PROP,
             action: {
                 type: 'string',
@@ -1064,6 +1074,7 @@ const MANAGE_WORKSPACES_TOOL = {
     inputSchema: {
         type: 'object',
         properties: {
+            ...TERMINAL_ID_PROP,
             ...TARGET_WORKSPACE_PROP,
             action: {
                 type: 'string',
@@ -1083,6 +1094,7 @@ const AGENTINBOX_TOOL = {
     inputSchema: {
         type: 'object',
         properties: {
+            ...TERMINAL_ID_PROP,
             action: {
                 type: 'string',
                 enum: ['list', 'send', 'receive', 'receipts', 'setAccessibility', 'join', 'leave'],
@@ -1155,6 +1167,7 @@ const KNOWLEDGE_TOOL = {
     inputSchema: {
         type: 'object',
         properties: {
+            ...TERMINAL_ID_PROP,
             action: {
                 type: 'string',
                 enum: ['search', 'get', 'add', 'list', 'link'],
