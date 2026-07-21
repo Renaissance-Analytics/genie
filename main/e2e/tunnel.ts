@@ -71,9 +71,23 @@ function fixtureHtml(): string {
   const attempt = async (name, fn) => {
     try { await fn(); } catch (error) { p.errors.push(name + ': ' + String(error)); }
   };
+  // The absolute script + stylesheet are EXTERNAL subresources: reading them the
+  // instant this runs races their load, which is why Windows (the slowest runner)
+  // intermittently reported absoluteStyle:false while macOS/Linux passed. Poll
+  // briefly instead of sampling once.
+  const settle = async (check) => {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if (check()) return true;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return check();
+  };
   (async () => {
-    p.absoluteScript = window.__absoluteScriptLoaded === true;
-    p.absoluteStyle = getComputedStyle(document.getElementById('style-probe')).color === 'rgb(1, 2, 3)';
+    p.absoluteScript = await settle(() => window.__absoluteScriptLoaded === true);
+    p.absoluteStyle = await settle(
+      () => getComputedStyle(document.getElementById('style-probe')).color === 'rgb(1, 2, 3)',
+    );
     await attempt('bearer', async () => {
       const response = await fetch('/api/bearer', {
         headers: { Authorization: 'Bearer fixture-application-token' },
