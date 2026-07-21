@@ -6,6 +6,7 @@ import {
     openGetStream,
     openStreamCount,
     pushNotification,
+    serverPushStats,
     type GetStreamLog,
 } from '../server-push';
 
@@ -138,6 +139,33 @@ describe('server-push GET stream registry', () => {
 
         req.emit('close');
         expect(openStreamCount()).toBe(0);
+    });
+
+    it('tracks the measurement counters the diagnostic surface reports', () => {
+        // Nothing yet — the "no client ever connected" baseline.
+        expect(serverPushStats()).toMatchObject({
+            open: 0,
+            streamsOpened: 0,
+            streamsWithSession: 0,
+            pushesSent: 0,
+            pushesReached: 0,
+        });
+
+        const a = fakeConn({ 'mcp-session-id': 'sess-A' }); // echoes a session id
+        const b = fakeConn(); // no session id
+        openGetStream(asReq(a.req), asRes(a.res), 'tok-1', HB);
+        openGetStream(asReq(b.req), asRes(b.res), 'tok-1', HB);
+
+        pushNotification({ token: 'tok-1' }, { method: 'notifications/message' }); // reaches 2
+        pushNotification({ token: 'nobody' }, { method: 'notifications/message' }); // reaches 0
+
+        expect(serverPushStats()).toMatchObject({
+            open: 2,
+            streamsOpened: 2,
+            streamsWithSession: 1, // only A carried a session id
+            pushesSent: 2,
+            pushesReached: 2, // 2 + 0
+        });
     });
 
     it('does not write to an ended stream', () => {

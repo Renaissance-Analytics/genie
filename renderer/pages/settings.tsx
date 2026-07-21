@@ -16,6 +16,7 @@ import {
 import {
     api,
     type McpServerState,
+    type ServerPushDiagnostics,
     type GenieHost,
     type MobileStatus,
     type MobileDevice,
@@ -2143,6 +2144,7 @@ function AgentMcpSection({
     onSyncChange: (target: 'claude' | 'cursor' | 'codex' | 'agents', on: boolean) => void;
 }) {
     const [state, setState] = useState<McpServerState | null>(null);
+    const [push, setPush] = useState<ServerPushDiagnostics | null>(null);
     const [busy, setBusy] = useState(false);
 
     const refresh = async () => {
@@ -2150,6 +2152,11 @@ function AgentMcpSection({
             setState(await api().mcp.status());
         } catch {
             setState(null);
+        }
+        try {
+            setPush(await api().mcp.pushStatus());
+        } catch {
+            setPush(null);
         }
     };
 
@@ -2295,7 +2302,74 @@ function AgentMcpSection({
                     />
                 </SettingRow>
             ))}
+
+            {!restricted && (
+                <>
+                    <SetSubhead>Server-push (SSE) — experimental</SetSubhead>
+                    <Text size="xs" className="text-zinc-500" style={{ marginBottom: 6 }}>
+                        Whether connected agents open the MCP server-push stream so an
+                        AgentInbox message can be pushed to them (vs a blocking poll).
+                        This measures what your actual agent clients do — run an agent,
+                        then refresh.
+                    </Text>
+                    <SettingRow
+                        label="Client opens the stream"
+                        desc="A real agent client connected to the GET SSE endpoint"
+                        keywords="server push sse stream mcp agentinbox measurement"
+                    >
+                        <PushStat
+                            ok={(push?.streamsOpened ?? 0) > 0}
+                            yes={`yes — ${push?.streamsOpened} opened, ${push?.open} open now`}
+                            no="not yet"
+                        />
+                    </SettingRow>
+                    <SettingRow
+                        label="Echoes a session id"
+                        desc="Mcp-Session-Id echoed back — required for per-agent routing"
+                        keywords="server push session id per-agent routing mcp"
+                    >
+                        <PushStat
+                            ok={(push?.sessionsCorrelated ?? 0) > 0}
+                            yes={`yes — ${push?.sessionsCorrelated} correlated`}
+                            no={
+                                (push?.streamsOpened ?? 0) > 0
+                                    ? 'no — falls back to workspace-wide'
+                                    : '—'
+                            }
+                        />
+                    </SettingRow>
+                    <SettingRow
+                        label="Pushes delivered"
+                        desc="Notifications that reached an open stream"
+                        keywords="server push delivered reached notifications mcp"
+                    >
+                        <PushStat
+                            ok={(push?.pushesReached ?? 0) > 0}
+                            yes={`${push?.pushesReached} of ${push?.pushesSent} reached`}
+                            no={
+                                (push?.pushesSent ?? 0) > 0
+                                    ? `0 of ${push?.pushesSent} reached`
+                                    : 'none sent yet'
+                            }
+                        />
+                    </SettingRow>
+                    <div className="set-actions">
+                        <Action variant="ghost" icon="refresh-cw" onClick={() => void refresh()}>
+                            Refresh
+                        </Action>
+                    </div>
+                </>
+            )}
         </SetSection>
+    );
+}
+
+/** A yes/no measurement pill for the server-push diagnostics. */
+function PushStat({ ok, yes, no }: { ok: boolean; yes: string; no: string }) {
+    return (
+        <Text size="xs" style={{ color: ok ? 'var(--emerald-600)' : 'var(--fg-3)' }}>
+            {ok ? yes : no}
+        </Text>
     );
 }
 

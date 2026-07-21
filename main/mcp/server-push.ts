@@ -49,6 +49,45 @@ export interface ServerNotification {
 let seq = 0;
 const streams = new Map<number, OpenStream>();
 
+/**
+ * Cumulative counters for the diagnostic readout — the whole point of the probe.
+ * `streamsOpened` > 0 answers "does a real client open the GET stream?";
+ * `streamsWithSession` > 0 answers "does it echo Mcp-Session-Id?" (per-agent
+ * routing viability); `pushesReached` vs `pushesSent` answers "did a push land?".
+ */
+const stats = {
+    streamsOpened: 0,
+    streamsWithSession: 0,
+    pushesSent: 0,
+    pushesReached: 0,
+};
+
+/** A snapshot of the server-push measurement for the diagnostic surface. */
+export interface ServerPushStats {
+    /** Streams open right now. */
+    open: number;
+    /** Streams ever opened this session — >0 means a client opened the GET stream. */
+    streamsOpened: number;
+    /** Of those, how many carried an Mcp-Session-Id — >0 means the client echoes it. */
+    streamsWithSession: number;
+    /** Notifications the server tried to push. */
+    pushesSent: number;
+    /** Push deliveries that reached an open stream (sum of reach counts). */
+    pushesReached: number;
+}
+
+export function serverPushStats(): ServerPushStats {
+    return { open: streams.size, ...stats };
+}
+
+/** Reset counters (server stop / tests). */
+export function resetServerPushStats(): void {
+    stats.streamsOpened = 0;
+    stats.streamsWithSession = 0;
+    stats.pushesSent = 0;
+    stats.pushesReached = 0;
+}
+
 function headerOf(req: http.IncomingMessage, name: string): string | undefined {
     const v = req.headers[name];
     return Array.isArray(v) ? v[0] : v;
@@ -68,6 +107,9 @@ export function openGetStream(
 ): void {
     const id = ++seq;
     const sessionId = headerOf(req, 'mcp-session-id');
+
+    stats.streamsOpened += 1;
+    if (sessionId) stats.streamsWithSession += 1;
 
     opts.log?.({
         token,
@@ -127,6 +169,8 @@ export function pushNotification(
         if (s.res.writableEnded || s.res.destroyed) continue;
         if (safeWrite(s.res, `event: message\ndata: ${payload}\n\n`)) reached++;
     }
+    stats.pushesSent += 1;
+    stats.pushesReached += reached;
     return reached;
 }
 
@@ -149,6 +193,7 @@ export function closeAllStreams(): void {
         }
     }
     streams.clear();
+    resetServerPushStats();
 }
 
 function safeWrite(res: http.ServerResponse, chunk: string): boolean {

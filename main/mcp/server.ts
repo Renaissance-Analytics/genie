@@ -6,8 +6,10 @@ import {
     closeAllStreams,
     openGetStream,
     pushNotification,
+    serverPushStats,
     type GetStreamLog,
     type ServerNotification,
+    type ServerPushStats,
 } from './server-push';
 import {
     handleMcpMessage,
@@ -300,6 +302,18 @@ export function pushToTerminal(terminalId: string, notification: ServerNotificat
         if (term === terminalId) reached += pushNotification({ sessionId }, notification);
     }
     return reached;
+}
+
+/** The server-push measurement — the diagnostic surface's data. Adds the
+ *  session↔terminal correlation count (per-agent routing readiness) to the
+ *  stream/push counters. */
+export interface ServerPushDiagnostics extends ServerPushStats {
+    /** Distinct sessions correlated to a terminal — >0 means per-agent routing is live. */
+    sessionsCorrelated: number;
+}
+
+export function serverPushDiagnostics(): ServerPushDiagnostics {
+    return { ...serverPushStats(), sessionsCorrelated: sessionTerminal.size };
 }
 
 /**
