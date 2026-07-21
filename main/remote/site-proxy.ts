@@ -279,9 +279,9 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
             cert: defaultLeaf.certPem,
             SNICallback: (servername, cb) => {
                 const host = stripHostPort(servername);
-                // Same structural gate as CONNECT: only ever issue a leaf for a
-                // real `.gen` name, never for an upstream `.test` vhost.
-                if (!isGenHost(host) || !deps.resolveGen(host)) {
+                // Same allowlist as CONNECT (see there): enabled names only, which
+                // includes a site's upstream `.test` host for its own assets.
+                if (!deps.resolveGen(host)) {
                     cb(new Error('refused: not an enabled testing-browser origin'));
                     return;
                 }
@@ -401,11 +401,13 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
     });
     proxy.on('connect', (req, clientSocket: Duplex, head: Buffer) => {
         const genHost = stripHostPort(req.url);
-        // §5 allowlist: refuse everything not in the enabled `.gen` set — a
-        // non-`.gen` host or a disabled/unknown `.gen` never gets a tunnel. The
-        // isGenHost check is structural: even a mis-keyed map can never talk the
-        // shim into tunnelling a raw upstream `.test` (genie#29).
-        if (!isGenHost(genHost) || !deps.resolveGen(genHost)) {
+        // §5 allowlist: refuse everything not in the ENABLED set. That set holds
+        // both a site's `.gen` name (what the browser navigates on) and its
+        // upstream `.test` hostname (which a page's own absolute asset/HMR URLs
+        // still reference, since response BODIES are not rewritten) — so the
+        // resolver IS the allowlist. An `isGenHost` test here would refuse every
+        // companion asset; the allowlist, not the suffix, is what makes this safe.
+        if (!deps.resolveGen(genHost)) {
             rejectSocket(clientSocket, 403);
             return;
         }
