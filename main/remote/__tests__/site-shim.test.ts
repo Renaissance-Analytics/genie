@@ -88,7 +88,7 @@ describe('shim pure helpers', () => {
         expect(forwardPath('abc123', undefined)).toBe('/api/site/abc123/');
     });
 
-    it('buildForwardResponseHeaders preserves real-origin headers and HSTS', () => {
+    it('buildForwardResponseHeaders rewrites Location + Set-Cookie to .gen and keeps HSTS', () => {
         const out = buildForwardResponseHeaders(
             {
                 location: 'https://tynn.test/x',
@@ -99,8 +99,10 @@ describe('shim pure helpers', () => {
             'tynn.test',
             'tynn.gen',
         );
-        expect(out['location']).toBe('https://tynn.test/x');
-        expect(out['set-cookie']).toEqual(['s=1; Secure; Domain=tynn.test']);
+        // The browser is on `tynn.gen`; a `.test` Location/Domain leaks the
+        // upstream origin, which a REMOTE client cannot resolve at all (genie#29).
+        expect(out['location']).toBe('https://tynn.gen/x');
+        expect(out['set-cookie']).toEqual(['s=1; Secure; Domain=tynn.gen']);
         expect(out['strict-transport-security']).toBe('max-age=63072000'); // HSTS preserved
         expect(out['connection']).toBeUndefined(); // hop-by-hop stripped
     });
@@ -248,8 +250,9 @@ describe('shim end-to-end (no display)', () => {
         try {
             const res = await fetchThroughShim(shim, GEN, '/redir', ca.caPem);
             expect(res.status).toBe(302);
-            expect(res.headers['location']).toBe('https://tynn.test/next?q=1');
-            expect(res.headers['set-cookie']).toContain('Domain=tynn.test');
+            // End to end: the redirect the BROWSER sees must stay on `.gen`.
+            expect(res.headers['location']).toBe('https://tynn.gen/next?q=1');
+            expect(res.headers['set-cookie']).toContain('Domain=tynn.gen');
             expect(res.headers['set-cookie']).toContain('Secure'); // preserved (valid https)
             expect(res.headers['strict-transport-security']).toContain('max-age=63072000');
         } finally {

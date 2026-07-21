@@ -234,6 +234,18 @@ export function buildForwardResponseHeaders(
         const lk = k.toLowerCase();
         if (HOP_BY_HOP.has(lk)) continue;
         if (connTokens.has(lk)) continue;
+        // Keep the browser ON the `.gen` origin. An upstream `Location` /
+        // `Set-Cookie Domain=` names the real `.test` vhost, which resolves ONLY
+        // on the host — leaking it strands a remote client entirely (genie#29).
+        if (lk === 'location') {
+            out[k] = rewriteGenLocation(String(v), hostname, genHost);
+            continue;
+        }
+        if (lk === 'set-cookie') {
+            const cookies = Array.isArray(v) ? v : [String(v)];
+            out[k] = cookies.map((c) => rewriteGenSetCookieDomain(c, hostname, genHost));
+            continue;
+        }
         out[k] = v; // HSTS, content-type, Secure cookies, etc. all preserved
     }
     return out;
@@ -267,7 +279,9 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
             cert: defaultLeaf.certPem,
             SNICallback: (servername, cb) => {
                 const host = stripHostPort(servername);
-                if (!deps.resolveGen(host)) {
+                // Same structural gate as CONNECT: only ever issue a leaf for a
+                // real `.gen` name, never for an upstream `.test` vhost.
+                if (!isGenHost(host) || !deps.resolveGen(host)) {
                     cb(new Error('refused: not an enabled testing-browser origin'));
                     return;
                 }
@@ -388,8 +402,10 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
     proxy.on('connect', (req, clientSocket: Duplex, head: Buffer) => {
         const genHost = stripHostPort(req.url);
         // §5 allowlist: refuse everything not in the enabled `.gen` set — a
-        // non-`.gen` host or a disabled/unknown `.gen` never gets a tunnel.
-        if (!deps.resolveGen(genHost)) {
+        // non-`.gen` host or a disabled/unknown `.gen` never gets a tunnel. The
+        // isGenHost check is structural: even a mis-keyed map can never talk the
+        // shim into tunnelling a raw upstream `.test` (genie#29).
+        if (!isGenHost(genHost) || !deps.resolveGen(genHost)) {
             rejectSocket(clientSocket, 403);
             return;
         }

@@ -135,8 +135,13 @@ function enabledGenSet(inst: TestingBrowserInstance): Set<string> {
     return new Set(inst.genMap.keys());
 }
 
+/**
+ * Alias → canonical origin for the URL bar: the real `.test` vhost resolves TO
+ * its `.gen` name. Inverted (`.gen` → `.test`) this is what turned a typed
+ * `tynn.gen` into `https://tynn.test/` — the reported symptom in genie#29.
+ */
 function aliasMap(inst: TestingBrowserInstance): Map<string, string> {
-    return new Map(inst.sites.map((site) => [site.genName.toLowerCase(), site.hostname.toLowerCase()]));
+    return new Map(inst.sites.map((site) => [site.hostname.toLowerCase(), site.genName.toLowerCase()]));
 }
 
 function normalizeForInstance(
@@ -336,7 +341,11 @@ async function refreshSites(inst: TestingBrowserInstance): Promise<void> {
         : await remoteListEnabledGenSites(inst.connKey);
     inst.genMap.clear();
     for (const s of sites) {
-        inst.genMap.set(s.hostname.toLowerCase(), {
+        // Keyed by the `.gen` NAME — this map is both the shim's resolver and the
+        // browser's URL source, so keying it by the upstream `.test` hostname is
+        // what made the browser navigate to `.test` and strand remote clients
+        // (genie#29). The `.test` host lives in the target as `hostname`.
+        inst.genMap.set(s.genName.toLowerCase(), {
             workspaceId: s.workspaceId,
             siteId: s.siteId,
             hostname: s.hostname,
