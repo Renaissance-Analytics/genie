@@ -11,6 +11,8 @@ import {
     mcpServerPort,
     workspaceEndpointUrl,
     registerTerminalEndpoint,
+    pushToWorkspace,
+    pushToTerminal,
     DEFAULT_MCP_PORT,
 } from '../server';
 
@@ -649,6 +651,218 @@ describe('mcp server', () => {
         } finally {
             if (prev === undefined) delete process.env.GENIE_MCP_HEARTBEAT_MS;
             else process.env.GENIE_MCP_HEARTBEAT_MS = prev;
+        }
+    });
+});
+
+/**
+ * The server->client GET SSE stream (MCP Streamable HTTP §"Listening for
+ * Messages from the Server"). Drives it over a real socket: a GET opens the
+ * stream (previously 405), initialize hands back an Mcp-Session-Id, and a
+ * server-side push reaches the open stream. This is the PROBE — the transport
+ * half whose live behaviour against a real client we still have to measure.
+ */
+describe('mcp server — GET server-push stream', () => {
+    /** Open a GET SSE stream; resolve once `bytes` contains `marker`, keeping
+     *  the socket OPEN so the caller can trigger a push, then close it. */
+    function openStream(
+        portNum: number,
+        token: string,
+        headers: Record<string, string> = {},
+    ): Promise<{ status: number; contentType: string; read: () => string; close: () => void }> {
+        return new Promise((resolve, reject) => {
+            const req = http.request(
+                {
+                    host: '127.0.0.1',
+                    port: portNum,
+                    path: `/mcp/${token}`,
+                    method: 'GET',
+                    headers: { Accept: 'text/event-stream', ...headers },
+                },
+                (res) => {
+                    let bytes = '';
+                    res.on('data', (c) => (bytes += c));
+                    res.on('error', () => {});
+                    resolve({
+                        status: res.statusCode ?? 0,
+                        contentType: String(res.headers['content-type'] ?? ''),
+                        read: () => bytes,
+                        close: () => req.destroy(),
+                    });
+                },
+            );
+            req.on('error', reject);
+            req.end();
+        });
+    }
+
+    /** POST that also returns response headers (for the Mcp-Session-Id check). */
+    function rpcWithHeaders(
+        portNum: number,
+        token: string,
+        msg: unknown,
+    ): Promise<{ status: number; headers: http.IncomingHttpHeaders }> {
+        return new Promise((resolve, reject) => {
+            const data = JSON.stringify(msg);
+            const req = http.request(
+                {
+                    host: '127.0.0.1',
+                    port: portNum,
+                    path: `/mcp/${token}`,
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Content-Length': Buffer.byteLength(data),
+                    },
+                },
+                (res) => {
+                    res.on('data', () => {});
+                    res.on('end', () =>
+                        resolve({ status: res.statusCode ?? 0, headers: res.headers }),
+                    );
+                },
+            );
+            req.on('error', reject);
+            req.end(data);
+        });
+    }
+
+    const until = async (fn: () => boolean, ms = 2000): Promise<void> => {
+        const deadline = Date.now() + ms;
+        while (Date.now() < deadline) {
+            if (fn()) return;
+            await new Promise((r) => setTimeout(r, 15));
+        }
+        throw new Error('condition not met in time');
+    };
+
+    it('answers a GET with an SSE stream instead of 405', async () => {
+        const dir = tmpUserDir();
+        await startMcpServer(deps(dir, 0, { ids: ['t-a'], lastActive: 't-a' }, () => {}));
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+
+        const s = await openStream(mcpServerPort()!, token);
+        try {
+            expect(s.status).toBe(200);
+            expect(s.contentType).toContain('text/event-stream');
+            await until(() => s.read().includes(': open'));
+        } finally {
+            s.close();
+        }
+    });
+
+    it('hands the client an Mcp-Session-Id at initialize', async () => {
+        const dir = tmpUserDir();
+        await startMcpServer(deps(dir, 0, { ids: ['t-a'], lastActive: 't-a' }, () => {}));
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+
+        const r = await rpcWithHeaders(mcpServerPort()!, token, {
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
+            params: {},
+        });
+        expect(r.status).toBe(200);
+        expect(r.headers['mcp-session-id']).toBeTruthy();
+    });
+
+    it('pushToWorkspace delivers a notification onto the open stream', async () => {
+        const dir = tmpUserDir();
+        await startMcpServer(deps(dir, 0, { ids: ['t-a'], lastActive: 't-a' }, () => {}));
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+
+        const s = await openStream(mcpServerPort()!, token);
+        try {
+            await until(() => s.read().includes(': open'));
+
+            const reached = pushToWorkspace('ws-1', {
+                method: 'notifications/message',
+                params: { level: 'info', data: 'you have a new AgentInbox message' },
+            });
+            expect(reached).toBe(1);
+
+            await until(() => s.read().includes('notifications/message'));
+            expect(s.read()).toContain('you have a new AgentInbox message');
+        } finally {
+            s.close();
+        }
+    });
+
+    it('pushToWorkspace reaches nobody when no stream is open (the measurement)', async () => {
+        const dir = tmpUserDir();
+        await startMcpServer(deps(dir, 0, { ids: ['t-a'], lastActive: 't-a' }, () => {}));
+        // No GET stream opened — a push must report 0 reached.
+        expect(pushToWorkspace('ws-1', { method: 'notifications/message' })).toBe(0);
+    });
+
+    /** POST that lets the caller set request headers (to echo Mcp-Session-Id). */
+    function postWithHeaders(
+        portNum: number,
+        token: string,
+        msg: unknown,
+        extra: Record<string, string>,
+    ): Promise<{ status: number }> {
+        return new Promise((resolve, reject) => {
+            const data = JSON.stringify(msg);
+            const req = http.request(
+                {
+                    host: '127.0.0.1',
+                    port: portNum,
+                    path: `/mcp/${token}`,
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Content-Length': Buffer.byteLength(data),
+                        ...extra,
+                    },
+                },
+                (res) => {
+                    res.on('data', () => {});
+                    res.on('end', () => resolve({ status: res.statusCode ?? 0 }));
+                },
+            );
+            req.on('error', reject);
+            req.end(data);
+        });
+    }
+
+    it('routes a push to ONE agent once its session↔terminal is correlated', async () => {
+        const dir = tmpUserDir();
+        await startMcpServer(
+            deps(dir, 0, { ids: ['t-a', 't-b'], lastActive: 't-b' }, () => {}),
+        );
+        const port = mcpServerPort()!;
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+        const sessionA = 'sess-A';
+
+        // The client echoes its session id on a tools/call naming terminal t-a —
+        // this is what correlates sessionA ↔ t-a server-side.
+        await postWithHeaders(
+            port,
+            token,
+            {
+                jsonrpc: '2.0',
+                id: 1,
+                method: 'tools/call',
+                params: { name: 'imDone', arguments: { terminalId: 't-a' } },
+            },
+            { 'Mcp-Session-Id': sessionA },
+        );
+
+        // t-a's stream carries that same session id.
+        const streamA = await openStream(port, token, { 'Mcp-Session-Id': sessionA });
+        try {
+            await until(() => streamA.read().includes(': open'));
+
+            // A DM to t-a routes to exactly this stream...
+            expect(pushToTerminal('t-a', { method: 'notifications/message', params: { data: 'for t-a' } })).toBe(1);
+            await until(() => streamA.read().includes('for t-a'));
+
+            // ...and a push aimed at t-b (no correlated session) reaches nobody,
+            // so the caller would fall back to workspace-wide.
+            expect(pushToTerminal('t-b', { method: 'notifications/message' })).toBe(0);
+        } finally {
+            streamA.close();
         }
     });
 });

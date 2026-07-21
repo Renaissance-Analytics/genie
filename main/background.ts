@@ -87,6 +87,8 @@ import {
 import {
     startMcpServer,
     workspaceEndpointUrl,
+    pushToWorkspace,
+    pushToTerminal,
     DEFAULT_MCP_PORT,
 } from './mcp/server';
 import { startControlServer } from './control';
@@ -1096,6 +1098,25 @@ app.whenReady().then(async () => {
         agentInboxBroker.setWorkspaceAccessResolver((workspaceId) =>
             getWorkspaceAgentAccess(workspaceId),
         );
+        // Server-push: on live delivery, nudge the recipient's MCP GET SSE stream
+        // (the "inbox over a hooked connection" path). Route per-agent via its
+        // terminal's session when the client echoed one; else fall back to the
+        // whole workspace. A no-op when the agent has no open stream (returns 0).
+        agentInboxBroker.setNotifySink((target, msg) => {
+            const notification = {
+                method: 'notifications/message',
+                params: {
+                    level: 'info',
+                    logger: 'agentinbox',
+                    data:
+                        msg.kind === 'dm'
+                            ? `New AgentInbox DM from ${msg.fromLabel}`
+                            : `New AgentInbox channel message from ${msg.fromLabel}`,
+                },
+            };
+            const perAgent = pushToTerminal(target.terminalId, notification);
+            if (perAgent === 0) pushToWorkspace(target.workspaceId, notification);
+        });
         rehydrateAgentInbox();
         agentInboxBroker.rehydrateMessages();
     } catch {

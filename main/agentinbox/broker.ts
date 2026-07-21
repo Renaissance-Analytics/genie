@@ -11,6 +11,7 @@ import {
     type AgentInboxJoinInput,
     type AgentInboxMessage,
     type AgentInboxScope,
+    type AgentInboxNotifyTarget,
     type WorkspaceAccessPolicy,
 } from './types';
 import { noopAgentInboxStore, type AgentInboxStore } from './store';
@@ -130,6 +131,39 @@ export class AgentInboxBroker {
 
     setWakeSink(fn: (terminalId: string, text: string) => void): void {
         this.wakeSink = fn;
+    }
+
+    /**
+     * Server-push sink — fired on LIVE delivery of a message to an agent so the
+     * host can push an MCP `notifications/message` down that agent's GET SSE
+     * stream (background.ts wires it to server.ts's pushToTerminal/pushToWorkspace).
+     * This is the SSE half of "the inbox delivers over a hooked connection": an
+     * actively-connected, waiting agent learns a message landed without holding a
+     * blocking `receive`. Absent in tests. Deliberately NOT fired on rehydrate
+     * replay — a boot must not re-announce historical messages. Best-effort: a
+     * sink failure never breaks delivery.
+     */
+    private notifySink: ((target: AgentInboxNotifyTarget, msg: AgentInboxMessage) => void) | null =
+        null;
+
+    setNotifySink(fn: (target: AgentInboxNotifyTarget, msg: AgentInboxMessage) => void): void {
+        this.notifySink = fn;
+    }
+
+    private notifyDelivery(agent: AgentInboxAgent, msg: AgentInboxMessage): void {
+        if (!this.notifySink) return;
+        try {
+            this.notifySink(
+                {
+                    workspaceId: agent.workspaceId,
+                    terminalId: agent.terminalId,
+                    agentId: agent.agentId,
+                },
+                msg,
+            );
+        } catch {
+            /* best-effort — a push failure must never break the durable inbox */
+        }
     }
 
     /** Resolve a workspace's access policy (the OUTER tier). Injected by the host
@@ -811,6 +845,9 @@ export class AgentInboxBroker {
             this.appendLog(this.dmLogs, pairKey(from, target.agentId), msg);
             this.store.append(msg);
             this.emitMessage(msg);
+            // Server-push: nudge the recipient's MCP GET stream (if it has one)
+            // so a connected, waiting agent sees the DM without re-polling.
+            this.notifyDelivery(target, msg);
             // Wake-on-DM (opt-in, fail-safe): nudge a genuinely-idle target so a
             // dormant agent starts a turn instead of staying deaf.
             this.maybeWake(target);
@@ -865,6 +902,7 @@ export class AgentInboxBroker {
                 const member = this.agents.get(memberId);
                 if (!member) continue;
                 this.push(member, msg);
+                this.notifyDelivery(member, msg);
                 delivered++;
             }
             this.appendLog(this.channelLogs, key, msg);

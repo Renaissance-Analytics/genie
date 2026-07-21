@@ -102,6 +102,7 @@ import {
     workspaceEndpointUrl,
     mcpServerState,
     restartMcpServer,
+    serverPushDiagnostics,
 } from './mcp/server';
 import {
     mobileEmit,
@@ -517,6 +518,9 @@ export function registerIpcHandlers(): void {
 
     // --- Agent MCP server status / restart (Settings → Agent MCP) -------
     ipcMain.handle('mcp:status', () => mcpServerState());
+    // Server-push (SSE GET stream) measurement — did a real client open the
+    // stream, echo a session id, and receive a push. See serverPushDiagnostics.
+    ipcMain.handle('mcp:push-status', () => serverPushDiagnostics());
     ipcMain.handle('mcp:restart', async () => {
         await restartMcpServer();
         // Rewrite enabled workspaces' configs so their .mcp.json picks up the

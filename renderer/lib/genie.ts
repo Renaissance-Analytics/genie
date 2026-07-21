@@ -515,6 +515,21 @@ export interface McpServerState {
 }
 
 /**
+ * The MCP server-push (SSE GET stream) measurement. The probe's whole purpose:
+ * `streamsOpened > 0` ⇒ a real client opens the stream; `streamsWithSession`/
+ * `sessionsCorrelated > 0` ⇒ it echoes Mcp-Session-Id (per-agent routing is
+ * live); `pushesReached` ⇒ pushes actually landed on an open stream.
+ */
+export interface ServerPushDiagnostics {
+    open: number;
+    streamsOpened: number;
+    streamsWithSession: number;
+    pushesSent: number;
+    pushesReached: number;
+    sessionsCorrelated: number;
+}
+
+/**
  * Live state of the mobile remote-control server (Settings → Mobile), bundled
  * with the pairing PIN + a QR data-URL of the pairing link. The phone NEVER sees
  * this — it's the desktop Settings view's status. `url` is the tailnet phone URL
@@ -1487,6 +1502,9 @@ export interface GenieApi {
         restart: () => Promise<McpServerState>;
         docHealth: (workspaceId: string) => Promise<WorkspaceDocHealth | null>;
         repairDocs: (workspaceId: string) => Promise<RepairDocsResult | null>;
+        /** Server-push (SSE GET stream) measurement — did a real client open the
+         *  stream, echo an Mcp-Session-Id, and receive a pushed notification. */
+        pushStatus: () => Promise<ServerPushDiagnostics>;
     };
     /** Plugin System (Settings → Plugins). Install from a repo URL / folder /
      *  marketplace; enable/disable; toggle granular permissions; uninstall. */

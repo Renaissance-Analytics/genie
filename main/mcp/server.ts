@@ -3,6 +3,15 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import {
+    closeAllStreams,
+    openGetStream,
+    pushNotification,
+    serverPushStats,
+    type GetStreamLog,
+    type ServerNotification,
+    type ServerPushStats,
+} from './server-push';
+import {
     handleMcpMessage,
     type ForceQuestion,
     type ForceQuestionResult,
@@ -219,13 +228,92 @@ function readBody(req: http.IncomingMessage): Promise<string> {
     });
 }
 
-function send(res: http.ServerResponse, status: number, body?: unknown): void {
+function send(
+    res: http.ServerResponse,
+    status: number,
+    body?: unknown,
+    extraHeaders?: Record<string, string>,
+): void {
     res.writeHead(status, {
         'Content-Type': 'application/json',
         // Loopback only; no cross-origin use, but be explicit.
         'Access-Control-Allow-Origin': '127.0.0.1',
+        ...(extraHeaders ?? {}),
     });
     res.end(body === undefined ? undefined : JSON.stringify(body));
+}
+
+/**
+ * PROBE: mint an `Mcp-Session-Id` at initialize and remember which workspace
+ * token it belongs to. A spec-compliant client MUST then echo it on subsequent
+ * requests — including the GET stream — which is exactly what makes per-agent
+ * routing possible. We assign but do NOT require it, so a client that ignores it
+ * keeps working unchanged; we just learn whether the real client honours it.
+ */
+const sessionToken = new Map<string, string>();
+function mintSessionId(token: string): string {
+    const id = crypto.randomUUID();
+    sessionToken.set(id, token);
+    return id;
+}
+
+/**
+ * PROBE + routing: which TERMINAL an Mcp-Session-Id belongs to. Learned when a
+ * POST tool call carries BOTH the echoed session id (header) and a resolved
+ * terminalId (GENIE_TERMINAL_ID arg) — the moment the two are correlated. This
+ * is what lets a DM to one agent push to exactly that agent's GET stream
+ * (per-agent routing) instead of every agent in the workspace. If a client never
+ * echoes the session id, this map stays empty and callers fall back to
+ * workspace-wide — so routing degrades gracefully to what the client supports.
+ */
+const sessionTerminal = new Map<string, string>();
+
+/** PROBE log: what a client presented when it opened the GET stream. */
+function logGetStream(l: GetStreamLog): void {
+    const tok = l.token.length > 8 ? l.token.slice(0, 8) + '…' : l.token;
+    // eslint-disable-next-line no-console
+    console.log(
+        `[mcp-get-stream] opened token=${tok} accept=${l.accept ?? '(none)'} ` +
+            `session=${l.sessionId ?? '(none)'} lastEventId=${l.lastEventId ?? '(none)'}`,
+    );
+}
+
+/**
+ * Push a server->client notification to a workspace's open GET stream(s).
+ * Returns how many streams it reached (0 = no client has an open stream for that
+ * workspace). The AgentInbox broker calls this on DM arrival so a waiting agent
+ * can be nudged over the stream instead of holding a blocking `receive`.
+ */
+export function pushToWorkspace(workspaceId: string, notification: ServerNotification): number {
+    const token = byWorkspace.get(workspaceId);
+    if (!token) return 0;
+    return pushNotification({ token }, notification);
+}
+
+/**
+ * Push to a SPECIFIC agent's GET stream(s), routed by the Mcp-Session-Id(s)
+ * correlated to its terminal. Returns 0 when no session maps to that terminal
+ * (client never echoed one, or the agent has no open stream) — the caller then
+ * falls back to {@link pushToWorkspace}.
+ */
+export function pushToTerminal(terminalId: string, notification: ServerNotification): number {
+    let reached = 0;
+    for (const [sessionId, term] of sessionTerminal) {
+        if (term === terminalId) reached += pushNotification({ sessionId }, notification);
+    }
+    return reached;
+}
+
+/** The server-push measurement — the diagnostic surface's data. Adds the
+ *  session↔terminal correlation count (per-agent routing readiness) to the
+ *  stream/push counters. */
+export interface ServerPushDiagnostics extends ServerPushStats {
+    /** Distinct sessions correlated to a terminal — >0 means per-agent routing is live. */
+    sessionsCorrelated: number;
+}
+
+export function serverPushDiagnostics(): ServerPushDiagnostics {
+    return { ...serverPushStats(), sessionsCorrelated: sessionTerminal.size };
 }
 
 /**
@@ -420,6 +508,15 @@ async function handle(
         send(res, 404, { error: 'unknown endpoint' });
         return;
     }
+    // GET opens the server->client SSE stream (MCP Streamable HTTP §"Listening
+    // for Messages from the Server"). Previously 405 — additive, so no existing
+    // client behaviour changes. PROBE: log every open so we can see whether a
+    // real client connects and whether it echoes the Mcp-Session-Id from
+    // initialize (the per-agent routing key).
+    if (req.method === 'GET') {
+        openGetStream(req, res, token, { heartbeatMs: heartbeatMs(), log: logGetStream });
+        return;
+    }
     if (req.method !== 'POST') {
         send(res, 405, { error: 'method not allowed' });
         return;
@@ -464,6 +561,20 @@ async function handle(
     }
     const terminalId = resolved ?? '';
 
+    // Correlate the client-echoed session id with the terminal it's acting as, so
+    // a DM to this agent can push to exactly its GET stream. Also the live
+    // measurement of whether the client echoes Mcp-Session-Id on POSTs at all.
+    const sid = req.headers['mcp-session-id'];
+    if (typeof sid === 'string' && terminalId && msg.method === 'tools/call') {
+        if (sessionTerminal.get(sid) !== terminalId) {
+            sessionTerminal.set(sid, terminalId);
+            // eslint-disable-next-line no-console
+            console.log(
+                `[mcp-get-stream] session ${sid.slice(0, 8)}… ↔ terminal ${terminalId}`,
+            );
+        }
+    }
+
     const mcpCtx = {
         terminalId,
         serverName: SERVER_NAME,
@@ -499,8 +610,17 @@ async function handle(
 
     const response = await handleMcpMessage(msg, mcpCtx);
     // Notifications get a 202 with no body; requests get their JSON-RPC result.
-    if (response === null) send(res, 202);
-    else send(res, 200, response);
+    if (response === null) {
+        send(res, 202);
+        return;
+    }
+    if (msg.method === 'initialize') {
+        // Hand the client a session id it can echo on the GET stream (PROBE —
+        // additive header; unknown to older clients, honoured by compliant ones).
+        send(res, 200, response, { 'Mcp-Session-Id': mintSessionId(token) });
+        return;
+    }
+    send(res, 200, response);
 }
 
 /**
@@ -595,6 +715,7 @@ export async function restartMcpServer(): Promise<void> {
 }
 
 export function stopMcpServer(): void {
+    closeAllStreams();
     server?.close();
     server = null;
     port = null;
@@ -603,6 +724,8 @@ export function stopMcpServer(): void {
     byTerminal.clear();
     workspaceTokens.clear();
     byWorkspace.clear();
+    sessionToken.clear();
+    sessionTerminal.clear();
 }
 
 /**

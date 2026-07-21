@@ -115,6 +115,17 @@ const api = {
             ipcRenderer.invoke('mcp:doc-health', workspaceId),
         repairDocs: (workspaceId: string) =>
             ipcRenderer.invoke('mcp:repair-docs', workspaceId),
+        /** Server-push (SSE) measurement: did a real client open the GET stream,
+         *  echo a session id, and receive a push. */
+        pushStatus: () =>
+            ipcRenderer.invoke('mcp:push-status') as Promise<{
+                open: number;
+                streamsOpened: number;
+                streamsWithSession: number;
+                pushesSent: number;
+                pushesReached: number;
+                sessionsCorrelated: number;
+            }>,
     },
 
     // Plugin System (Settings → Plugins). Install / enable / grant + marketplaces.
