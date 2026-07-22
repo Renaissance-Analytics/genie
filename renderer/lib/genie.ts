@@ -483,6 +483,13 @@ export interface Settings {
     agent_flags_codex?: string;
     /** Specialized terminals: always-on launch flags for a Custom agent. */
     agent_flags_custom?: string;
+    /** Workstation Setup: the owner's chosen DEFAULT agent id (claude/codex/custom).
+     *  Written by the setup wizard; lets a re-run pre-fill and a future picker pick
+     *  a default. HOST-SOURCED — it describes the host's agent environment. */
+    agent_default?: string;
+    /** Workstation Setup: the enabled-agent ids as a JSON string array. Written by
+     *  the setup wizard; HOST-SOURCED (mirrors `agent_default`). */
+    agent_enabled?: string;
 }
 
 /** Health of a workspace's agent docs (AGENTS.md + Genie section + CLAUDE sync). */

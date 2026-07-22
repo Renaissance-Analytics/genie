@@ -55,6 +55,12 @@ const termOpens: Array<Record<string, unknown>> = [];
 // Every grid the server actually drove the pty to, in order — so a test can assert
 // BOTH that a resize landed and that it was never clamped/dropped on the way.
 const resizes: Array<{ id: string; cols: number; rows: number }> = [];
+// Workstation Setup routes (/api/desktop/setup/*): when wired, expose the status
+// signal + record completion calls; flip `setupWired` false to simulate a host
+// that doesn't support setup (the endpoints then 501).
+let setupWired = true;
+let setupCompleteCalls = 0;
+const SETUP_WS_ID = '__genie_setup__';
 
 function buildAppDir(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mobile-it-'));
@@ -151,6 +157,20 @@ const deps = (): MobileDataDeps => ({
                       : { ok: true, supported: true };
               },
           }),
+    ...(setupWired
+        ? {
+              setupWorkspaceId: SETUP_WS_ID,
+              setupStatus: () => ({
+                  complete: false,
+                  needed: true,
+                  steps: { agents: false, github: false },
+              }),
+              completeSetup: async () => {
+                  setupCompleteCalls += 1;
+                  return { ok: true };
+              },
+          }
+        : {}),
     listPendingQuestions: () => [],
     answerPendingQuestion: () => true,
     updateStatus: () => ({
@@ -259,6 +279,8 @@ beforeEach(() => {
     agentInboxUpdates.length = 0;
     termOpens.length = 0;
     resizes.length = 0;
+    setupWired = true;
+    setupCompleteCalls = 0;
 });
 
 afterEach(() => {
@@ -325,6 +347,53 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         });
         expect(r.status).toBe(400);
         expect(termOpens).toHaveLength(0);
+    });
+
+    it('POST /api/desktop/terminal-open spawns on the reserved setup workspace (workspace-less host)', async () => {
+        const port = await start();
+        const token = await pair(port);
+        // __genie_setup__ has NO served-workspace row, but the WizardModal's embedded
+        // gh terminal must still spawn there — the reserved-binding exemption allows it.
+        const r = await req(port, 'POST', '/api/desktop/terminal-open', {
+            token,
+            body: { id: 'setup-gh', workspaceId: SETUP_WS_ID, cwd: '', shell: 'gh', args: ['auth', 'status'] },
+        });
+        expect(r.status).toBe(200);
+        expect(termOpens).toHaveLength(1);
+        expect(termOpens[0]).toMatchObject({ id: 'setup-gh', workspaceId: SETUP_WS_ID, shell: 'gh' });
+    });
+
+    it('GET /api/desktop/setup/status returns the host status (401 without a token)', async () => {
+        const port = await start();
+        const anon = await req(port, 'GET', '/api/desktop/setup/status');
+        expect(anon.status).toBe(401);
+
+        const token = await pair(port);
+        const r = await req(port, 'GET', '/api/desktop/setup/status', { token });
+        expect(r.status).toBe(200);
+        expect(r.json).toEqual({
+            status: { complete: false, needed: true, steps: { agents: false, github: false } },
+        });
+    });
+
+    it('POST /api/desktop/setup/complete runs the completion seam once', async () => {
+        const port = await start();
+        const token = await pair(port);
+        const r = await req(port, 'POST', '/api/desktop/setup/complete', { token });
+        expect(r.status).toBe(200);
+        expect(r.json).toEqual({ ok: true });
+        expect(setupCompleteCalls).toBe(1);
+    });
+
+    it('setup routes 501 on a host that does not support setup', async () => {
+        setupWired = false;
+        const port = await start();
+        const token = await pair(port);
+        const status = await req(port, 'GET', '/api/desktop/setup/status', { token });
+        expect(status.status).toBe(501);
+        const complete = await req(port, 'POST', '/api/desktop/setup/complete', { token });
+        expect(complete.status).toBe(501);
+        expect(setupCompleteCalls).toBe(0);
     });
 
     it('serves the app shell under /m/ with the <base> injected', async () => {
