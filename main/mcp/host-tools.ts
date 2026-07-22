@@ -58,7 +58,6 @@ import { resolveWorkspaceRepos, getWorkspaceFeed, getOpenCounts, getWorkspaceSta
 import { forceQuestion } from '../ask/force-question';
 import { resolveTargetWorkspace, type TargetDecision } from './target-workspace';
 import { readTynnLink } from '../tynn/provision';
-import { workspaceEndpointUrl } from './server';
 import {
     readTynnMcpUrl,
     withCodexMcpLaunch,
@@ -1090,10 +1089,15 @@ export function resolveAgentLaunch(
     if (!workspace) {
         return withFlags;
     }
+    // Only the WORKSPACE-scoped Tynn override is baked here. The genie endpoint is
+    // deliberately NOT: it must be the TERMINAL's own per-terminal URL so its token
+    // self-identifies the terminal (genie #35) — a workspace-scoped genie URL makes
+    // the server REFUSE every multi-terminal call lacking `terminalId`. The terminal
+    // id doesn't exist yet at this point, so the genie `-c` override is woven in
+    // later, at terminal-create time, via withCodexGenieMcpLaunch (see terminal/ipc).
     return withCodexMcpLaunch(withFlags, {
         agent,
         mcpSyncCodexOff: s.mcp_sync_codex === 'off',
-        genieUrl: workspaceEndpointUrl(workspace.id),
         tynnUrl: readTynnMcpUrl(workspace.path),
     });
 }
