@@ -219,3 +219,111 @@ describe('namespacedToolName', () => {
         expect(namespacedToolName('hello', 'greet')).toBe('hello.greet');
     });
 });
+
+/** A minimal VALID recipe-contributing plugin (declarative steps only). */
+function validRecipePlugin(): Record<string, unknown> {
+    return {
+        id: 'com.example.deployer',
+        namespace: 'deployer',
+        name: 'Deployer',
+        version: '1.0.0',
+        // Contributing recipes REQUIRES the grantable `recipes` Genie-API permission.
+        capabilities: { genieApi: ['recipes'] },
+        recipes: [
+            {
+                id: 'deploy',
+                title: 'Deploy',
+                steps: [
+                    { type: 'form', id: 'target', title: 'Target', fields: [{ key: 'host', label: 'Host', required: true }] },
+                    { type: 'choice', id: 'env', title: 'Environment', options: [{ value: 'prod', label: 'Production' }] },
+                    { type: 'terminal', id: 'run', title: 'Run', command: 'echo', args: ['deploy'] },
+                    { type: 'browser', id: 'open', title: 'Open', url: 'https://example.com/' },
+                ],
+            },
+        ],
+    };
+}
+
+describe('validatePluginManifest — recipes', () => {
+    it('accepts a well-formed recipe plugin', () => {
+        const res = validatePluginManifest(validRecipePlugin());
+        expect(res.ok).toBe(true);
+        if (res.ok) expect(res.manifest.recipes?.[0].id).toBe('deploy');
+    });
+
+    it('requires the `recipes` genieApi permission when recipes are present', () => {
+        const m = validRecipePlugin();
+        m.capabilities = { genieApi: [] };
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.errors.join('\n')).toContain("`capabilities.genieApi` must include \"recipes\"");
+    });
+
+    it('rejects a recipe with no steps', () => {
+        const m = validRecipePlugin();
+        (m.recipes as Array<Record<string, unknown>>)[0].steps = [];
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.errors.join('\n')).toContain('steps');
+    });
+
+    it('rejects an unknown step type', () => {
+        const m = validRecipePlugin();
+        (m.recipes as Array<{ steps: unknown[] }>)[0].steps = [{ type: 'task', id: 'x', title: 'X' }];
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        // `task` needs a JS function → not expressible in a JSON manifest.
+        if (!res.ok) expect(res.errors.join('\n')).toContain('type');
+    });
+
+    it('rejects a terminal step with no command', () => {
+        const m = validRecipePlugin();
+        (m.recipes as Array<{ steps: Array<Record<string, unknown>> }>)[0].steps = [
+            { type: 'terminal', id: 'run', title: 'Run' },
+        ];
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.errors.join('\n')).toContain('command');
+    });
+
+    it('rejects a browser step with no url', () => {
+        const m = validRecipePlugin();
+        (m.recipes as Array<{ steps: Array<Record<string, unknown>> }>)[0].steps = [
+            { type: 'browser', id: 'open', title: 'Open' },
+        ];
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.errors.join('\n')).toContain('url');
+    });
+
+    it('rejects duplicate step ids within a recipe', () => {
+        const m = validRecipePlugin();
+        (m.recipes as Array<{ steps: Array<Record<string, unknown>> }>)[0].steps = [
+            { type: 'choice', id: 'dup', title: 'A', options: [{ value: 'a', label: 'A' }] },
+            { type: 'choice', id: 'dup', title: 'B', options: [{ value: 'b', label: 'B' }] },
+        ];
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.errors.join('\n')).toContain('duplicated');
+    });
+
+    it('rejects a choice step with no options', () => {
+        const m = validRecipePlugin();
+        (m.recipes as Array<{ steps: Array<Record<string, unknown>> }>)[0].steps = [
+            { type: 'choice', id: 'env', title: 'Environment', options: [] },
+        ];
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.errors.join('\n')).toContain('options');
+    });
+
+    it('rejects a form field missing key or label', () => {
+        const m = validRecipePlugin();
+        (m.recipes as Array<{ steps: Array<Record<string, unknown>> }>)[0].steps = [
+            { type: 'form', id: 'f', title: 'F', fields: [{ label: 'No key' }] },
+        ];
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.errors.join('\n')).toContain('key');
+    });
+});

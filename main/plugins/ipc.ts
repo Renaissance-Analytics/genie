@@ -31,6 +31,7 @@ import {
 import { disposePlugin } from './registry';
 import { OFFICIAL_PLUGINS, listBundledPlugins, materialiseBundled } from './official';
 import { consentAndEnablePlugin } from './consent';
+import { listPluginRecipes } from './recipes';
 import { userTrustedKeys, addUserTrustedKey, removeUserTrustedKey } from './trust';
 
 /** One toggleable granular permission for the Settings UI (§12.1). */
@@ -300,6 +301,10 @@ export function registerPluginsIpc(): void {
         }
         return { curated: OFFICIAL_PLUGINS, bundled };
     });
+
+    // Launchable recipes for the WizardModal launcher — only from enabled +
+    // surfaceable plugins that hold the `recipes` grant (fail-closed).
+    ipcMain.handle('plugins:recipes', () => listPluginRecipes());
 
     ipcMain.handle('plugins:install-bundled', async (_e, id: string) => {
         try {

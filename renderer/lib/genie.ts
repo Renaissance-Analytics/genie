@@ -1340,6 +1340,46 @@ export interface InstalledPluginView {
     devApproved: boolean;
 }
 
+/**
+ * A plugin-contributed recipe as delivered to the WizardModal launcher — the
+ * SERIALIZABLE recipe manifest (form/choice/terminal/browser steps) plus its
+ * origin. The renderer reconstitutes it into a runtime Recipe (see
+ * lib/recipes/plugin.ts) before running it.
+ */
+export interface PluginRecipeStepView {
+    type: 'form' | 'choice' | 'terminal' | 'browser';
+    id: string;
+    title: string;
+    fields?: Array<{
+        key: string;
+        label: string;
+        type?: 'text' | 'password' | 'number' | 'select';
+        placeholder?: string;
+        description?: string;
+        required?: boolean;
+        options?: Array<{ value: string; label: string; description?: string }>;
+        defaultValue?: string;
+    }>;
+    options?: Array<{ value: string; label: string; description?: string }>;
+    multi?: boolean;
+    command?: string;
+    args?: string[];
+    cwd?: string;
+    until?: { pattern?: string; exit?: number };
+    capture?: string;
+    url?: string;
+    pollMs?: number;
+}
+
+export interface PluginRecipeView {
+    pluginId: string;
+    pluginName: string;
+    namespace: string;
+    /** Namespaced, collision-free launch id: `${namespace}.${recipe.id}`. */
+    launchId: string;
+    recipe: { id: string; title: string; steps: PluginRecipeStepView[] };
+}
+
 /** Developer Mode state + the user's developer-trusted signing keys. */
 export interface PluginDeveloperModeState {
     enabled: boolean;
@@ -1530,6 +1570,8 @@ export interface GenieApi {
         ) => Promise<PluginActionResult>;
         official: () => Promise<OfficialPluginsResult>;
         installBundled: (id: string) => Promise<PluginActionResult>;
+        /** Launchable recipes contributed by enabled + `recipes`-granted plugins. */
+        recipes: () => Promise<PluginRecipeView[]>;
         /** Capability-scoped binary read/write for a granted plugin editor (§6.2). */
         editorRead: (
             pluginId: string,
