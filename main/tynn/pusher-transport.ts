@@ -40,10 +40,27 @@ export interface WorkstationPusherHandlers {
 export interface WorkstationPusherTransportOptions {
     appKey: string;
     cluster: string;
-    workstationId: string;
     /** Tynn API base — the broadcasting-auth endpoint the channel is authorized at. */
     tynnApiBaseUrl: string;
-    signer: WorkstationSigner;
+    /**
+     * The private channel to hold. Optional: when omitted it defaults to this
+     * workstation's OWN `private-workstation.{id}` channel (the original path).
+     * A caller riding a different channel (e.g. the user's personal
+     * `private-App.Models.User.{id}`) supplies it explicitly.
+     */
+    channel?: string;
+    /**
+     * Custom channel authorizer for `socket_id` → auth string. Optional: when set
+     * it REPLACES the built-in host-proof `POST .../workstations/{id}/broadcasting-auth`,
+     * so a caller can authorize a different channel however it must (e.g. a
+     * session-cookie POST to `/api/v1/user/broadcasting-auth`). When omitted the
+     * built-in host-proof path runs and `workstationId` + `signer` are required.
+     */
+    authorize?: (socketId: string) => Promise<string>;
+    /** Required only for the built-in host-proof auth path (no `authorize`). */
+    workstationId?: string;
+    /** Required only for the built-in host-proof auth path (no `authorize`). */
+    signer?: WorkstationSigner;
     /** Injectable socket + fetch for tests; default to real `ws` + global fetch. */
     wsFactory?: (url: string) => WebSocketLike;
     fetchImpl?: typeof fetch;
@@ -75,7 +92,13 @@ export class WorkstationPusherTransport {
     private readonly channel: string;
 
     constructor(private readonly opts: WorkstationPusherTransportOptions) {
-        this.channel = workstationChannel(opts.workstationId);
+        if (opts.channel) {
+            this.channel = opts.channel;
+        } else if (opts.workstationId) {
+            this.channel = workstationChannel(opts.workstationId);
+        } else {
+            throw new Error('WorkstationPusherTransport requires a `channel` or a `workstationId`');
+        }
     }
 
     open(handlers: WorkstationPusherHandlers): WorkstationSubscriptionHandle {
@@ -146,7 +169,9 @@ export class WorkstationPusherTransport {
 
     private async authorizeAndSubscribe(socketId: string): Promise<void> {
         try {
-            const auth = await this.fetchChannelAuth(socketId);
+            const auth = this.opts.authorize
+                ? await this.opts.authorize(socketId)
+                : await this.fetchChannelAuth(socketId);
             this.safeSend(encodeSubscribe(this.channel, auth));
         } catch (e) {
             this.log(`channel auth failed: ${errMsg(e)}`);
@@ -158,17 +183,23 @@ export class WorkstationPusherTransport {
         }
     }
 
-    /** POST the host proof to Tynn's broadcasting-auth for this socket + channel. */
+    /** POST the host proof to Tynn's broadcasting-auth for this socket + channel.
+     *  Only reached on the built-in path (no `authorize`), where `workstationId`
+     *  and `signer` are required. */
     private async fetchChannelAuth(socketId: string): Promise<string> {
+        const { workstationId, signer } = this.opts;
+        if (!workstationId || !signer) {
+            throw new Error('host-proof channel auth requires `workstationId` and `signer`');
+        }
         const fetchImpl = this.opts.fetchImpl ?? fetch;
         const base = this.opts.tynnApiBaseUrl.replace(/\/+$/, '');
-        const url = `${base}/api/v1/workstations/${encodeURIComponent(this.opts.workstationId)}/broadcasting-auth`;
+        const url = `${base}/api/v1/workstations/${encodeURIComponent(workstationId)}/broadcasting-auth`;
         const res = await fetchImpl(url, {
             method: 'POST',
             headers: {
                 'content-type': 'application/json',
                 accept: 'application/json',
-                authorization: this.opts.signer.authHeader(),
+                authorization: signer.authHeader(),
             },
             body: JSON.stringify({ socket_id: socketId, channel_name: this.channel }),
         });
