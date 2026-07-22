@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+    ghIsGitCredentialHelper,
     githubAuthConfig,
     githubCloneAuth,
+    githubInsteadOfRewrites,
     githubSshToHttps,
+    isHostGithubGhConfigured,
     redactSecrets,
 } from '../git-auth';
 
@@ -102,6 +105,137 @@ describe('githubCloneAuth', () => {
         const auth = githubCloneAuth('https://github.com/o/r.git', TOKEN);
         expect(auth.url).toBe('https://github.com/o/r.git');
         expect(auth.config).toEqual(githubAuthConfig(TOKEN));
+    });
+});
+
+describe('githubInsteadOfRewrites', () => {
+    it('is the two SSH→HTTPS insteadOf entries, with NO token extraheader', () => {
+        expect(githubInsteadOfRewrites()).toEqual([
+            'url.https://github.com/.insteadOf=git@github.com:',
+            'url.https://github.com/.insteadOf=ssh://git@github.com/',
+        ]);
+    });
+
+    it('is the prefix of githubAuthConfig (the token path adds only the extraheader)', () => {
+        const full = githubAuthConfig(TOKEN);
+        expect(full.slice(0, 2)).toEqual(githubInsteadOfRewrites());
+        expect(full).toHaveLength(3);
+    });
+});
+
+// Owner gh-auth (genie-cloud workstation, issue #2): when the host has run
+// `gh auth setup-git`, gh is git's credential helper for ALL of github.com, so
+// it covers EVERY account the owner can access — cross-owner private submodules
+// included. In that mode the recursive clone must rely on gh and must NOT inject
+// the envelope-owner App-token extraheader (a single-owner token that 404s a
+// cross-owner submodule, AND an explicit Authorization header shadows the helper).
+describe('githubCloneAuth — ghConfigured (owner gh-auth)', () => {
+    it('gh-configured + token → keeps insteadOf rewrites, DROPS the extraheader, leaks no secret', () => {
+        const auth = githubCloneAuth('git@github.com:o/r.git', TOKEN, { ghConfigured: true });
+        // SSH → HTTPS so gh's HTTPS credential helper applies to the top-level clone.
+        expect(auth.url).toBe('https://github.com/o/r.git');
+        // insteadOf rewrites remain (so SSH-pinned submodules fetch over HTTPS
+        // where gh's helper applies) but the token extraheader is gone.
+        expect(auth.config).toEqual(githubInsteadOfRewrites());
+        expect(auth.config.some((c) => c.includes('extraheader'))).toBe(false);
+        expect(auth.config.join('\n')).not.toContain(B64);
+        // The token is neither used nor surfaced as a scrub secret.
+        expect(auth.secrets).toEqual([]);
+    });
+
+    it('gh-configured + NO token → same insteadOf-only config (gh authenticates)', () => {
+        for (const noTok of [null, undefined, '']) {
+            const auth = githubCloneAuth('git@github.com:o/r.git', noTok, { ghConfigured: true });
+            expect(auth.url).toBe('https://github.com/o/r.git');
+            expect(auth.config).toEqual(githubInsteadOfRewrites());
+            expect(auth.secrets).toEqual([]);
+        }
+    });
+
+    it('gh-configured still rewrites BOTH SSH submodule forms (the cross-owner fix)', () => {
+        const auth = githubCloneAuth('https://github.com/o/r.git', TOKEN, { ghConfigured: true });
+        expect(auth.config).toContain('url.https://github.com/.insteadOf=git@github.com:');
+        expect(auth.config).toContain('url.https://github.com/.insteadOf=ssh://git@github.com/');
+    });
+
+    it('ghConfigured:false is EXACTLY today — the App-token extraheader fallback', () => {
+        const gated = githubCloneAuth('git@github.com:o/r.git', TOKEN, { ghConfigured: false });
+        const today = githubCloneAuth('git@github.com:o/r.git', TOKEN);
+        expect(gated).toEqual(today);
+        expect(gated.config).toEqual(githubAuthConfig(TOKEN));
+        expect(gated.secrets).toEqual([TOKEN, B64]);
+    });
+
+    it('no opts is EXACTLY today (both token and no-token paths unchanged)', () => {
+        expect(githubCloneAuth('git@github.com:o/r.git', TOKEN)).toEqual(
+            githubCloneAuth('git@github.com:o/r.git', TOKEN, { ghConfigured: false }),
+        );
+        expect(githubCloneAuth('git@github.com:o/r.git', null)).toEqual({
+            url: 'git@github.com:o/r.git',
+            config: [],
+            secrets: [],
+        });
+    });
+});
+
+describe('ghIsGitCredentialHelper', () => {
+    it('detects gh as the credential helper across path / bang / .exe forms', () => {
+        for (const v of [
+            '!/usr/bin/gh auth git-credential',
+            '!gh auth git-credential',
+            '/opt/homebrew/bin/gh auth git-credential',
+            // The real Windows form `gh auth setup-git` writes — a QUOTED path, so
+            // the char after `gh.exe` is a `'`, not whitespace (regression guard).
+            "!'C:\\Program Files\\GitHub CLI\\gh.exe' auth git-credential",
+            'C:\\Program Files\\GitHub CLI\\gh.exe auth git-credential',
+            'gh',
+        ]) {
+            expect(ghIsGitCredentialHelper([v])).toBe(true);
+        }
+    });
+
+    it('ignores the empty clearing line setup-git writes, but sees the gh line after it', () => {
+        expect(ghIsGitCredentialHelper(['', '!gh auth git-credential'])).toBe(true);
+    });
+
+    it('is false for non-gh helpers and gh-lookalikes (no false positives)', () => {
+        for (const v of ['osxkeychain', 'manager', 'store', 'cache', 'ghq', 'my-gh-tool', '']) {
+            expect(ghIsGitCredentialHelper([v])).toBe(false);
+        }
+        expect(ghIsGitCredentialHelper([])).toBe(false);
+    });
+});
+
+describe('isHostGithubGhConfigured', () => {
+    it('true when the gh helper is set on the github.com host key', () => {
+        const run = (args: string[]): string =>
+            args.includes('credential.https://github.com.helper')
+                ? '\n!/usr/bin/gh auth git-credential\n'
+                : '';
+        expect(isHostGithubGhConfigured(run)).toBe(true);
+    });
+
+    it('true when the gh helper is set on the global credential.helper key', () => {
+        const run = (args: string[]): string =>
+            args.includes('credential.helper') ? '!gh auth git-credential\n' : '';
+        expect(isHostGithubGhConfigured(run)).toBe(true);
+    });
+
+    it('false when no gh helper is configured', () => {
+        expect(isHostGithubGhConfigured(() => 'osxkeychain\n')).toBe(false);
+    });
+
+    it('treats a missing key (git config exit 1 → throw) as not-configured', () => {
+        // `git config --get-all <unset>` exits non-zero → execFileSync throws.
+        expect(
+            isHostGithubGhConfigured(() => {
+                throw new Error('exit 1');
+            }),
+        ).toBe(false);
+    });
+
+    it('defaults to a real git probe and returns a boolean without throwing', () => {
+        expect(typeof isHostGithubGhConfigured()).toBe('boolean');
     });
 });
 

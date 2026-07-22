@@ -14,7 +14,7 @@ import { consolidateMcp } from './mcp';
 import { applyAgentsSection, hasGenieAgentsSection } from '../mcp/agent-config';
 import { getAllSettings } from '../db';
 import { getToken } from '../github/storage';
-import { githubCloneAuth, redactSecrets } from './git-auth';
+import { githubCloneAuth, isHostGithubGhConfigured, redactSecrets } from './git-auth';
 
 const execFileAsync = promisify(execFile);
 
@@ -732,7 +732,18 @@ export async function cloneAgiEnvelope(
     // A caller may pass its OWN token (genie-cloud's fetched App installation
     // token — genie #47); an explicit `token` (incl. null) overrides getToken().
     const token = opts.token !== undefined ? opts.token : getToken();
-    const auth = githubCloneAuth(opts.url, token);
+    // Owner gh-auth (genie-cloud workstation, issue #2): ONLY on the headless
+    // host path (an explicit `opts.token` — even null — marks a caller that mints
+    // its own credential), when the host has gh set up as git's credential helper
+    // for github.com, rely on gh instead of the App token. gh covers EVERY
+    // account the owner can access, so a cross-owner private submodule that a
+    // single-owner App token would 404 resolves. This drops the token extraheader
+    // (which would otherwise shadow the helper). The desktop path
+    // (`opts.token === undefined` → local `getToken()`) is NEVER gh-gated, so its
+    // behavior is unchanged. Both sides probe the same host git config; genie-cloud
+    // separately skips the token fetch — see genie-cloud reconcile.ts makeFetchCloneToken.
+    const ghConfigured = opts.token !== undefined && isHostGithubGhConfigured();
+    const auth = githubCloneAuth(opts.url, token, { ghConfigured });
     try {
         // Clone INTO the parent with an explicit dir name so git creates the
         // envelope folder for us. simple-git's clone takes (repo, localPath,
