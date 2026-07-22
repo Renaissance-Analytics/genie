@@ -5,6 +5,7 @@ import { api, ulid } from '../../lib/genie';
 import {
     captureTerminalOutput,
     evaluateTerminalUntil,
+    resolveFields,
     type BrowserStepSpec,
     type ChoiceStepSpec,
     type FormStepSpec,
@@ -30,6 +31,8 @@ interface StepViewProps {
     active: boolean;
     /** Fallback cwd for terminal steps that don't pin one. */
     defaultCwd: string;
+    /** Register a spawned host terminal id so the WizardModal destroys it on close. */
+    onTerminalCreated: (id: string) => void;
 }
 
 /** Reflect a form/choice step's validity into the engine without redundant emits. */
@@ -41,10 +44,22 @@ function syncValidity(engine: RecipeEngine, stepId: string, valid: boolean): voi
 
 /* ===== form ============================================================= */
 
-function FormStep({ step, engine }: { step: FormStepSpec; engine: RecipeEngine }) {
+/** Read a checkbox field's stored selection as a string[] (tolerant of a stray
+ *  scalar / undefined), so toggling a box always starts from a clean array. */
+function selectedFlags(engine: RecipeEngine, key: string): string[] {
+    const raw = engine.get(key);
+    return Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : [];
+}
+
+function FormStep({ step, engine, ctx }: { step: FormStepSpec; engine: RecipeEngine; ctx: RecipeContext }) {
+    // Fields may be a static list OR a function of context (dynamic on prior
+    // answers — e.g. flags for only the enabled agents). Resolve every render so
+    // the form reflects the latest context.
+    const fields = resolveFields(step, ctx);
+
     // Seed defaults into the context once, before first paint.
     useEffect(() => {
-        for (const f of step.fields) {
+        for (const f of fields) {
             if (f.defaultValue !== undefined && engine.get(f.key) === undefined) {
                 engine.set(f.key, f.defaultValue);
             }
@@ -52,7 +67,7 @@ function FormStep({ step, engine }: { step: FormStepSpec; engine: RecipeEngine }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const valid = step.fields.every(
+    const valid = fields.every(
         (f) => !f.required || String(engine.get(f.key) ?? '').trim() !== '',
     );
     useEffect(() => {
@@ -61,8 +76,61 @@ function FormStep({ step, engine }: { step: FormStepSpec; engine: RecipeEngine }
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {step.fields.map((f) => {
+            {fields.map((f) => {
                 const value = String(engine.get(f.key) ?? '');
+                if (f.type === 'checkboxes') {
+                    const on = selectedFlags(engine, f.key);
+                    const toggle = (v: string) =>
+                        engine.set(
+                            f.key,
+                            on.includes(v) ? on.filter((x) => x !== v) : [...on, v],
+                        );
+                    return (
+                        <div key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <Text size="xs" style={{ display: 'block', fontWeight: 600 }}>{f.label}</Text>
+                            {f.description && (
+                                <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                                    {f.description}
+                                </Text>
+                            )}
+                            {(f.options ?? []).map((o) => {
+                                const checked = on.includes(o.value);
+                                return (
+                                    <button
+                                        key={o.value}
+                                        type="button"
+                                        onClick={() => toggle(o.value)}
+                                        style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 10,
+                                            padding: '8px 10px',
+                                            textAlign: 'left',
+                                            borderRadius: 8,
+                                            cursor: 'pointer',
+                                            border: checked
+                                                ? '1px solid var(--blue-500)'
+                                                : '1px solid var(--zinc-700)',
+                                            background: checked
+                                                ? 'color-mix(in srgb, var(--blue-500) 12%, transparent)'
+                                                : 'transparent',
+                                        }}
+                                    >
+                                        <Icon name={checked ? 'check-square' : 'square'} size="sm" />
+                                        <span style={{ display: 'flex', flexDirection: 'column' }}>
+                                            <Text size="sm" style={{ fontWeight: 600 }}>
+                                                <code>{o.value}</code>
+                                            </Text>
+                                            {o.description && (
+                                                <Text size="xs" className="text-zinc-500">{o.description}</Text>
+                                            )}
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    );
+                }
                 if (f.type === 'select') {
                     return (
                         <div key={f.key}>
@@ -158,17 +226,30 @@ function ChoiceStep({ step, engine }: { step: ChoiceStepSpec; engine: RecipeEngi
 
 /* ===== terminal ========================================================= */
 
-function TerminalStep({ step, engine, ctx, active, defaultCwd }: {
+function TerminalStep({ step, engine, ctx, active, defaultCwd, onTerminalCreated }: {
     step: TerminalStepSpec;
     engine: RecipeEngine;
     ctx: RecipeContext;
     active: boolean;
     defaultCwd: string;
+    /** Register a spawned host terminal id so the WizardModal destroys it on close. */
+    onTerminalCreated: (id: string) => void;
 }) {
     const termIdRef = useRef('');
     const outputRef = useRef('');
     const doneRef = useRef(false);
     const [attempt, setAttempt] = useState(0);
+
+    // A recipe scoped to a workspace (ctx.workspaceId set — e.g. the Workstation
+    // Setup's reserved `__genie_setup__` binding) runs in a HOST window, so the
+    // embedded terminal must be HOSTED exactly like a regular grid terminal: a
+    // persisted spec the host binds and streams. Without that spec the headless
+    // host fails the /ws/term attach CLOSED and the terminal is black. An unscoped
+    // (local) step keeps the transient one-off pty — a local pty needs no host gate.
+    const hosted = !!ctx.workspaceId;
+    // Gate the <Terminal> mount until the host has the spec row, so the attach the
+    // Terminal fires finds a member-visible pty. Local (unhosted) mounts at once.
+    const [specReady, setSpecReady] = useState(!hosted);
 
     const startAttempt = () => {
         termIdRef.current = `recipe-${step.id}-${ulid()}`;
@@ -185,21 +266,60 @@ function TerminalStep({ step, engine, ctx, active, defaultCwd }: {
         engine.markSuccess(step.id, capture);
     };
 
-    // While active, mark the step running and accumulate pty output so an
-    // `until.pattern` can resolve even before the process exits. The SAME pty
-    // stream the <Terminal> renders is observed here via a second listener
-    // (api().on.terminalData is a multi-listener emitter).
+    // While active: (1) provision the host spec so the pty streams and register it
+    // for teardown, (2) open the device page in the owner's LOCAL browser if the
+    // step declares one, (3) accumulate pty output so an `until.pattern` can resolve
+    // before exit. The SAME pty stream the <Terminal> renders is observed here via a
+    // second listener (api().on.terminalData is a multi-listener emitter).
     useEffect(() => {
         if (!active) return;
         engine.markRunning(step.id);
-        const off = api().on.terminalData(({ id, data }) => {
-            if (id !== termIdRef.current || doneRef.current) return;
+        const id = termIdRef.current;
+        let cancelled = false;
+
+        if (hosted) {
+            setSpecReady(false);
+            void (async () => {
+                try {
+                    await api().terminalSpec.create({
+                        id,
+                        workspace_id: ctx.workspaceId ?? null,
+                        label: step.title,
+                        cwd: step.cwd ?? defaultCwd,
+                        shell: step.command,
+                        args: step.args,
+                        type: 'terminal',
+                    });
+                } catch {
+                    // A warm re-activation reuses the same id — the spec already
+                    // exists; proceed to (re)attach. Any real failure surfaces when
+                    // the Terminal itself can't attach.
+                }
+                if (cancelled) return;
+                onTerminalCreated(id);
+                setSpecReady(true);
+            })();
+        }
+
+        // Device-flow hand-off (Bug 3): open the entry page on the owner's machine
+        // while the terminal shows the one-time code. Best-effort — headless-robust
+        // because the pty also prints the URL (clickable) as a fallback.
+        if (step.openUrl) {
+            const url = typeof step.openUrl === 'function' ? step.openUrl(ctx) : step.openUrl;
+            void api().shell.openExternal(url).catch(() => {});
+        }
+
+        const off = api().on.terminalData(({ id: hitId, data }) => {
+            if (hitId !== id || doneRef.current) return;
             outputRef.current += data;
             if (evaluateTerminalUntil(step.until, { output: outputRef.current }) === 'success') {
                 succeed();
             }
         });
-        return () => off();
+        return () => {
+            cancelled = true;
+            off();
+        };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [active, attempt]);
 
@@ -215,19 +335,31 @@ function TerminalStep({ step, engine, ctx, active, defaultCwd }: {
 
     const rerun = () => {
         startAttempt();
+        if (hosted) setSpecReady(false);
         setAttempt((n) => n + 1);
     };
 
     const failed = engine.stateOf(step.id) === 'error';
+    const openUrl = step.openUrl
+        ? typeof step.openUrl === 'function'
+            ? step.openUrl(ctx)
+            : step.openUrl
+        : null;
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
                 Running <code>{[step.command, ...(step.args ?? [])].join(' ')}</code>
-                {ctx.workstationId ? ' on the host' : ''}.
+                {hosted || ctx.workstationId ? ' on the host' : ''}.
             </Text>
+            {openUrl && (
+                <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
+                    Opening <code>{openUrl}</code> in your browser — read the one-time code below and
+                    enter it there.
+                </Text>
+            )}
             <div style={{ height: 280, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--zinc-800)' }}>
-                {active ? (
+                {active && specReady ? (
                     <Terminal
                         key={termIdRef.current}
                         id={termIdRef.current}
@@ -240,10 +372,17 @@ function TerminalStep({ step, engine, ctx, active, defaultCwd }: {
                     />
                 ) : (
                     <div style={{ display: 'grid', placeItems: 'center', height: '100%' }}>
-                        <Text size="xs" className="text-zinc-500">Terminal starts when you reach this step.</Text>
+                        <Text size="xs" className="text-zinc-500">
+                            {active ? 'Starting terminal…' : 'Terminal starts when you reach this step.'}
+                        </Text>
                     </div>
                 )}
             </div>
+            {openUrl && active && (
+                <Action size="sm" variant="ghost" icon="external-link" onClick={() => void api().shell.openExternal(openUrl).catch(() => {})}>
+                    Open the login page again
+                </Action>
+            )}
             {failed && (
                 <Action size="sm" variant="ghost" icon="refresh-cw" onClick={rerun}>
                     Run again
@@ -388,10 +527,17 @@ export function StepView(props: StepViewProps) {
     const error = engine.errorOf(step.id);
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {step.type === 'form' && <FormStep step={step} engine={engine} />}
+            {step.type === 'form' && <FormStep step={step} engine={engine} ctx={props.ctx} />}
             {step.type === 'choice' && <ChoiceStep step={step} engine={engine} />}
             {step.type === 'terminal' && (
-                <TerminalStep step={step} engine={engine} ctx={props.ctx} active={props.active} defaultCwd={props.defaultCwd} />
+                <TerminalStep
+                    step={step}
+                    engine={engine}
+                    ctx={props.ctx}
+                    active={props.active}
+                    defaultCwd={props.defaultCwd}
+                    onTerminalCreated={props.onTerminalCreated}
+                />
             )}
             {step.type === 'browser' && (
                 <BrowserStep step={step} engine={engine} ctx={props.ctx} active={props.active} />

@@ -458,7 +458,15 @@ export function terminalServable(deps: MobileDataDeps, terminalId: string): bool
     if (!isHeadless()) return true;
     const served = servedWorkspaceIds(deps);
     const spec = deps.listTerminalSpecs().find((s) => s.id === terminalId);
-    return !!spec && boundToServedWorkspace(spec.workspace_id, served);
+    if (!spec) return false;
+    // Reserved-workspace exemption (Bug 1): the WizardModal's embedded setup
+    // terminal binds to the reserved `__genie_setup__` workspace, which has NO
+    // served row on a workspace-less workstation. It is member-visible for setup —
+    // otherwise the /ws/term attach fails closed and the terminal is black — the
+    // SAME exemption `/api/desktop/terminal-open` makes for the spawn. Exactly this
+    // one reserved id; every other unattached/foreign binding still fails closed.
+    if (deps.setupWorkspaceId && spec.workspace_id === deps.setupWorkspaceId) return true;
+    return boundToServedWorkspace(spec.workspace_id, served);
 }
 
 /** The process list as served: headless drops System / null-workspace rows. */

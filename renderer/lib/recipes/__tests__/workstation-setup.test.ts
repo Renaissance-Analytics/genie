@@ -1,13 +1,17 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { api as apiType } from '../../genie';
-import { RecipeEngine } from '../engine';
+import { RecipeEngine, resolveFields } from '../engine';
 import {
     workstationSetupRecipe,
     buildAgentSettingsPatch,
+    composeAgentFlags,
+    agentFlagFields,
+    enabledAgentIds,
+    AGENT_FLAG_CATALOG,
     SETUP_COMPLETE_PATH,
     WORKSTATION_SETUP_RECIPE_ID,
 } from '../workstation-setup';
-import type { RecipeStep, TaskStepSpec, TerminalStepSpec, BrowserStepSpec } from '../types';
+import type { RecipeContext, RecipeStep, TaskStepSpec, TerminalStepSpec } from '../types';
 
 /** A fake `api()` accessor whose settings.set + remote.request are spies. */
 function fakeApi() {
@@ -28,49 +32,43 @@ const stepById = (id: string): RecipeStep => {
     return s;
 };
 
+/** A minimal RecipeContext seeded from a plain object (no engine needed). */
+function ctxFrom(data: Record<string, unknown>): RecipeContext {
+    const store = new Map(Object.entries(data));
+    return {
+        get: (k) => store.get(k),
+        set: (k, v) => void store.set(k, v),
+        api: (() => ({})) as unknown as typeof apiType,
+    };
+}
+
 describe('workstationSetupRecipe — shape', () => {
     it('is the workstation-setup recipe with the agent → github → complete flow', () => {
         expect(workstationSetupRecipe.id).toBe(WORKSTATION_SETUP_RECIPE_ID);
+        // The standalone `gh-device` browser step is GONE — the device page now opens
+        // FROM the gh-login terminal (Bug 3), so the terminal (showing the one-time
+        // code) and the browser appear together, correctly ordered.
         expect(workstationSetupRecipe.steps.map((s) => s.id)).toEqual([
             'default-agent',
             'enabled-agents',
             'agent-flags',
             'persist-agents',
-            'gh-device',
             'gh-login',
             'gh-setup-git',
             'complete',
         ]);
     });
 
-    it('picks the default agent (single) and enables agents (multi)', () => {
-        const def = stepById('default-agent');
-        const enabled = stepById('enabled-agents');
-        expect(def.type).toBe('choice');
-        expect(enabled.type).toBe('choice');
-        expect(enabled.type === 'choice' && enabled.multi).toBe(true);
-        // Every agent the launch pipeline knows is offered.
-        expect(def.type === 'choice' && def.options.map((o) => o.value)).toEqual([
-            'claude',
-            'codex',
-            'custom',
-        ]);
-    });
-
-    it('collects per-agent flags in a non-blocking form (no required fields)', () => {
+    it('collects per-agent flags in a DYNAMIC, non-blocking form', () => {
         const flags = stepById('agent-flags');
         expect(flags.type).toBe('form');
         if (flags.type !== 'form') throw new Error('expected form');
-        expect(flags.fields.map((f) => f.key)).toEqual([
-            'agent_flags_claude',
-            'agent_flags_codex',
-            'agent_flags_custom',
-        ]);
-        // Optional — nothing required, so an empty form never blocks the wizard.
-        expect(flags.fields.some((f) => f.required)).toBe(false);
+        // Bug 2: the fields are a FUNCTION of context (only the enabled agents), not
+        // a fixed list — so a disabled agent never shows a flags control.
+        expect(typeof flags.fields).toBe('function');
     });
 
-    it('runs the gh device-flow login in an embedded (host) terminal', () => {
+    it('gh-login runs the device flow AND opens the device page together (Bug 3)', () => {
         const login = stepById('gh-login') as TerminalStepSpec;
         expect(login.type).toBe('terminal');
         expect(login.command).toBe('gh');
@@ -83,16 +81,13 @@ describe('workstationSetupRecipe — shape', () => {
             'https',
             '--web',
         ]);
-    });
-
-    it('opens the GitHub device page in the LOCAL browser before login', () => {
-        const device = stepById('gh-device') as BrowserStepSpec;
-        expect(device.type).toBe('browser');
-        expect(device.url).toBe('https://github.com/login/device');
-        // The browser step is ordered BEFORE the gh-login terminal, so the page is
-        // already open when the terminal shows the one-time code.
+        // The terminal step itself opens the LOCAL browser to the device page, so the
+        // owner reads the one-time code in the terminal and enters it on the opened
+        // page — no separate, out-of-order browser step.
+        expect(login.openUrl).toBe('https://github.com/login/device');
         const ids = workstationSetupRecipe.steps.map((s) => s.id);
-        expect(ids.indexOf('gh-device')).toBeLessThan(ids.indexOf('gh-login'));
+        expect(ids.indexOf('gh-login')).toBeLessThan(ids.indexOf('gh-setup-git'));
+        expect(ids).not.toContain('gh-device');
     });
 
     it('registers git credentials and verifies auth (setup-git && status)', () => {
@@ -101,6 +96,85 @@ describe('workstationSetupRecipe — shape', () => {
         const joined = [setupGit.command, ...(setupGit.args ?? [])].join(' ');
         expect(joined).toContain('gh auth setup-git');
         expect(joined).toContain('gh auth status');
+    });
+});
+
+describe('AGENT_FLAG_CATALOG — known safe flags per agent (Bug 2)', () => {
+    it('offers the recommended flags as catalog entries', () => {
+        expect(AGENT_FLAG_CATALOG.claude.map((f) => f.flag)).toContain(
+            '--dangerously-skip-permissions',
+        );
+        expect(AGENT_FLAG_CATALOG.codex.map((f) => f.flag)).toContain('--yolo');
+        // Every catalog entry is a fully-formed, self-describing checkbox option.
+        for (const list of Object.values(AGENT_FLAG_CATALOG)) {
+            for (const f of list) {
+                expect(f.flag.startsWith('-')).toBe(true);
+                expect(f.label.length).toBeGreaterThan(0);
+                expect(f.description.length).toBeGreaterThan(0);
+            }
+        }
+    });
+});
+
+describe('enabledAgentIds — only the agents chosen in the prior step', () => {
+    it('reads the multi-choice, keeps known ids in catalog order, de-dupes', () => {
+        expect(enabledAgentIds(ctxFrom({ 'enabled-agents': ['codex', 'claude'] }))).toEqual([
+            'claude',
+            'codex',
+        ]);
+        // A single (non-array) value and unknown ids are handled gracefully.
+        expect(enabledAgentIds(ctxFrom({ 'enabled-agents': 'claude' }))).toEqual(['claude']);
+        expect(enabledAgentIds(ctxFrom({ 'enabled-agents': ['bogus', 'claude'] }))).toEqual([
+            'claude',
+        ]);
+        expect(enabledAgentIds(ctxFrom({}))).toEqual([]);
+    });
+});
+
+describe('agentFlagFields — checkboxes only for enabled agents (Bug 2)', () => {
+    it('renders a checkbox field per enabled agent with the catalog options', () => {
+        const fields = agentFlagFields(['claude', 'codex']);
+        expect(fields.map((f) => f.key)).toEqual(['agent_flags_claude', 'agent_flags_codex']);
+        const claude = fields[0];
+        expect(claude.type).toBe('checkboxes');
+        expect((claude.options ?? []).map((o) => o.value)).toEqual(
+            AGENT_FLAG_CATALOG.claude.map((f) => f.flag),
+        );
+    });
+
+    it('shows only the enabled agents — a disabled agent gets no field', () => {
+        const fields = agentFlagFields(['claude']);
+        expect(fields.map((f) => f.key)).toEqual(['agent_flags_claude']);
+    });
+
+    it('falls back to a free-text field for an agent with no known flags (custom)', () => {
+        const fields = agentFlagFields(['custom']);
+        expect(fields).toHaveLength(1);
+        expect(fields[0].key).toBe('agent_flags_custom');
+        expect(fields[0].type).toBe('text');
+    });
+
+    it('the agent-flags step resolves its fields from the enabled-agents context', () => {
+        const flags = stepById('agent-flags');
+        if (flags.type !== 'form') throw new Error('expected form');
+        const resolved = resolveFields(flags, ctxFrom({ 'enabled-agents': ['codex'] }));
+        expect(resolved.map((f) => f.key)).toEqual(['agent_flags_codex']);
+    });
+});
+
+describe('composeAgentFlags — checkbox selection → flag string', () => {
+    it('joins a selected-flags array into a space-separated string', () => {
+        expect(composeAgentFlags(['--yolo', '--full-auto'])).toBe('--yolo --full-auto');
+    });
+    it('de-dupes, drops blanks/non-strings, and preserves order', () => {
+        expect(composeAgentFlags(['--a', '', '--a', '--b', 42 as unknown])).toBe('--a --b');
+    });
+    it('passes a plain string through trimmed (custom free-text)', () => {
+        expect(composeAgentFlags('  --flag  ')).toBe('--flag');
+    });
+    it('treats undefined / null as no flags', () => {
+        expect(composeAgentFlags(undefined)).toBe('');
+        expect(composeAgentFlags(null)).toBe('');
     });
 });
 
@@ -148,14 +222,14 @@ describe('buildAgentSettingsPatch — agent choices → genie settings', () => {
 });
 
 describe('workstationSetupRecipe — effects', () => {
-    it('persist-agents writes the derived settings patch to the host', async () => {
+    it('persist-agents composes checkbox selections into the settings patch', async () => {
         const { fn, settingsSet } = fakeApi();
         const e = new RecipeEngine(workstationSetupRecipe, { workspaceId: '__genie_setup__' });
         e.set('default-agent', 'claude');
         e.set('enabled-agents', ['claude', 'codex']);
-        e.set('agent_flags_claude', '--dangerously-skip-permissions');
-        e.set('agent_flags_codex', '');
-        e.set('agent_flags_custom', '');
+        // Checkbox steps store the SELECTED flags as arrays — persist must compose them.
+        e.set('agent_flags_claude', ['--dangerously-skip-permissions']);
+        e.set('agent_flags_codex', []);
         const ctx = e.buildContext(fn);
 
         await (stepById('persist-agents') as TaskStepSpec).run(ctx);

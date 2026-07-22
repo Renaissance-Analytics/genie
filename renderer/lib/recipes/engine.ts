@@ -1,5 +1,5 @@
 import type { api } from '../genie';
-import type { Recipe, RecipeContext, RecipeStep, StepState } from './types';
+import type { FormStepSpec, Recipe, RecipeContext, RecipeField, RecipeStep, StepState } from './types';
 
 /**
  * RecipeEngine — a framework-agnostic runner for a Recipe. It owns the pure
@@ -255,6 +255,16 @@ export class RecipeEngine {
         this._snapshot = null; // invalidate — next getSnapshot rebuilds
         for (const l of this._listeners) l();
     }
+}
+
+/**
+ * Resolve a form step's fields against the current context. A step may declare a
+ * static `fields` list OR a function of the context (so it can adapt to earlier
+ * answers — e.g. showing a flags control only for the enabled agents). Pure, so
+ * both the FormStep view and the recipe tests resolve fields the same way.
+ */
+export function resolveFields(step: FormStepSpec, ctx: RecipeContext): RecipeField[] {
+    return typeof step.fields === 'function' ? step.fields(ctx) : step.fields;
 }
 
 /* ===== pure helpers shared with the TerminalStep component ============= */

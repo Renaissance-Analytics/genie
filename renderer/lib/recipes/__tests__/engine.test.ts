@@ -3,8 +3,10 @@ import {
     RecipeEngine,
     evaluateTerminalUntil,
     captureTerminalOutput,
+    resolveFields,
 } from '../engine';
-import type { Recipe, RecipeStep } from '../types';
+import type { api as apiType } from '../../genie';
+import type { FormStepSpec, Recipe, RecipeContext, RecipeStep } from '../types';
 
 /** A three-step recipe used across the transition/gating tests. */
 function makeRecipe(overrides?: Partial<Recipe>): Recipe {
@@ -229,6 +231,41 @@ describe('evaluateTerminalUntil — pure', () => {
         expect(
             evaluateTerminalUntil({ pattern: 'Logged in' }, { exitCode: 0, output: 'nope' }),
         ).toBe('fail');
+    });
+});
+
+describe('resolveFields — static and dynamic form fields', () => {
+    const ctxWith = (data: Record<string, unknown>): RecipeContext => {
+        const store = new Map(Object.entries(data));
+        return {
+            get: (k) => store.get(k),
+            set: (k, v) => void store.set(k, v),
+            api: (() => ({})) as unknown as typeof apiType,
+        };
+    };
+
+    it('returns a static list verbatim', () => {
+        const step: FormStepSpec = {
+            type: 'form',
+            id: 'f',
+            title: 'F',
+            fields: [{ key: 'a', label: 'A' }],
+        };
+        expect(resolveFields(step, ctxWith({}))).toEqual([{ key: 'a', label: 'A' }]);
+    });
+
+    it('invokes a field function against the current context', () => {
+        const step: FormStepSpec = {
+            type: 'form',
+            id: 'f',
+            title: 'F',
+            fields: (ctx) =>
+                (ctx.get('want') as string[]).map((k) => ({ key: k, label: k.toUpperCase() })),
+        };
+        expect(resolveFields(step, ctxWith({ want: ['x', 'y'] })).map((f) => f.key)).toEqual([
+            'x',
+            'y',
+        ]);
     });
 });
 

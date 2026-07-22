@@ -1,4 +1,4 @@
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Action, Carousel, Icon, Modal, Text, useCarousel } from '@particle-academy/react-fancy';
 import { api } from '../../lib/genie';
 import { RecipeEngine, type Recipe } from '../../lib/recipes';
@@ -45,6 +45,23 @@ export default function WizardModal({
         () => engine.getSnapshot(),
     );
 
+    // Terminals the recipe's terminal steps spawned on the host (setup ptys +
+    // their persisted specs). The WizardModal owns their lifetime: on close (X,
+    // Cancel, or complete → onClose → unmount) it destroys EVERY one so no orphaned
+    // setup pty or spec row is left on the workstation. A Set de-dupes a re-run's
+    // id; kill + spec.remove are both idempotent (a missing id is a no-op).
+    const createdTerminals = useRef<Set<string>>(new Set());
+    useEffect(() => {
+        const created = createdTerminals.current;
+        return () => {
+            for (const id of created) {
+                void api().terminal.kill(id).catch(() => {});
+                void api().terminalSpec.remove(id).catch(() => {});
+            }
+            created.clear();
+        };
+    }, []);
+
     const [finishing, setFinishing] = useState(false);
 
     const finish = async () => {
@@ -86,6 +103,7 @@ export default function WizardModal({
                                     ctx={ctx}
                                     active={engine.index === i}
                                     defaultCwd={defaultCwd}
+                                    onTerminalCreated={(id) => createdTerminals.current.add(id)}
                                 />
                             </Carousel.Slide>
                         ))}
