@@ -6,14 +6,21 @@ import {
 } from './helpers/launch';
 
 test('Testing Browser preserves a dev site origin across the tunnel', async () => {
+    // The probe's subresource `settle` can wait up to ~15s on a slow CI runner
+    // (genie#20), so the readiness poll — and the whole test — must out-wait it,
+    // else `probe.ready` times out at the default 5s/30s and flakes on ubuntu.
+    test.setTimeout(90_000);
     const { app } = await launchGenieTunnelE2E();
     try {
         let probe: TunnelProbe | null = null;
         await expect
-            .poll(async () => {
-                probe = await readTunnelProbe(app);
-                return probe?.ready ?? false;
-            })
+            .poll(
+                async () => {
+                    probe = await readTunnelProbe(app);
+                    return probe?.ready ?? false;
+                },
+                { timeout: 45_000, intervals: [250, 500, 1000] },
+            )
             .toBe(true);
 
         // Re-read rather than reuse the polled `probe` local (TS narrows it to
