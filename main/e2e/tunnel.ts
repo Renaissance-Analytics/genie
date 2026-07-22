@@ -76,7 +76,10 @@ function fixtureHtml(): string {
   // intermittently reported absoluteStyle:false while macOS/Linux passed. Poll
   // briefly instead of sampling once.
   const settle = async (check) => {
-    const deadline = Date.now() + 5000;
+    // 15s (was 5s): the slow Windows CI runner loads these external subresources
+    // over the tunnel well after 5s, which is why absoluteStyle:false flaked there
+    // (genie#20) while macOS/Linux passed.
+    const deadline = Date.now() + 15000;
     while (Date.now() < deadline) {
       if (check()) return true;
       await new Promise((r) => setTimeout(r, 50));
@@ -84,10 +87,16 @@ function fixtureHtml(): string {
     return check();
   };
   (async () => {
-    p.absoluteScript = await settle(() => window.__absoluteScriptLoaded === true);
-    p.absoluteStyle = await settle(
-      () => getComputedStyle(document.getElementById('style-probe')).color === 'rgb(1, 2, 3)',
-    );
+    // Settle the two external subresources CONCURRENTLY. Sequentially, the
+    // stylesheet's window only opened AFTER the script settled, so on a slow
+    // runner it could exhaust its budget before the stylesheet applied. In
+    // parallel each gets the full window from t=0.
+    [p.absoluteScript, p.absoluteStyle] = await Promise.all([
+      settle(() => window.__absoluteScriptLoaded === true),
+      settle(
+        () => getComputedStyle(document.getElementById('style-probe')).color === 'rgb(1, 2, 3)',
+      ),
+    ]);
     await attempt('bearer', async () => {
       const response = await fetch('/api/bearer', {
         headers: { Authorization: 'Bearer fixture-application-token' },
