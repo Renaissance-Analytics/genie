@@ -94,6 +94,9 @@ describe('host-sourced (bucket 2) classification', () => {
                 'agent_flags_codex',
                 'agent_command_custom',
                 'agent_flags_custom',
+                // Workstation Setup: the owner's default + enabled agents.
+                'agent_default',
+                'agent_enabled',
             ].sort(),
         );
     });

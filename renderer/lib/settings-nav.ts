@@ -107,6 +107,11 @@ export const HOST_SOURCED_SETTINGS_KEYS = [
     'agent_flags_codex',
     'agent_command_custom',
     'agent_flags_custom',
+    // Workstation Setup: the owner's default + enabled agents, chosen in the desktop
+    // setup wizard but describing the HOST's agent environment (so the host's setup
+    // status reads them, and a re-run pre-fills from the host, not the client).
+    'agent_default',
+    'agent_enabled',
 ] as const satisfies readonly (keyof Settings)[];
 
 export type HostSourcedSettingKey = (typeof HOST_SOURCED_SETTINGS_KEYS)[number];

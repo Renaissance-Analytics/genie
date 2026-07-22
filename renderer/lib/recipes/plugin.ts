@@ -1,5 +1,6 @@
 import { api, type PluginRecipeStepView, type PluginRecipeView } from '../genie';
 import { demoRecipe } from './demo';
+import { workstationSetupRecipe } from './workstation-setup';
 import type { Recipe, RecipeField, RecipeOption, RecipeStep } from './types';
 
 /**
@@ -80,6 +81,12 @@ export interface LaunchableRecipe {
  */
 export async function listLaunchableRecipes(): Promise<LaunchableRecipe[]> {
     const out: LaunchableRecipe[] = [
+        {
+            launchId: workstationSetupRecipe.id,
+            title: workstationSetupRecipe.title,
+            source: 'builtin',
+            recipe: workstationSetupRecipe,
+        },
         { launchId: 'demo', title: demoRecipe.title, source: 'builtin', recipe: demoRecipe },
     ];
     try {

@@ -102,6 +102,11 @@ export const HOST_SOURCED_SETTINGS_KEYS = [
     'agent_flags_codex',
     'agent_command_custom',
     'agent_flags_custom',
+    // Workstation Setup: the owner's default + enabled agents, chosen in the desktop
+    // setup wizard. Host-sourced so the host's setup-status computation reads them
+    // and a re-run pre-fills from the host. Mirrors renderer/lib/settings-nav.ts.
+    'agent_default',
+    'agent_enabled',
 ] as const satisfies readonly (keyof Settings)[];
 
 /** The bucket-2 subset of the host's settings a remote may see (allow-list filter). */
@@ -197,6 +202,18 @@ function writeFirstFree(aiDir: string, safeName: string, buf: Buffer): string | 
         }
     }
     return null;
+}
+
+/**
+ * The host's machine-readable Workstation-Setup status (mirror of genie-cloud's
+ * `SetupStatus`). Served at `GET /api/desktop/setup/status` so the desktop can
+ * decide whether to open the setup WizardModal. Kept structurally identical on
+ * both sides (genie can't import genie-cloud).
+ */
+export interface SetupStatusView {
+    complete: boolean;
+    needed: boolean;
+    steps: { agents: boolean; github: boolean };
 }
 
 /** The terminal/process/workspace/question data the REST + WS layers reuse. */
@@ -389,6 +406,23 @@ export interface MobileDataDeps {
      * unwired and `/api/sites/enabled` returns an empty set.
      */
     listEnabledSites?: () => Promise<EnabledGenSite[]>;
+
+    // --- Workstation Setup (the desktop WizardModal drives this host) ----------
+    /**
+     * The reserved synthetic workspace id the setup terminals bind to
+     * (genie-cloud `__genie_setup__`). Absent on a host without setup support.
+     * Present ⇒ `/api/desktop/terminal-open` may spawn a pty on THIS id even
+     * though it has no served-workspace row, so the WizardModal's embedded gh
+     * terminal appears on a workspace-less workstation. No OTHER unattached id is
+     * ever spawnable — the exemption is exactly this one reserved id.
+     */
+    setupWorkspaceId?: string;
+    /** The host's machine-readable "setup needed" signal (GET /api/desktop/setup/status).
+     *  Absent ⇒ the route 501s (a host that doesn't support setup). */
+    setupStatus?: () => SetupStatusView;
+    /** Mark Workstation Setup complete on the host: set the flag, drain the queued
+     *  provisioning, report to Tynn (POST /api/desktop/setup/complete). Absent ⇒ 501. */
+    completeSetup?: () => Promise<{ ok: boolean }>;
 }
 
 // --- headless (genie-cloud) System-workspace exclusion + terminal confinement --
@@ -877,15 +911,24 @@ export async function handleApi(
             return true;
         }
         const ws = deps.listWorkspaces().find((w) => w.id === body.workspaceId);
-        if (!ws) {
+        // Reserved-workspace exemption: the WizardModal's embedded setup terminal
+        // spawns on `__genie_setup__`, which has NO served-workspace row, on a
+        // workspace-less workstation. Allow spawning on EXACTLY that reserved id
+        // (createAgentTerminal resolves its cwd to the host's setup dir); no other
+        // unattached id is spawnable. Otherwise an unknown workspace is rejected.
+        const isSetupWs =
+            !!deps.setupWorkspaceId && body.workspaceId === deps.setupWorkspaceId;
+        if (!ws && !isSetupWs) {
             sendJson(res, 400, { error: 'unknown workspace' });
             return true;
         }
         const created = deps.createAgentTerminal({
             id: body.id,
-            workspaceId: ws.id,
+            workspaceId: ws ? ws.id : body.workspaceId!,
             // Confine the pty cwd to the workspace folder — never spawn outside it.
-            cwd: confineCwdToWorkspace(ws.path, body.cwd),
+            // For the reserved setup workspace there is no served path; the host's
+            // createAgentTerminal resolves the setup cwd, so pass the raw request.
+            cwd: ws ? confineCwdToWorkspace(ws.path, body.cwd) : body.cwd ?? '',
             label: body.label?.trim() || 'Terminal',
             shell: body.shell,
             args: body.args,
@@ -895,7 +938,7 @@ export async function handleApi(
             // rather than trusted to be caught further in.
             ...(isUsableGrid(body) ? { cols: body.cols, rows: body.rows } : {}),
         });
-        audit('terminal.open', `${created.id} in ${ws.project_name}`, actor);
+        audit('terminal.open', `${created.id} in ${ws ? ws.project_name : 'setup'}`, actor);
         sendJson(res, 200, {
             id: created.id,
             scrollback: created.scrollback,
@@ -1289,6 +1332,33 @@ export async function handleApi(
         setSettings(patch);
         audit('settings.set', Object.keys(patch).join(',') || '(none)', actor);
         sendJson(res, 200, { settings: pickHostSettings(getAllSettings()) });
+        return true;
+    }
+
+    // --- Workstation Setup — the desktop WizardModal driving this host ----------
+    // The WizardModal (rendered in the owner's host window) reads the host's
+    // machine-readable "setup needed" signal and, on finish, tells the host to
+    // record completion (set the flag, drain the queued provisioning, report to
+    // Tynn). Both are host-only concepts a phone never touches — absent deps ⇒ 501.
+    // The read is auth-only; the completion is a "drive the host" mutation, so it's
+    // kill-switch-gated like every other POST.
+    if (pathname === '/api/desktop/setup/status' && method === 'GET') {
+        if (!deps.setupStatus) {
+            sendJson(res, 501, { error: 'setup not supported on this host' });
+            return true;
+        }
+        sendJson(res, 200, { status: deps.setupStatus() });
+        return true;
+    }
+    if (pathname === '/api/desktop/setup/complete' && method === 'POST') {
+        if (!deps.completeSetup) {
+            sendJson(res, 501, { error: 'setup not supported on this host' });
+            return true;
+        }
+        if (guardLocked()) return true;
+        const result = await deps.completeSetup();
+        audit('setup.complete', result.ok ? 'ok' : 'failed', actor);
+        sendJson(res, 200, result);
         return true;
     }
 
