@@ -19,15 +19,17 @@ export interface RecipeField {
     key: string;
     label: string;
     /**
-     * Control kind. `select` uses `options`; everything else renders a
-     * Fancy `Input` with the matching HTML input type. Defaults to `text`.
+     * Control kind. `select` uses `options` (single value); `checkboxes` uses
+     * `options` too but stores a STRING[] of the ticked values; everything else
+     * renders a Fancy `Input` with the matching HTML input type. Defaults to
+     * `text`.
      */
-    type?: 'text' | 'password' | 'number' | 'select';
+    type?: 'text' | 'password' | 'number' | 'select' | 'checkboxes';
     placeholder?: string;
     description?: string;
     /** When true the step is not forward-satisfied until this field is set. */
     required?: boolean;
-    /** Options for `type: 'select'`. */
+    /** Options for `type: 'select'` or `type: 'checkboxes'`. */
     options?: RecipeOption[];
     /** Seed value written into the context when the step first activates. */
     defaultValue?: string;
@@ -59,12 +61,19 @@ export interface RecipeContext {
 /**
  * Collect input with Fancy controls; each field writes into the context under
  * its `key`. Forward-satisfied once every `required` field has a value.
+ *
+ * `fields` may be a plain list OR a FUNCTION of the recipe context, so a form can
+ * adapt to earlier answers (owner-directed extension: the Workstation Setup
+ * "Agent options" step shows a flags control ONLY for the agents enabled in the
+ * prior step — see `agentFlagFields`). Plugin-contributed recipes always carry a
+ * static list; the function form is first-party-only. Resolve via
+ * {@link resolveFields} in the engine.
  */
 export interface FormStepSpec {
     type: 'form';
     id: string;
     title: string;
-    fields: RecipeField[];
+    fields: RecipeField[] | ((ctx: RecipeContext) => RecipeField[]);
 }
 
 /**
@@ -97,6 +106,16 @@ export interface TerminalStepSpec {
     until?: { pattern?: string; exit?: number };
     /** Context key to store captured output under. */
     capture?: string;
+    /**
+     * Owner-directed extension: when set, the step opens this URL in the owner's
+     * LOCAL browser as soon as it becomes active, WHILE the terminal runs — the
+     * device-flow hand-off (the pty shows the one-time code on the host; the entry
+     * page opens on the owner's machine at the same time). Headless-robust: the URL
+     * is also shown as a copy-fallback and the pty prints it, so a browserless
+     * `openExternal` no-op never blocks. Combines what used to be a separate,
+     * out-of-order `browser` step.
+     */
+    openUrl?: string | ((ctx: RecipeContext) => string);
 }
 
 /**

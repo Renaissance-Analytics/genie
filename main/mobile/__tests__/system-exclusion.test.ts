@@ -22,16 +22,22 @@ afterEach(() => _resetRuntimeModeForTest());
 
 const WS = process.platform === 'win32' ? 'C:\\work\\proj' : '/work/proj';
 
+const SETUP_WS = '__genie_setup__';
+
 /** A stub surface with one real workspace `w1`, one workspace-bound terminal
- *  `t-real`, one SYSTEM terminal `t-sys` (workspace_id null), a real process
- *  `p-real`, and a System process `p-sys` (workspaceId null). */
+ *  `t-real`, one SYSTEM terminal `t-sys` (workspace_id null), a reserved SETUP
+ *  terminal `t-setup` (bound to the setup workspace), a real process `p-real`, and
+ *  a System process `p-sys` (workspaceId null). `setupWorkspaceId` is wired, as it
+ *  is on a host that supports the Workstation Setup wizard. */
 function deps(): MobileDataDeps {
     return {
+        setupWorkspaceId: SETUP_WS,
         listWorkspaces: () => [{ id: 'w1', project_name: 'Proj', path: WS }],
         listTerminalSpecs: () => [
             { id: 't-real', workspace_id: 'w1', label: 't', type: 'terminal', cwd: WS, live_cwd: null },
             { id: 't-sys', workspace_id: null, label: 'sys', type: 'terminal', cwd: WS, live_cwd: null },
             { id: 't-ghost', workspace_id: 'gone', label: 'g', type: 'terminal', cwd: WS, live_cwd: null },
+            { id: 't-setup', workspace_id: SETUP_WS, label: 'setup', type: 'terminal', cwd: WS, live_cwd: null },
         ],
         listAllProcesses: () => [
             { id: 'p-real', kind: 'process', label: 'p', command: 'x', workspace: 'Proj', workspaceId: 'w1', status: 'running', autostart: false },
@@ -55,6 +61,29 @@ describe('terminalServable', () => {
         expect(terminalServable(d, 't-sys')).toBe(false); // System (null workspace)
         expect(terminalServable(d, 't-ghost')).toBe(false); // removed workspace
         expect(terminalServable(d, 'nope')).toBe(false); // unknown id → fail-closed
+    });
+
+    it('headless serves the reserved setup terminal so the wizard streams (Bug 1)', () => {
+        markHeadlessRuntime();
+        const d = deps();
+        // The WizardModal's embedded gh-login terminal binds to __genie_setup__ — a
+        // reserved workspace with no served row. It must be member-visible for the
+        // /ws/term attach to stream output (otherwise the terminal is black), the
+        // same exemption /api/desktop/terminal-open already makes for the spawn.
+        expect(terminalServable(d, 't-setup')).toBe(true);
+    });
+
+    it('the setup exemption is EXACTLY the reserved id — a null/foreign binding stays closed', () => {
+        markHeadlessRuntime();
+        // A host WITHOUT setup support (no setupWorkspaceId) never exempts anything.
+        const noSetup = {
+            listWorkspaces: () => [{ id: 'w1', project_name: 'Proj', path: WS }],
+            listTerminalSpecs: () => [
+                { id: 't-setup', workspace_id: SETUP_WS, label: 'setup', type: 'terminal', cwd: WS, live_cwd: null },
+            ],
+            listAllProcesses: () => [],
+        } as unknown as MobileDataDeps;
+        expect(terminalServable(noSetup, 't-setup')).toBe(false);
     });
 });
 
