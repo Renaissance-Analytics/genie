@@ -80,6 +80,59 @@ export interface PluginEditorMapping {
     }>;
 }
 
+/**
+ * A DECLARED recipe a plugin contributes to the WizardModal launcher. Because a
+ * manifest is JSON, plugin recipes are the SERIALIZABLE subset of the Recipe API
+ * — form / choice / terminal / browser(url string). The function-valued step
+ * types (`task`) and function fields (browser `check`, url-as-function,
+ * `onComplete`) are reserved for FIRST-PARTY in-code recipes, never a JSON
+ * manifest. Contributing recipes requires the grantable `recipes` Genie-API
+ * permission ({@link RECIPE_CAPABILITY}).
+ */
+export interface PluginRecipeField {
+    key: string;
+    label: string;
+    type?: 'text' | 'password' | 'number' | 'select';
+    placeholder?: string;
+    description?: string;
+    required?: boolean;
+    options?: Array<{ value: string; label: string; description?: string }>;
+    defaultValue?: string;
+}
+
+export type PluginRecipeStep =
+    | { type: 'form'; id: string; title: string; fields: PluginRecipeField[] }
+    | {
+          type: 'choice';
+          id: string;
+          title: string;
+          options: Array<{ value: string; label: string; description?: string }>;
+          multi?: boolean;
+      }
+    | {
+          type: 'terminal';
+          id: string;
+          title: string;
+          command: string;
+          args?: string[];
+          cwd?: string;
+          until?: { pattern?: string; exit?: number };
+          capture?: string;
+      }
+    | { type: 'browser'; id: string; title: string; url: string; pollMs?: number };
+
+export interface PluginRecipeManifest {
+    id: string;
+    title: string;
+    steps: PluginRecipeStep[];
+}
+
+/** The Genie-API permission key a recipe-contributing plugin must declare + hold. */
+export const RECIPE_CAPABILITY = 'recipes';
+
+/** The serializable step types a plugin manifest may declare. */
+const PLUGIN_RECIPE_STEP_TYPES = ['form', 'choice', 'terminal', 'browser'] as const;
+
 /** Granular declared capabilities. Each entry is an independent grant (§12.1). */
 export interface PluginCapabilities {
     /** Filesystem: a named scope + an extension allow-list (guard-resolved). */
@@ -114,6 +167,8 @@ export interface PluginManifest {
     /** Required when mcpTools are present: agents need a workflow, not bare verbs. */
     agent?: PluginAgentGuidance;
     editors?: PluginEditorMapping[];
+    /** Declared recipes contributed to the WizardModal launcher (§ recipes). */
+    recipes?: PluginRecipeManifest[];
     capabilities?: PluginCapabilities;
     /** npm deps the plugin needs (audited/pinned downstream). */
     dependencies?: Record<string, string>;
@@ -322,6 +377,78 @@ export function validatePluginManifest(raw: unknown): ValidationResult<PluginMan
                     if (!nonEmpty(e.fancyEditor.export)) errors.push(`${at}.fancyEditor.export is required`);
                 }
             });
+        }
+    }
+
+    // recipes ---------------------------------------------------------------
+    if (raw.recipes !== undefined) {
+        if (!Array.isArray(raw.recipes)) {
+            errors.push('`recipes` must be an array when present');
+        } else {
+            const recipeIds = new Set<string>();
+            raw.recipes.forEach((r, i) => {
+                const at = `recipes[${i}]`;
+                if (!isRecord(r)) {
+                    errors.push(`${at} must be an object`);
+                    return;
+                }
+                if (!nonEmpty(r.id)) errors.push(`${at}.id is required`);
+                else if (recipeIds.has(r.id)) errors.push(`${at}.id "${r.id}" is duplicated`);
+                else recipeIds.add(r.id);
+                if (!nonEmpty(r.title)) errors.push(`${at}.title is required`);
+                if (!Array.isArray(r.steps) || r.steps.length === 0) {
+                    errors.push(`${at}.steps must be a non-empty array`);
+                } else {
+                    const stepIds = new Set<string>();
+                    r.steps.forEach((s, j) => {
+                        const sat = `${at}.steps[${j}]`;
+                        if (!isRecord(s)) {
+                            errors.push(`${sat} must be an object`);
+                            return;
+                        }
+                        if (!isStr(s.type) || !PLUGIN_RECIPE_STEP_TYPES.includes(s.type as never)) {
+                            errors.push(
+                                `${sat}.type must be one of ${PLUGIN_RECIPE_STEP_TYPES.join(', ')} (a plugin manifest can only declare serializable steps — no "task")`,
+                            );
+                            return;
+                        }
+                        if (!nonEmpty(s.id)) errors.push(`${sat}.id is required`);
+                        else if (stepIds.has(s.id)) errors.push(`${sat}.id "${s.id}" is duplicated`);
+                        else stepIds.add(s.id);
+                        if (!nonEmpty(s.title)) errors.push(`${sat}.title is required`);
+                        if (s.type === 'form') {
+                            if (!Array.isArray(s.fields) || s.fields.length === 0)
+                                errors.push(`${sat}.fields must be a non-empty array`);
+                            else
+                                s.fields.forEach((f, k) => {
+                                    if (!isRecord(f) || !nonEmpty(f.key))
+                                        errors.push(`${sat}.fields[${k}].key is required`);
+                                    if (!isRecord(f) || !nonEmpty(f.label))
+                                        errors.push(`${sat}.fields[${k}].label is required`);
+                                });
+                        } else if (s.type === 'choice') {
+                            if (!Array.isArray(s.options) || s.options.length === 0)
+                                errors.push(`${sat}.options must be a non-empty array`);
+                        } else if (s.type === 'terminal') {
+                            if (!nonEmpty(s.command)) errors.push(`${sat}.command is required`);
+                        } else if (s.type === 'browser') {
+                            if (!nonEmpty(s.url)) errors.push(`${sat}.url is required (a string; plugin recipes cannot ship a URL function)`);
+                        }
+                    });
+                }
+            });
+            // A recipe surface is powerful (it can run terminal commands) → it must
+            // be gated by a permission the user consents to. Require the plugin to
+            // DECLARE the grantable `recipes` Genie-API capability.
+            if (raw.recipes.length > 0) {
+                const caps = isRecord(raw.capabilities) ? raw.capabilities : undefined;
+                const genieApi = caps && Array.isArray(caps.genieApi) ? caps.genieApi : [];
+                if (!genieApi.includes(RECIPE_CAPABILITY)) {
+                    errors.push(
+                        `\`capabilities.genieApi\` must include "${RECIPE_CAPABILITY}" when \`recipes\` are present (the user consents to it at enable-time)`,
+                    );
+                }
+            }
         }
     }
 

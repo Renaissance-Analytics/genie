@@ -151,6 +151,7 @@ const api = {
             ipcRenderer.invoke('plugins:install-marketplace-plugin', marketplaceId, pluginId),
         official: () => ipcRenderer.invoke('plugins:official'),
         installBundled: (id: string) => ipcRenderer.invoke('plugins:install-bundled', id),
+        recipes: () => ipcRenderer.invoke('plugins:recipes'),
         // Capability-scoped binary bridge for a granted plugin's editor (§6.2).
         editorRead: (pluginId: string, root: string, relPath: string) =>
             ipcRenderer.invoke('plugins:editor-read', pluginId, root, relPath),
