@@ -25,6 +25,8 @@ describe('pickHostSettings — host-sourced allow-list', () => {
                 'agent_flags_codex',
                 'agent_command_custom',
                 'agent_flags_custom',
+                'agent_default',
+                'agent_enabled',
             ].sort(),
         );
     });
@@ -44,6 +46,8 @@ describe('pickHostSettings — host-sourced allow-list', () => {
             agent_flags_codex: '--yolo',
             agent_command_custom: 'my-agent',
             agent_flags_custom: '--interactive',
+            agent_default: 'codex',
+            agent_enabled: '["claude","codex"]',
             // host-machine / device / secret — must NOT leak:
             primary_workspace: '/host/only/path',
             tynn_host: 'https://tynn.ai',
@@ -69,6 +73,8 @@ describe('pickHostSettings — host-sourced allow-list', () => {
             agent_flags_codex: '--yolo',
             agent_command_custom: 'my-agent',
             agent_flags_custom: '--interactive',
+            agent_default: 'codex',
+            agent_enabled: '["claude","codex"]',
         });
         // Explicit: no secret / host-machine key survives the filter.
         expect('github_token_enc' in picked).toBe(false);

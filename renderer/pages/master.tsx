@@ -14,6 +14,7 @@ import AddWorkspaceModal from '../components/AddWorkspaceModal';
 import BootScreen from '../components/Master/BootScreen';
 import HostUpgradeOverlay from '../components/Master/HostUpgradeOverlay';
 import HostBuildNudge from '../components/Master/HostBuildNudge';
+import { WorkstationSetupLauncher } from '../components/Wizard';
 import DocsFlyout from '../components/Master/DocsFlyout';
 import IssueWatchFlyout from '../components/Master/IssueWatchFlyout';
 import TaskManagerFlyout from '../components/Master/TaskManagerFlyout';
@@ -177,6 +178,9 @@ export default function MasterPage() {
             {isHostWindow && link.phase === 'connected' && link.hostBuildBehind && (
                 <HostBuildNudge build={link.hostBuildBehind} />
             )}
+            {/* Owner connected to a workstation: open the setup wizard if the host
+                still needs setup (idempotent; the launcher decides via the host). */}
+            {isHostWindow && link.phase === 'connected' && <WorkstationSetupLauncher />}
             {isHostWindow && viewOnly && <RemoteViewOnlyBanner />}
         </>
 

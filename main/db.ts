@@ -880,6 +880,12 @@ export interface Settings {
     agent_flags_codex?: string;
     /** Always-on launch flags appended to a `custom` agent's command. Default ''. */
     agent_flags_custom?: string;
+    /** Workstation Setup: the owner's chosen DEFAULT agent id (claude/codex/custom),
+     *  written by the desktop setup wizard. HOST-SOURCED. Default '' (none chosen). */
+    agent_default?: string;
+    /** Workstation Setup: the enabled-agent ids as a JSON string array, written by
+     *  the desktop setup wizard. HOST-SOURCED. Default '' (none chosen). */
+    agent_enabled?: string;
     /** Plugin System Developer Mode. When 'on', the user may install/enable
      *  UNSIGNED plugins (with escalated consent + restricted runtime) and manage
      *  developer-trusted signing keys. Default 'off' — the signed registry is the
