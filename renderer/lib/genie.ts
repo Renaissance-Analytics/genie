@@ -2612,6 +2612,28 @@ let remoteBindingResolved = false;
  * local desktop before an async call resolves); we then confirm against main's
  * authoritative `myBinding()` once and correct any mismatch.
  */
+/**
+ * The binding mode this window should settle on, given the SYNCHRONOUS URL hint
+ * (`?host=` ⇒ a host window) and main's AUTHORITATIVE `myBinding()` mode. PURE →
+ * unit-testable (genie#50).
+ *
+ * A URL host window is authoritatively remote for its WHOLE lifetime and must
+ * NEVER be flipped local here: a transient/mismatched `myBinding()` (the conn not
+ * yet registered for this wcId, a reload changing the wcId, a dropped confirm)
+ * would otherwise null the remote bridge, and `api().files.*` would then run on
+ * the CLIENT against the host's POSIX path → `stat 'C:\data\…'` ENOENT on a Linux
+ * host. If the host is genuinely gone, staying remote fails with a clear
+ * connection error, not a wrong-filesystem read. The async confirm only ever
+ * CORRECTS a no-hint window that main says is remote (local → remote).
+ */
+export function resolveBindingMode(
+    isHostWindow: boolean,
+    mainMode: 'local' | 'remote',
+): 'local' | 'remote' {
+    if (isHostWindow) return 'remote';
+    return mainMode;
+}
+
 function ensureRemoteBinding(local: GenieApi): void {
     if (remoteBindingResolved) return;
     remoteBindingResolved = true;
@@ -2619,11 +2641,15 @@ function ensureRemoteBinding(local: GenieApi): void {
         typeof window !== 'undefined' && /[?&]host=/.test(window.location?.search ?? '');
     if (isHostWindow) activeRemoteBridge = makeRemoteBridge(local);
     // Confirm against main (authoritative): a host window stays remote, the local
-    // window stays local. Defensive — corrects a stale/absent URL hint.
+    // window stays local. Defensive — corrects a stale/absent URL hint. A URL host
+    // window is NEVER flipped local by a transient/mismatched binding (genie#50).
     local.remote
         .myBinding()
         .then((b) => {
-            activeRemoteBridge = b.mode === 'remote' ? makeRemoteBridge(local) : null;
+            activeRemoteBridge =
+                resolveBindingMode(isHostWindow, b.mode) === 'remote'
+                    ? makeRemoteBridge(local)
+                    : null;
         })
         .catch(() => {});
 }
