@@ -128,6 +128,7 @@ import type {
 import { resolveTargetWorkspace, type TargetDecision } from './mcp/target-workspace';
 import { TynnBackend } from './backend/tynn';
 import { startLocalWorkstation } from './tynn/local-workstation';
+import { startUserChannelIssueWatch } from './tynn/user-channel-issuewatch';
 import { readTynnLink, ensureMcpGitignored } from './tynn/provision';
 import {
     bindWindowToConnection,
@@ -1353,6 +1354,16 @@ app.whenReady().then(async () => {
     // depend on whether this machine exposes Genie Remote/Mobile hosting.
     if (!isE2E()) {
         let issueWatchHandle: Awaited<ReturnType<typeof startLocalWorkstation>> = null;
+        // Phase 2b: a PARALLEL user-channel IssueWatch subscription runs ALONGSIDE
+        // the workstation path above — a personal desktop rides its own
+        // private-App.Models.User.{id} channel with no workstation row. Authorized
+        // + reconciled via the Tynn SESSION cookie (session.defaultSession.fetch),
+        // not the host proof. applyPushedDelta is idempotent, so a delta arriving
+        // on both channels is safe. It never touches the shared service state
+        // (owned by the workstation path) so the two never fight over it.
+        let userChannelHandle: Awaited<ReturnType<typeof startUserChannelIssueWatch>> = null;
+        const sessionFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+            session.defaultSession.fetch(input as string, init)) as typeof fetch;
         const startIssueWatch = async () => {
             issueWatchHandle?.stop();
             issueWatchHandle = await startLocalWorkstation({
@@ -1376,6 +1387,11 @@ app.whenReady().then(async () => {
                 },
                 log: (m) => console.log('[workstation]', m),
             });
+            userChannelHandle?.stop();
+            userChannelHandle = await startUserChannelIssueWatch({
+                fetchImpl: sessionFetch,
+                log: (m) => console.log('[user-channel]', m),
+            });
         };
         void isSignedIn().then((signedIn) => {
             if (signedIn) return startIssueWatch();
@@ -1386,6 +1402,8 @@ app.whenReady().then(async () => {
             else {
                 issueWatchHandle?.stop();
                 issueWatchHandle = null;
+                userChannelHandle?.stop();
+                userChannelHandle = null;
                 setIssueWatchServiceState('signed-out');
             }
         });

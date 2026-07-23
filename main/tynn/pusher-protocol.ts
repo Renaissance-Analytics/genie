@@ -33,6 +33,16 @@ export function workstationChannel(workstationId: string): string {
 }
 
 /**
+ * The private channel Tynn broadcasts a USER's personal events on — Laravel's
+ * default per-model private channel for `App\Models\User`. A personal desktop
+ * rides this instead of a self-registered workstation channel (Phase 2b), so it
+ * receives the SAME server-side `issuewatch.delta` push with no workstation row.
+ */
+export function userChannel(userId: string): string {
+    return `private-App.Models.User.${userId}`;
+}
+
+/**
  * Parse a raw Pusher frame. Pusher double-encodes `data` as a JSON STRING for
  * channel events, so we transparently decode it. Returns null for non-JSON /
  * event-less frames (dropped, never fatal).
