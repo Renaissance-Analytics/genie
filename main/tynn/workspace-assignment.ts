@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import {
     addWorkspace,
     getAllSettings,
@@ -6,7 +8,7 @@ import {
     listWorkspaces,
     removeWorkspace,
 } from '../db';
-import { cloneAgiEnvelope } from '../workspace/create-agi';
+import { cloneAgiEnvelope, envelopeFolderName } from '../workspace/create-agi';
 import { broadcastWorkspacesChanged } from '../ipc';
 import { childAgiCloneUrl } from './ops-provision';
 
@@ -111,6 +113,15 @@ export interface AssignmentProvisionDeps {
         step: 'cloning' | 'submodules' | 'agent_config' | 'ready';
         status: 'running' | 'done' | 'error';
         message?: string;
+        /**
+         * Monotonic, host-global emission sequence (genie#128). The ticks are
+         * fire-and-forget concurrent POSTs that can arrive OUT OF ORDER — an `error`
+         * can land before the `running` that preceded it, leaving the UI stuck on the
+         * stale `running`. The consumer keeps the tick with the highest `seq` so
+         * delivery order can't regress the display. Strictly increasing ACROSS
+         * provisions (so a re-provision's ticks always outrank the prior run's).
+         */
+        seq: number;
     }) => void;
     listExisting?: () => Array<{ id: string }>;
     register?: (row: Parameters<typeof addWorkspace>[0]) => unknown;
@@ -118,7 +129,61 @@ export interface AssignmentProvisionDeps {
     notifyChanged?: () => void;
     /** env-file for the registered row (default: the global default_env_file). */
     envFile?: string;
+    /**
+     * Resolve the on-disk envelope folder for a slug (default
+     * `<parentPath>/<envelopeFolderName(slug)>`) — the SAME path cloneAgiEnvelope
+     * writes to, so the recovery check below inspects exactly what a re-clone targets.
+     */
+    resolveDest?: (parentPath: string, slug: string) => string;
+    /**
+     * Classify a pre-existing on-disk target BEFORE cloning (genie#47 self-healing):
+     *  - `'valid'`  — a complete envelope clone (has `.git` + `project.json`) → ADOPT
+     *    it instead of re-cloning (which would hard-fail on the non-empty guard);
+     *  - `'stale'`  — exists but incomplete / not a clone → CLEAN then re-clone;
+     *  - `'absent'` — nothing there → clone fresh.
+     * Default probes the filesystem.
+     */
+    inspectTarget?: (dest: string) => 'absent' | 'valid' | 'stale';
+    /** Remove a stale/partial target so a fresh clone can proceed (default: recursive
+     *  rm). Only ever called for a `'stale'` classification. */
+    cleanTarget?: (dest: string) => void;
 }
+
+/** Default on-disk envelope folder — the SAME path {@link cloneAgiEnvelope} writes to. */
+function defaultResolveDest(parentPath: string, slug: string): string {
+    return path.join(parentPath, envelopeFolderName(slug));
+}
+
+/**
+ * Default target classifier (genie#47). "Complete" requires BOTH a `.git` and a
+ * top-level `project.json` (the envelope manifest), so a half-finished clone — git
+ * dir created but files not yet checked out — is treated as `'stale'` and re-cloned
+ * rather than adopted incomplete. Any fs error is conservatively `'stale'`.
+ */
+function defaultInspectTarget(dest: string): 'absent' | 'valid' | 'stale' {
+    try {
+        if (!fs.existsSync(dest) || fs.readdirSync(dest).length === 0) return 'absent';
+        const hasGit = fs.existsSync(path.join(dest, '.git'));
+        const hasManifest = fs.existsSync(path.join(dest, 'project.json'));
+        return hasGit && hasManifest ? 'valid' : 'stale';
+    } catch {
+        return 'stale';
+    }
+}
+
+/** Remove a stale/partial target (recursive, best-effort). */
+function defaultCleanTarget(dest: string): void {
+    fs.rmSync(dest, { recursive: true, force: true });
+}
+
+/**
+ * Monotonic, host-global provisioning-tick sequence (genie#128). Incremented on
+ * EVERY emitted progress tick across ALL provisions in this host process, so the
+ * consumer (Tynn's progress card) can keep the highest-`seq` tick and ignore any
+ * that arrive out of order — the ticks are fire-and-forget concurrent POSTs that
+ * race, and a stale `running` must never overwrite a later `error`/`ready`.
+ */
+let nextReportSeq = 0;
 
 /**
  * Clone + register ONE assigned workspace, then broadcast the list change.
@@ -135,6 +200,9 @@ export async function provisionAssignedWorkspace(
     const listExisting = deps.listExisting ?? listWorkspaces;
     const register = deps.register ?? addWorkspace;
     const notifyChanged = deps.notifyChanged ?? broadcastWorkspacesChanged;
+    const resolveDest = deps.resolveDest ?? defaultResolveDest;
+    const inspectTarget = deps.inspectTarget ?? defaultInspectTarget;
+    const cleanTarget = deps.cleanTarget ?? defaultCleanTarget;
 
     if (listExisting().some((w) => w.id === a.workspaceId)) {
         return { status: 'exists', workspaceId: a.workspaceId };
@@ -158,7 +226,13 @@ export async function provisionAssignedWorkspace(
         message?: string,
     ) => {
         try {
-            deps.reportProgress?.({ workspaceId: a.workspaceId, step, status, message });
+            deps.reportProgress?.({
+                workspaceId: a.workspaceId,
+                step,
+                status,
+                message,
+                seq: nextReportSeq++,
+            });
         } catch {
             /* a progress report must never break provisioning */
         }
@@ -167,21 +241,40 @@ export async function provisionAssignedWorkspace(
 
     try {
         report('cloning', 'running');
-        // Resolve a clone credential when the shell provides a fetcher (headless
-        // host, genie #47). Best-effort: a fetch failure resolves to no token, so a
-        // public envelope still clones via ambient auth rather than aborting.
-        let token: string | null | undefined;
-        if (deps.getCloneToken) {
-            token = await deps.getCloneToken(url).catch(() => null);
+        // genie#47 self-healing: a prior run may have left a clone ON DISK with no DB
+        // row (partial provision, DB reset, or a crash between clone and register).
+        // Re-cloning into that folder hard-fails on cloneAgiEnvelope's non-empty guard
+        // and bricks the assignment forever, so recover: ADOPT a complete clone, or
+        // CLEAN a partial one before re-cloning.
+        const dest = resolveDest(deps.parentPath, a.slug);
+        const onDisk = inspectTarget(dest);
+        let wsPath: string;
+        if (onDisk === 'valid') {
+            // Complete clone already present — adopt it rather than re-clone.
+            wsPath = dest;
+        } else {
+            if (onDisk === 'stale') {
+                // Incomplete/foreign folder — remove it so the fresh clone isn't
+                // blocked by the non-empty guard.
+                cleanTarget(dest);
+            }
+            // Resolve a clone credential when the shell provides a fetcher (headless
+            // host, genie #47). Best-effort: a fetch failure resolves to no token, so a
+            // public envelope still clones via ambient auth rather than aborting.
+            let token: string | null | undefined;
+            if (deps.getCloneToken) {
+                token = await deps.getCloneToken(url).catch(() => null);
+            }
+            const cloned = await clone({
+                url,
+                parent_path: deps.parentPath,
+                folder: a.slug,
+                ...(token !== undefined ? { token } : {}),
+            });
+            wsPath = cloned.path;
         }
-        const { path: wsPath } = await clone({
-            url,
-            parent_path: deps.parentPath,
-            folder: a.slug,
-            ...(token !== undefined ? { token } : {}),
-        });
         // The recursive `--recurse-submodules` clone brought the envelope AND its
-        // submodules down together.
+        // submodules down together (or we adopted an already-complete clone).
         report('cloning', 'done');
         report('submodules', 'done');
         stage = 'agent_config';

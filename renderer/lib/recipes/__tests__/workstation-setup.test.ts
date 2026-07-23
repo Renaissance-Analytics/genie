@@ -68,23 +68,21 @@ describe('workstationSetupRecipe — shape', () => {
         expect(typeof flags.fields).toBe('function');
     });
 
-    it('gh-login runs the device flow AND opens the device page together (Bug 3)', () => {
+    it('gh-login runs the device flow with the browser-open suppressed and does NOT auto-open a window (genie#48, genie-cloud#11)', () => {
         const login = stepById('gh-login') as TerminalStepSpec;
         expect(login.type).toBe('terminal');
-        expect(login.command).toBe('gh');
-        expect(login.args).toEqual([
-            'auth',
-            'login',
-            '--hostname',
-            'github.com',
-            '--git-protocol',
-            'https',
-            '--web',
-        ]);
-        // The terminal step itself opens the LOCAL browser to the device page, so the
-        // owner reads the one-time code in the terminal and enters it on the opened
-        // page — no separate, out-of-order browser step.
-        expect(login.openUrl).toBe('https://github.com/login/device');
+        // Suppress gh's browser-open: on the headless host `--web` runs xdg-open and
+        // prints an alarming "Failed opening a web browser" error (genie-cloud#11).
+        // BROWSER=true makes the open a silent no-op; the owner reads the one-time
+        // code + the device URL the pty prints and opens it themselves.
+        const joined = [login.command, ...(login.args ?? [])].join(' ');
+        expect(joined).toContain('BROWSER=true');
+        expect(joined).toContain('gh auth login');
+        expect(joined).toContain('--hostname github.com');
+        expect(joined).toContain('--git-protocol https');
+        expect(joined).toContain('--web');
+        // The wizard must NOT open the GitHub window for the owner (genie#48).
+        expect(login.openUrl).toBeUndefined();
         const ids = workstationSetupRecipe.steps.map((s) => s.id);
         expect(ids.indexOf('gh-login')).toBeLessThan(ids.indexOf('gh-setup-git'));
         expect(ids).not.toContain('gh-device');

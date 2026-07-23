@@ -167,6 +167,24 @@ describe('provisionAssignedWorkspace', () => {
         expect(reportProgress.mock.calls.every(([i]) => i.workspaceId === 'p1')).toBe(true);
     });
 
+    // genie#128 — the ticks are fire-and-forget concurrent POSTs that can RACE
+    // (an `error` can arrive before the `running` that preceded it, leaving the UI
+    // stuck on the stale `running`). A monotonic seq stamped at emission lets the
+    // consumer keep the latest-emitted tick regardless of delivery order.
+    it('stamps each progress tick with a strictly increasing, unique seq (genie#128 out-of-order guard)', async () => {
+        const reportProgress = vi.fn();
+        const { deps } = fakeDeps({ reportProgress });
+
+        await provisionAssignedWorkspace(assignment(), deps);
+
+        const seqs = reportProgress.mock.calls.map(([i]) => i.seq);
+        expect(seqs.length).toBeGreaterThan(1);
+        expect(seqs.every((s) => typeof s === 'number')).toBe(true);
+        // Monotonic increasing (emission order) and unique.
+        expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+        expect(new Set(seqs).size).toBe(seqs.length);
+    });
+
     it('reports an error on the current stage when the clone fails', async () => {
         const reportProgress = vi.fn();
         const { deps } = fakeDeps({
@@ -206,6 +224,70 @@ describe('provisionAssignedWorkspace', () => {
         expect(clone).not.toHaveBeenCalled();
         expect(register).not.toHaveBeenCalled();
         expect(notifyChanged).not.toHaveBeenCalled();
+    });
+
+    // genie#47 — self-healing recovery when a clone already exists ON DISK but has
+    // no DB row (partial provision / DB reset / crash between clone and register).
+    // Before the fix this hard-failed forever on cloneAgiEnvelope's "Target folder
+    // is not empty" guard, bricking the assignment.
+    it('ADOPTS an existing complete on-disk clone when there is no DB row (idempotent recovery)', async () => {
+        const { deps, clone, register, notifyChanged } = fakeDeps({
+            // The default dest for slug "wonder" is `<parent>/wonder.agi`; inject a
+            // deterministic (forward-slash) dest so the assertion is OS-independent.
+            resolveDest: (p, slug) => `${p}/${slug}.agi`,
+            inspectTarget: () => 'valid',
+        });
+
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+
+        expect(r.status).toBe('provisioned');
+        expect(r.path).toBe('/hosts/root/wonder.agi');
+        // Never re-clone over a complete clone — adopt it.
+        expect(clone).not.toHaveBeenCalled();
+        expect(register).toHaveBeenCalledTimes(1);
+        expect(register.mock.calls[0][0]).toMatchObject({
+            id: 'p1',
+            path: '/hosts/root/wonder.agi',
+            assignment_managed: 1,
+        });
+        expect(notifyChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports the same stage sequence when adopting an existing clone', async () => {
+        const reportProgress = vi.fn();
+        const { deps } = fakeDeps({ inspectTarget: () => 'valid', reportProgress });
+
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+
+        expect(r.status).toBe('provisioned');
+        expect(reportProgress.mock.calls.map(([i]) => `${i.step}:${i.status}`)).toEqual([
+            'cloning:running',
+            'cloning:done',
+            'submodules:done',
+            'agent_config:running',
+            'agent_config:done',
+            'ready:done',
+        ]);
+    });
+
+    it('CLEANS a stale/partial folder then re-clones (no DB row, incomplete clone)', async () => {
+        const cleanTarget = vi.fn();
+        const { deps, clone, register } = fakeDeps({
+            resolveDest: (p, slug) => `${p}/${slug}.agi`,
+            inspectTarget: () => 'stale',
+            cleanTarget,
+        });
+
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+
+        expect(r.status).toBe('provisioned');
+        expect(cleanTarget).toHaveBeenCalledWith('/hosts/root/wonder.agi');
+        expect(clone).toHaveBeenCalledWith({
+            url: 'https://github.com/acme/wonder.agi.git',
+            parent_path: '/hosts/root',
+            folder: 'wonder',
+        });
+        expect(register).toHaveBeenCalledTimes(1);
     });
 
     it('errors (never throws) when no clone URL can be resolved', async () => {

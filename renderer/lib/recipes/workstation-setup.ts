@@ -259,18 +259,25 @@ export const workstationSetupRecipe: Recipe = {
             },
         },
         {
-            // gh's device flow, shown in a live host terminal, WITH the device page
-            // opening on the owner's own machine at the same time (Bug 3). gh prints a
-            // one-time code and polls; `openUrl` opens the entry page locally as the
-            // step activates, so the owner reads the code HERE and enters it on the
-            // just-opened page (authorizing the Civicognita + wishborn orgs — SSO).
-            // Advances when gh exits 0. No separate, out-of-order browser step.
+            // gh's device flow, shown in a live host terminal. gh prints a one-time
+            // code + the device URL and polls; the owner copies the code and opens the
+            // URL THEMSELVES (authorizing the Civicognita + wishborn orgs — SSO).
+            // Advances when gh exits 0.
+            //
+            // The wizard does NOT auto-open the GitHub window (genie#48 — owner asked
+            // us not to), and `BROWSER=true` makes gh's own browser-open a silent
+            // no-op: on the headless host a bare `--web` runs xdg-open, which isn't
+            // installed, and prints an alarming "Failed opening a web browser" error
+            // (genie-cloud#11). `true <url>` exits 0 so gh believes it opened, skips
+            // the error, and still prints the code + URL for the owner to use.
             type: 'terminal',
             id: 'gh-login',
             title: 'Sign in to GitHub',
-            command: 'gh',
-            args: ['auth', 'login', '--hostname', 'github.com', '--git-protocol', 'https', '--web'],
-            openUrl: 'https://github.com/login/device',
+            command: 'sh',
+            args: [
+                '-c',
+                'BROWSER=true gh auth login --hostname github.com --git-protocol https --web',
+            ],
         },
         {
             // Register gh as git's credential helper, then verify the session is live.
