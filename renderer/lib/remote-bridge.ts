@@ -603,6 +603,26 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             ).result,
     };
 
+    // genie#54 — a `.md`/`.docx`/… file opens as a PLUGIN tab, whose binary editor
+    // I/O (`editorRead`/`editorWrite`) resolves the file. Left on the client, its
+    // win32 `path.resolve` mangled the host's POSIX root (`/data/…` → `C:\data\…`) and
+    // `fsp.stat` ENOENT'd. Route the I/O to the host so it resolves with its OWN path.
+    // `editorFor` (which editor claims the extension) + the rest stay client-local —
+    // the client renders the plugin tab; only the bytes live on the host.
+    const plugins: GenieApi['plugins'] = {
+        ...local.plugins,
+        editorRead: async (pluginId, root, relPath) =>
+            (await req('/api/plugins/editor-read', {
+                method: 'POST',
+                json: { pluginId, root, relPath },
+            })) as Awaited<ReturnType<GenieApi['plugins']['editorRead']>>,
+        editorWrite: async (pluginId, root, relPath, base64) =>
+            (await req('/api/plugins/editor-write', {
+                method: 'POST',
+                json: { pluginId, root, relPath, base64 },
+            })) as Awaited<ReturnType<GenieApi['plugins']['editorWrite']>>,
+    };
+
     return {
         ...local,
         workspaces,
@@ -618,5 +638,6 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         tynn,
         tynnHost,
         mcp,
+        plugins,
     };
 }

@@ -52,6 +52,7 @@ import {
 import { agentInboxBroker } from '../agentinbox/broker';
 import { listAllProjects, getTynnBackend } from '../backend/registry';
 import { workspaceDocHealth, repairWorkspaceDocs } from '../workspace/create-agi';
+import { runPluginEditorFs } from '../plugins/editor-bridge';
 import {
     provisionWorkspaceTynn,
     provisionStatus as tynnProvisionStatus,
@@ -1653,6 +1654,42 @@ export async function handleApi(
             return true;
         }
         sendJson(res, 404, { error: 'unknown docs route' });
+        return true;
+    }
+
+    // genie#54 — plugin-editor binary I/O for a remote window. A `.md`/`.docx` file
+    // opens as a plugin tab whose bytes live on the HOST, so resolve + read/write here
+    // (host POSIX path) instead of the client's win32 FS. `root` must be one of the
+    // host's OWN workspaces; runPluginEditorFs re-applies the plugin trust + fs sandbox.
+    if (pathname === '/api/plugins/editor-read' || pathname === '/api/plugins/editor-write') {
+        if (method !== 'POST') {
+            sendJson(res, 405, { error: 'method not allowed' });
+            return true;
+        }
+        let pb: { pluginId?: string; root?: string; relPath?: string; base64?: string };
+        try {
+            pb = await readJsonBody(req);
+        } catch {
+            sendJson(res, 400, { error: 'invalid body' });
+            return true;
+        }
+        const root = String(pb.root ?? '');
+        if (!root || !dbListWorkspaces().some((w) => w.path === root)) {
+            sendJson(res, 404, { error: 'unknown workspace' });
+            return true;
+        }
+        const pluginId = String(pb.pluginId ?? '');
+        const relPath = String(pb.relPath ?? '');
+        if (pathname === '/api/plugins/editor-read') {
+            sendJson(res, 200, await runPluginEditorFs(pluginId, root, relPath, 'fs.readBytes'));
+            return true;
+        }
+        if (guardLocked()) return true; // write — kill-switch gated
+        sendJson(
+            res,
+            200,
+            await runPluginEditorFs(pluginId, root, relPath, 'fs.writeBytes', String(pb.base64 ?? '')),
+        );
         return true;
     }
 
