@@ -45,6 +45,7 @@ import {
     type PluginTrustStatus,
 } from '../db';
 import { disposePlugin } from './registry';
+import { BUNDLED_PLUGIN_SOURCES, materialiseBundled, type BundledPluginSource } from './official';
 import { computeBundleIntegrity } from './signing';
 import { collectBundleFiles } from './bundle-files';
 import {
@@ -265,6 +266,84 @@ export async function installPluginFromFolder(
     return record(manifest, installPath, { type: 'folder', url: folder }, firstParty);
 }
 
+/** Deterministic, key-sorted JSON so a manifest compare ignores key ORDER. */
+function canonicalJson(value: unknown): string {
+    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+    if (value && typeof value === 'object') {
+        const obj = value as Record<string, unknown>;
+        return `{${Object.keys(obj)
+            .sort()
+            .map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`)
+            .join(',')}}`;
+    }
+    return JSON.stringify(value ?? null);
+}
+
+/** True when a bundled plugin's STORED manifest has drifted from the embedded source. */
+function bundledManifestDrifted(storedManifestJson: string, src: BundledPluginSource): boolean {
+    let stored: unknown;
+    try {
+        stored = JSON.parse(storedManifestJson);
+    } catch {
+        return true; // an unparseable stored manifest → re-materialise the current source
+    }
+    return canonicalJson(stored) !== canonicalJson(src.manifest);
+}
+
+/**
+ * Re-install ONE bundled plugin from its CURRENT embedded source through the normal
+ * first-party folder-install path. `record()` (via `installPluginFromFolder`)
+ * preserves the prior row's `enabled` flag + granted permissions, so a self-heal
+ * never silently re-disables or re-prompts. Shared by the startup reconcile and the
+ * revalidation invalid-manifest branch.
+ */
+async function selfHealBundled(id: string): Promise<void> {
+    const materialised = materialiseBundled(id);
+    await installPluginFromFolder(materialised.path, true);
+}
+
+/**
+ * STARTUP SELF-HEAL: for every BUNDLED plugin ALREADY installed whose stored
+ * manifest/version has drifted from the source Genie now ships, re-materialise +
+ * re-install it (preserving `enabled` + grants).
+ *
+ * This is the ROOT-CAUSE fix for bundled plugins installed before a schema
+ * tightening (e.g. `agent.guide` became mandatory when `mcpTools` are present):
+ * their stale stored manifest fails validation on the next boot, and without this
+ * they would be wrongly refused. Idempotent — a plugin already matching the
+ * embedded source is skipped. Runs BEFORE `revalidateAllPluginTrust()` on boot.
+ */
+export async function reconcileBundledPlugins(): Promise<void> {
+    for (const src of BUNDLED_PLUGIN_SOURCES) {
+        try {
+            const row = getPlugin(src.id);
+            if (!row) continue; // not installed → nothing to reconcile
+            const srcVersion = typeof src.manifest.version === 'string' ? src.manifest.version : '';
+            if (row.version === srcVersion && !bundledManifestDrifted(row.manifest_json, src)) continue;
+            await selfHealBundled(src.id);
+        } catch {
+            /* best-effort per plugin — one failure must not block the others or boot */
+        }
+    }
+}
+
+/**
+ * Gate a plugin whose STORED manifest no longer validates. This is NOT a
+ * signature/tamper failure — the manifest merely predates a newer schema — so it
+ * is reported as `outdated` (a distinct, accurate reason the UI describes as
+ * "needs an update"), never the misleading `untrusted`. Fail-closed: an unloadable
+ * manifest cannot surface, so it is disabled.
+ */
+function gateOutdatedManifest(id: string): void {
+    const row = getPlugin(id);
+    if (!row) return;
+    if (row.trust !== 'outdated') setPluginTrust(id, 'outdated', false);
+    if (row.enabled) {
+        setPluginEnabled(id, false);
+        disposePlugin(id);
+    }
+}
+
 /**
  * Re-evaluate EVERY installed plugin's trust against the CURRENT trust store and
  * update its cached verdict. This is how revocation propagates: remove a signing
@@ -274,13 +353,23 @@ export async function installPluginFromFolder(
  */
 export function revalidateAllPluginTrust(): void {
     const store = productionTrustStore();
+    const bundledIds = new Set(BUNDLED_PLUGIN_SOURCES.map((b) => b.id));
     for (const row of listPlugins()) {
         try {
             const parsed = validatePluginManifest(JSON.parse(row.manifest_json));
             if (!parsed.ok) {
-                // A now-invalid manifest can no longer be trusted — disable it.
-                if (row.trust !== 'untrusted') setPluginTrust(row.id, 'untrusted', false);
-                if (row.enabled) { setPluginEnabled(row.id, false); disposePlugin(row.id); }
+                // A FIRST-PARTY bundled plugin can never be "invalid": its stored
+                // manifest merely predates a schema tightening. Self-heal it from the
+                // embedded source — NEVER punish it as untrusted. The folder-install
+                // path does no awaits, so the row is corrected in place here; a rare
+                // failure falls back to `outdated` (still never `untrusted`).
+                if (bundledIds.has(row.id)) {
+                    void selfHealBundled(row.id).catch(() => gateOutdatedManifest(row.id));
+                    continue;
+                }
+                // Third-party: a stored manifest that no longer validates is OUTDATED
+                // against a newer schema, not a signature/tamper failure.
+                gateOutdatedManifest(row.id);
                 continue;
             }
             // Signature-only re-check (code unchanged since install; skip re-hash).

@@ -2073,12 +2073,19 @@ export function markIssueWatchSeen(
 /** Where a plugin was installed from. */
 export type PluginSourceType = 'repo' | 'folder' | 'marketplace';
 
-/** A plugin's evaluated provenance verdict (Plugin System Phase 3). */
-export type PluginTrustStatus = 'trusted' | 'unsigned' | 'untrusted';
+/**
+ * A plugin's evaluated provenance verdict (Plugin System Phase 3).
+ *
+ * `outdated` is DISTINCT from `untrusted`: the stored manifest no longer validates
+ * against a newer schema (it "needs an update"), which is a very different thing
+ * from a signature/tamper `untrusted`. Both are non-surfaceable, but they carry
+ * different, accurate user-facing reasons.
+ */
+export type PluginTrustStatus = 'trusted' | 'unsigned' | 'untrusted' | 'outdated';
 
 /** Coerce a stored trust string to a valid status (fail-closed to 'unsigned'). */
 function parseTrustStatus(raw: string | null | undefined): PluginTrustStatus {
-    return raw === 'trusted' || raw === 'untrusted' ? raw : 'unsigned';
+    return raw === 'trusted' || raw === 'untrusted' || raw === 'outdated' ? raw : 'unsigned';
 }
 
 /**

@@ -96,7 +96,17 @@ export async function consentAndEnablePlugin(id: string): Promise<ConsentResult>
         return {
             ok: false,
             enabled: false,
-            error: `Refused to enable ${row.name}: it is not from a trusted publisher (signature invalid or code tampered).`,
+            error: `Refused to enable ${row.name}: it is not from a trusted publisher (its signature is invalid or its code was tampered with).`,
+        };
+    }
+    // Outdated is NOT a trust failure: the stored manifest predates a newer schema
+    // requirement. It reads (and self-heals, for bundled plugins) differently from a
+    // tamper — reinstalling picks up the current manifest.
+    if (row.trust === 'outdated') {
+        return {
+            ok: false,
+            enabled: false,
+            error: `Refused to enable ${row.name}: its manifest predates a newer Genie requirement. Reinstall it to update before enabling.`,
         };
     }
     const unsigned = row.trust === 'unsigned';

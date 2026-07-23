@@ -192,7 +192,7 @@ import { registerPluginEditorBridge } from './plugins/editor-bridge';
 import { registerDocumentConvert } from './plugins/document-convert';
 // (plugin editor-routing is consumed via the plugins:editor-for IPC in
 // editor-bridge.ts — CodePanel asks it per tab open.)
-import { revalidateAllPluginTrust } from './plugins/install';
+import { reconcileBundledPlugins, revalidateAllPluginTrust } from './plugins/install';
 import {
     registerCapabilityIpc,
     runBootCapabilityCheck,
@@ -1144,9 +1144,14 @@ app.whenReady().then(async () => {
     registerPluginsIpc();
     registerPluginEditorBridge();
     registerDocumentConvert();
-    // Re-evaluate plugin trust against the current trust store on boot, so a key
-    // removed / Developer Mode turned off between sessions revokes fail-closed.
+    // Self-heal FIRST: re-install any bundled plugin whose stored manifest drifted
+    // from the source Genie now ships (e.g. a manifest installed before a schema
+    // tightening), preserving its enabled state + grants — so revalidate below sees
+    // a fresh, valid manifest and never wrongly refuses a first-party plugin. THEN
+    // re-evaluate plugin trust against the current trust store, so a key removed /
+    // Developer Mode turned off between sessions revokes fail-closed.
     try {
+        await reconcileBundledPlugins();
         revalidateAllPluginTrust();
     } catch {
         /* best-effort — the runtime surface gate still fail-closes per call */
