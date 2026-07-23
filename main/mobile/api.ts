@@ -51,6 +51,7 @@ import {
 } from '../issue-watch';
 import { agentInboxBroker } from '../agentinbox/broker';
 import { listAllProjects, getTynnBackend } from '../backend/registry';
+import { workspaceDocHealth, repairWorkspaceDocs } from '../workspace/create-agi';
 import {
     provisionWorkspaceTynn,
     provisionStatus as tynnProvisionStatus,
@@ -1615,6 +1616,43 @@ export async function handleApi(
             return true;
         }
         sendJson(res, 404, { error: 'unknown tynn route' });
+        return true;
+    }
+
+    // genie#54 — the "Workspace docs" panel (AGENTS.md / CLAUDE.md doc-health +
+    // Repair) must resolve ON THE HOST: the envelope path is the host's POSIX path,
+    // and running it on the client fed win32 `path.*` a `/data/…` root → `C:\data\…`
+    // ENOENT. Resolve the workspace by id against the host's OWN list (never an
+    // arbitrary path) so it computes with the host's own `path` module.
+    if (pathname.startsWith('/api/desktop/docs/')) {
+        if (method !== 'POST') {
+            sendJson(res, 405, { error: 'method not allowed' });
+            return true;
+        }
+        let db: { workspaceId?: string };
+        try {
+            db = await readJsonBody(req);
+        } catch {
+            sendJson(res, 400, { error: 'invalid body' });
+            return true;
+        }
+        const ws = dbListWorkspaces().find((w) => w.id === String(db.workspaceId ?? ''));
+        if (!ws) {
+            sendJson(res, 404, { error: 'unknown workspace' });
+            return true;
+        }
+        if (pathname === '/api/desktop/docs/health') {
+            sendJson(res, 200, { health: workspaceDocHealth(ws.path) });
+            return true;
+        }
+        if (pathname === '/api/desktop/docs/repair') {
+            if (guardLocked()) return true; // write — kill-switch gated
+            const result = repairWorkspaceDocs(ws.path, ws.project_name, ws.project_name);
+            audit('docs.repair', ws.path, actor);
+            sendJson(res, 200, { result });
+            return true;
+        }
+        sendJson(res, 404, { error: 'unknown docs route' });
         return true;
     }
 

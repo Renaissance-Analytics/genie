@@ -580,6 +580,29 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         get: async () => ((await req('/api/desktop/tynn/host')) as { host: string }).host,
     };
 
+    // genie#54 — the "Workspace docs" panel resolves AGENTS.md / CLAUDE.md, which live
+    // on the HOST. Left on the client, its win32 `path.*` mangled the host's POSIX root
+    // (`/data/workspaces/…` → `C:\data\…`) so stat/read ENOENT'd. Route doc-health +
+    // repair to the host so it resolves with its OWN path. status/restart/pushStatus
+    // stay client-local — they concern the client's MCP server, not host workspace files.
+    const mcp: GenieApi['mcp'] = {
+        ...local.mcp,
+        docHealth: async (workspaceId) =>
+            (
+                (await req('/api/desktop/docs/health', {
+                    method: 'POST',
+                    json: { workspaceId },
+                })) as { health: Awaited<ReturnType<GenieApi['mcp']['docHealth']>> }
+            ).health,
+        repairDocs: async (workspaceId) =>
+            (
+                (await req('/api/desktop/docs/repair', {
+                    method: 'POST',
+                    json: { workspaceId },
+                })) as { result: Awaited<ReturnType<GenieApi['mcp']['repairDocs']>> }
+            ).result,
+    };
+
     return {
         ...local,
         workspaces,
@@ -594,5 +617,6 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         agentInbox,
         tynn,
         tynnHost,
+        mcp,
     };
 }
