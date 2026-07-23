@@ -1,7 +1,14 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
-import { decideProvision, ensureMcpGitignored } from '../provision';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+    cookieProvisionAuth,
+    decideProvision,
+    ensureMcpGitignored,
+    provisionWorkspaceTynn,
+    type TynnProvisionAuth,
+} from '../provision';
 import {
     applyServer,
     tynnEntry,
@@ -11,7 +18,24 @@ import {
     writeWorkspaceTynnMcp,
     TYNN_TOKEN_ENV_KEY,
 } from '../../mcp/agent-config';
+import { initDatabase } from '../../db';
 import { cleanupTmpRoot, makeTmpDir } from '../../../test/helpers';
+
+// The default (cookie) auth constructs a TynnBackend; mock it so the desktop-path
+// test rides a controllable cookie backend instead of a real Electron session,
+// and the host-path test can prove the cookie backend is NEVER constructed.
+const cookieWhoami = vi.fn(async () => ({ backend: 'tynn', id: 'u1', name: 'U', email: 'u@x' }));
+const cookieMint = vi.fn(async (projectId: string) => ({
+    token: `rpk_cookie.${projectId}`,
+    mcpUrl: 'https://tynn.ai/mcp/tynn',
+    scopes: ['work:read'],
+    isOpsProject: false,
+    agent: { id: 'a1', name: 'Genie' },
+}));
+vi.mock('../../backend/tynn', () => ({
+    TynnBackend: vi.fn(() => ({ whoami: cookieWhoami, mintAgentToken: cookieMint })),
+    TynnAuthError: class TynnAuthError extends Error {},
+}));
 
 afterAll(() => cleanupTmpRoot());
 
@@ -238,6 +262,86 @@ describe('healTynnLiteralToken (offline self-heal)', () => {
         );
         fs.writeFileSync(path.join(dir, '.env'), `${TYNN_TOKEN_ENV_KEY}=rpk_env.token\n`);
         expect(healTynnLiteralToken(dir)).toBe(false);
+    });
+});
+
+describe('provisionWorkspaceTynn — mint auth seam (genie #52)', () => {
+    beforeAll(() => {
+        // resolveTynnLink → getWorkspaceByPath needs an initialised db. A fresh
+        // file db with no rows is enough here: project.json carries the link, so
+        // pickTynnLink never falls back to the (empty) workspace row.
+        initDatabase(fs.mkdtempSync(path.join(os.tmpdir(), 'genie-provision-db-')));
+    });
+
+    /** A workspace dir whose project.json carries a Tynn link. */
+    function linkedWorkspace(projectId: string): string {
+        const dir = makeTmpDir('ws-linked');
+        fs.writeFileSync(
+            path.join(dir, 'project.json'),
+            JSON.stringify({ tynn: { projectId } }, null, 2) + '\n',
+        );
+        return dir;
+    }
+
+    it('HOST path: mints via the injected Workstation-authed source and writes the literal-token .mcp.json', async () => {
+        const { TynnBackend } = (await import('../../backend/tynn')) as unknown as {
+            TynnBackend: ReturnType<typeof vi.fn>;
+        };
+        TynnBackend.mockClear();
+
+        const dir = linkedWorkspace('proj-host');
+        const hostMint = vi.fn(async (projectId: string) => ({
+            token: `rpk_host.${projectId}`,
+            mcpUrl: 'https://tynn.ai/mcp/tynn',
+            agent: { id: 'ha', name: 'Genie' },
+            isOpsProject: false,
+        }));
+        const auth: TynnProvisionAuth = { ready: async () => true, mint: hostMint };
+
+        const r = await provisionWorkspaceTynn(dir, { auth });
+
+        expect(r.status).toBe('provision');
+        expect(hostMint).toHaveBeenCalledWith('proj-host');
+        // .mcp.json embeds the HOST-minted literal token — never a ${…} reference.
+        const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8'));
+        expect(cfg.mcpServers.tynn.headers.Authorization).toBe('Bearer rpk_host.proj-host');
+        expect(cfg.mcpServers.tynn.url).toBe('https://tynn.ai/mcp/tynn');
+        // The cookie backend is NEVER constructed on the host path.
+        expect(TynnBackend).not.toHaveBeenCalled();
+    });
+
+    it('DESKTOP path (default auth): rides the user cookie via TynnBackend', async () => {
+        const { TynnBackend } = (await import('../../backend/tynn')) as unknown as {
+            TynnBackend: ReturnType<typeof vi.fn>;
+        };
+        TynnBackend.mockClear();
+        cookieMint.mockClear();
+
+        const dir = linkedWorkspace('proj-cookie');
+        const r = await provisionWorkspaceTynn(dir); // no auth → cookie default
+
+        expect(r.status).toBe('provision');
+        // Constructed the cookie backend and minted through it.
+        expect(TynnBackend).toHaveBeenCalled();
+        expect(cookieMint).toHaveBeenCalledWith('proj-cookie');
+        const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8'));
+        expect(cfg.mcpServers.tynn.headers.Authorization).toBe('Bearer rpk_cookie.proj-cookie');
+    });
+
+    it('cookieProvisionAuth delegates readiness→whoami and mint→mintAgentToken', async () => {
+        const whoami = vi.fn(async () => ({ backend: 'tynn', id: 'u', name: 'n', email: 'e' }));
+        const mintAgentToken = vi.fn(async () => ({
+            token: 'rpk_x.y',
+            mcpUrl: 'u',
+            scopes: [],
+            isOpsProject: false,
+            agent: { id: 'a', name: 'Genie' },
+        }));
+        const auth = cookieProvisionAuth({ whoami, mintAgentToken } as never);
+        expect(await auth.ready()).toBe(true);
+        await auth.mint('p1');
+        expect(whoami).toHaveBeenCalled();
+        expect(mintAgentToken).toHaveBeenCalledWith('p1');
     });
 });
 

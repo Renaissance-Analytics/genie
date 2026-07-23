@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
     createWorkspaceAssignmentSubscriber,
     deprovisionAssignedWorkspace,
+    hostTynnMcpProvisioner,
     provisionAssignedWorkspace,
     reconcileAssignedWorkspaces,
     resolveAssignmentCloneUrl,
@@ -12,6 +13,7 @@ import {
     type IssueWatchDeltaPush,
     type WorkspaceAssignment,
 } from '../workspace-assignment';
+import { type TynnProvisionAuth } from '../provision';
 
 function assignment(over: Partial<WorkspaceAssignment> = {}): WorkspaceAssignment {
     return {
@@ -314,6 +316,75 @@ describe('provisionAssignedWorkspace', () => {
         expect(r.error).toMatch(/repository not found/);
         expect(register).not.toHaveBeenCalled();
         expect(notifyChanged).not.toHaveBeenCalled();
+    });
+
+    // genie #52 — after clone + register, provision the on-host Tynn MCP so a
+    // headless host's agents can reach Tynn with the host's own identity.
+    it('provisions the on-host Tynn MCP after registering the workspace (genie #52)', async () => {
+        const provisionTynnMcp = vi.fn(async () => {});
+        const { deps, register, notifyChanged } = fakeDeps({ provisionTynnMcp });
+
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+
+        expect(r.status).toBe('provisioned');
+        expect(register).toHaveBeenCalledTimes(1);
+        // Passed the on-disk path + the workspace's Tynn project id.
+        expect(provisionTynnMcp).toHaveBeenCalledWith({
+            workspacePath: '/hosts/root/wonder',
+            projectId: 'p1',
+        });
+        expect(notifyChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it('a failing Tynn MCP provision NEVER breaks workspace provisioning (best-effort)', async () => {
+        const provisionTynnMcp = vi.fn(async () => {
+            throw new Error('mint endpoint down');
+        });
+        const { deps, register, notifyChanged } = fakeDeps({ provisionTynnMcp });
+
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+
+        expect(r.status).toBe('provisioned');
+        expect(register).toHaveBeenCalledTimes(1);
+        expect(provisionTynnMcp).toHaveBeenCalled();
+        expect(notifyChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips Tynn MCP provisioning when the seam is absent (desktop path)', async () => {
+        const { deps } = fakeDeps(); // no provisionTynnMcp injected
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+        expect(r.status).toBe('provisioned');
+    });
+});
+
+describe('hostTynnMcpProvisioner (genie #52 mint-auth glue)', () => {
+    it('drives provisionWorkspaceTynn with the injected host mint as the auth source (never the cookie)', async () => {
+        const hostMint = vi.fn(async (projectId: string) => ({
+            token: `rpk_host.${projectId}`,
+            mcpUrl: 'https://tynn.ai/mcp/tynn',
+            agent: { id: 'a', name: 'Genie' },
+            isOpsProject: false,
+        }));
+        const provision = vi.fn(
+            async (
+                _workspacePath: string,
+                _opts?: { force?: boolean; auth?: TynnProvisionAuth },
+            ) => ({ status: 'provision' as const }),
+        );
+
+        const fn = hostTynnMcpProvisioner(hostMint, provision);
+        await fn({ workspacePath: '/hosts/root/wonder', projectId: 'p1' });
+
+        expect(provision).toHaveBeenCalledTimes(1);
+        const [wsPath, opts] = provision.mock.calls[0];
+        expect(wsPath).toBe('/hosts/root/wonder');
+        expect(opts?.force).toBe(true);
+        // The injected AUTH SOURCE is host-signed: ready() is unconditional and
+        // mint() delegates to the Workstation-authed minter — the cookie whoami is
+        // never consulted.
+        expect(await opts?.auth?.ready()).toBe(true);
+        await opts?.auth?.mint('p1');
+        expect(hostMint).toHaveBeenCalledWith('p1');
     });
 });
 

@@ -11,6 +11,11 @@ import {
 import { cloneAgiEnvelope, envelopeFolderName } from '../workspace/create-agi';
 import { broadcastWorkspacesChanged } from '../ipc';
 import { childAgiCloneUrl } from './ops-provision';
+import {
+    provisionWorkspaceTynn,
+    type TynnAgentTokenMint,
+    type TynnProvisionAuth,
+} from './provision';
 
 /**
  * Workspace-assignment PUSH provisioning (headless host side).
@@ -135,6 +140,16 @@ export interface AssignmentProvisionDeps {
      * writes to, so the recovery check below inspects exactly what a re-clone targets.
      */
     resolveDest?: (parentPath: string, slug: string) => string;
+    /**
+     * Provision the workspace's on-host Tynn MCP (`.mcp.json`) right after it's
+     * cloned + registered (genie #52): mint a project agent token via the host's
+     * Workstation identity and write the literal-token config, so a headless host's
+     * agents can reach Tynn WITHOUT the user web-session cookie a cloud host lacks.
+     * Injected by the genie-cloud shell (needs the host signer + Tynn base). Absent
+     * on the desktop, which provisions on open via the user's cookie. Best-effort —
+     * a failure NEVER breaks workspace provisioning.
+     */
+    provisionTynnMcp?: (input: { workspacePath: string; projectId: string }) => Promise<void>;
     /**
      * Classify a pre-existing on-disk target BEFORE cloning (genie#47 self-healing):
      *  - `'valid'`  — a complete envelope clone (has `.git` + `project.json`) → ADOPT
@@ -298,6 +313,22 @@ export async function provisionAssignedWorkspace(
             // deprovision it later — this is the ONLY flow that sets this flag.
             assignment_managed: 1,
         });
+        // genie #52 — provision the on-host Tynn MCP for the freshly-served
+        // workspace, minting via the host's Workstation identity (a headless host
+        // has no user cookie). Best-effort: a mint/write failure must NEVER fail
+        // workspace provisioning, so it's swallowed with a log. Absent on the
+        // desktop (no seam injected), where provisioning rides the cookie on open.
+        if (deps.provisionTynnMcp) {
+            try {
+                await deps.provisionTynnMcp({ workspacePath: wsPath, projectId: a.projectId });
+            } catch (e) {
+                console.warn(
+                    `[workspace-assignment] on-host Tynn MCP provision failed for ${a.workspaceId}: ${
+                        e instanceof Error ? e.message : String(e)
+                    }`,
+                );
+            }
+        }
         report('agent_config', 'done');
         // The workspace-list broadcast assign-ui keys off — emits `workspaces:changed`
         // locally + over the host `/ws/events` so remote sessions re-fetch + fade in.
@@ -433,6 +464,28 @@ export async function reconcileAssignedWorkspaces(
     return out;
 }
 
+/**
+ * Build the on-host Tynn MCP provisioner (genie #52) from a Workstation-authed
+ * minter. It drives the SAME `provisionWorkspaceTynn` the desktop uses — link
+ * resolution, `.mcp.json` write (literal token), gitignore — swapping ONLY the
+ * mint AUTH SOURCE for the injected host mint (`ready()` is unconditional because
+ * the mint itself carries the Ed25519 host proof; the cookie is never consulted).
+ * `force` re-provisions even if a stale entry exists. `provision` is injectable
+ * for tests; production uses the real `provisionWorkspaceTynn`.
+ */
+export function hostTynnMcpProvisioner(
+    mint: (projectId: string) => Promise<TynnAgentTokenMint>,
+    provision: typeof provisionWorkspaceTynn = provisionWorkspaceTynn,
+): (input: { workspacePath: string; projectId: string }) => Promise<void> {
+    const auth: TynnProvisionAuth = {
+        ready: async () => true,
+        mint: (projectId) => mint(projectId),
+    };
+    return async ({ workspacePath }) => {
+        await provision(workspacePath, { auth, force: true });
+    };
+}
+
 /** A live subscription handle — closing it drops the ONE persistent connection. */
 export interface AssignmentSubscriptionHandle {
     close(): void;
@@ -548,6 +601,12 @@ export interface WorkspaceAssignmentWiring {
      *  bar (genie #45). Injected (needs the host signer + Tynn base). Absent on the
      *  desktop. Fire-and-forget + best-effort. */
     reportProgress?: AssignmentProvisionDeps['reportProgress'];
+    /** Mint a project's Tynn MCP agent token via the HOST-authed endpoint (genie
+     *  #52) — the Workstation-signed POST the shell performs. When present, each
+     *  provisioned workspace's on-host Tynn MCP is provisioned (mint + write
+     *  `.mcp.json`) with the host's own identity. Absent on the desktop, which
+     *  provisions via the user cookie on open. */
+    mintAgentTokenAsHost?: (projectId: string) => Promise<TynnAgentTokenMint>;
     /** Where assigned envelopes clone to (`<parent>/<slug>`). */
     parentPath: string;
     /** Optional provision/deprovision-seam overrides (tests / custom env-file). */
@@ -573,6 +632,12 @@ export function createWorkspaceAssignmentSubscriber(
         parentPath: w.parentPath,
         ...(w.getCloneToken ? { getCloneToken: w.getCloneToken } : {}),
         ...(w.reportProgress ? { reportProgress: w.reportProgress } : {}),
+        // genie #52 — when the shell supplies a Workstation-authed minter, wire the
+        // on-host Tynn MCP provisioner so each provisioned workspace gets its
+        // `.mcp.json` written with the host's own identity.
+        ...(w.mintAgentTokenAsHost
+            ? { provisionTynnMcp: hostTynnMcpProvisioner(w.mintAgentTokenAsHost) }
+            : {}),
         ...w.provisionDeps,
     };
     return new WorkspaceAssignmentSubscriber({
