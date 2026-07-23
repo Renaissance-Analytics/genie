@@ -2772,11 +2772,14 @@ function PluginsSection() {
     );
 }
 
-/** A small colour-coded provenance chip: Trusted / Unsigned / Untrusted. */
+/** A small colour-coded provenance chip: Trusted / Unsigned / Needs update / Untrusted. */
 function TrustBadge({ plugin }: { plugin: InstalledPluginView }) {
     const map = {
         trusted: { label: 'Trusted', bg: 'rgba(34,197,94,0.15)', fg: '#4ade80' },
         unsigned: { label: 'Unsigned', bg: 'rgba(251,191,36,0.15)', fg: '#fbbf24' },
+        // A schema-outdated manifest is a "needs an update" state, not a red flag —
+        // orange, and worded distinctly from the tamper-red Untrusted.
+        outdated: { label: 'Needs update', bg: 'rgba(251,146,60,0.15)', fg: '#fb923c' },
         untrusted: { label: 'Untrusted', bg: 'rgba(248,113,113,0.15)', fg: '#f87171' },
     } as const;
     const s = map[plugin.trust];
@@ -2787,7 +2790,9 @@ function TrustBadge({ plugin }: { plugin: InstalledPluginView }) {
                 : 'First-party — bundled with Genie'
             : plugin.trust === 'unsigned'
               ? 'Not signed by a trusted publisher'
-              : 'Signature invalid or code tampered';
+              : plugin.trust === 'outdated'
+                ? "Manifest predates a newer Genie requirement — reinstall to update"
+                : 'Signature invalid or code tampered';
     return (
         <span
             title={title}
@@ -2840,7 +2845,13 @@ function PluginCard({
                     </span>
                     {plugin.trust === 'untrusted' && (
                         <span className="set-row-desc" style={{ color: '#f87171' }}>
-                            Untrusted — signature invalid or code tampered. This plugin cannot be enabled.
+                            Untrusted — its signature is invalid or its code was tampered with. This plugin cannot be enabled.
+                        </span>
+                    )}
+                    {plugin.trust === 'outdated' && (
+                        <span className="set-row-desc" style={{ color: '#fb923c' }}>
+                            Needs an update — this plugin&apos;s manifest predates a newer Genie requirement. Reinstall it to
+                            update; it cannot be enabled until then.
                         </span>
                     )}
                     {plugin.trust === 'unsigned' && (

@@ -1321,8 +1321,12 @@ export interface PluginPermissionView {
     granted: boolean;
 }
 
-/** A plugin's evaluated provenance verdict (Plugin System Phase 3). */
-export type PluginTrustStatus = 'trusted' | 'unsigned' | 'untrusted';
+/**
+ * A plugin's evaluated provenance verdict (Plugin System Phase 3). `outdated`
+ * means the stored manifest predates a newer schema requirement (needs an update)
+ * — distinct from a signature/tamper `untrusted`.
+ */
+export type PluginTrustStatus = 'trusted' | 'unsigned' | 'untrusted' | 'outdated';
 
 /** An installed plugin as Settings → Plugins renders it. */
 export interface InstalledPluginView {

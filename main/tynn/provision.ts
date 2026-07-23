@@ -49,6 +49,46 @@ export interface ProvisionResult {
     error?: string;
 }
 
+/** A minted MCP agent token + where to write it — the shape both mint auth
+ *  sources produce (the cookie `TynnBackend.mintAgentToken` and the host-authed
+ *  Workstation mint). Only `.mcp.json`-relevant fields; `scopes` is not needed. */
+export interface TynnAgentTokenMint {
+    token: string;
+    mcpUrl: string;
+    agent: { id: string; name: string };
+    isOpsProject: boolean;
+}
+
+/**
+ * The mint AUTH SOURCE for provisioning — the ONE seam that differs between the
+ * desktop and the headless-host paths (genie #52). The desktop default rides the
+ * user's Tynn web-session COOKIE; a Genie Cloud host injects a Workstation-signed
+ * source so it provisions with its own enrolled identity (no cookie exists on a
+ * headless host). The `.mcp.json` writer downstream is IDENTICAL either way —
+ * only where the token comes from changes.
+ */
+export interface TynnProvisionAuth {
+    /** Whether this source is authenticated enough to mint: a live cookie session
+     *  (desktop) or a present enrolled Workstation identity (host). */
+    ready(): Promise<boolean>;
+    /** Mint the project's MCP agent token. */
+    mint(projectId: string): Promise<TynnAgentTokenMint>;
+}
+
+/**
+ * The default (desktop) mint auth: the user's Tynn web-session cookie via
+ * `TynnBackend`. `ready` is the cookie `whoami`; `mint` is the cookie
+ * `POST /api/v1/projects/agent-token`. The backend is injectable for tests.
+ */
+export function cookieProvisionAuth(
+    backend: Pick<TynnBackend, 'whoami' | 'mintAgentToken'> = new TynnBackend(),
+): TynnProvisionAuth {
+    return {
+        ready: async () => !!(await backend.whoami()),
+        mint: (projectId) => backend.mintAgentToken(projectId),
+    };
+}
+
 /**
  * The link block AS STORED IN project.json — null unless it carries a
  * projectId. The narrow, file-only view; most callers want `resolveTynnLink`,
@@ -128,12 +168,15 @@ export function resolveTynnLink(workspacePath: string): ProjectJsonTynn | null {
  */
 export async function provisionWorkspaceTynn(
     workspacePath: string,
-    opts: { force?: boolean } = {},
+    opts: { force?: boolean; auth?: TynnProvisionAuth } = {},
 ): Promise<ProvisionResult> {
     const link = resolveTynnLink(workspacePath);
-    const backend = new TynnBackend();
+    // The mint AUTH SOURCE is the ONLY thing that differs desktop-vs-host: default
+    // to the user cookie (desktop), or use an injected Workstation-signed source
+    // (headless host, genie #52). Everything below is identical either way.
+    const auth = opts.auth ?? cookieProvisionAuth();
 
-    const signedIn = link ? !!(await backend.whoami()) : false;
+    const signedIn = link ? await auth.ready() : false;
     const decision = decideProvision({
         linked: !!link,
         signedIn,
@@ -144,7 +187,7 @@ export async function provisionWorkspaceTynn(
     if (decision !== 'provision') return { status: decision };
 
     try {
-        const minted = await backend.mintAgentToken(link!.projectId!);
+        const minted = await auth.mint(link!.projectId!);
         // Self-heal: when the link was recovered from the durable workspace row
         // (project.json carried no `tynn` block), write it back so project.json
         // and the row agree and the AGI gateway sees the mapping too.

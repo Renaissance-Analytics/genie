@@ -33,7 +33,13 @@ import { getAllSettings } from '../db';
 import { verifyDetached, signingPayload, keyIdForPublicKey } from './signing';
 import type { PluginManifest, MarketplaceManifest } from './manifest';
 
-export type TrustStatus = 'trusted' | 'unsigned' | 'untrusted';
+/**
+ * `outdated` is not produced by signature evaluation — it is set by the install /
+ * revalidation layer when a STORED manifest no longer validates against a newer
+ * schema (a "needs an update" state, distinct from a signature/tamper `untrusted`).
+ * It is non-surfaceable like `untrusted` but reads differently to the user.
+ */
+export type TrustStatus = 'trusted' | 'unsigned' | 'untrusted' | 'outdated';
 
 /** A resolved verdict for a plugin's provenance. */
 export interface TrustVerdict {
