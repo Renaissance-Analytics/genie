@@ -73,7 +73,7 @@
     "electron-builder": "^26.15.3",
     "next": "^15.5.21",
     "nextron": "^9.4.0",
-    "postcss": "^8.5.3",
+    "postcss": "^8.5.23",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tailwindcss": "^4.0.0",
