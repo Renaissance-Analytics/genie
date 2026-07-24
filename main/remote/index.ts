@@ -599,6 +599,10 @@ async function syncForwardedQuestions(conn: RemoteConnection): Promise<void> {
             hostId: q.id,
             questions: q.questions,
             workspaceLabel: q.workspaceLabel,
+            // v2 — preserve the host's priority (so a host's urgent sorts up in the
+            // driver's queue) + attribute it to the host (§8: never shown as local).
+            priority: q.priority,
+            remoteHost: conn.host.hostname,
         }).then(async (result) => {
             shown.delete(q.id);
             // Only an actual answer goes back to the host. A cancel (the driver

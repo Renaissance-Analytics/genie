@@ -117,6 +117,7 @@ import {
     registerForceQuestionIpc,
     raiseForwardedQuestion,
     dismissForwardedQuestion,
+    listPendingQuestions,
     setQuestionTransport,
 } from '../force-question';
 
@@ -180,6 +181,26 @@ describe('ForceTheQuestion FIFO queue', () => {
         expect(pending.map((q) => q.questions[0].header)).toEqual(['A', 'C']); // B gone, head A unchanged
         win().close();
         await Promise.all([pA, pB, pC]);
+    });
+
+    it('a forwarded host question carries its priority + remote-host attribution (v2 §8)', async () => {
+        const p = raiseForwardedQuestion({
+            connKey: 'c1',
+            hostId: 'h1',
+            questions: Q('Deploy'),
+            workspaceLabel: 'the-good-flood',
+            priority: 'urgent',
+            remoteHost: 'fcee07.geniecloud.link',
+        });
+        const item = listPendingQuestions().find((q) => q.questions[0].header === 'Deploy')!;
+        expect(item.priority).toBe('urgent');
+        expect(item.remoteHost).toBe('fcee07.geniecloud.link'); // labeled as a REMOTE host
+        // A LOCAL question has no remoteHost, so the UI never mislabels it.
+        const pLocal = forceQuestion(Q('Local'));
+        const local = listPendingQuestions().find((q) => q.questions[0].header === 'Local')!;
+        expect(local.remoteHost).toBeUndefined();
+        win().close();
+        await Promise.all([p, pLocal]);
     });
 
     it('shows the first request immediately with no items queued behind it', async () => {

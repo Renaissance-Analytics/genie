@@ -26,6 +26,8 @@ type PendingItem = {
     questions: ForceQuestionSpec[];
     index: number;
     priority?: 'low' | 'normal' | 'high' | 'urgent';
+    /** §8 attribution — the remote host this was forwarded from, or undefined (local). */
+    remoteHost?: string;
 };
 
 const PRIORITY_META: Record<
@@ -139,9 +141,15 @@ export default function AskPage() {
             (_q, qi) => (selected[qi]?.length ?? 0) > 0 || (notes[qi]?.trim() ?? '') !== '',
         );
 
-    const title = active?.workspaceLabel
-        ? `An agent in ${active.workspaceLabel} needs your input`
-        : 'An agent needs your input';
+    // §8 attribution — a forwarded question names its REMOTE host so it's never
+    // mistaken for a local one; a local question keeps the workspace phrasing.
+    const title = active?.remoteHost
+        ? `An agent on ${active.remoteHost}${
+              active.workspaceLabel ? ` · ${active.workspaceLabel}` : ''
+          } needs your input`
+        : active?.workspaceLabel
+          ? `An agent in ${active.workspaceLabel} needs your input`
+          : 'An agent needs your input';
 
     // The OTHER pending requests (everything but the one being answered).
     const others = pending.filter((p) => p.id !== active?.id);
@@ -235,9 +243,21 @@ export default function AskPage() {
                                     />
                                 )}
                                 <span>{p.questions[0]?.header ?? 'Question'}</span>
-                                {p.workspaceLabel && (
+                                {p.remoteHost ? (
+                                    <span
+                                        style={{
+                                            opacity: 0.75,
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: 3,
+                                        }}
+                                        title={`Remote host: ${p.remoteHost}`}
+                                    >
+                                        <Icon name="cloud" size="xs" /> {p.remoteHost}
+                                    </span>
+                                ) : p.workspaceLabel ? (
                                     <span style={{ opacity: 0.6 }}>· {p.workspaceLabel}</span>
-                                )}
+                                ) : null}
                             </button>
                         );
                     })}

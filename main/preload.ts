@@ -1064,6 +1064,7 @@ const api = {
                     }>;
                     index: number;
                     priority?: 'low' | 'normal' | 'high' | 'urgent';
+                    remoteHost?: string;
                 }>;
             }) => void,
         ) => {

@@ -2451,6 +2451,7 @@ export interface GenieApi {
                     questions: ForceQuestionSpec[];
                     index: number;
                     priority?: 'low' | 'normal' | 'high' | 'urgent';
+                    remoteHost?: string;
                 }>;
             }) => void,
         ) => () => void;

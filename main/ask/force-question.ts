@@ -55,7 +55,7 @@ interface QueueItem {
      * the driver's answer routes back over the bridge instead of resolving a
      * local agent's promise.
      */
-    forward?: { connKey: string; hostId: string };
+    forward?: { connKey: string; hostId: string; hostLabel?: string };
 }
 
 /**
@@ -130,6 +130,10 @@ export interface PendingQuestion {
     /** PendingQuestions v2 — the request's priority (default 'normal'), for the
      *  queue view to badge + the client to sort. */
     priority?: QuestionPriority;
+    /** v2 §8 attribution — the remote host this question was FORWARDED from (its
+     *  display name), or undefined for a LOCAL question. The queue view labels it so
+     *  a host's question is never shown as if it were local. */
+    remoteHost?: string;
 }
 
 /**
@@ -143,6 +147,7 @@ export function listPendingQuestions(): PendingQuestion[] {
         workspaceLabel: item.workspaceLabel,
         index,
         priority: item.priority,
+        remoteHost: item.forward?.hostLabel,
     }));
 }
 
@@ -448,6 +453,9 @@ export function raiseForwardedQuestion(opts: {
     questions: ForceQuestion[];
     workspaceLabel?: string;
     priority?: QuestionPriority;
+    /** The remote host's display name (§8 attribution) — so the queue view shows
+     *  the user this question is a REMOTE host's, never a local one. */
+    remoteHost?: string;
 }): Promise<ForceQuestionResult> {
     return new Promise((resolve) => {
         const id = crypto.randomBytes(9).toString('hex');
@@ -457,7 +465,7 @@ export function raiseForwardedQuestion(opts: {
             questions: opts.questions,
             workspaceLabel: opts.workspaceLabel,
             priority: opts.priority,
-            forward: { connKey: opts.connKey, hostId: opts.hostId },
+            forward: { connKey: opts.connKey, hostId: opts.hostId, hostLabel: opts.remoteHost },
         });
     });
 }
