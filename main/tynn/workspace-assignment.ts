@@ -151,6 +151,14 @@ export interface AssignmentProvisionDeps {
      */
     provisionTynnMcp?: (input: { workspacePath: string; projectId: string }) => Promise<void>;
     /**
+     * genie #55 — write the on-host GENIE MCP entry into the workspace's `.mcp.json`
+     * (pointing at the host's OWN loopback genie MCP server), so a member's agents
+     * get the full Genie tool surface (imDone / ForceTheQuestion / manageProcess / …),
+     * not just Tynn. Injected by the host wiring; absent on the desktop (which writes
+     * it on workspace open). Best-effort — a failure NEVER breaks provisioning.
+     */
+    provisionGenieMcp?: (input: { workspacePath: string; workspaceId: string }) => void;
+    /**
      * Classify a pre-existing on-disk target BEFORE cloning (genie#47 self-healing):
      *  - `'valid'`  — a complete envelope clone (has `.git` + `project.json`) → ADOPT
      *    it instead of re-cloning (which would hard-fail on the non-empty guard);
@@ -329,6 +337,20 @@ export async function provisionAssignedWorkspace(
                 );
             }
         }
+        // genie #55 — also write the on-host GENIE MCP entry (imDone / ForceTheQuestion
+        // / manageProcess / …), pointing at the host's own loopback server, so a member
+        // gets the full Genie tool surface, not just Tynn. Best-effort like the Tynn write.
+        if (deps.provisionGenieMcp) {
+            try {
+                deps.provisionGenieMcp({ workspacePath: wsPath, workspaceId: a.workspaceId });
+            } catch (e) {
+                console.warn(
+                    `[workspace-assignment] on-host genie MCP provision failed for ${a.workspaceId}: ${
+                        e instanceof Error ? e.message : String(e)
+                    }`,
+                );
+            }
+        }
         report('agent_config', 'done');
         // The workspace-list broadcast assign-ui keys off — emits `workspaces:changed`
         // locally + over the host `/ws/events` so remote sessions re-fetch + fade in.
@@ -486,6 +508,33 @@ export function hostTynnMcpProvisioner(
     };
 }
 
+/**
+ * genie #55 — the on-host GENIE MCP provisioner: write the workspace `.mcp.json`
+ * `genie` entry pointing at the host's OWN loopback genie MCP server, so a member's
+ * agents get the full Genie tool surface (imDone / ForceTheQuestion / manageProcess
+ * / …), not just Tynn. The electron-free deps are lazy-required so this module stays
+ * import-clean for unit tests. `writeWorkspaceAgentMcp` removes a stale entry when the
+ * server isn't listening yet (null URL), so the next reconcile self-corrects.
+ */
+export function hostGenieMcpProvisioner(
+    writeMcp?: (workspacePath: string, enabled: boolean, url: string | null) => void,
+    endpointUrl?: (workspaceId: string) => string | null,
+): (input: { workspacePath: string; workspaceId: string }) => void {
+    return ({ workspacePath, workspaceId }) => {
+        // Lazy-require the electron-touching modules only when a real dep isn't
+        // injected (unit tests inject directly, mirroring hostTynnMcpProvisioner),
+        // so this module stays import-clean.
+        const write =
+            writeMcp ??
+            (require('../mcp/agent-config') as typeof import('../mcp/agent-config'))
+                .writeWorkspaceAgentMcp;
+        const url =
+            endpointUrl ??
+            (require('../mcp/server') as typeof import('../mcp/server')).workspaceEndpointUrl;
+        write(workspacePath, true, url(workspaceId));
+    };
+}
+
 /** A live subscription handle — closing it drops the ONE persistent connection. */
 export interface AssignmentSubscriptionHandle {
     close(): void;
@@ -635,8 +684,14 @@ export function createWorkspaceAssignmentSubscriber(
         // genie #52 — when the shell supplies a Workstation-authed minter, wire the
         // on-host Tynn MCP provisioner so each provisioned workspace gets its
         // `.mcp.json` written with the host's own identity.
+        // genie #55 — the same headless-host context also wires the on-host GENIE
+        // MCP provisioner (loopback server, no minter needed) so a member's agents
+        // get the full Genie tool surface, not just Tynn.
         ...(w.mintAgentTokenAsHost
-            ? { provisionTynnMcp: hostTynnMcpProvisioner(w.mintAgentTokenAsHost) }
+            ? {
+                  provisionTynnMcp: hostTynnMcpProvisioner(w.mintAgentTokenAsHost),
+                  provisionGenieMcp: hostGenieMcpProvisioner(),
+              }
             : {}),
         ...w.provisionDeps,
     };

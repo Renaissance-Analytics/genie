@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
     createWorkspaceAssignmentSubscriber,
     deprovisionAssignedWorkspace,
+    hostGenieMcpProvisioner,
     hostTynnMcpProvisioner,
     provisionAssignedWorkspace,
     reconcileAssignedWorkspaces,
@@ -355,6 +356,45 @@ describe('provisionAssignedWorkspace', () => {
         const r = await provisionAssignedWorkspace(assignment(), deps);
         expect(r.status).toBe('provisioned');
     });
+
+    // genie #55 — after register, ALSO provision the on-host GENIE MCP so a member's
+    // agents get the full Genie tool surface (imDone / ForceTheQuestion / …), not
+    // just Tynn. Keyed by the WORKSPACE id (the loopback endpoint is per-workspace),
+    // not the project id.
+    it('provisions the on-host genie MCP after registering the workspace (genie #55)', async () => {
+        const provisionGenieMcp = vi.fn();
+        const { deps, register, notifyChanged } = fakeDeps({ provisionGenieMcp });
+
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+
+        expect(r.status).toBe('provisioned');
+        expect(register).toHaveBeenCalledTimes(1);
+        expect(provisionGenieMcp).toHaveBeenCalledWith({
+            workspacePath: '/hosts/root/wonder',
+            workspaceId: 'p1',
+        });
+        expect(notifyChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it('a failing genie MCP provision NEVER breaks workspace provisioning (best-effort)', async () => {
+        const provisionGenieMcp = vi.fn(() => {
+            throw new Error('mcp server not listening yet');
+        });
+        const { deps, register, notifyChanged } = fakeDeps({ provisionGenieMcp });
+
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+
+        expect(r.status).toBe('provisioned');
+        expect(register).toHaveBeenCalledTimes(1);
+        expect(provisionGenieMcp).toHaveBeenCalled();
+        expect(notifyChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips genie MCP provisioning when the seam is absent (desktop path)', async () => {
+        const { deps } = fakeDeps(); // no provisionGenieMcp injected
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+        expect(r.status).toBe('provisioned');
+    });
 });
 
 describe('hostTynnMcpProvisioner (genie #52 mint-auth glue)', () => {
@@ -385,6 +425,37 @@ describe('hostTynnMcpProvisioner (genie #52 mint-auth glue)', () => {
         expect(await opts?.auth?.ready()).toBe(true);
         await opts?.auth?.mint('p1');
         expect(hostMint).toHaveBeenCalledWith('p1');
+    });
+});
+
+describe('hostGenieMcpProvisioner (genie #55 loopback glue)', () => {
+    it('writes the workspace .mcp.json genie entry at the host loopback endpoint for that workspace', () => {
+        const writeMcp = vi.fn();
+        const endpointUrl = vi.fn(() => 'http://127.0.0.1:5199/mcp/tok-p1');
+
+        const fn = hostGenieMcpProvisioner(writeMcp, endpointUrl);
+        fn({ workspacePath: '/hosts/root/wonder', workspaceId: 'p1' });
+
+        // The endpoint is minted for THIS workspace id...
+        expect(endpointUrl).toHaveBeenCalledWith('p1');
+        // ...and written as an ENABLED genie entry pointing at the host's own server.
+        expect(writeMcp).toHaveBeenCalledWith(
+            '/hosts/root/wonder',
+            true,
+            'http://127.0.0.1:5199/mcp/tok-p1',
+        );
+    });
+
+    it('passes a null url through so the writer REMOVES a stale entry when the server is not listening yet', () => {
+        const writeMcp = vi.fn();
+        const endpointUrl = vi.fn(() => null);
+
+        const fn = hostGenieMcpProvisioner(writeMcp, endpointUrl);
+        fn({ workspacePath: '/hosts/root/wonder', workspaceId: 'p1' });
+
+        // null URL ⇒ writeWorkspaceAgentMcp deletes any prior entry; the next
+        // reconcile (once the port is bound) self-corrects.
+        expect(writeMcp).toHaveBeenCalledWith('/hosts/root/wonder', true, null);
     });
 });
 
