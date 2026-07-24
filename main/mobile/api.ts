@@ -523,6 +523,22 @@ export function confineCwdToWorkspace(workspaceRoot: string, requested?: string)
     return abs === root || abs.startsWith(root + path.sep) ? abs : root;
 }
 
+/**
+ * Redact a plugin-editor fs result before it's sent to a REMOTE member (genie #54 /
+ * CodeQL js/stack-trace-exposure). `runPluginEditorFs` returns `{ ok:false, error:
+ * String(e) }` on a failure — that raw error text (a plugin fs error, possibly with
+ * a path or stack) must NEVER leak over the relay. Log it host-side; send a fixed,
+ * value-free reason. Success (and error-less failures) pass through unchanged. The
+ * LOCAL IPC path (`plugins:editor-read`) keeps the detail — the desktop is trusted.
+ */
+export function redactPluginFsError<T extends { ok: boolean; error?: string }>(r: T): T {
+    if (!r.ok && r.error) {
+        console.warn('[mobile-api] plugin editor fs op failed:', r.error);
+        return { ...r, error: 'plugin file operation failed' };
+    }
+    return r;
+}
+
 /** A small JSON response helper (CORS-free — same-origin from the served app). */
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
     const data = JSON.stringify(body);
@@ -1713,14 +1729,20 @@ export async function handleApi(
         const pluginId = String(pb.pluginId ?? '');
         const relPath = String(pb.relPath ?? '');
         if (pathname === '/api/plugins/editor-read') {
-            sendJson(res, 200, await runPluginEditorFs(pluginId, root, relPath, 'fs.readBytes'));
+            sendJson(
+                res,
+                200,
+                redactPluginFsError(await runPluginEditorFs(pluginId, root, relPath, 'fs.readBytes')),
+            );
             return true;
         }
         if (guardLocked()) return true; // write — kill-switch gated
         sendJson(
             res,
             200,
-            await runPluginEditorFs(pluginId, root, relPath, 'fs.writeBytes', String(pb.base64 ?? '')),
+            redactPluginFsError(
+                await runPluginEditorFs(pluginId, root, relPath, 'fs.writeBytes', String(pb.base64 ?? '')),
+            ),
         );
         return true;
     }
