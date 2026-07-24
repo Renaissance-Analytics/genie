@@ -43,7 +43,7 @@ function fakeDeps(over: Partial<Deps> = {}) {
     const register = vi.fn();
     const notifyChanged = vi.fn();
     const stopTerminals = vi.fn((id: string) => [`${id}-t1`]);
-    const existing: Array<{ id: string }> = [];
+    const existing: Array<{ id: string; path?: string }> = [];
     const managed: Array<{ id: string }> = [];
     const remove = vi.fn((id: string) => {
         const i = existing.findIndex((w) => w.id === id);
@@ -394,6 +394,46 @@ describe('provisionAssignedWorkspace', () => {
         const { deps } = fakeDeps(); // no provisionGenieMcp injected
         const r = await provisionAssignedWorkspace(assignment(), deps);
         expect(r.status).toBe('provisioned');
+    });
+
+    // genie #55 upgrade gap — a workspace ALREADY cloned by an older host (before
+    // #55) short-circuited at the 'exists' guard and never got the genie MCP entry.
+    // Ensure the on-host MCP config is (re)written idempotently for existing
+    // workspaces too, so `.mcp.json` gains the genie server after an image upgrade —
+    // without re-cloning.
+    it('ensures BOTH on-host MCP entries for an ALREADY-existing workspace, without re-cloning (#55 upgrade gap)', async () => {
+        const provisionTynnMcp = vi.fn(async () => {});
+        const provisionGenieMcp = vi.fn();
+        const { deps, clone, existing } = fakeDeps({ provisionTynnMcp, provisionGenieMcp });
+        // The workspace was cloned by an OLDER host — already registered on disk.
+        existing.push({ id: 'p1', path: '/hosts/root/wonder' });
+
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+
+        expect(r.status).toBe('exists');
+        expect(clone).not.toHaveBeenCalled(); // NEVER re-clones an existing workspace
+        // ...but it DOES converge the MCP config, so the genie entry lands post-upgrade.
+        expect(provisionTynnMcp).toHaveBeenCalledWith({
+            workspacePath: '/hosts/root/wonder',
+            projectId: 'p1',
+        });
+        expect(provisionGenieMcp).toHaveBeenCalledWith({
+            workspacePath: '/hosts/root/wonder',
+            workspaceId: 'p1',
+        });
+    });
+
+    it('a failing MCP ensure on an existing workspace still returns exists (best-effort)', async () => {
+        const provisionGenieMcp = vi.fn(() => {
+            throw new Error('mcp server not listening yet');
+        });
+        const { deps, existing } = fakeDeps({ provisionGenieMcp });
+        existing.push({ id: 'p1', path: '/hosts/root/wonder' });
+
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+
+        expect(r.status).toBe('exists');
+        expect(provisionGenieMcp).toHaveBeenCalled();
     });
 });
 

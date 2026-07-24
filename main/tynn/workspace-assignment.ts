@@ -227,7 +227,19 @@ export async function provisionAssignedWorkspace(
     const inspectTarget = deps.inspectTarget ?? defaultInspectTarget;
     const cleanTarget = deps.cleanTarget ?? defaultCleanTarget;
 
-    if (listExisting().some((w) => w.id === a.workspaceId)) {
+    const already = listExisting().find((w) => w.id === a.workspaceId);
+    if (already) {
+        // Already cloned — but STILL (re)write the on-host MCP config. A workspace
+        // first provisioned by an OLDER host (before genie #55, or before the Tynn
+        // MCP seam) otherwise NEVER gets the genie MCP entry, because this function
+        // short-circuits here and the fresh-clone MCP write below is skipped. Making
+        // the ensure idempotent + running it on every reconcile means an existing
+        // workspace's `.mcp.json` converges to the current host's tool surface after
+        // an image upgrade — not only at first clone. Path from the registered row,
+        // falling back to the deterministic clone dest.
+        const wsPath =
+            (already as { path?: string }).path || resolveDest(deps.parentPath, a.slug);
+        await ensureWorkspaceMcp(wsPath, a, deps);
         return { status: 'exists', workspaceId: a.workspaceId };
     }
 
@@ -321,36 +333,9 @@ export async function provisionAssignedWorkspace(
             // deprovision it later — this is the ONLY flow that sets this flag.
             assignment_managed: 1,
         });
-        // genie #52 — provision the on-host Tynn MCP for the freshly-served
-        // workspace, minting via the host's Workstation identity (a headless host
-        // has no user cookie). Best-effort: a mint/write failure must NEVER fail
-        // workspace provisioning, so it's swallowed with a log. Absent on the
-        // desktop (no seam injected), where provisioning rides the cookie on open.
-        if (deps.provisionTynnMcp) {
-            try {
-                await deps.provisionTynnMcp({ workspacePath: wsPath, projectId: a.projectId });
-            } catch (e) {
-                console.warn(
-                    `[workspace-assignment] on-host Tynn MCP provision failed for ${a.workspaceId}: ${
-                        e instanceof Error ? e.message : String(e)
-                    }`,
-                );
-            }
-        }
-        // genie #55 — also write the on-host GENIE MCP entry (imDone / ForceTheQuestion
-        // / manageProcess / …), pointing at the host's own loopback server, so a member
-        // gets the full Genie tool surface, not just Tynn. Best-effort like the Tynn write.
-        if (deps.provisionGenieMcp) {
-            try {
-                deps.provisionGenieMcp({ workspacePath: wsPath, workspaceId: a.workspaceId });
-            } catch (e) {
-                console.warn(
-                    `[workspace-assignment] on-host genie MCP provision failed for ${a.workspaceId}: ${
-                        e instanceof Error ? e.message : String(e)
-                    }`,
-                );
-            }
-        }
+        // Write the on-host MCP config (Tynn #52 + genie #55). Same idempotent
+        // ensure used for an ALREADY-cloned workspace above — see ensureWorkspaceMcp.
+        await ensureWorkspaceMcp(wsPath, a, deps);
         report('agent_config', 'done');
         // The workspace-list broadcast assign-ui keys off — emits `workspaces:changed`
         // locally + over the host `/ws/events` so remote sessions re-fetch + fade in.
@@ -366,6 +351,48 @@ export async function provisionAssignedWorkspace(
             workspaceId: a.workspaceId,
             error,
         };
+    }
+}
+
+/**
+ * Write the on-host MCP config (Tynn #52 + genie #55) for a served workspace's
+ * `.mcp.json`. Idempotent + best-effort — a mint/write failure NEVER breaks
+ * provisioning. Run for BOTH a fresh clone AND an already-present workspace on
+ * every reconcile, so a workspace first provisioned by an OLDER host converges to
+ * the current host's tool surface (e.g. gains the genie MCP entry after an image
+ * upgrade) rather than only at first clone.
+ */
+async function ensureWorkspaceMcp(
+    wsPath: string,
+    a: WorkspaceAssignment,
+    deps: AssignmentProvisionDeps,
+): Promise<void> {
+    // genie #52 — the on-host Tynn MCP, minted via the host's Workstation identity
+    // (a headless host has no user cookie). Absent on the desktop (no seam injected).
+    if (deps.provisionTynnMcp) {
+        try {
+            await deps.provisionTynnMcp({ workspacePath: wsPath, projectId: a.projectId });
+        } catch (e) {
+            console.warn(
+                `[workspace-assignment] on-host Tynn MCP provision failed for ${a.workspaceId}: ${
+                    e instanceof Error ? e.message : String(e)
+                }`,
+            );
+        }
+    }
+    // genie #55 — the on-host GENIE MCP (imDone / ForceTheQuestion / manageProcess
+    // / …) at the host's own loopback endpoint, so a member gets the full Genie tool
+    // surface, not just Tynn.
+    if (deps.provisionGenieMcp) {
+        try {
+            deps.provisionGenieMcp({ workspacePath: wsPath, workspaceId: a.workspaceId });
+        } catch (e) {
+            console.warn(
+                `[workspace-assignment] on-host genie MCP provision failed for ${a.workspaceId}: ${
+                    e instanceof Error ? e.message : String(e)
+                }`,
+            );
+        }
     }
 }
 
