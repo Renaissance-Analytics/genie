@@ -203,11 +203,25 @@ function payloadFor(item: QueueItem): {
     };
 }
 
-/** Push the current head's payload to the renderer (no-op if nothing pending). */
+/**
+ * Push the WHOLE pending queue to the ask window (PendingQuestions v2 — the
+ * user-controlled queue view). Sent alongside `ask:show` so the renderer can list
+ * every pending request (priority-badged, with its workspace label) and let the
+ * user pick which to answer next / defer / dismiss. No-op when the window is down.
+ */
+function pushQueue(): void {
+    if (win && !win.isDestroyed()) {
+        win.webContents.send('ask:queue', { pending: listPendingQuestions() });
+    }
+}
+
+/** Push the current head's payload + the full queue to the renderer (no-op if
+ *  nothing pending). */
 function showHead(): void {
     const head = queue[0];
     if (head && win && !win.isDestroyed()) {
         win.webContents.send('ask:show', payloadFor(head));
+        pushQueue();
     }
 }
 
@@ -227,8 +241,12 @@ function finish(id: string, result: ForceQuestionResult): void {
     notifyQuestionsChanged();
 
     // Only the head drives the window. If a queued (not-yet-shown) item was
-    // resolved, leave the current view alone.
-    if (idx !== 0) return;
+    // resolved, the shown question is unchanged — but the queue LIST shrank, so
+    // refresh it (v2) and leave the current view alone.
+    if (idx !== 0) {
+        pushQueue();
+        return;
+    }
 
     if (queue.length === 0) {
         // Nothing left — close the shared window. The `closed` handler is a

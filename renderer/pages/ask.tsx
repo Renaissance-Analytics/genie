@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Action, ContentRenderer, Heading, Icon, Text } from '@particle-academy/react-fancy';
 import {
     api,
@@ -11,18 +11,40 @@ import {
  * ForceTheQuestion modal — a frameless, always-on-top window an agent raises via
  * the Genie MCP to ask the user one or more questions. Mirrors the AskUserQuestion
  * UX: each question offers single/multi-select options AND an always-available
- * free-text note, so a single call covers everything the agent needs.
+ * free-text note.
  *
- * Main pushes the payload via `ask:show` (carrying the request id); we reply with
- * `ask:answer` (the per-question selections + notes) or `ask:cancel`.
+ * PendingQuestions v2: Genie is multi-agent, so several asks can be pending at once.
+ * Main pushes the WHOLE queue (`ask:queue`, priority-ordered) + the head (`ask:show`).
+ * The user can pick which pending request to answer next (`answerPendingQuestion` by
+ * id) — a higher-priority one sorts to the top, but nothing is answered for the user;
+ * they choose. `ask:answer`/`ask:cancel` act on the SELECTED id.
  */
+
+type PendingItem = {
+    id: string;
+    workspaceLabel?: string;
+    questions: ForceQuestionSpec[];
+    index: number;
+    priority?: 'low' | 'normal' | 'high' | 'urgent';
+};
+
+const PRIORITY_META: Record<
+    NonNullable<PendingItem['priority']>,
+    { label: string; color: string }
+> = {
+    urgent: { label: 'Urgent', color: 'var(--red-500)' },
+    high: { label: 'High', color: 'var(--amber-500)' },
+    normal: { label: '', color: '' },
+    low: { label: 'Low', color: 'var(--zinc-500)' },
+};
+
 export default function AskPage() {
     const [bridgeReady, setBridgeReady] = useState(false);
-    const [reqId, setReqId] = useState<string | null>(null);
-    const [workspaceLabel, setWorkspaceLabel] = useState<string | null>(null);
-    const [questions, setQuestions] = useState<ForceQuestionSpec[]>([]);
-    // How many other ForceTheQuestion requests are queued behind this one.
-    const [queuedCount, setQueuedCount] = useState(0);
+    // The full pending queue (priority-ordered) + the head, from main.
+    const [pending, setPending] = useState<PendingItem[]>([]);
+    const [head, setHead] = useState<PendingItem | null>(null);
+    // The request the user is currently answering. null ⇒ follow the head.
+    const [activeId, setActiveId] = useState<string | null>(null);
     // Per-question selected labels + free-text note, keyed by question index.
     const [selected, setSelected] = useState<Record<number, string[]>>({});
     const [notes, setNotes] = useState<Record<number, string>>({});
@@ -34,41 +56,52 @@ export default function AskPage() {
 
     useEffect(() => {
         if (!bridgeReady) return;
-        const off = api().ask.onShow(({ id, questions: qs, workspaceLabel: ws, queued }) => {
-            setReqId(id);
-            setWorkspaceLabel(ws ?? null);
-            setQuestions(qs);
-            setQueuedCount(queued ?? 0);
-            // The window is shared across queued requests, so reset per-request
-            // input state whenever a new one is shown (id may stay the same only
-            // for a re-delivery of the SAME request — harmless to reset then).
-            setSelected({});
-            setNotes({});
-            setSubmitting(false);
+        const offShow = api().ask.onShow(({ id, questions: qs, workspaceLabel: ws, queued }) => {
+            setHead({ id, questions: qs, workspaceLabel: ws, index: 0 });
+            // A new head means the previous one was answered/advanced — refollow it.
+            setActiveId(null);
+            void queued; // count is derived from `pending` now
         });
-        // Now that the listener is attached, tell main to deliver the payload.
-        // (Pushing on did-finish-load can fire before this effect runs, so the
-        // ready handshake is what guarantees the modal actually loads.)
+        const offQueue = api().ask.onQueue(({ pending: p }) => setPending(p as PendingItem[]));
+        // Attached → tell main to deliver.
         void api().ask.ready().catch(() => {});
-        return off;
+        return () => {
+            offShow();
+            offQueue();
+        };
     }, [bridgeReady]);
+
+    // The request being answered: the explicit selection, else the head. Prefer the
+    // queue copy (authoritative + carries priority) and fall back to the head payload.
+    const active: PendingItem | null = useMemo(() => {
+        const wantId = activeId ?? head?.id ?? pending[0]?.id ?? null;
+        return pending.find((p) => p.id === wantId) ?? (wantId === head?.id ? head : null) ?? head;
+    }, [activeId, head, pending]);
+
+    // Reset the per-question input whenever the ACTIVE request changes.
+    useEffect(() => {
+        setSelected({});
+        setNotes({});
+        setSubmitting(false);
+    }, [active?.id]);
+
+    const questions = active?.questions ?? [];
 
     const toggle = (qi: number, label: string, multi: boolean) => {
         setSelected((prev) => {
             const cur = prev[qi] ?? [];
             if (multi) {
-                const next = cur.includes(label)
-                    ? cur.filter((l) => l !== label)
-                    : [...cur, label];
-                return { ...prev, [qi]: next };
+                return {
+                    ...prev,
+                    [qi]: cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label],
+                };
             }
-            // Single-select: clicking the chosen one again clears it.
             return { ...prev, [qi]: cur[0] === label ? [] : [label] };
         });
     };
 
     const submit = async () => {
-        if (!reqId || submitting) return;
+        if (!active || submitting) return;
         setSubmitting(true);
         const answers: ForceAnswerSpec[] = questions.map((q, qi) => ({
             header: q.header,
@@ -77,18 +110,17 @@ export default function AskPage() {
             note: (notes[qi] ?? '').trim(),
         }));
         try {
-            await api().ask.answer(reqId, answers);
+            await api().ask.answer(active.id, answers);
         } catch {
-            /* window will close from main; nothing to recover here */
+            /* window will close / advance from main; nothing to recover here */
         }
     };
 
-    // Close the window regardless of state. Uses dismiss() (resolves by sender
-    // window) so it works even in the loading view where reqId isn't set yet —
-    // the user is never trapped.
-    const dismiss = () => {
-        void api().ask.dismiss().catch(() => {});
+    // Cancel just the ACTIVE request (advances the queue); dismiss closes the window.
+    const cancelActive = () => {
+        if (active) void api().ask.cancel(active.id).catch(() => {});
     };
+    const dismiss = () => void api().ask.dismiss().catch(() => {});
 
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
@@ -101,45 +133,47 @@ export default function AskPage() {
         return () => window.removeEventListener('keydown', onKey);
     }, []);
 
-    // Require at least one selection OR a note per question before submit.
     const ready =
         questions.length > 0 &&
         questions.every(
             (_q, qi) => (selected[qi]?.length ?? 0) > 0 || (notes[qi]?.trim() ?? '') !== '',
         );
 
-    const title = workspaceLabel
-        ? `An agent in ${workspaceLabel} needs your input`
+    const title = active?.workspaceLabel
+        ? `An agent in ${active.workspaceLabel} needs your input`
         : 'An agent needs your input';
 
-    // Subtle badge so the user knows more questions are waiting behind this one.
-    const queuedBadge =
-        queuedCount > 0 ? (
-            <span className="ask-queued" title={`${queuedCount} more waiting`}>
-                +{queuedCount} more queued
-            </span>
-        ) : null;
+    // The OTHER pending requests (everything but the one being answered).
+    const others = pending.filter((p) => p.id !== active?.id);
 
-    if (!bridgeReady || !reqId) {
+    const header = (
+        <div className="ask-head">
+            <Icon name="sparkles" size="sm" className="text-violet-500" />
+            <Heading as="h1" size="sm" style={{ margin: 0 }}>
+                {title}
+            </Heading>
+            {others.length > 0 && (
+                <span className="ask-queued" title={`${others.length} more waiting`}>
+                    +{others.length} more queued
+                </span>
+            )}
+            <div style={{ flex: 1 }} />
+            <button
+                type="button"
+                className="ask-x"
+                onClick={dismiss}
+                title="Close (Esc)"
+                aria-label="Close"
+            >
+                ✕
+            </button>
+        </div>
+    );
+
+    if (!bridgeReady || !active) {
         return (
             <div className="ask-frame">
-                <div className="ask-head">
-                    <Icon name="sparkles" size="sm" className="text-violet-500" />
-                    <Heading as="h1" size="sm" style={{ margin: 0 }}>
-                        {title}
-                    </Heading>
-                    {queuedBadge}
-                    <div style={{ flex: 1 }} />
-                    <button
-                        type="button"
-                        className="ask-x"
-                        onClick={dismiss}
-                        title="Close (Esc)"
-                        aria-label="Close"
-                    >
-                        ✕
-                    </button>
-                </div>
+                {header}
                 <div className="ask-loading">
                     <Text size="sm" className="text-zinc-500">
                         Waiting for the question…
@@ -151,23 +185,64 @@ export default function AskPage() {
 
     return (
         <div className="ask-frame">
-            <div className="ask-head">
-                <Icon name="sparkles" size="sm" className="text-violet-500" />
-                <Heading as="h1" size="sm" style={{ margin: 0 }}>
-                    {title}
-                </Heading>
-                {queuedBadge}
-                <div style={{ flex: 1 }} />
-                <button
-                    type="button"
-                    className="ask-x"
-                    onClick={dismiss}
-                    title="Close (Esc)"
-                    aria-label="Close"
+            {header}
+
+            {/* PendingQuestions v2 — the queue: pick which to answer next. Higher
+                priority sorts up, but the user chooses; nothing is auto-answered. */}
+            {others.length > 0 && (
+                <div
+                    style={{
+                        display: 'flex',
+                        gap: 6,
+                        flexWrap: 'wrap',
+                        padding: '8px 14px',
+                        borderBottom: '1px solid var(--zinc-800, #27272a)',
+                    }}
                 >
-                    ✕
-                </button>
-            </div>
+                    {pending.map((p) => {
+                        const on = p.id === active.id;
+                        const meta = p.priority ? PRIORITY_META[p.priority] : PRIORITY_META.normal;
+                        return (
+                            <button
+                                key={p.id}
+                                type="button"
+                                onClick={() => setActiveId(p.id)}
+                                title={p.workspaceLabel ?? undefined}
+                                style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 6,
+                                    padding: '3px 9px',
+                                    borderRadius: 999,
+                                    border: on
+                                        ? '1px solid var(--violet-500, #8b5cf6)'
+                                        : '1px solid var(--zinc-700, #3f3f46)',
+                                    background: on ? 'var(--violet-500-a, rgba(139,92,246,.12))' : 'transparent',
+                                    color: 'inherit',
+                                    cursor: 'pointer',
+                                    fontSize: 12,
+                                }}
+                            >
+                                {meta.color && (
+                                    <span
+                                        aria-hidden
+                                        style={{
+                                            width: 7,
+                                            height: 7,
+                                            borderRadius: 999,
+                                            background: meta.color,
+                                        }}
+                                    />
+                                )}
+                                <span>{p.questions[0]?.header ?? 'Question'}</span>
+                                {p.workspaceLabel && (
+                                    <span style={{ opacity: 0.6 }}>· {p.workspaceLabel}</span>
+                                )}
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
 
             <div className="ask-body">
                 {questions.map((q, qi) => (
@@ -180,9 +255,6 @@ export default function AskPage() {
                                 </Text>
                             )}
                         </div>
-                        {/* The question body renders as MARKDOWN prose (normal
-                            weight, real paragraphs/lists), not one bold blob —
-                            agents write multi-line, structured question text. */}
                         <ContentRenderer
                             value={q.question}
                             format="markdown"
@@ -228,7 +300,7 @@ export default function AskPage() {
                     dismiss
                 </Text>
                 <div style={{ flex: 1 }} />
-                <Action variant="ghost" size="sm" onClick={dismiss}>
+                <Action variant="ghost" size="sm" onClick={cancelActive}>
                     Cancel
                 </Action>
                 <Action

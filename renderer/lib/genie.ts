@@ -2441,6 +2441,19 @@ export interface GenieApi {
                 queued?: number;
             }) => void,
         ) => () => void;
+        /** PendingQuestions v2 — the WHOLE pending queue (priority-ordered), so the
+         *  modal can list every pending request + let the user pick which to answer. */
+        onQueue: (
+            cb: (payload: {
+                pending: Array<{
+                    id: string;
+                    workspaceLabel?: string;
+                    questions: ForceQuestionSpec[];
+                    index: number;
+                    priority?: 'low' | 'normal' | 'high' | 'urgent';
+                }>;
+            }) => void,
+        ) => () => void;
         answer: (id: string, answers: ForceAnswerSpec[]) => Promise<void>;
         cancel: (id: string) => Promise<void>;
         /** Signal main the show-listener is attached (race-free delivery). */

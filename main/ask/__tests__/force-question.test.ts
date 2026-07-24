@@ -19,6 +19,16 @@ import type { ForceQuestion } from '../../mcp/protocol';
 interface FakeWin {
     id: number;
     shown: Array<{ id: string; questions: ForceQuestion[]; queued: number }>;
+    /** Captured `ask:queue` pushes (PendingQuestions v2 — the full queue view). */
+    queues: Array<{
+        pending: Array<{
+            id: string;
+            priority?: string;
+            index: number;
+            workspaceLabel?: string;
+            questions: ForceQuestion[];
+        }>;
+    }>;
     closedHandlers: Array<() => void>;
     destroyed: boolean;
     close: () => void;
@@ -46,6 +56,7 @@ vi.mock('electron', () => {
             const self = this as unknown as FakeWin;
             self.id = wcId;
             self.shown = [];
+            self.queues = [];
             self.closedHandlers = [];
             self.destroyed = false;
             self.webContents = {
@@ -61,6 +72,8 @@ vi.mock('electron', () => {
                                 queued: number;
                             },
                         );
+                    } else if (channel === 'ask:queue') {
+                        self.queues.push(payload as FakeWin['queues'][number]);
                     }
                 },
             };
@@ -136,6 +149,38 @@ describe('ForceTheQuestion FIFO queue', () => {
         });
     });
     afterEach(() => vi.clearAllMocks());
+
+    it('pushes the FULL pending queue (priority-ordered, head first) to the window (v2)', async () => {
+        const pA = forceQuestion(Q('A'), 'ws-a'); // head (normal)
+        const pB = forceQuestion(Q('B'), 'ws-b'); // normal
+        const pC = forceQuestion(Q('C'), 'ws-c', 'urgent'); // urgent → jumps ahead of B, behind head
+
+        const pending = win().queues[win().queues.length - 1].pending;
+        // Head A is protected; urgent C is answered before normal B.
+        expect(pending.map((q) => q.questions[0].header)).toEqual(['A', 'C', 'B']);
+        expect(pending[0].workspaceLabel).toBe('ws-a');
+        expect(pending[1].priority).toBe('urgent');
+        win().close();
+        await Promise.all([pA, pB, pC]);
+    });
+
+    it('refreshes the queue when a non-head item is answered out of order (user-controlled flow)', async () => {
+        const pA = forceQuestion(Q('A'));
+        const pB = forceQuestion(Q('B'));
+        const pC = forceQuestion(Q('C'));
+
+        // The user picks the queued B (not the head) and answers it.
+        const bId = win()
+            .queues[win().queues.length - 1].pending.find((q) => q.questions[0].header === 'B')!.id;
+        await invokeIpc('ask:answer', win().id, bId, [
+            { header: 'B', question: 'B?', selected: ['Yes'], note: '' },
+        ]);
+
+        const pending = win().queues[win().queues.length - 1].pending;
+        expect(pending.map((q) => q.questions[0].header)).toEqual(['A', 'C']); // B gone, head A unchanged
+        win().close();
+        await Promise.all([pA, pB, pC]);
+    });
 
     it('shows the first request immediately with no items queued behind it', async () => {
         const p = forceQuestion(Q('A'));

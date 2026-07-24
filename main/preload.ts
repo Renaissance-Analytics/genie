@@ -1048,6 +1048,29 @@ const api = {
             ipcRenderer.on('ask:show', handler);
             return () => ipcRenderer.off('ask:show', handler);
         },
+        // PendingQuestions v2 — the FULL pending queue (priority-ordered), so the
+        // modal can list every pending request and let the user pick which to answer
+        // / defer. `answer(id,…)` / `cancel(id)` already act on any id.
+        onQueue: (
+            cb: (payload: {
+                pending: Array<{
+                    id: string;
+                    workspaceLabel?: string;
+                    questions: Array<{
+                        header: string;
+                        question: string;
+                        multiSelect?: boolean;
+                        options: Array<{ label: string; description?: string }>;
+                    }>;
+                    index: number;
+                    priority?: 'low' | 'normal' | 'high' | 'urgent';
+                }>;
+            }) => void,
+        ) => {
+            const handler = (_e: unknown, payload: any) => cb(payload);
+            ipcRenderer.on('ask:queue', handler);
+            return () => ipcRenderer.off('ask:queue', handler);
+        },
         answer: (
             id: string,
             answers: Array<{
