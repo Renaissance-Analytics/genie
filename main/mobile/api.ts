@@ -236,13 +236,16 @@ export interface MobileDataDeps {
      *  reconcile). Drives status' signed-in check + provision's mint. */
     hostProvisionAuth?: TynnProvisionAuth;
     /** The Tynn projects this host may provision — its assigned workspaces — for the
-     *  picker (the host can only mint for projects it hosts). */
-    listHostProjects?: () => Array<{
-        id: string;
-        name: string;
-        slug: string;
-        owner_name?: string;
-    }>;
+     *  picker (the host can only mint for projects it hosts). Async: the host fetches
+     *  its assignments (host-authed) fresh on a picker open. */
+    listHostProjects?: () => Promise<
+        Array<{
+            id: string;
+            name: string;
+            slug: string;
+            owner_name?: string;
+        }>
+    >;
     listTerminalSpecs: () => Array<{
         id: string;
         workspace_id: string | null;
@@ -1589,7 +1592,7 @@ export async function handleApi(
             // workspaces), via the workstation identity — the host has no user cookie
             // for listAllProjects(). Desktop: the user's own projects.
             const projects = deps.listHostProjects
-                ? deps.listHostProjects()
+                ? await deps.listHostProjects()
                 : await listAllProjects();
             sendJson(res, 200, { projects });
             return true;

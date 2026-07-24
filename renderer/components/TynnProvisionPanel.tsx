@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Action, Icon, Select, Text } from '@particle-academy/react-fancy';
 import { api } from '../lib/genie';
+import { shouldAutoProvisionOnOpen } from '../lib/tynn-autoprovision';
 
 /**
  * Tynn auto-provisioning — per-workspace panel (the workspace settings modal).
@@ -22,6 +23,9 @@ export default function TynnProvisionPanel({ workspaceId }: { workspaceId?: stri
     const [picked, setPicked] = useState('');
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState<string | null>(null);
+    // genie #52 — the workspace path we've already auto-provisioned on open, so the
+    // zero-click auto-connect fires at most once per workspace (no re-provision loop).
+    const autoProvisionedFor = useRef<string | null>(null);
 
     const refresh = async () => {
         setMsg(null);
@@ -40,6 +44,21 @@ export default function TynnProvisionPanel({ workspaceId }: { workspaceId?: stri
             setLink(s.link);
             if (s.status === 'unlinked') {
                 setProjects(await api().tynn.projects());
+            }
+            // Zero-click auto-connect on open: a linked-but-unconfigured workspace
+            // (status 'provision') provisions itself now — mirroring the desktop's
+            // "auto-provision on open" — instead of waiting for a manual Re-provision.
+            // Idempotent (force=false), best-effort, and guarded to fire once per path.
+            if (shouldAutoProvisionOnOpen({ status: s.status, attemptedFor: autoProvisionedFor.current, workspacePath: wsPath })) {
+                autoProvisionedFor.current = wsPath;
+                try {
+                    setMsg(provisionMessage(await api().tynn.provision(wsPath, false)));
+                    const after = await api().tynn.provisionStatus(wsPath);
+                    setStatus(after.status);
+                    setLink(after.link);
+                } catch {
+                    /* best-effort — the Re-provision button remains for a manual retry */
+                }
             }
         } catch {
             setStatus(null);
