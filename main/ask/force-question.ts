@@ -10,6 +10,7 @@ import type {
     ForceQuestionResult,
 } from '../mcp/protocol';
 import type { QuestionTransport } from '../host-core/ports';
+import { insertByPriority, type QuestionPriority } from './question-priority';
 
 /**
  * ForceTheQuestion — an OS-level, always-on-top modal an agent can raise to ask
@@ -44,6 +45,9 @@ interface QueueItem {
     resolve: (r: ForceQuestionResult) => void;
     questions: ForceQuestion[];
     workspaceLabel?: string;
+    /** PendingQuestions v2 — orders the queue (default 'normal'). Higher priority
+     *  is answered sooner but never preempts the shown head. */
+    priority?: QuestionPriority;
     /**
      * Set when this is a host question FORWARDED to a remote driver (its modal
      * pops in the remote Genie). Carries the originating connection + the HOST's
@@ -120,8 +124,12 @@ export interface PendingQuestion {
     id: string;
     questions: ForceQuestion[];
     workspaceLabel?: string;
-    /** Position in the FIFO queue (0 = currently shown on the desktop). */
+    /** Position in the queue (0 = currently shown on the desktop). Already ordered
+     *  by priority (v2), so index reflects answer order. */
     index: number;
+    /** PendingQuestions v2 — the request's priority (default 'normal'), for the
+     *  queue view to badge + the client to sort. */
+    priority?: QuestionPriority;
 }
 
 /**
@@ -134,6 +142,7 @@ export function listPendingQuestions(): PendingQuestion[] {
         questions: item.questions,
         workspaceLabel: item.workspaceLabel,
         index,
+        priority: item.priority,
     }));
 }
 
@@ -326,10 +335,11 @@ function createAskWindow(): BrowserWindow {
  * both. On a window-open failure the item is dropped and resolved cancelled.
  */
 function enqueue(item: QueueItem): void {
-    // First in line opens the shared window; later ones just enqueue and wait
-    // their turn (the window is reused as each is answered).
+    // First in line opens the shared window; later ones enqueue BY PRIORITY (v2)
+    // and wait their turn — a higher-priority arrival jumps ahead of lower-priority
+    // waiters but never preempts the shown head (the window reuses each in turn).
     const startsQueue = queue.length === 0;
-    queue.push(item);
+    insertByPriority(queue, item);
     // A new pending question — tell the mobile/remote push channel (question:changed).
     notifyQuestionsChanged();
 
@@ -367,10 +377,11 @@ function enqueue(item: QueueItem): void {
 function raiseDesktopModal(
     questions: ForceQuestion[],
     workspaceLabel?: string,
+    priority?: QuestionPriority,
 ): Promise<ForceQuestionResult> {
     return new Promise((resolve) => {
         const id = crypto.randomBytes(9).toString('hex');
-        enqueue({ id, resolve, questions, workspaceLabel });
+        enqueue({ id, resolve, questions, workspaceLabel, priority });
     });
 }
 
@@ -400,8 +411,9 @@ export function setQuestionTransport(t: QuestionTransport | null): void {
 export function forceQuestion(
     questions: ForceQuestion[],
     workspaceLabel?: string,
+    priority?: QuestionPriority,
 ): Promise<ForceQuestionResult> {
-    return (questionTransport ?? desktopQuestionTransport).ask(questions, workspaceLabel);
+    return (questionTransport ?? desktopQuestionTransport).ask(questions, workspaceLabel, priority);
 }
 
 /**
@@ -417,6 +429,7 @@ export function raiseForwardedQuestion(opts: {
     hostId: string;
     questions: ForceQuestion[];
     workspaceLabel?: string;
+    priority?: QuestionPriority;
 }): Promise<ForceQuestionResult> {
     return new Promise((resolve) => {
         const id = crypto.randomBytes(9).toString('hex');
@@ -425,6 +438,7 @@ export function raiseForwardedQuestion(opts: {
             resolve,
             questions: opts.questions,
             workspaceLabel: opts.workspaceLabel,
+            priority: opts.priority,
             forward: { connKey: opts.connKey, hostId: opts.hostId },
         });
     });

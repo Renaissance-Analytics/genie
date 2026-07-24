@@ -11,6 +11,7 @@ import {
     type ServerNotification,
     type ServerPushStats,
 } from './server-push';
+import type { QuestionPriority } from '../ask/question-priority';
 import {
     handleMcpMessage,
     type ForceQuestion,
@@ -94,6 +95,7 @@ export interface ServerDeps {
     onForceQuestion: (
         terminalId: string,
         questions: ForceQuestion[],
+        priority?: QuestionPriority,
     ) => Promise<ForceQuestionResult>;
     /** Map the caller's workspace for the initializeWorkspace prompt. */
     describeWorkspace: (terminalId: string) => Promise<WorkspaceMap | null>;

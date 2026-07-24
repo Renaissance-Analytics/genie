@@ -79,7 +79,7 @@ export function buildHostServerDeps(
         checkIssues: (terminalId) => checkIssuesForMcp(terminalId),
         agentInboxMailLine: (terminalId) =>
             formatAgentInboxMailLine(agentInboxBroker.unreadForTerminal(terminalId)),
-        onForceQuestion: (terminalId, questions) => {
+        onForceQuestion: (terminalId, questions, priority) => {
             let workspaceLabel: string | undefined;
             try {
                 const wsId = terminalId ? getTerminalSpec(terminalId)?.workspace_id : null;
@@ -89,7 +89,7 @@ export function buildHostServerDeps(
             } catch {
                 /* fall back to the generic title */
             }
-            return forceQuestion(questions, workspaceLabel);
+            return forceQuestion(questions, workspaceLabel, priority);
         },
         describeWorkspace: (terminalId) => describeWorkspaceForMcp(terminalId),
         manageProcess: (terminalId, req) => manageProcessForMcp(terminalId, req),

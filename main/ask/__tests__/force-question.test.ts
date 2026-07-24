@@ -320,9 +320,17 @@ describe('QuestionTransport routing (host-core decouple)', () => {
         expect(ask).toHaveBeenCalledWith(
             [expect.objectContaining({ header: 'Proceed' })],
             'demo',
+            undefined, // priority defaults to normal (PendingQuestions v2)
         );
         // The headless transport raised NO modal (the GUI path is fully bypassed).
         expect(state.windows).toHaveLength(0);
+    });
+
+    it('threads the request priority through to the transport (PendingQuestions v2)', async () => {
+        const ask = vi.fn().mockResolvedValue({ cancelled: true, answers: [] });
+        setQuestionTransport({ ask });
+        await forceQuestion(Q('Deploy?'), 'ws', 'urgent');
+        expect(ask).toHaveBeenCalledWith(expect.any(Array), 'ws', 'urgent');
     });
 
     it('defaults to the desktop modal when no transport is installed', () => {

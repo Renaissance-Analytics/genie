@@ -1182,10 +1182,29 @@ describe('handleMcpMessage', () => {
             },
             ctx({ terminalId: 'term-Q', onForceQuestion }),
         );
-        expect(onForceQuestion).toHaveBeenCalledWith('term-Q', questions);
+        expect(onForceQuestion).toHaveBeenCalledWith('term-Q', questions, undefined);
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
         expect(text).toContain('Deploy');
         expect(text).toContain('Yes');
+    });
+
+    it('passes a valid ForceTheQuestion priority through, and ignores a bad one (PendingQuestions v2)', async () => {
+        const onForceQuestion = vi.fn().mockResolvedValue({ cancelled: true, answers: [] });
+        const questions = [{ header: 'H', question: 'Q?', options: [{ label: 'A' }, { label: 'B' }] }];
+        const call = (priority: unknown) =>
+            handleMcpMessage(
+                {
+                    jsonrpc: '2.0',
+                    id: 7,
+                    method: 'tools/call',
+                    params: { name: 'ForceTheQuestion', arguments: { questions, priority } },
+                },
+                ctx({ terminalId: 'term-P', onForceQuestion }),
+            );
+        await call('urgent');
+        expect(onForceQuestion).toHaveBeenLastCalledWith('term-P', questions, 'urgent');
+        await call('bogus'); // not in the enum → dropped to undefined (default normal)
+        expect(onForceQuestion).toHaveBeenLastCalledWith('term-P', questions, undefined);
     });
 
     it('errors when ForceTheQuestion is called without questions', async () => {

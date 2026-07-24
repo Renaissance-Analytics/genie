@@ -13,6 +13,7 @@
 
 import type { Encryptor } from '@particle-academy/fancy-term-host';
 import type { ForceQuestion, ForceQuestionResult } from '../mcp/protocol';
+import type { QuestionPriority } from '../ask/question-priority';
 
 /** Secrets-at-rest. Desktop injects the Electron `safeStorage` impl; genie-cloud
  *  a KMS/keyring-backed one. Re-exported from the terminal core's existing port
@@ -25,7 +26,13 @@ export type { Encryptor };
  * fail-closed transport that forwards to the driving member or DENIES.
  */
 export interface QuestionTransport {
-    ask(questions: ForceQuestion[], workspaceLabel?: string): Promise<ForceQuestionResult>;
+    ask(
+        questions: ForceQuestion[],
+        workspaceLabel?: string,
+        /** PendingQuestions v2 — orders the queue (default 'normal'); never preempts
+         *  the shown head. Optional so existing transports keep compiling. */
+        priority?: QuestionPriority,
+    ): Promise<ForceQuestionResult>;
 }
 
 /**

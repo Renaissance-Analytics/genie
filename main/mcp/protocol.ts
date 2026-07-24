@@ -10,6 +10,7 @@
  */
 
 import { GENIE_MCP_GUIDE } from './guide';
+import type { QuestionPriority } from '../ask/question-priority';
 import type {
     SetEnvRequest,
     SetEnvResult,
@@ -214,6 +215,7 @@ export interface McpContext {
     onForceQuestion: (
         terminalId: string,
         questions: ForceQuestion[],
+        priority?: QuestionPriority,
     ) => Promise<ForceQuestionResult>;
     /**
      * Map the caller's workspace (root + repos + orientation files) so the
@@ -1505,6 +1507,12 @@ const FORCE_QUESTION_TOOL = {
                     additionalProperties: false,
                 },
             },
+            priority: {
+                type: 'string',
+                enum: ['low', 'normal', 'high', 'urgent'],
+                description:
+                    'Queue priority (default normal). Genie is multi-agent, so several ForceTheQuestion asks can be pending at once; a higher-priority one is answered sooner — but it NEVER preempts the question the user is currently answering. Reserve `urgent` for genuinely blocking asks.',
+            },
         },
         required: ['questions'],
         additionalProperties: false,
@@ -1612,6 +1620,7 @@ export async function handleMcpMessage(
                 name?: string;
                 arguments?: {
                     questions?: ForceQuestion[];
+                    priority?: QuestionPriority;
                 } & Partial<ManageProcessRequest>;
             };
             if (params.name === 'imDone') {
@@ -2095,7 +2104,15 @@ export async function handleMcpMessage(
                         'ForceTheQuestion requires a non-empty `questions` array.',
                     );
                 }
-                const result = await ctx.onForceQuestion(ctx.terminalId, questions);
+                const rawPriority = params.arguments?.priority;
+                const priority: QuestionPriority | undefined =
+                    rawPriority === 'low' ||
+                    rawPriority === 'normal' ||
+                    rawPriority === 'high' ||
+                    rawPriority === 'urgent'
+                        ? rawPriority
+                        : undefined;
+                const result = await ctx.onForceQuestion(ctx.terminalId, questions, priority);
                 if (result.cancelled) {
                     return ok(msg.id, {
                         content: [
