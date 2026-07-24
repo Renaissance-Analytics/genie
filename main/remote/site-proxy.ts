@@ -71,6 +71,8 @@ export interface GenTarget {
     siteId: string;
     /** The upstream loopback vhost name (e.g. `tynn.test`) the `.gen` maps to. */
     hostname: string;
+    /** The browser-visible session origin (e.g. `tynn.gen`). */
+    browserHostname?: string;
 }
 
 /** The injected deps for one shim — all read in MAIN, nothing in the renderer. */
@@ -196,6 +198,7 @@ export function rewriteGenSetCookieDomain(cookie: string, hostname: string, genH
 export function buildForwardHeaders(
     inbound: http.IncomingHttpHeaders,
     opts: { keepUpgrade?: boolean } = {},
+    rewriteOrigin: (origin: string) => string = (origin) => origin,
 ): http.OutgoingHttpHeaders {
     const out: http.OutgoingHttpHeaders = {};
     const connTokens = connectionTokens(inbound['connection']);
@@ -209,6 +212,10 @@ export function buildForwardHeaders(
             continue;
         }
         if (connTokens.has(lk)) continue;
+        if (lk === 'origin') {
+            out[k] = Array.isArray(v) ? v.map(rewriteOrigin) : rewriteOrigin(String(v));
+            continue;
+        }
         out[k] = v;
     }
     return out;
@@ -226,6 +233,7 @@ export function buildForwardResponseHeaders(
     upstream: http.IncomingHttpHeaders,
     hostname: string,
     genHost: string,
+    rewriteOrigin: (origin: string) => string = (origin) => origin,
 ): http.OutgoingHttpHeaders {
     const out: http.OutgoingHttpHeaders = {};
     const connTokens = connectionTokens(upstream['connection']);
@@ -246,9 +254,33 @@ export function buildForwardResponseHeaders(
             out[k] = cookies.map((c) => rewriteGenSetCookieDomain(c, hostname, genHost));
             continue;
         }
+        if (lk === 'access-control-allow-origin') {
+            out[k] = Array.isArray(v) ? v.map(rewriteOrigin) : rewriteOrigin(String(v));
+            continue;
+        }
         out[k] = v; // HSTS, content-type, Secure cookies, etc. all preserved
     }
     return out;
+}
+
+/** Rewrite an exact enabled origin without accepting or inferring any new host. */
+export function rewriteEnabledOrigin(
+    origin: string,
+    resolveGen: SiteShimDeps['resolveGen'],
+    destination: 'upstream' | 'browser',
+): string {
+    try {
+        const url = new URL(origin);
+        const target = resolveGen(url.hostname.toLowerCase());
+        if (!target) return origin;
+        const hostname =
+            destination === 'upstream' ? target.hostname : (target.browserHostname ?? url.hostname);
+        url.hostname = hostname;
+        return url.origin;
+    } catch {
+        // `*`, `null`, malformed, and opaque origins are intentionally preserved.
+        return origin;
+    }
 }
 
 /** PURE. The `/api/site/<siteId><path>` request path on the host proxy, with the
@@ -314,7 +346,9 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
         // Build the forward headers (Authorization already dropped) + the
         // preserve-origin control signal; the CARRIER injects per-transport auth
         // (tailnet Bearer / relay grant), keeping the token in MAIN.
-        const headers = buildForwardHeaders(req.headers);
+        const headers = buildForwardHeaders(req.headers, {}, (origin) =>
+            rewriteEnabledOrigin(origin, deps.resolveGen, 'upstream'),
+        );
         headers[PRESERVE_ORIGIN_HEADER] = '1';
         const call = deps.carrier.forward({
             workspaceId: target.workspaceId,
@@ -329,7 +363,12 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
         res.on('close', () => call.abort());
         call.response
             .then(({ status, headers: upHeaders, body }) => {
-                const outHeaders = buildForwardResponseHeaders(upHeaders, target.hostname, genHost);
+                const outHeaders = buildForwardResponseHeaders(
+                    upHeaders,
+                    target.hostname,
+                    genHost,
+                    (origin) => rewriteEnabledOrigin(origin, deps.resolveGen, 'browser'),
+                );
                 res.writeHead(status, outHeaders);
                 body.on('error', () => {
                     try {
@@ -364,7 +403,9 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
             workspaceId: target.workspaceId,
             siteId: target.siteId,
             path: forwardPath(target.siteId, req.url),
-            headers: buildForwardHeaders(req.headers, { keepUpgrade: true }),
+            headers: buildForwardHeaders(req.headers, { keepUpgrade: true }, (origin) =>
+                rewriteEnabledOrigin(origin, deps.resolveGen, 'upstream'),
+            ),
         });
         socket.on('error', () => call.abort());
         call.upgrade

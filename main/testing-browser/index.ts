@@ -350,6 +350,7 @@ async function refreshSites(inst: TestingBrowserInstance): Promise<void> {
             workspaceId: s.workspaceId,
             siteId: s.siteId,
             hostname: s.hostname,
+            browserHostname: s.genName,
         };
         // BOTH names resolve to the same target, deliberately:
         //  - the `.gen` NAME is what the BROWSER navigates on (keying this map by
