@@ -525,18 +525,26 @@ export function confineCwdToWorkspace(workspaceRoot: string, requested?: string)
 
 /**
  * Redact a plugin-editor fs result before it's sent to a REMOTE member (genie #54 /
- * CodeQL js/stack-trace-exposure). `runPluginEditorFs` returns `{ ok:false, error:
- * String(e) }` on a failure — that raw error text (a plugin fs error, possibly with
- * a path or stack) must NEVER leak over the relay. Log it host-side; send a fixed,
- * value-free reason. Success (and error-less failures) pass through unchanged. The
- * LOCAL IPC path (`plugins:editor-read`) keeps the detail — the desktop is trusted.
+ * CodeQL js/stack-trace-exposure #11). `runPluginEditorFs` returns `{ ok:false,
+ * error: String(e) }` on a failure — that raw error text (a plugin fs error, possibly
+ * with a path or stack) must NEVER leak over the relay. Log it host-side; send a
+ * fixed, value-free reason.
+ *
+ * TOTAL sanitizer: the raw error is destructured OUT and never re-enters the returned
+ * object on ANY path. A branch-only version (redact the failure case, `return r`
+ * otherwise) still hands the caller's object — whose `.error` field carries the raw
+ * String(e) — to the remote response, and CodeQL's path-insensitive taint tracker
+ * follows that passthrough to `sendJson`. So every return here rebuilds the object
+ * with `.error` either absent or the fixed reason; `raw` reaches only the host log.
+ * The LOCAL IPC path (`plugins:editor-read`) keeps the detail — the desktop is trusted.
  */
 export function redactPluginFsError<T extends { ok: boolean; error?: string }>(r: T): T {
-    if (!r.ok && r.error) {
-        console.warn('[mobile-api] plugin editor fs op failed:', r.error);
-        return { ...r, error: 'plugin file operation failed' };
-    }
-    return r;
+    const { error: raw, ...rest } = r;
+    if (raw) console.warn('[mobile-api] plugin editor fs op failed:', raw);
+    // Success, or a failure with no error text → no error field at all.
+    if (r.ok || !raw) return { ...rest } as T;
+    // Failure with error text → the fixed reason ONLY (never the raw value).
+    return { ...rest, error: 'plugin file operation failed' } as T;
 }
 
 /** A small JSON response helper (CORS-free — same-origin from the served app). */
