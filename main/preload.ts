@@ -847,6 +847,15 @@ const api = {
          *  advance it from there. */
         snapshot: () => ipcRenderer.invoke('agent-pulse:snapshot'),
     },
+    /** PendingQuestions inbox — the top-bar question icon's grouped list + answers. */
+    questions: {
+        /** Grouped pending questions (by workspace) + the total badge count. */
+        list: () => ipcRenderer.invoke('questions:list'),
+        /** Answer a pending question by id — routes a modal-queue answer to the
+         *  blocked agent, or clears a DND-deferred one. */
+        answer: (id: string, answers: Array<{ header: string; selected: string[]; note: string }>) =>
+            ipcRenderer.invoke('questions:answer', id, answers),
+    },
     agentInbox: {
         /** All agents in this Genie (the human owns the workstation → no scope filter). */
         directory: () => ipcRenderer.invoke('agentinbox:directory'),
@@ -1107,6 +1116,13 @@ const api = {
                 cb(payload);
             ipcRenderer.on('inbox:updated', handler);
             return () => ipcRenderer.off('inbox:updated', handler);
+        },
+        /** PendingQuestions — a question was added / answered / deferred; the master
+         *  window re-fetches the grouped list + refreshes the top-bar badge. */
+        questionsChanged: (cb: () => void) => {
+            const handler = () => cb();
+            ipcRenderer.on('questions:changed', handler);
+            return () => ipcRenderer.off('questions:changed', handler);
         },
         // Customization: play a notification chime. The payload carries a
         // `sound` descriptor resolved main-side from the per-alert setting:

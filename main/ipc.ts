@@ -78,6 +78,13 @@ import {
 } from './mcp/host-tools';
 import { agentInboxBroker } from './agentinbox/broker';
 import { type AgentInboxScope } from './agentinbox/types';
+import {
+    listPendingQuestions,
+    answerPendingQuestion,
+    onQuestionsChanged,
+} from './ask/force-question';
+import { groupPendingByWorkspace, pendingCount } from './ask/inbox';
+import type { ForceAnswer } from './mcp/protocol';
 import { getKnowledgeStore } from './knowledge/store';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import {
@@ -1018,6 +1025,25 @@ export function registerIpcHandlers(): void {
             },
         ) => updateAgentInboxChannel(specId, patch),
     );
+
+    // --- PendingQuestions inbox (top-bar question icon) ------------------
+    // The master window's question inbox reads the grouped pending list (modal
+    // queue + DND-deferred) and answers any of them; `answerPendingQuestion`
+    // routes a modal-queue answer to the blocked agent and clears a deferred one.
+    // Every change pushes `questions:changed` so the badge + panel refresh live
+    // (event-driven, never polled).
+    ipcMain.handle('questions:list', () => {
+        const pending = listPendingQuestions();
+        return { groups: groupPendingByWorkspace(pending), count: pendingCount(pending) };
+    });
+    ipcMain.handle('questions:answer', (_e, id: string, answers: ForceAnswer[]) =>
+        answerPendingQuestion(id, answers ?? []),
+    );
+    onQuestionsChanged(() => {
+        for (const w of BrowserWindow.getAllWindows()) {
+            if (!w.isDestroyed()) w.webContents.send('questions:changed');
+        }
+    });
 
     // --- Knowledge Graph (workstation-wide local memory store) -----------
     // The renderer Knowledge Graph window reads/writes the shared store here;

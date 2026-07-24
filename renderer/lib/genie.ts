@@ -108,6 +108,28 @@ export interface ForceAnswerSpec {
     note: string;
 }
 
+/** One pending ForceTheQuestion in the top-bar inbox (mirrors main PendingQuestion). */
+export interface PendingQuestionSpec {
+    id: string;
+    questions: ForceQuestionSpec[];
+    workspaceLabel?: string;
+    index: number;
+    priority?: 'low' | 'normal' | 'high' | 'urgent';
+    /** The remote host it was forwarded from (undefined ⇒ local). */
+    remoteHost?: string;
+    /** True for a DND-deferred question (never popped a modal). */
+    deferred?: boolean;
+}
+
+/** Pending questions grouped by workspace for the inbox panel (main-side grouping). */
+export interface WorkspaceQuestionGroupSpec {
+    workspaceLabel: string;
+    remoteHost?: string;
+    count: number;
+    topPriority: 'low' | 'normal' | 'high' | 'urgent';
+    questions: PendingQuestionSpec[];
+}
+
 /**
  * Issue Watch: per-workspace tallies by bucket (the 3-dot pill). The three
  * security-alert kinds (dependabot / code-scanning / secret-scanning) collapse
@@ -2180,6 +2202,11 @@ export interface GenieApi {
          *  fetched once when the workspace menu opens to backfill each sparkline. */
         snapshot: () => Promise<{ pulses: Record<string, number[]> }>;
     };
+    /** PendingQuestions inbox — the top-bar question icon's grouped list + answers. */
+    questions: {
+        list: () => Promise<{ groups: WorkspaceQuestionGroupSpec[]; count: number }>;
+        answer: (id: string, answers: ForceAnswerSpec[]) => Promise<boolean>;
+    };
     agentInbox: {
         /** Every discoverable agent (the directory pane). */
         directory: () => Promise<{ agents: AgentInboxAgentInfo[] }>;
@@ -2470,6 +2497,8 @@ export interface GenieApi {
             }) => void,
         ) => () => void;
         inboxUpdated: (cb: (payload: { count: number }) => void) => () => void;
+        /** PendingQuestions — a question was added / answered / deferred; refetch. */
+        questionsChanged: (cb: () => void) => () => void;
         /** Customization: play a notification chime. The `sound` descriptor is
          *  resolved main-side from the per-alert setting (synth / bundled asset /
          *  custom data-URL); a legacy payload without it falls back to synth. */

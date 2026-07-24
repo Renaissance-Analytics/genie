@@ -19,6 +19,7 @@ import DocsFlyout from '../components/Master/DocsFlyout';
 import IssueWatchFlyout from '../components/Master/IssueWatchFlyout';
 import TaskManagerFlyout from '../components/Master/TaskManagerFlyout';
 import AgentInboxFlyout from '../components/Master/AgentInboxFlyout';
+import QuestionInboxFlyout from '../components/Master/QuestionInboxFlyout';
 import TerminalTypeSplitButton from '../components/Master/TerminalTypeSplitButton';
 import AgentTerminalForm from '../components/Master/AgentTerminalForm';
 import GithubCapabilitiesFlyout from '../components/Master/GithubCapabilitiesFlyout';
@@ -55,6 +56,7 @@ import {
     IconEye,
     IconCpu,
     IconMessage,
+    IconMailQuestion,
     IconGraph,
     IconSettings,
     IconAlert,
@@ -304,6 +306,21 @@ function MasterInner() {
     useEffect(() => {
         if (agentInboxOpen) setAgentInboxUnread(0);
     }, [agentInboxOpen]);
+    // PendingQuestions inbox: the top-bar question icon + its live pending count.
+    // The panel owns the grouped list; the master just tracks the badge total and
+    // refreshes it on `questions:changed` (event-driven, no polling).
+    const [questionsOpen, setQuestionsOpen] = useState(false);
+    const [questionCount, setQuestionCount] = useState(0);
+    useEffect(() => {
+        const load = (): void => {
+            api()
+                .questions?.list?.()
+                .then((r) => setQuestionCount(r.count))
+                .catch(() => {});
+        };
+        load();
+        return api().on.questionsChanged?.(load);
+    }, []);
     // Split Add-Terminal button: the last-used terminal type (persisted) + the
     // configured custom-agent command (for the create form's placeholder).
     const [lastTerminalType, setLastTerminalTypeState] = useState<TerminalTypeId>('regular');
@@ -1619,6 +1636,8 @@ function MasterInner() {
                         onShowTaskManager={() => setTaskManagerOpen((o) => !o)}
                         onShowAgentInbox={() => setAgentInboxOpen((o) => !o)}
                         agentInboxUnread={agentInboxUnread}
+                        onShowQuestions={() => setQuestionsOpen((o) => !o)}
+                        questionCount={questionCount}
                         onShowKnowledge={() => {
                             // Header button → open the standalone Knowledge Graph
                             // window (main-owned, via knowledge.openWindow). Guarded
@@ -1712,6 +1731,10 @@ function MasterInner() {
             <AgentInboxFlyout
                 open={agentInboxOpen}
                 onClose={() => setAgentInboxOpen(false)}
+            />
+            <QuestionInboxFlyout
+                open={questionsOpen}
+                onClose={() => setQuestionsOpen(false)}
             />
             <GithubCapabilitiesFlyout
                 open={githubCapsOpen}
@@ -2374,6 +2397,8 @@ function TitleBar({
     onShowTaskManager,
     onShowAgentInbox,
     agentInboxUnread = 0,
+    onShowQuestions,
+    questionCount = 0,
     onShowKnowledge,
     onShowIssueWatch,
     issueWatchUnread = 0,
@@ -2387,6 +2412,8 @@ function TitleBar({
     onShowTaskManager?: () => void;
     onShowAgentInbox?: () => void;
     agentInboxUnread?: number;
+    onShowQuestions?: () => void;
+    questionCount?: number;
     onShowKnowledge?: () => void;
     onShowIssueWatch?: () => void;
     issueWatchUnread?: number;
@@ -2456,6 +2483,20 @@ function TitleBar({
                 {agentInboxUnread > 0 && (
                     <span className="iw-btn-badge">
                         {agentInboxUnread > 99 ? '99+' : agentInboxUnread}
+                    </span>
+                )}
+            </button>
+            <button
+                type="button"
+                className="gicon questions-btn"
+                title="Questions — pending agent questions (answer at your leisure)"
+                aria-label="Questions"
+                onClick={() => onShowQuestions?.()}
+            >
+                <IconMailQuestion size={16} />
+                {questionCount > 0 && (
+                    <span className="iw-btn-badge">
+                        {questionCount > 99 ? '99+' : questionCount}
                     </span>
                 )}
             </button>
