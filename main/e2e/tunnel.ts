@@ -273,10 +273,10 @@ async function startFixture(): Promise<{ server: http.Server; port: number }> {
 
 async function startViteFixture(): Promise<{ server: http.Server; port: number }> {
     const cors = {
-        // The browser is legitimately on the `.gen` origin, so a correctly
-        // configured dev server allows it (see the PR note: a REAL Vite/Next
-        // server needs its own CORS/origin config for this).
-        'Access-Control-Allow-Origin': 'https://app.gen',
+        // Model an ordinary host-local dev server that knows its real `.test`
+        // application origin, not Genie's session-only `.gen` alias. The shim
+        // maps request Origin to `.test` and this response back to `.gen`.
+        'Access-Control-Allow-Origin': 'https://app.test',
         Vary: 'Origin',
     };
     const server = http.createServer((req, res) => {

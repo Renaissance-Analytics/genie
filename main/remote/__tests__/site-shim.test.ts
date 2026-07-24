@@ -11,6 +11,7 @@ import {
     createSiteShim,
     forwardPath,
     isGenHost,
+    rewriteEnabledOrigin,
     rewriteGenLocation,
     rewriteGenSetCookieDomain,
     stripHostPort,
@@ -88,6 +89,49 @@ describe('shim pure helpers', () => {
         expect(forwardPath('abc123', undefined)).toBe('/api/site/abc123/');
     });
 
+    it('keeps CORS origins coherent across the .gen browser and .test upstream', () => {
+        const target: GenTarget = {
+            workspaceId: 'workspace-1',
+            siteId: SITE_ID,
+            hostname: 'tynn.test',
+            browserHostname: 'tynn.gen',
+        };
+        const enabled = new Map<string, GenTarget>([
+            ['tynn.gen', target],
+            ['tynn.test', target],
+        ]);
+        const resolve = (hostname: string) => enabled.get(hostname) ?? null;
+        const toUpstreamOrigin = (origin: string) =>
+            rewriteEnabledOrigin(origin, resolve, 'upstream');
+        const toBrowserOrigin = (origin: string) =>
+            rewriteEnabledOrigin(origin, resolve, 'browser');
+
+        const request = buildForwardHeaders(
+            {
+                host: 'assets.tynn.test',
+                origin: 'https://tynn.gen',
+            },
+            {},
+            toUpstreamOrigin,
+        );
+        expect(request['origin']).toBe('https://tynn.test');
+
+        const response = buildForwardResponseHeaders(
+            {
+                'access-control-allow-origin': 'https://tynn.test',
+                vary: 'Origin',
+            },
+            'assets.tynn.test',
+            'assets.tynn.test',
+            toBrowserOrigin,
+        );
+        expect(response['access-control-allow-origin']).toBe('https://tynn.gen');
+        expect(response['vary']).toBe('Origin');
+        expect(toUpstreamOrigin('https://evil.example')).toBe('https://evil.example');
+        expect(toBrowserOrigin('*')).toBe('*');
+        expect(toBrowserOrigin('null')).toBe('null');
+    });
+
     it('buildForwardResponseHeaders rewrites Location + Set-Cookie to .gen and keeps HSTS', () => {
         const out = buildForwardResponseHeaders(
             {
@@ -120,17 +164,28 @@ let lastAuth: string | undefined;
 let lastTransport: string | undefined;
 let lastPreserve: string | undefined;
 let lastPath: string | undefined;
+let lastOrigin: string | undefined;
 
 beforeEach(async () => {
     lastAuth = undefined;
     lastTransport = undefined;
     lastPreserve = undefined;
     lastPath = undefined;
+    lastOrigin = undefined;
     fakeHost = http.createServer((req, res) => {
         lastAuth = req.headers['authorization'];
         lastTransport = req.headers['x-genie-transport-token'] as string | undefined;
         lastPreserve = req.headers['x-genie-preserve-origin'] as string | undefined;
         lastPath = req.url;
+        lastOrigin = req.headers.origin;
+        if (req.url?.includes('/cors')) {
+            res.writeHead(200, {
+                'Access-Control-Allow-Origin': 'https://tynn.test',
+                Vary: 'Origin',
+            });
+            res.end('cors-ok');
+            return;
+        }
         if (req.url?.includes('/redir')) {
             res.writeHead(302, {
                 Location: 'https://tynn.test/next?q=1',
@@ -189,6 +244,7 @@ async function fetchThroughShim(
     genHost: string,
     path: string,
     caPem: string,
+    requestHeaders: Record<string, string> = {},
 ): Promise<{ status: number; headers: Record<string, string>; body: string }> {
     const socket = await connectTunnel(shim.port, `${genHost}:443`);
     const tlsSock = tls.connect({
@@ -197,7 +253,12 @@ async function fetchThroughShim(
         ca: [caPem],
     });
     await once(tlsSock, 'secureConnect');
-    tlsSock.write(`GET ${path} HTTP/1.1\r\nHost: ${genHost}\r\nConnection: close\r\n\r\n`);
+    const extraHeaders = Object.entries(requestHeaders)
+        .map(([name, value]) => `${name}: ${value}\r\n`)
+        .join('');
+    tlsSock.write(
+        `GET ${path} HTTP/1.1\r\nHost: ${genHost}\r\n${extraHeaders}Connection: close\r\n\r\n`,
+    );
     const chunks: Buffer[] = [];
     for await (const c of tlsSock) chunks.push(c as Buffer);
     const raw = Buffer.concat(chunks).toString('utf8');
@@ -255,6 +316,32 @@ describe('shim end-to-end (no display)', () => {
             expect(res.headers['set-cookie']).toContain('Domain=tynn.gen');
             expect(res.headers['set-cookie']).toContain('Secure'); // preserved (valid https)
             expect(res.headers['strict-transport-security']).toContain('max-age=63072000');
+        } finally {
+            await shim.close();
+        }
+    });
+
+    it('maps CORS request and response origins through the enabled site aliases', async () => {
+        const ca = new SessionCa();
+        const target: GenTarget = {
+            workspaceId: 'workspace-1',
+            siteId: SITE_ID,
+            hostname: HOSTNAME,
+            browserHostname: GEN,
+        };
+        const genMap = new Map<string, GenTarget>([
+            [GEN, target],
+            [HOSTNAME, target],
+        ]);
+        const shim = await makeShim(ca, genMap);
+        try {
+            const res = await fetchThroughShim(shim, GEN, '/cors', ca.caPem, {
+                Origin: `https://${GEN}`,
+            });
+            expect(res.status).toBe(200);
+            expect(lastOrigin).toBe(`https://${HOSTNAME}`);
+            expect(res.headers['access-control-allow-origin']).toBe(`https://${GEN}`);
+            expect(res.headers['vary']).toBe('Origin');
         } finally {
             await shim.close();
         }
