@@ -58,6 +58,7 @@ import {
     provisionStatus as tynnProvisionStatus,
     linkWorkspaceTynn,
     unlinkWorkspaceTynn,
+    type TynnProvisionAuth,
 } from '../tynn/provision';
 import type { ProjectJsonTynn } from '../workspace/project-json';
 
@@ -225,6 +226,22 @@ export interface MobileDataDeps {
         id: string;
         project_name: string;
         path: string;
+    }>;
+    // --- Tynn provisioning on a HEADLESS HOST (genie #52) ---
+    // A Genie Cloud host has no user OAuth cookie, so the "Tynn agent" picker's list,
+    // status, and provision must ride the host's WORKSTATION identity instead. These
+    // are present ONLY on a headless host (injected by host-core); on the desktop they
+    // are absent and the endpoints fall back to the user-cookie path.
+    /** The Workstation-signed mint auth (mirrors what #52 injects into the assignment
+     *  reconcile). Drives status' signed-in check + provision's mint. */
+    hostProvisionAuth?: TynnProvisionAuth;
+    /** The Tynn projects this host may provision — its assigned workspaces — for the
+     *  picker (the host can only mint for projects it hosts). */
+    listHostProjects?: () => Array<{
+        id: string;
+        name: string;
+        slug: string;
+        owner_name?: string;
     }>;
     listTerminalSpecs: () => Array<{
         id: string;
@@ -1568,7 +1585,13 @@ export async function handleApi(
     // OWN workspace list so a remote can never target an arbitrary host path.
     if (pathname.startsWith('/api/desktop/tynn/')) {
         if (pathname === '/api/desktop/tynn/projects' && method === 'GET') {
-            sendJson(res, 200, { projects: await listAllProjects() });
+            // Headless host: only the projects it may provision (its assigned
+            // workspaces), via the workstation identity — the host has no user cookie
+            // for listAllProjects(). Desktop: the user's own projects.
+            const projects = deps.listHostProjects
+                ? deps.listHostProjects()
+                : await listAllProjects();
+            sendJson(res, 200, { projects });
             return true;
         }
         if (pathname === '/api/desktop/tynn/host' && method === 'GET') {
@@ -1593,7 +1616,9 @@ export async function handleApi(
             return true;
         }
         if (pathname === '/api/desktop/tynn/status') {
-            sendJson(res, 200, await tynnProvisionStatus(wsPath));
+            // Host: check signed-in via the workstation identity (no cookie exists),
+            // so a linked host workspace reports 'already'/'provision' not 'signed-out'.
+            sendJson(res, 200, await tynnProvisionStatus(wsPath, deps.hostProvisionAuth));
             return true;
         }
         // Mutations — kill-switch-gated.
@@ -1611,7 +1636,11 @@ export async function handleApi(
             return true;
         }
         if (pathname === '/api/desktop/tynn/provision') {
-            const r = await provisionWorkspaceTynn(wsPath, { force: !!tb.force });
+            // Host: mint via the workstation identity; desktop: the user cookie.
+            const r = await provisionWorkspaceTynn(wsPath, {
+                force: !!tb.force,
+                auth: deps.hostProvisionAuth,
+            });
             audit('tynn.provision', `${wsPath}:${r.status}`, actor);
             sendJson(res, 200, r);
             return true;

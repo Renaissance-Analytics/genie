@@ -221,12 +221,19 @@ export async function provisionWorkspaceTynn(
  * Read-only status for the UI: where this workspace stands without minting
  * anything. Returns the decision plus the resolved link (for display).
  */
-export async function provisionStatus(workspacePath: string): Promise<{
+export async function provisionStatus(
+    workspacePath: string,
+    auth?: TynnProvisionAuth,
+): Promise<{
     status: ProvisionDecision;
     link: ProjectJsonTynn | null;
 }> {
     const link = resolveTynnLink(workspacePath);
-    const signedIn = link ? !!(await new TynnBackend().whoami()) : false;
+    // Same auth seam as provisioning (genie #52): default to the user cookie
+    // (desktop), or use the injected Workstation-signed source (headless host —
+    // no cookie exists, so the hardcoded whoami wrongly reported 'signed-out').
+    const source = auth ?? cookieProvisionAuth();
+    const signedIn = link ? await source.ready() : false;
     return {
         status: decideProvision({
             linked: !!link,

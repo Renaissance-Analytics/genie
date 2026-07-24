@@ -6,6 +6,7 @@ import {
     cookieProvisionAuth,
     decideProvision,
     ensureMcpGitignored,
+    provisionStatus,
     provisionWorkspaceTynn,
     type TynnProvisionAuth,
 } from '../provision';
@@ -307,6 +308,26 @@ describe('provisionWorkspaceTynn — mint auth seam (genie #52)', () => {
         expect(cfg.mcpServers.tynn.headers.Authorization).toBe('Bearer rpk_host.proj-host');
         expect(cfg.mcpServers.tynn.url).toBe('https://tynn.ai/mcp/tynn');
         // The cookie backend is NEVER constructed on the host path.
+        expect(TynnBackend).not.toHaveBeenCalled();
+    });
+
+    it('STATUS host path: uses the injected auth for signed-in, never constructs the cookie backend', async () => {
+        const { TynnBackend } = (await import('../../backend/tynn')) as unknown as {
+            TynnBackend: ReturnType<typeof vi.fn>;
+        };
+        TynnBackend.mockClear();
+
+        const dir = linkedWorkspace('proj-status-host');
+        const hostReady = vi.fn(async () => true);
+        const auth: TynnProvisionAuth = { ready: hostReady, mint: vi.fn() };
+
+        const s = await provisionStatus(dir, auth);
+
+        // Linked + signed-in (via the host auth) + not yet configured ⇒ 'provision'.
+        // Without this fix status hardcodes the cookie whoami → 'signed-out' on a host.
+        expect(s.status).toBe('provision');
+        expect(hostReady).toHaveBeenCalled();
+        // The cookie backend is NEVER constructed on the host status path.
         expect(TynnBackend).not.toHaveBeenCalled();
     });
 
