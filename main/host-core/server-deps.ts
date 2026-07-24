@@ -81,15 +81,19 @@ export function buildHostServerDeps(
             formatAgentInboxMailLine(agentInboxBroker.unreadForTerminal(terminalId)),
         onForceQuestion: (terminalId, questions, priority) => {
             let workspaceLabel: string | undefined;
+            let workspaceId: string | undefined;
             try {
                 const wsId = terminalId ? getTerminalSpec(terminalId)?.workspace_id : null;
                 if (wsId) {
+                    workspaceId = wsId;
                     workspaceLabel = listWorkspaces().find((w) => w.id === wsId)?.project_name;
                 }
             } catch {
                 /* fall back to the generic title */
             }
-            return forceQuestion(questions, workspaceLabel, priority);
+            // Pass the workspace scope so a per-workspace/-workstation DND setting is
+            // honored (PendingQuestions UX). Absent workspace ⇒ global availability.
+            return forceQuestion(questions, workspaceLabel, priority, { workspaceId });
         },
         describeWorkspace: (terminalId) => describeWorkspaceForMcp(terminalId),
         manageProcess: (terminalId, req) => manageProcessForMcp(terminalId, req),

@@ -11,6 +11,82 @@ import type {
 } from '../mcp/protocol';
 import type { QuestionTransport } from '../host-core/ports';
 import { insertByPriority, type QuestionPriority } from './question-priority';
+import {
+    asFtqAvailability,
+    resolveDndMessage,
+    resolveFtqAvailability,
+    type FtqAvailability,
+} from './availability';
+
+/** The scope a question belongs to — drives the per-workspace/per-workstation
+ *  availability resolution. Both optional: absent ⇒ that scope is unset (inherit). */
+export interface QuestionScope {
+    workspaceId?: string;
+    workstationId?: string;
+}
+
+interface AvailabilityDecision {
+    availability: FtqAvailability;
+    dndMessage: string;
+}
+
+/** Parse a JSON `{ id: 'available'|'dnd' }` scope-map setting; tolerant of junk. */
+function parseScopeMap(v: unknown): Record<string, unknown> {
+    if (typeof v !== 'string' || v === '') return {};
+    try {
+        const o = JSON.parse(v);
+        return o && typeof o === 'object' ? (o as Record<string, unknown>) : {};
+    } catch {
+        return {};
+    }
+}
+
+/** Resolve availability + the DND notice from settings for a question's scope.
+ *  Most-specific wins: workspace → workstation → global → Available default. */
+function readAvailabilityFromSettings(scope: QuestionScope): AvailabilityDecision {
+    try {
+        const s = getAllSettings();
+        const wsMap = parseScopeMap(s.ftq_availability_workspaces);
+        const wkMap = parseScopeMap(s.ftq_availability_workstations);
+        return {
+            availability: resolveFtqAvailability({
+                workspace: scope.workspaceId ? asFtqAvailability(wsMap[scope.workspaceId]) : undefined,
+                workstation: scope.workstationId
+                    ? asFtqAvailability(wkMap[scope.workstationId])
+                    : undefined,
+                global: asFtqAvailability(s.ftq_availability),
+            }),
+            dndMessage: resolveDndMessage(s.ftq_dnd_message),
+        };
+    } catch {
+        return { availability: 'available', dndMessage: resolveDndMessage(undefined) };
+    }
+}
+
+/** Injectable so the desktop enqueue path is unit-testable without the settings
+ *  DB (tests install a fake); default reads live settings. */
+let availabilityReader: (scope: QuestionScope) => AvailabilityDecision = readAvailabilityFromSettings;
+export function setAvailabilityReader(
+    r: ((scope: QuestionScope) => AvailabilityDecision) | null,
+): void {
+    availabilityReader = r ?? readAvailabilityFromSettings;
+}
+
+/**
+ * DND "deferred" questions — the user is heads-down for this scope, so the modal
+ * NEVER pops. The question sits HERE (surfaced in the top-bar inbox via
+ * listPendingQuestions) for the user to answer at leisure; the agent already got
+ * the DND notice back. Kept OUT of the modal `queue` so it can't disturb the
+ * head/window-close invariants.
+ */
+interface DeferredQuestion {
+    id: string;
+    questions: ForceQuestion[];
+    workspaceLabel?: string;
+    priority?: QuestionPriority;
+    remoteHost?: string;
+}
+const deferred: DeferredQuestion[] = [];
 
 /**
  * ForceTheQuestion — an OS-level, always-on-top modal an agent can raise to ask
@@ -134,14 +210,19 @@ export interface PendingQuestion {
      *  display name), or undefined for a LOCAL question. The queue view labels it so
      *  a host's question is never shown as if it were local. */
     remoteHost?: string;
+    /** PendingQuestions UX — true for a DND-DEFERRED question: it never popped a
+     *  modal (the user was heads-down), it's here to answer at leisure. The inbox
+     *  styles it without the blocking-modal urgency. */
+    deferred?: boolean;
 }
 
 /**
- * Snapshot the pending questions for the mobile `/api/questions` + bootstrap.
- * Read-only — does not touch the modal. Returns them in FIFO order (head first).
+ * Snapshot the pending questions for the top-bar inbox / mobile `/api/questions` +
+ * bootstrap. Read-only. The MODAL queue (blocking, one-at-a-time) comes first in
+ * FIFO/priority order, then the DND-DEFERRED questions (answered at leisure).
  */
 export function listPendingQuestions(): PendingQuestion[] {
-    return queue.map((item, index) => ({
+    const active: PendingQuestion[] = queue.map((item, index) => ({
         id: item.id,
         questions: item.questions,
         workspaceLabel: item.workspaceLabel,
@@ -149,6 +230,16 @@ export function listPendingQuestions(): PendingQuestion[] {
         priority: item.priority,
         remoteHost: item.forward?.hostLabel,
     }));
+    const dnd: PendingQuestion[] = deferred.map((d, i) => ({
+        id: d.id,
+        questions: d.questions,
+        workspaceLabel: d.workspaceLabel,
+        index: queue.length + i,
+        priority: d.priority,
+        remoteHost: d.remoteHost,
+        deferred: true,
+    }));
+    return [...active, ...dnd];
 }
 
 /**
@@ -162,9 +253,20 @@ export function answerPendingQuestion(
     id: string,
     answers: ForceAnswer[],
 ): boolean {
-    if (!queue.some((q) => q.id === id)) return false;
-    finish(id, { cancelled: false, answers: answers ?? [] });
-    return true;
+    if (queue.some((q) => q.id === id)) {
+        finish(id, { cancelled: false, answers: answers ?? [] });
+        return true;
+    }
+    // A DND-deferred question: the agent already got the DND notice, so answering
+    // (or dismissing) it from the inbox just clears it. Delivering the late answer
+    // back to the agent is a follow-up via AgentInbox (see the plan).
+    const di = deferred.findIndex((d) => d.id === id);
+    if (di !== -1) {
+        deferred.splice(di, 1);
+        notifyQuestionsChanged();
+        return true;
+    }
+    return false;
 }
 
 /** Subscribe to pending-question changes (mobile push). Returns an unsubscribe. */
@@ -401,9 +503,21 @@ function raiseDesktopModal(
     questions: ForceQuestion[],
     workspaceLabel?: string,
     priority?: QuestionPriority,
+    scope?: QuestionScope,
 ): Promise<ForceQuestionResult> {
     return new Promise((resolve) => {
         const id = crypto.randomBytes(9).toString('hex');
+        const decision = availabilityReader(scope ?? {});
+        if (decision.availability === 'dnd') {
+            // DND for this scope: NEVER pop the modal or chime. Drop the question
+            // into the top-bar inbox (deferred) to answer at leisure, and hand the
+            // agent the configured notice so it isn't left blocked on a modal that
+            // will never appear. `cancelled: true` marks "not answered inline".
+            deferred.push({ id, questions, workspaceLabel, priority });
+            notifyQuestionsChanged();
+            resolve({ cancelled: true, answers: [], dndMessage: decision.dndMessage });
+            return;
+        }
         enqueue({ id, resolve, questions, workspaceLabel, priority });
     });
 }
@@ -435,8 +549,16 @@ export function forceQuestion(
     questions: ForceQuestion[],
     workspaceLabel?: string,
     priority?: QuestionPriority,
+    /** The question's scope (workspace/workstation ids) — drives the DND
+     *  availability resolution on the desktop transport. Absent ⇒ global only. */
+    scope?: QuestionScope,
 ): Promise<ForceQuestionResult> {
-    return (questionTransport ?? desktopQuestionTransport).ask(questions, workspaceLabel, priority);
+    return (questionTransport ?? desktopQuestionTransport).ask(
+        questions,
+        workspaceLabel,
+        priority,
+        scope,
+    );
 }
 
 /**

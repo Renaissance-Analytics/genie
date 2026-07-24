@@ -118,6 +118,8 @@ import {
     raiseForwardedQuestion,
     dismissForwardedQuestion,
     listPendingQuestions,
+    answerPendingQuestion,
+    setAvailabilityReader,
     setQuestionTransport,
 } from '../force-question';
 
@@ -387,6 +389,7 @@ describe('QuestionTransport routing (host-core decouple)', () => {
             [expect.objectContaining({ header: 'Proceed' })],
             'demo',
             undefined, // priority defaults to normal (PendingQuestions v2)
+            undefined, // scope (PendingQuestions UX) — none passed here
         );
         // The headless transport raised NO modal (the GUI path is fully bypassed).
         expect(state.windows).toHaveLength(0);
@@ -396,13 +399,61 @@ describe('QuestionTransport routing (host-core decouple)', () => {
         const ask = vi.fn().mockResolvedValue({ cancelled: true, answers: [] });
         setQuestionTransport({ ask });
         await forceQuestion(Q('Deploy?'), 'ws', 'urgent');
-        expect(ask).toHaveBeenCalledWith(expect.any(Array), 'ws', 'urgent');
+        expect(ask).toHaveBeenCalledWith(expect.any(Array), 'ws', 'urgent', undefined);
     });
 
     it('defaults to the desktop modal when no transport is installed', () => {
         setQuestionTransport(null);
         void forceQuestion(Q('A'));
         expect(state.windows).toHaveLength(1); // the BrowserWindow modal
+        win().close();
+    });
+});
+
+// --- PendingQuestions UX — DND availability ---------------------------------
+describe('ForceTheQuestion DND availability', () => {
+    beforeEach(() => {
+        setQuestionTransport(null); // desktop modal transport (the DND path lives here)
+        registerForceQuestionIpc({ isDev: false, preloadPath: '/p.js', getMasterWindow: () => null });
+    });
+    afterEach(() => {
+        setAvailabilityReader(null); // restore the settings-backed reader
+        // Clear anything left in the inbox (deferred + queue) so tests don't leak.
+        for (const p of listPendingQuestions()) answerPendingQuestion(p.id, []);
+        vi.clearAllMocks();
+    });
+
+    it('DND: resolves immediately with the notice, NEVER opens a modal, and drops into the inbox as deferred', async () => {
+        setAvailabilityReader(() => ({ availability: 'dnd', dndMessage: 'heads-down; hold off' }));
+        const before = state.windows.length;
+
+        const result = await forceQuestion(Q('A'), 'Wonder', 'normal', { workspaceId: 'ws1' });
+
+        // The agent gets the DND notice back at once — not blocked on a modal.
+        expect(result.cancelled).toBe(true);
+        expect(result.dndMessage).toBe('heads-down; hold off');
+        expect(state.windows.length).toBe(before); // no window created
+        // ...and the question is in the inbox, flagged deferred, with its workspace.
+        const row = listPendingQuestions().find((p) => p.workspaceLabel === 'Wonder');
+        expect(row?.deferred).toBe(true);
+        expect(row?.questions[0].header).toBe('A');
+    });
+
+    it('answering a DND-deferred question from the inbox clears it', async () => {
+        setAvailabilityReader(() => ({ availability: 'dnd', dndMessage: 'x' }));
+        await forceQuestion(Q('B'), 'Box', 'normal', { workspaceId: 'ws1' });
+        const row = listPendingQuestions().find((p) => p.workspaceLabel === 'Box');
+        expect(row).toBeDefined();
+
+        expect(answerPendingQuestion(row!.id, [])).toBe(true);
+        expect(listPendingQuestions().some((p) => p.id === row!.id)).toBe(false);
+    });
+
+    it('Available still pops the modal — DND is strictly opt-in per scope', () => {
+        setAvailabilityReader(() => ({ availability: 'available', dndMessage: 'x' }));
+        const before = state.windows.length;
+        void forceQuestion(Q('C'), 'ws', 'normal', { workspaceId: 'ws1' });
+        expect(state.windows.length).toBe(before + 1); // the modal opened
         win().close();
     });
 });

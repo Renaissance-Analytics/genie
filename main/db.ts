@@ -816,6 +816,18 @@ export interface Settings {
     remote_network_lan?: 'on' | 'off';
     remote_network_tailscale?: 'on' | 'off';
     remote_network_tynn?: 'on' | 'off';
+    /** PendingQuestions UX — GLOBAL ForceTheQuestion availability: 'available'
+     *  (pop the modal) or 'dnd' (queue to the top-bar inbox, no popup). Narrower
+     *  per-workspace / per-workstation overrides live in the JSON maps below;
+     *  resolved most-specific-first (see main/ask/availability.ts). */
+    ftq_availability?: 'available' | 'dnd';
+    /** Per-WORKSPACE availability overrides — JSON `{ [workspaceId]: 'available'|'dnd' }`. */
+    ftq_availability_workspaces?: string;
+    /** Per-WORKSTATION availability overrides — JSON `{ [workstationId]: 'available'|'dnd' }`. */
+    ftq_availability_workstations?: string;
+    /** The agent-facing reply when the user is in DND (user-configurable). Empty
+     *  ⇒ the built-in default (availability.ts DEFAULT_DND_MESSAGE). */
+    ftq_dnd_message?: string;
     /** Fixed port for the mobile server, bound on the Tailscale IP. String-
      *  encoded; default '51718' (obscure, beside the MCP port). Same Integer/
      *  range guard as mcp_port. Changing it requires restarting the server. */
@@ -961,6 +973,10 @@ export function getAllSettings(): Settings {
         remote_network_lan: (out['remote_network_lan'] as 'on' | 'off') ?? 'off',
         remote_network_tailscale: (out['remote_network_tailscale'] as 'on' | 'off') ?? 'on',
         remote_network_tynn: (out['remote_network_tynn'] as 'on' | 'off') ?? 'on',
+        ftq_availability: (out['ftq_availability'] as 'available' | 'dnd') ?? 'available',
+        ftq_availability_workspaces: out['ftq_availability_workspaces'] ?? '',
+        ftq_availability_workstations: out['ftq_availability_workstations'] ?? '',
+        ftq_dnd_message: out['ftq_dnd_message'] ?? '',
         mobile_port: out['mobile_port'] ?? '51718',
         local_sites_enabled:
             (out['local_sites_enabled'] as 'on' | 'off') ?? 'off',

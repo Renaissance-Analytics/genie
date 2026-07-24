@@ -74,6 +74,13 @@ export interface ForceQuestionResult {
     /** True if the user dismissed the modal without answering. */
     cancelled: boolean;
     answers: ForceAnswer[];
+    /**
+     * PendingQuestions UX — set when the user is in DND for this question's scope:
+     * the question was NOT popped (it dropped into the top-bar inbox to answer at
+     * leisure), and this is the notice returned to the agent so it isn't left
+     * blocked on a modal that will never appear. `cancelled` is true alongside it.
+     */
+    dndMessage?: string;
 }
 
 /** One repo in a workspace map (a member submodule, or the lone simple repo). */
@@ -2118,7 +2125,13 @@ export async function handleMcpMessage(
                         content: [
                             {
                                 type: 'text',
-                                text: 'The user dismissed the question without answering.',
+                                // DND: the user is heads-down — return the configured
+                                // notice so the agent can decide to hold or proceed
+                                // (the question is waiting in their inbox). Otherwise
+                                // it was a plain dismissal.
+                                text:
+                                    result.dndMessage ??
+                                    'The user dismissed the question without answering.',
                             },
                         ],
                     });

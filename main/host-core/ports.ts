@@ -32,6 +32,10 @@ export interface QuestionTransport {
         /** PendingQuestions v2 — orders the queue (default 'normal'); never preempts
          *  the shown head. Optional so existing transports keep compiling. */
         priority?: QuestionPriority,
+        /** PendingQuestions UX — the question's scope (workspace/workstation ids),
+         *  driving the DND availability decision on the desktop transport. Optional
+         *  so existing transports keep compiling; absent ⇒ global availability only. */
+        scope?: { workspaceId?: string; workstationId?: string },
     ): Promise<ForceQuestionResult>;
 }
 
