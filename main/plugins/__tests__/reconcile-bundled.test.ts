@@ -4,7 +4,11 @@ import path from 'path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from 'electron';
 import { initDatabase, upsertPlugin, getPlugin, deletePlugin, emptyPluginGrants } from '../../db';
-import { revalidateAllPluginTrust, reconcileBundledPlugins } from '../install';
+import {
+    revalidateAllPluginTrust,
+    reconcileBundledPlugins,
+    ensureBundledPluginsInstalled,
+} from '../install';
 import { BUNDLED_PLUGIN_SOURCES } from '../official';
 
 /**
@@ -193,5 +197,39 @@ describe('revalidateAllPluginTrust — bundled self-heal + third-party split', (
         const row = getPlugin('com.thirdparty.stale')!;
         expect(row.trust).toBe('outdated'); // distinct from a signature/tamper 'untrusted'
         expect(row.enabled).toBe(false); // an unloadable manifest cannot surface
+    });
+});
+
+describe('ensureBundledPluginsInstalled (genie #56 — headless host install + enable)', () => {
+    beforeEach(() => {
+        // A fresh headless host: no bundled plugins installed yet (the desktop
+        // installs them on user action; a host has no such UI).
+        for (const b of BUNDLED_PLUGIN_SOURCES) {
+            try {
+                deletePlugin(b.id);
+            } catch {
+                /* not present — fine */
+            }
+        }
+    });
+
+    it('installs + ENABLES every bundled plugin (empty host registry → plugin editors resolve)', async () => {
+        for (const b of BUNDLED_PLUGIN_SOURCES) expect(getPlugin(b.id)).toBeNull();
+        await ensureBundledPluginsInstalled({ enable: true });
+        for (const b of BUNDLED_PLUGIN_SOURCES) {
+            const row = getPlugin(b.id);
+            expect(row).not.toBeNull();
+            // Enabled ⇒ surfaceable ⇒ runPluginEditorFs's trust gate passes on the host.
+            expect(row!.enabled).toBe(true);
+        }
+    });
+
+    it('installs DISABLED when enable is not requested', async () => {
+        await ensureBundledPluginsInstalled();
+        for (const b of BUNDLED_PLUGIN_SOURCES) {
+            const row = getPlugin(b.id);
+            expect(row).not.toBeNull();
+            expect(row!.enabled).toBe(false);
+        }
     });
 });

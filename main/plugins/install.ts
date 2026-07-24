@@ -328,6 +328,33 @@ export async function reconcileBundledPlugins(): Promise<void> {
 }
 
 /**
+ * Ensure every bundled plugin is INSTALLED — and, on a headless host, ENABLED
+ * (genie #56).
+ *
+ * The desktop installs bundled plugins on user action (Settings → Official →
+ * install), so a HEADLESS host — which has no such UI — would have an EMPTY plugin
+ * registry. A remote member's plugin editors (e.g. the Document editor a `.md`
+ * opens into) then fail closed on the host: `runPluginEditorFs` → `getPlugin` →
+ * null → `deny('unknown plugin')`. This materialises + installs every FIRST-PARTY
+ * bundled plugin (trusted by construction) and, with `enable`, turns it on so the
+ * host's fs trust gate passes. Idempotent + fail-soft per plugin; NEVER call it on
+ * the desktop (that keeps its user-choice model) — only the host-core boot does.
+ */
+export async function ensureBundledPluginsInstalled(opts?: { enable?: boolean }): Promise<void> {
+    for (const src of BUNDLED_PLUGIN_SOURCES) {
+        try {
+            if (!getPlugin(src.id)) {
+                const dir = materialiseBundled(src.id);
+                await installPluginFromFolder(dir.path, true); // first-party → trusted
+            }
+            if (opts?.enable) setPluginEnabled(src.id, true);
+        } catch {
+            /* best-effort per plugin — one failure must not block the others or boot */
+        }
+    }
+}
+
+/**
  * Gate a plugin whose STORED manifest no longer validates. This is NOT a
  * signature/tamper failure — the manifest merely predates a newer schema — so it
  * is reported as `outdated` (a distinct, accurate reason the UI describes as
