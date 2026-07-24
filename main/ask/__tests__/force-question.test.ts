@@ -44,6 +44,10 @@ const state: {
     windows: FakeWin[];
     nextWcId: number;
     ipc: Map<string, (...args: unknown[]) => unknown>;
+    /** When set, the NEXT BrowserWindow construction throws (simulates a display
+     *  failure) — for the "modal can't be shown → inbox, not false-dismiss" test.
+     *  Auto-clears after firing. */
+    throwOnCreate?: boolean;
 } = { windows: [], nextWcId: 1, ipc: new Map() };
 
 vi.mock('electron', () => {
@@ -52,6 +56,10 @@ vi.mock('electron', () => {
             return [];
         }
         constructor() {
+            if (state.throwOnCreate) {
+                state.throwOnCreate = false;
+                throw new Error('no display available');
+            }
             const wcId = state.nextWcId++;
             const self = this as unknown as FakeWin;
             self.id = wcId;
@@ -455,5 +463,21 @@ describe('ForceTheQuestion DND availability', () => {
         void forceQuestion(Q('C'), 'ws', 'normal', { workspaceId: 'ws1' });
         expect(state.windows.length).toBe(before + 1); // the modal opened
         win().close();
+    });
+
+    it('a modal that CANNOT be shown routes to the inbox with a notice — never a false "dismissed"', async () => {
+        setAvailabilityReader(() => ({ availability: 'available', dndMessage: 'x' }));
+        state.throwOnCreate = true; // the next createAskWindow throws (no display)
+        const before = state.windows.length;
+
+        const result = await forceQuestion(Q('D'), 'Workspace', 'normal', { workspaceId: 'ws1' });
+
+        // The agent gets a NOTICE, not a bogus "user dismissed" (the finding).
+        expect(result.cancelled).toBe(true);
+        expect(result.dndMessage).toMatch(/could not be shown/i);
+        expect(state.windows.length).toBe(before); // no window ever opened
+        // ...and it's answerable in the inbox rather than silently lost.
+        const row = listPendingQuestions().find((p) => p.workspaceLabel === 'Workspace');
+        expect(row?.deferred).toBe(true);
     });
 });

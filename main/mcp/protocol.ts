@@ -75,10 +75,12 @@ export interface ForceQuestionResult {
     cancelled: boolean;
     answers: ForceAnswer[];
     /**
-     * PendingQuestions UX — set when the user is in DND for this question's scope:
-     * the question was NOT popped (it dropped into the top-bar inbox to answer at
-     * leisure), and this is the notice returned to the agent so it isn't left
-     * blocked on a modal that will never appear. `cancelled` is true alongside it.
+     * PendingQuestions UX — an agent-facing NOTICE on a cancelled question, set
+     * when the modal was never actually shown to the user so the agent isn't left
+     * thinking it was a deliberate refusal. Two cases: the user is in DND (the
+     * question dropped into the top-bar inbox to answer at leisure), or the modal
+     * couldn't be displayed (also routed to the inbox). `cancelled` is true
+     * alongside it; the MCP tool returns this text instead of "user dismissed".
      */
     dndMessage?: string;
 }

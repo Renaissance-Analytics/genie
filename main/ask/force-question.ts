@@ -478,9 +478,25 @@ function enqueue(item: QueueItem): void {
     try {
         win = createAskWindow();
     } catch {
+        // The modal could NOT be displayed (window creation failed / no display).
+        // The user never saw it — so do NOT report a false "dismissed" (which reads
+        // to the agent as a deliberate refusal). Move the question to the inbox
+        // (deferred) so it stays answerable, and hand the agent a clear notice.
         const idx = queue.indexOf(item);
         if (idx !== -1) queue.splice(idx, 1);
-        item.resolve({ cancelled: true, answers: [] });
+        deferred.push({
+            id: item.id,
+            questions: item.questions,
+            workspaceLabel: item.workspaceLabel,
+            priority: item.priority,
+        });
+        notifyQuestionsChanged();
+        item.resolve({
+            cancelled: true,
+            answers: [],
+            dndMessage:
+                'the question could not be shown right now — it is waiting in the user’s inbox to answer',
+        });
         return;
     }
     // Distinct chime so the user can tell ForceTheQuestion from imDone by ear.
