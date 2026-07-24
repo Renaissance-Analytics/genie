@@ -86,6 +86,11 @@ export class RelayMemberClient {
             this.ws = ws;
             let welcomed = false;
             let connected = false;
+            // The precise reason the HOST rejected this session mid-handshake (grant
+            // rejected / PoP failed / site-E2E failed / …). The host sends it as a
+            // control `error` frame; capturing it surfaces the real cause instead of
+            // the generic "relay connection closed during secure handshake" (genie#52).
+            let hostRejectReason: string | null = null;
             const finishConnect = (): void => {
                 if (connected) return;
                 connected = true;
@@ -156,6 +161,22 @@ export class RelayMemberClient {
                     return; // drop a malformed frame rather than tear down
                 }
                 if (frame.channel === 'control') {
+                    // The host rejected this session mid-handshake (grant/PoP/site-E2E).
+                    // Capture its reason + reject with it, instead of dropping the frame
+                    // and letting the close handler emit the generic error (genie#52).
+                    if (frame.kind === 'error') {
+                        hostRejectReason = frame.reason || 'the workstation rejected the connection';
+                        clearTimeout(timer);
+                        try {
+                            ws.close();
+                        } catch {
+                            /* */
+                        }
+                        if (!connected) {
+                            reject(new Error(`the workstation rejected the connection: ${hostRejectReason}`));
+                        }
+                        return;
+                    }
                     try {
                         const challenge = decodePopChallenge(frame);
                         if (challenge) {
@@ -187,7 +208,13 @@ export class RelayMemberClient {
             ws.on('close', () => {
                 if (!connected) {
                     clearTimeout(timer);
-                    reject(new Error('relay connection closed during secure handshake'));
+                    reject(
+                        new Error(
+                            hostRejectReason
+                                ? `the workstation rejected the connection: ${hostRejectReason}`
+                                : 'relay connection closed during secure handshake',
+                        ),
+                    );
                 }
                 this.mux?.rejectAll('relay connection closed');
             });
