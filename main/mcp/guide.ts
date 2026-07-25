@@ -45,6 +45,18 @@ and which orientation files exist (README, AGENTS.md, CLAUDE.md, manifest) —
 plus a numbered plan for learning the project. Follow that plan with your own
 file tools; the repos are the primary resource.
 
+The map also reports AgentInbox identity/session binding, Codex SessionStart
+hook presence, hook-trust visibility, and the focused Genie skills installed in
+the workspace.
+
+## Focused Genie skills
+
+Genie automatically syncs a small routing skill plus focused skills for
+\`genie-orientation\`, \`genie-attention\`, \`genie-agentinbox\`,
+\`genie-terminals\`, \`genie-workspaces\`, \`genie-knowledge\`, and
+\`genie-issuewatch\`. Load the focused skill for the capability in use; call
+\`genieGuide\` when the complete protocol is needed.
+
 ## Tools
 
 ### manageProcess
@@ -145,6 +157,9 @@ on shared CHANNELS. You FETCH messages with \`receive\`; nothing is injected
 MID-TURN (that would corrupt it). To wait for a reply, make **ONE blocking
 \`receive\` with \`wait: true\`** — it returns the moment a message lands, so do NOT
 sit in a poll loop. Actions (\`action\`):
+
+For Codex, Genie automatically installs a SessionStart hook that sends Codex's generated session id back to Genie and rebinds the existing AgentInbox identity and history in place. Agents should not hand-edit this hook or create a second registration. Codex owns hook trust; if it reports a pending hook, review it once with \`/hooks\`. Genie cannot inspect or bypass that trust decision.
+
 - \`list\` — discovery: your own agent info (\`self\`), the peers you can SEE
   (\`agents\`), and your \`channels\`. Each peer carries \`reachable\`: **false means
   you can see it but cannot DM it** — discover-then-ask, rather than the agent

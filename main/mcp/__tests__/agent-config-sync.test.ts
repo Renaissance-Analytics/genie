@@ -33,6 +33,23 @@ const mcpJson = path.join(WS, '.mcp.json');
 const cursorJson = path.join(WS, '.cursor', 'mcp.json');
 const codexToml = path.join(WS, '.codex', 'config.toml');
 const codexSkill = path.join(WS, '.agents', 'skills', 'genie', 'SKILL.md');
+const codexSessionHook = path.join(
+    WS,
+    '.agents',
+    'skills',
+    'genie',
+    'scripts',
+    'register-session.cjs',
+);
+const coreSkillNames = [
+    'genie-orientation',
+    'genie-attention',
+    'genie-agentinbox',
+    'genie-terminals',
+    'genie-workspaces',
+    'genie-knowledge',
+    'genie-issuewatch',
+];
 const URL = 'http://127.0.0.1:51717/mcp/tok';
 
 beforeEach(() => {
@@ -48,8 +65,24 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
         expect(files.has(cursorJson)).toBe(true);
         expect(files.get(codexToml)).toContain('[mcp_servers.genie]');
         expect(files.get(codexToml)).toContain(`url = '${URL}'`);
+        expect(files.get(codexToml)).toContain('[[hooks.SessionStart]]');
+        expect(files.get(codexToml)).toContain('matcher = "startup|resume|clear"');
+        expect(files.get(codexToml)).toContain(codexSessionHook.replace(/\\/g, '\\\\'));
         expect(files.get(codexSkill)).toContain('name: genie');
         expect(files.get(codexSkill)).toContain('initializeWorkspace');
+        expect(files.get(codexSessionHook)).toContain('payload.session_id');
+        expect(files.get(codexSessionHook)).toContain("action: 'registerSession'");
+        expect(files.get(codexSessionHook)).toContain('process.env.GENIE_MCP_URL');
+        for (const name of coreSkillNames) {
+            const file = path.join(WS, '.agents', 'skills', name, 'SKILL.md');
+            expect(files.get(file)).toMatch(new RegExp(`^---\\nname: ${name}\\n`));
+        }
+        expect(
+            files.get(path.join(WS, '.agents', 'skills', 'genie-agentinbox', 'SKILL.md')),
+        ).toContain('registerSession');
+        expect(
+            files.get(path.join(WS, '.agents', 'skills', 'genie-orientation', 'SKILL.md')),
+        ).toContain('initializeWorkspace');
         expect(JSON.parse(files.get(mcpJson)!).mcpServers.genie.url).toBe(URL);
     });
 
@@ -84,6 +117,12 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
         settings = { mcp_sync_codex: 'off' };
         writeWorkspaceAgentMcp(WS, true, URL);
         expect(files.get(codexToml)).toBe('model = "gpt-5"\n');
+        expect(files.has(codexSessionHook)).toBe(false);
+        for (const name of coreSkillNames) {
+            expect(
+                files.has(path.join(WS, '.agents', 'skills', name, 'SKILL.md')),
+            ).toBe(false);
+        }
     });
 
     it('writes Tynn to project Codex config using the environment token', () => {

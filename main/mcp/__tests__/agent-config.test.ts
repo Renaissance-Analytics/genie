@@ -3,6 +3,7 @@ import {
     applyAgentsSection,
     genieCodexSkill,
     applyCodexMcpLaunchArgs,
+    applyCodexSessionHookBlock,
     applyCodexServerBlock,
     applyGenieServer,
     claudeEntry,
@@ -70,6 +71,32 @@ describe('applyGenieServer', () => {
     it('claudeEntry sets an explicit http transport type; cursorEntry omits it', () => {
         expect(claudeEntry(URL)).toEqual({ type: 'http', url: URL });
         expect(cursorEntry(URL)).toEqual({ url: URL });
+    });
+});
+
+describe('applyCodexSessionHookBlock', () => {
+    it('is idempotent and removes only its managed block', () => {
+        const existing = [
+            'model = "gpt-5"',
+            '[[hooks.Stop]]',
+            '[[hooks.Stop.hooks]]',
+            'type = "command"',
+            'command = "keep-me"',
+            '',
+        ].join('\n');
+        const once = applyCodexSessionHookBlock(existing, 'C:\\Work\\demo', true);
+        const twice = applyCodexSessionHookBlock(once, 'C:\\Work\\demo', true);
+
+        expect(twice).toBe(once);
+        expect(once).toContain('[[hooks.SessionStart]]');
+        expect(once).toContain('keep-me');
+        expect(applyCodexSessionHookBlock(once, 'C:\\Work\\demo', false)).toBe(existing);
+    });
+
+    it('escapes a Windows hook path as a valid TOML basic string', () => {
+        const out = applyCodexSessionHookBlock('', "C:\\Owner's Work\\demo", true);
+        expect(out).toContain('C:\\\\Owner\'s Work\\\\demo');
+        expect(out).toContain('command_windows = ');
     });
 });
 

@@ -161,6 +161,22 @@ describe('handleMcpMessage', () => {
                     orientation: { readme: true, agents: false, claude: false, manifests: ['composer.json'] },
                 },
             ],
+            agentIntegration: {
+                agentType: 'codex',
+                agentId: 'agent-X',
+                chatSessionId: 'session-X',
+                sessionBound: true,
+                codexSessionHook: {
+                    configured: true,
+                    scriptPresent: true,
+                    trust: 'unknown',
+                },
+                installedSkills: [
+                    'genie',
+                    'genie-orientation',
+                    'genie-agentinbox',
+                ],
+            },
         });
         const res = await handleMcpMessage(
             {
@@ -177,6 +193,10 @@ describe('handleMcpMessage', () => {
         const text = messages[0].content.text;
         expect(text).toContain('acme/api'); // the repo's GitHub ref
         expect(text).toContain('How to learn this workspace'); // the numbered plan
+        expect(text).toContain('Agent integration — healthy');
+        expect(text).toContain('Codex session is bound to the existing AgentInbox identity');
+        expect(text).toContain('Hook trust cannot be verified by Genie');
+        expect(text).toContain('genie-agentinbox');
         expect(text).toContain('"isAgiEnvelope": true'); // machine-parseable JSON block
     });
 
@@ -765,10 +785,61 @@ describe('handleMcpMessage', () => {
             scope: undefined,
             workspaces: undefined,
             purpose: undefined,
+            sessionId: undefined,
         });
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
         expect(text).toContain('1 agent(s) reachable, 1 visible but unavailable, 1 channel(s).');
         expect(text).toContain('w1:general'); // the JSON block
+    });
+
+    it('agentinbox exposes and routes the Codex SessionStart registration action', async () => {
+        const listed = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 701, method: 'tools/list' },
+            ctx(),
+        );
+        const tools = (listed?.result as {
+            tools: Array<{
+                name: string;
+                inputSchema: {
+                    properties: {
+                        action: { enum: string[] };
+                        sessionId?: { type: string };
+                    };
+                };
+            }>;
+        }).tools;
+        const schema = tools.find((tool) => tool.name === 'agentinbox')!.inputSchema;
+        expect(schema.properties.action.enum).toContain('registerSession');
+        expect(schema.properties.sessionId).toEqual(
+            expect.objectContaining({ type: 'string' }),
+        );
+
+        const agentInbox = vi.fn().mockResolvedValue({
+            ok: true,
+            self: { agentId: 'agent-1', chatSessionId: 'generated-session' },
+        });
+        await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 702,
+                method: 'tools/call',
+                params: {
+                    name: 'agentinbox',
+                    arguments: {
+                        action: 'registerSession',
+                        sessionId: 'generated-session',
+                    },
+                },
+            },
+            ctx({ terminalId: 'term-1', agentInbox }),
+        );
+        expect(agentInbox).toHaveBeenCalledWith(
+            'term-1',
+            expect.objectContaining({
+                action: 'registerSession',
+                sessionId: 'generated-session',
+            }),
+        );
     });
 
     it('agentinbox plumbs send args (to/channel/text/interrupt) and summarizes delivery', async () => {

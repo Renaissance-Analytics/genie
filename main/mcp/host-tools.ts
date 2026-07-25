@@ -25,6 +25,7 @@ import { agentInboxBroker } from '../agentinbox/broker';
 import { getKnowledgeStore } from '../knowledge/store';
 import { workspaceSlug } from '../agentinbox/slug';
 import { appendLaunchFlags } from '../agentinbox/session-capture';
+import { registerAgentInboxSession } from '../agentinbox/session-registration';
 import {
     normalizePurpose,
     type AgentInboxAgentType,
@@ -155,9 +156,8 @@ const MANIFEST_FILES = [
 export async function describeWorkspaceForMcp(
     terminalId: string,
 ): Promise<WorkspaceMap | null> {
-    const workspaceId = terminalId
-        ? getTerminalSpec(terminalId)?.workspace_id ?? null
-        : null;
+    const terminalSpec = terminalId ? getTerminalSpec(terminalId) : null;
+    const workspaceId = terminalSpec?.workspace_id ?? null;
     if (!workspaceId) return null;
     const ws = listWorkspaces().find((w) => w.id === workspaceId);
     if (!ws) return null;
@@ -193,6 +193,35 @@ export async function describeWorkspaceForMcp(
             },
         };
     });
+    const agentType = (terminalSpec?.meta?.agent as string | undefined) ?? null;
+    const agentId = (terminalSpec?.meta?.agent_id as string | undefined) ?? null;
+    const liveAgent = agentId ? agentInboxBroker.getInfo(agentId) : null;
+    const chatSessionId =
+        liveAgent?.chatSessionId ??
+        (terminalSpec?.meta?.chat_session_id as string | undefined) ??
+        null;
+    const skillRoot =
+        agentType === 'claude'
+            ? path.join(root, '.claude', 'skills')
+            : path.join(root, '.agents', 'skills');
+    const coreSkillNames = [
+        'genie',
+        'genie-orientation',
+        'genie-attention',
+        'genie-agentinbox',
+        'genie-terminals',
+        'genie-workspaces',
+        'genie-knowledge',
+        'genie-issuewatch',
+    ];
+    const installedSkills = coreSkillNames.filter((name) =>
+        fs.existsSync(path.join(skillRoot, name, 'SKILL.md')),
+    );
+    const codexConfig = path.join(root, '.codex', 'config.toml');
+    const codexHookConfigured =
+        agentType === 'codex' &&
+        fs.existsSync(codexConfig) &&
+        fs.readFileSync(codexConfig, 'utf8').includes('register-session.cjs');
 
     return {
         root,
@@ -205,6 +234,30 @@ export async function describeWorkspaceForMcp(
         envelopeAgents: exists('AGENTS.md') ? path.join(root, 'AGENTS.md') : null,
         envelopeClaude: exists('CLAUDE.md') ? path.join(root, 'CLAUDE.md') : null,
         repos,
+        agentIntegration: {
+            agentType,
+            agentId,
+            chatSessionId,
+            sessionBound: Boolean(agentId && chatSessionId),
+            codexSessionHook:
+                agentType === 'codex'
+                    ? {
+                          configured: codexHookConfigured,
+                          scriptPresent: fs.existsSync(
+                              path.join(
+                                  root,
+                                  '.agents',
+                                  'skills',
+                                  'genie',
+                                  'scripts',
+                                  'register-session.cjs',
+                              ),
+                          ),
+                          trust: 'unknown',
+                      }
+                    : null,
+            installedSkills,
+        },
         docHealth: (() => {
             const dh = workspaceDocHealth(root);
             return {
@@ -1500,6 +1553,20 @@ export async function agentInboxForMcp(
                 // ACK cursor passed the message (issue #9) — so a sender can tell
                 // 'queued' from 'seen' and decide whether to escalate to a nudge.
                 return { ok: true, receipts: agentInboxBroker.receipts(agentId, req.limit) };
+            }
+            case 'registerSession': {
+                const registered = registerAgentInboxSession(spec.id, req.sessionId ?? '', {
+                    getTerminalSpec,
+                    updateTerminalSpec,
+                    setChatSession: (id, sessionId) =>
+                        agentInboxBroker.setChatSession(id, sessionId),
+                });
+                if (!registered.ok) return registered;
+                broadcastTerminalSpecsChanged();
+                return {
+                    ok: true,
+                    self: agentInboxBroker.getInfo(registered.agentId) ?? undefined,
+                };
             }
             case 'setAccessibility': {
                 // A `specific` visibility list is limited to workspaces the caller

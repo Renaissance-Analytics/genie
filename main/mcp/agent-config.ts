@@ -30,6 +30,8 @@ import { pluginAgentSkills, type PluginSkill } from '../plugins/registry';
 
 export const GENIE_SERVER_NAME = 'genie';
 export const TYNN_SERVER_NAME = 'tynn';
+const CODEX_SESSION_HOOK_BEGIN = '# BEGIN GENIE CODEX SESSION HOOK';
+const CODEX_SESSION_HOOK_END = '# END GENIE CODEX SESSION HOOK';
 
 type JsonObj = Record<string, unknown>;
 
@@ -165,6 +167,45 @@ export function applyCodexServerBlock(
     return `${without}${without && !without.endsWith('\n') ? '\n' : ''}${block}`;
 }
 
+/** Add/remove the managed Codex SessionStart hook without touching user hooks. */
+export function applyCodexSessionHookBlock(
+    existing: string,
+    workspacePath: string,
+    enabled: boolean,
+): string {
+    const escapedBegin = CODEX_SESSION_HOOK_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escapedEnd = CODEX_SESSION_HOOK_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const without = existing.replace(
+        new RegExp(`${escapedBegin}\\r?\\n[\\s\\S]*?${escapedEnd}(?:\\r?\\n)?`, 'g'),
+        '',
+    );
+    if (!enabled) return without;
+    const script = path.join(
+        workspacePath,
+        '.agents',
+        'skills',
+        'genie',
+        'scripts',
+        'register-session.cjs',
+    );
+    const command = `node "${script}"`;
+    const block = [
+        CODEX_SESSION_HOOK_BEGIN,
+        '[[hooks.SessionStart]]',
+        'matcher = "startup|resume|clear"',
+        '',
+        '[[hooks.SessionStart.hooks]]',
+        'type = "command"',
+        `command = ${JSON.stringify(command)}`,
+        `command_windows = ${JSON.stringify(command)}`,
+        'timeout = 10',
+        'statusMessage = "Connecting Codex history to AgentInbox"',
+        CODEX_SESSION_HOOK_END,
+        '',
+    ].join('\n');
+    return `${without}${without && !without.endsWith('\n') ? '\n' : ''}${block}`;
+}
+
 function syncCodexServer(
     workspacePath: string,
     name: string,
@@ -180,7 +221,10 @@ function syncCodexServer(
     } catch {
         /* absent — created below */
     }
-    const next = applyCodexServerBlock(existing, name, url, bearerTokenEnvVar, enabled);
+    let next = applyCodexServerBlock(existing, name, url, bearerTokenEnvVar, enabled);
+    if (name === GENIE_SERVER_NAME) {
+        next = applyCodexSessionHookBlock(next, workspacePath, enabled);
+    }
     if (next === existing) return;
     try {
         fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -655,6 +699,116 @@ Always follow the workspace's AGENTS.md; it may impose stronger project-specific
 `;
 }
 
+/** Focused Genie workflow skills installed beside the base routing skill. */
+export function genieCoreSkills(): Record<string, string> {
+    const skill = (name: string, description: string, body: string): string => `---
+name: ${name}
+description: ${description}
+---
+
+${body}
+`;
+    return {
+        'genie-orientation': skill(
+            'genie-orientation',
+            'Use when entering, reinitializing, or learning a Genie workspace.',
+            `# Genie workspace orientation
+
+Call \`initializeWorkspace\` once for a fresh or newly converted workspace. Follow its numbered plan, treat repos as the primary source, and review the Agent integration health section before starting work. Read the nearest AGENTS.md and repository instructions before changing code.`,
+        ),
+        'genie-attention': skill(
+            'genie-attention',
+            'Use when finishing work, handing back, surfacing a file, or needing a user decision in Genie.',
+            `# Genie attention
+
+Call \`imDone\` every time you hand work back. Use \`ForceTheQuestion\` for a blocking decision, batch all questions, and name the actor in every option. Use \`openFileForUser\` to put a relevant result in front of the user. Pass \`GENIE_TERMINAL_ID\` whenever available.`,
+        ),
+        'genie-agentinbox': skill(
+            'genie-agentinbox',
+            'Use for Genie AgentInbox discovery, messaging, channels, accessibility, receipts, and Codex session binding.',
+            `# Genie AgentInbox
+
+Use \`agentinbox\` to list peers, send DMs or channel messages, receive new messages, inspect receipts, and manage accessibility or channel membership. To await a reply, make one blocking receive with \`wait:true\`; do not poll.
+
+Genie owns Codex session binding. Its generated SessionStart hook calls the internal \`registerSession\` action to rebind the generated session id to the existing agent and history in place. Do not hand-edit that hook or manually create another registration. If Codex reports that hooks await trust review, use \`/hooks\` once; Genie never bypasses Codex trust.`,
+        ),
+        'genie-terminals': skill(
+            'genie-terminals',
+            'Use when managing Genie terminals, coding agents, or supervised background processes.',
+            `# Genie terminals and processes
+
+Use \`manageTerminals\` to create, drive, read, or stop terminals; \`runAgent\` for coding agents; and \`manageProcess\` for long-running servers or workers that should survive terminal activity. Creation and writes may require user approval.`,
+        ),
+        'genie-workspaces': skill(
+            'genie-workspaces',
+            'Use when listing, opening, activating, removing, provisioning, or scaffolding Genie workspaces.',
+            `# Genie workspaces
+
+Use \`manageWorkspaces\` for registered workspaces. Removal only unregisters a workspace and never deletes its files. In an Ops workspace, use \`provisionWorkspaces\` for governed children and respect its approval gates.`,
+        ),
+        'genie-knowledge': skill(
+            'genie-knowledge',
+            'Use when reading or recording durable workstation-wide Genie knowledge.',
+            `# Genie knowledge
+
+Search the knowledge graph before adding a node. Keep memories small and reusable, retrieve full nodes only when relevant, and connect related knowledge with wikilinks. The graph is workstation-wide, not workspace-local.`,
+        ),
+        'genie-issuewatch': skill(
+            'genie-issuewatch',
+            'Use when inspecting Genie IssueWatch issues, pull requests, and security alerts.',
+            `# Genie IssueWatch
+
+Use \`checkIssues\` for the detailed workspace feed. \`imDone\` also reports open counts. Treat security alerts according to workspace policy and fix root causes rather than masking them.`,
+        ),
+    };
+}
+
+/** Script invoked by Codex's SessionStart hook; stdin is the documented hook payload. */
+export function codexSessionRegistrationHook(): string {
+    return `'use strict';
+
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+    input += chunk;
+});
+process.stdin.on('end', async () => {
+    try {
+        const payload = JSON.parse(input);
+        const sessionId = typeof payload.session_id === 'string' ? payload.session_id.trim() : '';
+        const endpoint = process.env.GENIE_MCP_URL;
+        if (!sessionId || !endpoint) return;
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                jsonrpc: '2.0',
+                id: 'codex-session-start',
+                method: 'tools/call',
+                params: {
+                    name: 'agentinbox',
+                    arguments: { action: 'registerSession', sessionId },
+                },
+            }),
+            signal: AbortSignal.timeout(8000),
+        });
+        if (!response.ok) throw new Error('Genie session registration request failed');
+        const result = await response.json();
+        if (result.error || result.result?.isError) {
+            throw new Error('Genie rejected Codex session registration');
+        }
+    } catch (error) {
+        process.stderr.write(
+            \`Genie could not connect this Codex session to AgentInbox: \${
+                error instanceof Error ? error.message : String(error)
+            \}\\n\`,
+        );
+        process.exitCode = 1;
+    }
+});
+`;
+}
+
 /** Render a plugin's guidance as a SKILL.md. */
 export function pluginSkillBody(skill: PluginSkill): string {
     const tools = skill.tools.map((t) => `- \`${t.name}\` — ${t.description}`).join('\n');
@@ -689,8 +843,8 @@ function writeIfChanged(file: string, body: string): void {
 }
 
 /**
- * Sync the repo-scoped skills for ONE agent: Genie's own workflow skill plus a
- * skill per enabled plugin that declares `agent.guide`.
+ * Sync the repo-scoped skills for ONE agent: Genie's routing + focused workflow
+ * skills, plus a skill per enabled plugin that declares `agent.guide`.
  *
  * Removal is deliberately asymmetric. The Genie skill is only deleted when it
  * still matches exactly what we wrote (a user edit is theirs to keep), while
@@ -705,18 +859,39 @@ function syncAgentSkills(
 ): void {
     try {
         const root = path.join(workspacePath, ...SKILL_ROOTS[agent]);
-        const genieFile = path.join(root, 'genie', 'SKILL.md');
+        const coreSkills = { genie: genieCodexSkill(), ...genieCoreSkills() };
+        const codexSessionHook = path.join(
+            root,
+            'genie',
+            'scripts',
+            'register-session.cjs',
+        );
         const skills = enabled ? pluginAgentSkills() : [];
         const wanted = new Map(
             skills.map((s) => [`${PLUGIN_SKILL_PREFIX}${s.namespace}`, pluginSkillBody(s)]),
         );
 
         if (!enabled) {
-            if (fs.existsSync(genieFile) && fs.readFileSync(genieFile, 'utf8') === genieCodexSkill()) {
-                fs.rmSync(genieFile);
+            for (const [name, body] of Object.entries(coreSkills)) {
+                const file = path.join(root, name, 'SKILL.md');
+                if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === body) {
+                    fs.rmSync(file);
+                }
+            }
+            if (
+                agent === 'codex' &&
+                fs.existsSync(codexSessionHook) &&
+                fs.readFileSync(codexSessionHook, 'utf8') === codexSessionRegistrationHook()
+            ) {
+                fs.rmSync(codexSessionHook);
             }
         } else {
-            writeIfChanged(genieFile, genieCodexSkill());
+            for (const [name, body] of Object.entries(coreSkills)) {
+                writeIfChanged(path.join(root, name, 'SKILL.md'), body);
+            }
+            if (agent === 'codex') {
+                writeIfChanged(codexSessionHook, codexSessionRegistrationHook());
+            }
             for (const [name, body] of wanted) {
                 writeIfChanged(path.join(root, name, 'SKILL.md'), body);
             }

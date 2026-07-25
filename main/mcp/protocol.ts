@@ -124,6 +124,20 @@ export interface WorkspaceMap {
     envelopeAgents: string | null;
     envelopeClaude: string | null;
     repos: WorkspaceRepoInfo[];
+    /** The caller's Genie identity, Codex session hook, and installed workflow skills. */
+    agentIntegration?: {
+        agentType: string | null;
+        agentId: string | null;
+        chatSessionId: string | null;
+        sessionBound: boolean;
+        codexSessionHook: {
+            configured: boolean;
+            scriptPresent: boolean;
+            /** Codex owns hook trust; Genie cannot inspect or bypass it. */
+            trust: 'unknown';
+        } | null;
+        installedSkills: string[];
+    };
     /** Health of the agent docs (AGENTS.md + Genie MCP section + CLAUDE sync). */
     docHealth?: {
         hasAgents: boolean;
@@ -602,8 +616,16 @@ export interface ManageWorkspacesResult {
 // --- agentinbox -----------------------------------------------------------------
 
 export interface AgentInboxRequest {
-    /** `list` (discovery), `send`, `receive`, `receipts`, `setAccessibility`, `join`, `leave`. */
-    action: 'list' | 'send' | 'receive' | 'receipts' | 'setAccessibility' | 'join' | 'leave';
+    /** Public actions plus the Codex SessionStart hook's late identity bind. */
+    action:
+        | 'list'
+        | 'send'
+        | 'receive'
+        | 'receipts'
+        | 'registerSession'
+        | 'setAccessibility'
+        | 'join'
+        | 'leave';
     /** send: DM this agent id (mutually exclusive with `channel`). */
     to?: string;
     /** send/join/leave: a channel — a bare purpose (own workspace) or `slug:purpose`. */
@@ -627,6 +649,8 @@ export interface AgentInboxRequest {
     /** setAccessibility (optional): opt in/out of wake-on-DM — a DM to you when idle
      *  injects a nudge to start a turn (issue #9). Default off. */
     wakeOnDm?: boolean;
+    /** registerSession: the generated Codex session id from SessionStart stdin. */
+    sessionId?: string;
     /** receipts (optional): how many recent sent DMs to report (default 20, cap 100). */
     limit?: number;
 }
@@ -1108,7 +1132,16 @@ const AGENTINBOX_TOOL = {
             ...TERMINAL_ID_PROP,
             action: {
                 type: 'string',
-                enum: ['list', 'send', 'receive', 'receipts', 'setAccessibility', 'join', 'leave'],
+                enum: [
+                    'list',
+                    'send',
+                    'receive',
+                    'receipts',
+                    'registerSession',
+                    'setAccessibility',
+                    'join',
+                    'leave',
+                ],
                 description: 'What to do.',
             },
             to: {
@@ -1123,6 +1156,11 @@ const AGENTINBOX_TOOL = {
                 type: 'boolean',
                 description:
                     'setAccessibility (optional): opt in/out of wake-on-DM. When ON, a DM that arrives while you are IDLE (turn ended, prompt empty) injects a one-line nudge so you start a turn and see it — instead of the DM sitting unread until you next act. Fail-safe: never fires mid-turn. Default off.',
+            },
+            sessionId: {
+                type: 'string',
+                description:
+                    'registerSession: the generated Codex session id supplied by its SessionStart hook.',
             },
             channel: {
                 type: 'string',
@@ -1289,6 +1327,42 @@ export function formatWorkspaceMap(map: WorkspaceMap): string {
     lines.push(
         `${n++}. Briefly summarize back to the user what this workspace is and what each repo does, then ask what they'd like to work on.`,
     );
+
+    const integration = map.agentIntegration;
+    if (integration) {
+        const hookHealthy =
+            integration.agentType !== 'codex' ||
+            (integration.codexSessionHook?.configured === true &&
+                integration.codexSessionHook.scriptPresent === true);
+        const healthy = integration.sessionBound && hookHealthy;
+        lines.push('');
+        lines.push(`## Agent integration — ${healthy ? 'healthy' : 'needs attention'}`);
+        if (integration.agentType === 'codex') {
+            lines.push(
+                integration.sessionBound
+                    ? `- Codex session is bound to the existing AgentInbox identity (\`${integration.agentId}\`).`
+                    : '- Codex session is not yet bound to its AgentInbox identity. Restart Codex after Genie syncs the workspace integration.',
+            );
+            const hook = integration.codexSessionHook;
+            lines.push(
+                hook?.configured && hook.scriptPresent
+                    ? '- Codex SessionStart hook is configured and its registration script is present.'
+                    : '- Codex SessionStart integration is incomplete. Re-sync Agent MCP for this workspace in Genie settings.',
+            );
+            lines.push(
+                '- Hook trust cannot be verified by Genie. If Codex reports hooks awaiting review, use `/hooks` once; Genie never bypasses trust.',
+            );
+        } else if (integration.sessionBound) {
+            lines.push(`- Session is bound to AgentInbox identity \`${integration.agentId}\`.`);
+        } else {
+            lines.push('- This agent session is not bound to an AgentInbox identity.');
+        }
+        lines.push(
+            integration.installedSkills.length
+                ? `- Focused Genie skills installed: ${integration.installedSkills.map((s) => `\`${s}\``).join(', ')}.`
+                : '- No generated Genie workflow skills were detected.',
+        );
+    }
 
     // Doc health — flag anything the user may want repaired (the repair is
     // idempotent and available from Genie's Settings → Agent MCP).
@@ -1919,6 +1993,7 @@ export async function handleMcpMessage(
                     action !== 'send' &&
                     action !== 'receive' &&
                     action !== 'receipts' &&
+                    action !== 'registerSession' &&
                     action !== 'setAccessibility' &&
                     action !== 'join' &&
                     action !== 'leave'
@@ -1926,7 +2001,7 @@ export async function handleMcpMessage(
                     return err(
                         msg.id,
                         -32602,
-                        'agentinbox requires `action`: list | send | receive | receipts | setAccessibility | join | leave.',
+                        'agentinbox requires `action`: list | send | receive | receipts | registerSession | setAccessibility | join | leave.',
                     );
                 }
                 const result = await ctx.agentInbox(ctx.terminalId, {
@@ -1941,6 +2016,7 @@ export async function handleMcpMessage(
                     scope: a.scope,
                     workspaces: a.workspaces,
                     purpose: a.purpose,
+                    sessionId: a.sessionId,
                     wakeOnDm: a.wakeOnDm,
                     limit: a.limit,
                 });

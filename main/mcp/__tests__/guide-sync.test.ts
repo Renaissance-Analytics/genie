@@ -78,4 +78,11 @@ describe('the agent guide stays in sync with the agentinbox schema', () => {
         expect(GENIE_MCP_GUIDE).toMatch(/reachable/i);
         expect(GENIE_MCP_GUIDE).toMatch(/WORKSPACE/);
     });
+
+    it('documents automatic Codex SessionStart registration and focused skills', () => {
+        expect(GENIE_MCP_GUIDE).toContain('SessionStart');
+        expect(GENIE_MCP_GUIDE).toMatch(/automatically.*session id/i);
+        expect(GENIE_MCP_GUIDE).toContain('genie-agentinbox');
+        expect(GENIE_MCP_GUIDE).toContain('genie-orientation');
+    });
 });
