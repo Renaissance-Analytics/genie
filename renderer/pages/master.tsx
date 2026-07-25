@@ -24,6 +24,7 @@ import TerminalTypeSplitButton from '../components/Master/TerminalTypeSplitButto
 import AgentTerminalForm from '../components/Master/AgentTerminalForm';
 import GithubCapabilitiesFlyout from '../components/Master/GithubCapabilitiesFlyout';
 import { useGithubCapabilities } from '../lib/githubCapabilities';
+import { issueWatchBadge } from '../lib/issuewatch';
 import { terminalTypeById, type TerminalTypeId } from '../lib/terminal-types';
 import SignInPrompt from '../components/SignInPrompt';
 import type { AgentType, BackendUser, ViewType, AgentInboxScope } from '../lib/genie';
@@ -1653,12 +1654,16 @@ function MasterInner() {
                         onShowIssueWatch={() =>
                             activeWorkspaceId && openIssueWatch(activeWorkspaceId)
                         }
-                        issueWatchUnread={(() => {
-                            const c = activeWorkspaceId
+                        issueWatchUnread={issueWatchBadge(
+                            activeWorkspaceId
                                 ? issueWatchCounts[activeWorkspaceId]
-                                : undefined;
-                            return c ? c.issue + c.pr + c.security : 0;
-                        })()}
+                                : undefined,
+                        ).count ?? 0}
+                        issueWatchUnknown={issueWatchBadge(
+                            activeWorkspaceId
+                                ? issueWatchCounts[activeWorkspaceId]
+                                : undefined,
+                        ).unknown}
                         githubNeedsResolve={githubNeedsResolve}
                         onShowGithubCaps={() => setGithubCapsOpen((o) => !o)}
                     />
@@ -2407,6 +2412,7 @@ function TitleBar({
     onShowKnowledge,
     onShowIssueWatch,
     issueWatchUnread = 0,
+    issueWatchUnknown = false,
     githubNeedsResolve = false,
     onShowGithubCaps,
     cornerInRail = false,
@@ -2422,6 +2428,7 @@ function TitleBar({
     onShowKnowledge?: () => void;
     onShowIssueWatch?: () => void;
     issueWatchUnread?: number;
+    issueWatchUnknown?: boolean;
     /** True when GitHub permissions are missing — shows a persistent warning. */
     githubNeedsResolve?: boolean;
     onShowGithubCaps?: () => void;
@@ -2516,7 +2523,9 @@ function TitleBar({
             <button
                 type="button"
                 className="gicon iw-btn"
-                title="Issue Watch — GitHub issues, PRs & Dependabot"
+                title={issueWatchUnknown
+                    ? 'Issue Watch — unknown / not tracking this workspace yet'
+                    : 'Issue Watch — GitHub issues, PRs & security alerts'}
                 onClick={() => onShowIssueWatch?.()}
             >
                 <IconEye />
@@ -2524,6 +2533,9 @@ function TitleBar({
                     <span className="iw-btn-badge">
                         {issueWatchUnread > 99 ? '99+' : issueWatchUnread}
                     </span>
+                )}
+                {issueWatchUnknown && (
+                    <span className="iw-btn-badge unknown">?</span>
                 )}
             </button>
             <button

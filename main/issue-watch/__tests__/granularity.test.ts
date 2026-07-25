@@ -183,11 +183,11 @@ describe('getOpenCounts — granularity gates the pill', () => {
         OWN_ITEMS = [item('issue', 1), item('pr', 2), item('dependabot', 3)];
         GRANULARITY = { own: { issues: true, pulls: true, security: true }, upstream: 'none' };
         await pollWorkspace('ws-1');
-        expect((await getOpenCounts())['ws-1']).toEqual({ issue: 1, pr: 1, security: 1 });
+        expect((await getOpenCounts())['ws-1']).toMatchObject({ issue: 1, pr: 1, security: 1 });
 
         GRANULARITY = { own: { issues: true, pulls: true, security: false }, upstream: 'none' };
         await pollWorkspace('ws-1');
-        expect((await getOpenCounts())['ws-1']).toEqual({ issue: 1, pr: 1, security: 0 });
+        expect((await getOpenCounts())['ws-1']).toMatchObject({ issue: 1, pr: 1, security: 0 });
     });
 
     it('includes upstream Issues/PRs in the pill per the upstream setting', async () => {
@@ -206,15 +206,15 @@ describe('getOpenCounts — granularity gates the pill', () => {
 
         GRANULARITY = { own: { issues: true, pulls: true, security: true }, upstream: 'none' };
         await pollWorkspace('ws-1');
-        expect((await getOpenCounts())['ws-1']).toEqual({ issue: 1, pr: 0, security: 0 });
+        expect((await getOpenCounts())['ws-1']).toMatchObject({ issue: 1, pr: 0, security: 0 });
 
         GRANULARITY = { own: { issues: true, pulls: true, security: true }, upstream: 'issues' };
         await pollWorkspace('ws-1');
-        expect((await getOpenCounts())['ws-1']).toEqual({ issue: 2, pr: 0, security: 0 });
+        expect((await getOpenCounts())['ws-1']).toMatchObject({ issue: 2, pr: 0, security: 0 });
 
         GRANULARITY = { own: { issues: true, pulls: true, security: true }, upstream: 'issues+prs' };
         await pollWorkspace('ws-1');
-        expect((await getOpenCounts())['ws-1']).toEqual({ issue: 2, pr: 1, security: 0 });
+        expect((await getOpenCounts())['ws-1']).toMatchObject({ issue: 2, pr: 1, security: 0 });
     });
 });
 

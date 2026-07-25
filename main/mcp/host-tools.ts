@@ -292,6 +292,7 @@ export async function checkIssuesForMcp(terminalId: string): Promise<IssueWatchS
             connected: false,
             workspaceResolved: true,
             serviceState: status.serviceState,
+            knownToServer: status.knownToServer,
             counts: empty,
             items: [],
         };
@@ -314,6 +315,7 @@ export async function checkIssuesForMcp(terminalId: string): Promise<IssueWatchS
     return {
         connected: true,
         workspaceResolved: true,
+        knownToServer: status.knownToServer,
         counts,
         items,
         // The user's PER-BUCKET remediation preference rides along so the imDone

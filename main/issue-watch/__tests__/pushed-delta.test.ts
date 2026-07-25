@@ -80,7 +80,7 @@ describe('server-fed IssueWatch override (#197)', () => {
         applyPushedDelta(delta());
 
         expect(isServerFed('ws-1')).toBe(true);
-        expect(await getOpenCounts()).toEqual({ 'ws-1': { issue: 1, pr: 0, security: 2 } });
+        expect(await getOpenCounts()).toEqual({ 'ws-1': { issue: 1, pr: 0, security: 2, knownToServer: true } });
         const feed = await getWorkspaceFeed('ws-1');
         expect(feed).toHaveLength(1);
         expect(feed[0]).toMatchObject({ key: 'o/r:issue:1', kind: 'issue', unread: true, owner: 'o', repo: 'r' });
@@ -97,7 +97,7 @@ describe('server-fed IssueWatch override (#197)', () => {
             // the flag is that an empty feed can no longer masquerade as healthy.
             knownToServer: true,
         });
-        expect(await getOpenCounts()).toEqual({ 'ws-1': { issue: 1, pr: 0, security: 2 } });
+        expect(await getOpenCounts()).toEqual({ 'ws-1': { issue: 1, pr: 0, security: 2, knownToServer: true } });
     });
 
     it('clearing a snapshot never re-enables local GitHub IssueWatch', async () => {
@@ -121,9 +121,11 @@ describe('server-fed IssueWatch override (#197)', () => {
         });
     });
 
-    it('zero-count server-fed workspace is omitted from the counts map (no dark pill regressions)', async () => {
+    it('keeps a zero-count server-fed workspace distinguishable from unknown', async () => {
         applyPushedDelta(delta({ counts: { issue: 0, pr: 0, security: 0 } }));
-        expect(await getOpenCounts()).toEqual({});
+        expect(await getOpenCounts()).toEqual({
+            'ws-1': { issue: 0, pr: 0, security: 0, knownToServer: true },
+        });
     });
 });
 

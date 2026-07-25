@@ -141,6 +141,8 @@ export interface WatchTypeCounts {
     pr: number;
     /** dependabot + code-scanning + secret-scanning. */
     security: number;
+    /** False until Tynn has delivered this workspace at least once. */
+    knownToServer: boolean;
 }
 
 /**

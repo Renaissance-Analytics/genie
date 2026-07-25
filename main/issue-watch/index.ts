@@ -85,7 +85,7 @@ export interface TypeCounts {
 }
 
 /** The bucket a WatchItem kind tallies into (security kinds → `security`). */
-function bucketOf(kind: WatchItem['kind']): keyof TypeCounts {
+function bucketOf(kind: WatchItem['kind']): 'issue' | 'pr' | 'security' {
     if (isSecurityKind(kind)) return 'security';
     return kind; // 'issue' | 'pr'
 }
@@ -662,17 +662,21 @@ export async function getWorkspaceFeed(
  * it. The seen-based unread highlight lives in the feed, not here. Async
  * because resolving a workspace's repos reads git remotes.
  */
-export async function getOpenCounts(): Promise<Record<string, TypeCounts>> {
-    const out: Record<string, TypeCounts> = {};
+export async function getOpenCounts(): Promise<
+    Record<string, TypeCounts & { knownToServer: boolean }>
+> {
+    const out: Record<string, TypeCounts & { knownToServer: boolean }> = {};
     for (const ws of listWorkspaces()) {
         // Server-fed: use Tynn's counts, skip the local git/GitHub resolution.
         const pushed = pushedByWorkspace.get(ws.id);
         if (pushed) {
-            if (pushed.counts.issue || pushed.counts.pr || pushed.counts.security) {
-                out[ws.id] = { ...pushed.counts };
-            }
+            out[ws.id] = { ...pushed.counts, knownToServer: true };
             continue;
         }
+        // No server delivery is not a confident zero. Keep the workspace in the
+        // payload with an explicit unknown marker so badges cannot collapse it
+        // into the same shape as a genuinely quiet feed.
+        out[ws.id] = { issue: 0, pr: 0, security: 0, knownToServer: false };
         let repos: ResolvedRepo[];
         try {
             repos = await resolveWorkspaceRepos(ws.id);
@@ -683,7 +687,12 @@ export async function getOpenCounts(): Promise<Record<string, TypeCounts>> {
         const watches = listIssueWatches(ws.id);
         const granularity = getWorkspaceIssuewatchGranularity(ws.id);
         const byKey = new Map(watches.map((w) => [cacheKey(w.owner, w.repo), w]));
-        const acc: TypeCounts = { issue: 0, pr: 0, security: 0 };
+        const acc: TypeCounts & { knownToServer: boolean } = {
+            issue: 0,
+            pr: 0,
+            security: 0,
+            knownToServer: false,
+        };
         for (const r of repos) {
             const w = byKey.get(cacheKey(r.owner, r.repo));
             const enabled = w ? w.enabled === 1 : true; // default ON
@@ -698,7 +707,7 @@ export async function getOpenCounts(): Promise<Record<string, TypeCounts>> {
             acc.pr += k.pr;
             acc.security += k.security;
         }
-        if (acc.issue || acc.pr || acc.security) out[ws.id] = acc;
+        out[ws.id] = acc;
     }
     return out;
 }

@@ -27,6 +27,7 @@ import { showPrompt } from './Prompt';
 import TerminalTypeSplitButton from './TerminalTypeSplitButton';
 import { terminalTypeForAgent, type TerminalTypeId } from '../../lib/terminal-types';
 import { workspaceNeedsAttention } from '../../lib/attention';
+import { issueWatchBadge } from '../../lib/issuewatch';
 import {
     enterableWorkspaceIds,
     newlyAddedWorkspaceIds,
@@ -1028,10 +1029,12 @@ export default function Chooser({
                                         synthetic System Workspace. */}
                                     {!system && (
                                         <span
-                                            className="iw-pill"
+                                            className={`iw-pill${issueWatchBadge(issueWatchCounts[ws.id]).unknown ? ' unknown' : ''}`}
                                             role="button"
                                             tabIndex={-1}
-                                            title="Issue Watch — Issues · PRs · Security alerts (click to open)"
+                                            title={issueWatchBadge(issueWatchCounts[ws.id]).unknown
+                                                ? 'Issue Watch — unknown / not tracking yet (click to inspect)'
+                                                : 'Issue Watch — Issues · PRs · Security alerts (click to open)'}
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 onShowIssueWatch(ws.id);

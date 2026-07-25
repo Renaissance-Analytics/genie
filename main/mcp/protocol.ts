@@ -187,6 +187,8 @@ export interface IssueWatchSnapshot {
     connected: boolean;
     workspaceResolved: boolean;
     serviceState?: 'connecting' | 'connected' | 'signed-out' | 'disabled' | 'disconnected';
+    /** False until Tynn has delivered this workspace at least once. */
+    knownToServer?: boolean;
     counts: IssueWatchCounts;
     items: IssueWatchItem[];
     /** The user's PER-BUCKET remediation preference (workspace settings), folded
@@ -1405,6 +1407,9 @@ export function formatWorkspaceMap(map: WorkspaceMap): string {
  */
 export function formatIssueCountsLine(snap: IssueWatchSnapshot): string | null {
     if (!snap.connected || !snap.workspaceResolved) return null;
+    if (snap.knownToServer === false) {
+        return 'IssueWatch — unknown / not tracking this workspace yet';
+    }
     const { issue, pr, security } = snap.counts;
     if (!issue && !pr && !security) return null;
     const base = `IssueWatch — issues:${issue}, PR:${pr}, sec:${security}`;
@@ -1482,6 +1487,9 @@ export function formatIssueWatchFeed(snap: IssueWatchSnapshot): string {
             connected: 'Genie is connected to the Tynn IssueWatch stream and loading this workspace\'s issues.',
         }[snap.serviceState ?? 'disconnected'];
         return `IssueWatch — unavailable: ${reason} Genie GitHub access is not required.`;
+    }
+    if (snap.knownToServer === false) {
+        return "IssueWatch — Tynn isn't tracking this workspace yet. The feed is unknown, not all-clear; wait for the first server delivery or verify this workspace is registered for IssueWatch.";
     }
     if (snap.items.length === 0) {
         return 'IssueWatch — nothing open across this workspace\'s repos (no Issues, PRs, or security alerts).';

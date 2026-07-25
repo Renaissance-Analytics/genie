@@ -6,6 +6,20 @@ import type {
     WatchRepoView,
     WorkspaceWatchStatus,
 } from './genie';
+import type { WatchTypeCounts } from './genie';
+
+/** Badge state that preserves "never delivered" separately from a true zero. */
+export function issueWatchBadge(
+    counts: WatchTypeCounts | undefined,
+): { count: number | null; unknown: boolean } {
+    if (!counts || counts.knownToServer === false) {
+        return { count: null, unknown: true };
+    }
+    return {
+        count: counts.issue + counts.pr + counts.security,
+        unknown: false,
+    };
+}
 
 /**
  * Issue Watch repo-list ↔ Activity-feed consistency.

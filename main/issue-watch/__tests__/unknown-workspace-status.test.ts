@@ -59,6 +59,7 @@ vi.mock('../../github/capability-service', () => ({
 import {
     applyPushedDelta,
     clearPushedDelta,
+    getOpenCounts,
     getWorkspaceStatus,
     setIssueWatchServiceState,
     setReconcileDelivered,
@@ -82,6 +83,12 @@ describe('workspace the server does not know about', () => {
         // Previously: {connected: true} → flyout said "Nothing open". The whole
         // point of this fix is that this workspace is distinguishable.
         expect(status.knownToServer).toBe(false);
+        expect((await getOpenCounts())['ws-1']).toEqual({
+            issue: 0,
+            pr: 0,
+            security: 0,
+            knownToServer: false,
+        });
     });
 
     it('is distinguishable from a workspace that genuinely has nothing open', async () => {
@@ -99,6 +106,7 @@ describe('workspace the server does not know about', () => {
 
         // Both are empty. They must NOT be the same status.
         expect(quiet.knownToServer).toBe(true);
+        expect((await getOpenCounts())['ws-1']?.knownToServer).toBe(true);
         expect(unknown.knownToServer).toBe(false);
         expect(quiet.knownToServer).not.toBe(unknown.knownToServer);
     });

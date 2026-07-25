@@ -1154,6 +1154,39 @@ describe('handleMcpMessage', () => {
         expect(text).not.toContain('IssueWatch');
     });
 
+    it('imDone reports an unknown feed instead of silently claiming all-clear', async () => {
+        const checkIssues = vi.fn().mockResolvedValue({
+            connected: true,
+            workspaceResolved: true,
+            knownToServer: false,
+            counts: { issue: 0, pr: 0, security: 0 },
+            items: [],
+        });
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 511, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
+            ctx({ checkIssues }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('IssueWatch — unknown / not tracking this workspace yet');
+    });
+
+    it('checkIssues distinguishes an unreported workspace from a quiet one', async () => {
+        const checkIssues = vi.fn().mockResolvedValue({
+            connected: true,
+            workspaceResolved: true,
+            knownToServer: false,
+            counts: { issue: 0, pr: 0, security: 0 },
+            items: [],
+        });
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 512, method: 'tools/call', params: { name: 'checkIssues', arguments: {} } },
+            ctx({ checkIssues }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain("Tynn isn't tracking this workspace yet");
+        expect(text).not.toContain('nothing open');
+    });
+
     it('imDone still acks if the IssueWatch snapshot throws (best-effort)', async () => {
         const checkIssues = vi.fn().mockRejectedValue(new Error('db down'));
         const onImDone = vi.fn();

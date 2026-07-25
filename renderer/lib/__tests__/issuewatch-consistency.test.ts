@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { feedItemBelongsToRepo, openCountForRepo } from '../issuewatch';
+import { feedItemBelongsToRepo, issueWatchBadge, openCountForRepo } from '../issuewatch';
 import type { WatchFeedItem, WatchRepoView } from '../genie';
 
 /**
@@ -24,6 +24,18 @@ const feedItem = (
     source: 'own',
     unread: false,
     ...over,
+});
+
+describe('issueWatchBadge — delivered vs unknown', () => {
+    it('is unknown for a workspace Tynn has never reported', () => {
+        expect(issueWatchBadge({ issue: 0, pr: 0, security: 0, knownToServer: false }))
+            .toEqual({ count: null, unknown: true });
+    });
+
+    it('is confidently zero only for a known quiet workspace', () => {
+        expect(issueWatchBadge({ issue: 0, pr: 0, security: 0, knownToServer: true }))
+            .toEqual({ count: 0, unknown: false });
+    });
 });
 
 const repo = (over: Partial<WatchRepoView> & Pick<WatchRepoView, 'owner' | 'repo'>): WatchRepoView => ({
