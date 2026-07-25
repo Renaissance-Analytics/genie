@@ -1010,6 +1010,9 @@ export function registerIpcHandlers(): void {
             return r.ok ? { ok: true } : { ok: false, error: r.error };
         },
     );
+    // genie #64 — AGENT-LAG: how far behind the agents are on their inboxes. Seeds
+    // the header badge on mount; the live `agentinbox:lag` push keeps it current.
+    ipcMain.handle('agentinbox:lag', () => ({ count: agentInboxBroker.agentLagCount() }));
     // genie #64 — WIPE a conversation. A HOST op: the durable log lives in
     // genie.db, so the broker clears its in-memory panel log AND the store rows
     // and pushes `agentinbox:cleared` to every open window. Agent inboxes and ACK

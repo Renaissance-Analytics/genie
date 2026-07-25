@@ -302,6 +302,42 @@ export class AgentInboxBroker {
                 this.push(agent, msg);
             }
         }
+        // Boot restores a real backlog — the badge must reflect it immediately.
+        this.emitLagIfChanged();
+    }
+
+    /**
+     * AGENT-LAG — how many delivered messages agents have NOT received/ACKed,
+     * summed across every registered agent. This is the header badge's signal
+     * (genie #64), and it answers a different question from the panel's own
+     * unread marks: "are my agents keeping up?", not "what haven't I read?".
+     *
+     * Normal chatter an agent promptly drains never raises it; an agent falling
+     * behind does, because that is the actionable case — the owner only wants to
+     * be pulled into the inbox by a problem. An agent that HARD-LEFT drops out
+     * (its terminal is gone, there is nothing to chase); an AWAY agent still
+     * counts, since it is revivable and its mail is still waiting.
+     *
+     * The human's own read state is deliberately NOT part of this — it lives
+     * client-side (renderer/lib/agentinbox-view.ts) and never touches the host.
+     */
+    agentLagCount(): number {
+        let count = 0;
+        for (const a of this.agents.values()) {
+            for (const m of a.inbox) if (m.seq > a.cursor) count++;
+        }
+        return count;
+    }
+
+    /** Last lag level pushed. The badge is a LEVEL, so only transitions emit —
+     *  re-pushing an unchanged count would make it a message stream again. */
+    private lastLagCount = 0;
+
+    private emitLagIfChanged(): void {
+        const count = this.agentLagCount();
+        if (count === this.lastLagCount) return;
+        this.lastLagCount = count;
+        this.emit({ type: 'lag', count });
     }
 
     /** Does the agent have unreceived mail (seq beyond its cursor)? Cheap — no
@@ -331,6 +367,8 @@ export class AgentInboxBroker {
             agent.cursor = cursor;
             this.store.setCursor(agent.agentId, cursor);
             this.resolveEscalations(agent.agentId, cursor);
+            // The agent just caught up — the header's agent-lag level dropped.
+            this.emitLagIfChanged();
         }
     }
 
@@ -510,6 +548,8 @@ export class AgentInboxBroker {
         this.agents.delete(agentId);
         this.byTerminal.delete(a.terminalId);
         this.emit({ type: 'offline', agentId });
+        // A departed agent's backlog is no longer chaseable — drop it from the lag.
+        this.emitLagIfChanged();
     }
 
     /** Update a captured chat-session id (detect strategy resolved it post-launch). */
@@ -874,6 +914,7 @@ export class AgentInboxBroker {
                 // Track C: escalate to the human if the target doesn't drain it.
                 this.registerEscalation(msg, target);
             }
+            this.emitLagIfChanged();
             return { ok: true, delivered: 1, message: msg };
         }
 
@@ -924,6 +965,7 @@ export class AgentInboxBroker {
             this.appendLog(this.channelLogs, key, msg);
             this.store.append(msg);
             this.emitMessage(msg);
+            this.emitLagIfChanged();
             return { ok: true, delivered, message: msg };
         }
 
@@ -1152,6 +1194,7 @@ export class AgentInboxBroker {
         this.channelLogs.clear();
         this.dmLogs.clear();
         this.seq = 0;
+        this.lastLagCount = 0;
     }
 }
 

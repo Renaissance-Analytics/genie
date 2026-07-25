@@ -533,6 +533,9 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 method: 'POST',
                 json: { specId, patch },
             })) as { ok: boolean; error?: string },
+        // The badge must reflect the HOST's agents (they are the ones lagging), so
+        // the seed reads the host too; the live level rides `agentinbox:lag`.
+        lag: async () => (await req('/api/desktop/agentinbox/lag')) as { count: number },
         // Wiping a conversation targets the HOST too — the durable log lives in the
         // host's genie.db, so clearing the client's own empty broker would silently
         // do nothing while the host kept the history. The `agentinbox:cleared` push

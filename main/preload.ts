@@ -876,6 +876,9 @@ const api = {
         /** Post as the human — to a channel (`channelKey`) or an agent (`toAgentId`). */
         post: (input: { channelKey?: string; toAgentId?: string; text: string }) =>
             ipcRenderer.invoke('agentinbox:post', input),
+        /** AGENT-LAG — messages this workstation's agents haven't received/ACKed.
+         *  The header badge's seed; `on.agentInboxLag` keeps it live. */
+        lag: () => ipcRenderer.invoke('agentinbox:lag'),
         /** Wipe a channel's history (the panel log + the durable rows). */
         clearChannel: (channelKey: string) =>
             ipcRenderer.invoke('agentinbox:clear-channel', channelKey),
@@ -1323,6 +1326,14 @@ const api = {
             const handler = (_e: unknown, payload: Parameters<typeof cb>[0]) => cb(payload);
             ipcRenderer.on('agentinbox:message', handler);
             return () => ipcRenderer.off('agentinbox:message', handler);
+        },
+        /** AgentInbox AGENT-LAG level (genie #64) — how many messages the agents
+         *  haven't received/ACKed. Drives the header badge (a LEVEL: it only fires
+         *  on a transition). NOT the human's unread, which is client-side. */
+        agentInboxLag: (cb: (payload: { count: number }) => void) => {
+            const handler = (_e: unknown, payload: { count: number }) => cb(payload);
+            ipcRenderer.on('agentinbox:lag', handler);
+            return () => ipcRenderer.off('agentinbox:lag', handler);
         },
         /** AgentInbox: the human WIPED a conversation (genie #64) — the panel drops
          *  its cached history/activity for that channel or DM pair. */

@@ -92,4 +92,11 @@ describe('PASSTHROUGH_EVENTS — every host→client badge event passes through 
     it('includes agentinbox:cleared so a wiped conversation disappears on a host window', () => {
         expect(PASSTHROUGH_EVENTS.has('agentinbox:cleared')).toBe(true);
     });
+
+    // genie #64 — the AgentInbox header badge now reflects HOST-derived agent lag
+    // (messages the host's agents haven't ACKed). It is a badge event, so it needs
+    // passthrough for exactly the reason questions:changed did.
+    it('includes agentinbox:lag so the host window badge tracks the HOST agents', () => {
+        expect(PASSTHROUGH_EVENTS.has('agentinbox:lag')).toBe(true);
+    });
 });

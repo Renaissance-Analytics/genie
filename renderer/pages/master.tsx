@@ -292,21 +292,34 @@ function MasterInner() {
     useEffect(() => {
         return api().on.openTaskManager?.(() => setTaskManagerOpen(true));
     }, []);
-    // AgentInbox: the human panel + an unread badge on its titlebar button.
+    // AgentInbox: the human panel + an AGENT-LAG badge on its titlebar button.
     const [agentInboxOpen, setAgentInboxOpen] = useState(false);
-    const [agentInboxUnread, setAgentInboxUnread] = useState(0);
-    // Live unread tally: bump on each new AgentInbox message while the panel is
-    // CLOSED; opening it clears the badge. The flyout owns its own live stream.
-    const agentInboxOpenRef = useRef(agentInboxOpen);
-    agentInboxOpenRef.current = agentInboxOpen;
+    const [agentInboxLag, setAgentInboxLag] = useState(0);
+    // genie #64 — the badge counts messages the AGENTS haven't received/ACKed, not
+    // messages the human hasn't read. It used to bump on every `agentinbox:message`
+    // while the panel was closed, so ordinary agent-to-agent chatter pulled the
+    // owner in constantly. The actionable signal is an agent falling BEHIND, which
+    // only the host knows (delivery/ACK cursors) — so seed from the host and track
+    // its `agentinbox:lag` level. Opening the panel deliberately does NOT clear it:
+    // looking at the inbox doesn't catch an agent up. The human's own read/unread
+    // is separate and lives client-side, inside the flyout.
     useEffect(() => {
-        return api().on.agentInboxMessage?.(() => {
-            if (!agentInboxOpenRef.current) setAgentInboxUnread((n) => Math.min(999, n + 1));
-        });
+        let alive = true;
+        const seed = () => {
+            api()
+                .agentInbox.lag()
+                .then((r) => {
+                    if (alive) setAgentInboxLag(r.count);
+                })
+                .catch(() => {});
+        };
+        seed();
+        const off = api().on.agentInboxLag?.((p) => setAgentInboxLag(p.count));
+        return () => {
+            alive = false;
+            off?.();
+        };
     }, []);
-    useEffect(() => {
-        if (agentInboxOpen) setAgentInboxUnread(0);
-    }, [agentInboxOpen]);
     // PendingQuestions inbox: the top-bar question icon + its live pending count.
     // The panel owns the grouped list; the master just tracks the badge total and
     // refreshes it on `questions:changed` (event-driven, no polling).
@@ -1644,7 +1657,7 @@ function MasterInner() {
                         onShowDocs={() => setDocsOpen((o) => !o)}
                         onShowTaskManager={() => setTaskManagerOpen((o) => !o)}
                         onShowAgentInbox={() => setAgentInboxOpen((o) => !o)}
-                        agentInboxUnread={agentInboxUnread}
+                        agentInboxLag={agentInboxLag}
                         onShowQuestions={() => setQuestionsOpen((o) => !o)}
                         questionCount={questionCount}
                         onShowKnowledge={() => {
@@ -2410,7 +2423,7 @@ function TitleBar({
     onShowDocs,
     onShowTaskManager,
     onShowAgentInbox,
-    agentInboxUnread = 0,
+    agentInboxLag = 0,
     onShowQuestions,
     questionCount = 0,
     onShowKnowledge,
@@ -2426,7 +2439,8 @@ function TitleBar({
     onShowDocs?: () => void;
     onShowTaskManager?: () => void;
     onShowAgentInbox?: () => void;
-    agentInboxUnread?: number;
+    /** Messages the AGENTS haven't received/ACKed — see the master's lag effect. */
+    agentInboxLag?: number;
     onShowQuestions?: () => void;
     questionCount?: number;
     onShowKnowledge?: () => void;
@@ -2491,14 +2505,18 @@ function TitleBar({
             <button
                 type="button"
                 className="gicon agentinbox-btn"
-                title="AgentInbox — talk to & between your agents"
+                title={
+                    agentInboxLag > 0
+                        ? `AgentInbox — ${agentInboxLag} message${agentInboxLag === 1 ? '' : 's'} your agents haven't picked up`
+                        : 'AgentInbox — talk to & between your agents'
+                }
                 aria-label="AgentInbox"
                 onClick={() => onShowAgentInbox?.()}
             >
                 <IconMessage size={16} />
-                {agentInboxUnread > 0 && (
+                {agentInboxLag > 0 && (
                     <span className="iw-btn-badge">
-                        {agentInboxUnread > 99 ? '99+' : agentInboxUnread}
+                        {agentInboxLag > 99 ? '99+' : agentInboxLag}
                     </span>
                 )}
             </button>

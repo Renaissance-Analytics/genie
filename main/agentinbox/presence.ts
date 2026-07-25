@@ -60,6 +60,12 @@ export function installAgentInboxPresence(): void {
                     resolved: true,
                 });
                 break;
+            case 'lag':
+                // genie #64 — the AGENT-lag level moved. The header badge is a
+                // level, so this only fires on a transition.
+                broadcastLocal('agentinbox:lag', { count: ev.count });
+                mobileEmit('agentinbox:lag', { count: ev.count });
+                break;
             case 'cleared': {
                 // genie #64 — the human wiped a conversation. Tell every open
                 // window so it drops its cached view instead of rendering rows

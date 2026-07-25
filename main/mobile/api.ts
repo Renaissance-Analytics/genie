@@ -1517,6 +1517,12 @@ export async function handleApi(
             sendJson(res, 200, { threads: agentInboxBroker.dmThreads() });
             return true;
         }
+        // genie #64 — the header badge's AGENT-LAG seed. Read-only, so auth-only
+        // like the other GETs; the live level rides /ws/events `agentinbox:lag`.
+        if (pathname === '/api/desktop/agentinbox/lag' && method === 'GET') {
+            sendJson(res, 200, { count: agentInboxBroker.agentLagCount() });
+            return true;
+        }
         if (method !== 'POST') {
             sendJson(res, 405, { error: 'method not allowed' });
             return true;

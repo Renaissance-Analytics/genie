@@ -234,7 +234,11 @@ export type AgentInboxBrokerEvent =
     // A conversation's history was WIPED by the human (genie #64) — every open
     // window must drop its cached view of it rather than keep rendering rows the
     // host no longer has.
-    | { type: 'cleared'; scope: 'channel' | 'dm'; key: string };
+    | { type: 'cleared'; scope: 'channel' | 'dm'; key: string }
+    // AGENT-lag level changed (genie #64) — how many delivered messages agents
+    // have not received/ACKed. Drives the header badge; a LEVEL, so it only
+    // fires on a transition, never per message.
+    | { type: 'lag'; count: number };
 
 /** A short preview excerpt for the message push (cap the body). */
 export function previewText(text: string, max = 140): string {

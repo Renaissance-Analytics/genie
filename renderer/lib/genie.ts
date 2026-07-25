@@ -2251,6 +2251,11 @@ export interface GenieApi {
             toAgentId?: string;
             text: string;
         }) => Promise<{ ok: boolean; error?: string }>;
+        /** AGENT-LAG (genie #64) — how many messages this workstation's AGENTS
+         *  have not received/ACKed. The header badge's signal: it answers "are my
+         *  agents keeping up?", NOT "what haven't I read?" (that is client-side,
+         *  see renderer/lib/agentinbox-view.ts). Live via `on.agentInboxLag`. */
+        lag: () => Promise<{ count: number }>;
         /** Wipe a channel's history — the panel log AND the durable rows (genie
          *  #64). A HOST op: agent inboxes and ACK cursors are left untouched. */
         clearChannel: (channelKey: string) => Promise<{ ok: boolean; cleared: number }>;
@@ -2654,6 +2659,9 @@ export interface GenieApi {
         agentInboxMessage: (
             cb: (payload: AgentInboxMessageEvent) => void,
         ) => () => void;
+        /** AgentInbox AGENT-LAG level changed (genie #64) — the header badge's
+         *  count. A LEVEL, so it only fires on a transition. */
+        agentInboxLag: (cb: (payload: { count: number }) => void) => () => void;
         /** AgentInbox: the human wiped a conversation (genie #64) — the panel
          *  drops its cached history + activity for that channel or DM pair. */
         agentInboxCleared: (
