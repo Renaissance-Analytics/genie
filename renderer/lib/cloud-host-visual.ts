@@ -30,9 +30,29 @@ export function cloudHostVisual(
     return { color: 'red', pulse: false, title: 'Offline or unavailable' };
 }
 
-/** A local Tynn registration is represented by discovery, never as cloud. */
-export function cloudWorkstationsOnly<T extends Pick<ConnectableWorkstation, 'is_local'>>(
+/** Return only cloud rows that are not this Genie and are not already represented
+ * by the desktop host discovery list. Tynn can return the same workstation more
+ * than once through owner/grant paths, so id de-duplication happens here too. */
+export function unifiedCloudWorkstations<
+    T extends Pick<ConnectableWorkstation, 'id' | 'name' | 'is_local'>,
+>(
     workstations: readonly T[],
+    desktopHosts: ReadonlyArray<{ name?: string; hostname: string }>,
+    localWorkstationId?: string | null,
 ): T[] {
-    return workstations.filter((workstation) => !workstation.is_local);
+    const desktopNames = new Set(
+        desktopHosts
+            .flatMap((host) => [host.name, host.hostname])
+            .filter((name): name is string => !!name)
+            .map((name) => name.trim().toLocaleLowerCase()),
+    );
+    const seen = new Set<string>();
+    return workstations.filter((workstation) => {
+        if (workstation.is_local || workstation.id === localWorkstationId) {
+            return false;
+        }
+        if (seen.has(workstation.id)) return false;
+        seen.add(workstation.id);
+        return !desktopNames.has(workstation.name.trim().toLocaleLowerCase());
+    });
 }

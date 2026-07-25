@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cloudHostVisual, cloudWorkstationsOnly } from '../cloud-host-visual';
+import { cloudHostVisual, unifiedCloudWorkstations } from '../cloud-host-visual';
 
 describe('cloudHostVisual', () => {
     it('is green for a connected cloud host', () => {
@@ -19,11 +19,18 @@ describe('cloudHostVisual', () => {
     });
 });
 
-describe('cloudWorkstationsOnly', () => {
-    it('never presents local Genie registrations as cloud workstations', () => {
-        expect(cloudWorkstationsOnly([
-            { id: 'local', is_local: true },
-            { id: 'cloud', is_local: false },
-        ])).toEqual([{ id: 'cloud', is_local: false }]);
+describe('unifiedCloudWorkstations', () => {
+    it('filters local identities and dedupes cloud rows already represented by desktop discovery', () => {
+        expect(unifiedCloudWorkstations(
+            [
+                { id: 'local-by-flag', name: 'This Genie', is_local: true },
+                { id: 'local-by-id', name: 'Stale local row', is_local: false },
+                { id: 'cloud-duplicate', name: 'Build Host', is_local: false },
+                { id: 'cloud-duplicate', name: 'Build Host duplicate', is_local: false },
+                { id: 'cloud-only', name: 'Cloud Only', is_local: false },
+            ],
+            [{ name: 'build host', hostname: 'build-host.tailnet' }],
+            'local-by-id',
+        )).toEqual([{ id: 'cloud-only', name: 'Cloud Only', is_local: false }]);
     });
 });

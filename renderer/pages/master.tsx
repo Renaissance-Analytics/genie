@@ -45,7 +45,7 @@ import {
     connectableWorkstationIds,
     newlyConnectableWorkstationIds,
 } from '../lib/workstation-status';
-import { cloudHostVisual, cloudWorkstationsOnly } from '../lib/cloud-host-visual';
+import { cloudHostVisual, unifiedCloudWorkstations } from '../lib/cloud-host-visual';
 import {
     IconBox,
     IconColumns,
@@ -2876,10 +2876,11 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
     const load = async () => {
         setLoading(true);
         try {
-            const [known, discovered, ws] = await Promise.all([
+            const [known, discovered, ws, settings] = await Promise.all([
                 api().remote.known().catch(() => [] as KnownHost[]),
                 api().workmode.discoverHosts().catch(() => [] as GenieHost[]),
                 api().workstations.connectable().catch(() => [] as ConnectableWorkstation[]),
+                api().settings.get().catch(() => ({})),
             ]);
             const byKey = new Map<string, HostRow>();
             for (const k of known) {
@@ -2925,9 +2926,13 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
             }
             const nextRows = [...byKey.values()];
             setRows(nextRows);
-            // Desktop Genie registrations are already represented by discovery.
-            // Only actual Genie Cloud machines belong in this unified host list.
-            setWorkstations(cloudWorkstationsOnly(ws));
+            setWorkstations(
+                unifiedCloudWorkstations(
+                    ws,
+                    nextRows,
+                    (settings as { workstation_id?: string }).workstation_id,
+                ),
+            );
         } finally {
             setLoading(false);
         }
