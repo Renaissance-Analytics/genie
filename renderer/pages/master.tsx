@@ -316,7 +316,11 @@ function MasterInner() {
         const load = (): void => {
             api()
                 .questions?.list?.()
-                .then((r) => setQuestionCount(r.count))
+                // #60: badge the number of WORKSPACES with pending questions (owner's
+                // ask), not the total question count. `groups` comes from the same
+                // grouped source the flyout uses (listPendingQuestions → includes
+                // DND-deferred), so a heads-down question still bumps the badge.
+                .then((r) => setQuestionCount(r.groups.length))
                 .catch(() => {});
         };
         load();
