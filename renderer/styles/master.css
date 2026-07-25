@@ -2,6 +2,34 @@
    Ported from the genie-workspace.html mockup. Tokens (colors, spacing,
    radii, motion) come from globals.css; this file owns the layout. */
 
+/* --- Fancy portal overlay layer (genie #66) ----------------------------------
+   react-fancy renders Modal and Popover content through a Portal into
+   `document.body` at Tailwind's `z-50`. Genie's own overlay chrome sits far
+   higher (`.docs-flyout-root` alone is 60, scrims/menus reach 120), and both are
+   SIBLINGS in the body stacking context — so a Fancy dialog opened from any
+   Genie flyout painted UNDERNEATH that flyout. That is what the owner saw: the
+   AgentInbox delete confirmation rendering behind the DM/channel list, with the
+   roster Popover silently broken the same way.
+
+   This is Genie's layer ladder, not a per-component nudge: every Fancy portal
+   surface in the app is lifted once, above all chrome but BELOW toasts (a toast
+   is a notification and must stay visible over a modal).
+
+   Genie ladder for reference: flyout 60 · ctx-scrim 80 · prompt-scrim 100 ·
+   proc menus 119/120 · [fancy overlays 900] · toasts 1000 · boot screen 9999.
+
+   The selectors pick the POSITIONED element in each portal: the modal's is the
+   portal child that wraps the `[data-react-fancy-modal]` panel; the popover's
+   carries `[data-react-fancy-popover]` itself. The portal wrapper is
+   `display: contents`, so it forms no stacking context of its own. */
+:root {
+    --z-fancy-overlay: 900;
+}
+[data-react-fancy-portal] > div:has([data-react-fancy-modal]),
+[data-react-fancy-portal] > [data-react-fancy-popover] {
+    z-index: var(--z-fancy-overlay);
+}
+
 .gwrap {
     width: 100%;
     min-height: 100vh;
