@@ -110,10 +110,14 @@ describe('describeRestartInterruption — what a restart would tear down', () =>
         expect(describeRestartInterruption()).toEqual({ terminals: 0, agentChats: 0 });
     });
 
-    it('reports NO interruption in-process (no enumerable host terminals)', () => {
+    it('counts in-process terminals because the app quit will destroy them', () => {
         backendKind = 'inprocess';
-        liveTerminals = [{ id: 't1', pid: 1, shell: 'bash' }]; // not reachable via host client in prod
-        expect(describeRestartInterruption()).toEqual({ terminals: 0, agentChats: 0 });
+        liveTerminals = [
+            { id: 't1', pid: 1, shell: 'bash' },
+            { id: 't2', pid: 2, shell: 'pwsh' },
+        ];
+        specs = { t1: { meta: { agent: 'codex' } }, t2: { meta: {} } };
+        expect(describeRestartInterruption()).toEqual({ terminals: 2, agentChats: 1 });
     });
 
     it('counts live host terminals and flags the agent-backed ones when the host WILL restart', () => {

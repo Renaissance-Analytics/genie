@@ -40,6 +40,7 @@ const state: {
 
 vi.mock('@particle-academy/fancy-term-host', () => ({
     getHostClient: () => state.client,
+    terminalManager: () => ({ list: () => state.client?.list() ?? [] }),
 }));
 
 vi.mock('electron', () => ({
@@ -135,14 +136,14 @@ describe('shouldConfirmQuit', () => {
         ).toBe(true);
     });
 
-    it('skips when NOT host-backed (in-process — nothing survives a quit)', () => {
+    it('warns when in-process terminals will be destroyed by quit', () => {
         expect(
             shouldConfirmQuit({
                 hostBacked: false,
                 liveTerminals: oneTerm,
                 hasOpenWindow: true,
             }),
-        ).toBe(false);
+        ).toBe(true);
     });
 
     it('skips when there are no live terminals', () => {
@@ -266,6 +267,7 @@ describe('confirmQuitTerminals (orchestrator)', () => {
         // The dialog payload carries the live terminals on the confirm channel.
         expect(send).toHaveBeenCalledWith(CONFIRM_QUIT_CHANNEL, {
             terminals: live,
+            destructive: false,
         });
         expect(state.ipcListeners.size).toBe(1);
         // Resolve so the promise doesn't dangle.

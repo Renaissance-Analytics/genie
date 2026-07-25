@@ -481,17 +481,21 @@ function MasterInner() {
     // modal and reply with the keep/kill decision. Null = no dialog up. The
     // master window is the only one that registers this (the dialog is shown in
     // whichever window main picks; all windows subscribe so any can host it).
-    const [quitTerminals, setQuitTerminals] = useState<QuitTerminal[] | null>(
-        null,
-    );
+    const [quitPrompt, setQuitPrompt] = useState<{
+        terminals: QuitTerminal[];
+        destructive: boolean;
+    } | null>(null);
     useEffect(() => {
         return api().on.confirmQuitTerminals((p) => {
-            setQuitTerminals(p.terminals ?? []);
+            setQuitPrompt({
+                terminals: p.terminals ?? [],
+                destructive: !!p.destructive,
+            });
         });
     }, []);
     const decideQuit = useCallback(
         (decision: { confirmed: boolean; keepIds: string[] }) => {
-            setQuitTerminals(null);
+            setQuitPrompt(null);
             api().app.quitDecision(decision);
         },
         [],
@@ -1744,9 +1748,10 @@ function MasterInner() {
 
             <PromptHost />
 
-            {quitTerminals && (
+            {quitPrompt && (
                 <QuitTerminalsModal
-                    terminals={quitTerminals}
+                    terminals={quitPrompt.terminals}
+                    destructive={quitPrompt.destructive}
                     specs={specs}
                     workspacesById={workspacesById}
                     onDecision={decideQuit}

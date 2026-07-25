@@ -1392,12 +1392,14 @@ const api = {
         confirmQuitTerminals: (
             cb: (payload: {
                 terminals: Array<{ id: string; pid: number; shell: string }>;
+                destructive?: boolean;
             }) => void,
         ) => {
             const handler = (
                 _e: unknown,
                 payload: {
                     terminals: Array<{ id: string; pid: number; shell: string }>;
+                    destructive?: boolean;
                 },
             ) => cb(payload);
             ipcRenderer.on('app:confirm-quit-terminals', handler);

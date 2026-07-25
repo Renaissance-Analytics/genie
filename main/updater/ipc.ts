@@ -25,7 +25,10 @@ import { mobileEmit } from '../mobile/bus';
 export function describeRestartInterruption(): RestartInterruption {
     let restartsHost = false;
     try {
-        restartsHost = hostBackendKind() === 'detached' && detachedHostPinsBinary();
+        const kind = hostBackendKind();
+        restartsHost =
+            kind === 'inprocess' ||
+            (kind === 'detached' && detachedHostPinsBinary());
     } catch {
         restartsHost = false;
     }

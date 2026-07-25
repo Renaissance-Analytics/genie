@@ -1,5 +1,5 @@
 import { BrowserWindow, ipcMain } from 'electron';
-import { getHostClient, type TerminalInfo } from '@particle-academy/fancy-term-host';
+import { getHostClient, terminalManager, type TerminalInfo } from '@particle-academy/fancy-term-host';
 
 /**
  * Manual-quit terminal confirmation (the counterpart to the update-quit flow).
@@ -62,10 +62,9 @@ export interface QuitDecision {
  */
 export function liveHostTerminals(): LiveHostTerminal[] {
     const client = getHostClient();
-    if (!client) return [];
     let list: TerminalInfo[] = [];
     try {
-        list = client.list();
+        list = client ? client.list() : terminalManager().list();
     } catch {
         return [];
     }
@@ -89,9 +88,7 @@ export function shouldConfirmQuit(opts: {
     hasOpenWindow: boolean;
 }): boolean {
     return (
-        opts.hostBacked &&
-        opts.liveTerminals.length > 0 &&
-        opts.hasOpenWindow
+        opts.liveTerminals.length > 0 && opts.hasOpenWindow
     );
 }
 
@@ -164,6 +161,7 @@ export type QuitConfirmOutcome =
  */
 export function confirmQuitTerminals(opts: {
     liveTerminals: LiveHostTerminal[];
+    destructive?: boolean;
     /** The window to show the dialog in (from pickDialogWindow). */
     send: (channel: string, payload: unknown) => void;
     /** Bring the dialog window forward; best-effort, may throw if torn down. */
@@ -210,7 +208,10 @@ export function confirmQuitTerminals(opts: {
 
         ipcMain.on(QUIT_DECISION_CHANNEL, onDecision);
         try {
-            send(CONFIRM_QUIT_CHANNEL, { terminals: liveTerminals });
+            send(CONFIRM_QUIT_CHANNEL, {
+                terminals: liveTerminals,
+                destructive: !!opts.destructive,
+            });
             opts.focusWindow?.();
         } catch {
             // Window tore down between pick and send → leave all running + quit.

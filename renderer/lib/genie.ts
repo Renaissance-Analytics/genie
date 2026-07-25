@@ -2625,6 +2625,7 @@ export interface GenieApi {
         confirmQuitTerminals: (
             cb: (payload: {
                 terminals: Array<{ id: string; pid: number; shell: string }>;
+                destructive?: boolean;
             }) => void,
         ) => () => void;
         updaterStatus: (cb: (status: UpdaterStatus) => void) => () => void;

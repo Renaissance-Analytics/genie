@@ -32,6 +32,7 @@ interface QuitTerminalsModalProps {
     terminals: QuitTerminal[];
     specs: TerminalSpec[];
     workspacesById: Map<string, WorkspaceRow>;
+    destructive?: boolean;
     /** confirm=false → cancel (abort quit). confirm=true → keep `keepIds` running. */
     onDecision: (decision: { confirmed: boolean; keepIds: string[] }) => void;
 }
@@ -55,6 +56,7 @@ export default function QuitTerminalsModal({
     terminals,
     specs,
     workspacesById,
+    destructive = false,
     onDecision,
 }: QuitTerminalsModalProps) {
     // Default: all kept running (checked). Uncheck → shut down on quit.
@@ -126,11 +128,14 @@ export default function QuitTerminalsModal({
             >
                 <div className="prompt-title quit-terms-title">
                     <IconAlert size={15} />
-                    Genie is closing — background terminals
+                    {destructive
+                        ? 'Genie is closing — terminals will be interrupted'
+                        : 'Genie is closing — background terminals'}
                 </div>
                 <div className="prompt-body">
-                    These terminals will keep running in the background after Genie
-                    closes. Uncheck any you want to shut down.
+                    {destructive
+                        ? 'These in-process terminals and their agents will close. Turn on “Keep terminals running after quit” in Settings to preserve them through quits and updates.'
+                        : 'These terminals will keep running in the background after Genie closes. Uncheck any you want to shut down.'}
                 </div>
 
                 <div className="quit-terms-list" role="group">
@@ -144,6 +149,7 @@ export default function QuitTerminalsModal({
                                 <input
                                     type="checkbox"
                                     checked={kept}
+                                    disabled={destructive}
                                     onChange={() => toggle(r.id)}
                                 />
                                 <span className="quit-term-main">
@@ -154,7 +160,7 @@ export default function QuitTerminalsModal({
                                     </span>
                                 </span>
                                 <span className="quit-term-state">
-                                    {kept ? 'keep running' : 'shut down'}
+                                    {destructive ? 'will close' : kept ? 'keep running' : 'shut down'}
                                 </span>
                             </label>
                         );
@@ -165,20 +171,22 @@ export default function QuitTerminalsModal({
                     <button type="button" className="prompt-btn" onClick={cancel}>
                         Cancel
                     </button>
-                    <button
+                    {!destructive && <button
                         type="button"
                         className="prompt-btn prompt-btn-destructive"
                         onClick={shutAll}
                         title="Shut down every terminal, then quit"
                     >
                         Shut all down &amp; quit
-                    </button>
+                    </button>}
                     <button
                         type="button"
                         className="prompt-btn prompt-btn-primary"
                         onClick={confirmKeep}
                     >
-                        {keptCount === total
+                        {destructive
+                            ? 'Quit and close terminals'
+                            : keptCount === total
                             ? 'Quit, keep all running'
                             : keptCount === 0
                               ? 'Quit, shut all down'

@@ -1719,6 +1719,7 @@ app.whenReady().then(async () => {
         }
         void confirmQuitTerminals({
             liveTerminals,
+            destructive: !isHostBacked(),
             send: (channel, payload) => win.webContents.send(channel, payload),
             focusWindow: () => {
                 win.show();
