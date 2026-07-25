@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Action, Modal, Popover, Tabs, Text } from '@particle-academy/react-fancy';
 import {
     IconCheckCheck,
     IconClock,
@@ -8,10 +9,12 @@ import {
     IconReply,
     IconSearch,
     IconSwap,
+    IconTrash,
     IconX,
 } from './icons';
 import {
     api,
+    currentConnKey,
     hasGenieBridge,
     type AgentInboxAgentInfo,
     type AgentInboxChannelInfo,
@@ -19,17 +22,36 @@ import {
     type AgentInboxEscalationEvent,
     type AgentInboxMessage,
 } from '../../lib/genie';
+import {
+    forgetSeen,
+    headcountOf,
+    markSeen,
+    parseSeenState,
+    rowKeyOfPairKey,
+    seenStorageKey,
+    serializeSeenState,
+    sortByActivityDesc,
+    sortedPairKey,
+} from '../../lib/agentinbox-view';
 
 /**
  * AgentInbox human panel. Right-side slide-in (reuses the Docs / Task Manager
  * flyout chrome) laid out as a full-width header over a two-pane body: a LEFT
- * list pane (search + filter chips + waiting summary + the AGENT DIRECTORY,
- * WORKSPACE CHANNELS and DIRECT MESSAGES sections) and a RIGHT thread pane
- * (thread header, per-agent inbox status, the message stream, and a fixed
- * footer that is the composer on a writable thread and a read-only bar on an
- * observed agent↔agent thread). Loads on open and stays live via
- * `on.agentInboxPresence` / `on.agentInboxMessage` / `on.agentInboxEscalation`.
- * AgentInbox is local-only in v1, so it's guarded behind the Genie bridge.
+ * list pane (search + a `Channels | DMs` tab switcher + filter chips + waiting
+ * summary) and a RIGHT thread pane (thread header, per-agent inbox status, the
+ * message stream, and a fixed footer that is the composer on a writable thread
+ * and a read-only bar on an observed agent↔agent thread). Loads on open and
+ * stays live via `on.agentInboxPresence` / `on.agentInboxMessage` /
+ * `on.agentInboxEscalation` / `on.agentInboxCleared`.
+ *
+ * genie #64 shaped the left pane: nearly every terminal in Genie is an agent and
+ * the sidebar already lists them, so there is NO standing agent directory here —
+ * just a headcount pill in the header that reveals the list on click. Both lists
+ * are always sorted by LAST ACTIVITY, newest first.
+ *
+ * Read/unread here is the VIEWER's, persisted client-side (see
+ * `renderer/lib/agentinbox-view.ts`). It is never the host's agent ACK cursor —
+ * that drives the header's agent-lag badge, a different question entirely.
  */
 
 /** The human panel's sender identity token (mirrors the broker's `AGENTINBOX_HUMAN`). */
@@ -48,6 +70,18 @@ type Selection =
     | { kind: 'dmPair'; a: string; b: string; title: string };
 
 type Filter = 'all' | 'unread' | 'stale';
+
+/** Which list the left pane is showing (genie #64 — tabbed, not stacked). */
+type Tab = 'channels' | 'dms';
+
+/**
+ * A wipe awaiting confirmation. Wiping history is irreversible and reaches the
+ * durable host store, so it always goes through a confirm step rather than
+ * firing straight off a row hover.
+ */
+type PendingWipe =
+    | { kind: 'channel'; key: string; label: string }
+    | { kind: 'dm'; pairKey: string; label: string };
 
 /** Last traffic seen on a row — drives its preview, relative time and unread. */
 interface RowActivity {
@@ -83,6 +117,13 @@ function rowKeyOfSelection(s: Selection): string {
     if (s.kind === 'channel') return `c:${s.key}`;
     if (s.kind === 'dm') return `d:${s.agentId}`;
     return `p:${[s.a, s.b].sort().join('|')}`;
+}
+
+/** The broker DM pair key for a DM selection — what `deleteThread` takes. */
+function pairKeyOf(s: Selection): string {
+    if (s.kind === 'dm') return sortedPairKey(HUMAN, s.agentId);
+    if (s.kind === 'dmPair') return sortedPairKey(s.a, s.b);
+    return '';
 }
 
 function rowKeyOfThread(t: AgentInboxDmThreadInfo): string {
@@ -234,6 +275,10 @@ export default function AgentInboxFlyout({
     const [posting, setPosting] = useState(false);
     const [query, setQuery] = useState('');
     const [filter, setFilter] = useState<Filter>('all');
+    const [tab, setTab] = useState<Tab>('channels');
+    const [rosterOpen, setRosterOpen] = useState(false);
+    const [pendingWipe, setPendingWipe] = useState<PendingWipe | null>(null);
+    const [wiping, setWiping] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
     // Channels carry no timestamp in the directory payload, so their preview and
@@ -241,7 +286,33 @@ export default function AgentInboxFlyout({
     // (and back-filled from history the first time one is opened).
     const [chanActivity, setChanActivity] = useState<Map<string, RowActivity>>(new Map());
     // Highest seq the human has actually looked at, per row — drives "unread".
-    const [seenSeq, setSeenSeq] = useState<Map<string, number>>(new Map());
+    // CLIENT-SIDE and PERSISTED (genie #64): this is the viewer's own state, not
+    // the host's agent ACK cursor, so it lives in localStorage bucketed by
+    // `currentConnKey()` — the local window and each host window keep their own,
+    // and it survives a reload of this infrequently-visited panel.
+    const [seenSeq, setSeenSeq] = useState<Map<string, number>>(() => {
+        if (typeof window === 'undefined') return new Map();
+        try {
+            return parseSeenState(window.localStorage.getItem(seenStorageKey(currentConnKey())));
+        } catch {
+            // Storage can be unavailable (disabled/quota); read state is a nicety,
+            // never a blocker for showing the inbox.
+            return new Map();
+        }
+    });
+
+    // Persist the viewer's read state on every change.
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try {
+            window.localStorage.setItem(
+                seenStorageKey(currentConnKey()),
+                serializeSeenState(seenSeq),
+            );
+        } catch {
+            /* storage unavailable — the panel still works, it just re-reads next boot */
+        }
+    }, [seenSeq]);
     // Track C — unACKed urgent DMs, keyed by messageId. Populated by
     // `on.agentInboxEscalation`; each is a "waiting on <agent>" oversight alert.
     const [escalations, setEscalations] = useState<Map<string, AgentInboxEscalationEvent>>(new Map());
@@ -279,7 +350,9 @@ export default function AgentInboxFlyout({
             if (last) {
                 // Reading a thread marks it seen, and gives a channel row the
                 // preview / timestamp the directory payload doesn't carry.
-                setSeenSeq((prev) => new Map(prev).set(rowKeyOfSelection(s), last.seq));
+                // `markSeen` is monotonic, so paging back through old history
+                // can never un-read the row.
+                setSeenSeq((prev) => markSeen(prev, rowKeyOfSelection(s), last.seq));
                 if (s.kind === 'channel') {
                     setChanActivity((prev) =>
                         new Map(prev).set(s.key, {
@@ -346,10 +419,38 @@ export default function AgentInboxFlyout({
                 return next;
             });
         });
+        // genie #64 — a conversation was WIPED (here, in another window, or on the
+        // host). Drop every cached trace of it: the row's activity, the viewer's
+        // read mark (else a future thread reusing the key would open pre-read),
+        // and the open stream if it was the one wiped.
+        const offCleared = api().on.agentInboxCleared?.((ev) => {
+            const rowKey = ev.scope === 'channel' ? `c:${ev.key}` : null;
+            if (ev.scope === 'channel') {
+                setChanActivity((prev) => {
+                    if (!prev.has(ev.key)) return prev;
+                    const next = new Map(prev);
+                    next.delete(ev.key);
+                    return next;
+                });
+            }
+            setSeenSeq((prev) => forgetSeen(prev, rowKey ?? rowKeyOfPairKey(ev.key)));
+            void loadDirectory();
+            setSel((cur) => {
+                if (!cur) return cur;
+                const hit =
+                    ev.scope === 'channel'
+                        ? cur.kind === 'channel' && cur.key === ev.key
+                        : rowKeyOfSelection(cur) === rowKeyOfPairKey(ev.key);
+                if (!hit) return cur;
+                setMessages([]);
+                return null;
+            });
+        });
         return () => {
             offPresence?.();
             offMessage?.();
             offEscalation?.();
+            offCleared?.();
         };
     }, [open, loadDirectory, loadHistory]);
 
@@ -368,14 +469,17 @@ export default function AgentInboxFlyout({
     useEffect(() => {
         if (!open) return;
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                e.preventDefault();
-                onClose();
-            }
+            if (e.key !== 'Escape') return;
+            // A confirm modal or the roster popover OWNS Escape while it is up —
+            // Fancy dismisses it, and the flyout must not close out from under it
+            // (which would look like one keypress closing two layers).
+            if (pendingWipe || rosterOpen) return;
+            e.preventDefault();
+            onClose();
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [open, onClose]);
+    }, [open, onClose, pendingWipe, rosterOpen]);
 
     // Auto-scroll the stream to the newest message.
     useEffect(() => {
@@ -404,6 +508,29 @@ export default function AgentInboxFlyout({
         }
     };
 
+    /**
+     * Run a confirmed wipe. Both ops are HOST ops (the durable log lives in the
+     * host's genie.db), so the panel does NOT optimistically prune its own
+     * state — it waits for the host's `agentinbox:cleared` push, which drives the
+     * identical refresh in every open window (and over the bridge on a remote
+     * one). A failed call leaves the conversation exactly as it was.
+     */
+    const confirmWipe = async () => {
+        if (!pendingWipe || wiping) return;
+        setWiping(true);
+        try {
+            if (pendingWipe.kind === 'channel') {
+                await api().agentInbox.clearChannel(pendingWipe.key);
+            } else {
+                await api().agentInbox.deleteThread(pendingWipe.pairKey);
+            }
+            await loadDirectory();
+        } finally {
+            setWiping(false);
+            setPendingWipe(null);
+        }
+    };
+
     /** Live escalations blocking any of the given participants. */
     const waitingOn = useCallback(
         (...ids: string[]) => [...escalations.values()].filter((e) => ids.includes(e.targetAgentId)),
@@ -422,10 +549,6 @@ export default function AgentInboxFlyout({
     const q = query.trim().toLowerCase();
     const matches = (...fields: (string | undefined)[]) =>
         !q || fields.some((f) => (f ?? '').toLowerCase().includes(q));
-
-    const visibleAgents = agents.filter((a) =>
-        matches(a.label, a.agentType, a.purpose, a.workspaceName, a.slug),
-    );
 
     const channelRows = channels
         .filter((c) => matches(c.slug, c.purpose, c.workspaceName))
@@ -455,10 +578,10 @@ export default function AgentInboxFlyout({
         return true;
     };
 
-    const shownChannels = channelRows.filter(passesFilter);
-    const shownThreads = threadRows.filter(passesFilter);
-    // The directory has no traffic of its own, so it only lists under "All".
-    const shownAgents = filter === 'all' ? visibleAgents : [];
+    // genie #64 — ALWAYS sorted by last activity, newest first, both lists. A
+    // channel with no traffic yet carries no activity and sinks to the bottom.
+    const shownChannels = sortByActivityDesc(channelRows.filter(passesFilter), (r) => r.act);
+    const shownThreads = sortByActivityDesc(threadRows.filter(passesFilter), (r) => r.act);
 
     const allRows = [...channelRows, ...threadRows];
     const counts: Record<Filter, number> = {
@@ -479,7 +602,10 @@ export default function AgentInboxFlyout({
               ? [HUMAN, sel.agentId]
               : null;
 
-    const onlineCount = agents.filter((a) => a.status === 'online').length;
+    // genie #64 — the headcount PILL replaced the standing agent list: nearly
+    // every terminal in Genie is an agent and the sidebar already lists them, so
+    // the panel shows `active/total` and reveals the roster only on click.
+    const headcount = headcountOf(agents);
 
     /**
      * "Interrupt thread" — the human can't join an agent↔agent thread (there's
@@ -495,7 +621,7 @@ export default function AgentInboxFlyout({
     const markThreadRead = () => {
         if (!sel) return;
         const last = messages[messages.length - 1];
-        if (last) setSeenSeq((prev) => new Map(prev).set(rowKeyOfSelection(sel), last.seq));
+        if (last) setSeenSeq((prev) => markSeen(prev, rowKeyOfSelection(sel), last.seq));
         setMenuOpen(false);
     };
 
@@ -526,10 +652,78 @@ export default function AgentInboxFlyout({
                     </span>
                     <span className="docs-title">AgentInbox</span>
                     {hasGenieBridge() && (
-                        <span className="agentinbox-live" title="AgentInbox broker connected">
-                            <span className="agentinbox-live-dot" />
-                            live · {onlineCount} online
-                        </span>
+                        <Popover
+                            placement="bottom"
+                            offset={6}
+                            open={rosterOpen}
+                            onOpenChange={setRosterOpen}
+                        >
+                            <Popover.Trigger>
+                                <button
+                                    type="button"
+                                    className="agentinbox-live agentinbox-headcount"
+                                    aria-expanded={rosterOpen}
+                                    title={`${headcount.active} of ${headcount.total} agents active — click for the roster`}
+                                >
+                                    <span className="agentinbox-live-dot" />
+                                    {headcount.active}/{headcount.total} agents
+                                </button>
+                            </Popover.Trigger>
+                            <Popover.Content
+                                className="agentinbox-roster"
+                                role="menu"
+                                aria-label="Agent roster"
+                            >
+                                {agents.length === 0 ? (
+                                    <Text size="xs" className="text-zinc-500">
+                                        No agents registered yet.
+                                    </Text>
+                                ) : (
+                                    <ul className="agentinbox-roster-list">
+                                        {agents.map((a) => (
+                                            <li key={a.agentId}>
+                                                <button
+                                                    type="button"
+                                                    role="menuitem"
+                                                    className="agentinbox-roster-row"
+                                                    onClick={() => {
+                                                        setSel({
+                                                            kind: 'dm',
+                                                            agentId: a.agentId,
+                                                            title: a.label,
+                                                        });
+                                                        // The DM we just opened lives in the DMs
+                                                        // list — land the user where it is.
+                                                        setTab('dms');
+                                                        setRosterOpen(false);
+                                                    }}
+                                                    title={`DM ${a.label} · ${STATUS_LABEL[a.status]}`}
+                                                >
+                                                    <span className="agentinbox-row-av">
+                                                        <Avatar
+                                                            code={shortCode(a.agentId, byId)}
+                                                            tone={toneOf(a.agentId, byId)}
+                                                        />
+                                                        <span
+                                                            className={`agentinbox-dot agentinbox-${a.status}`}
+                                                        />
+                                                    </span>
+                                                    <span className="agentinbox-roster-main">
+                                                        <span className="agentinbox-row-name">
+                                                            {a.label}
+                                                        </span>
+                                                        <span className="agentinbox-row-preview">
+                                                            {a.workspaceName} · {a.agentType} ·{' '}
+                                                            {STATUS_LABEL[a.status]}
+                                                        </span>
+                                                    </span>
+                                                </button>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </Popover.Content>
+                        </Popover>
                     )}
                     <span className="grow" />
                     <button
@@ -587,6 +781,30 @@ export default function AgentInboxFlyout({
                                 />
                             </div>
 
+                            {/* genie #64 — Channels | DMs, tabbed rather than two
+                                stacked sections, so the pane shows ONE list at a time. */}
+                            <Tabs
+                                variant="pills"
+                                activeTab={tab}
+                                onTabChange={(t) => setTab(t as Tab)}
+                                className="agentinbox-tabs"
+                            >
+                                <Tabs.List className="agentinbox-tabs-list">
+                                    <Tabs.Tab value="channels">
+                                        Channels
+                                        <span className="agentinbox-chip-count">
+                                            {shownChannels.length}
+                                        </span>
+                                    </Tabs.Tab>
+                                    <Tabs.Tab value="dms">
+                                        DMs
+                                        <span className="agentinbox-chip-count">
+                                            {shownThreads.length}
+                                        </span>
+                                    </Tabs.Tab>
+                                </Tabs.List>
+                            </Tabs>
+
                             <div className="agentinbox-chips" role="group" aria-label="Filter threads">
                                 {(['all', 'unread', 'stale'] as Filter[]).map((f) => (
                                     <button
@@ -611,152 +829,82 @@ export default function AgentInboxFlyout({
                                 </div>
                             )}
 
+                            {/* Only the ACTIVE tab's list renders — the panes are
+                                alternatives, not two sections of one scroll. */}
                             <div className="agentinbox-scroll">
-                                {filter === 'all' && (
-                                    <>
-                                        <div className="agentinbox-sec">
-                                            <span className="agentinbox-sec-label">Agents</span>
-                                            <span className="agentinbox-sec-count">
-                                                {shownAgents.length}
-                                            </span>
-                                            <span className="agentinbox-sec-rule" />
-                                        </div>
-                                        {shownAgents.length === 0 ? (
-                                            <div className="agentinbox-empty">
-                                                No agents online yet.
-                                            </div>
-                                        ) : (
-                                            <ul className="agentinbox-list">
-                                                {shownAgents.map((a) => {
-                                                    const waiting = waitingOn(a.agentId);
-                                                    return (
-                                                        <li key={a.agentId}>
-                                                            <button
-                                                                type="button"
-                                                                className={`agentinbox-row${
-                                                                    sel?.kind === 'dm' &&
-                                                                    sel.agentId === a.agentId
-                                                                        ? ' on'
-                                                                        : ''
-                                                                }${waiting.length > 0 ? ' alert' : ''}`}
-                                                                onClick={() =>
-                                                                    setSel({
-                                                                        kind: 'dm',
-                                                                        agentId: a.agentId,
-                                                                        title: a.label,
-                                                                    })
-                                                                }
-                                                                title={`DM ${a.label} · ${STATUS_LABEL[a.status]}`}
-                                                            >
-                                                                <span className="agentinbox-row-av">
-                                                                    <Avatar
-                                                                        code={shortCode(a.agentId, byId)}
-                                                                        tone={toneOf(a.agentId, byId)}
-                                                                    />
-                                                                    <span
-                                                                        className={`agentinbox-dot agentinbox-${a.status}`}
-                                                                    />
+                                {tab === 'channels' ? (
+                                    shownChannels.length === 0 ? (
+                                        <div className="agentinbox-empty">No channels yet.</div>
+                                    ) : (
+                                        <ul className="agentinbox-list">
+                                            {shownChannels.map(({ c, act, unread }) => (
+                                                <li key={c.key} className="agentinbox-li">
+                                                    <button
+                                                        type="button"
+                                                        className={`agentinbox-row${
+                                                            sel?.kind === 'channel' &&
+                                                            sel.key === c.key
+                                                                ? ' on'
+                                                                : ''
+                                                        }${unread ? ' alert' : ''}`}
+                                                        onClick={() =>
+                                                            setSel({
+                                                                kind: 'channel',
+                                                                key: c.key,
+                                                                title: `${c.slug}:${c.purpose}`,
+                                                            })
+                                                        }
+                                                        title={`${c.slug}:${c.purpose} · ${c.workspaceName}`}
+                                                    >
+                                                        <span className="agentinbox-row-av">
+                                                            <span className="agentinbox-av agentinbox-tone-hash">
+                                                                #
+                                                            </span>
+                                                        </span>
+                                                        <span className="agentinbox-row-main">
+                                                            <span className="agentinbox-row-top">
+                                                                <span className="agentinbox-row-name">
+                                                                    #{c.purpose}
                                                                 </span>
-                                                                <span className="agentinbox-row-main">
-                                                                    <span className="agentinbox-row-top">
-                                                                        <span className="agentinbox-row-name">
-                                                                            {a.label}
-                                                                        </span>
-                                                                        <span className="agentinbox-ws">
-                                                                            {a.workspaceName}
-                                                                        </span>
-                                                                        <span className="agentinbox-row-time">
-                                                                            {STATUS_LABEL[a.status]}
-                                                                        </span>
-                                                                    </span>
-                                                                    <span className="agentinbox-row-bot">
-                                                                        <span className="agentinbox-row-preview">
-                                                                            {a.agentType} · {a.purpose}
-                                                                        </span>
-                                                                        <RowStatus
-                                                                            waiting={waiting}
-                                                                            byId={byId}
-                                                                        />
-                                                                    </span>
+                                                                <span className="agentinbox-ws">
+                                                                    {c.workspaceName}
                                                                 </span>
-                                                            </button>
-                                                        </li>
-                                                    );
-                                                })}
-                                            </ul>
-                                        )}
-                                    </>
-                                )}
-
-                                <div className="agentinbox-sec">
-                                    <span className="agentinbox-sec-label">Workspace channels</span>
-                                    <span className="agentinbox-sec-count">
-                                        {shownChannels.length}
-                                    </span>
-                                    <span className="agentinbox-sec-rule" />
-                                </div>
-                                {shownChannels.length === 0 ? (
-                                    <div className="agentinbox-empty">No channels yet.</div>
-                                ) : (
-                                    <ul className="agentinbox-list">
-                                        {shownChannels.map(({ c, act, unread }) => (
-                                            <li key={c.key}>
-                                                <button
-                                                    type="button"
-                                                    className={`agentinbox-row${
-                                                        sel?.kind === 'channel' && sel.key === c.key
-                                                            ? ' on'
-                                                            : ''
-                                                    }${unread ? ' alert' : ''}`}
-                                                    onClick={() =>
-                                                        setSel({
-                                                            kind: 'channel',
-                                                            key: c.key,
-                                                            title: `${c.slug}:${c.purpose}`,
-                                                        })
-                                                    }
-                                                    title={`${c.slug}:${c.purpose} · ${c.workspaceName}`}
-                                                >
-                                                    <span className="agentinbox-row-av">
-                                                        <span className="agentinbox-av agentinbox-tone-hash">
-                                                            #
-                                                        </span>
-                                                    </span>
-                                                    <span className="agentinbox-row-main">
-                                                        <span className="agentinbox-row-top">
-                                                            <span className="agentinbox-row-name">
-                                                                #{c.purpose}
+                                                                <span className="agentinbox-row-time">
+                                                                    {act ? relTime(act.ts) : ''}
+                                                                </span>
                                                             </span>
-                                                            <span className="agentinbox-ws">
-                                                                {c.workspaceName}
-                                                            </span>
-                                                            <span className="agentinbox-row-time">
-                                                                {act ? relTime(act.ts) : ''}
+                                                            <span className="agentinbox-row-bot">
+                                                                <span className="agentinbox-row-preview">
+                                                                    {act
+                                                                        ? `${act.fromLabel}: ${act.preview}`
+                                                                        : `${c.memberCount} member${c.memberCount === 1 ? '' : 's'}`}
+                                                                </span>
+                                                                <RowStatus waiting={[]} byId={byId} />
                                                             </span>
                                                         </span>
-                                                        <span className="agentinbox-row-bot">
-                                                            <span className="agentinbox-row-preview">
-                                                                {act
-                                                                    ? `${act.fromLabel}: ${act.preview}`
-                                                                    : `${c.memberCount} member${c.memberCount === 1 ? '' : 's'}`}
-                                                            </span>
-                                                            <RowStatus waiting={[]} byId={byId} />
-                                                        </span>
-                                                    </span>
-                                                </button>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                )}
-
-                                <div className="agentinbox-sec">
-                                    <span className="agentinbox-sec-label">Direct messages</span>
-                                    <span className="agentinbox-sec-count">
-                                        {shownThreads.length}
-                                    </span>
-                                    <span className="agentinbox-sec-rule" />
-                                </div>
-                                {shownThreads.length === 0 ? (
+                                                    </button>
+                                                    {/* Sibling, not a child: a button inside a
+                                                        button is invalid and unclickable. */}
+                                                    <button
+                                                        type="button"
+                                                        className="agentinbox-row-action"
+                                                        onClick={() =>
+                                                            setPendingWipe({
+                                                                kind: 'channel',
+                                                                key: c.key,
+                                                                label: `#${c.purpose} · ${c.workspaceName}`,
+                                                            })
+                                                        }
+                                                        title={`Clear #${c.purpose} history`}
+                                                        aria-label={`Clear #${c.purpose} history`}
+                                                    >
+                                                        <IconTrash size={12} />
+                                                    </button>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    )
+                                ) : shownThreads.length === 0 ? (
                                     <div className="agentinbox-empty">No direct messages yet.</div>
                                 ) : (
                                     <ul className="agentinbox-list">
@@ -771,7 +919,7 @@ export default function AgentInboxFlyout({
                                             const wsA = workspaceOf(t.a, byId);
                                             const wsB = workspaceOf(t.b, byId);
                                             return (
-                                                <li key={t.key}>
+                                                <li key={t.key} className="agentinbox-li">
                                                     <button
                                                         type="button"
                                                         className={`agentinbox-row${
@@ -815,6 +963,21 @@ export default function AgentInboxFlyout({
                                                                 />
                                                             </span>
                                                         </span>
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        className="agentinbox-row-action"
+                                                        onClick={() =>
+                                                            setPendingWipe({
+                                                                kind: 'dm',
+                                                                pairKey: t.key,
+                                                                label: `${t.aLabel} ↔ ${t.bLabel}`,
+                                                            })
+                                                        }
+                                                        title="Delete this DM thread"
+                                                        aria-label={`Delete the DM thread ${t.aLabel} ↔ ${t.bLabel}`}
+                                                    >
+                                                        <IconTrash size={12} />
                                                     </button>
                                                 </li>
                                             );
@@ -895,6 +1058,33 @@ export default function AgentInboxFlyout({
                                                         onClick={markThreadRead}
                                                     >
                                                         Mark as read
+                                                    </button>
+                                                    {/* genie #64 — wipe from the thread you're
+                                                        reading, not only from its list row. */}
+                                                    <button
+                                                        type="button"
+                                                        role="menuitem"
+                                                        className="agentinbox-menu-danger"
+                                                        onClick={() => {
+                                                            setMenuOpen(false);
+                                                            setPendingWipe(
+                                                                sel.kind === 'channel'
+                                                                    ? {
+                                                                          kind: 'channel',
+                                                                          key: sel.key,
+                                                                          label: sel.title,
+                                                                      }
+                                                                    : {
+                                                                          kind: 'dm',
+                                                                          pairKey: pairKeyOf(sel),
+                                                                          label: sel.title,
+                                                                      },
+                                                            );
+                                                        }}
+                                                    >
+                                                        {sel.kind === 'channel'
+                                                            ? 'Clear history'
+                                                            : 'Delete thread'}
                                                     </button>
                                                 </div>
                                             )}
@@ -1056,6 +1246,65 @@ export default function AgentInboxFlyout({
                     </div>
                 )}
             </aside>
+
+            {/* genie #64 — wiping history is irreversible and reaches the host's
+                durable store, so it always goes through this confirm. */}
+            {pendingWipe && (
+                <Modal open size="sm" onClose={() => !wiping && setPendingWipe(null)}>
+                    <Modal.Header>
+                        {pendingWipe.kind === 'channel'
+                            ? 'Clear channel history?'
+                            : 'Delete this DM thread?'}
+                    </Modal.Header>
+                    <Modal.Body>
+                        <Text size="sm" style={{ display: 'block' }}>
+                            {pendingWipe.kind === 'channel' ? (
+                                <>
+                                    Every message in <b>{pendingWipe.label}</b> is permanently
+                                    deleted. The channel and its members stay — only the history
+                                    goes.
+                                </>
+                            ) : (
+                                <>
+                                    The whole conversation <b>{pendingWipe.label}</b> is permanently
+                                    deleted.
+                                </>
+                            )}
+                        </Text>
+                        <Text
+                            size="xs"
+                            className="text-zinc-500"
+                            style={{ display: 'block', marginTop: 8, lineHeight: 1.5 }}
+                        >
+                            This cannot be undone. Messages an agent hasn&rsquo;t picked up yet stay
+                            in its inbox — clearing your view never drops an agent&rsquo;s mail.
+                        </Text>
+                        <div
+                            style={{
+                                display: 'flex',
+                                justifyContent: 'flex-end',
+                                gap: 8,
+                                marginTop: 14,
+                            }}
+                        >
+                            <Action
+                                variant="ghost"
+                                onClick={() => setPendingWipe(null)}
+                                disabled={wiping}
+                            >
+                                Cancel
+                            </Action>
+                            <Action color="red" onClick={() => void confirmWipe()} disabled={wiping}>
+                                {wiping
+                                    ? 'Deleting…'
+                                    : pendingWipe.kind === 'channel'
+                                      ? 'Clear history'
+                                      : 'Delete thread'}
+                            </Action>
+                        </div>
+                    </Modal.Body>
+                </Modal>
+            )}
         </div>
     );
 }
