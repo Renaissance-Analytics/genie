@@ -98,6 +98,8 @@ import {
     listPendingQuestions,
     answerPendingQuestion,
     desktopQuestionTransport,
+    setDeferredAnswerSink,
+    type DeferredAnswerDelivery,
 } from './ask/force-question';
 import { listAllProcesses } from './terminal/process-list';
 import { getTerminalSize, recordTerminalSize } from './terminal/size-tracker';
@@ -884,6 +886,26 @@ function readPtyHostPid(): number | null {
     }
 }
 
+/**
+ * Render a DND-deferred ForceTheQuestion answer as the AgentInbox message the
+ * asking agent pulls (genie #62). Restates each question with the option(s) the
+ * user picked + any note, and echoes the questionId so the agent can correlate it
+ * to the ForceTheQuestion call that deferred.
+ */
+function formatDeferredAnswer(d: DeferredAnswerDelivery): string {
+    const lines = d.answers.map((a, i) => {
+        const q = d.questions[i]?.question ?? d.questions[i]?.header ?? `Q${i + 1}`;
+        const picked = a.selected.length ? a.selected.join(', ') : '(no option selected)';
+        const note = a.note?.trim() ? ` — note: ${a.note.trim()}` : '';
+        return `• ${q}\n  → ${picked}${note}`;
+    });
+    return (
+        `Your ForceTheQuestion was answered (it had been deferred while you were in DND):\n\n` +
+        `${lines.join('\n')}\n\n` +
+        `(questionId: ${d.questionId})`
+    );
+}
+
 /** `genie host stop` — kill the running pty-host (terminates its terminals). */
 async function hostStop(): Promise<string> {
     const pid = readPtyHostPid();
@@ -1118,6 +1140,16 @@ app.whenReady().then(async () => {
             };
             const perAgent = pushToTerminal(target.terminalId, notification);
             if (perAgent === 0) pushToWorkspace(target.workspaceId, notification);
+        });
+        // PendingQuestions (genie #62): a DND-deferred ForceTheQuestion answer is
+        // delivered back to the asking agent THROUGH the inbox — append + wake +
+        // stream-nudge — so the agent PULLs it (ping/poll/pull) instead of the answer
+        // being dropped. force-question stays broker-free via this injected sink.
+        setDeferredAnswerSink((d: DeferredAnswerDelivery) => {
+            agentInboxBroker.deliverHumanMessageToTerminal(
+                d.terminalId,
+                formatDeferredAnswer(d),
+            );
         });
         rehydrateAgentInbox();
         agentInboxBroker.rehydrateMessages();

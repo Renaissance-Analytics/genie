@@ -93,7 +93,9 @@ export function buildHostServerDeps(
             }
             // Pass the workspace scope so a per-workspace/-workstation DND setting is
             // honored (PendingQuestions UX). Absent workspace ⇒ global availability.
-            return forceQuestion(questions, workspaceLabel, priority, { workspaceId });
+            // Pass the asking terminal so a DND-deferred answer is delivered back to
+            // THIS agent's AgentInbox (ping/poll/pull) instead of being dropped.
+            return forceQuestion(questions, workspaceLabel, priority, { workspaceId }, terminalId);
         },
         describeWorkspace: (terminalId) => describeWorkspaceForMcp(terminalId),
         manageProcess: (terminalId, req) => manageProcessForMcp(terminalId, req),

@@ -73,6 +73,30 @@ export function setAvailabilityReader(
 }
 
 /**
+ * A DND-deferred question's late answer, ready to hand back to the asking agent.
+ * The composition root wires a sink that delivers it through the AgentInbox broker
+ * (append → the agent PULLs it; notifyDelivery + wake = the PING) so a deferred
+ * ForceTheQuestion behaves exactly like the inbox: ping, poll, pull. Kept as an
+ * injected port so `force-question` never imports the broker (testable + no cycle).
+ */
+export interface DeferredAnswerDelivery {
+    /** The asking agent's terminal — the broker resolves it to the target agent. */
+    terminalId: string;
+    /** The deferred question id (matches the `questionId` the ask returned). */
+    questionId: string;
+    /** The questions as asked, so the delivered message can restate them. */
+    questions: ForceQuestion[];
+    /** The user's answer (selected options + note per question). */
+    answers: ForceAnswer[];
+}
+let deferredAnswerSink: ((d: DeferredAnswerDelivery) => void) | null = null;
+/** Install the deferred-answer delivery sink (composition root → AgentInbox broker).
+ *  Pass null to disable delivery (the default; internal gates don't route back). */
+export function setDeferredAnswerSink(fn: ((d: DeferredAnswerDelivery) => void) | null): void {
+    deferredAnswerSink = fn;
+}
+
+/**
  * DND "deferred" questions — the user is heads-down for this scope, so the modal
  * NEVER pops. The question sits HERE (surfaced in the top-bar inbox via
  * listPendingQuestions) for the user to answer at leisure; the agent already got
@@ -89,12 +113,18 @@ interface DeferredQuestion {
      * Present ONLY for a FORWARDED DND deferral (a remote host the driver set to
      * DND). Its promise is still LIVE: answering it from the inbox must resolve
      * WITH the answer so the remote bridge POSTs it back to the host, and a
-     * host-first resolution (`dismissForwardedQuestion`) must cancel it. A LOCAL
-     * DND deferral has neither — the agent already got the notice at ask time, so
-     * a late inbox answer just clears the row (delivery-back is a v1 follow-up).
+     * host-first resolution (`dismissForwardedQuestion`) must cancel it.
      */
     resolve?: (r: ForceQuestionResult) => void;
     forward?: { connKey: string; hostId: string };
+    /**
+     * A LOCAL deferral's delivery handle: the asking agent's terminal id. The
+     * agent's ForceTheQuestion call already returned the deferred notice, so the
+     * late flyout answer is delivered to THIS terminal's AgentInbox (ping/poll/pull)
+     * via {@link deferredAnswerSink} — no longer dropped. Absent for an internal
+     * gate (no MCP asker) or a forwarded question (which uses `resolve`).
+     */
+    askerTerminalId?: string;
 }
 const deferred: DeferredQuestion[] = [];
 
@@ -142,6 +172,10 @@ interface QueueItem {
      * local agent's promise.
      */
     forward?: { connKey: string; hostId: string; hostLabel?: string };
+    /** The asking agent's terminal — carried so that if the modal CAN'T be shown
+     *  (createAskWindow throws) the question defers with a delivery handle, exactly
+     *  like the DND path. Absent for an internal gate / forwarded question. */
+    askerTerminalId?: string;
 }
 
 /**
@@ -267,16 +301,29 @@ export function answerPendingQuestion(
         finish(id, { cancelled: false, answers: answers ?? [] });
         return true;
     }
-    // A DND-deferred question. A FORWARDED deferral carries a live resolve —
+    // A DND-deferred question. A FORWARDED deferral carries a live `resolve` —
     // answering it resolves the bridged promise WITH the answer, so the remote
-    // bridge POSTs it back to the host. A LOCAL deferral has none: the agent
-    // already got the DND notice at ask time, so this just clears the row
-    // (delivering the late answer back to a local agent is a v1 follow-up via
-    // AgentInbox — see the plan).
+    // bridge POSTs it back to the host. A LOCAL deferral (an MCP ForceTheQuestion
+    // whose caller already returned the deferred notice) instead carries the asking
+    // terminal: deliver the answer to THAT agent's AgentInbox (ping/poll/pull) so a
+    // deferred question is no longer a dead end. An internal gate has neither → the
+    // row just clears.
     const di = deferred.findIndex((d) => d.id === id);
     if (di !== -1) {
         const [d] = deferred.splice(di, 1);
         d.resolve?.({ cancelled: false, answers: answers ?? [] });
+        if (d.askerTerminalId && deferredAnswerSink) {
+            try {
+                deferredAnswerSink({
+                    terminalId: d.askerTerminalId,
+                    questionId: d.id,
+                    questions: d.questions,
+                    answers: answers ?? [],
+                });
+            } catch {
+                /* a delivery failure must never break answering the question */
+            }
+        }
         notifyQuestionsChanged();
         return true;
     }
@@ -503,13 +550,16 @@ function enqueue(item: QueueItem): void {
             questions: item.questions,
             workspaceLabel: item.workspaceLabel,
             priority: item.priority,
+            askerTerminalId: item.askerTerminalId,
         });
         notifyQuestionsChanged();
         item.resolve({
             cancelled: true,
             answers: [],
+            deferred: true,
+            questionId: item.id,
             dndMessage:
-                'the question could not be shown right now — it is waiting in the user’s inbox to answer',
+                'the question could not be shown right now — it is waiting in the user’s inbox; the answer will be delivered to your AgentInbox',
         });
         return;
     }
@@ -534,21 +584,30 @@ function raiseDesktopModal(
     workspaceLabel?: string,
     priority?: QuestionPriority,
     scope?: QuestionScope,
+    askerTerminalId?: string,
 ): Promise<ForceQuestionResult> {
     return new Promise((resolve) => {
         const id = crypto.randomBytes(9).toString('hex');
         const decision = availabilityReader(scope ?? {});
         if (decision.availability === 'dnd') {
-            // DND for this scope: NEVER pop the modal or chime. Drop the question
-            // into the top-bar inbox (deferred) to answer at leisure, and hand the
-            // agent the configured notice so it isn't left blocked on a modal that
-            // will never appear. `cancelled: true` marks "not answered inline".
-            deferred.push({ id, questions, workspaceLabel, priority });
+            // DND for this scope: NEVER pop the modal or chime. Park the question in
+            // the top-bar inbox (deferred) to answer at leisure. Record the asking
+            // terminal so the eventual flyout answer is delivered back to that agent's
+            // AgentInbox (ping/poll/pull) — a deferred ForceTheQuestion is NOT a dead
+            // end. Resolve NOW (never block) with the notice + questionId so the agent
+            // knows to pull the answer later. `cancelled: true` marks "not inline".
+            deferred.push({ id, questions, workspaceLabel, priority, askerTerminalId });
             notifyQuestionsChanged();
-            resolve({ cancelled: true, answers: [], dndMessage: decision.dndMessage });
+            resolve({
+                cancelled: true,
+                answers: [],
+                deferred: true,
+                questionId: id,
+                dndMessage: decision.dndMessage,
+            });
             return;
         }
-        enqueue({ id, resolve, questions, workspaceLabel, priority });
+        enqueue({ id, resolve, questions, workspaceLabel, priority, askerTerminalId });
     });
 }
 
@@ -582,12 +641,17 @@ export function forceQuestion(
     /** The question's scope (workspace/workstation ids) — drives the DND
      *  availability resolution on the desktop transport. Absent ⇒ global only. */
     scope?: QuestionScope,
+    /** The asking agent's terminal id (the MCP ForceTheQuestion tool passes it) —
+     *  routes a DND-deferred answer back to that agent's AgentInbox. Absent for an
+     *  internal approval gate, which has no agent to deliver a late answer to. */
+    askerTerminalId?: string,
 ): Promise<ForceQuestionResult> {
     return (questionTransport ?? desktopQuestionTransport).ask(
         questions,
         workspaceLabel,
         priority,
         scope,
+        askerTerminalId,
     );
 }
 

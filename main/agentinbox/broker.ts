@@ -261,6 +261,22 @@ export class AgentInboxBroker {
     }
 
     /**
+     * Deliver a message FROM the human straight to the agent on `terminalId` — the
+     * transport for a DND-deferred ForceTheQuestion answer (the asking agent already
+     * returned the deferred notice; this hands its answer back so it isn't lost).
+     * Reuses the DM path, so it behaves exactly like the inbox: appended to the store
+     * (the agent PULLs it), MCP-stream-notified, and it wakes the terminal if idle
+     * (`interrupt`) — ping, poll, pull. Returns false if the terminal has no
+     * registered agent identity (nothing to deliver to yet).
+     */
+    deliverHumanMessageToTerminal(terminalId: string, text: string): boolean {
+        const target = this.agentForTerminal(terminalId);
+        if (!target) return false;
+        const r = this.send({ human: true, toAgentId: target.agentId, text, interrupt: true });
+        return r.ok;
+    }
+
+    /**
      * Rehydrate the in-memory logs + inboxes from the store at boot — call AFTER
      * {@link rehydrate} (identities) and {@link setStore}. Resumes the global seq
      * (so cursors stay valid), rebuilds the human-panel channel/DM history, and

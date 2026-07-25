@@ -83,6 +83,17 @@ export interface ForceQuestionResult {
      * alongside it; the MCP tool returns this text instead of "user dismissed".
      */
     dndMessage?: string;
+    /**
+     * PendingQuestions UX — true when the question was DEFERRED (DND or a modal that
+     * couldn't show) rather than answered inline. The answer, when the user gives it
+     * in the top-bar flyout, is delivered LATER to the asking agent's AgentInbox
+     * (ping/poll/pull) — so a deferred ForceTheQuestion is not a dead end. `cancelled`
+     * is true alongside it; `questionId` correlates the pulled answer to this ask.
+     */
+    deferred?: boolean;
+    /** The deferred question's id — echoed in the AgentInbox delivery so the agent
+     *  can match a pulled answer back to the ForceTheQuestion call that asked it. */
+    questionId?: string;
 }
 
 /** One repo in a workspace map (a member submodule, or the lone simple repo). */
@@ -2207,20 +2218,19 @@ export async function handleMcpMessage(
                         : undefined;
                 const result = await ctx.onForceQuestion(ctx.terminalId, questions, priority);
                 if (result.cancelled) {
-                    return ok(msg.id, {
-                        content: [
-                            {
-                                type: 'text',
-                                // DND: the user is heads-down — return the configured
-                                // notice so the agent can decide to hold or proceed
-                                // (the question is waiting in their inbox). Otherwise
-                                // it was a plain dismissal.
-                                text:
-                                    result.dndMessage ??
-                                    'The user dismissed the question without answering.',
-                            },
-                        ],
-                    });
+                    // DEFERRED (DND / couldn't-show): the question is parked in the
+                    // user's top-bar flyout. It is NOT a dead end — when they answer,
+                    // the answer is delivered to THIS agent's AgentInbox (ping/poll/
+                    // pull). Tell the agent to receive it there rather than treat the
+                    // deferral as a refusal. A plain dismissal has neither flag.
+                    const text = result.deferred
+                        ? `${result.dndMessage ?? 'The user is in Do Not Disturb.'}\n\n` +
+                          `Your question is waiting in the user's PendingQuestions flyout. When they answer, ` +
+                          `the answer will be delivered to your AgentInbox — call agentinbox(action:"receive") ` +
+                          `to pull it (questionId: ${result.questionId ?? 'unknown'}).`
+                        : (result.dndMessage ??
+                          'The user dismissed the question without answering.');
+                    return ok(msg.id, { content: [{ type: 'text', text }] });
                 }
                 // Human-readable summary + a machine-parseable JSON block so the
                 // agent can act on either.

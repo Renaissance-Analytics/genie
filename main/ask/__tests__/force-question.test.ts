@@ -129,7 +129,9 @@ import {
     answerPendingQuestion,
     setAvailabilityReader,
     setQuestionTransport,
+    setDeferredAnswerSink,
 } from '../force-question';
+import type { ForceAnswer } from '../../mcp/protocol';
 
 /** Simulate the renderer for the currently-shown window: answer / cancel / dismiss. */
 function invokeIpc(channel: string, senderWcId: number, ...args: unknown[]) {
@@ -398,6 +400,7 @@ describe('QuestionTransport routing (host-core decouple)', () => {
             'demo',
             undefined, // priority defaults to normal (PendingQuestions v2)
             undefined, // scope (PendingQuestions UX) — none passed here
+            undefined, // askerTerminalId — none passed here (internal gate)
         );
         // The headless transport raised NO modal (the GUI path is fully bypassed).
         expect(state.windows).toHaveLength(0);
@@ -407,7 +410,7 @@ describe('QuestionTransport routing (host-core decouple)', () => {
         const ask = vi.fn().mockResolvedValue({ cancelled: true, answers: [] });
         setQuestionTransport({ ask });
         await forceQuestion(Q('Deploy?'), 'ws', 'urgent');
-        expect(ask).toHaveBeenCalledWith(expect.any(Array), 'ws', 'urgent', undefined);
+        expect(ask).toHaveBeenCalledWith(expect.any(Array), 'ws', 'urgent', undefined, undefined);
     });
 
     it('defaults to the desktop modal when no transport is installed', () => {
@@ -426,9 +429,56 @@ describe('ForceTheQuestion DND availability', () => {
     });
     afterEach(() => {
         setAvailabilityReader(null); // restore the settings-backed reader
+        setDeferredAnswerSink(null); // restore no deferred-answer delivery
         // Clear anything left in the inbox (deferred + queue) so tests don't leak.
         for (const p of listPendingQuestions()) answerPendingQuestion(p.id, []);
         vi.clearAllMocks();
+    });
+
+    it('DND: delivers the answer back to the asking agent on answer (ping/poll/pull), and marks the result deferred', async () => {
+        setAvailabilityReader(() => ({ availability: 'dnd', dndMessage: 'heads-down' }));
+        const delivered: Array<{ terminalId: string; questionId: string; answers: ForceAnswer[] }> =
+            [];
+        setDeferredAnswerSink((d) => delivered.push(d));
+
+        // An agent on terminal T1 asks under DND: it defers + resolves at once
+        // (never blocks), carrying the questionId so the agent can correlate the
+        // pulled answer.
+        const result = await forceQuestion(Q('Ship?'), 'Wonder', 'normal', { workspaceId: 'ws1' }, 'T1');
+        expect(result.cancelled).toBe(true);
+        expect(result.deferred).toBe(true);
+        expect(result.questionId).toBeTruthy();
+        // Nothing delivered yet — the user hasn't answered.
+        expect(delivered).toHaveLength(0);
+
+        // The user answers it in the flyout → the answer is delivered to the ASKING
+        // terminal (which pulls it from its AgentInbox). This is the bug: it used to
+        // be dropped because the local deferral stored no delivery handle.
+        const row = listPendingQuestions().find((p) => p.workspaceLabel === 'Wonder')!;
+        const answers: ForceAnswer[] = [
+            { header: 'Ship?', question: 'Ship?', selected: ['Yes'], note: 'go' },
+        ];
+        expect(answerPendingQuestion(row.id, answers)).toBe(true);
+
+        expect(delivered).toHaveLength(1);
+        expect(delivered[0].terminalId).toBe('T1');
+        expect(delivered[0].questionId).toBe(result.questionId);
+        expect(delivered[0].answers[0].selected).toEqual(['Yes']);
+        expect(delivered[0].answers[0].note).toBe('go');
+    });
+
+    it('DND with NO asking terminal (a local approval gate) never invokes the sink', async () => {
+        setAvailabilityReader(() => ({ availability: 'dnd', dndMessage: 'x' }));
+        let calls = 0;
+        setDeferredAnswerSink(() => {
+            calls += 1;
+        });
+        // No terminalId: an internal gate, not an MCP ForceTheQuestion — the DND
+        // result stays a plain cancelled, and there's no agent to deliver back to.
+        await forceQuestion(Q('Gate'), 'GateWs', 'normal', { workspaceId: 'ws1' });
+        const row = listPendingQuestions().find((p) => p.workspaceLabel === 'GateWs')!;
+        answerPendingQuestion(row.id, [{ header: 'Gate', question: 'Gate', selected: [], note: '' }]);
+        expect(calls).toBe(0);
     });
 
     it('DND: resolves immediately with the notice, NEVER opens a modal, and drops into the inbox as deferred', async () => {

@@ -36,6 +36,12 @@ export interface QuestionTransport {
          *  driving the DND availability decision on the desktop transport. Optional
          *  so existing transports keep compiling; absent ⇒ global availability only. */
         scope?: { workspaceId?: string; workstationId?: string },
+        /** PendingQuestions UX — the asking agent's terminal id. When the question is
+         *  DEFERRED (DND / can't-show), it's recorded on the deferred item so the
+         *  eventual flyout answer is delivered back to THIS agent's AgentInbox
+         *  (ping/poll/pull). Optional so existing transports/callers keep compiling;
+         *  absent ⇒ no deferred-answer delivery (an internal gate, not an MCP ask). */
+        askerTerminalId?: string,
     ): Promise<ForceQuestionResult>;
 }
 
