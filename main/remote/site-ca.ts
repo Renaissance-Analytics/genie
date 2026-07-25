@@ -46,17 +46,22 @@ interface ForgeCertificate {
     setIssuer(attrs: Array<{ name: string; value: string }>): void;
     setExtensions(exts: Array<Record<string, unknown>>): void;
     sign(key: unknown, md: unknown): void;
+    signatureOid?: string;
+    siginfo?: { algorithmOid?: string };
+    tbsCertificate?: unknown;
+    signature?: string;
 }
 interface ForgePki {
-    privateKeyFromPem(pem: string): unknown;
     publicKeyFromPem(pem: string): unknown;
     createCertificate(): ForgeCertificate;
+    getTBSCertificate(cert: ForgeCertificate): unknown;
     certificateToPem(cert: ForgeCertificate): string;
     privateKeyToPem(key: unknown): string;
 }
 interface Forge {
     pki: ForgePki;
     md: { sha256: { create(): unknown } };
+    asn1: { toDer(value: unknown): { getBytes(): string } };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -80,17 +85,32 @@ const BACKDATE_MS = 60 * 60 * 1000;
 
 const CA_SUBJECT = [{ name: 'commonName', value: 'Genie Testing Browser Session CA' }];
 
-function genKeyPair(): { priv: unknown; pub: unknown; privPem: string } {
+function genKeyPair(): { pub: unknown; privPem: string } {
     const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
         modulusLength: 2048,
         publicKeyEncoding: { type: 'spki', format: 'pem' },
         privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
     });
     return {
-        priv: forge.pki.privateKeyFromPem(privateKey),
         pub: forge.pki.publicKeyFromPem(publicKey),
         privPem: privateKey,
     };
+}
+
+const SHA256_WITH_RSA_OID = '1.2.840.113549.1.1.11';
+
+/** Assemble the certificate with forge, but sign the TBS bytes with Node/OpenSSL.
+ * Forge's pure-JS RSA signer intermittently emitted a malformed signature BIT
+ * STRING under full-suite CPU contention; native signing keeps the certificate
+ * construction synchronous while removing that nondeterministic crypto seam. */
+function signCertificate(cert: ForgeCertificate, privateKeyPem: string): void {
+    cert.signatureOid = SHA256_WITH_RSA_OID;
+    cert.siginfo = { algorithmOid: SHA256_WITH_RSA_OID };
+    cert.tbsCertificate = forge.pki.getTBSCertificate(cert);
+    const tbs = forge.asn1.toDer(cert.tbsCertificate).getBytes();
+    cert.signature = crypto
+        .sign('sha256', Buffer.from(tbs, 'binary'), privateKeyPem)
+        .toString('binary');
 }
 
 /** A short random hex serial (positive, ≤20 bytes) for each cert. */
@@ -109,7 +129,7 @@ export class SessionCa {
     readonly caPem: string;
     /** Node's parsed CA cert — the verification anchor (`checkIssued` + `verify`). */
     private readonly caX509: X509Certificate;
-    private readonly caPrivateKey: unknown;
+    private readonly caPrivateKeyPem: string;
     /** One leaf keypair shared across all issued leaves (only the cert differs). */
     private readonly leafPub: unknown;
     private readonly leafKeyPem: string;
@@ -118,7 +138,7 @@ export class SessionCa {
 
     constructor() {
         const ca = genKeyPair();
-        this.caPrivateKey = ca.priv;
+        this.caPrivateKeyPem = ca.privPem;
         const now = Date.now();
         const caCert = forge.pki.createCertificate();
         caCert.publicKey = ca.pub;
@@ -131,7 +151,7 @@ export class SessionCa {
             { name: 'basicConstraints', cA: true, critical: true },
             { name: 'keyUsage', keyCertSign: true, cRLSign: true, critical: true },
         ]);
-        caCert.sign(this.caPrivateKey, forge.md.sha256.create());
+        signCertificate(caCert, this.caPrivateKeyPem);
         this.caPem = forge.pki.certificateToPem(caCert);
         this.caX509 = new X509Certificate(this.caPem);
 
@@ -163,7 +183,7 @@ export class SessionCa {
             { name: 'extKeyUsage', serverAuth: true },
             { name: 'subjectAltName', altNames: [{ type: 2, value: key }] },
         ]);
-        cert.sign(this.caPrivateKey, forge.md.sha256.create());
+        signCertificate(cert, this.caPrivateKeyPem);
         const issued: LeafCert = {
             certPem: forge.pki.certificateToPem(cert),
             keyPem: this.leafKeyPem,
