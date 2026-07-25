@@ -12,6 +12,16 @@ import type {
     WorkspaceAgentAccess,
 } from '../../lib/genie';
 import { api } from '../../lib/genie';
+import { scopeValue, setScopeEntry } from '../../lib/ftq-availability';
+
+/** Per-workspace ForceTheQuestion availability — 'inherit' clears the override so
+ *  the workstation/global default applies; the two explicit values override it. */
+type ScopeAvailability = 'inherit' | 'available' | 'dnd';
+const AVAILABILITY_OPTIONS = [
+    { value: 'inherit', label: 'Inherit — use the global / connection default' },
+    { value: 'available', label: 'Available — pop the question prompt' },
+    { value: 'dnd', label: 'Do Not Disturb — send questions to the inbox' },
+];
 
 /** The all-on + upstream-issues+prs defaults — the optimistic value shown until
  *  the workspace's stored granularity loads (and the fallback on a read error). */
@@ -66,6 +76,8 @@ export default function WorkspaceSettingsModal({
     // Per-workspace IssueWatch granularity (what to watch + ping about). Null
     // until the resolved value loads; we render the defaults optimistically.
     const [granularity, setGranularity] = useState<IssuewatchGranularity | null>(null);
+    // Per-workspace ForceTheQuestion availability override ('inherit' = unset).
+    const [availability, setAvailability] = useState<ScopeAvailability>('inherit');
 
     const saveName = async () => {
         const next = name.trim();
@@ -111,11 +123,39 @@ export default function WorkspaceSettingsModal({
             } catch {
                 if (alive) setGranularity(DEFAULT_GRANULARITY);
             }
+            try {
+                const s = await api().settings.get();
+                if (alive) {
+                    setAvailability(
+                        scopeValue(s.ftq_availability_workspaces, workspace.id) ?? 'inherit',
+                    );
+                }
+            } catch {
+                if (alive) setAvailability('inherit');
+            }
         })();
         return () => {
             alive = false;
         };
     }, [workspace.id]);
+
+    // Persist this workspace's availability override. Re-reads the live map before
+    // merging so a single-workspace edit never clobbers other workspaces' entries.
+    const changeAvailability = async (v: ScopeAvailability) => {
+        const prev = availability;
+        setAvailability(v); // optimistic
+        try {
+            const s = await api().settings.get();
+            const nextRaw = setScopeEntry(
+                s.ftq_availability_workspaces,
+                workspace.id,
+                v === 'inherit' ? null : v,
+            );
+            await api().settings.set({ ftq_availability_workspaces: nextRaw });
+        } catch {
+            setAvailability(prev); // revert
+        }
+    };
 
     const toggleProcessApproval = async (require: boolean) => {
         setProcessApproval(require); // optimistic
@@ -233,6 +273,17 @@ export default function WorkspaceSettingsModal({
                 {workspace.path && <OpsWorkspacesPanel workspacePath={workspace.path} />}
 
                 <Section title="Agent behavior">
+                    <Row
+                        label="Agent questions — availability"
+                        sub="How ForceTheQuestion surfaces for this workspace — inherits the global / connection default unless set"
+                        vertical
+                    >
+                        <Select
+                            value={availability}
+                            onValueChange={(v) => void changeAvailability(v as ScopeAvailability)}
+                            list={AVAILABILITY_OPTIONS}
+                        />
+                    </Row>
                     <Row
                         label="Remediation — Security alerts"
                         sub="How agents act on Dependabot / code-scanning / secret-scanning pings"

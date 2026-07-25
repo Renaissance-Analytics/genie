@@ -448,6 +448,20 @@ export interface Settings {
     /** Absolute path to the custom ForceTheQuestion sound (used when
      *  sound_forcequestion === 'custom'). */
     sound_forcequestion_custom?: string;
+    /** ForceTheQuestion AVAILABILITY (client-side). 'available' (default) pops the
+     *  always-on-top modal now; 'dnd' suppresses the popup + chime and diverts the
+     *  question to the top-bar inbox to answer at leisure. This is the GLOBAL
+     *  default; per-workspace / per-workstation overrides live in the JSON maps
+     *  below (most-specific wins). See main/ask/availability.ts. */
+    ftq_availability?: 'available' | 'dnd';
+    /** Per-workspace availability overrides — JSON `{ [workspaceId]: 'available'|'dnd' }`. */
+    ftq_availability_workspaces?: string;
+    /** Per-workstation (remote host) availability overrides — JSON
+     *  `{ [workstationId]: 'available'|'dnd' }`. */
+    ftq_availability_workstations?: string;
+    /** The reply an agent gets when the user is in DND, so it can hold or proceed.
+     *  Empty = the built-in default sentence (see main/ask/availability.ts). */
+    ftq_dnd_message?: string;
     /** Fixed loopback port for the agent-integration MCP server. String-encoded;
      *  default '51717'. Changing it requires restarting the MCP server. */
     mcp_port?: string;
@@ -1688,8 +1702,14 @@ export interface GenieApi {
         disconnect: () => Promise<{ ok: boolean }>;
         status: () => Promise<RemoteStatus>;
         /** This window's binding — `local`, or `remote` to a specific host. Read
-         *  once on boot to route api() per-window (host window vs local window). */
-        myBinding: () => Promise<{ mode: 'local' | 'remote'; host: RemoteHost | null }>;
+         *  once on boot to route api() per-window (host window vs local window).
+         *  `connKey` is the bound host's stable workstation identity (null when
+         *  local) — keys per-workstation client settings (e.g. FTQ availability). */
+        myBinding: () => Promise<{
+            mode: 'local' | 'remote';
+            host: RemoteHost | null;
+            connKey: string | null;
+        }>;
         request: (path: string, init?: { method?: string; json?: unknown }) => Promise<unknown>;
         onStatus: (cb: (s: RemoteStatus) => void) => () => void;
         /** Bridge link health (version match + upgrade/limbo). Read on mount;

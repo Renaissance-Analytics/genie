@@ -442,6 +442,31 @@ export default function SettingsPage() {
                         }
                     />
                 </SettingRow>
+                <SetSubhead>Agent questions</SetSubhead>
+                <SettingRow
+                    label="Do Not Disturb"
+                    desc="When on, an agent's question no longer pops the always-on-top prompt or chimes — it waits in the top-bar question inbox for you to answer at your leisure. This is the global default; override it per workspace (Workspace settings) or per connection (Connections)."
+                    keywords="dnd do not disturb availability forcethequestion pending questions interrupt focus popup"
+                >
+                    <Switch
+                        checked={s.ftq_availability === 'dnd'}
+                        onCheckedChange={(on: boolean) =>
+                            patch({ ftq_availability: on ? 'dnd' : 'available' })
+                        }
+                    />
+                </SettingRow>
+                <SettingRow
+                    label="Reply to agents while in DND"
+                    desc="What an agent is told when it asks a question while you're in Do Not Disturb, so it can decide to hold or proceed. Blank uses the built-in default."
+                    keywords="dnd message reply agent response do not disturb hold"
+                    vertical
+                >
+                    <Input
+                        value={s.ftq_dnd_message ?? ''}
+                        onValueChange={(v: string) => patch({ ftq_dnd_message: v })}
+                        placeholder="the user has notifications set to DND, if this is a show-stopper then hold off until they answer"
+                    />
+                </SettingRow>
             </SetSection>
 
             {/* Startup + the quick-capture hotkey configure THIS machine's app
