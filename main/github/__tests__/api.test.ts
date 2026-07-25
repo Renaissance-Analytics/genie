@@ -17,6 +17,8 @@ const store = {
     accessExpiryMs: null as number | null,
     refreshExpiryMs: null as number | null,
     reauthFlagged: false,
+    reauthReason: null as unknown,
+    refreshTokenState: null as 'missing' | 'undecryptable' | null,
     saved: null as unknown,
 };
 const refreshUserTokenMock = vi.fn();
@@ -27,12 +29,19 @@ vi.mock('electron', () => ({
 vi.mock('../storage', () => ({
     getToken: () => store.token,
     getRefreshToken: () => store.refreshToken,
+    getRefreshTokenState: () => ({
+        token: store.refreshToken,
+        state: store.refreshToken
+            ? 'available'
+            : (store.refreshTokenState ?? 'missing'),
+    }),
     getAccessExpiryMs: () => store.accessExpiryMs,
     getRefreshExpiryMs: () => store.refreshExpiryMs,
     getClientId: () => 'Iv_test',
     getUsername: () => 'me',
-    markReauthNeeded: () => {
+    markReauthNeeded: (reason: unknown) => {
         store.reauthFlagged = true;
+        store.reauthReason = reason;
     },
     clearReauthNeeded: () => {
         store.reauthFlagged = false;
@@ -96,6 +105,8 @@ afterEach(() => {
     store.accessExpiryMs = null;
     store.refreshExpiryMs = null;
     store.reauthFlagged = false;
+    store.reauthReason = null;
+    store.refreshTokenState = null;
     store.saved = null;
 });
 
@@ -527,7 +538,28 @@ describe('token refresh (expiring user-to-server tokens)', () => {
 
         await expect(listInstallations()).rejects.toBeTruthy();
         expect(store.reauthFlagged).toBe(true);
+        expect(store.reauthReason).toMatchObject({ code: 'missing_refresh_token' });
         expect(refreshUserTokenMock).not.toHaveBeenCalled();
+    });
+
+    it('records an undecryptable refresh credential distinctly from a missing one', async () => {
+        store.accessExpiryMs = Date.now() - 1000;
+        store.refreshToken = null;
+        store.refreshTokenState = 'undecryptable';
+
+        await expect(listInstallations()).rejects.toBeInstanceOf(GitHubAuthError);
+
+        expect(store.reauthReason).toMatchObject({ code: 'refresh_token_undecryptable' });
+    });
+
+    it('records refresh-token expiry as a recoverable reason', async () => {
+        store.accessExpiryMs = Date.now() - 1000;
+        store.refreshToken = 'ghr_expired';
+        store.refreshExpiryMs = Date.now() - 1;
+
+        await expect(listInstallations()).rejects.toBeInstanceOf(GitHubAuthError);
+
+        expect(store.reauthReason).toMatchObject({ code: 'refresh_token_expired' });
     });
 
     it('flags reauth when the refresh token itself is rejected', async () => {
@@ -537,6 +569,9 @@ describe('token refresh (expiring user-to-server tokens)', () => {
 
         await expect(listInstallations()).rejects.toBeInstanceOf(GitHubAuthError);
         expect(store.reauthFlagged).toBe(true);
+        expect(store.reauthReason).toMatchObject({
+            code: 'refresh_token_rejected',
+        });
     });
 
     it('single-flights concurrent refreshes — ONE rotation shared by all callers', async () => {
@@ -591,6 +626,10 @@ describe('token refresh (expiring user-to-server tokens)', () => {
 
         await expect(listInstallations()).rejects.toBeInstanceOf(GitHubAuthError);
         expect(store.reauthFlagged).toBe(true);
+        expect(store.reauthReason).toMatchObject({
+            code: 'refresh_token_rejected',
+            detailCode: 'bad_refresh_token',
+        });
     });
 });
 

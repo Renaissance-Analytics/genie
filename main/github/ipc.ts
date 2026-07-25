@@ -12,10 +12,12 @@ import {
     getBuiltInClientId,
     getClientId,
     getClientIdOverride,
+    getReauthFailure,
     getToken,
     getUsername,
     isStorageAvailable,
     needsReauth,
+    reauthFailureMessage,
     saveTokenSet,
 } from './storage';
 import {
@@ -69,6 +71,11 @@ export function registerGithubIpc(): void {
         connected: boolean;
         username: string | null;
         needsReauth: boolean;
+        reauthFailure: {
+            code: string;
+            occurredAt: number;
+            message: string;
+        } | null;
         clientIdSet: boolean;
         builtInClientId: boolean;
         usingOverride: boolean;
@@ -78,12 +85,20 @@ export function registerGithubIpc(): void {
     }> => {
         const override = getClientIdOverride();
         const active = getClientId();
+        const failure = getReauthFailure();
         return {
             connected: !!getToken(),
             username: getUsername(),
             // True when a stored token died (refresh exhausted / revoked) and
             // the user must reconnect — distinct from "never connected".
             needsReauth: needsReauth(),
+            reauthFailure: failure
+                ? {
+                      code: failure.code,
+                      occurredAt: failure.occurredAt,
+                      message: reauthFailureMessage(failure) ?? 'Reconnect GitHub to restore access.',
+                  }
+                : null,
             clientIdSet: !!active,
             // True when the binary ships with a baked-in client ID
             // (config.GENIE_GITHUB_CLIENT_ID). Settings UI uses this

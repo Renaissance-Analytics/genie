@@ -26,6 +26,23 @@ const ACCESS_EXP_KEY = 'github_token_exp_ms';
 const REFRESH_EXP_KEY = 'github_refresh_exp_ms';
 const USER_KEY = 'github_user';
 const REAUTH_KEY = 'github_needs_reauth';
+const REAUTH_REASON_KEY = 'github_reauth_reason';
+const REAUTH_DETAIL_KEY = 'github_reauth_detail';
+const REAUTH_AT_KEY = 'github_reauth_at_ms';
+
+export type GitHubReauthReasonCode =
+    | 'missing_refresh_token'
+    | 'refresh_token_undecryptable'
+    | 'refresh_token_expired'
+    | 'refresh_token_rejected'
+    | 'access_token_rejected';
+
+export interface GitHubReauthFailure {
+    code: GitHubReauthReasonCode;
+    occurredAt: number;
+    /** Redacted provider error code only; never a token or raw response. */
+    detailCode?: string;
+}
 
 export function isStorageAvailable(): boolean {
     return secretEncryptionAvailable();
@@ -85,6 +102,9 @@ export function saveTokenSet(set: TokenSet, username: string): void {
             : '',
         [USER_KEY]: username,
         [REAUTH_KEY]: '',
+        [REAUTH_REASON_KEY]: '',
+        [REAUTH_DETAIL_KEY]: '',
+        [REAUTH_AT_KEY]: '',
     } as Record<string, string>);
 }
 
@@ -99,8 +119,23 @@ export function getToken(): string | null {
 }
 
 export function getRefreshToken(): string | null {
+    return getRefreshTokenState().token;
+}
+
+/** Distinguish an absent refresh credential from ciphertext the current OS
+ *  keyring cannot decrypt. Both return no token, but require different recovery
+ *  guidance and must remain distinguishable after an update/restart. */
+export function getRefreshTokenState(): {
+    token: string | null;
+    state: 'available' | 'missing' | 'undecryptable';
+} {
     const settings = getAllSettings() as unknown as Record<string, string>;
-    return decrypt(settings[REFRESH_KEY]);
+    const encrypted = settings[REFRESH_KEY];
+    if (!encrypted) return { token: null, state: 'missing' };
+    const token = decrypt(encrypted);
+    return token
+        ? { token, state: 'available' }
+        : { token: null, state: 'undecryptable' };
 }
 
 /** Absolute epoch-ms when the access token expires, or null if non-expiring. */
@@ -124,13 +159,57 @@ export function getUsername(): string | null {
 
 /** Flag the stored session as dead (refresh exhausted / token revoked) so the
  *  UI can prompt a one-time reconnect instead of failing silently. */
-export function markReauthNeeded(): void {
-    setSettings({ [REAUTH_KEY]: '1' } as Record<string, string>);
+export function markReauthNeeded(
+    failure: Omit<GitHubReauthFailure, 'occurredAt'> & { occurredAt?: number },
+): void {
+    const detailCode = failure.detailCode?.replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 80) ?? '';
+    setSettings({
+        [REAUTH_KEY]: '1',
+        [REAUTH_REASON_KEY]: failure.code,
+        [REAUTH_DETAIL_KEY]: detailCode,
+        [REAUTH_AT_KEY]: String(failure.occurredAt ?? Date.now()),
+    } as Record<string, string>);
 }
 
 export function needsReauth(): boolean {
     const settings = getAllSettings() as unknown as Record<string, string>;
     return settings[REAUTH_KEY] === '1';
+}
+
+export function getReauthFailure(): GitHubReauthFailure | null {
+    const settings = getAllSettings() as unknown as Record<string, string>;
+    if (settings[REAUTH_KEY] !== '1') return null;
+    const code = settings[REAUTH_REASON_KEY] as GitHubReauthReasonCode | undefined;
+    const valid: GitHubReauthReasonCode[] = [
+        'missing_refresh_token',
+        'refresh_token_undecryptable',
+        'refresh_token_expired',
+        'refresh_token_rejected',
+        'access_token_rejected',
+    ];
+    if (!code || !valid.includes(code)) return null;
+    const occurredAt = Number(settings[REAUTH_AT_KEY]);
+    return {
+        code,
+        occurredAt: Number.isFinite(occurredAt) ? occurredAt : 0,
+        ...(settings[REAUTH_DETAIL_KEY] ? { detailCode: settings[REAUTH_DETAIL_KEY] } : {}),
+    };
+}
+
+export function reauthFailureMessage(failure: GitHubReauthFailure | null): string | null {
+    if (!failure) return null;
+    switch (failure.code) {
+        case 'missing_refresh_token':
+            return 'The saved authorization has no refresh credential. Reconnect GitHub to create a new grant.';
+        case 'refresh_token_undecryptable':
+            return 'Genie cannot decrypt the saved refresh credential with the current OS keychain. Reconnect GitHub to replace it.';
+        case 'refresh_token_expired':
+            return 'The saved GitHub refresh credential expired. Reconnect GitHub to renew authorization.';
+        case 'refresh_token_rejected':
+            return 'GitHub rejected the saved refresh credential. Reconnect GitHub to authorize a new one.';
+        case 'access_token_rejected':
+            return 'GitHub rejected the refreshed access token. Reconnect GitHub; the saved grant may have been revoked.';
+    }
 }
 
 /** Clear the reauth flag. Call after a SUCCESSFUL authenticated request: a 2xx
@@ -139,7 +218,14 @@ export function needsReauth(): boolean {
  *  self-heal instead of pinning the "GitHub session expired" banner while reads
  *  actually work. No-op (no write) when the flag isn't set. */
 export function clearReauthNeeded(): void {
-    if (needsReauth()) setSettings({ [REAUTH_KEY]: '' } as Record<string, string>);
+    if (needsReauth()) {
+        setSettings({
+            [REAUTH_KEY]: '',
+            [REAUTH_REASON_KEY]: '',
+            [REAUTH_DETAIL_KEY]: '',
+            [REAUTH_AT_KEY]: '',
+        } as Record<string, string>);
+    }
 }
 
 export function clearToken(): void {
@@ -150,6 +236,9 @@ export function clearToken(): void {
         [REFRESH_EXP_KEY]: '',
         [USER_KEY]: '',
         [REAUTH_KEY]: '',
+        [REAUTH_REASON_KEY]: '',
+        [REAUTH_DETAIL_KEY]: '',
+        [REAUTH_AT_KEY]: '',
     } as Record<string, string>);
 }
 

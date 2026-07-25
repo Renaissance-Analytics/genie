@@ -2334,6 +2334,11 @@ export interface GenieApi {
             connected: boolean;
             username: string | null;
             needsReauth: boolean;
+            reauthFailure: {
+                code: string;
+                occurredAt: number;
+                message: string;
+            } | null;
             clientIdSet: boolean;
             builtInClientId: boolean;
             usingOverride: boolean;

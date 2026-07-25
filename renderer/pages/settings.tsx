@@ -1341,6 +1341,11 @@ function GitHubSection() {
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [storageOk, setStorageOk] = useState(true);
     const [needsReauth, setNeedsReauth] = useState(false);
+    const [reauthFailure, setReauthFailure] = useState<{
+        code: string;
+        occurredAt: number;
+        message: string;
+    } | null>(null);
     const [installations, setInstallations] = useState<
         Array<{ login: string; avatar_url: string; id: number | null; isOrg: boolean }>
     >([]);
@@ -1369,6 +1374,7 @@ function GitHubSection() {
         setActiveClientId(st.activeClientId);
         setStorageOk(st.storageOk);
         setNeedsReauth(st.needsReauth);
+        setReauthFailure(st.reauthFailure);
         // Where the App is installed — drives the zero-install prompt + the
         // "installed on X" summary. Authorizing alone grants no repo access.
         if (st.connected) {
@@ -1475,6 +1481,7 @@ function GitHubSection() {
     const reconnect = async () => {
         await api().github.disconnect();
         setNeedsReauth(false);
+        setReauthFailure(null);
         setInstallError(false);
         await start();
     };
@@ -1620,11 +1627,17 @@ function GitHubSection() {
                     }}
                 >
                     <Text size="xs">
-                        Your GitHub session has expired, so Genie can't reach
-                        GitHub right now — that's why the install list and
-                        IssueWatch may look empty. Reconnect to restore access
-                        (your installs on GitHub are untouched).
+                        {reauthFailure?.message ??
+                            `Your GitHub session is no longer authorized, so Genie can't reach
+                            GitHub right now. Reconnect to restore access; your installs on
+                            GitHub are untouched.`}
                     </Text>
+                    {reauthFailure && (
+                        <Text size="xs" style={{ opacity: 0.7 }}>
+                            Diagnostic: {reauthFailure.code} ·{' '}
+                            {new Date(reauthFailure.occurredAt).toLocaleString()}
+                        </Text>
+                    )}
                     <div>
                         <Action
                             color="blue"

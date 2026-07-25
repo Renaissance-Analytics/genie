@@ -4,6 +4,7 @@ import {
     getClientId,
     getRefreshExpiryMs,
     getRefreshToken,
+    getRefreshTokenState,
     getToken,
     getUsername,
     markReauthNeeded,
@@ -89,11 +90,21 @@ async function refreshOrFail(): Promise<string> {
  *  error (classifyFetchError → 'rate_limited') so a passing 429 during a poll
  *  burst never nukes a healthy session — the next poll self-heals. */
 async function doRefresh(): Promise<string> {
-    const refreshToken = getRefreshToken();
+    const refresh = getRefreshTokenState();
+    const refreshToken = refresh.token;
     const refreshExp = getRefreshExpiryMs();
     const refreshDead = refreshExp !== null && Date.now() >= refreshExp;
-    if (!refreshToken || refreshDead) {
-        markReauthNeeded();
+    if (!refreshToken) {
+        markReauthNeeded({
+            code:
+                refresh.state === 'undecryptable'
+                    ? 'refresh_token_undecryptable'
+                    : 'missing_refresh_token',
+        });
+        throw new GitHubAuthError();
+    }
+    if (refreshDead) {
+        markReauthNeeded({ code: 'refresh_token_expired' });
         throw new GitHubAuthError();
     }
     try {
@@ -119,7 +130,10 @@ async function doRefresh(): Promise<string> {
             );
         }
         // A real rejection (bad/expired/revoked refresh token) → reconnect.
-        markReauthNeeded();
+        markReauthNeeded({
+            code: 'refresh_token_rejected',
+            ...(e instanceof DeviceFlowError ? { detailCode: e.code } : {}),
+        });
         throw new GitHubAuthError();
     }
 }
@@ -167,7 +181,15 @@ async function gh<T = unknown>(
         // Unrecoverable here: either no refresh token (a revoked non-expiring
         // token) or a second 401 after refreshing. Flag a reconnect so the UI
         // stops showing a stale "Connected" and the user can re-authorize.
-        markReauthNeeded();
+        const refresh = getRefreshTokenState();
+        markReauthNeeded({
+            code:
+                retriedAfterAuth
+                    ? 'access_token_rejected'
+                    : refresh.state === 'undecryptable'
+                      ? 'refresh_token_undecryptable'
+                      : 'missing_refresh_token',
+        });
     }
     if (!res.ok) {
         // GitHub's top-level `message` is often generic ("Repository
