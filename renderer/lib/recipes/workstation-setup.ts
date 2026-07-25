@@ -259,6 +259,25 @@ export const workstationSetupRecipe: Recipe = {
             },
         },
         {
+            type: 'terminal',
+            id: 'claude-login',
+            title: 'Sign in to Claude Code (optional)',
+            command: 'claude',
+            optional: true,
+            enabledWhen: (ctx) => enabledAgentIds(ctx).includes('claude'),
+        },
+        {
+            // Verified against the installed CLI (`codex login --help`) and the
+            // current official Codex manual: device auth is the headless flow.
+            type: 'terminal',
+            id: 'codex-login',
+            title: 'Sign in to Codex (optional)',
+            command: 'sh',
+            args: ['-c', 'codex login --device-auth'],
+            optional: true,
+            enabledWhen: (ctx) => enabledAgentIds(ctx).includes('codex'),
+        },
+        {
             // gh's device flow, shown in a live host terminal. gh prints a one-time
             // code + the device URL and polls; the owner copies the code and opens the
             // URL THEMSELVES (authorizing the Civicognita + wishborn orgs — SSO).

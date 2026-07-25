@@ -190,6 +190,14 @@ export class RecipeEngine {
         return true;
     }
 
+    /** Explicitly satisfy and leave an optional terminal step. */
+    skipOptional(): boolean {
+        const step = this.currentStep;
+        if (step.type !== 'terminal' || !step.optional || this.isLastStep) return false;
+        this.markSuccess();
+        return this.next();
+    }
+
     /** Go to the previous step. Always allowed; never loses prior progress. */
     back(): boolean {
         if (this._index === 0) return false;

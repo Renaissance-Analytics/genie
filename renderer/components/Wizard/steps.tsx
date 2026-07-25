@@ -524,7 +524,23 @@ function TaskStep({ step, engine, ctx, active }: {
 /** Render the view for a step, plus its surfaced error (if any). */
 export function StepView(props: StepViewProps) {
     const { step, engine } = props;
+    const disabled =
+        step.type === 'terminal' &&
+        !!step.enabledWhen &&
+        !step.enabledWhen(props.ctx);
+    useEffect(() => {
+        if (props.active && disabled && engine.stateOf(step.id) !== 'success') {
+            engine.markSuccess(step.id);
+        }
+    }, [disabled, engine, props.active, step.id]);
     const error = engine.errorOf(step.id);
+    if (disabled) {
+        return (
+            <Text size="sm" className="text-zinc-500">
+                This agent is not enabled, so no login is needed.
+            </Text>
+        );
+    }
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {step.type === 'form' && <FormStep step={step} engine={engine} ctx={props.ctx} />}

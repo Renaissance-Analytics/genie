@@ -53,10 +53,27 @@ describe('workstationSetupRecipe — shape', () => {
             'enabled-agents',
             'agent-flags',
             'persist-agents',
+            'claude-login',
+            'codex-login',
             'gh-login',
             'gh-setup-git',
             'complete',
         ]);
+    });
+
+    it('offers skippable login terminals only for enabled first-party agents', () => {
+        const claude = stepById('claude-login') as TerminalStepSpec;
+        const codex = stepById('codex-login') as TerminalStepSpec;
+        expect(claude.optional).toBe(true);
+        expect(claude.enabledWhen?.(ctxFrom({ 'enabled-agents': ['claude'] }))).toBe(true);
+        expect(claude.enabledWhen?.(ctxFrom({ 'enabled-agents': ['codex'] }))).toBe(false);
+        expect([claude.command, ...(claude.args ?? [])].join(' ')).toContain('claude');
+        expect(codex.optional).toBe(true);
+        expect(codex.enabledWhen?.(ctxFrom({ 'enabled-agents': ['codex'] }))).toBe(true);
+        expect(codex.enabledWhen?.(ctxFrom({ 'enabled-agents': ['claude'] }))).toBe(false);
+        expect([codex.command, ...(codex.args ?? [])].join(' ')).toContain(
+            'codex login --device-auth',
+        );
     });
 
     it('collects per-agent flags in a DYNAMIC, non-blocking form', () => {

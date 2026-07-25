@@ -116,6 +116,10 @@ export interface TerminalStepSpec {
      * out-of-order `browser` step.
      */
     openUrl?: string | ((ctx: RecipeContext) => string);
+    /** Owner may continue without completing this terminal. */
+    optional?: boolean;
+    /** False means the step is not applicable and auto-satisfies without spawning. */
+    enabledWhen?: (ctx: RecipeContext) => boolean;
 }
 
 /**

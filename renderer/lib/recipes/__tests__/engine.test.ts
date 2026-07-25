@@ -39,6 +39,20 @@ describe('RecipeEngine — construction', () => {
 });
 
 describe('RecipeEngine — forward gating', () => {
+    it('skips an optional terminal but refuses to bypass a required step', () => {
+        const optional = makeRecipe({
+            steps: [
+                { type: 'terminal', id: 'login', title: 'Login', command: 'codex', optional: true },
+                { type: 'task', id: 'done', title: 'Done', run: async () => {} },
+            ],
+        });
+        const e = new RecipeEngine(optional);
+        expect(e.skipOptional()).toBe(true);
+        expect(e.index).toBe(1);
+        expect(e.stateOf('login')).toBe('success');
+        expect(e.skipOptional()).toBe(false);
+    });
+
     it('will not advance while the current step is unsatisfied', () => {
         const e = new RecipeEngine(makeRecipe());
         expect(e.canAdvance()).toBe(false);

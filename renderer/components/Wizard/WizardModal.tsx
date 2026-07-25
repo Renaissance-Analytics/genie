@@ -114,6 +114,13 @@ export default function WizardModal({
                         isLast={engine.isLastStep}
                         finishing={finishing}
                         onFinish={() => void finish()}
+                        optional={!!(
+                            engine.currentStep.type === 'terminal' &&
+                            engine.currentStep.optional
+                        )}
+                        onSkip={() => {
+                            engine.skipOptional();
+                        }}
                     />
                 </Carousel>
             </Modal.Body>
@@ -133,12 +140,16 @@ function WizardFooter({
     isLast,
     finishing,
     onFinish,
+    optional,
+    onSkip,
 }: {
     onCancel: () => void;
     canAdvance: boolean;
     isLast: boolean;
     finishing: boolean;
     onFinish: () => void;
+    optional: boolean;
+    onSkip: () => void;
 }) {
     const { activeIndex, next, prev } = useCarousel();
     const isFirst = activeIndex === 0;
@@ -152,6 +163,11 @@ function WizardFooter({
             {!isFirst && (
                 <Action variant="ghost" icon="arrow-left" onClick={prev} disabled={finishing}>
                     Back
+                </Action>
+            )}
+            {optional && !isLast && (
+                <Action variant="ghost" onClick={onSkip} disabled={finishing}>
+                    Skip
                 </Action>
             )}
             {isLast ? (
