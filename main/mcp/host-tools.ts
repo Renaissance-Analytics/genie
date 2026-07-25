@@ -40,7 +40,6 @@ import {
     agentSessionTranscriptExists,
 } from '../terminal/ipc';
 import {
-    buildSubmitBytes,
     PASTE_SUBMIT_DELAY_MS,
     resolveTerminalInput,
     stripAnsi,
@@ -1201,7 +1200,8 @@ export function createSpecializedAgentTerminal(input: {
             : path.join(ws.path, input.cwd);
     }
     const label = input.label?.trim() || `${input.agent} · ${normalizePurpose(input.purpose)}`;
-    const { id, command: launchCommand } = createAgentTerminal({
+    // Spawns the pty AND launches the agent CLI into it, host-side (genie #63).
+    const { id } = createAgentTerminal({
         workspaceId: ws.id,
         cwd,
         label,
@@ -1217,8 +1217,6 @@ export function createSpecializedAgentTerminal(input: {
             action: input.issuewatch_action,
         },
     });
-    // Launch the agent CLI in the fresh shell (the session-captured form).
-    writeToTerminal(id, buildSubmitBytes(launchCommand ?? command, true));
     return { ok: true, spec: getTerminalSpec(id) ?? undefined };
 }
 
@@ -1327,9 +1325,9 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
             scopeWorkspaces: spec.meta?.whisper_workspaces,
         },
     });
-    // renderAgentLaunch leaves a resume/continue command untouched (it already
-    // carries the session), so restarted.command === resume — submit it to launch.
-    writeToTerminal(restarted.id, buildSubmitBytes(restarted.command ?? resume, true));
+    // createAgentTerminal launches it host-side; renderAgentLaunch leaves a
+    // resume/continue command untouched (it already carries the session), so what
+    // was submitted is `restarted.command` === resume.
     return { ok: true, oldId: id, newId: restarted.id, agent, command: restarted.command ?? resume };
 }
 
@@ -1375,17 +1373,15 @@ export async function runAgentForMcp(
                 if (!approved) {
                     return { ok: false, error: 'Denied by user — no agent was launched.' };
                 }
-                const { id, command: launchCommand } = createAgentTerminal({
+                // Spawns the pty AND launches the agent CLI into it, host-side —
+                // the agent is running the moment this returns, whether or not
+                // anyone ever opens the panel (genie #63 Phase 0).
+                const { id } = createAgentTerminal({
                     workspaceId: ws.id,
                     cwd: cwdR.cwd,
                     label: `${agent} agent`,
                     agentMeta: { agent, command },
                 });
-                // Launch the agent CLI in the fresh shell. A single-line command
-                // submits on the trailing CR, same as a shell Enter. `launchCommand`
-                // is the session-captured form (e.g. `claude --session-id <uuid>`);
-                // fall back to the base command if none was rendered.
-                writeToTerminal(id, buildSubmitBytes(launchCommand ?? command, true));
                 return { ok: true, id, agent, command };
             }
             case 'send': {

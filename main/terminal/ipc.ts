@@ -245,6 +245,11 @@ function withTerminalGenieUrlForCodex(
  * GENIE_MCP_URL / GENIE_TERMINAL_ID env so a launched coding agent can
  * itself reach Genie. Returns the new terminal id + its initial scrollback. The
  * APPROVAL GATE is enforced by the caller (background.ts) BEFORE this runs.
+ *
+ * With `agentMeta` this ALSO LAUNCHES the agent's CLI into the fresh pty (genie
+ * #63 Phase 0) — the whole operation happens in the Host, with no renderer
+ * involved. Callers do NOT submit the returned `command`; it is returned only so
+ * they can report what was launched.
  */
 export function createAgentTerminal(opts: {
     /**
@@ -380,6 +385,24 @@ export function createAgentTerminal(opts: {
     // (existing:true, scrollback replayed) instead of spawning a duplicate.
     const result = terminalManager().create(createOpts);
     noteTerminalActivity(id);
+
+    // LAUNCH THE AGENT — here, in the Host, the moment the pty exists (genie #63
+    // Phase 0). Creating an agent terminal is ONE host-side operation: spawn the
+    // pty AND start the agent's CLI in it. It used to be two — this function
+    // rendered the launch command and handed it back for each caller to submit —
+    // so the only place that treated "a fresh pty for an agent spec must have its
+    // agent launched" as a RULE was maybeRelaunchAgent, invoked exclusively from
+    // the `terminal:create` renderer-attach IPC. That tied the CLI launch to a
+    // human opening the panel: any create path that didn't remember to write left
+    // a terminal whose agent only started once a renderer mounted it. Owning the
+    // launch here means no entry point (host route, MCP tool, future Client) can
+    // create an agent terminal that never starts.
+    //
+    // Only on a FRESH pty: a re-create that reattached to a LIVE pty (existing)
+    // already has its agent running, and submitting the command again would type
+    // it straight into the running TUI's prompt.
+    if (launchCommand && !result.existing) deliverAgentLaunch(id, launchCommand);
+
     // Tell every window the spec set changed so the new terminal appears live.
     broadcastTerminalSpecsChanged();
 
@@ -432,6 +455,41 @@ export function agentSessionTranscriptExists(spec: TerminalSpecRow | null, sid: 
     }
 }
 
+/**
+ * How long to let a FRESHLY SPAWNED shell settle (profile load) before submitting
+ * an agent's boot command into it. Typing into a shell that hasn't started reading
+ * its stdin yet can drop the keystrokes and leave the terminal sitting at a plain
+ * prompt with no agent.
+ */
+export const AGENT_LAUNCH_SETTLE_MS = 500;
+
+/**
+ * Submit an agent's boot command into its FRESH pty — the ONE host-side routine
+ * that starts an agent CLI in a terminal.
+ *
+ * Both paths that produce a fresh pty for an agent spec go through here: the
+ * create path ({@link createAgentTerminal}) and the reattach-after-restart path
+ * ({@link maybeRelaunchAgent}). They are the same situation — a just-spawned shell
+ * that needs the agent typed into it — and running them on two different
+ * disciplines is what let the create path be the less reliable of the two (it
+ * submitted instantly; only the renderer-attach path waited for the shell).
+ *
+ * Best-effort: a pty that died between spawn and submit is not an error here.
+ */
+function deliverAgentLaunch(id: string, command: string): void {
+    const bytes = buildSubmitBytes(command, true);
+    const timer = setTimeout(() => {
+        try {
+            writeToTerminal(id, bytes);
+        } catch {
+            /* pty gone — nothing to submit */
+        }
+    }, AGENT_LAUNCH_SETTLE_MS);
+    if (typeof (timer as { unref?: () => void }).unref === 'function') {
+        (timer as { unref: () => void }).unref();
+    }
+}
+
 function maybeRelaunchAgent(id: string, existing: boolean): void {
     const spec = getTerminalSpec(id);
     const decision = agentRelaunchDecision(spec, existing, (sid) =>
@@ -450,18 +508,7 @@ function maybeRelaunchAgent(id: string, existing: boolean): void {
         spec?.meta?.agent,
         decision.command,
     );
-    const bytes = buildSubmitBytes(command, true);
-    // Let the fresh shell settle (profile load) before submitting the boot command.
-    const timer = setTimeout(() => {
-        try {
-            writeToTerminal(id, bytes);
-        } catch {
-            /* pty gone — nothing to submit */
-        }
-    }, 500);
-    if (typeof (timer as { unref?: () => void }).unref === 'function') {
-        (timer as { unref: () => void }).unref();
-    }
+    deliverAgentLaunch(id, command);
 }
 
 /**
