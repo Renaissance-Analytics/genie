@@ -533,6 +533,20 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 method: 'POST',
                 json: { specId, patch },
             })) as { ok: boolean; error?: string },
+        // Wiping a conversation targets the HOST too — the durable log lives in the
+        // host's genie.db, so clearing the client's own empty broker would silently
+        // do nothing while the host kept the history. The `agentinbox:cleared` push
+        // rides /ws/events → PASSTHROUGH_EVENTS back to this window.
+        clearChannel: async (channelKey) =>
+            (await req('/api/desktop/agentinbox/clear', {
+                method: 'POST',
+                json: { channelKey },
+            })) as { ok: boolean; cleared: number },
+        deleteThread: async (pairKey) =>
+            (await req('/api/desktop/agentinbox/delete-thread', {
+                method: 'POST',
+                json: { pairKey },
+            })) as { ok: boolean; cleared: number },
     };
 
     // Host-sourced Tynn provisioning. The workspace-settings "Tynn agent" panel writes

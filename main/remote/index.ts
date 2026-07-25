@@ -1023,6 +1023,9 @@ export const PASSTHROUGH_EVENTS = new Set([
     'agentinbox:message',
     // Track C — unACKed-urgent "waiting on <agent>" oversight alerts.
     'agentinbox:escalation',
+    // genie #64 — the human WIPED a channel / DM on the host. Without this a
+    // host-bound window keeps rendering history the host no longer has.
+    'agentinbox:cleared',
     // PendingQuestions: the host pushes this on every change to its pending set.
     // Without it a host-bound window's top-bar QUESTIONS badge never updates (the
     // flyout masks it by fetching on open) — the count sat at 0 forever (genie #60).

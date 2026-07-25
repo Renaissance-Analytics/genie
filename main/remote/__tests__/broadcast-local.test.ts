@@ -85,4 +85,11 @@ describe('PASSTHROUGH_EVENTS — every host→client badge event passes through 
         // The PendingQuestions badge needs the same treatment — this was the bug.
         expect(PASSTHROUGH_EVENTS.has('questions:changed')).toBe(true);
     });
+
+    // genie #64 — the human can WIPE a channel / DM from the panel. That is a HOST
+    // op, so a host-bound window must be told the history is gone, or it keeps
+    // rendering rows the host no longer has until the next manual refresh.
+    it('includes agentinbox:cleared so a wiped conversation disappears on a host window', () => {
+        expect(PASSTHROUGH_EVENTS.has('agentinbox:cleared')).toBe(true);
+    });
 });

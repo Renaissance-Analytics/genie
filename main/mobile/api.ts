@@ -1530,6 +1530,7 @@ export async function handleApi(
             toAgentId?: string;
             text?: string;
             specId?: string;
+            pairKey?: string;
             patch?: {
                 purpose?: string;
                 scope?: AgentInboxScope;
@@ -1574,6 +1575,28 @@ export async function handleApi(
                 text: wb.text,
             });
             sendJson(res, 200, r.ok ? { ok: true } : { ok: false, error: r.error });
+            return true;
+        }
+        // genie #64 — WIPE a conversation. Destructive "drive the host" mutations
+        // (the durable log is the host's), so kill-switch gated exactly like post.
+        // Same broker ops the local IPC handlers call, so local and remote wipe
+        // identically — the one protocol, one implementation.
+        if (pathname === '/api/desktop/agentinbox/clear') {
+            if (guardLocked()) return true;
+            if (!wb.channelKey) {
+                sendJson(res, 200, { ok: false, cleared: 0, error: 'No channel given.' });
+                return true;
+            }
+            sendJson(res, 200, agentInboxBroker.clearChannel(wb.channelKey));
+            return true;
+        }
+        if (pathname === '/api/desktop/agentinbox/delete-thread') {
+            if (guardLocked()) return true;
+            if (!wb.pairKey) {
+                sendJson(res, 200, { ok: false, cleared: 0, error: 'No thread given.' });
+                return true;
+            }
+            sendJson(res, 200, agentInboxBroker.deleteThread(wb.pairKey));
             return true;
         }
         if (pathname === '/api/desktop/agentinbox/update-channel') {

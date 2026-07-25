@@ -1094,6 +1094,53 @@ export class AgentInboxBroker {
         return out.slice(-limit);
     }
 
+    // --- delete / clear (human panel, genie #64) ---------------------------
+
+    /**
+     * Wipe a CHANNEL's history — the in-memory panel log AND the durable rows,
+     * so a restart can't rehydrate what the human just deleted. The channel
+     * itself survives (membership is separate from history); it simply has no
+     * messages.
+     *
+     * Deliberately does NOT touch agent inboxes or ACK cursors: clearing the
+     * human's VIEW of a conversation must not silently drop mail an agent has
+     * not received yet, nor rewind an agent's ACK position (which would re-fire
+     * escalations and re-deliver on the next rehydrate).
+     */
+    clearChannel(channelKey: string): { ok: boolean; cleared: number } {
+        const key = String(channelKey ?? '').trim();
+        if (!key) return { ok: false, cleared: 0 };
+        const inMemory = this.channelLogs.get(key)?.length ?? 0;
+        this.channelLogs.delete(key);
+        const persisted = this.store.clearChannel(key);
+        const cleared = Math.max(inMemory, persisted);
+        if (cleared > 0) this.emit({ type: 'cleared', scope: 'channel', key });
+        return { ok: true, cleared };
+    }
+
+    /**
+     * Delete a whole DM THREAD by its pair key (`<idA>|<idB>`, sorted — the same
+     * key {@link dmThreads} reports). Covers human↔agent AND agent↔agent. The
+     * thread disappears from the DM list entirely rather than lingering empty.
+     * Same non-interference rule as {@link clearChannel}: inboxes and cursors
+     * are untouched.
+     */
+    deleteThread(pairKeyArg: string): { ok: boolean; cleared: number } {
+        const key = String(pairKeyArg ?? '').trim();
+        const sep = key.indexOf('|');
+        if (sep <= 0 || sep === key.length - 1) return { ok: false, cleared: 0 };
+        const a = key.slice(0, sep);
+        const b = key.slice(sep + 1);
+        // Normalise so a caller passing the pair unsorted still hits the log.
+        const normalized = pairKey(a, b);
+        const inMemory = this.dmLogs.get(normalized)?.length ?? 0;
+        this.dmLogs.delete(normalized);
+        const persisted = this.store.deleteDmThread(a, b);
+        const cleared = Math.max(inMemory, persisted);
+        if (cleared > 0) this.emit({ type: 'cleared', scope: 'dm', key: normalized });
+        return { ok: true, cleared };
+    }
+
     // --- test / diagnostic accessors --------------------------------------
 
     /** Reset all state — test-only. */

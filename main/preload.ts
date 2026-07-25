@@ -876,6 +876,12 @@ const api = {
         /** Post as the human — to a channel (`channelKey`) or an agent (`toAgentId`). */
         post: (input: { channelKey?: string; toAgentId?: string; text: string }) =>
             ipcRenderer.invoke('agentinbox:post', input),
+        /** Wipe a channel's history (the panel log + the durable rows). */
+        clearChannel: (channelKey: string) =>
+            ipcRenderer.invoke('agentinbox:clear-channel', channelKey),
+        /** Delete a whole DM thread by its pair key (`<idA>|<idB>`, sorted). */
+        deleteThread: (pairKey: string) =>
+            ipcRenderer.invoke('agentinbox:delete-thread', pairKey),
         /** Edit an agent's purpose/scope (re-keys its channel + re-emits presence). */
         updateChannel: (
             specId: string,
@@ -1317,6 +1323,13 @@ const api = {
             const handler = (_e: unknown, payload: Parameters<typeof cb>[0]) => cb(payload);
             ipcRenderer.on('agentinbox:message', handler);
             return () => ipcRenderer.off('agentinbox:message', handler);
+        },
+        /** AgentInbox: the human WIPED a conversation (genie #64) — the panel drops
+         *  its cached history/activity for that channel or DM pair. */
+        agentInboxCleared: (cb: (payload: { scope: 'channel' | 'dm'; key: string }) => void) => {
+            const handler = (_e: unknown, payload: Parameters<typeof cb>[0]) => cb(payload);
+            ipcRenderer.on('agentinbox:cleared', handler);
+            return () => ipcRenderer.off('agentinbox:cleared', handler);
         },
         /** AgentInbox escalation (Track C) — an urgent DM went unACKed past the
          *  window, or (`resolved`) was finally received. The panel shows/clears a

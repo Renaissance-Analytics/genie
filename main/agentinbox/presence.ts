@@ -60,6 +60,15 @@ export function installAgentInboxPresence(): void {
                     resolved: true,
                 });
                 break;
+            case 'cleared': {
+                // genie #64 — the human wiped a conversation. Tell every open
+                // window so it drops its cached view instead of rendering rows
+                // the host no longer has.
+                const payload = { scope: ev.scope, key: ev.key };
+                broadcastLocal('agentinbox:cleared', payload);
+                mobileEmit('agentinbox:cleared', payload);
+                break;
+            }
         }
     });
 }

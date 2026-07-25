@@ -230,7 +230,11 @@ export type AgentInboxBrokerEvent =
     | { type: 'message'; preview: AgentInboxMessagePreview }
     | { type: 'interrupt'; terminalId: string }
     | { type: 'escalation'; escalation: AgentInboxEscalation }
-    | { type: 'escalation-resolved'; messageId: string; targetAgentId: string };
+    | { type: 'escalation-resolved'; messageId: string; targetAgentId: string }
+    // A conversation's history was WIPED by the human (genie #64) — every open
+    // window must drop its cached view of it rather than keep rendering rows the
+    // host no longer has.
+    | { type: 'cleared'; scope: 'channel' | 'dm'; key: string };
 
 /** A short preview excerpt for the message push (cap the body). */
 export function previewText(text: string, max = 140): string {

@@ -2251,6 +2251,12 @@ export interface GenieApi {
             toAgentId?: string;
             text: string;
         }) => Promise<{ ok: boolean; error?: string }>;
+        /** Wipe a channel's history — the panel log AND the durable rows (genie
+         *  #64). A HOST op: agent inboxes and ACK cursors are left untouched. */
+        clearChannel: (channelKey: string) => Promise<{ ok: boolean; cleared: number }>;
+        /** Delete a whole DM thread by its pair key (`<idA>|<idB>`, sorted — the
+         *  key `dmThreads()` reports). Covers human↔agent and agent↔agent. */
+        deleteThread: (pairKey: string) => Promise<{ ok: boolean; cleared: number }>;
         /** Edit an agent's channel identity (purpose / scope) — re-emits presence. */
         updateChannel: (
             specId: string,
@@ -2647,6 +2653,11 @@ export interface GenieApi {
          *  badge and, if the relevant thread is open, re-fetches history. */
         agentInboxMessage: (
             cb: (payload: AgentInboxMessageEvent) => void,
+        ) => () => void;
+        /** AgentInbox: the human wiped a conversation (genie #64) — the panel
+         *  drops its cached history + activity for that channel or DM pair. */
+        agentInboxCleared: (
+            cb: (payload: { scope: 'channel' | 'dm'; key: string }) => void,
         ) => () => void;
         /** AgentInbox (Track C): an urgent DM went unACKed past the window — the
          *  panel shows a "waiting on <agent>" oversight alert (cleared when the

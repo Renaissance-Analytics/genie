@@ -1010,6 +1010,16 @@ export function registerIpcHandlers(): void {
             return r.ok ? { ok: true } : { ok: false, error: r.error };
         },
     );
+    // genie #64 — WIPE a conversation. A HOST op: the durable log lives in
+    // genie.db, so the broker clears its in-memory panel log AND the store rows
+    // and pushes `agentinbox:cleared` to every open window. Agent inboxes and ACK
+    // cursors are deliberately untouched (see the broker's doc comments).
+    ipcMain.handle('agentinbox:clear-channel', (_e, channelKey: string) =>
+        agentInboxBroker.clearChannel(channelKey),
+    );
+    ipcMain.handle('agentinbox:delete-thread', (_e, pairKey: string) =>
+        agentInboxBroker.deleteThread(pairKey),
+    );
     ipcMain.handle(
         'agentinbox:update-channel',
         (

@@ -35,6 +35,13 @@ export interface AgentInboxStore {
      *  seq). Lets a sender tell 'queued' from 'seen' and decide whether to escalate
      *  (issue #9). Derived from the existing cursors — no per-message state. */
     sentDmReceipts(fromId: string, limit: number): DmReceipt[];
+    /** Wipe a channel's persisted history (genie #64). Returns rows deleted.
+     *  Cursors are deliberately untouched — clearing the human's view of a
+     *  conversation must never rewind an agent's ACK position. */
+    clearChannel(channelKey: string): number;
+    /** Wipe a DM thread's persisted history — BOTH directions of the pair
+     *  (genie #64). Returns rows deleted. Cursors untouched, as above. */
+    deleteDmThread(a: string, b: string): number;
 }
 
 /** One sent-DM read-receipt: the message + whether its recipient has seen it. */
@@ -65,6 +72,12 @@ export const noopAgentInboxStore: AgentInboxStore = {
     },
     sentDmReceipts() {
         return [];
+    },
+    clearChannel() {
+        return 0;
+    },
+    deleteDmThread() {
+        return 0;
     },
 };
 
@@ -189,5 +202,20 @@ export const dbAgentInboxStore: AgentInboxStore = {
             ts: r.ts,
             seen: r.acked >= r.seq,
         }));
+    },
+    clearChannel(channelKey) {
+        return getDb()
+            .prepare("DELETE FROM whisper_messages WHERE kind = 'channel' AND channel_key = ?")
+            .run(channelKey).changes;
+    },
+    deleteDmThread(a, b) {
+        // Both directions of the pair — a thread is the conversation, not one leg.
+        return getDb()
+            .prepare(
+                `DELETE FROM whisper_messages
+                  WHERE kind = 'dm'
+                    AND ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))`,
+            )
+            .run(a, b, b, a).changes;
     },
 };

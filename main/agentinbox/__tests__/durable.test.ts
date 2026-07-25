@@ -57,6 +57,22 @@ function makeStore(): AgentInboxStore & { rows: AgentInboxMessage[]; cursors: Ma
                     seen: (cursors.get(m.to ?? '') ?? 0) >= m.seq,
                 }));
         },
+        clearChannel(channelKey) {
+            const before = rows.length;
+            for (let i = rows.length - 1; i >= 0; i--) {
+                if (rows[i].kind === 'channel' && rows[i].channel === channelKey) rows.splice(i, 1);
+            }
+            return before - rows.length;
+        },
+        deleteDmThread(a, b) {
+            const before = rows.length;
+            for (let i = rows.length - 1; i >= 0; i--) {
+                const m = rows[i];
+                if (m.kind !== 'dm') continue;
+                if ((m.from === a && m.to === b) || (m.from === b && m.to === a)) rows.splice(i, 1);
+            }
+            return before - rows.length;
+        },
     };
 }
 
