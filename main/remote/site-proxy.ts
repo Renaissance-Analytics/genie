@@ -300,6 +300,15 @@ export function forwardPath(siteId: string, rawUrl: string | undefined): string 
  */
 export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
     const liveSockets = new Set<Duplex>();
+    const secureContexts = new Map<string, tls.SecureContext>();
+    const secureContextFor = (host: string): tls.SecureContext => {
+        const cached = secureContexts.get(host);
+        if (cached) return cached;
+        const leaf = deps.ca.issueLeaf(host);
+        const context = tls.createSecureContext({ key: leaf.keyPem, cert: leaf.certPem });
+        secureContexts.set(host, context);
+        return context;
+    };
 
     // The internal MITM server: it TLS-terminates each accepted CONNECT tunnel
     // (via SNICallback → a session-CA leaf) and parses the decrypted HTTP/WS. It
@@ -318,8 +327,7 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
                     return;
                 }
                 try {
-                    const leaf = deps.ca.issueLeaf(host);
-                    cb(null, tls.createSecureContext({ key: leaf.keyPem, cert: leaf.certPem }));
+                    cb(null, secureContextFor(host));
                 } catch (e) {
                     cb(e as Error);
                 }
@@ -450,6 +458,16 @@ export async function createSiteShim(deps: SiteShimDeps): Promise<SiteShim> {
         // companion asset; the allowlist, not the suffix, is what makes this safe.
         if (!deps.resolveGen(genHost)) {
             rejectSocket(clientSocket, 403);
+            return;
+        }
+        // Prepare and parse the leaf before acknowledging CONNECT. The client
+        // begins TLS immediately after the 200, so doing certificate work later
+        // in SNICallback races the handshake under full-suite/CI CPU pressure.
+        // The callback now only retrieves this ready SecureContext.
+        try {
+            secureContextFor(genHost);
+        } catch {
+            rejectSocket(clientSocket, 502);
             return;
         }
         liveSockets.add(clientSocket);

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
 import tls from 'node:tls';
@@ -278,6 +278,25 @@ async function fetchThroughShim(
 }
 
 describe('shim end-to-end (no display)', () => {
+    it('prepares the requested leaf before acknowledging CONNECT', async () => {
+        const ca = new SessionCa();
+        const issueLeaf = vi.spyOn(ca, 'issueLeaf');
+        const genMap = new Map<string, GenTarget>([[GEN, {
+            workspaceId: 'workspace-1',
+            siteId: SITE_ID,
+            hostname: HOSTNAME,
+        }]]);
+        const shim = await makeShim(ca, genMap);
+        let socket: net.Socket | null = null;
+        try {
+            socket = await connectTunnel(shim.port, `${GEN}:443`);
+            expect(issueLeaf).toHaveBeenCalledWith(GEN);
+        } finally {
+            socket?.destroy();
+            await shim.close();
+        }
+    });
+
     it('MITM-terminates an enabled .gen and forwards with the Bearer + preserve-origin', async () => {
         const ca = new SessionCa();
         const genMap = new Map<string, GenTarget>([[GEN, {
