@@ -481,3 +481,92 @@ describe('ForceTheQuestion DND availability', () => {
         expect(row?.deferred).toBe(true);
     });
 });
+
+// --- PendingQuestions UX — per-remote-host (workstation) DND -----------------
+// A CLIENT-side, workstation-scoped setting: when the DRIVER has a connected host
+// set to DND, that host's FORWARDED questions never pop the driver's modal — they
+// wait in the inbox, still answerable (the answer routes back to the host).
+describe('forwarded question DND (per-remote-host availability)', () => {
+    beforeEach(() => {
+        for (const w of state.windows) if (!w.destroyed) w.close();
+        state.windows = [];
+        state.nextWcId = 1;
+        setQuestionTransport(null);
+        registerForceQuestionIpc({ isDev: false, preloadPath: '/p.js', getMasterWindow: () => null });
+    });
+    afterEach(() => {
+        setAvailabilityReader(null);
+        for (const p of listPendingQuestions()) answerPendingQuestion(p.id, []);
+        vi.clearAllMocks();
+    });
+
+    it("resolves availability with the HOST's workstationId (its connKey)", async () => {
+        const seen: Array<{ workstationId?: string; workspaceId?: string }> = [];
+        setAvailabilityReader((scope) => {
+            seen.push(scope);
+            return { availability: 'available', dndMessage: 'x' };
+        });
+        const p = raiseForwardedQuestion({
+            connKey: 'host:abc',
+            hostId: 'Q1',
+            questions: Q('Go'),
+            workstationId: 'host:abc',
+        });
+        expect(seen[0]?.workstationId).toBe('host:abc');
+        win().close();
+        await p;
+    });
+
+    it('host in DND: no modal — lands in the inbox as a deferred REMOTE question, and the answer routes back', async () => {
+        setAvailabilityReader(() => ({ availability: 'dnd', dndMessage: 'x' }));
+        const before = state.windows.length;
+        const p = raiseForwardedQuestion({
+            connKey: 'host:abc',
+            hostId: 'Q2',
+            questions: Q('Deploy'),
+            remoteHost: 'abc.geniecloud.link',
+            workstationId: 'host:abc',
+        });
+        expect(state.windows.length).toBe(before); // never popped a modal on the driver
+        const row = listPendingQuestions().find((r) => r.questions[0].header === 'Deploy');
+        expect(row?.deferred).toBe(true);
+        expect(row?.remoteHost).toBe('abc.geniecloud.link'); // attributed to the host, not local
+
+        // Answering from the inbox resolves the bridged promise WITH the answer, so
+        // the remote bridge POSTs it back to the host (result NOT cancelled).
+        answerPendingQuestion(row!.id, [
+            { header: 'Deploy', question: 'Deploy?', selected: ['Yes'], note: '' },
+        ]);
+        const r = await p;
+        expect(r.cancelled).toBe(false);
+        expect(r.answers[0].selected).toEqual(['Yes']);
+    });
+
+    it('host in DND, then the host answers first: dismiss resolves cancelled + clears the inbox', async () => {
+        setAvailabilityReader(() => ({ availability: 'dnd', dndMessage: 'x' }));
+        const p = raiseForwardedQuestion({
+            connKey: 'host:abc',
+            hostId: 'Q3',
+            questions: Q('X'),
+            workstationId: 'host:abc',
+        });
+        expect(listPendingQuestions().some((r) => r.questions[0].header === 'X')).toBe(true);
+        dismissForwardedQuestion('host:abc', 'Q3');
+        const r = await p;
+        expect(r.cancelled).toBe(true); // host already answered — nothing POSTed back
+        expect(listPendingQuestions().some((r) => r.questions[0].header === 'X')).toBe(false);
+    });
+
+    it('Available host still pops the modal (DND is opt-in per workstation)', () => {
+        setAvailabilityReader(() => ({ availability: 'available', dndMessage: 'x' }));
+        const before = state.windows.length;
+        void raiseForwardedQuestion({
+            connKey: 'host:abc',
+            hostId: 'Q4',
+            questions: Q('Y'),
+            workstationId: 'host:abc',
+        });
+        expect(state.windows.length).toBe(before + 1);
+        win().close();
+    });
+});

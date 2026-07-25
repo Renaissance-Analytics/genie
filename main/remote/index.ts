@@ -404,9 +404,18 @@ export function remoteStatusFor(wcId: number): { connected: boolean; host: Remot
 }
 
 /** Per-window binding for the renderer's boot-time routing decision. */
-export function remoteBindingFor(wcId: number): { mode: 'local' | 'remote'; host: RemoteHost | null } {
+export function remoteBindingFor(
+    wcId: number,
+): { mode: 'local' | 'remote'; host: RemoteHost | null; connKey: string | null } {
     const conn = connForWebContents(wcId);
-    return { mode: conn ? 'remote' : 'local', host: conn?.host ?? null };
+    // connKey is the stable per-host workstation identity (`host:<hostId>` /
+    // `ws:<workstationId>`) — the SAME key `ftq_availability_workstations` and the
+    // forwarded-question scope use, so client-side per-workstation settings line up.
+    return {
+        mode: conn ? 'remote' : 'local',
+        host: conn?.host ?? null,
+        connKey: conn?.connKey ?? null,
+    };
 }
 
 /** Send a connection's events ONLY to the windows bound to it — so a host's
@@ -603,6 +612,10 @@ async function syncForwardedQuestions(conn: RemoteConnection): Promise<void> {
             // driver's queue) + attribute it to the host (§8: never shown as local).
             priority: q.priority,
             remoteHost: conn.host.hostname,
+            // PendingQuestions UX — the host's workstation identity, so the DRIVER's
+            // per-workstation DND for THIS host diverts its questions to the inbox
+            // instead of popping a modal (a client-side, workstation-scoped setting).
+            workstationId: conn.connKey,
         }).then(async (result) => {
             shown.delete(q.id);
             // Only an actual answer goes back to the host. A cancel (the driver

@@ -266,6 +266,7 @@ const api = {
             ipcRenderer.invoke('remote:my-binding') as Promise<{
                 mode: 'local' | 'remote';
                 host: { ip: string; port: number; hostname: string } | null;
+                connKey: string | null;
             }>,
         request: (path: string, init?: { method?: string; json?: unknown }) =>
             ipcRenderer.invoke('remote:request', path, init),

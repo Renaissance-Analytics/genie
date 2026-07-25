@@ -85,6 +85,16 @@ interface DeferredQuestion {
     workspaceLabel?: string;
     priority?: QuestionPriority;
     remoteHost?: string;
+    /**
+     * Present ONLY for a FORWARDED DND deferral (a remote host the driver set to
+     * DND). Its promise is still LIVE: answering it from the inbox must resolve
+     * WITH the answer so the remote bridge POSTs it back to the host, and a
+     * host-first resolution (`dismissForwardedQuestion`) must cancel it. A LOCAL
+     * DND deferral has neither — the agent already got the notice at ask time, so
+     * a late inbox answer just clears the row (delivery-back is a v1 follow-up).
+     */
+    resolve?: (r: ForceQuestionResult) => void;
+    forward?: { connKey: string; hostId: string };
 }
 const deferred: DeferredQuestion[] = [];
 
@@ -257,12 +267,16 @@ export function answerPendingQuestion(
         finish(id, { cancelled: false, answers: answers ?? [] });
         return true;
     }
-    // A DND-deferred question: the agent already got the DND notice, so answering
-    // (or dismissing) it from the inbox just clears it. Delivering the late answer
-    // back to the agent is a follow-up via AgentInbox (see the plan).
+    // A DND-deferred question. A FORWARDED deferral carries a live resolve —
+    // answering it resolves the bridged promise WITH the answer, so the remote
+    // bridge POSTs it back to the host. A LOCAL deferral has none: the agent
+    // already got the DND notice at ask time, so this just clears the row
+    // (delivering the late answer back to a local agent is a v1 follow-up via
+    // AgentInbox — see the plan).
     const di = deferred.findIndex((d) => d.id === id);
     if (di !== -1) {
-        deferred.splice(di, 1);
+        const [d] = deferred.splice(di, 1);
+        d.resolve?.({ cancelled: false, answers: answers ?? [] });
         notifyQuestionsChanged();
         return true;
     }
@@ -594,9 +608,36 @@ export function raiseForwardedQuestion(opts: {
     /** The remote host's display name (§8 attribution) — so the queue view shows
      *  the user this question is a REMOTE host's, never a local one. */
     remoteHost?: string;
+    /** The remote host's WORKSTATION identity (its `connKey`) — resolves the
+     *  DRIVER's per-workstation DND for this host. Absent ⇒ global default only. */
+    workstationId?: string;
+    /** The remote workspace id, when known — for a per-workspace override. */
+    workspaceId?: string;
 }): Promise<ForceQuestionResult> {
     return new Promise((resolve) => {
         const id = crypto.randomBytes(9).toString('hex');
+        // Per-remote-host DND is a CLIENT-side setting: the driver decides whether
+        // THIS host's questions interrupt. In DND, never pop the driver's modal —
+        // park the forwarded question in the inbox, still answerable (answering
+        // resolves this promise → the bridge POSTs it back; a host-first resolution
+        // cancels it via dismissForwardedQuestion).
+        const decision = availabilityReader({
+            workstationId: opts.workstationId,
+            workspaceId: opts.workspaceId,
+        });
+        if (decision.availability === 'dnd') {
+            deferred.push({
+                id,
+                questions: opts.questions,
+                workspaceLabel: opts.workspaceLabel,
+                priority: opts.priority,
+                remoteHost: opts.remoteHost,
+                resolve,
+                forward: { connKey: opts.connKey, hostId: opts.hostId },
+            });
+            notifyQuestionsChanged();
+            return;
+        }
         enqueue({
             id,
             resolve,
@@ -618,11 +659,34 @@ export function dismissForwardedQuestion(connKey: string, hostId: string): void 
     const item = queue.find(
         (q) => q.forward?.connKey === connKey && q.forward?.hostId === hostId,
     );
-    if (item) finish(item.id, { cancelled: true, answers: [] });
+    if (item) {
+        finish(item.id, { cancelled: true, answers: [] });
+        return;
+    }
+    // Also a forwarded DND deferral (the host was in DND on the driver, then the
+    // host answered first) — resolve it cancelled (POST nothing) + drop the row.
+    const di = deferred.findIndex(
+        (d) => d.forward?.connKey === connKey && d.forward?.hostId === hostId,
+    );
+    if (di !== -1) {
+        const [d] = deferred.splice(di, 1);
+        d.resolve?.({ cancelled: true, answers: [] });
+        notifyQuestionsChanged();
+    }
 }
 
 /** Dismiss EVERY forwarded question for a connection (the bridge dropped). */
 export function dismissForwardedQuestionsForConn(connKey: string): void {
     const ids = queue.filter((q) => q.forward?.connKey === connKey).map((q) => q.id);
     for (const id of ids) finish(id, { cancelled: true, answers: [] });
+    // Forwarded DND deferrals for this connection too — resolve cancelled + drop.
+    const droppedDeferred = deferred.filter((d) => d.forward?.connKey === connKey);
+    if (droppedDeferred.length) {
+        for (const d of droppedDeferred) {
+            const di = deferred.indexOf(d);
+            if (di !== -1) deferred.splice(di, 1);
+            d.resolve?.({ cancelled: true, answers: [] });
+        }
+        notifyQuestionsChanged();
+    }
 }
