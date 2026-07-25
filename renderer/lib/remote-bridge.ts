@@ -550,6 +550,11 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 method: 'POST',
                 json: { pairKey },
             })) as { ok: boolean; cleared: number },
+        wipeMany: async (input) =>
+            (await req('/api/desktop/agentinbox/wipe-many', {
+                method: 'POST',
+                json: input,
+            })) as { ok: boolean; cleared: number; channels: number; threads: number },
     };
 
     // Host-sourced Tynn provisioning. The workspace-settings "Tynn agent" panel writes

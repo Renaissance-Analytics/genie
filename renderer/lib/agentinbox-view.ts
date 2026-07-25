@@ -46,6 +46,83 @@ export function rowKeyOfPairKey(pairKey: string): string {
     return `p:${[a, b].sort().join('|')}`;
 }
 
+/**
+ * Collapse a BURST of calls into one run (genie #66).
+ *
+ * A mass delete emits one `cleared` push per target — deliberately, so each
+ * window's per-key cache invalidation stays exact. But the directory refetch
+ * that follows is 3 requests, and on a remote Host they cross the relay, so N
+ * targets would mean 3N round trips for a single user action. This collapses the
+ * REFETCH while leaving the per-key invalidation untouched.
+ *
+ * Not a poll: nothing fires unless an event scheduled it.
+ */
+export function makeCoalescer(
+    run: () => void,
+    delayMs = 40,
+): { schedule: () => void; cancel: () => void } {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    return {
+        schedule() {
+            if (timer !== null) return; // a run is already queued for this burst
+            timer = setTimeout(() => {
+                timer = null;
+                run();
+            }, delayMs);
+        },
+        cancel() {
+            if (timer === null) return;
+            clearTimeout(timer);
+            timer = null;
+        },
+    };
+}
+
+/**
+ * MULTI-SELECT (genie #66). A selected row is held as one opaque token so a
+ * single `Set<string>` can mix channels and DM threads; `partitionWipeTargets`
+ * turns the set back into the host's batch shape.
+ *
+ * `<kind>:<key>` — and the key itself contains separators (a channel key is
+ * `ws1:general`, a pair key is `a|b`), so parsing MUST split on the first
+ * delimiter only.
+ */
+export function wipeToken(kind: 'channel' | 'dm', key: string): string {
+    return `${kind}:${key}`;
+}
+
+/**
+ * Split selection tokens into the `wipeMany` call shape. Deduped, and malformed
+ * or empty tokens are dropped rather than forwarded as junk to the host.
+ */
+export function partitionWipeTargets(tokens: readonly string[]): {
+    channelKeys: string[];
+    pairKeys: string[];
+} {
+    const channels = new Set<string>();
+    const pairs = new Set<string>();
+    for (const token of tokens) {
+        const sep = token.indexOf(':');
+        if (sep <= 0) continue;
+        const kind = token.slice(0, sep);
+        const key = token.slice(sep + 1);
+        if (!key) continue;
+        if (kind === 'channel') channels.add(key);
+        else if (kind === 'dm') pairs.add(key);
+    }
+    return { channelKeys: [...channels], pairKeys: [...pairs] };
+}
+
+/** Add or remove a token, returning a NEW set (never mutating the input). */
+export function toggleSelection(
+    selected: ReadonlySet<string>,
+    token: string,
+): Set<string> {
+    const next = new Set(selected);
+    if (!next.delete(token)) next.add(token);
+    return next;
+}
+
 /** Last-activity stamp of a list row. `seq` is the broker's monotonic counter. */
 export interface RowActivityStamp {
     ts: number;

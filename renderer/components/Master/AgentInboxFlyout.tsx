@@ -25,10 +25,14 @@ import {
 import {
     forgetSeen,
     headcountOf,
+    makeCoalescer,
     markSeen,
     parseSeenState,
+    partitionWipeTargets,
     rowKeyOfPairKey,
     seenStorageKey,
+    toggleSelection,
+    wipeToken,
     serializeSeenState,
     sortByActivityDesc,
     sortedPairKey,
@@ -81,7 +85,9 @@ type Tab = 'channels' | 'dms';
  */
 type PendingWipe =
     | { kind: 'channel'; key: string; label: string }
-    | { kind: 'dm'; pairKey: string; label: string };
+    | { kind: 'dm'; pairKey: string; label: string }
+    // A multi-select mass delete (genie #66) — one host call for the whole set.
+    | { kind: 'batch'; tokens: string[]; channels: number; threads: number };
 
 /** Last traffic seen on a row — drives its preview, relative time and unread. */
 interface RowActivity {
@@ -277,6 +283,10 @@ export default function AgentInboxFlyout({
     const [filter, setFilter] = useState<Filter>('all');
     const [tab, setTab] = useState<Tab>('channels');
     const [rosterOpen, setRosterOpen] = useState(false);
+    // genie #66 — multi-select. Tokens are typed (`channel:` / `dm:`) so ONE set
+    // spans both tabs: the owner can tick channels and DMs and wipe them together.
+    const [selectMode, setSelectMode] = useState(false);
+    const [selected, setSelected] = useState<Set<string>>(new Set());
     const [pendingWipe, setPendingWipe] = useState<PendingWipe | null>(null);
     const [wiping, setWiping] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
@@ -423,6 +433,11 @@ export default function AgentInboxFlyout({
         // host). Drop every cached trace of it: the row's activity, the viewer's
         // read mark (else a future thread reusing the key would open pre-read),
         // and the open stream if it was the one wiped.
+        //
+        // genie #66 — a MASS delete fires one of these per target (deliberately,
+        // so the per-key invalidation below stays exact). Only the directory
+        // REFETCH is coalesced, or an N-target batch would cost 3N round trips.
+        const reload = makeCoalescer(() => void loadDirectory());
         const offCleared = api().on.agentInboxCleared?.((ev) => {
             const rowKey = ev.scope === 'channel' ? `c:${ev.key}` : null;
             if (ev.scope === 'channel') {
@@ -434,7 +449,18 @@ export default function AgentInboxFlyout({
                 });
             }
             setSeenSeq((prev) => forgetSeen(prev, rowKey ?? rowKeyOfPairKey(ev.key)));
-            void loadDirectory();
+            // A wiped row can't stay ticked — its token would outlive the row.
+            setSelected((prev) => {
+                const token = wipeToken(
+                    ev.scope === 'channel' ? 'channel' : 'dm',
+                    ev.key,
+                );
+                if (!prev.has(token)) return prev;
+                const next = new Set(prev);
+                next.delete(token);
+                return next;
+            });
+            reload.schedule();
             setSel((cur) => {
                 if (!cur) return cur;
                 const hit =
@@ -451,6 +477,7 @@ export default function AgentInboxFlyout({
             offMessage?.();
             offEscalation?.();
             offCleared?.();
+            reload.cancel();
         };
     }, [open, loadDirectory, loadHistory]);
 
@@ -521,8 +548,15 @@ export default function AgentInboxFlyout({
         try {
             if (pendingWipe.kind === 'channel') {
                 await api().agentInbox.clearChannel(pendingWipe.key);
-            } else {
+            } else if (pendingWipe.kind === 'dm') {
                 await api().agentInbox.deleteThread(pendingWipe.pairKey);
+            } else {
+                // ONE host call for the whole selection — the broker batches over
+                // the same per-target ops, so a partial failure can't leave half
+                // the set in a different state than a one-at-a-time loop would.
+                await api().agentInbox.wipeMany(partitionWipeTargets(pendingWipe.tokens));
+                setSelected(new Set());
+                setSelectMode(false);
             }
             await loadDirectory();
         } finally {
@@ -588,6 +622,42 @@ export default function AgentInboxFlyout({
         all: allRows.length,
         unread: allRows.filter((r) => r.unread).length,
         stale: allRows.filter((r) => isStale(r.act)).length,
+    };
+
+    // genie #66 — the tokens for whatever the ACTIVE tab currently shows, which is
+    // what "Select all" operates on (selecting rows a filter is hiding would be a
+    // nasty surprise). The selection itself spans both tabs.
+    const visibleTokens =
+        tab === 'channels'
+            ? shownChannels.map((r) => wipeToken('channel', r.c.key))
+            : shownThreads.map((r) => wipeToken('dm', r.t.key));
+    const allVisibleSelected =
+        visibleTokens.length > 0 && visibleTokens.every((t) => selected.has(t));
+
+    const toggleAllVisible = () => {
+        setSelected((prev) => {
+            const next = new Set(prev);
+            if (allVisibleSelected) for (const t of visibleTokens) next.delete(t);
+            else for (const t of visibleTokens) next.add(t);
+            return next;
+        });
+    };
+
+    const exitSelectMode = () => {
+        setSelectMode(false);
+        setSelected(new Set());
+    };
+
+    /** Open the confirm for the current multi-selection. */
+    const requestBatchWipe = () => {
+        const { channelKeys, pairKeys } = partitionWipeTargets([...selected]);
+        if (channelKeys.length + pairKeys.length === 0) return;
+        setPendingWipe({
+            kind: 'batch',
+            tokens: [...selected],
+            channels: channelKeys.length,
+            threads: pairKeys.length,
+        });
     };
 
     const escalationList = [...escalations.values()];
@@ -818,7 +888,53 @@ export default function AgentInboxFlyout({
                                         <span className="agentinbox-chip-count">{counts[f]}</span>
                                     </button>
                                 ))}
+                                <span className="grow" />
+                                {/* genie #66 — enter multi-select to wipe in bulk. */}
+                                <button
+                                    type="button"
+                                    className={`agentinbox-chip${selectMode ? ' on' : ''}`}
+                                    onClick={() =>
+                                        selectMode ? exitSelectMode() : setSelectMode(true)
+                                    }
+                                    aria-pressed={selectMode}
+                                    title={
+                                        selectMode
+                                            ? 'Leave selection mode'
+                                            : 'Select several conversations to delete at once'
+                                    }
+                                >
+                                    {selectMode ? 'Done' : 'Select'}
+                                </button>
                             </div>
+
+                            {selectMode && (
+                                <div className="agentinbox-selectbar" role="group" aria-label="Bulk actions">
+                                    <label className="agentinbox-selectall">
+                                        <input
+                                            type="checkbox"
+                                            checked={allVisibleSelected}
+                                            onChange={toggleAllVisible}
+                                            disabled={visibleTokens.length === 0}
+                                            aria-label={`Select all ${tab === 'channels' ? 'channels' : 'DMs'} shown`}
+                                        />
+                                        All shown
+                                    </label>
+                                    <span className="agentinbox-selectcount">
+                                        {selected.size} selected
+                                    </span>
+                                    <span className="grow" />
+                                    <button
+                                        type="button"
+                                        className="agentinbox-danger"
+                                        onClick={requestBatchWipe}
+                                        disabled={selected.size === 0}
+                                        title="Delete every selected conversation"
+                                    >
+                                        <IconTrash size={12} />
+                                        Delete selected
+                                    </button>
+                                </div>
+                            )}
 
                             {waitingThreadCount > 0 && (
                                 <div className="agentinbox-waiting-line">
@@ -837,22 +953,49 @@ export default function AgentInboxFlyout({
                                         <div className="agentinbox-empty">No channels yet.</div>
                                     ) : (
                                         <ul className="agentinbox-list">
-                                            {shownChannels.map(({ c, act, unread }) => (
-                                                <li key={c.key} className="agentinbox-li">
+                                            {shownChannels.map(({ c, act, unread }) => {
+                                                const token = wipeToken('channel', c.key);
+                                                const ticked = selected.has(token);
+                                                return (
+                                                <li
+                                                    key={c.key}
+                                                    className={`agentinbox-li${selectMode ? ' picking' : ''}`}
+                                                >
+                                                    {selectMode && (
+                                                        <input
+                                                            type="checkbox"
+                                                            className="agentinbox-row-check"
+                                                            checked={ticked}
+                                                            onChange={() =>
+                                                                setSelected((p) =>
+                                                                    toggleSelection(p, token),
+                                                                )
+                                                            }
+                                                            aria-label={`Select #${c.purpose} in ${c.workspaceName}`}
+                                                        />
+                                                    )}
                                                     <button
                                                         type="button"
                                                         className={`agentinbox-row${
+                                                            !selectMode &&
                                                             sel?.kind === 'channel' &&
                                                             sel.key === c.key
                                                                 ? ' on'
                                                                 : ''
-                                                        }${unread ? ' alert' : ''}`}
+                                                        }${unread ? ' alert' : ''}${ticked ? ' picked' : ''}`}
                                                         onClick={() =>
-                                                            setSel({
-                                                                kind: 'channel',
-                                                                key: c.key,
-                                                                title: `${c.slug}:${c.purpose}`,
-                                                            })
+                                                            // In selection mode the row IS the
+                                                            // checkbox target — a bigger hit area
+                                                            // than the box alone.
+                                                            selectMode
+                                                                ? setSelected((p) =>
+                                                                      toggleSelection(p, token),
+                                                                  )
+                                                                : setSel({
+                                                                      kind: 'channel',
+                                                                      key: c.key,
+                                                                      title: `${c.slug}:${c.purpose}`,
+                                                                  })
                                                         }
                                                         title={`${c.slug}:${c.purpose} · ${c.workspaceName}`}
                                                     >
@@ -884,24 +1027,29 @@ export default function AgentInboxFlyout({
                                                         </span>
                                                     </button>
                                                     {/* Sibling, not a child: a button inside a
-                                                        button is invalid and unclickable. */}
-                                                    <button
-                                                        type="button"
-                                                        className="agentinbox-row-action"
-                                                        onClick={() =>
-                                                            setPendingWipe({
-                                                                kind: 'channel',
-                                                                key: c.key,
-                                                                label: `#${c.purpose} · ${c.workspaceName}`,
-                                                            })
-                                                        }
-                                                        title={`Clear #${c.purpose} history`}
-                                                        aria-label={`Clear #${c.purpose} history`}
-                                                    >
-                                                        <IconTrash size={12} />
-                                                    </button>
+                                                        button is invalid and unclickable. The
+                                                        single-row action hides in selection mode —
+                                                        "Delete selected" is the action there. */}
+                                                    {!selectMode && (
+                                                        <button
+                                                            type="button"
+                                                            className="agentinbox-row-action"
+                                                            onClick={() =>
+                                                                setPendingWipe({
+                                                                    kind: 'channel',
+                                                                    key: c.key,
+                                                                    label: `#${c.purpose} · ${c.workspaceName}`,
+                                                                })
+                                                            }
+                                                            title={`Clear #${c.purpose} history`}
+                                                            aria-label={`Clear #${c.purpose} history`}
+                                                        >
+                                                            <IconTrash size={12} />
+                                                        </button>
+                                                    )}
                                                 </li>
-                                            ))}
+                                                );
+                                            })}
                                         </ul>
                                     )
                                 ) : shownThreads.length === 0 ? (
@@ -918,14 +1066,38 @@ export default function AgentInboxFlyout({
                                                     (t.a === sel.agentId || t.b === sel.agentId));
                                             const wsA = workspaceOf(t.a, byId);
                                             const wsB = workspaceOf(t.b, byId);
+                                            const token = wipeToken('dm', t.key);
+                                            const ticked = selected.has(token);
                                             return (
-                                                <li key={t.key} className="agentinbox-li">
+                                                <li
+                                                    key={t.key}
+                                                    className={`agentinbox-li${selectMode ? ' picking' : ''}`}
+                                                >
+                                                    {selectMode && (
+                                                        <input
+                                                            type="checkbox"
+                                                            className="agentinbox-row-check"
+                                                            checked={ticked}
+                                                            onChange={() =>
+                                                                setSelected((p) =>
+                                                                    toggleSelection(p, token),
+                                                                )
+                                                            }
+                                                            aria-label={`Select the DM thread ${t.aLabel} ↔ ${t.bLabel}`}
+                                                        />
+                                                    )}
                                                     <button
                                                         type="button"
                                                         className={`agentinbox-row${
-                                                            active ? ' on' : ''
-                                                        }${unread ? ' alert' : ''}`}
-                                                        onClick={() => selectThread(t)}
+                                                            !selectMode && active ? ' on' : ''
+                                                        }${unread ? ' alert' : ''}${ticked ? ' picked' : ''}`}
+                                                        onClick={() =>
+                                                            selectMode
+                                                                ? setSelected((p) =>
+                                                                      toggleSelection(p, token),
+                                                                  )
+                                                                : selectThread(t)
+                                                        }
                                                         title={`${t.aLabel} ↔ ${t.bLabel}`}
                                                     >
                                                         <span className="agentinbox-row-av">
@@ -964,21 +1136,23 @@ export default function AgentInboxFlyout({
                                                             </span>
                                                         </span>
                                                     </button>
-                                                    <button
-                                                        type="button"
-                                                        className="agentinbox-row-action"
-                                                        onClick={() =>
-                                                            setPendingWipe({
-                                                                kind: 'dm',
-                                                                pairKey: t.key,
-                                                                label: `${t.aLabel} ↔ ${t.bLabel}`,
-                                                            })
-                                                        }
-                                                        title="Delete this DM thread"
-                                                        aria-label={`Delete the DM thread ${t.aLabel} ↔ ${t.bLabel}`}
-                                                    >
-                                                        <IconTrash size={12} />
-                                                    </button>
+                                                    {!selectMode && (
+                                                        <button
+                                                            type="button"
+                                                            className="agentinbox-row-action"
+                                                            onClick={() =>
+                                                                setPendingWipe({
+                                                                    kind: 'dm',
+                                                                    pairKey: t.key,
+                                                                    label: `${t.aLabel} ↔ ${t.bLabel}`,
+                                                                })
+                                                            }
+                                                            title="Delete this DM thread"
+                                                            aria-label={`Delete the DM thread ${t.aLabel} ↔ ${t.bLabel}`}
+                                                        >
+                                                            <IconTrash size={12} />
+                                                        </button>
+                                                    )}
                                                 </li>
                                             );
                                         })}
@@ -1254,7 +1428,9 @@ export default function AgentInboxFlyout({
                     <Modal.Header>
                         {pendingWipe.kind === 'channel'
                             ? 'Clear channel history?'
-                            : 'Delete this DM thread?'}
+                            : pendingWipe.kind === 'dm'
+                              ? 'Delete this DM thread?'
+                              : `Delete ${pendingWipe.channels + pendingWipe.threads} conversations?`}
                     </Modal.Header>
                     <Modal.Body>
                         <Text size="sm" style={{ display: 'block' }}>
@@ -1264,10 +1440,28 @@ export default function AgentInboxFlyout({
                                     deleted. The channel and its members stay — only the history
                                     goes.
                                 </>
-                            ) : (
+                            ) : pendingWipe.kind === 'dm' ? (
                                 <>
                                     The whole conversation <b>{pendingWipe.label}</b> is permanently
                                     deleted.
+                                </>
+                            ) : (
+                                <>
+                                    Permanently deleting{' '}
+                                    {pendingWipe.channels > 0 && (
+                                        <b>
+                                            {pendingWipe.channels} channel
+                                            {pendingWipe.channels === 1 ? '' : 's'}
+                                        </b>
+                                    )}
+                                    {pendingWipe.channels > 0 && pendingWipe.threads > 0 && ' and '}
+                                    {pendingWipe.threads > 0 && (
+                                        <b>
+                                            {pendingWipe.threads} DM thread
+                                            {pendingWipe.threads === 1 ? '' : 's'}
+                                        </b>
+                                    )}
+                                    . Channels keep their members — only the history goes.
                                 </>
                             )}
                         </Text>
@@ -1299,7 +1493,9 @@ export default function AgentInboxFlyout({
                                     ? 'Deleting…'
                                     : pendingWipe.kind === 'channel'
                                       ? 'Clear history'
-                                      : 'Delete thread'}
+                                      : pendingWipe.kind === 'dm'
+                                        ? 'Delete thread'
+                                        : `Delete ${pendingWipe.channels + pendingWipe.threads}`}
                             </Action>
                         </div>
                     </Modal.Body>

@@ -1,13 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     HUMAN_ID,
     SEEN_CAP,
     forgetSeen,
     headcountOf,
+    makeCoalescer,
     markSeen,
     parseSeenState,
+    partitionWipeTargets,
     rowKeyOfPairKey,
     seenStorageKey,
+    toggleSelection,
+    wipeToken,
     serializeSeenState,
     sortByActivityDesc,
     sortedPairKey,
@@ -113,6 +117,92 @@ describe('rowKeyOfPairKey', () => {
     it('sortedPairKey is order-independent', () => {
         expect(sortedPairKey('b', 'a')).toBe(sortedPairKey('a', 'b'));
         expect(sortedPairKey('a', 'b')).toBe('a|b');
+    });
+});
+
+describe('multi-select wipe targets (genie #66)', () => {
+    it('builds a token per kind and partitions it back into the host call shape', () => {
+        const tokens = [
+            wipeToken('channel', 'ws1:general'),
+            wipeToken('dm', 'human|zeta'),
+            wipeToken('channel', 'ws1:frontend'),
+        ];
+        expect(partitionWipeTargets(tokens)).toEqual({
+            channelKeys: ['ws1:general', 'ws1:frontend'],
+            pairKeys: ['human|zeta'],
+        });
+    });
+
+    it('splits on the FIRST separator only — a channel key contains its own colon', () => {
+        // `ws1:general` would be mangled by a naive split(':').
+        expect(partitionWipeTargets([wipeToken('channel', 'ws1:general')])).toEqual({
+            channelKeys: ['ws1:general'],
+            pairKeys: [],
+        });
+    });
+
+    it('dedupes and drops malformed / empty tokens rather than sending junk to the host', () => {
+        expect(
+            partitionWipeTargets([
+                wipeToken('channel', 'ws1:general'),
+                wipeToken('channel', 'ws1:general'),
+                'garbage-no-prefix',
+                '',
+                'channel:',
+            ]),
+        ).toEqual({ channelKeys: ['ws1:general'], pairKeys: [] });
+    });
+
+    it('an empty selection partitions to an empty batch', () => {
+        expect(partitionWipeTargets([])).toEqual({ channelKeys: [], pairKeys: [] });
+    });
+
+    it('toggleSelection adds then removes, returning a NEW set each time', () => {
+        const empty = new Set<string>();
+        const one = toggleSelection(empty, 'channel:x');
+        expect([...one]).toEqual(['channel:x']);
+        expect(one).not.toBe(empty);
+        expect([...empty]).toEqual([]); // input untouched
+
+        const back = toggleSelection(one, 'channel:x');
+        expect([...back]).toEqual([]);
+    });
+});
+
+describe('makeCoalescer (genie #66)', () => {
+    // A mass delete emits ONE `cleared` push per target so per-key invalidation
+    // stays exact — but every window listening would then refetch the directory
+    // N times (3 requests each, over the relay on a remote Host). Collapse the
+    // refetch, not the invalidation.
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('collapses a burst of schedules into a single run', () => {
+        const run = vi.fn();
+        const c = makeCoalescer(run, 40);
+        for (let i = 0; i < 20; i++) c.schedule();
+        expect(run).not.toHaveBeenCalled(); // nothing runs eagerly
+        vi.advanceTimersByTime(40);
+        expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it('runs again for a burst that arrives after the window closed', () => {
+        const run = vi.fn();
+        const c = makeCoalescer(run, 40);
+        c.schedule();
+        vi.advanceTimersByTime(40);
+        c.schedule();
+        vi.advanceTimersByTime(40);
+        expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it('cancel drops a pending run — an unmounting panel must not refetch', () => {
+        const run = vi.fn();
+        const c = makeCoalescer(run, 40);
+        c.schedule();
+        c.cancel();
+        vi.advanceTimersByTime(200);
+        expect(run).not.toHaveBeenCalled();
     });
 });
 

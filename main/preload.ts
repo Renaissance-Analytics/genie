@@ -885,6 +885,9 @@ const api = {
         /** Delete a whole DM thread by its pair key (`<idA>|<idB>`, sorted). */
         deleteThread: (pairKey: string) =>
             ipcRenderer.invoke('agentinbox:delete-thread', pairKey),
+        /** Wipe MANY conversations in one call (multi-select mass delete). */
+        wipeMany: (input: { channelKeys?: string[]; pairKeys?: string[] }) =>
+            ipcRenderer.invoke('agentinbox:wipe-many', input),
         /** Edit an agent's purpose/scope (re-keys its channel + re-emits presence). */
         updateChannel: (
             specId: string,

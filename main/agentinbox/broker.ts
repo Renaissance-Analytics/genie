@@ -1183,6 +1183,47 @@ export class AgentInboxBroker {
         return { ok: true, cleared };
     }
 
+    /**
+     * MASS delete (genie #66) — wipe many conversations in ONE host call so the
+     * panel doesn't fire N round trips (which on a remote Host means N requests
+     * over the relay).
+     *
+     * Deliberately a BATCH OVER the existing ops rather than a second
+     * implementation: every target goes through {@link clearChannel} /
+     * {@link deleteThread}, so the durable semantics and the non-interference
+     * rule (agent inboxes and ACK cursors untouched) hold by construction, and a
+     * `cleared` event still fires per target so per-key cache invalidation stays
+     * exact for every listening window.
+     *
+     * Keys are deduped. A malformed key is skipped without aborting the batch —
+     * one bad entry must not cost the user the other twenty deletions.
+     */
+    wipeMany(input: { channelKeys?: string[]; pairKeys?: string[] }): {
+        ok: boolean;
+        cleared: number;
+        channels: number;
+        threads: number;
+    } {
+        let cleared = 0;
+        let channels = 0;
+        let threads = 0;
+        for (const key of new Set(input.channelKeys ?? [])) {
+            const r = this.clearChannel(key);
+            if (r.cleared > 0) {
+                cleared += r.cleared;
+                channels++;
+            }
+        }
+        for (const key of new Set(input.pairKeys ?? [])) {
+            const r = this.deleteThread(key);
+            if (r.ok && r.cleared > 0) {
+                cleared += r.cleared;
+                threads++;
+            }
+        }
+        return { ok: true, cleared, channels, threads };
+    }
+
     // --- test / diagnostic accessors --------------------------------------
 
     /** Reset all state — test-only. */

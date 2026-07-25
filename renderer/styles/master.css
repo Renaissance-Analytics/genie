@@ -4393,6 +4393,78 @@ body.gutter-dragging .grid-gutter {
     min-width: 0;
 }
 
+/* --- multi-select mass delete (genie #66) ------------------------------ */
+/* `.grow` is context-scoped in this sheet (see .docs-head/.agentinbox-foot),
+   not a global utility — the spacers in these two rows need their own rule. */
+.agentinbox-chips .grow,
+.agentinbox-selectbar .grow {
+    flex: 1;
+}
+.agentinbox-selectbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    border-radius: var(--radius-md);
+    border: 1px solid color-mix(in srgb, var(--ai-red) 30%, transparent);
+    background: color-mix(in srgb, var(--ai-red) 8%, transparent);
+    font-size: 11.5px;
+}
+.agentinbox-selectall {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--fg-3);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.agentinbox-selectcount {
+    color: var(--fg-4);
+    white-space: nowrap;
+}
+.agentinbox-danger {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: var(--radius-full);
+    border: 1px solid color-mix(in srgb, var(--ai-red) 50%, transparent);
+    background: color-mix(in srgb, var(--ai-red) 16%, transparent);
+    color: var(--ai-red);
+    font: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+}
+.agentinbox-danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--ai-red) 26%, transparent);
+}
+.agentinbox-danger:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+/* The checkbox sits OUTSIDE the row button (a control nested in a button is
+   invalid), so the li becomes a flex row while picking. */
+.agentinbox-li.picking {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.agentinbox-li.picking .agentinbox-row {
+    flex: 1;
+    min-width: 0;
+}
+.agentinbox-row-check {
+    flex: 0 0 auto;
+    margin: 0 0 3px 4px;
+    accent-color: var(--ai-red);
+    cursor: pointer;
+}
+.agentinbox-row.picked {
+    border-color: color-mix(in srgb, var(--ai-red) 45%, transparent);
+    background: color-mix(in srgb, var(--ai-red) 10%, transparent);
+}
+
 /* --- per-row destructive action (genie #64) ---------------------------- */
 /* A SIBLING of the row button (nesting one button in another is invalid and
    unclickable), revealed on hover and always reachable by keyboard. */

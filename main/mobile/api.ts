@@ -1537,6 +1537,8 @@ export async function handleApi(
             text?: string;
             specId?: string;
             pairKey?: string;
+            channelKeys?: string[];
+            pairKeys?: string[];
             patch?: {
                 purpose?: string;
                 scope?: AgentInboxScope;
@@ -1603,6 +1605,21 @@ export async function handleApi(
                 return true;
             }
             sendJson(res, 200, agentInboxBroker.deleteThread(wb.pairKey));
+            return true;
+        }
+        // genie #66 — the multi-select mass delete, as ONE request. Same
+        // kill-switch gate as the single-target wipes; the broker batches over the
+        // very same ops, so local and remote behave identically.
+        if (pathname === '/api/desktop/agentinbox/wipe-many') {
+            if (guardLocked()) return true;
+            sendJson(
+                res,
+                200,
+                agentInboxBroker.wipeMany({
+                    channelKeys: wb.channelKeys ?? [],
+                    pairKeys: wb.pairKeys ?? [],
+                }),
+            );
             return true;
         }
         if (pathname === '/api/desktop/agentinbox/update-channel') {

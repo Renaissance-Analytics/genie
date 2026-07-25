@@ -2262,6 +2262,12 @@ export interface GenieApi {
         /** Delete a whole DM thread by its pair key (`<idA>|<idB>`, sorted — the
          *  key `dmThreads()` reports). Covers human↔agent and agent↔agent. */
         deleteThread: (pairKey: string) => Promise<{ ok: boolean; cleared: number }>;
+        /** Wipe MANY conversations in one host call (genie #66 mass delete) —
+         *  batches the same per-target ops, so one round trip instead of N. */
+        wipeMany: (input: {
+            channelKeys?: string[];
+            pairKeys?: string[];
+        }) => Promise<{ ok: boolean; cleared: number; channels: number; threads: number }>;
         /** Edit an agent's channel identity (purpose / scope) — re-emits presence. */
         updateChannel: (
             specId: string,

@@ -1023,6 +1023,13 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('agentinbox:delete-thread', (_e, pairKey: string) =>
         agentInboxBroker.deleteThread(pairKey),
     );
+    // genie #66 — MASS delete: one call for a whole multi-select, so the panel
+    // doesn't fire N round trips (N relay requests on a remote Host).
+    ipcMain.handle(
+        'agentinbox:wipe-many',
+        (_e, input: { channelKeys?: string[]; pairKeys?: string[] }) =>
+            agentInboxBroker.wipeMany(input ?? {}),
+    );
     ipcMain.handle(
         'agentinbox:update-channel',
         (
