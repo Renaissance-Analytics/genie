@@ -1006,7 +1006,7 @@ export async function remoteReconnect(wcId: number): Promise<{ ok: boolean; erro
 // renderer ALREADY subscribes to — so re-emitting them makes the desktop's live
 // dashboard updates (agent-attention glow, workspace pulse, process status,
 // terminal-spec + workspace-list changes) work transparently in remote mode.
-const PASSTHROUGH_EVENTS = new Set([
+export const PASSTHROUGH_EVENTS = new Set([
     'terminal:attention',
     'workspace:pulse',
     'process:status',
@@ -1023,6 +1023,12 @@ const PASSTHROUGH_EVENTS = new Set([
     'agentinbox:message',
     // Track C — unACKed-urgent "waiting on <agent>" oversight alerts.
     'agentinbox:escalation',
+    // PendingQuestions: the host pushes this on every change to its pending set.
+    // Without it a host-bound window's top-bar QUESTIONS badge never updates (the
+    // flyout masks it by fetching on open) — the count sat at 0 forever (genie #60).
+    // Mirrors agentinbox:message / issue-watch:update: a host badge event MUST
+    // re-emit to the bound window so the client reflects the HOST's pending set.
+    'questions:changed',
     // AgentPulse — per-workspace real-time terminal-activity (rail glow + live
     // sparkline); a remote window reflects the HOST's agent activity.
     'agent-pulse',
