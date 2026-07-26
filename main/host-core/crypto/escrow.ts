@@ -144,20 +144,29 @@ export async function openCredentialBundle(
 ): Promise<OpenedCredentials> {
     const escrowKeypair = await openEscrowKeypair(bundle.escrow, hostKeypair);
     const escrowPublicKeyB64 = bundle.escrow?.publicKeyB64 ?? '';
+    // No escrow key ⇒ nothing openable, full stop. Bootstrap is solved by escrow
+    // DISTRIBUTION (the browser seals escrow_priv to each host at setup, a live
+    // peer covers re-provisioning, the owner's backup covers whole-fleet loss) —
+    // NOT by credentials sealed directly to a host. Tynn 422s the only writer
+    // that could produce one, so treating this as a partial-open state would be
+    // a branch that never runs, obscuring the real signal.
+    if (!escrowKeypair) {
+        return { status: 'no-escrow-key', escrowPublicKeyB64, credentials: [], failed: [] };
+    }
 
     const credentials: OpenedCredential[] = [];
     const failed: string[] = [];
     for (const credential of bundle.credentials ?? []) {
-        // A `host`-sealed credential opens with our OWN key, so it is available
-        // even while the escrow bootstrap is still pending. Missing the escrow
-        // key is not a reason to drop something we can already open.
+        // `sealedTo` still selects the key: escrow is the only value any current
+        // flow produces, but the field is the schema's recipient discriminator
+        // and picking by it costs one expression. It is NOT a bootstrap path —
+        // we have already returned above when the escrow key is missing.
         const keypair = credential.sealedTo === 'host' ? hostKeypair : escrowKeypair;
         // Shape-check first: anything that could be plaintext is treated as a
         // store fault and dropped without an open attempt.
-        const plaintext =
-            keypair && isPlausibleSealedBox(credential.ciphertext)
-                ? await sealOpenText(credential.ciphertext, keypair)
-                : null;
+        const plaintext = isPlausibleSealedBox(credential.ciphertext)
+            ? await sealOpenText(credential.ciphertext, keypair)
+            : null;
         if (plaintext == null) {
             failed.push(credential.id);
             continue;
@@ -173,7 +182,7 @@ export async function openCredentialBundle(
         });
     }
     return {
-        status: escrowKeypair ? 'ok' : 'no-escrow-key',
+        status: 'ok',
         escrowPublicKeyB64,
         credentials,
         failed,

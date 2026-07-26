@@ -189,8 +189,8 @@ export async function refreshManagedCredentials(
     }
 
     const opened = await openCredentialBundle(bundle, hostKeypair);
-    if (opened.status === 'no-escrow-key' && opened.credentials.length === 0) {
-        // Nothing openable at all — the bootstrap-pending case. Leave whatever is
+    if (opened.status === 'no-escrow-key') {
+        // Nothing openable — the bootstrap-pending case. Leave whatever is
         // already injected alone; this is not a revoke.
         return {
             status: 'no-escrow-key',
@@ -248,7 +248,7 @@ export async function refreshManagedCredentials(
     };
 
     return {
-        status: opened.status === 'ok' ? 'ok' : 'no-escrow-key',
+        status: 'ok',
         credentialIds,
         failed: opened.failed,
         envVars: Object.keys(managedCredentialEnv()),

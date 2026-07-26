@@ -161,8 +161,13 @@ describe('openCredentialBundle', () => {
         expect(opened.credentials[0].value).toBe(FAKE.anthropic);
     });
 
-    it('opens a host-sealed credential EVEN WITH NO escrow key, and reports the escrow gap', async () => {
-        // Bootstrap-pending is not a reason to drop something we can already open.
+    it('opens NOTHING without the escrow key, even a host-sealed row', async () => {
+        // No flow produces a host-sealed credential (Tynn 422s the only writer),
+        // so a host with no escrow key genuinely has nothing it can open.
+        // Bootstrap is solved by escrow DISTRIBUTION — the browser seals
+        // escrow_priv to each host, a peer covers re-provisioning — not by
+        // host-sealed credentials. Opening anything here would be a branch that
+        // never runs, hiding the real signal: report the gap, inject nothing.
         const escrow = await generateEncryptionKeypair();
         const host = await generateEncryptionKeypair();
         const bundle: CredentialBundle = {
@@ -184,8 +189,8 @@ describe('openCredentialBundle', () => {
         const opened = await openCredentialBundle(bundle, host);
 
         expect(opened.status).toBe('no-escrow-key');
-        expect(opened.credentials.map((c) => c.id)).toEqual(['direct']);
-        expect(opened.failed).toEqual(['escrowed']);
+        expect(opened.credentials).toEqual([]);
+        expect(opened.failed).toEqual([]);
     });
 
     it('recovers a RE-PROVISIONED host: a brand-new keypair opens the SAME credentials', async () => {
