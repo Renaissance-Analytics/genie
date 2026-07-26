@@ -192,6 +192,65 @@ describe('WorkstationPusherTransport', () => {
         expect(onIssueWatchDelta).toHaveBeenCalledTimes(1);
     });
 
+    it('dispatches onProviderCredentialChange on a provider-credential.changed push', () => {
+        const channel = workstationChannel('ws-1');
+        const sockets: FakeSocket[] = [];
+        const transport = new WorkstationPusherTransport({
+            appKey: 'k',
+            cluster: 'us2',
+            workstationId: 'ws-1',
+            tynnApiBaseUrl: 'https://tynn.test',
+            signer: { authHeader: () => 'Workstation 1:s' },
+            fetchImpl: (async () => ({ ok: true, json: async () => ({ auth: 'a' }) })) as unknown as typeof fetch,
+            wsFactory: () => {
+                const s = new FakeSocket();
+                sockets.push(s);
+                return s;
+            },
+        });
+
+        const onProviderCredentialChange = vi.fn();
+        transport.open({
+            onConnected: vi.fn(),
+            onIssueWatchDelta: vi.fn(),
+            onProviderCredentialChange,
+        });
+        const sock = sockets[0];
+
+        sock.emit('message', frame({
+            event: 'provider-credential.changed',
+            channel,
+            data: frame({ action: 'revoked', credentialId: '01KA', provider: 'anthropic', kind: 'subscription' }),
+        }));
+        expect(onProviderCredentialChange).toHaveBeenCalledTimes(1);
+        expect(onProviderCredentialChange.mock.calls[0][0]).toMatchObject({
+            action: 'revoked',
+            credentialId: '01KA',
+        });
+
+        // `set` matters as much as `revoked`: without it a newly ADDED credential
+        // would not reach a running host until restart — a poll in disguise.
+        sock.emit('message', frame({
+            event: 'provider-credential.changed',
+            channel,
+            data: frame({ action: 'set', credentialId: '01KB' }),
+        }));
+        expect(onProviderCredentialChange.mock.calls[1][0]).toMatchObject({
+            action: 'set',
+            credentialId: '01KB',
+        });
+
+        // A payload naming no valid action or credential is DROPPED — a garbled
+        // push must never act on a guess.
+        sock.emit('message', frame({ event: 'provider-credential.changed', channel, data: frame({}) }));
+        sock.emit('message', frame({
+            event: 'provider-credential.changed',
+            channel,
+            data: frame({ action: 'exploded', credentialId: '01KC' }),
+        }));
+        expect(onProviderCredentialChange).toHaveBeenCalledTimes(2);
+    });
+
     const baseOpts = (sockets: FakeSocket[]) => ({
         appKey: 'k',
         cluster: 'us2',

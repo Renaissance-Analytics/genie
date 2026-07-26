@@ -36,7 +36,8 @@ import {
     type AgentInboxAgentType,
     type AgentInboxScope,
 } from '../agentinbox/types';
-import { loadWorkspaceTerminalEnv, withCodexGenieMcpLaunch } from '../mcp/agent-config';
+import { withCodexGenieMcpLaunch } from '../mcp/agent-config';
+import { buildTerminalEnv } from './terminal-env';
 import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
 import { TerminalReadBuffer, type ReadResult } from './read-buffer';
@@ -349,9 +350,12 @@ export function createAgentTerminal(opts: {
     // Env: the workspace `.env` (so an agent resolves ${TYNN_AGENT_TOKEN} etc.)
     // plus the workspace's agent MCP endpoint when enabled, so a coding agent
     // launched here can call imDone etc.
+    // Plus any Tynn-managed provider credentials this host has opened (the
+    // workspace `.env` overrides them — see buildTerminalEnv).
     let env: Record<string, string> = {};
-    const wsRoot = getWorkspace(opts.workspaceId)?.path;
-    env = wsRoot ? loadWorkspaceTerminalEnv(wsRoot) : {};
+    const ws = getWorkspace(opts.workspaceId);
+    const wsRoot = ws?.path;
+    env = buildTerminalEnv(wsRoot, ws?.project_id);
     if (workspaceMcpEnabled(opts.workspaceId)) {
         const mcpUrl = registerTerminalEndpoint(id);
         if (mcpUrl) {
@@ -700,14 +704,15 @@ export function registerTerminalIpc(): void {
                     args: buildProcessArgs(opts.shell ?? '', spec.meta.command),
                 };
             }
-            // Load workspace env and reconstruct TYNN_AGENT_TOKEN from the
-            // authoritative literal MCP config when `.env` is missing/stale.
-            // This path covers restored/resumed terminals; explicit opts.env
-            // still wins on any collision.
-            const wsRoot = spec?.workspace_id
-                ? getWorkspace(spec.workspace_id)?.path
-                : undefined;
-            const envFileVars = wsRoot ? loadWorkspaceTerminalEnv(wsRoot) : {};
+            // Load the managed provider credentials + workspace env, and
+            // reconstruct TYNN_AGENT_TOKEN from the authoritative literal MCP
+            // config when `.env` is missing/stale. This path covers
+            // restored/resumed terminals; explicit opts.env still wins on any
+            // collision. A respawn re-reads the managed env, so a credential
+            // revoked since the last spawn is simply gone from this one.
+            const specWs = spec?.workspace_id ? getWorkspace(spec.workspace_id) : undefined;
+            const wsRoot = specWs?.path;
+            const envFileVars = buildTerminalEnv(wsRoot, specWs?.project_id);
             if (Object.keys(envFileVars).length) {
                 opts = { ...opts, env: { ...envFileVars, ...opts.env } };
             }

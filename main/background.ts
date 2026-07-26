@@ -130,6 +130,7 @@ import type {
 import { resolveTargetWorkspace, type TargetDecision } from './mcp/target-workspace';
 import { TynnBackend } from './backend/tynn';
 import { startLocalWorkstation } from './tynn/local-workstation';
+import { startManagedCredentials } from './tynn/managed-credentials-service';
 import { startUserChannelIssueWatch } from './tynn/user-channel-issuewatch';
 import { readTynnLink, ensureMcpGitignored } from './tynn/provision';
 import {
@@ -1399,6 +1400,7 @@ app.whenReady().then(async () => {
         // on both channels is safe. It never touches the shared service state
         // (owned by the workstation path) so the two never fight over it.
         let userChannelHandle: Awaited<ReturnType<typeof startUserChannelIssueWatch>> = null;
+        let managedCredentialsHandle: Awaited<ReturnType<typeof startManagedCredentials>> = null;
         const sessionFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
             session.defaultSession.fetch(input as string, init)) as typeof fetch;
         const startIssueWatch = async () => {
@@ -1423,11 +1425,23 @@ app.whenReady().then(async () => {
                     };
                 },
                 log: (m) => console.log('[workstation]', m),
+                // Late-bound on purpose: the managed-credential service starts
+                // below, after this one, so read the handle at push time.
+                onProviderCredentialChange: (event) =>
+                    void managedCredentialsHandle?.onCredentialChange(event),
             });
             userChannelHandle?.stop();
             userChannelHandle = await startUserChannelIssueWatch({
                 fetchImpl: sessionFetch,
                 log: (m) => console.log('[user-channel]', m),
+            });
+            // Tynn-managed provider credentials for agent terminals. Gated on the
+            // `managed_credentials` setting (default OFF) — when off this is fully
+            // dark: no keypair, no request. It rides the same signed-in lifecycle
+            // as IssueWatch because it uses the same enrolled-workstation identity.
+            managedCredentialsHandle?.stop();
+            managedCredentialsHandle = await startManagedCredentials({
+                log: (m) => console.log('[managed-credentials]', m),
             });
         };
         void isSignedIn().then((signedIn) => {
@@ -1441,6 +1455,10 @@ app.whenReady().then(async () => {
                 issueWatchHandle = null;
                 userChannelHandle?.stop();
                 userChannelHandle = null;
+                // Signing out is not a revoke — leave the materialized file alone
+                // (the owner may sign back in) but stop watching for rotations.
+                managedCredentialsHandle?.stop();
+                managedCredentialsHandle = null;
                 setIssueWatchServiceState('signed-out');
             }
         });

@@ -852,6 +852,12 @@ export interface Settings {
     /** Keep the Genie brief synced into a workspace's AGENTS.md. Default 'on';
      *  'off' leaves it alone. */
     mcp_sync_agents?: 'on' | 'off';
+    /** Pull Tynn-managed provider credentials (Anthropic/OpenAI keys, GitHub
+     *  token, Claude subscription) and inject them into agent terminals. Default
+     *  'off' — the host generates no encryption key and makes no request until
+     *  the owner turns it on, so nothing changes for a host whose owner has not
+     *  opted in. See `main/tynn/managed-credentials-service.ts`. */
+    managed_credentials?: 'on' | 'off';
     /** Auto-provision Genie workspaces for an Ops project's governed children
      *  (the provisionWorkspaces MCP tool). 'off' (default): the agent proposes a
      *  plan and the user approves each clone via the OS modal. 'on': the agent
@@ -984,6 +990,7 @@ export function getAllSettings(): Settings {
         mcp_sync_cursor: (out['mcp_sync_cursor'] as 'on' | 'off') ?? 'on',
         mcp_sync_codex: (out['mcp_sync_codex'] as 'on' | 'off') ?? 'on',
         mcp_sync_agents: (out['mcp_sync_agents'] as 'on' | 'off') ?? 'on',
+        managed_credentials: (out['managed_credentials'] as 'on' | 'off') ?? 'off',
         ops_auto_provision_workspaces:
             (out['ops_auto_provision_workspaces'] as 'on' | 'off') ?? 'off',
         terminal_copy_paste:

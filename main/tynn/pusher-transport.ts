@@ -12,6 +12,8 @@ import {
     toIssueWatchDelta,
     workstationChannel,
 } from './pusher-protocol';
+import { isProviderCredentialChange, toProviderCredentialChange } from './managed-credential-client';
+import type { ProviderCredentialChange } from '../host-core/crypto/managed-credentials';
 import type { IssueWatchDeltaPush } from './workspace-assignment';
 
 /** The minimal socket surface the transport drives — the real `ws` WebSocket
@@ -34,6 +36,13 @@ export interface WorkstationPusherHandlers {
     onConnected: () => void;
     /** Fires per pushed `issuewatch.delta` for this workstation's channel. */
     onIssueWatchDelta: (delta: IssueWatchDeltaPush) => void;
+    /**
+     * Fires per pushed `credential.revoked` — Tynn's immediate push-to-revoke for
+     * managed provider credentials. Rides THIS existing socket rather than a
+     * second transport, so revocation costs no extra connection and no polling.
+     * Optional: a caller with no managed credentials simply omits it.
+     */
+    onProviderCredentialChange?: (event: ProviderCredentialChange) => void;
     onDisconnected?: () => void;
 }
 
@@ -164,6 +173,13 @@ export class WorkstationPusherTransport {
         if (isIssueWatchDelta(frame, this.channel)) {
             const delta = toIssueWatchDelta(frame.data);
             if (delta) this.handlers?.onIssueWatchDelta(delta);
+            return;
+        }
+        if (isProviderCredentialChange(frame, this.channel)) {
+            // A payload naming no valid action or credential is dropped by the
+            // coercion — a garbled push must never act on a guess.
+            const event = toProviderCredentialChange(frame.data);
+            if (event) this.handlers?.onProviderCredentialChange?.(event);
         }
     }
 
