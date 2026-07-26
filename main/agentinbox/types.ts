@@ -204,6 +204,14 @@ export interface AgentInboxJoinInput {
     status?: AgentInboxStatus;
     /** Opt-in wake-on-DM (issue #9), restored from spec meta on (re)join. Default false. */
     wakeOnDm?: boolean;
+    /**
+     * Channel KEYS this agent explicitly joined, restored from spec meta on
+     * (re)join (genie #65). Its own `<workspaceId>:<purpose>` room is NOT listed
+     * here — that one is always re-derived from `purpose`. Each key is re-checked
+     * against the workspace tier on restore, so a workspace that has since shut
+     * its door genuinely evicts. Absent ⇒ no extra channels.
+     */
+    channels?: string[];
 }
 
 /** An unACKed urgent (`interrupt`) DM that escalated to the human oversight
