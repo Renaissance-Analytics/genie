@@ -1557,6 +1557,14 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
             purpose: spec.meta?.whisper_purpose,
             scope: spec.meta?.whisper_scope,
             scopeWorkspaces: spec.meta?.whisper_workspaces,
+            // genie #65: the teardown above dropped the old agent from every
+            // channel. Carry its explicitly-joined rooms onto the relaunched
+            // identity, or a restart silently evicts it from the rooms it was
+            // coordinating in — with its next channel send reporting a
+            // delivered-to-nobody success.
+            channels: Array.isArray(spec.meta?.whisper_channels)
+                ? (spec.meta.whisper_channels as string[])
+                : [],
         },
     });
     // createAgentTerminal launches it host-side; renderAgentLaunch leaves a
@@ -1684,6 +1692,29 @@ export async function runAgentForMcp(
 }
 
 /**
+ * Write an agent's CURRENT channel membership to its spec meta (genie #65).
+ *
+ * The broker's `channelMembers` map is pure runtime state, so a membership that
+ * only lives there dies on the next restart or agent-terminal relaunch — which
+ * is exactly how a joined agent found itself silently out of a room. Called
+ * after every action that can change membership (`join`, `leave`, and a channel
+ * `send`, which auto-joins). Only the EXPLICIT rooms are stored; the agent's own
+ * purpose room is re-derived from `whisper_purpose` on rejoin.
+ */
+function persistAgentChannels(specId: string, agentId: string): void {
+    const cur = getTerminalSpec(specId);
+    if (!cur) return;
+    const channels = agentInboxBroker.persistableChannelKeys(agentId);
+    const prev = Array.isArray(cur.meta?.whisper_channels)
+        ? (cur.meta.whisper_channels as string[])
+        : [];
+    // Cheap equality — membership changes rarely, and a no-op write would churn
+    // the spec row (and its change broadcast) on every channel send.
+    if (prev.length === channels.length && prev.every((k, i) => k === channels[i])) return;
+    updateTerminalSpec(specId, { meta: { ...cur.meta, whisper_channels: channels } });
+}
+
+/**
  * Back the AgentInbox MCP `agentinbox` tool. Resolves (or lazily creates) the
  * caller's AgentInbox identity from its terminal, then dispatches the action against
  * the in-memory broker:
@@ -1700,6 +1731,8 @@ export async function runAgentForMcp(
  *     to the spec meta (durable across restart).
  *   - `join`/`leave {channel}` — opt in/out of a channel (a bare purpose targets
  *     the caller's own workspace room; `slug:purpose` targets another's).
+ *     Persisted to the spec meta, like accessibility, so a membership survives a
+ *     restart instead of silently lapsing (genie #65).
  *
  * A NON-agent caller (a plain terminal that runs an agent and calls agentinbox) is
  * lazily joined with defaults (`self` scope, `general` purpose) so any Genie
@@ -1745,6 +1778,18 @@ export async function agentInboxForMcp(
         });
     } else {
         agentInboxBroker.markOnline(agentId);
+        // SELF-HEAL (genie #65): the broker is in-memory, so an agent calling in
+        // after a host restart may be registered without the rooms it joined —
+        // the spec meta is the durable record. Re-apply it (idempotent; the
+        // workspace tier is re-checked inside `join`) so a returning agent finds
+        // itself where it left off instead of silently alone.
+        const durable = Array.isArray(spec.meta?.whisper_channels)
+            ? (spec.meta.whisper_channels as string[])
+            : [];
+        const live = new Set(agentInboxBroker.persistableChannelKeys(agentId));
+        for (const key of durable) {
+            if (!live.has(key)) agentInboxBroker.joinChannel(agentId, key);
+        }
     }
 
     try {
@@ -1770,7 +1815,26 @@ export async function agentInboxForMcp(
                     text: req.text,
                     interrupt: req.interrupt,
                 });
-                return r.ok ? { ok: true, delivered: r.delivered } : { ok: false, error: r.error };
+                // A channel send auto-joins the room — make that membership durable
+                // so it isn't silently lost on the next restart (genie #65).
+                if (req.channel) persistAgentChannels(spec.id, agentId);
+                // `delivered` / `channel` / `rejoined` ride BOTH arms: a broadcast
+                // that reached NOBODY comes back `ok: false` (it used to read as a
+                // clean success and the report was lost), and the caller still needs
+                // the facts to act on it.
+                return r.ok
+                    ? {
+                          ok: true,
+                          delivered: r.delivered,
+                          ...(r.channel ? { channel: r.channel, rejoined: r.rejoined === true } : {}),
+                      }
+                    : {
+                          ok: false,
+                          error: r.error,
+                          ...(r.channel
+                              ? { delivered: r.delivered ?? 0, channel: r.channel, rejoined: r.rejoined === true }
+                              : {}),
+                      };
             }
             case 'receive': {
                 const { messages, cursor } = await agentInboxBroker.receive(agentId, {
@@ -1834,11 +1898,15 @@ export async function agentInboxForMcp(
                 if (!req.channel) return { ok: false, error: 'join needs a `channel`.' };
                 const ok = agentInboxBroker.joinChannel(agentId, req.channel);
                 if (!ok) return { ok: false, error: `Couldn't resolve channel "${req.channel}".` };
+                // Durable membership (genie #65) — a join that lives only in the
+                // broker's memory evaporates on the next restart.
+                persistAgentChannels(spec.id, agentId);
                 return { ok: true, channels: agentInboxBroker.channelsForAgent(agentId) };
             }
             case 'leave': {
                 if (!req.channel) return { ok: false, error: 'leave needs a `channel`.' };
                 agentInboxBroker.leaveChannel(agentId, req.channel);
+                persistAgentChannels(spec.id, agentId);
                 return { ok: true, channels: agentInboxBroker.channelsForAgent(agentId) };
             }
         }

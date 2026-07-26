@@ -95,6 +95,49 @@ function pairKey(a: string, b: string): string {
     return [a, b].sort().join('|');
 }
 
+/**
+ * The outcome of {@link AgentInboxBroker.send}. `delivered` / `channel` /
+ * `rejoined` ride BOTH arms because a channel broadcast that reached nobody is
+ * reported as a failure (genie #65) and the caller still needs the facts: which
+ * room it resolved to, that zero agents got it, and whether the sender's own
+ * membership had lapsed.
+ */
+export type AgentInboxSendResult =
+    | {
+          ok: true;
+          delivered: number;
+          message: AgentInboxMessage;
+          /** Channel sends: the resolved channel key. */
+          channel?: string;
+          /** Channel sends: the sender was not a member and `send` re-added it. */
+          rejoined?: boolean;
+      }
+    | {
+          ok: false;
+          error: string;
+          delivered?: number;
+          channel?: string;
+          rejoined?: boolean;
+      };
+
+/**
+ * Why a channel broadcast reached nobody, in terms an agent can act on. Names
+ * the room, distinguishes "your membership had lapsed" from "the room is simply
+ * empty" (issue #65 asked for exactly that), and says outright that the message
+ * must NOT be treated as reported — while noting it survives in the panel, so a
+ * blind retry isn't the only way to keep the text.
+ */
+function channelSendMissError(key: string, rejoined: boolean): string {
+    const cause = rejoined
+        ? `you were no longer a member of channel "${key}" (rejoined now), and no other agent is in it`
+        : `no other agent is in channel "${key}"`;
+    return (
+        `Delivered to 0 recipients — ${cause}. The message is in the channel history ` +
+        `for the human, but NO agent received it, so do NOT treat this as reported. ` +
+        `Use \`list\` to see who is in the room, or send with \`to\` to DM an agent directly.`
+    );
+}
+
 export class AgentInboxBroker {
     private agents = new Map<string, AgentInboxAgent>();
     private byTerminal = new Map<string, string>(); // terminalId → agentId
@@ -464,8 +507,14 @@ export class AgentInboxBroker {
     /**
      * Register (or re-register) an agent. Idempotent per agentId: a second join
      * with the same id updates the record in place (e.g. rehydrate, or a spec
-     * edit). Auto-joins the agent's own `workspaceId:purpose` channel. Returns the
-     * public info.
+     * edit). Auto-joins the agent's own `workspaceId:purpose` channel, PLUS every
+     * channel in `input.channels` — the explicitly-joined rooms the host persisted
+     * to spec meta (genie #65). Returns the public info.
+     *
+     * Restoring those rooms is what makes membership survive a restart or an
+     * agent-terminal relaunch. Without it a re-registered agent came back holding
+     * only its purpose room — silently evicted from every shared channel it had
+     * joined, with its next channel send reporting a delivered-to-nobody success.
      */
     join(input: AgentInboxJoinInput): AgentInboxAgentInfo {
         this.wsInfo.set(input.workspaceId, {
@@ -500,8 +549,16 @@ export class AgentInboxBroker {
         };
         this.agents.set(agent.agentId, agent);
         this.byTerminal.set(agent.terminalId, agent.agentId);
-        // Own channel — its purpose room.
+        // Own channel — its purpose room (always derived, never persisted).
         this.addToChannel(agent.agentId, this.keyFor(agent.workspaceId, purpose));
+        // Explicitly-joined rooms restored from spec meta. Re-checked against the
+        // workspace tier: durable membership must not outlive the access that
+        // granted it, so a workspace that has since closed its door evicts here.
+        for (const key of input.channels ?? []) {
+            if (!key || key === this.keyFor(agent.workspaceId, purpose)) continue;
+            if (!this.workspaceAllows(agent.workspaceId, this.workspaceOfKey(key))) continue;
+            this.addToChannel(agent.agentId, key);
+        }
         this.emitPresence(agent);
         return this.toInfo(agent);
     }
@@ -711,6 +768,26 @@ export class AgentInboxBroker {
         return out.sort((a, b) => a.key.localeCompare(b.key));
     }
 
+    /**
+     * The channel keys the HOST must persist for an agent (genie #65) — every
+     * room it explicitly joined (or auto-joined by posting), MINUS its own
+     * `<workspaceId>:<purpose>` room.
+     *
+     * The purpose room is deliberately excluded because it is DERIVED: `join`
+     * rebuilds it from `whisper_purpose` every time, so persisting it would let
+     * a purpose rename strand a ghost room that resurrects on the next restart.
+     * What's left is exactly the state that has no other home — and losing it is
+     * what silently evicted agents from shared channels.
+     */
+    persistableChannelKeys(agentId: string): string[] {
+        const a = this.agents.get(agentId);
+        if (!a) return [];
+        const own = this.keyFor(a.workspaceId, a.purpose);
+        return this.channelsForAgent(agentId)
+            .map((c) => c.key)
+            .filter((key) => key !== own);
+    }
+
     // --- discovery ---------------------------------------------------------
 
     /**
@@ -841,6 +918,15 @@ export class AgentInboxBroker {
      * channel broadcast) must be set. `human:true` posts as the human panel; else
      * `fromAgentId` is the sending agent. Returns how many recipients it reached
      * (`delivered`) or an error. No self-echo on channels.
+     *
+     * A channel broadcast from an AGENT that reaches NOBODY is reported as a
+     * FAILURE (genie #65). It used to return `{ ok: true, delivered: 0 }` —
+     * indistinguishable from a delivered report, so an agent whose membership had
+     * lapsed believed it had reported while the message reached no one. The text
+     * is still recorded in the channel log (the human panel keeps it); only the
+     * VERDICT changes, because "nobody received this" is not a success. The human
+     * panel's own posts are exempt: the human can see their message land, so an
+     * empty room is not an error for them.
      */
     send(input: {
         fromAgentId?: string;
@@ -849,7 +935,7 @@ export class AgentInboxBroker {
         channelArg?: string;
         text: string;
         interrupt?: boolean;
-    }): { ok: true; delivered: number; message: AgentInboxMessage } | { ok: false; error: string } {
+    }): AgentInboxSendResult {
         const text = String(input.text ?? '');
         if (!text.trim()) return { ok: false, error: 'A message needs non-empty text.' };
 
@@ -921,6 +1007,8 @@ export class AgentInboxBroker {
         // --- channel ---
         if (input.channelArg) {
             let key: string | null;
+            /** The sender's membership had lapsed and `send` restored it. */
+            let rejoined = false;
             if (input.human) {
                 // The human posts by an explicit channel KEY (from the panel);
                 // resolve a slug-qualified form too, but a bare key is the norm.
@@ -942,7 +1030,12 @@ export class AgentInboxBroker {
                     };
                 }
                 // Convenience: a sending agent auto-joins the channel it posts to.
-                if (key) this.addToChannel(sender!.agentId, key);
+                // Whether it HAD to is reported back — a sender that believed it
+                // was already in the room learns its membership had lapsed.
+                if (key) {
+                    rejoined = !(this.channelMembers.get(key)?.has(sender!.agentId) ?? false);
+                    this.addToChannel(sender!.agentId, key);
+                }
             }
             if (!key) return { ok: false, error: `Unknown channel "${input.channelArg}".` };
             const msg: AgentInboxMessage = {
@@ -966,7 +1059,18 @@ export class AgentInboxBroker {
             this.store.append(msg);
             this.emitMessage(msg);
             this.emitLagIfChanged();
-            return { ok: true, delivered, message: msg };
+            // Reached nobody: tell the AGENT sender plainly, so it can never
+            // mistake a delivered-to-no-one broadcast for a filed report.
+            if (!input.human && delivered === 0) {
+                return {
+                    ok: false,
+                    error: channelSendMissError(key, rejoined),
+                    delivered: 0,
+                    channel: key,
+                    rejoined,
+                };
+            }
+            return { ok: true, delivered, message: msg, channel: key, rejoined };
         }
 
         return { ok: false, error: 'Send needs `to` (an agent) or `channel`.' };

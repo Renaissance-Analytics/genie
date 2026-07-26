@@ -730,8 +730,15 @@ export interface AgentInboxResult {
     messages?: AgentInboxMessage[];
     /** receive: the cursor to pass to the NEXT receive. */
     cursor?: number;
-    /** send: how many recipients the message reached. */
+    /** send: how many recipients the message reached. On a CHANNEL send this also
+     *  rides an `ok: false` result — a broadcast nobody received is a failure, not
+     *  a quiet success (genie #65), and the caller still needs the count. */
     delivered?: number;
+    /** send (channel): the channel key the message resolved to. */
+    channel?: string;
+    /** send (channel): the sender was NOT a member and `send` re-added it — its
+     *  membership had lapsed, so anything it "reported" in between went nowhere. */
+    rejoined?: boolean;
     /** receipts: the caller's recent sent DMs, each with a `seen` flag. */
     receipts?: AgentInboxReceipt[];
 }
@@ -1214,7 +1221,7 @@ const MANAGE_WORKSPACES_TOOL = {
 const AGENTINBOX_TOOL = {
     name: 'agentinbox',
     description:
-        "Coordinate with OTHER AI agents running in this Genie instance — AgentInbox, a LOCAL inter-agent messaging network. Discover peer agents (in your workspace, or across the workstation when they allow it), DM them 1:1, and broadcast on shared CHANNELS. Delivery is PULL-based — you FETCH messages; they're never injected mid-turn (which would corrupt it). To await a reply, make ONE blocking `receive` with `wait:true` rather than polling in a loop — it returns the moment a message lands. Actions (`action`): `list` (discovery — returns YOUR agent info `self`, the peers you can reach `agents`, and your `channels`); `send` (message a peer with `to` = their agentId, OR broadcast with `channel` = a purpose like `frontend` (your workspace's room) or `slug:purpose` (another workspace's) — needs `text`; optional `interrupt:true` also glows a DM target's terminal so they notice); `receive` (fetch NEW messages — pass a `cursor` from a prior receive to page forward; set `wait:true` to LONG-POLL until a message arrives (optional `timeoutMs`), so you can block waiting for a peer's reply); `receipts` (read-receipts for the DMs YOU sent — each with a `seen` flag that's true once the recipient has received it, so you can tell 'queued' from 'seen' and decide whether to escalate; optional `limit`, default 20); `setAccessibility` (`scope` — who may DM you: `self` your workspace only (default) / `specific` + `workspaces` a chosen set / `all` the whole workstation / `none` nobody, but you STAY LISTED to peers as unreachable so they can find you and ask / `hidden` nobody, and you're omitted from discovery entirely; optional `purpose` renames your channel); `join`/`leave` (`channel`) to opt in/out of a channel. Your identity + accessibility are remembered across restarts. Local-only — no relay, no cross-host.",
+        "Coordinate with OTHER AI agents running in this Genie instance — AgentInbox, a LOCAL inter-agent messaging network. Discover peer agents (in your workspace, or across the workstation when they allow it), DM them 1:1, and broadcast on shared CHANNELS. Delivery is PULL-based — you FETCH messages; they're never injected mid-turn (which would corrupt it). To await a reply, make ONE blocking `receive` with `wait:true` rather than polling in a loop — it returns the moment a message lands. Actions (`action`): `list` (discovery — returns YOUR agent info `self`, the peers you can reach `agents`, and your `channels`); `send` (message a peer with `to` = their agentId, OR broadcast with `channel` = a purpose like `frontend` (your workspace's room) or `slug:purpose` (another workspace's) — needs `text`; optional `interrupt:true` also glows a DM target's terminal so they notice); `receive` (fetch NEW messages — pass a `cursor` from a prior receive to page forward; set `wait:true` to LONG-POLL until a message arrives (optional `timeoutMs`), so you can block waiting for a peer's reply); `receipts` (read-receipts for the DMs YOU sent — each with a `seen` flag that's true once the recipient has received it, so you can tell 'queued' from 'seen' and decide whether to escalate; optional `limit`, default 20); `setAccessibility` (`scope` — who may DM you: `self` your workspace only (default) / `specific` + `workspaces` a chosen set / `all` the whole workstation / `none` nobody, but you STAY LISTED to peers as unreachable so they can find you and ask / `hidden` nobody, and you're omitted from discovery entirely; optional `purpose` renames your channel); `join`/`leave` (`channel`) to opt in/out of a channel. Your identity, accessibility AND channel memberships are remembered across restarts — a channel you joined stays joined until you `leave` it. A channel `send` that reaches NOBODY comes back `ok:false` with `delivered:0` (the text is still kept in the channel history for the human): treat that as NOT REPORTED — check `list` for who's in the room, or DM someone with `to`. Local-only — no relay, no cross-host.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -2142,7 +2149,14 @@ export async function handleMcpMessage(
                 } else if (action === 'receive') {
                     summary = `${result.messages?.length ?? 0} new message(s).`;
                 } else if (action === 'send') {
-                    summary = `Sent — delivered to ${result.delivered ?? 0} recipient(s).`;
+                    // A lapsed membership is worth saying out loud even on a
+                    // SUCCESSFUL send: it means the sender was out of the room for
+                    // a while, so anything it "reported" in between went nowhere.
+                    summary =
+                        `Sent — delivered to ${result.delivered ?? 0} recipient(s).` +
+                        (result.rejoined
+                            ? ` (You were no longer in ${result.channel} — rejoined.)`
+                            : '');
                 } else if (action === 'receipts') {
                     const rs = result.receipts ?? [];
                     summary = `${rs.length} sent DM(s); ${rs.filter((r) => r.seen).length} seen.`;

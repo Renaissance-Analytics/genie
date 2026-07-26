@@ -1849,6 +1849,12 @@ export interface TerminalSpecMeta {
     /** Opt-in wake-on-DM (issue #9): a DM to an idle agent may inject a nudge to
      *  start a turn. Default off/absent. */
     whisper_wake_on_dm?: boolean;
+    /** Channel keys this agent explicitly joined (genie #65) — everything beyond
+     *  its own `<workspaceId>:<purpose>` room, which is re-derived from
+     *  `whisper_purpose` instead. The broker's `channelMembers` map is pure
+     *  runtime state, so without this a restart or an agent-terminal relaunch
+     *  silently evicted the agent from every shared channel. */
+    whisper_channels?: string[];
     /** IssueWatch pings (feature): this agent participates in its workspace's
      *  IssueWatch deltas. Default off/absent — no ping is delivered. */
     issuewatch_handle?: boolean;
