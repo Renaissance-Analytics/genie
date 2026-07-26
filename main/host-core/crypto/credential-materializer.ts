@@ -2,24 +2,34 @@ import nodeFs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { ANTHROPIC_API_KEY, CLAUDE_SUBSCRIPTION, GITHUB_TOKEN, OPENAI_API_KEY } from './escrow';
+import { ANTHROPIC, API_KEY, OPENAI, SCOPE_PROJECT, type OpenedCredential } from './escrow';
 
 /**
  * Getting an OPENED credential into the shape each agent CLI actually reads —
  * the last hop of the managed-credential path, and the only place a plaintext
  * value touches anything outside process memory.
  *
- * Three destinations, deliberately different:
+ * **`kind`, not `provider`, decides the destination:**
  *
- * - **API keys** (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) → the terminal
- *   environment. Nothing on disk.
- * - **GitHub token** → `gh auth login --with-token`, piped on **STDIN**. Never
- *   argv: a process's command line is world-readable (`ps -e`), so a token in
- *   argv is a token leaked to every local user.
- * - **Claude subscription** → `~/.claude/.credentials.json`, 0600 in a 0700
- *   `.claude/`, because that is the only interface the Claude CLI offers. It is
- *   NOT put in the environment as well — that would be a second copy in a place
- *   every child process inherits.
+ * - **`api_key`** → the terminal environment (`ANTHROPIC_API_KEY`,
+ *   `OPENAI_API_KEY`). Nothing on disk. Per-process, so project scope works.
+ * - **`github` + `api_key`** → `gh auth login --with-token`, piped on **STDIN**.
+ *   Never argv: a process's command line is world-readable (`ps -e`), so a token
+ *   in argv is a token leaked to every local user.
+ * - **`anthropic` + `subscription`** → `~/.claude/.credentials.json`, 0600 in a
+ *   0700 `.claude/`, because that is the only interface the Claude CLI offers.
+ *   It is NOT put in the environment as well — that would be a second copy in a
+ *   place every child process inherits.
+ *
+ * That `anthropic` appears with BOTH kinds, materializing two completely
+ * different ways, is exactly why the descriptor can't collapse to one slug.
+ *
+ * **Scope reaches only as far as the mechanism does.** An env var is per-process,
+ * so a `project`-scoped api_key cleanly overrides the account one for that
+ * workspace's terminals. `gh auth login` and `~/.claude/.credentials.json` are
+ * **one per host** — there is no per-project variant of either — so those fall to
+ * {@link resolveHostGlobal}, which prefers the account credential and REFUSES to
+ * guess between competing project ones.
  *
  * Every failure path here returns a flag + a **redacted** reason. An underlying
  * error (or gh's own stderr) can quote the value back at us, so the value is
@@ -31,37 +41,97 @@ export const CLAUDE_CREDENTIALS_MODE = 0o600;
 /** Mode for the `.claude/` directory that holds it. */
 export const CLAUDE_DIR_MODE = 0o700;
 
-/** provider slug → the env var the agent CLI reads. Providers absent from this
- *  map are materialized some other way (or not at all) and MUST NOT reach env. */
-const ENV_PROVIDERS: Record<string, string> = {
-    [ANTHROPIC_API_KEY]: 'ANTHROPIC_API_KEY',
-    [OPENAI_API_KEY]: 'OPENAI_API_KEY',
+/** `provider/kind` → the env var the agent CLI reads. A pair absent from this
+ *  map is materialized some other way (or not at all) and MUST NOT reach env. */
+const ENV_VARS: Record<string, string> = {
+    [`${ANTHROPIC}/${API_KEY}`]: 'ANTHROPIC_API_KEY',
+    [`${OPENAI}/${API_KEY}`]: 'OPENAI_API_KEY',
 };
 
 /**
- * The env var a provider is injected as, or null when it is materialized some
- * other way (GitHub token, Claude subscription) and must NEVER reach an
- * environment. The single source of truth for that mapping in both directions —
- * a revoke names a provider and needs the variable to unset.
+ * The env var a credential is injected as, or null when it is materialized some
+ * other way (the GitHub token, the Claude subscription) and must NEVER reach an
+ * environment. Keyed on `provider` AND `kind` because the pair is what decides:
+ * `anthropic/api_key` is an env var, `anthropic/subscription` is a file.
  */
-export function envVarForProvider(provider: string): string | null {
-    return ENV_PROVIDERS[provider] ?? null;
+export function envVarForCredential(credential: { provider: string; kind: string }): string | null {
+    return ENV_VARS[`${credential.provider}/${credential.kind}`] ?? null;
 }
 
 /**
- * The env fragment for a set of opened credentials. Only the providers in
- * {@link ENV_PROVIDERS} appear — the GitHub token and the Claude subscription
- * are intentionally excluded so they never ride a child process's environment.
- * Blank values are dropped rather than exported as empty strings (an empty
- * `ANTHROPIC_API_KEY` is worse than an absent one: the CLI treats it as set).
+ * The env fragment for a terminal, resolved for `projectId` (the workspace that
+ * terminal belongs to, when it has one).
+ *
+ * Per env var, a `project`-scoped credential matching `projectId` wins over the
+ * `account` one — that is the owner's per-workspace override. A project
+ * credential for a DIFFERENT workspace is ignored entirely rather than falling
+ * back into this one, so workspace A's key can never leak into workspace B.
+ *
+ * Blank values are dropped rather than exported as empty strings: an empty
+ * `ANTHROPIC_API_KEY` is worse than an absent one, since the CLI treats it as set.
  */
-export function credentialEnv(values: Record<string, string>): Record<string, string> {
+export function credentialEnv(
+    credentials: OpenedCredential[],
+    projectId?: string | null,
+): Record<string, string> {
     const env: Record<string, string> = {};
-    for (const [provider, value] of Object.entries(values)) {
-        const envVar = envVarForProvider(provider);
-        if (envVar && value?.trim()) env[envVar] = value.trim();
+    const fromProject = new Set<string>();
+    for (const credential of credentials ?? []) {
+        const envVar = envVarForCredential(credential);
+        const value = credential.value?.trim();
+        if (!envVar || !value) continue;
+
+        if (credential.scope === SCOPE_PROJECT) {
+            // Only this workspace's own override applies.
+            if (!projectId || credential.projectId !== projectId) continue;
+            env[envVar] = value;
+            fromProject.add(envVar);
+            continue;
+        }
+        // Account scope never displaces a project override already resolved.
+        if (!fromProject.has(envVar)) env[envVar] = value;
     }
     return env;
+}
+
+export type HostGlobalStatus = 'ok' | 'absent' | 'ambiguous';
+
+export interface HostGlobalResolution {
+    status: HostGlobalStatus;
+    credential?: OpenedCredential;
+    /** On 'ambiguous', the competing credential IDs — ids only, never values. */
+    conflictIds?: string[];
+}
+
+/**
+ * Pick the ONE credential for a host-global materialization (`gh auth login`,
+ * `~/.claude/.credentials.json`). Both are single-slot per host: one home
+ * directory, one gh auth state, and the Claude CLI offers no per-directory
+ * credential path, so two project-scoped credentials cannot both be live.
+ *
+ * Account scope wins. With no account credential and exactly ONE project-scoped
+ * candidate, that one is used — better than leaving the host unauthenticated.
+ * With SEVERAL, this returns `ambiguous` and materializes nothing: silently
+ * picking would authenticate every agent on the host as one workspace's
+ * identity, which is worse than having no credential at all.
+ */
+export function resolveHostGlobal(
+    credentials: OpenedCredential[],
+    provider: string,
+    kind: string,
+): HostGlobalResolution {
+    const matches = (credentials ?? []).filter(
+        (c) => c.provider === provider && c.kind === kind && c.value?.trim(),
+    );
+    const account = matches.find((c) => c.scope !== SCOPE_PROJECT);
+    if (account) return { status: 'ok', credential: account };
+
+    const scoped = matches.filter((c) => c.scope === SCOPE_PROJECT);
+    if (scoped.length === 1) return { status: 'ok', credential: scoped[0] };
+    if (scoped.length > 1) {
+        return { status: 'ambiguous', conflictIds: scoped.map((c) => c.id) };
+    }
+    return { status: 'absent' };
 }
 
 /** The subset of `node:fs` THIS module uses — injected so tests never need real

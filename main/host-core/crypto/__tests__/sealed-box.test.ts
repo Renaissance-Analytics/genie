@@ -121,4 +121,38 @@ describe('sealed box (libsodium crypto_box_seal)', () => {
         expect(isPlausibleSealedBox(FAKE_CREDENTIAL)).toBe(false);
         expect(isPlausibleSealedBox('')).toBe(false);
     });
+
+    it('rejects EXACTLY 48 bytes — a real box always carries a body', async () => {
+        // SEALBYTES is header + MAC only, so a 48-byte payload is a box with no
+        // content: structurally impossible. Mirrors Tynn's server-side gate.
+        expect(isPlausibleSealedBox(Buffer.alloc(48, 0xab).toString('base64'))).toBe(false);
+        expect(isPlausibleSealedBox(Buffer.alloc(49, 0xab).toString('base64'))).toBe(true);
+    });
+
+    it('rejects a payload that decodes to PRINTABLE TEXT — the base64-wrapped-plaintext trap', async () => {
+        // The case length alone misses: someone base64s a long credential file and
+        // sends it as "ciphertext". It clears 48 bytes but is plainly not a box.
+        const wrappedJson = Buffer.from(
+            JSON.stringify({ fake: true, note: 'a'.repeat(200) }),
+            'utf8',
+        ).toString('base64');
+        expect(Buffer.from(wrappedJson, 'base64').length).toBeGreaterThan(48);
+        expect(isPlausibleSealedBox(wrappedJson)).toBe(false);
+
+        const wrappedKey = Buffer.from('fake-not-a-real-key-'.repeat(10), 'utf8').toString('base64');
+        expect(isPlausibleSealedBox(wrappedKey)).toBe(false);
+    });
+
+    it('rejects a payload above the 16KB ceiling', async () => {
+        const kp = await generateEncryptionKeypair();
+        const huge = await seal(Buffer.alloc(17 * 1024, 7), kp.publicKeyB64);
+        expect(isPlausibleSealedBox(huge)).toBe(false);
+        // A large-but-sane credential blob still passes.
+        expect(isPlausibleSealedBox(await seal(Buffer.alloc(8 * 1024, 7), kp.publicKeyB64))).toBe(true);
+    });
+
+    it('rejects non-strict base64 (url-safe alphabet, whitespace)', () => {
+        expect(isPlausibleSealedBox('AAAA-BBBB_CCCC'.repeat(10))).toBe(false);
+        expect(isPlausibleSealedBox(`${Buffer.alloc(64, 1).toString('base64')}\n`)).toBe(false);
+    });
 });

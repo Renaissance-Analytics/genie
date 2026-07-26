@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import nodeFs from 'node:fs';
 import path from 'node:path';
-import { CLAUDE_SUBSCRIPTION, sealForEscrow } from './escrow';
+import { sealForEscrow } from './escrow';
 import { claudeCredentialsPath, type CredentialFs } from './credential-materializer';
 
 /**
@@ -46,7 +46,7 @@ export function resetClaudeRotation(): void {
 
 /** The one Tynn call rotation makes. */
 export interface RotationClient {
-    putCredential(provider: string, ciphertextB64: string): Promise<void>;
+    putCredential(credentialId: string, ciphertextB64: string): Promise<void>;
 }
 
 export interface RotationDeps {
@@ -63,6 +63,17 @@ export interface RotationDeps {
      * orchestrator depends on rotation, not the other way around.
      */
     escrowPublicKey?: string | null | (() => string | null);
+    /**
+     * The Tynn credential id backing the materialized file — the write-back
+     * target. A thunk for the same reason as the escrow key: a refresh can swap
+     * which credential is materialized under a long-lived watcher. Absent/null ⇒
+     * nothing is materialized by us, so there is nothing to write back to.
+     *
+     * Keyed on the ID rather than the provider because an account-wide and a
+     * project-scoped subscription can coexist; a provider-keyed PUT would
+     * overwrite whichever the server guessed.
+     */
+    credentialId?: string | null | (() => string | null);
 }
 
 const defaultFs: CredentialFs = {
@@ -85,6 +96,8 @@ export type RotationStatus =
     | 'absent'
     /** Nothing to seal to — the host holds no escrow key. */
     | 'no-escrow-key'
+    /** No credential id to write back to — nothing was materialized by us. */
+    | 'no-credential-id'
     /** Seal or PUT failed; the baseline is unchanged so the next tick retries. */
     | 'error';
 
@@ -92,9 +105,8 @@ export interface RotationResult {
     status: RotationStatus;
 }
 
-function resolveEscrowKey(deps: RotationDeps): string | null {
-    const key = deps.escrowPublicKey;
-    return (typeof key === 'function' ? key() : key) ?? null;
+function resolveLate(value: string | null | undefined | (() => string | null)): string | null {
+    return (typeof value === 'function' ? value() : value) ?? null;
 }
 
 /**
@@ -132,12 +144,14 @@ export async function syncClaudeCredentialRotation(
     }
     if (current === lastDigest) return { status: 'unchanged' };
 
-    const escrowPublicKeyB64 = resolveEscrowKey(deps);
+    const escrowPublicKeyB64 = resolveLate(deps.escrowPublicKey);
     if (!escrowPublicKeyB64) return { status: 'no-escrow-key' };
+    const credentialId = resolveLate(deps.credentialId);
+    if (!credentialId) return { status: 'no-credential-id' };
 
     try {
         const ciphertext = await sealForEscrow(blob, escrowPublicKeyB64);
-        await client.putCredential(CLAUDE_SUBSCRIPTION, ciphertext);
+        await client.putCredential(credentialId, ciphertext);
     } catch {
         // Baseline intentionally NOT advanced — retry on the next change.
         return { status: 'error' };

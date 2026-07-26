@@ -12,8 +12,8 @@ import {
     toIssueWatchDelta,
     workstationChannel,
 } from './pusher-protocol';
-import { isCredentialRevoke, toCredentialRevoke } from './managed-credential-client';
-import type { CredentialRevoke } from '../host-core/crypto/managed-credentials';
+import { isProviderCredentialChange, toProviderCredentialChange } from './managed-credential-client';
+import type { ProviderCredentialChange } from '../host-core/crypto/managed-credentials';
 import type { IssueWatchDeltaPush } from './workspace-assignment';
 
 /** The minimal socket surface the transport drives — the real `ws` WebSocket
@@ -42,7 +42,7 @@ export interface WorkstationPusherHandlers {
      * second transport, so revocation costs no extra connection and no polling.
      * Optional: a caller with no managed credentials simply omits it.
      */
-    onCredentialRevoke?: (event: CredentialRevoke) => void;
+    onProviderCredentialChange?: (event: ProviderCredentialChange) => void;
     onDisconnected?: () => void;
 }
 
@@ -175,11 +175,11 @@ export class WorkstationPusherTransport {
             if (delta) this.handlers?.onIssueWatchDelta(delta);
             return;
         }
-        if (isCredentialRevoke(frame, this.channel)) {
-            // A payload naming nothing is dropped by the coercion — a garbled
-            // push must never be upgraded into an all-revoke.
-            const event = toCredentialRevoke(frame.data);
-            if (event) this.handlers?.onCredentialRevoke?.(event);
+        if (isProviderCredentialChange(frame, this.channel)) {
+            // A payload naming no valid action or credential is dropped by the
+            // coercion — a garbled push must never act on a guess.
+            const event = toProviderCredentialChange(frame.data);
+            if (event) this.handlers?.onProviderCredentialChange?.(event);
         }
     }
 

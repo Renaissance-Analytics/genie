@@ -23,15 +23,24 @@ import { managedCredentialEnv } from '../host-core/crypto/managed-credentials';
  */
 
 export interface TerminalEnvDeps {
-    managedEnv?: () => Record<string, string>;
+    managedEnv?: (projectId?: string | null) => Record<string, string>;
     workspaceEnv?: (workspacePath: string) => Record<string, string>;
 }
 
+/**
+ * `projectId` is the Tynn project of the workspace this terminal belongs to. It
+ * selects the owner's per-workspace credential override: a `project`-scoped API
+ * key for THIS project wins over the account-wide one, and one belonging to a
+ * different project is not applied at all. Omit it and only account-scoped
+ * credentials are injected — which is the correct, conservative answer for a
+ * terminal that belongs to no Tynn project.
+ */
 export function buildTerminalEnv(
     workspacePath: string | undefined,
+    projectId?: string | null,
     deps: TerminalEnvDeps = {},
 ): Record<string, string> {
-    const managed = (deps.managedEnv ?? managedCredentialEnv)();
+    const managed = (deps.managedEnv ?? managedCredentialEnv)(projectId);
     if (!workspacePath) return managed;
     const workspace = (deps.workspaceEnv ?? loadWorkspaceTerminalEnv)(workspacePath);
     return { ...managed, ...workspace };

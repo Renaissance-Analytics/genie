@@ -353,8 +353,9 @@ export function createAgentTerminal(opts: {
     // Plus any Tynn-managed provider credentials this host has opened (the
     // workspace `.env` overrides them — see buildTerminalEnv).
     let env: Record<string, string> = {};
-    const wsRoot = getWorkspace(opts.workspaceId)?.path;
-    env = buildTerminalEnv(wsRoot);
+    const ws = getWorkspace(opts.workspaceId);
+    const wsRoot = ws?.path;
+    env = buildTerminalEnv(wsRoot, ws?.project_id);
     if (workspaceMcpEnabled(opts.workspaceId)) {
         const mcpUrl = registerTerminalEndpoint(id);
         if (mcpUrl) {
@@ -709,10 +710,9 @@ export function registerTerminalIpc(): void {
             // restored/resumed terminals; explicit opts.env still wins on any
             // collision. A respawn re-reads the managed env, so a credential
             // revoked since the last spawn is simply gone from this one.
-            const wsRoot = spec?.workspace_id
-                ? getWorkspace(spec.workspace_id)?.path
-                : undefined;
-            const envFileVars = buildTerminalEnv(wsRoot);
+            const specWs = spec?.workspace_id ? getWorkspace(spec.workspace_id) : undefined;
+            const wsRoot = specWs?.path;
+            const envFileVars = buildTerminalEnv(wsRoot, specWs?.project_id);
             if (Object.keys(envFileVars).length) {
                 opts = { ...opts, env: { ...envFileVars, ...opts.env } };
             }

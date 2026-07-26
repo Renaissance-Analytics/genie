@@ -117,15 +117,42 @@ export async function sealOpenText(
     return opened ? Buffer.from(opened).toString('utf8') : null;
 }
 
+/** Ceiling for a stored credential ciphertext. Mirrors Tynn's server-side gate. */
+export const MAX_SEALED_BOX_BYTES = 16 * 1024;
+
+/** Is every decoded byte printable text (ASCII plus tab/CR/LF)? */
+function looksLikeText(raw: Buffer): boolean {
+    for (const byte of raw) {
+        const printable = byte === 0x09 || byte === 0x0a || byte === 0x0d || (byte >= 0x20 && byte <= 0x7e);
+        if (!printable) return false;
+    }
+    return true;
+}
+
 /**
- * A cheap shape check: does this base64 blob even have room for a sealed box?
- * Used to REFUSE handling anything that looks like it might be plaintext (a
- * credential short enough to fit inside the 48-byte overhead can't be a box).
- * It is a guard, not a validation — only {@link sealOpen} proves a real box.
+ * Structural check that a payload could be a sealed box, so anything that might
+ * be PLAINTEXT is refused before it can be written to Tynn. Deliberately mirrors
+ * Tynn's server-side gate byte-for-byte, so both ends refuse and neither can be
+ * the one that lands an openable value in the zero-knowledge store:
+ *
+ * - strict base64 (the url-safe `-`/`_` alphabet and whitespace are rejected, so
+ *   a raw un-encoded credential fails here);
+ * - **strictly more** than 48 bytes — `SEALBYTES` is ephemeral key + MAC only, so
+ *   exactly 48 is a box with no body: structurally impossible;
+ * - at most {@link MAX_SEALED_BOX_BYTES};
+ * - the decoded bytes must NOT be all-printable. This is the rule length alone
+ *   misses: a base64-wrapped API key or `credentials.json` clears 48 bytes
+ *   easily. A real box opens with a 32-byte random ephemeral public key, so
+ *   all-printable is vanishingly unlikely by chance.
+ *
+ * It is a guard, not a validation — only {@link sealOpen} proves a real box, and
+ * neither side holds a key that could confirm one. That is the point.
  */
 export function isPlausibleSealedBox(value: string): boolean {
     if (!value || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
-    return Buffer.from(value, 'base64').length > SEAL_OVERHEAD_BYTES;
+    const raw = Buffer.from(value, 'base64');
+    if (raw.length <= SEAL_OVERHEAD_BYTES || raw.length > MAX_SEALED_BOX_BYTES) return false;
+    return !looksLikeText(raw);
 }
 
 /**

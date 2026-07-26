@@ -29,11 +29,34 @@ import {
  * reported as a provider NAME on `failed[]`; the value simply never materialises.
  */
 
-/** Provider slugs on the wire — must match Tynn's `ProviderCredential.provider`. */
-export const ANTHROPIC_API_KEY = 'anthropic_api_key';
-export const OPENAI_API_KEY = 'openai_api_key';
-export const GITHUB_TOKEN = 'github_token';
-export const CLAUDE_SUBSCRIPTION = 'claude_subscription';
+/**
+ * A credential is described by THREE independent dimensions, not one slug
+ * (Tynn's `ProviderCredential`):
+ *
+ * - `provider` — whose credential it is (`github` / `anthropic` / `openai`);
+ * - `kind` — **how the host materializes it** (`api_key` → an env var;
+ *   `subscription` → the Claude CLI's own credential file);
+ * - `scope` — `account`, or `project` with a `projectId`.
+ *
+ * They are genuinely independent: `anthropic` has both an `api_key` and a
+ * `subscription` form that materialize completely differently, and one provider
+ * can have several live credentials at once (an account default plus a
+ * project override). A flat slug can express none of that — which is also why
+ * write-back keys on the credential `id` rather than the provider.
+ */
+export const GITHUB = 'github';
+export const ANTHROPIC = 'anthropic';
+export const OPENAI = 'openai';
+
+export const API_KEY = 'api_key';
+export const SUBSCRIPTION = 'subscription';
+
+export const SCOPE_ACCOUNT = 'account';
+export const SCOPE_PROJECT = 'project';
+
+/** Which key opens a credential: the owner's escrow key (normal) or this host's
+ *  own key (sealed directly to us — e.g. a first-host handoff). */
+export type SealedTo = 'escrow' | 'host';
 
 /** The owner's escrow key as Tynn serves it to ONE host. */
 export interface EscrowBundle {
@@ -45,9 +68,16 @@ export interface EscrowBundle {
 }
 
 export interface SealedCredential {
-    id?: string;
+    /** Tynn's credential id — the write-back key. Unambiguous where a provider
+     *  name is not: an account and a project credential share a provider. */
+    id: string;
     provider: string;
-    /** Sealed to the escrow PUBLIC key. */
+    kind: string;
+    scope?: string;
+    projectId?: string | null;
+    label?: string | null;
+    /** Which key opens `ciphertext`. Absent ⇒ escrow (the normal case). */
+    sealedTo?: SealedTo;
     ciphertext: string;
     updatedAt?: string;
 }
@@ -59,13 +89,24 @@ export interface CredentialBundle {
 
 export type OpenBundleStatus = 'ok' | 'no-escrow-key';
 
+/** One opened credential: its descriptor plus the plaintext, in memory only. */
+export interface OpenedCredential {
+    id: string;
+    provider: string;
+    kind: string;
+    scope: string;
+    projectId: string | null;
+    label: string | null;
+    /** Plaintext. Never persisted, never logged, never put in a summary. */
+    value: string;
+}
+
 export interface OpenedCredentials {
     status: OpenBundleStatus;
     /** Echoed so a rotation write-back seals to the SAME escrow key it opened. */
     escrowPublicKeyB64: string;
-    /** provider → plaintext. In-memory only; never persisted or logged as a whole. */
-    values: Record<string, string>;
-    /** Providers whose ciphertext did not open — NAMES ONLY, never values. */
+    credentials: OpenedCredential[];
+    /** Credential IDs whose ciphertext did not open — IDS ONLY, never values. */
     failed: string[];
 }
 
@@ -103,22 +144,40 @@ export async function openCredentialBundle(
 ): Promise<OpenedCredentials> {
     const escrowKeypair = await openEscrowKeypair(bundle.escrow, hostKeypair);
     const escrowPublicKeyB64 = bundle.escrow?.publicKeyB64 ?? '';
-    if (!escrowKeypair) {
-        return { status: 'no-escrow-key', escrowPublicKeyB64, values: {}, failed: [] };
-    }
 
-    const values: Record<string, string> = {};
+    const credentials: OpenedCredential[] = [];
     const failed: string[] = [];
     for (const credential of bundle.credentials ?? []) {
-        // Shape-check first: anything too small to BE a sealed box is treated as a
-        // store fault (possibly plaintext) and dropped without an open attempt.
-        const plaintext = isPlausibleSealedBox(credential.ciphertext)
-            ? await sealOpenText(credential.ciphertext, escrowKeypair)
-            : null;
-        if (plaintext == null) failed.push(credential.provider);
-        else values[credential.provider] = plaintext;
+        // A `host`-sealed credential opens with our OWN key, so it is available
+        // even while the escrow bootstrap is still pending. Missing the escrow
+        // key is not a reason to drop something we can already open.
+        const keypair = credential.sealedTo === 'host' ? hostKeypair : escrowKeypair;
+        // Shape-check first: anything that could be plaintext is treated as a
+        // store fault and dropped without an open attempt.
+        const plaintext =
+            keypair && isPlausibleSealedBox(credential.ciphertext)
+                ? await sealOpenText(credential.ciphertext, keypair)
+                : null;
+        if (plaintext == null) {
+            failed.push(credential.id);
+            continue;
+        }
+        credentials.push({
+            id: credential.id,
+            provider: credential.provider,
+            kind: credential.kind,
+            scope: credential.scope ?? SCOPE_ACCOUNT,
+            projectId: credential.projectId ?? null,
+            label: credential.label ?? null,
+            value: plaintext,
+        });
     }
-    return { status: 'ok', escrowPublicKeyB64, values, failed };
+    return {
+        status: escrowKeypair ? 'ok' : 'no-escrow-key',
+        escrowPublicKeyB64,
+        credentials,
+        failed,
+    };
 }
 
 /**

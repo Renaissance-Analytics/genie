@@ -16,7 +16,7 @@ import {
     WorkstationPusherTransport,
     type WorkstationSubscriptionHandle,
 } from './pusher-transport';
-import type { CredentialRevoke } from '../host-core/crypto/managed-credentials';
+import type { ProviderCredentialChange } from '../host-core/crypto/managed-credentials';
 import type { IssueWatchDeltaPush } from './workspace-assignment';
 
 /**
@@ -95,7 +95,7 @@ export interface WorkstationTransportLike {
     open(handlers: {
         onConnected: () => void;
         onIssueWatchDelta: (delta: IssueWatchDeltaPush) => void;
-        onCredentialRevoke?: (event: CredentialRevoke) => void;
+        onProviderCredentialChange?: (event: ProviderCredentialChange) => void;
         onDisconnected?: () => void;
     }): WorkstationSubscriptionHandle;
 }
@@ -142,7 +142,7 @@ export interface StartLocalWorkstationDeps {
      * one (it depends on the same enrolled identity), so the shell hands over a
      * lookup rather than a handle that would still be null at wire-up time.
      */
-    onCredentialRevoke?: (event: CredentialRevoke) => void;
+    onProviderCredentialChange?: (event: ProviderCredentialChange) => void;
     log?: (msg: string) => void;
 }
 
@@ -362,13 +362,15 @@ export async function startLocalWorkstation(
                     log(`applyPushedDelta failed: ${e instanceof Error ? e.message : String(e)}`);
                 }
             },
-            // Immediate push-to-revoke: wipe the materialized credential + drop it
-            // from the next spawn. Never let a revoke failure kill the socket.
-            onCredentialRevoke: (event) => {
+            // Managed-credential push: a revoke wipes immediately, set/rotated
+            // asks for a re-fetch. Never let a handler failure kill the socket.
+            onProviderCredentialChange: (event) => {
                 try {
-                    deps.onCredentialRevoke?.(event);
+                    deps.onProviderCredentialChange?.(event);
                 } catch (e) {
-                    log(`credential revoke failed: ${e instanceof Error ? e.message : String(e)}`);
+                    log(
+                        `provider-credential change failed: ${e instanceof Error ? e.message : String(e)}`,
+                    );
                 }
             },
             // A transport drop always schedules a re-dial (see onDrop), so the

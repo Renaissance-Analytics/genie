@@ -2,18 +2,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { cleanupTmpRoot, makeTmpDir } from '../../../../test/helpers';
-import {
-    ANTHROPIC_API_KEY,
-    CLAUDE_SUBSCRIPTION,
-    GITHUB_TOKEN,
-    OPENAI_API_KEY,
-} from '../escrow';
+import { ANTHROPIC, API_KEY, GITHUB, OPENAI, SUBSCRIPTION, type OpenedCredential } from '../escrow';
 import {
     CLAUDE_CREDENTIALS_MODE,
     applyGithubToken,
     claudeCredentialsPath,
     credentialEnv,
+    envVarForCredential,
     materializeClaudeCredentials,
+    resolveHostGlobal,
     wipeClaudeCredentials,
     type CommandRunner,
 } from '../credential-materializer';
@@ -29,32 +26,133 @@ const FAKE_OPENAI = 'fake-openai-0000';
 const FAKE_GH = 'fake-gh-token-0000';
 const FAKE_CLAUDE_BLOB = '{"fake":true,"refresh":"fake-refresh-0000"}';
 
+function cred(
+    id: string,
+    provider: string,
+    kind: string,
+    value: string,
+    scope = 'account',
+    projectId: string | null = null,
+): OpenedCredential {
+    return { id, provider, kind, scope, projectId, label: null, value };
+}
+
 afterAll(() => cleanupTmpRoot());
 
+describe('envVarForCredential', () => {
+    it('maps only the api_key kinds onto env vars', () => {
+        expect(envVarForCredential({ provider: ANTHROPIC, kind: API_KEY })).toBe('ANTHROPIC_API_KEY');
+        expect(envVarForCredential({ provider: OPENAI, kind: API_KEY })).toBe('OPENAI_API_KEY');
+    });
+
+    it('returns null for the kinds materialized through a CLI credential store', () => {
+        // Same PROVIDER, different KIND — proving kind is what decides, not provider.
+        expect(envVarForCredential({ provider: ANTHROPIC, kind: SUBSCRIPTION })).toBeNull();
+        expect(envVarForCredential({ provider: GITHUB, kind: API_KEY })).toBeNull();
+        expect(envVarForCredential({ provider: 'something_new', kind: API_KEY })).toBeNull();
+    });
+});
+
 describe('credentialEnv', () => {
-    it('maps the API-key providers onto the env vars the agent CLIs read', () => {
+    it('exports the api_key credentials as the env vars the agent CLIs read', () => {
         expect(
-            credentialEnv({ [ANTHROPIC_API_KEY]: FAKE_ANTHROPIC, [OPENAI_API_KEY]: FAKE_OPENAI }),
+            credentialEnv([
+                cred('a', ANTHROPIC, API_KEY, FAKE_ANTHROPIC),
+                cred('o', OPENAI, API_KEY, FAKE_OPENAI),
+            ]),
         ).toEqual({ ANTHROPIC_API_KEY: FAKE_ANTHROPIC, OPENAI_API_KEY: FAKE_OPENAI });
     });
 
     it('does NOT put the GitHub token or the Claude subscription in the environment', () => {
         // Those two are materialized through their CLI's own credential store, so
         // they must never leak into a child process env (or `ps -e` / a crash dump).
-        const env = credentialEnv({
-            [GITHUB_TOKEN]: FAKE_GH,
-            [CLAUDE_SUBSCRIPTION]: FAKE_CLAUDE_BLOB,
-        });
+        const env = credentialEnv([
+            cred('g', GITHUB, API_KEY, FAKE_GH),
+            cred('s', ANTHROPIC, SUBSCRIPTION, FAKE_CLAUDE_BLOB),
+        ]);
 
         expect(env).toEqual({});
         expect(JSON.stringify(env)).not.toContain(FAKE_GH);
         expect(JSON.stringify(env)).not.toContain('fake-refresh-0000');
     });
 
-    it('ignores unknown providers and blank values rather than exporting empties', () => {
-        expect(
-            credentialEnv({ something_new: 'fake-x', [ANTHROPIC_API_KEY]: '   ' }),
-        ).toEqual({});
+    it('lets a PROJECT-scoped credential override the account one for its own workspace', () => {
+        const credentials = [
+            cred('acct', ANTHROPIC, API_KEY, FAKE_ANTHROPIC),
+            cred('proj', ANTHROPIC, API_KEY, 'fake-anthropic-proj', 'project', 'p-42'),
+        ];
+
+        expect(credentialEnv(credentials, 'p-42').ANTHROPIC_API_KEY).toBe('fake-anthropic-proj');
+        // A different workspace, and no workspace at all, both get the account one.
+        expect(credentialEnv(credentials, 'p-99').ANTHROPIC_API_KEY).toBe(FAKE_ANTHROPIC);
+        expect(credentialEnv(credentials).ANTHROPIC_API_KEY).toBe(FAKE_ANTHROPIC);
+    });
+
+    it('uses a project credential even when NO account credential exists', () => {
+        const credentials = [cred('proj', OPENAI, API_KEY, FAKE_OPENAI, 'project', 'p-42')];
+
+        expect(credentialEnv(credentials, 'p-42')).toEqual({ OPENAI_API_KEY: FAKE_OPENAI });
+        // …but it must NOT leak into an unrelated workspace.
+        expect(credentialEnv(credentials, 'p-99')).toEqual({});
+        expect(credentialEnv(credentials)).toEqual({});
+    });
+
+    it('drops blank values rather than exporting empty strings', () => {
+        expect(credentialEnv([cred('a', ANTHROPIC, API_KEY, '   ')])).toEqual({});
+    });
+});
+
+describe('resolveHostGlobal (single-slot materializations)', () => {
+    // `gh auth login` and ~/.claude/.credentials.json are ONE per host — there is
+    // no per-project variant of either — so project scope cannot be honoured and
+    // the host must not silently pick a workspace's identity for the whole box.
+
+    it('prefers the account-scoped credential', () => {
+        const resolved = resolveHostGlobal(
+            [
+                cred('proj', ANTHROPIC, SUBSCRIPTION, 'fake-proj-blob', 'project', 'p-1'),
+                cred('acct', ANTHROPIC, SUBSCRIPTION, FAKE_CLAUDE_BLOB),
+            ],
+            ANTHROPIC,
+            SUBSCRIPTION,
+        );
+
+        expect(resolved.status).toBe('ok');
+        expect(resolved.credential?.id).toBe('acct');
+    });
+
+    it('falls back to a project-scoped credential when it is the ONLY one', () => {
+        const resolved = resolveHostGlobal(
+            [cred('proj', GITHUB, API_KEY, FAKE_GH, 'project', 'p-1')],
+            GITHUB,
+            API_KEY,
+        );
+
+        expect(resolved.status).toBe('ok');
+        expect(resolved.credential?.id).toBe('proj');
+    });
+
+    it('REFUSES to guess between several project-scoped credentials', () => {
+        // Picking one would silently authenticate every agent on the host as one
+        // workspace's identity — worse than having no credential at all.
+        const resolved = resolveHostGlobal(
+            [
+                cred('p1', GITHUB, API_KEY, 'fake-gh-1', 'project', 'p-1'),
+                cred('p2', GITHUB, API_KEY, 'fake-gh-2', 'project', 'p-2'),
+            ],
+            GITHUB,
+            API_KEY,
+        );
+
+        expect(resolved.status).toBe('ambiguous');
+        expect(resolved.credential).toBeUndefined();
+        expect(resolved.conflictIds).toEqual(['p1', 'p2']);
+    });
+
+    it('reports absent when nothing matches the provider+kind', () => {
+        expect(resolveHostGlobal([cred('a', ANTHROPIC, API_KEY, FAKE_ANTHROPIC)], GITHUB, API_KEY))
+            .toMatchObject({ status: 'absent' });
+        expect(resolveHostGlobal([], ANTHROPIC, SUBSCRIPTION)).toMatchObject({ status: 'absent' });
     });
 });
 

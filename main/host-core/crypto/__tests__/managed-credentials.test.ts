@@ -1,21 +1,24 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { generateEncryptionKeypair, seal, sodiumReady, type EncryptionKeypair } from '../sealed-box';
 import {
-    ANTHROPIC_API_KEY,
-    CLAUDE_SUBSCRIPTION,
-    GITHUB_TOKEN,
-    OPENAI_API_KEY,
+    ANTHROPIC,
+    API_KEY,
+    GITHUB,
+    OPENAI,
+    SUBSCRIPTION,
     openEscrowKeypair,
     wrapEscrowForPeer,
     type CredentialBundle,
+    type SealedCredential,
 } from '../escrow';
 import type { CredentialFs } from '../credential-materializer';
 import { resetClaudeRotation, syncClaudeCredentialRotation } from '../claude-rotation';
 import {
-    applyCredentialRevoke,
+    applyCredentialChange,
     bootstrapEscrowForPeers,
     managedCredentialEnv,
     managedEscrowPublicKey,
+    managedSubscriptionCredentialId,
     refreshManagedCredentials,
     resetManagedCredentials,
     type ManagedCredentialClient,
@@ -24,8 +27,8 @@ import {
 /**
  * SYNTHETIC KEYS + FAKE VALUES ONLY. Every keypair is generated in-process;
  * every "credential" is a `fake-…` literal this test invented. Assertions compare
- * against those literals, and several assertions exist specifically to prove that
- * NO value reaches a summary, a log line, or the environment when it shouldn't.
+ * against those literals, and several exist specifically to prove that NO value
+ * reaches a summary, a log line, or the environment when it shouldn't.
  */
 
 const FAKE = {
@@ -45,6 +48,26 @@ afterEach(() => {
     resetClaudeRotation();
 });
 
+async function credential(
+    id: string,
+    provider: string,
+    kind: string,
+    value: string,
+    escrowPublicKeyB64: string,
+    extra: Partial<SealedCredential> = {},
+): Promise<SealedCredential> {
+    return {
+        id,
+        provider,
+        kind,
+        scope: 'account',
+        projectId: null,
+        sealedTo: 'escrow',
+        ciphertext: await seal(value, escrowPublicKeyB64),
+        ...extra,
+    };
+}
+
 async function buildBundle(
     escrow: EncryptionKeypair,
     host: EncryptionKeypair | null,
@@ -55,23 +78,25 @@ async function buildBundle(
             wrappedPrivateKeyB64: host ? await wrapEscrowForPeer(escrow, host.publicKeyB64) : null,
         },
         credentials: [
-            { provider: ANTHROPIC_API_KEY, ciphertext: await seal(FAKE.anthropic, escrow.publicKeyB64) },
-            { provider: OPENAI_API_KEY, ciphertext: await seal(FAKE.openai, escrow.publicKeyB64) },
-            { provider: GITHUB_TOKEN, ciphertext: await seal(FAKE.github, escrow.publicKeyB64) },
-            { provider: CLAUDE_SUBSCRIPTION, ciphertext: await seal(FAKE.claude, escrow.publicKeyB64) },
+            await credential('c1', ANTHROPIC, API_KEY, FAKE.anthropic, escrow.publicKeyB64),
+            await credential('c2', OPENAI, API_KEY, FAKE.openai, escrow.publicKeyB64),
+            await credential('c3', GITHUB, API_KEY, FAKE.github, escrow.publicKeyB64),
+            await credential('c4', ANTHROPIC, SUBSCRIPTION, FAKE.claude, escrow.publicKeyB64),
         ],
     };
 }
 
-function fakeClient(bundle: CredentialBundle): ManagedCredentialClient & { puts: unknown[]; wraps: unknown[] } {
-    const puts: unknown[] = [];
+function fakeClient(
+    bundle: CredentialBundle,
+): ManagedCredentialClient & { puts: Array<{ credentialId: string; ciphertext: string }>; wraps: unknown[] } {
+    const puts: Array<{ credentialId: string; ciphertext: string }> = [];
     const wraps: unknown[] = [];
     return {
         puts,
         wraps,
         fetchBundle: vi.fn(async () => bundle),
-        putCredential: vi.fn(async (provider: string, ciphertext: string) => {
-            puts.push({ provider, ciphertext });
+        putCredential: vi.fn(async (credentialId: string, ciphertext: string) => {
+            puts.push({ credentialId, ciphertext });
         }),
         listEscrowPending: vi.fn(async () => []),
         wrapEscrowForHost: vi.fn(async (input) => {
@@ -80,7 +105,6 @@ function fakeClient(bundle: CredentialBundle): ManagedCredentialClient & { puts:
     };
 }
 
-/** An in-memory fs so materialization is observable without touching disk. */
 function memoryFs() {
     const files = new Map<string, { data: string; mode: number }>();
     const impl: CredentialFs = {
@@ -121,7 +145,7 @@ function materializeDeps() {
 }
 
 describe('refreshManagedCredentials', () => {
-    it('opens the bundle and materializes each credential to its own destination', async () => {
+    it('opens the bundle and materializes each kind to its own destination', async () => {
         const escrow = await generateEncryptionKeypair();
         const host = await generateEncryptionKeypair();
         const client = fakeClient(await buildBundle(escrow, host));
@@ -130,21 +154,19 @@ describe('refreshManagedCredentials', () => {
         const summary = await refreshManagedCredentials(client, host, m.deps);
 
         expect(summary.status).toBe('ok');
-        expect(summary.providers.sort()).toEqual(
-            [ANTHROPIC_API_KEY, CLAUDE_SUBSCRIPTION, GITHUB_TOKEN, OPENAI_API_KEY].sort(),
-        );
-        // API keys → env
+        expect(summary.credentialIds.sort()).toEqual(['c1', 'c2', 'c3', 'c4']);
+        // api_key → env
         expect(managedCredentialEnv()).toEqual({
             ANTHROPIC_API_KEY: FAKE.anthropic,
             OPENAI_API_KEY: FAKE.openai,
         });
-        // Claude subscription → 0600 file
-        const claudeFile = [...m.files.entries()].find(([f]) => f.includes('.credentials.json'));
-        expect(claudeFile?.[1]).toEqual({ data: FAKE.claude, mode: 0o600 });
-        // GitHub token → gh stdin
+        // anthropic/subscription → 0600 file
+        expect([...m.files.values()][0]).toEqual({ data: FAKE.claude, mode: 0o600 });
+        // github/api_key → gh stdin
         expect(m.ghCalls).toEqual([FAKE.github]);
-        // The escrow public key is retained for rotation write-back.
+        // Retained for rotation write-back.
         expect(managedEscrowPublicKey()).toBe(escrow.publicKeyB64);
+        expect(managedSubscriptionCredentialId()).toBe('c4');
     });
 
     it('returns a summary that contains NO credential value at all', async () => {
@@ -158,7 +180,6 @@ describe('refreshManagedCredentials', () => {
         const serialized = JSON.stringify(summary);
         for (const value of ALL_FAKE_VALUES) expect(serialized).not.toContain(value);
         expect(serialized).not.toContain('fake-refresh-0000');
-        // …and neither does the escrow PRIVATE key.
         expect(serialized).not.toContain(escrow.privateKeyB64);
         expect(serialized).not.toContain(host.privateKeyB64);
     });
@@ -172,7 +193,7 @@ describe('refreshManagedCredentials', () => {
         const summary = await refreshManagedCredentials(client, host, m.deps);
 
         expect(summary.status).toBe('no-escrow-key');
-        expect(summary.providers).toEqual([]);
+        expect(summary.credentialIds).toEqual([]);
         expect(managedCredentialEnv()).toEqual({});
         expect(m.files.size).toBe(0);
         expect(m.ghCalls).toEqual([]);
@@ -192,21 +213,66 @@ describe('refreshManagedCredentials', () => {
         expect(m.files.size).toBe(0);
     });
 
-    it('reports a provider that failed to open by NAME and still materializes the rest', async () => {
+    it('resolves a project-scoped api_key per workspace at spawn time', async () => {
+        const escrow = await generateEncryptionKeypair();
+        const host = await generateEncryptionKeypair();
+        const bundle = await buildBundle(escrow, host);
+        bundle.credentials.push(
+            await credential('cp', ANTHROPIC, API_KEY, 'fake-anthropic-proj', escrow.publicKeyB64, {
+                scope: 'project',
+                projectId: 'p-42',
+            }),
+        );
+        const m = materializeDeps();
+
+        await refreshManagedCredentials(fakeClient(bundle), host, m.deps);
+
+        expect(managedCredentialEnv('p-42').ANTHROPIC_API_KEY).toBe('fake-anthropic-proj');
+        expect(managedCredentialEnv('p-99').ANTHROPIC_API_KEY).toBe(FAKE.anthropic);
+        expect(managedCredentialEnv().ANTHROPIC_API_KEY).toBe(FAKE.anthropic);
+    });
+
+    it('REFUSES to materialize a host-global credential when project scope is ambiguous', async () => {
+        // Two project-scoped GitHub tokens; `gh auth login` is one per host, so
+        // picking either would authenticate every agent as one workspace.
+        const escrow = await generateEncryptionKeypair();
+        const host = await generateEncryptionKeypair();
+        const bundle = await buildBundle(escrow, host);
+        bundle.credentials = [
+            await credential('g1', GITHUB, API_KEY, 'fake-gh-1', escrow.publicKeyB64, {
+                scope: 'project',
+                projectId: 'p-1',
+            }),
+            await credential('g2', GITHUB, API_KEY, 'fake-gh-2', escrow.publicKeyB64, {
+                scope: 'project',
+                projectId: 'p-2',
+            }),
+        ];
+        const m = materializeDeps();
+
+        const summary = await refreshManagedCredentials(fakeClient(bundle), host, m.deps);
+
+        expect(m.ghCalls).toEqual([]);
+        expect(summary.github?.ok).toBe(false);
+        expect(summary.conflicts).toEqual([{ target: 'github', credentialIds: ['g1', 'g2'] }]);
+        expect(JSON.stringify(summary)).not.toContain('fake-gh-1');
+    });
+
+    it('reports a credential that failed to open by ID and still materializes the rest', async () => {
         const escrow = await generateEncryptionKeypair();
         const host = await generateEncryptionKeypair();
         const stranger = await generateEncryptionKeypair();
         const bundle = await buildBundle(escrow, host);
         bundle.credentials = [
             bundle.credentials[0],
-            { provider: CLAUDE_SUBSCRIPTION, ciphertext: await seal(FAKE.claude, stranger.publicKeyB64) },
+            await credential('bad', ANTHROPIC, SUBSCRIPTION, FAKE.claude, stranger.publicKeyB64),
         ];
         const m = materializeDeps();
 
         const summary = await refreshManagedCredentials(fakeClient(bundle), host, m.deps);
 
-        expect(summary.failed).toEqual([CLAUDE_SUBSCRIPTION]);
-        expect(summary.providers).toEqual([ANTHROPIC_API_KEY]);
+        expect(summary.failed).toEqual(['bad']);
+        expect(summary.credentialIds).toEqual(['c1']);
         expect(managedCredentialEnv()).toEqual({ ANTHROPIC_API_KEY: FAKE.anthropic });
         expect(m.files.size).toBe(0);
     });
@@ -234,16 +300,14 @@ describe('refreshManagedCredentials', () => {
         });
     });
 
-    it('records a gh/file materialization failure without leaking the value', async () => {
+    it('records a gh failure without leaking the value', async () => {
         const escrow = await generateEncryptionKeypair();
         const host = await generateEncryptionKeypair();
         const m = materializeDeps();
 
         const summary = await refreshManagedCredentials(fakeClient(await buildBundle(escrow, host)), host, {
             ...m.deps,
-            runner: {
-                run: async () => ({ code: 1, stderr: `invalid token ${FAKE.github}` }),
-            },
+            runner: { run: async () => ({ code: 1, stderr: `invalid token ${FAKE.github}` }) },
         });
 
         expect(summary.github?.ok).toBe(false);
@@ -252,7 +316,7 @@ describe('refreshManagedCredentials', () => {
 });
 
 describe('rotation baseline', () => {
-    it("records OUR OWN write as the baseline so it is not mistaken for a CLI rotation", async () => {
+    it('records OUR OWN write as the baseline so it is not mistaken for a CLI rotation', async () => {
         const escrow = await generateEncryptionKeypair();
         const host = await generateEncryptionKeypair();
         const client = fakeClient(await buildBundle(escrow, host));
@@ -260,85 +324,83 @@ describe('rotation baseline', () => {
 
         await refreshManagedCredentials(client, host, m.deps);
 
-        // The file we just materialized IS the baseline — a sync right now must
-        // see no change and PUT nothing back.
         const result = await syncClaudeCredentialRotation(client, {
             homeDir: m.deps.homeDir,
             fs: m.deps.fs,
             escrowPublicKey: escrow.publicKeyB64,
+            credentialId: 'c4',
         });
 
         expect(result.status).toBe('unchanged');
         expect(client.puts).toEqual([]);
     });
-
-    it('clears the baseline on an all-revoke so a later host re-adopts cleanly', async () => {
-        const escrow = await generateEncryptionKeypair();
-        const host = await generateEncryptionKeypair();
-        const client = fakeClient(await buildBundle(escrow, host));
-        const m = materializeDeps();
-        await refreshManagedCredentials(client, host, m.deps);
-
-        applyCredentialRevoke({ all: true }, m.deps);
-
-        // Nothing on disk and no baseline: a sync is a clean no-op, not a PUT.
-        const result = await syncClaudeCredentialRotation(client, {
-            homeDir: m.deps.homeDir,
-            fs: m.deps.fs,
-            escrowPublicKey: escrow.publicKeyB64,
-        });
-        expect(result.status).toBe('absent');
-        expect(client.puts).toEqual([]);
-    });
 });
 
-describe('applyCredentialRevoke (immediate push-to-revoke)', () => {
-    it('wipes the materialized Claude file AND drops it from the next spawn', async () => {
+describe('applyCredentialChange (provider-credential.changed)', () => {
+    it('revokes ONE credential: wipes the file and drops it from the next spawn', async () => {
         const escrow = await generateEncryptionKeypair();
         const host = await generateEncryptionKeypair();
         const m = materializeDeps();
         await refreshManagedCredentials(fakeClient(await buildBundle(escrow, host)), host, m.deps);
         expect(m.files.size).toBe(1);
 
-        const result = applyCredentialRevoke({ provider: CLAUDE_SUBSCRIPTION }, m.deps);
+        const result = applyCredentialChange({ action: 'revoked', credentialId: 'c4' }, m.deps);
 
-        expect(result.revoked).toEqual([CLAUDE_SUBSCRIPTION]);
+        expect(result.revoked).toEqual(['c4']);
         expect(m.files.size).toBe(0);
-        // The API keys are untouched — only the revoked provider goes.
+        expect(managedSubscriptionCredentialId()).toBeNull();
+        // The api keys are untouched — only the revoked credential goes.
         expect(managedCredentialEnv()).toEqual({
             ANTHROPIC_API_KEY: FAKE.anthropic,
             OPENAI_API_KEY: FAKE.openai,
         });
     });
 
-    it('unsets a revoked API key so the NEXT terminal spawn no longer sees it', async () => {
+    it('unsets a revoked api_key so the NEXT terminal spawn no longer sees it', async () => {
         const escrow = await generateEncryptionKeypair();
         const host = await generateEncryptionKeypair();
         const m = materializeDeps();
         await refreshManagedCredentials(fakeClient(await buildBundle(escrow, host)), host, m.deps);
 
-        applyCredentialRevoke({ provider: ANTHROPIC_API_KEY }, m.deps);
+        applyCredentialChange({ action: 'revoked', credentialId: 'c1' }, m.deps);
 
         expect(managedCredentialEnv()).toEqual({ OPENAI_API_KEY: FAKE.openai });
     });
 
-    it('revokes EVERYTHING on an all-revoke: env cleared, file wiped, escrow dropped', async () => {
+    it('does NOT wipe the file when some OTHER credential is revoked', async () => {
         const escrow = await generateEncryptionKeypair();
         const host = await generateEncryptionKeypair();
         const m = materializeDeps();
         await refreshManagedCredentials(fakeClient(await buildBundle(escrow, host)), host, m.deps);
 
-        const result = applyCredentialRevoke({ all: true }, m.deps);
+        applyCredentialChange({ action: 'revoked', credentialId: 'c2' }, m.deps);
 
-        expect(result.revoked).toContain(CLAUDE_SUBSCRIPTION);
-        expect(managedCredentialEnv()).toEqual({});
-        expect(managedEscrowPublicKey()).toBeNull();
-        expect(m.files.size).toBe(0);
+        expect(m.files.size).toBe(1);
+        expect(managedSubscriptionCredentialId()).toBe('c4');
+    });
+
+    it('reports set/rotated as needing a re-fetch rather than revoking anything', async () => {
+        const escrow = await generateEncryptionKeypair();
+        const host = await generateEncryptionKeypair();
+        const m = materializeDeps();
+        await refreshManagedCredentials(fakeClient(await buildBundle(escrow, host)), host, m.deps);
+
+        for (const action of ['set', 'rotated'] as const) {
+            const result = applyCredentialChange({ action, credentialId: 'c1' }, m.deps);
+            expect(result.refetch).toBe(true);
+            expect(result.revoked).toEqual([]);
+        }
+        // Nothing was torn down while we wait for the re-fetch.
+        expect(managedCredentialEnv().ANTHROPIC_API_KEY).toBe(FAKE.anthropic);
+        expect(m.files.size).toBe(1);
     });
 
     it('is safe when nothing was ever injected', () => {
         const m = materializeDeps();
-        expect(applyCredentialRevoke({ all: true }, m.deps).revoked).toEqual([]);
+        expect(applyCredentialChange({ action: 'revoked', credentialId: 'nope' }, m.deps)).toEqual({
+            revoked: [],
+            refetch: false,
+        });
     });
 });
 
@@ -357,39 +419,35 @@ describe('bootstrapEscrowForPeers (new-host bootstrap from a live peer)', () => 
         const summary = await bootstrapEscrowForPeers(client);
 
         expect(summary.wrapped).toEqual(['ws-new']);
-        expect(client.wraps).toHaveLength(1);
-        const wrap = client.wraps[0] as { targetWorkstationId: string; wrappedPrivateKeyB64: string };
+        const wrap = client.wraps[0] as { targetWorkstationId: string; ciphertext: string };
         expect(wrap.targetWorkstationId).toBe('ws-new');
-        // The wrapped copy is openable by the NEW host and by nobody else.
         expect(
             await openEscrowKeypair(
-                { publicKeyB64: escrow.publicKeyB64, wrappedPrivateKeyB64: wrap.wrappedPrivateKeyB64 },
+                { publicKeyB64: escrow.publicKeyB64, wrappedPrivateKeyB64: wrap.ciphertext },
                 newHost,
             ),
         ).toMatchObject({ publicKeyB64: escrow.publicKeyB64 });
         expect(
             await openEscrowKeypair(
-                { publicKeyB64: escrow.publicKeyB64, wrappedPrivateKeyB64: wrap.wrappedPrivateKeyB64 },
+                { publicKeyB64: escrow.publicKeyB64, wrappedPrivateKeyB64: wrap.ciphertext },
                 await generateEncryptionKeypair(),
             ),
         ).toBeNull();
-        // The escrow PRIVATE key never appears in the summary.
         expect(JSON.stringify(summary)).not.toContain(escrow.privateKeyB64);
     });
 
-    it('does nothing when this host holds no escrow key (it cannot vouch for anyone)', async () => {
+    it('does NOT call the endpoint at all when this host holds no escrow key', async () => {
+        // Tynn 403s a caller that holds no escrow key, so don't ask.
         const escrow = await generateEncryptionKeypair();
         const host = await generateEncryptionKeypair();
         const client = fakeClient(await buildBundle(escrow, null));
-        client.listEscrowPending = vi.fn(async () => [
-            { workstationId: 'ws-new', encryptionPublicKeyB64: (await generateEncryptionKeypair()).publicKeyB64 },
-        ]);
         const m = materializeDeps();
         await refreshManagedCredentials(client, host, m.deps);
 
         const summary = await bootstrapEscrowForPeers(client);
 
         expect(summary.status).toBe('no-escrow-key');
+        expect(client.listEscrowPending).not.toHaveBeenCalled();
         expect(client.wraps).toEqual([]);
     });
 

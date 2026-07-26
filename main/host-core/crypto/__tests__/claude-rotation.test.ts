@@ -1,5 +1,4 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { CLAUDE_SUBSCRIPTION } from '../escrow';
 import { generateEncryptionKeypair, sealOpenText, sodiumReady } from '../sealed-box';
 import { claudeCredentialsPath, type MaterializerFs } from '../credential-materializer';
 import {
@@ -45,12 +44,12 @@ function fakeFs(contents: Record<string, string>): MaterializerFs & {
     };
 }
 
-function fakeClient(): RotationClient & { puts: Array<{ provider: string; ciphertext: string }> } {
-    const puts: Array<{ provider: string; ciphertext: string }> = [];
+function fakeClient(): RotationClient & { puts: Array<{ credentialId: string; ciphertext: string }> } {
+    const puts: Array<{ credentialId: string; ciphertext: string }> = [];
     return {
         puts,
-        putCredential: vi.fn(async (provider: string, ciphertext: string) => {
-            puts.push({ provider, ciphertext });
+        putCredential: vi.fn(async (credentialId: string, ciphertext: string) => {
+            puts.push({ credentialId, ciphertext });
         }),
     };
 }
@@ -66,11 +65,12 @@ describe('syncClaudeCredentialRotation', () => {
             homeDir: HOME,
             fs: fakeFs(contents),
             escrowPublicKey: escrow.publicKeyB64,
+            credentialId: 'c4',
         });
 
         expect(result.status).toBe('written');
         expect(client.puts).toHaveLength(1);
-        expect(client.puts[0].provider).toBe(CLAUDE_SUBSCRIPTION);
+        expect(client.puts[0].credentialId).toBe('c4');
         // Sealed to the ESCROW key — so a host provisioned LATER can open it too.
         expect(await sealOpenText(client.puts[0].ciphertext, escrow)).toBe(FAKE_ROTATED);
         // The plaintext never rides the result.
@@ -86,6 +86,7 @@ describe('syncClaudeCredentialRotation', () => {
             homeDir: HOME,
             fs: fakeFs({ [FILE]: FAKE_ORIGINAL }),
             escrowPublicKey: escrow.publicKeyB64,
+            credentialId: 'c4',
         });
 
         expect(result.status).toBe('unchanged');
@@ -96,7 +97,7 @@ describe('syncClaudeCredentialRotation', () => {
         const escrow = await generateEncryptionKeypair();
         const contents = { [FILE]: FAKE_ROTATED };
         const client = fakeClient();
-        const deps = { homeDir: HOME, fs: fakeFs(contents), escrowPublicKey: escrow.publicKeyB64 };
+        const deps = { homeDir: HOME, fs: fakeFs(contents), escrowPublicKey: escrow.publicKeyB64, credentialId: 'c4' };
         noteClaudeCredentialBlob(FAKE_ORIGINAL);
 
         expect((await syncClaudeCredentialRotation(client, deps)).status).toBe('written');
@@ -112,6 +113,7 @@ describe('syncClaudeCredentialRotation', () => {
             homeDir: HOME,
             fs: fakeFs({}),
             escrowPublicKey: escrow.publicKeyB64,
+            credentialId: 'c4',
         });
 
         expect(result.status).toBe('absent');
@@ -127,6 +129,7 @@ describe('syncClaudeCredentialRotation', () => {
             homeDir: HOME,
             fs: fakeFs({ [FILE]: FAKE_ROTATED }),
             escrowPublicKey: null,
+            credentialId: 'c4',
         });
 
         expect(result.status).toBe('no-escrow-key');
@@ -140,7 +143,7 @@ describe('syncClaudeCredentialRotation', () => {
         const client = fakeClient();
 
         expect(
-            (await syncClaudeCredentialRotation(client, { homeDir: HOME, fs, escrowPublicKey: null }))
+            (await syncClaudeCredentialRotation(client, { homeDir: HOME, fs, escrowPublicKey: null, credentialId: 'c4' }))
                 .status,
         ).toBe('adopted');
 
@@ -149,6 +152,7 @@ describe('syncClaudeCredentialRotation', () => {
             homeDir: HOME,
             fs,
             escrowPublicKey: escrow.publicKeyB64,
+            credentialId: 'c4',
         });
 
         expect(later.status).toBe('written');
@@ -166,6 +170,7 @@ describe('syncClaudeCredentialRotation', () => {
             homeDir: HOME,
             fs: fakeFs({ [FILE]: FAKE_ROTATED }),
             escrowPublicKey: escrow.publicKeyB64,
+            credentialId: 'c4',
         };
         noteClaudeCredentialBlob(FAKE_ORIGINAL);
 
@@ -185,6 +190,7 @@ describe('syncClaudeCredentialRotation', () => {
             homeDir: HOME,
             fs: fakeFs({ [FILE]: '   ' }),
             escrowPublicKey: escrow.publicKeyB64,
+            credentialId: 'c4',
         });
 
         expect(result.status).toBe('absent');
@@ -198,6 +204,7 @@ describe('syncClaudeCredentialRotation', () => {
             homeDir: HOME,
             fs: fakeFs({ [FILE]: FAKE_ORIGINAL }),
             escrowPublicKey: escrow.publicKeyB64,
+            credentialId: 'c4',
         };
 
         // No baseline noted: the file on disk is whatever a previous process left.
@@ -216,7 +223,7 @@ describe('syncClaudeCredentialRotation', () => {
         const fs = fakeFs(contents);
         const client = fakeClient();
         let active = first.publicKeyB64;
-        const deps = { homeDir: HOME, fs, escrowPublicKey: () => active };
+        const deps = { homeDir: HOME, fs, escrowPublicKey: () => active, credentialId: () => 'c4' };
         noteClaudeCredentialBlob(FAKE_ORIGINAL);
 
         contents[FILE] = FAKE_ROTATED;
@@ -243,6 +250,7 @@ describe('watchClaudeCredentialRotation', () => {
             homeDir: HOME,
             fs: fakeFs(contents),
             escrowPublicKey: escrow.publicKeyB64,
+            credentialId: 'c4',
             debounceMs: 0,
             watch: (_dir, onChange) => {
                 fire = onChange;
@@ -271,6 +279,7 @@ describe('watchClaudeCredentialRotation', () => {
             homeDir: HOME,
             fs: fakeFs(contents),
             escrowPublicKey: escrow.publicKeyB64,
+            credentialId: 'c4',
             debounceMs: 5,
             watch: (_dir, onChange) => {
                 fire = onChange;
@@ -290,6 +299,7 @@ describe('watchClaudeCredentialRotation', () => {
         const watcher = watchClaudeCredentialRotation(fakeClient(), {
             homeDir: HOME,
             escrowPublicKey: null,
+            credentialId: 'c4',
             watch: () => {
                 throw new Error('ENOENT');
             },

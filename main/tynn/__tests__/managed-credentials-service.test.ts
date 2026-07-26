@@ -1,10 +1,11 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { setSecretEncryptor } from '../../secrets/store';
 import {
-    ANTHROPIC_API_KEY,
-    CLAUDE_SUBSCRIPTION,
-    GITHUB_TOKEN,
-    OPENAI_API_KEY,
+    ANTHROPIC,
+    API_KEY,
+    GITHUB,
+    OPENAI,
+    SUBSCRIPTION,
     openEscrowKeypair,
 } from '../../host-core/crypto/escrow';
 import {
@@ -41,7 +42,8 @@ const FAKE = {
 };
 
 const BASE = 'https://tynn.test';
-const identity = { workstationId: 'ws-42', authHeader: () => 'Workstation 1:sig==' };
+const WS_ID = 'ws-42';
+const identity = { workstationId: WS_ID, authHeader: () => 'Workstation 1:sig==' };
 
 beforeAll(async () => {
     await sodiumReady();
@@ -115,12 +117,22 @@ function memoryFsDeps() {
 function fakeTynn(escrow: EncryptionKeypair) {
     const state = {
         publishedPublicKey: null as string | null,
-        published: [] as Array<{ publicKeyB64: string; fingerprint: string }>,
-        puts: [] as Array<{ provider: string; ciphertext: string }>,
-        wraps: [] as Array<{ target: string; wrapped: string }>,
-        pending: [] as Array<{ workstation_id: string; encryption_public_key: string }>,
+        published: [] as Array<Record<string, unknown>>,
+        puts: [] as Array<{ credentialId: string; body: Record<string, unknown> }>,
+        wraps: [] as Array<{ target: string; ciphertext: string }>,
+        pending: [] as Array<{ workstationId: string; encryptionPublicKey: string }>,
         requests: [] as string[],
     };
+
+    const row = async (id: string, provider: string, kind: string, value: string) => ({
+        id,
+        provider,
+        kind,
+        scope: 'account',
+        projectId: null,
+        sealedTo: 'escrow',
+        ciphertext: await seal(value, escrow.publicKeyB64),
+    });
 
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
         const method = init?.method ?? 'GET';
@@ -128,14 +140,11 @@ function fakeTynn(escrow: EncryptionKeypair) {
         const body = init?.body ? JSON.parse(init.body as string) : undefined;
 
         if (url.endsWith('/encryption-key')) {
-            state.publishedPublicKey = body.encryption_public_key;
-            state.published.push({
-                publicKeyB64: body.encryption_public_key,
-                fingerprint: body.fingerprint,
-            });
-            return { ok: true, status: 200, json: async () => ({}) } as Response;
+            state.publishedPublicKey = body.publicKey;
+            state.published.push(body);
+            return { ok: true, status: 200, json: async () => ({ fingerprint: 'srv' }) } as Response;
         }
-        if (url.endsWith('/credentials')) {
+        if (url.endsWith('/provider-credentials')) {
             const wrapped = state.publishedPublicKey
                 ? await seal(Buffer.from(escrow.privateKeyB64, 'base64'), state.publishedPublicKey)
                 : null;
@@ -143,28 +152,33 @@ function fakeTynn(escrow: EncryptionKeypair) {
                 ok: true,
                 status: 200,
                 json: async () => ({
-                    escrow: { public_key: escrow.publicKeyB64, wrapped_private_key: wrapped },
+                    workstationId: WS_ID,
+                    escrow: { publicKey: escrow.publicKeyB64, wrappedPrivateKey: wrapped },
                     credentials: [
-                        { provider: ANTHROPIC_API_KEY, ciphertext: await seal(FAKE.anthropic, escrow.publicKeyB64) },
-                        { provider: OPENAI_API_KEY, ciphertext: await seal(FAKE.openai, escrow.publicKeyB64) },
-                        { provider: GITHUB_TOKEN, ciphertext: await seal(FAKE.github, escrow.publicKeyB64) },
-                        { provider: CLAUDE_SUBSCRIPTION, ciphertext: await seal(FAKE.claude, escrow.publicKeyB64) },
+                        await row('c1', ANTHROPIC, API_KEY, FAKE.anthropic),
+                        await row('c2', OPENAI, API_KEY, FAKE.openai),
+                        await row('c3', GITHUB, API_KEY, FAKE.github),
+                        await row('c4', ANTHROPIC, SUBSCRIPTION, FAKE.claude),
                     ],
                 }),
             } as Response;
         }
         if (url.endsWith('/escrow/pending')) {
-            return { ok: true, status: 200, json: async () => ({ hosts: state.pending }) } as Response;
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({
+                    escrow: { publicKey: escrow.publicKeyB64 },
+                    hosts: state.pending,
+                }),
+            } as Response;
         }
-        if (url.endsWith('/escrow/wrap')) {
-            state.wraps.push({
-                target: body.target_workstation_id,
-                wrapped: body.wrapped_private_key,
-            });
+        if (url.endsWith('/escrow/wrapped-keys')) {
+            state.wraps.push({ target: body.targetWorkstationId, ciphertext: body.ciphertext });
             return { ok: true, status: 200, json: async () => ({}) } as Response;
         }
-        if (method === 'PUT' && url.includes('/credentials/')) {
-            state.puts.push({ provider: url.split('/credentials/')[1], ciphertext: body.ciphertext });
+        if (method === 'PUT' && url.includes('/provider-credentials/')) {
+            state.puts.push({ credentialId: url.split('/provider-credentials/')[1], body });
             return { ok: true, status: 200, json: async () => ({}) } as Response;
         }
         return { ok: false, status: 404, json: async () => ({}) } as Response;
@@ -221,23 +235,29 @@ describe('startManagedCredentials', () => {
         expect(handle).not.toBeNull();
 
         // 1. A host keypair was generated and persisted ENCRYPTED.
-        expect(keys.rows[ENC_PUBLIC_KEY_SETTING]).toBeTruthy();
-        expect(keys.rows[ENC_KEY_ENC_SETTING]).toMatch(/^/);
         expect(Buffer.from(keys.rows[ENC_PUBLIC_KEY_SETTING], 'base64')).toHaveLength(32);
+        expect(keys.rows[ENC_KEY_ENC_SETTING]).toBeTruthy();
 
-        // 2. Only the PUBLIC half was published.
-        expect(tynn.state.published).toHaveLength(1);
-        expect(tynn.state.published[0].publicKeyB64).toBe(keys.rows[ENC_PUBLIC_KEY_SETTING]);
+        // 2. Only the PUBLIC half was published, with no client-sent fingerprint.
+        expect(tynn.state.published).toEqual([{ publicKey: keys.rows[ENC_PUBLIC_KEY_SETTING] }]);
         expect(JSON.stringify(tynn.state.requests)).not.toContain(escrow.privateKeyB64);
 
-        // 3. The credentials opened and landed in their three destinations.
+        // 3. Each KIND landed in its own destination.
         expect(managedCredentialEnv()).toEqual({
             ANTHROPIC_API_KEY: FAKE.anthropic,
             OPENAI_API_KEY: FAKE.openai,
         });
-        const claudeFile = [...mat.files.values()][0];
-        expect(claudeFile).toEqual({ data: FAKE.claude, mode: 0o600 });
+        expect([...mat.files.values()][0]).toEqual({ data: FAKE.claude, mode: 0o600 });
         expect(mat.ghCalls).toEqual([FAKE.github]);
+    });
+
+    it('nests every request under /api/v1/workstations/{id}/ so the host proof verifies', async () => {
+        const { tynn } = await start();
+
+        expect(tynn.state.requests.length).toBeGreaterThan(0);
+        for (const request of tynn.state.requests) {
+            expect(request).toContain(`/api/v1/workstations/${WS_ID}/`);
+        }
     });
 
     it('returns null and touches nothing when this machine is not enrolled', async () => {
@@ -277,7 +297,11 @@ describe('startManagedCredentials', () => {
     });
 
     it('never breaks boot when OS encryption is unavailable — and injects nothing', async () => {
-        setSecretEncryptor({ isAvailable: () => false, encrypt: () => Buffer.alloc(0), decrypt: () => Buffer.alloc(0) });
+        setSecretEncryptor({
+            isAvailable: () => false,
+            encrypt: () => Buffer.alloc(0),
+            decrypt: () => Buffer.alloc(0),
+        });
         const logs: string[] = [];
 
         const handle = await startManagedCredentials({
@@ -300,7 +324,7 @@ describe('startManagedCredentials', () => {
         const escrow = await generateEncryptionKeypair();
         const tynn = fakeTynn(escrow);
         tynn.state.pending = [
-            { workstation_id: 'ws-new', encryption_public_key: newHost.publicKeyB64 },
+            { workstationId: 'ws-new', encryptionPublicKey: newHost.publicKeyB64 },
         ];
         setSecretEncryptor(fakeEncryptor());
 
@@ -319,7 +343,7 @@ describe('startManagedCredentials', () => {
         // The wrapped copy opens for the NEW host and for nobody else.
         const escrowBundle = {
             publicKeyB64: escrow.publicKeyB64,
-            wrappedPrivateKeyB64: tynn.state.wraps[0].wrapped,
+            wrappedPrivateKeyB64: tynn.state.wraps[0].ciphertext,
         };
         expect(await openEscrowKeypair(escrowBundle, newHost)).toMatchObject({
             publicKeyB64: escrow.publicKeyB64,
@@ -327,17 +351,34 @@ describe('startManagedCredentials', () => {
         expect(await openEscrowKeypair(escrowBundle, await generateEncryptionKeypair())).toBeNull();
     });
 
-    it('applies a pushed revoke immediately: file wiped, env dropped', async () => {
+    it('applies a pushed REVOKE immediately: file wiped, env dropped', async () => {
         const { mat, handle } = await start();
         expect(mat.files.size).toBe(1);
 
-        handle!.onRevoke({ all: true });
-
+        handle!.onCredentialChange({ action: 'revoked', credentialId: 'c4' });
         expect(mat.files.size).toBe(0);
-        expect(managedCredentialEnv()).toEqual({});
+
+        handle!.onCredentialChange({ action: 'revoked', credentialId: 'c1' });
+        expect(managedCredentialEnv()).toEqual({ OPENAI_API_KEY: FAKE.openai });
     });
 
-    it('writes a CLI rotation back to Tynn, sealed to the ESCROW key', async () => {
+    it('re-fetches on a SET push so a newly added credential reaches a running host', async () => {
+        // Revoke-only would leave an added credential unseen until restart —
+        // a poll in disguise.
+        const { tynn, handle } = await start();
+        const before = tynn.state.requests.filter((r) => r.endsWith('/provider-credentials')).length;
+
+        const result = handle!.onCredentialChange({ action: 'set', credentialId: 'c9' });
+
+        expect(result.refetch).toBe(true);
+        await vi.waitFor(() =>
+            expect(
+                tynn.state.requests.filter((r) => r.endsWith('/provider-credentials')).length,
+            ).toBe(before + 1),
+        );
+    });
+
+    it('writes a CLI rotation back to Tynn keyed on the credential id, sealed to ESCROW', async () => {
         const { escrow, tynn, mat, handle } = await start();
         const file = [...mat.files.keys()][0];
         const rotated = '{"fake":true,"refresh":"fake-refresh-rotated"}';
@@ -347,8 +388,9 @@ describe('startManagedCredentials', () => {
 
         expect(result.status).toBe('written');
         expect(tynn.state.puts).toHaveLength(1);
-        expect(tynn.state.puts[0].provider).toBe(CLAUDE_SUBSCRIPTION);
-        expect(await sealOpenText(tynn.state.puts[0].ciphertext, escrow)).toBe(rotated);
+        expect(tynn.state.puts[0].credentialId).toBe('c4');
+        expect(tynn.state.puts[0].body.sealedTo).toBe('escrow');
+        expect(await sealOpenText(tynn.state.puts[0].body.ciphertext as string, escrow)).toBe(rotated);
     });
 
     it('stops the rotation watch cleanly', async () => {

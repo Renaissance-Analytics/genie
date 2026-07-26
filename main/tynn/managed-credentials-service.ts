@@ -4,14 +4,15 @@ import {
     type EnsureHostEncryptionKeyDeps,
 } from '../host-core/crypto/host-encryption-key';
 import {
-    applyCredentialRevoke,
+    applyCredentialChange,
     bootstrapEscrowForPeers,
     managedEscrowPublicKey,
+    managedSubscriptionCredentialId,
     refreshManagedCredentials,
-    type CredentialRevoke,
+    type CredentialChangeResult,
     type ManagedCredentialDeps,
+    type ProviderCredentialChange,
     type RefreshSummary,
-    type RevokeResult,
 } from '../host-core/crypto/managed-credentials';
 import {
     syncClaudeCredentialRotation,
@@ -73,8 +74,12 @@ export interface StartManagedCredentialsDeps {
 export interface ManagedCredentialsHandle {
     /** Re-fetch and re-materialize (on a push, or a manual re-sync). */
     refresh(): Promise<RefreshSummary>;
-    /** Apply a pushed revoke immediately. */
-    onRevoke(event: CredentialRevoke): RevokeResult;
+    /**
+     * Apply a pushed `provider-credential.changed`. A `revoked` takes effect
+     * immediately; a `set`/`rotated` triggers a re-fetch, so a credential the
+     * owner ADDS reaches a running host without a restart.
+     */
+    onCredentialChange(event: ProviderCredentialChange): CredentialChangeResult;
     /** Force a rotation check (the watch does this on file change). */
     syncRotation(): Promise<RotationResult>;
     stop(): void;
@@ -113,18 +118,23 @@ export async function startManagedCredentials(
     const rotationDeps: WatchDeps = {
         ...materialize,
         ...deps.rotation,
-        // A thunk, not a value: a later refresh (or a re-key) moves the escrow
-        // key, and a watcher started here lives for the whole process.
+        // Thunks, not values: a later refresh (or a re-key) moves the escrow key
+        // AND can change which credential backs the file, while a watcher started
+        // here lives for the whole process.
         escrowPublicKey: managedEscrowPublicKey,
+        credentialId: managedSubscriptionCredentialId,
     };
 
     const refresh = async (): Promise<RefreshSummary> => {
         const summary = await refreshManagedCredentials(client, hostKeypair, materialize);
-        // Names + flags only — never a value.
+        // IDs + flags only — never a value.
         log(
             `managed credentials: ${summary.status}` +
-                (summary.providers.length ? ` providers=${summary.providers.join(',')}` : '') +
-                (summary.failed.length ? ` failed=${summary.failed.join(',')}` : ''),
+                (summary.credentialIds.length ? ` ok=${summary.credentialIds.join(',')}` : '') +
+                (summary.failed.length ? ` failed=${summary.failed.join(',')}` : '') +
+                (summary.conflicts.length
+                    ? ` ambiguous=${summary.conflicts.map((c) => c.target).join(',')}`
+                    : ''),
         );
         return summary;
     };
@@ -150,7 +160,13 @@ export async function startManagedCredentials(
 
     return {
         refresh,
-        onRevoke: (event) => applyCredentialRevoke(event, materialize),
+        onCredentialChange: (event) => {
+            const result = applyCredentialChange(event, materialize);
+            // A set/rotated push means the bundle moved on — pull it. Fire and
+            // forget: the caller is a socket handler, not an async context.
+            if (result.refetch) void refresh();
+            return result;
+        },
         syncRotation: () => syncClaudeCredentialRotation(client, rotationDeps),
         stop: () => watcher?.stop(),
     };

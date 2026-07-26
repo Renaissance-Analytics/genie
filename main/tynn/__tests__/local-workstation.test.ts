@@ -192,7 +192,7 @@ describe('WorkstationPusherTransport', () => {
         expect(onIssueWatchDelta).toHaveBeenCalledTimes(1);
     });
 
-    it('dispatches onCredentialRevoke on a credential.revoked push (immediate revoke)', () => {
+    it('dispatches onProviderCredentialChange on a provider-credential.changed push', () => {
         const channel = workstationChannel('ws-1');
         const sockets: FakeSocket[] = [];
         const transport = new WorkstationPusherTransport({
@@ -209,25 +209,46 @@ describe('WorkstationPusherTransport', () => {
             },
         });
 
-        const onCredentialRevoke = vi.fn();
-        transport.open({ onConnected: vi.fn(), onIssueWatchDelta: vi.fn(), onCredentialRevoke });
+        const onProviderCredentialChange = vi.fn();
+        transport.open({
+            onConnected: vi.fn(),
+            onIssueWatchDelta: vi.fn(),
+            onProviderCredentialChange,
+        });
         const sock = sockets[0];
 
         sock.emit('message', frame({
-            event: 'credential.revoked',
+            event: 'provider-credential.changed',
             channel,
-            data: frame({ provider: 'claude_subscription' }),
+            data: frame({ action: 'revoked', credentialId: '01KA', provider: 'anthropic', kind: 'subscription' }),
         }));
-        expect(onCredentialRevoke).toHaveBeenCalledTimes(1);
-        expect(onCredentialRevoke.mock.calls[0][0]).toEqual({ provider: 'claude_subscription' });
+        expect(onProviderCredentialChange).toHaveBeenCalledTimes(1);
+        expect(onProviderCredentialChange.mock.calls[0][0]).toMatchObject({
+            action: 'revoked',
+            credentialId: '01KA',
+        });
 
-        sock.emit('message', frame({ event: 'credential.revoked', channel, data: frame({ all: true }) }));
-        expect(onCredentialRevoke.mock.calls[1][0]).toEqual({ all: true });
+        // `set` matters as much as `revoked`: without it a newly ADDED credential
+        // would not reach a running host until restart — a poll in disguise.
+        sock.emit('message', frame({
+            event: 'provider-credential.changed',
+            channel,
+            data: frame({ action: 'set', credentialId: '01KB' }),
+        }));
+        expect(onProviderCredentialChange.mock.calls[1][0]).toMatchObject({
+            action: 'set',
+            credentialId: '01KB',
+        });
 
-        // A payload naming nothing is DROPPED — a garbled push must never be
-        // upgraded into an all-revoke that un-authenticates the whole host.
-        sock.emit('message', frame({ event: 'credential.revoked', channel, data: frame({}) }));
-        expect(onCredentialRevoke).toHaveBeenCalledTimes(2);
+        // A payload naming no valid action or credential is DROPPED — a garbled
+        // push must never act on a guess.
+        sock.emit('message', frame({ event: 'provider-credential.changed', channel, data: frame({}) }));
+        sock.emit('message', frame({
+            event: 'provider-credential.changed',
+            channel,
+            data: frame({ action: 'exploded', credentialId: '01KC' }),
+        }));
+        expect(onProviderCredentialChange).toHaveBeenCalledTimes(2);
     });
 
     const baseOpts = (sockets: FakeSocket[]) => ({

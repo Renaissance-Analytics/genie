@@ -1427,7 +1427,8 @@ app.whenReady().then(async () => {
                 log: (m) => console.log('[workstation]', m),
                 // Late-bound on purpose: the managed-credential service starts
                 // below, after this one, so read the handle at push time.
-                onCredentialRevoke: (event) => void managedCredentialsHandle?.onRevoke(event),
+                onProviderCredentialChange: (event) =>
+                    void managedCredentialsHandle?.onCredentialChange(event),
             });
             userChannelHandle?.stop();
             userChannelHandle = await startUserChannelIssueWatch({

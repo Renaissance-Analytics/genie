@@ -1,15 +1,17 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { generateEncryptionKeypair, seal, sodiumReady, type EncryptionKeypair } from '../sealed-box';
 import {
-    ANTHROPIC_API_KEY,
-    CLAUDE_SUBSCRIPTION,
-    GITHUB_TOKEN,
-    OPENAI_API_KEY,
+    ANTHROPIC,
+    API_KEY,
+    GITHUB,
+    OPENAI,
+    SUBSCRIPTION,
     openCredentialBundle,
     openEscrowKeypair,
     sealForEscrow,
     wrapEscrowForPeer,
     type CredentialBundle,
+    type SealedCredential,
 } from '../escrow';
 
 /**
@@ -30,8 +32,27 @@ beforeAll(async () => {
     await sodiumReady();
 });
 
-/** Build the bundle Tynn would return: escrow priv sealed to `host`, each
- *  credential sealed to the escrow PUBLIC key. */
+/** One credential row as Tynn serves it, sealed to the escrow key by default. */
+async function credential(
+    id: string,
+    provider: string,
+    kind: string,
+    value: string,
+    escrowPublicKeyB64: string,
+    extra: Partial<SealedCredential> = {},
+): Promise<SealedCredential> {
+    return {
+        id,
+        provider,
+        kind,
+        scope: 'account',
+        projectId: null,
+        sealedTo: 'escrow',
+        ciphertext: await seal(value, escrowPublicKeyB64),
+        ...extra,
+    };
+}
+
 async function buildBundle(
     escrow: EncryptionKeypair,
     host: EncryptionKeypair | null,
@@ -39,15 +60,13 @@ async function buildBundle(
     return {
         escrow: {
             publicKeyB64: escrow.publicKeyB64,
-            wrappedPrivateKeyB64: host
-                ? await seal(Buffer.from(escrow.privateKeyB64, 'base64'), host.publicKeyB64)
-                : null,
+            wrappedPrivateKeyB64: host ? await wrapEscrowForPeer(escrow, host.publicKeyB64) : null,
         },
         credentials: [
-            { provider: ANTHROPIC_API_KEY, ciphertext: await seal(FAKE.anthropic, escrow.publicKeyB64) },
-            { provider: OPENAI_API_KEY, ciphertext: await seal(FAKE.openai, escrow.publicKeyB64) },
-            { provider: GITHUB_TOKEN, ciphertext: await seal(FAKE.github, escrow.publicKeyB64) },
-            { provider: CLAUDE_SUBSCRIPTION, ciphertext: await seal(FAKE.claude, escrow.publicKeyB64) },
+            await credential('c1', ANTHROPIC, API_KEY, FAKE.anthropic, escrow.publicKeyB64),
+            await credential('c2', OPENAI, API_KEY, FAKE.openai, escrow.publicKeyB64),
+            await credential('c3', GITHUB, API_KEY, FAKE.github, escrow.publicKeyB64),
+            await credential('c4', ANTHROPIC, SUBSCRIPTION, FAKE.claude, escrow.publicKeyB64),
         ],
     };
 }
@@ -102,20 +121,71 @@ describe('openEscrowKeypair', () => {
 });
 
 describe('openCredentialBundle', () => {
-    it('opens every credential sealed to the escrow key (escrow recovery end to end)', async () => {
+    it('opens every escrow-sealed credential, preserving its provider/kind/scope descriptor', async () => {
         const escrow = await generateEncryptionKeypair();
         const host = await generateEncryptionKeypair();
-        const bundle = await buildBundle(escrow, host);
 
-        const opened = await openCredentialBundle(bundle, host);
+        const opened = await openCredentialBundle(await buildBundle(escrow, host), host);
 
         expect(opened.status).toBe('ok');
         expect(opened.escrowPublicKeyB64).toBe(escrow.publicKeyB64);
-        expect(opened.values[ANTHROPIC_API_KEY]).toBe(FAKE.anthropic);
-        expect(opened.values[OPENAI_API_KEY]).toBe(FAKE.openai);
-        expect(opened.values[GITHUB_TOKEN]).toBe(FAKE.github);
-        expect(opened.values[CLAUDE_SUBSCRIPTION]).toBe(FAKE.claude);
         expect(opened.failed).toEqual([]);
+        expect(opened.credentials.map((c) => [c.id, c.provider, c.kind, c.value])).toEqual([
+            ['c1', ANTHROPIC, API_KEY, FAKE.anthropic],
+            ['c2', OPENAI, API_KEY, FAKE.openai],
+            ['c3', GITHUB, API_KEY, FAKE.github],
+            ['c4', ANTHROPIC, SUBSCRIPTION, FAKE.claude],
+        ]);
+        expect(opened.credentials[0]).toMatchObject({ scope: 'account', projectId: null });
+    });
+
+    it('opens a credential sealed DIRECTLY to this host (sealedTo: host)', async () => {
+        const escrow = await generateEncryptionKeypair();
+        const host = await generateEncryptionKeypair();
+        const bundle = await buildBundle(escrow, host);
+        bundle.credentials = [
+            {
+                id: 'direct',
+                provider: ANTHROPIC,
+                kind: API_KEY,
+                scope: 'account',
+                projectId: null,
+                sealedTo: 'host',
+                ciphertext: await seal(FAKE.anthropic, host.publicKeyB64),
+            },
+        ];
+
+        const opened = await openCredentialBundle(bundle, host);
+
+        expect(opened.credentials).toHaveLength(1);
+        expect(opened.credentials[0].value).toBe(FAKE.anthropic);
+    });
+
+    it('opens a host-sealed credential EVEN WITH NO escrow key, and reports the escrow gap', async () => {
+        // Bootstrap-pending is not a reason to drop something we can already open.
+        const escrow = await generateEncryptionKeypair();
+        const host = await generateEncryptionKeypair();
+        const bundle: CredentialBundle = {
+            escrow: { publicKeyB64: escrow.publicKeyB64, wrappedPrivateKeyB64: null },
+            credentials: [
+                {
+                    id: 'direct',
+                    provider: OPENAI,
+                    kind: API_KEY,
+                    scope: 'account',
+                    projectId: null,
+                    sealedTo: 'host',
+                    ciphertext: await seal(FAKE.openai, host.publicKeyB64),
+                },
+                await credential('escrowed', ANTHROPIC, API_KEY, FAKE.anthropic, escrow.publicKeyB64),
+            ],
+        };
+
+        const opened = await openCredentialBundle(bundle, host);
+
+        expect(opened.status).toBe('no-escrow-key');
+        expect(opened.credentials.map((c) => c.id)).toEqual(['direct']);
+        expect(opened.failed).toEqual(['escrowed']);
     });
 
     it('recovers a RE-PROVISIONED host: a brand-new keypair opens the SAME credentials', async () => {
@@ -134,58 +204,83 @@ describe('openCredentialBundle', () => {
             credentials: original.credentials,
         };
 
-        expect(await openCredentialBundle(original, newHost)).toMatchObject({ status: 'no-escrow-key' });
+        const before = await openCredentialBundle(original, newHost);
+        expect(before.status).toBe('no-escrow-key');
+        expect(before.credentials).toEqual([]);
+
         const recovered = await openCredentialBundle(rewrapped, newHost);
         expect(recovered.status).toBe('ok');
-        expect(recovered.values[ANTHROPIC_API_KEY]).toBe(FAKE.anthropic);
-        expect(recovered.values[CLAUDE_SUBSCRIPTION]).toBe(FAKE.claude);
+        expect(recovered.credentials.find((c) => c.id === 'c1')?.value).toBe(FAKE.anthropic);
+        expect(recovered.credentials.find((c) => c.id === 'c4')?.value).toBe(FAKE.claude);
     });
 
-    it('reports no-escrow-key (no values) when the wrapped copy is missing', async () => {
-        const escrow = await generateEncryptionKeypair();
-        const host = await generateEncryptionKeypair();
-
-        const opened = await openCredentialBundle(await buildBundle(escrow, null), host);
-
-        expect(opened.status).toBe('no-escrow-key');
-        expect(opened.values).toEqual({});
-    });
-
-    it('names the providers that failed to open WITHOUT surfacing any value', async () => {
+    it('names the credentials that failed to open by ID, never surfacing a value', async () => {
         const escrow = await generateEncryptionKeypair();
         const host = await generateEncryptionKeypair();
         const stranger = await generateEncryptionKeypair();
         const bundle = await buildBundle(escrow, host);
-        // One credential was sealed to a key the escrow can't open.
         bundle.credentials.push({
-            provider: 'unopenable',
+            id: 'unopenable',
+            provider: ANTHROPIC,
+            kind: API_KEY,
+            scope: 'account',
+            projectId: null,
+            sealedTo: 'escrow',
             ciphertext: await seal('fake-stranger-0000', stranger.publicKeyB64),
         });
 
         const opened = await openCredentialBundle(bundle, host);
 
-        expect(opened.status).toBe('ok');
         expect(opened.failed).toEqual(['unopenable']);
-        expect(opened.values.unopenable).toBeUndefined();
+        expect(opened.credentials.map((c) => c.id)).not.toContain('unopenable');
+        expect(JSON.stringify(opened.failed)).not.toContain('fake-stranger-0000');
     });
 
     it('drops a credential whose ciphertext could be plaintext (never trusts a bad store)', async () => {
         const escrow = await generateEncryptionKeypair();
         const host = await generateEncryptionKeypair();
         const bundle = await buildBundle(escrow, host);
-        bundle.credentials.push({ provider: 'plaintextish', ciphertext: 'fake-not-a-real-key' });
+        bundle.credentials.push({
+            id: 'plaintextish',
+            provider: ANTHROPIC,
+            kind: API_KEY,
+            scope: 'account',
+            projectId: null,
+            sealedTo: 'escrow',
+            ciphertext: Buffer.from('fake-not-a-real-key-'.repeat(10)).toString('base64'),
+        });
 
         const opened = await openCredentialBundle(bundle, host);
 
         expect(opened.failed).toContain('plaintextish');
-        expect(opened.values.plaintextish).toBeUndefined();
+        expect(opened.credentials.map((c) => c.id)).not.toContain('plaintextish');
+    });
+
+    it('carries project scope through so the host can resolve per-workspace overrides', async () => {
+        const escrow = await generateEncryptionKeypair();
+        const host = await generateEncryptionKeypair();
+        const bundle = await buildBundle(escrow, host);
+        bundle.credentials = [
+            await credential('acct', ANTHROPIC, API_KEY, FAKE.anthropic, escrow.publicKeyB64),
+            await credential('proj', ANTHROPIC, API_KEY, 'fake-anthropic-proj', escrow.publicKeyB64, {
+                scope: 'project',
+                projectId: 'p-42',
+            }),
+        ];
+
+        const opened = await openCredentialBundle(bundle, host);
+
+        expect(opened.credentials.find((c) => c.id === 'proj')).toMatchObject({
+            scope: 'project',
+            projectId: 'p-42',
+            value: 'fake-anthropic-proj',
+        });
     });
 });
 
 describe('write-back sealing', () => {
     it('seals a rotated value to the ESCROW key so every host — present and future — can open it', async () => {
         const escrow = await generateEncryptionKeypair();
-        const hostA = await generateEncryptionKeypair();
         const hostB = await generateEncryptionKeypair();
         const rotated = '{"fake":true,"refresh":"fake-rotated-0000"}';
 
@@ -197,17 +292,20 @@ describe('write-back sealing', () => {
                 publicKeyB64: escrow.publicKeyB64,
                 wrappedPrivateKeyB64: await wrapEscrowForPeer(escrow, hostB.publicKeyB64),
             },
-            credentials: [{ provider: CLAUDE_SUBSCRIPTION, ciphertext }],
+            credentials: [
+                {
+                    id: 'c4',
+                    provider: ANTHROPIC,
+                    kind: SUBSCRIPTION,
+                    scope: 'account',
+                    projectId: null,
+                    sealedTo: 'escrow',
+                    ciphertext,
+                },
+            ],
         };
         const opened = await openCredentialBundle(bundle, hostB);
-        expect(opened.values[CLAUDE_SUBSCRIPTION]).toBe(rotated);
-
-        // And it is NOT openable by a host key directly — it is escrow-sealed.
-        const hostASealed = await openCredentialBundle(
-            { escrow: { publicKeyB64: escrow.publicKeyB64, wrappedPrivateKeyB64: null }, credentials: [] },
-            hostA,
-        );
-        expect(hostASealed.status).toBe('no-escrow-key');
+        expect(opened.credentials[0].value).toBe(rotated);
     });
 
     it('refuses to seal an empty value (never writes back nothing)', async () => {
