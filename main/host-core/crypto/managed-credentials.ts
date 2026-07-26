@@ -14,6 +14,7 @@ import {
     wipeClaudeCredentials,
     type ApplyResult,
     type CommandRunner,
+    type CredentialFs,
     type MaterializeDeps,
 } from './credential-materializer';
 import { noteClaudeCredentialBlob, resetClaudeRotation } from './claude-rotation';
@@ -57,8 +58,16 @@ export interface ManagedCredentialClient {
     }): Promise<void>;
 }
 
-/** Materialization seams (fs + the gh spawner), all injectable for tests. */
-export interface ManagedCredentialDeps extends MaterializeDeps {
+/**
+ * Materialization seams (fs + the gh spawner), all injectable for tests.
+ *
+ * The fs here is the FULL {@link CredentialFs}, not the write-only
+ * `MaterializerFs`: this module owns the whole flow and passes the same fs on to
+ * rotation, which must read the file back. Demanding the read up front means a
+ * caller cannot inject a write-only fs and silently lose rotation write-back.
+ */
+export interface ManagedCredentialDeps extends Omit<MaterializeDeps, 'fs'> {
+    fs?: CredentialFs;
     runner?: CommandRunner;
 }
 

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { CLAUDE_SUBSCRIPTION, sealForEscrow } from './escrow';
-import { claudeCredentialsPath, type MaterializerFs } from './credential-materializer';
+import { claudeCredentialsPath, type CredentialFs } from './credential-materializer';
 
 /**
  * Claude subscription ROTATION write-back.
@@ -49,14 +49,9 @@ export interface RotationClient {
     putCredential(provider: string, ciphertextB64: string): Promise<void>;
 }
 
-/** `MaterializerFs` plus the read rotation needs. */
-export interface RotationFs extends MaterializerFs {
-    readFileSync(file: string): string;
-}
-
 export interface RotationDeps {
     homeDir?: string;
-    fs?: RotationFs;
+    fs?: CredentialFs;
     /**
      * The escrow public key to re-seal to. Absent/null ⇒ refuse to write back.
      *
@@ -70,7 +65,7 @@ export interface RotationDeps {
     escrowPublicKey?: string | null | (() => string | null);
 }
 
-const defaultFs: RotationFs = {
+const defaultFs: CredentialFs = {
     mkdirSync: (dir, opts) => void nodeFs.mkdirSync(dir, opts),
     writeFileSync: (file, data, opts) => nodeFs.writeFileSync(file, data, opts),
     chmodSync: (file, mode) => nodeFs.chmodSync(file, mode),

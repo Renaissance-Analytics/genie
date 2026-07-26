@@ -133,6 +133,7 @@ describe('buildTerminalEnv (wired to the real managed state)', () => {
                 chmodSync: vi.fn(),
                 existsSync: (file) => files.has(file),
                 rmSync: (file) => void files.delete(file),
+                readFileSync: (file) => files.get(file) ?? '',
             },
             runner: { run: async () => ({ code: 0, stderr: '' }) },
         });

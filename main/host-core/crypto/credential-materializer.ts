@@ -64,7 +64,7 @@ export function credentialEnv(values: Record<string, string>): Record<string, st
     return env;
 }
 
-/** The subset of `node:fs` this module uses — injected so tests never need real
+/** The subset of `node:fs` THIS module uses — injected so tests never need real
  *  IO to assert the modes and the refuse-to-write paths. */
 export interface MaterializerFs {
     mkdirSync(dir: string, opts: { recursive: boolean; mode?: number }): void;
@@ -72,6 +72,16 @@ export interface MaterializerFs {
     chmodSync(file: string, mode: number): void;
     existsSync(file: string): boolean;
     rmSync(file: string, opts: { force: boolean }): void;
+}
+
+/**
+ * The FULL filesystem surface the credential path needs — writing (here) plus
+ * reading back (rotation detection). Anything wiring the whole flow injects this
+ * one, so a caller cannot hand the orchestrator a write-only fs and silently
+ * lose rotation write-back.
+ */
+export interface CredentialFs extends MaterializerFs {
+    readFileSync(file: string): string;
 }
 
 export interface MaterializeDeps {

@@ -9,7 +9,7 @@ import {
     wrapEscrowForPeer,
     type CredentialBundle,
 } from '../escrow';
-import type { MaterializerFs } from '../credential-materializer';
+import type { CredentialFs } from '../credential-materializer';
 import { resetClaudeRotation, syncClaudeCredentialRotation } from '../claude-rotation';
 import {
     applyCredentialRevoke,
@@ -83,7 +83,7 @@ function fakeClient(bundle: CredentialBundle): ManagedCredentialClient & { puts:
 /** An in-memory fs so materialization is observable without touching disk. */
 function memoryFs() {
     const files = new Map<string, { data: string; mode: number }>();
-    const impl: MaterializerFs = {
+    const impl: CredentialFs = {
         mkdirSync: vi.fn(),
         writeFileSync: (file, data, opts) => void files.set(file, { data, mode: opts.mode }),
         chmodSync: (file, mode) => {
@@ -92,6 +92,11 @@ function memoryFs() {
         },
         existsSync: (file) => files.has(file),
         rmSync: (file) => void files.delete(file),
+        readFileSync: (file) => {
+            const entry = files.get(file);
+            if (!entry) throw new Error('ENOENT');
+            return entry.data;
+        },
     };
     return { files, impl };
 }
@@ -257,13 +262,9 @@ describe('rotation baseline', () => {
 
         // The file we just materialized IS the baseline — a sync right now must
         // see no change and PUT nothing back.
-        const rotationFs = {
-            ...m.deps.fs,
-            readFileSync: (file: string) => m.files.get(file)!.data,
-        };
         const result = await syncClaudeCredentialRotation(client, {
             homeDir: m.deps.homeDir,
-            fs: rotationFs,
+            fs: m.deps.fs,
             escrowPublicKey: escrow.publicKeyB64,
         });
 
@@ -283,7 +284,7 @@ describe('rotation baseline', () => {
         // Nothing on disk and no baseline: a sync is a clean no-op, not a PUT.
         const result = await syncClaudeCredentialRotation(client, {
             homeDir: m.deps.homeDir,
-            fs: { ...m.deps.fs, readFileSync: () => '' },
+            fs: m.deps.fs,
             escrowPublicKey: escrow.publicKeyB64,
         });
         expect(result.status).toBe('absent');
