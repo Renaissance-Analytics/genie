@@ -285,6 +285,10 @@ export function createAgentTerminal(opts: {
         scopeWorkspaces?: string[];
         /** Opt-in wake-on-DM (issue #9): a direct message wakes this agent when idle. */
         wakeOnDm?: boolean;
+        /** Channel keys to carry forward (genie #65) — a RESTARTED agent terminal
+         *  hands its predecessor's explicitly-joined rooms on, so a relaunch (a new
+         *  terminal + a new agent id) doesn't drop it out of shared channels. */
+        channels?: string[];
     };
     /** Specialized terminals: IssueWatch ping handling to stamp on the spec meta. */
     issuewatch?: {
@@ -324,6 +328,9 @@ export function createAgentTerminal(opts: {
                 ? { whisper_workspaces: opts.agentInbox.scopeWorkspaces }
                 : {}),
             ...(opts.agentInbox?.wakeOnDm ? { whisper_wake_on_dm: true } : {}),
+            ...(opts.agentInbox?.channels?.length
+                ? { whisper_channels: [...opts.agentInbox.channels] }
+                : {}),
             ...(opts.issuewatch?.handle ? { issuewatch_handle: true } : {}),
             ...(opts.issuewatch?.handle && opts.issuewatch.action
                 ? { issuewatch_action: opts.issuewatch.action }
@@ -541,6 +548,11 @@ function joinInputFromSpec(spec: TerminalSpecRow | null): AgentInboxJoinInput | 
             : [],
         chatSessionId: spec.meta?.chat_session_id ?? null,
         wakeOnDm: spec.meta?.whisper_wake_on_dm === true,
+        // Explicitly-joined channels (genie #65) — the broker re-adds these on
+        // (re)join so a restart doesn't silently evict the agent from them.
+        channels: Array.isArray(spec.meta?.whisper_channels)
+            ? (spec.meta.whisper_channels as string[])
+            : [],
     };
 }
 
