@@ -310,7 +310,13 @@ export function applyCredentialChange(
 }
 
 export interface PeerBootstrapSummary {
-    status: 'ok' | 'no-escrow-key' | 'unavailable';
+    /**
+     * `not-applicable` covers Tynn's two expected refusals: 403 (this host holds
+     * no escrow key) and 404 (the owner has no escrow key at all). Both are
+     * normal points in the bootstrap lifecycle, not failures — kept distinct from
+     * `unavailable` so a caller doesn't log routine states as errors.
+     */
+    status: 'ok' | 'no-escrow-key' | 'not-applicable' | 'unavailable';
     /** Workstation ids this host wrapped the escrow key for. */
     wrapped: string[];
     /** Workstation ids skipped (malformed published key, or the post failed). */
@@ -335,7 +341,12 @@ export async function bootstrapEscrowForPeers(
     let pending: Array<{ workstationId: string; encryptionPublicKeyB64: string }>;
     try {
         pending = await client.listEscrowPending();
-    } catch {
+    } catch (e) {
+        const status = (e as { status?: number } | null)?.status;
+        // 403/404 are Tynn telling us there is nothing to do yet, not a fault.
+        if (status === 403 || status === 404) {
+            return { status: 'not-applicable', wrapped: [], skipped: [] };
+        }
         return { status: 'unavailable', wrapped: [], skipped: [] };
     }
 

@@ -146,6 +146,10 @@ export async function startManagedCredentials(
     try {
         const peers = await bootstrapEscrowForPeers(client);
         if (peers.wrapped.length) log(`escrow wrapped for: ${peers.wrapped.join(',')}`);
+        else if (peers.status === 'unavailable') log('escrow peer bootstrap unreachable; will retry');
+        // 'no-escrow-key' / 'not-applicable' are routine lifecycle states — the
+        // usual case on a host the owner hasn't provisioned. Logging them as
+        // problems would train the reader to ignore this line.
     } catch (e) {
         log(`escrow peer bootstrap skipped: ${String(e)}`);
     }

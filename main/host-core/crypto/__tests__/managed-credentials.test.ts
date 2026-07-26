@@ -451,6 +451,43 @@ describe('bootstrapEscrowForPeers (new-host bootstrap from a live peer)', () => 
         expect(client.wraps).toEqual([]);
     });
 
+    it('treats a 403/404 from escrow/pending as a STATE, not an error', async () => {
+        // 403 = this host holds no escrow key; 404 = the owner has no escrow key
+        // at all. Both are normal points in the bootstrap lifecycle — skip quietly
+        // and retry next boot rather than surfacing a failure.
+        const escrow = await generateEncryptionKeypair();
+        const host = await generateEncryptionKeypair();
+        const m = materializeDeps();
+
+        for (const status of [403, 404]) {
+            resetManagedCredentials();
+            const client = fakeClient(await buildBundle(escrow, host));
+            client.listEscrowPending = vi.fn(async () => {
+                throw Object.assign(new Error(`HTTP ${status}`), { status });
+            });
+            await refreshManagedCredentials(client, host, m.deps);
+
+            const summary = await bootstrapEscrowForPeers(client);
+
+            expect(summary.status).toBe('not-applicable');
+            expect(summary.wrapped).toEqual([]);
+            expect(client.wraps).toEqual([]);
+        }
+    });
+
+    it('still reports a genuine transport failure as unavailable', async () => {
+        const escrow = await generateEncryptionKeypair();
+        const host = await generateEncryptionKeypair();
+        const client = fakeClient(await buildBundle(escrow, host));
+        client.listEscrowPending = vi.fn(async () => {
+            throw Object.assign(new Error('HTTP 500'), { status: 500 });
+        });
+        const m = materializeDeps();
+        await refreshManagedCredentials(client, host, m.deps);
+
+        expect((await bootstrapEscrowForPeers(client)).status).toBe('unavailable');
+    });
+
     it('skips a pending host whose published public key is malformed', async () => {
         const escrow = await generateEncryptionKeypair();
         const host = await generateEncryptionKeypair();
