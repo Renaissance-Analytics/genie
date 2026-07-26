@@ -192,6 +192,44 @@ describe('WorkstationPusherTransport', () => {
         expect(onIssueWatchDelta).toHaveBeenCalledTimes(1);
     });
 
+    it('dispatches onCredentialRevoke on a credential.revoked push (immediate revoke)', () => {
+        const channel = workstationChannel('ws-1');
+        const sockets: FakeSocket[] = [];
+        const transport = new WorkstationPusherTransport({
+            appKey: 'k',
+            cluster: 'us2',
+            workstationId: 'ws-1',
+            tynnApiBaseUrl: 'https://tynn.test',
+            signer: { authHeader: () => 'Workstation 1:s' },
+            fetchImpl: (async () => ({ ok: true, json: async () => ({ auth: 'a' }) })) as unknown as typeof fetch,
+            wsFactory: () => {
+                const s = new FakeSocket();
+                sockets.push(s);
+                return s;
+            },
+        });
+
+        const onCredentialRevoke = vi.fn();
+        transport.open({ onConnected: vi.fn(), onIssueWatchDelta: vi.fn(), onCredentialRevoke });
+        const sock = sockets[0];
+
+        sock.emit('message', frame({
+            event: 'credential.revoked',
+            channel,
+            data: frame({ provider: 'claude_subscription' }),
+        }));
+        expect(onCredentialRevoke).toHaveBeenCalledTimes(1);
+        expect(onCredentialRevoke.mock.calls[0][0]).toEqual({ provider: 'claude_subscription' });
+
+        sock.emit('message', frame({ event: 'credential.revoked', channel, data: frame({ all: true }) }));
+        expect(onCredentialRevoke.mock.calls[1][0]).toEqual({ all: true });
+
+        // A payload naming nothing is DROPPED — a garbled push must never be
+        // upgraded into an all-revoke that un-authenticates the whole host.
+        sock.emit('message', frame({ event: 'credential.revoked', channel, data: frame({}) }));
+        expect(onCredentialRevoke).toHaveBeenCalledTimes(2);
+    });
+
     const baseOpts = (sockets: FakeSocket[]) => ({
         appKey: 'k',
         cluster: 'us2',

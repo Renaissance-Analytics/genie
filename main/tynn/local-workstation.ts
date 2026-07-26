@@ -16,6 +16,7 @@ import {
     WorkstationPusherTransport,
     type WorkstationSubscriptionHandle,
 } from './pusher-transport';
+import type { CredentialRevoke } from '../host-core/crypto/managed-credentials';
 import type { IssueWatchDeltaPush } from './workspace-assignment';
 
 /**
@@ -94,6 +95,7 @@ export interface WorkstationTransportLike {
     open(handlers: {
         onConnected: () => void;
         onIssueWatchDelta: (delta: IssueWatchDeltaPush) => void;
+        onCredentialRevoke?: (event: CredentialRevoke) => void;
         onDisconnected?: () => void;
     }): WorkstationSubscriptionHandle;
 }
@@ -130,6 +132,17 @@ export interface StartLocalWorkstationDeps {
     /** Current local workspace + enabled-site inventory. Synced to Tynn with
      * workstation auth so share policy never depends on a Tynn project row. */
     inventory?: () => Promise<WorkstationInventory>;
+    /**
+     * Apply Tynn's immediate push-to-revoke for managed provider credentials.
+     * Rides THIS subscription — the revoke arrives on the same private channel as
+     * the IssueWatch deltas, so there is no second socket and no polling. Absent
+     * ⇒ the host holds no managed credentials and the push is ignored.
+     *
+     * Late-bound deliberately: the managed-credential service starts AFTER this
+     * one (it depends on the same enrolled identity), so the shell hands over a
+     * lookup rather than a handle that would still be null at wire-up time.
+     */
+    onCredentialRevoke?: (event: CredentialRevoke) => void;
     log?: (msg: string) => void;
 }
 
@@ -347,6 +360,15 @@ export async function startLocalWorkstation(
                     applyDelta(delta);
                 } catch (e) {
                     log(`applyPushedDelta failed: ${e instanceof Error ? e.message : String(e)}`);
+                }
+            },
+            // Immediate push-to-revoke: wipe the materialized credential + drop it
+            // from the next spawn. Never let a revoke failure kill the socket.
+            onCredentialRevoke: (event) => {
+                try {
+                    deps.onCredentialRevoke?.(event);
+                } catch (e) {
+                    log(`credential revoke failed: ${e instanceof Error ? e.message : String(e)}`);
                 }
             },
             // A transport drop always schedules a re-dial (see onDrop), so the
