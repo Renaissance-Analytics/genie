@@ -227,34 +227,13 @@ export async function provisionAssignedWorkspace(
     const inspectTarget = deps.inspectTarget ?? defaultInspectTarget;
     const cleanTarget = deps.cleanTarget ?? defaultCleanTarget;
 
-    const already = listExisting().find((w) => w.id === a.workspaceId);
-    if (already) {
-        // Already cloned — but STILL (re)write the on-host MCP config. A workspace
-        // first provisioned by an OLDER host (before genie #55, or before the Tynn
-        // MCP seam) otherwise NEVER gets the genie MCP entry, because this function
-        // short-circuits here and the fresh-clone MCP write below is skipped. Making
-        // the ensure idempotent + running it on every reconcile means an existing
-        // workspace's `.mcp.json` converges to the current host's tool surface after
-        // an image upgrade — not only at first clone. Path from the registered row,
-        // falling back to the deterministic clone dest.
-        const wsPath =
-            (already as { path?: string }).path || resolveDest(deps.parentPath, a.slug);
-        await ensureWorkspaceMcp(wsPath, a, deps);
-        return { status: 'exists', workspaceId: a.workspaceId };
-    }
-
-    const url = resolveAssignmentCloneUrl(a);
-    if (!url) {
-        return {
-            status: 'error',
-            workspaceId: a.workspaceId,
-            error: `no .agi clone URL could be resolved for "${a.name}"`,
-        };
-    }
-
     // Best-effort progress reporter (genie #45): narrates each stage to Tynn for
-    // the assign UI. Never throws into provisioning. `stage` tracks where we are so
-    // a failure reports an error on the right step.
+    // the assign UI, and — since Tynn #114 — is how a TERMINAL tick (`error`, or
+    // `ready`+`done`) gets PERSISTED onto the workspace instance. Declared here,
+    // ABOVE the early returns, because every exit path has to be able to report:
+    // an outcome the host only returns locally is one Tynn never hears, which is
+    // how a workspace ends up sitting at 'unknown' forever (genie-cloud#13).
+    // Never throws into provisioning.
     const report = (
         step: 'cloning' | 'submodules' | 'agent_config' | 'ready',
         status: 'running' | 'done' | 'error',
@@ -272,6 +251,40 @@ export async function provisionAssignedWorkspace(
             /* a progress report must never break provisioning */
         }
     };
+
+    const already = listExisting().find((w) => w.id === a.workspaceId);
+    if (already) {
+        // Already cloned — but STILL (re)write the on-host MCP config. A workspace
+        // first provisioned by an OLDER host (before genie #55, or before the Tynn
+        // MCP seam) otherwise NEVER gets the genie MCP entry, because this function
+        // short-circuits here and the fresh-clone MCP write below is skipped. Making
+        // the ensure idempotent + running it on every reconcile means an existing
+        // workspace's `.mcp.json` converges to the current host's tool surface after
+        // an image upgrade — not only at first clone. Path from the registered row,
+        // falling back to the deterministic clone dest.
+        const wsPath =
+            (already as { path?: string }).path || resolveDest(deps.parentPath, a.slug);
+        await ensureWorkspaceMcp(wsPath, a, deps);
+        // The workspace IS present and served on this host — report the terminal
+        // success. Tynn only clears a stored provisioning error on `ready`+`done`,
+        // so without this tick a workspace that failed once and has since healed
+        // (adopted on disk, or provisioned by an earlier host) stays ERROR on the
+        // record permanently, with nothing able to un-say it.
+        report('ready', 'done');
+        return { status: 'exists', workspaceId: a.workspaceId };
+    }
+
+    const url = resolveAssignmentCloneUrl(a);
+    if (!url) {
+        const error = `no .agi clone URL could be resolved for "${a.name}"`;
+        // A real, owner-fixable failure (the workspace's repo metadata in Tynn can't
+        // form an envelope URL) — not an internal detail. Report it on `cloning`,
+        // the step it prevented, so Tynn persists the reason instead of 'unknown'.
+        report('cloning', 'error', error);
+        return { status: 'error', workspaceId: a.workspaceId, error };
+    }
+
+    // `stage` tracks where we are so a failure reports an error on the right step.
     let stage: 'cloning' | 'agent_config' | 'ready' = 'cloning';
 
     try {
