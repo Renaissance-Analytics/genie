@@ -337,13 +337,18 @@ function MasterInner() {
     const [questionsOpen, setQuestionsOpen] = useState(false);
     const [questionCount, setQuestionCount] = useState(0);
     useEffect(() => {
-        const load = (): void => {
+        // #60: badge the number of WORKSPACES with pending questions (incl. DND-
+        // deferred). The `questions:changed` event now CARRIES `{workspaces}` — set it
+        // straight from the payload (push-driven, like the AgentInbox lag badge), so a
+        // host-bound window updates without a fetch that would only see its empty local
+        // list. Fall back to a fetch on the initial mount (no payload).
+        const load = (payload?: { workspaces?: number }): void => {
+            if (payload && typeof payload.workspaces === 'number') {
+                setQuestionCount(payload.workspaces);
+                return;
+            }
             api()
                 .questions?.list?.()
-                // #60: badge the number of WORKSPACES with pending questions (owner's
-                // ask), not the total question count. `groups` comes from the same
-                // grouped source the flyout uses (listPendingQuestions → includes
-                // DND-deferred), so a heads-down question still bumps the badge.
                 .then((r) => setQuestionCount(r.groups.length))
                 .catch(() => {});
         };

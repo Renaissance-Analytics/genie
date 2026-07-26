@@ -12,6 +12,7 @@ import {
     mobileTermFanout,
     setLocked,
 } from '../server';
+import { _seedPendingQuestionForTest, answerPendingQuestion } from '../../ask/force-question';
 import {
     _resetAuthForTest,
     currentPin,
@@ -554,6 +555,31 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         expect(msg).toBeTruthy();
         expect(msg.payload).toEqual({ id: 'p-1', status: 'running' });
         ws.close();
+    });
+
+    it('pushes questions:changed (PLURAL) with the pending count when a question is added (genie #60)', async () => {
+        // The host must announce a question change over /ws/events so a host-bound
+        // window's top-bar QUESTIONS badge updates — exactly like process:status /
+        // agentinbox:message. The event name is `questions:changed` (plural); the old
+        // singular `question:changed` matched nothing the client listens for, so the
+        // badge never moved on a workstation-connected window. This asserts the plural
+        // name + the count payload, so that regression can't come back.
+        const port = await start();
+        const token = await pair(port);
+        const evFrames: any[] = [];
+        const ws = await openWs(`ws://127.0.0.1:${port}/ws/events?token=${token}`, evFrames);
+        await new Promise((r) => setTimeout(r, 20));
+        const id = _seedPendingQuestionForTest(
+            [{ header: 'H', question: 'Q?', options: [{ label: 'Yes' }, { label: 'No' }] }],
+            'Workspace A',
+        );
+        await new Promise((r) => setTimeout(r, 30));
+        const msg = evFrames.find((f) => f.type === 'questions:changed');
+        expect(msg).toBeTruthy(); // would be undefined against the old 'question:changed'
+        expect(msg.payload.workspaces).toBe(1);
+        expect(msg.payload.count).toBe(1);
+        ws.close();
+        answerPendingQuestion(id, []); // clear the seeded question
     });
 
     it('/ws/term streams catch-up + onData and writes phone input to the pty', async () => {

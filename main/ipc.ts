@@ -1073,9 +1073,15 @@ export function registerIpcHandlers(): void {
         answerPendingQuestion(id, answers ?? []),
     );
     onQuestionsChanged(() => {
-        for (const w of BrowserWindow.getAllWindows()) {
-            if (!w.isDestroyed()) w.webContents.send('questions:changed');
-        }
+        // Carry the count so the badge updates push-style (fetch-free, like the
+        // AgentInbox). broadcastLocal SKIPS host-bound windows — those get the
+        // HOST's count via mobileEmit + PASSTHROUGH, so a client's local 0 never
+        // clobbers it (genie #60).
+        const pending = listPendingQuestions();
+        broadcastLocal('questions:changed', {
+            count: pendingCount(pending),
+            workspaces: groupPendingByWorkspace(pending).length,
+        });
     });
 
     // --- Knowledge Graph (workstation-wide local memory store) -----------

@@ -44,7 +44,8 @@ import {
     type BatonRosterEntry,
     type ControlView,
 } from './baton';
-import { onQuestionsChanged } from '../ask/force-question';
+import { onQuestionsChanged, listPendingQuestions } from '../ask/force-question';
+import { groupPendingByWorkspace, pendingCount } from '../ask/inbox';
 import { hostInstallId } from '../host-identity';
 
 /**
@@ -708,7 +709,20 @@ export async function startMobileServer(d: MobileServerDeps): Promise<void> {
     // Push new/resolved ForceTheQuestion prompts to /ws/events so a paired phone
     // sees them live (mobileEmit no-ops when nothing is connected). Subscribe once.
     if (!questionSubWired) {
-        onQuestionsChanged(() => mobileEmit('question:changed'));
+        // Push the pending-question count to /ws/events so a host-bound window's
+        // top-bar QUESTIONS badge updates live — exactly like agentinbox:message /
+        // issue-watch:update do. NAME must be `questions:changed` (plural): the
+        // renderer, preload, ipc, and PASSTHROUGH_EVENTS all use the plural — the
+        // old singular `question:changed` matched NOTHING, so the badge never moved
+        // on a workstation-connected window (genie #60). Carry the count in the
+        // payload so the badge sets it directly (fetch-free, push-driven).
+        onQuestionsChanged(() => {
+            const pending = listPendingQuestions();
+            mobileEmit('questions:changed', {
+                count: pendingCount(pending),
+                workspaces: groupPendingByWorkspace(pending).length,
+            });
+        });
         questionSubWired = true;
     }
     if (servers.size > 0) return; // already running

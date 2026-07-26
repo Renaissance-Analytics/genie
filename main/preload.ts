@@ -1160,10 +1160,14 @@ const api = {
             ipcRenderer.on('inbox:updated', handler);
             return () => ipcRenderer.off('inbox:updated', handler);
         },
-        /** PendingQuestions — a question was added / answered / deferred; the master
-         *  window re-fetches the grouped list + refreshes the top-bar badge. */
-        questionsChanged: (cb: () => void) => {
-            const handler = () => cb();
+        /** PendingQuestions — a question was added / answered / deferred. Carries
+         *  `{count, workspaces}` so the badge sets it directly (push-driven, like the
+         *  AgentInbox); forwarded so the renderer needn't re-fetch (genie #60). */
+        questionsChanged: (
+            cb: (payload?: { count: number; workspaces: number }) => void,
+        ) => {
+            const handler = (_e: unknown, payload?: { count: number; workspaces: number }) =>
+                cb(payload);
             ipcRenderer.on('questions:changed', handler);
             return () => ipcRenderer.off('questions:changed', handler);
         },
