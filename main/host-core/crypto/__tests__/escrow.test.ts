@@ -191,6 +191,34 @@ describe('openCredentialBundle', () => {
         expect(opened.status).toBe('no-escrow-key');
         expect(opened.credentials).toEqual([]);
         expect(opened.failed).toEqual([]);
+        // But say WHICH credentials are stranded. "no escrow key" alone cannot
+        // distinguish "the owner provisioned nothing" from "the owner provisioned
+        // two and this host can open neither" — and only the second is actionable
+        // (a peer must wrap, or the owner must restore from their backup).
+        expect(opened.awaitingEscrow).toEqual(['direct', 'escrowed']);
+    });
+
+    it('reports nothing awaiting when the owner has provisioned nothing', async () => {
+        const escrow = await generateEncryptionKeypair();
+        const host = await generateEncryptionKeypair();
+
+        const opened = await openCredentialBundle(
+            { escrow: { publicKeyB64: escrow.publicKeyB64, wrappedPrivateKeyB64: null }, credentials: [] },
+            host,
+        );
+
+        expect(opened.status).toBe('no-escrow-key');
+        expect(opened.awaitingEscrow).toEqual([]);
+    });
+
+    it('reports nothing awaiting once the escrow key IS held', async () => {
+        const escrow = await generateEncryptionKeypair();
+        const host = await generateEncryptionKeypair();
+
+        const opened = await openCredentialBundle(await buildBundle(escrow, host), host);
+
+        expect(opened.status).toBe('ok');
+        expect(opened.awaitingEscrow).toEqual([]);
     });
 
     it('recovers a RE-PROVISIONED host: a brand-new keypair opens the SAME credentials', async () => {

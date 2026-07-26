@@ -108,6 +108,23 @@ export interface OpenedCredentials {
     credentials: OpenedCredential[];
     /** Credential IDs whose ciphertext did not open — IDS ONLY, never values. */
     failed: string[];
+    /**
+     * Credential IDs this host holds but cannot open BECAUSE it has no escrow
+     * key. Empty in every other state.
+     *
+     * Kept separate from `failed`, which means "a ciphertext that should have
+     * opened didn't" — a store fault worth investigating. This is a known
+     * lifecycle state with a known remedy (a live peer wraps the escrow key, or
+     * the owner restores it from their backup). Folding them together would make
+     * `failed` noisy on every unprovisioned host and bury the real faults.
+     *
+     * It exists because `status: 'no-escrow-key'` alone cannot distinguish "the
+     * owner has provisioned nothing" (quiet, normal) from "the owner provisioned
+     * credentials this host can open none of" (actionable) — and a host that
+     * sits silent in the second case is the failure mode this whole path is
+     * meant to avoid.
+     */
+    awaitingEscrow: string[];
 }
 
 /**
@@ -151,7 +168,13 @@ export async function openCredentialBundle(
     // that could produce one, so treating this as a partial-open state would be
     // a branch that never runs, obscuring the real signal.
     if (!escrowKeypair) {
-        return { status: 'no-escrow-key', escrowPublicKeyB64, credentials: [], failed: [] };
+        return {
+            status: 'no-escrow-key',
+            escrowPublicKeyB64,
+            credentials: [],
+            failed: [],
+            awaitingEscrow: (bundle.credentials ?? []).map((c) => c.id),
+        };
     }
 
     const credentials: OpenedCredential[] = [];
@@ -181,12 +204,7 @@ export async function openCredentialBundle(
             value: plaintext,
         });
     }
-    return {
-        status: 'ok',
-        escrowPublicKeyB64,
-        credentials,
-        failed,
-    };
+    return { status: 'ok', escrowPublicKeyB64, credentials, failed, awaitingEscrow: [] };
 }
 
 /**

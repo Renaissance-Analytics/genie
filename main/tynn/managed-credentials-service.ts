@@ -136,6 +136,18 @@ export async function startManagedCredentials(
                     ? ` ambiguous=${summary.conflicts.map((c) => c.target).join(',')}`
                     : ''),
         );
+        // The one state that is silent-but-wrong: the owner HAS provisioned
+        // credentials and this host can open none of them. Say so explicitly and
+        // name the remedy — otherwise the host just appears to have no
+        // credentials, with nothing pointing at why. An unprovisioned host with
+        // nothing to open stays quiet (awaitingEscrow is empty).
+        if (summary.awaitingEscrow.length) {
+            log(
+                `${summary.awaitingEscrow.length} credential(s) awaiting this host's escrow key ` +
+                    `(${summary.awaitingEscrow.join(',')}) — a live peer will wrap it automatically, ` +
+                    `or restore it from the owner's backup if no other host is running.`,
+            );
+        }
         return summary;
     };
 

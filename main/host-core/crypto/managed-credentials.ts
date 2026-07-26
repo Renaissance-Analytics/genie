@@ -95,6 +95,9 @@ export interface RefreshSummary {
     credentialIds: string[];
     /** Credential IDs whose ciphertext did not open. */
     failed: string[];
+    /** Credential IDs stranded because this host holds no escrow key — the
+     *  actionable half of `no-escrow-key`. See `OpenedCredentials`. */
+    awaitingEscrow: string[];
     /** Env var NAMES currently injectable (not their values). */
     envVars: string[];
     /** Single-slot targets left unfilled because several project-scoped
@@ -181,6 +184,7 @@ export async function refreshManagedCredentials(
             status: 'unavailable',
             credentialIds: [],
             failed: [],
+            awaitingEscrow: [],
             envVars: [],
             conflicts: [],
             claude: null,
@@ -196,6 +200,7 @@ export async function refreshManagedCredentials(
             status: 'no-escrow-key',
             credentialIds: [],
             failed: opened.failed,
+            awaitingEscrow: opened.awaitingEscrow,
             envVars: Object.keys(managedCredentialEnv()),
             conflicts: [],
             claude: null,
@@ -251,6 +256,7 @@ export async function refreshManagedCredentials(
         status: 'ok',
         credentialIds,
         failed: opened.failed,
+        awaitingEscrow: opened.awaitingEscrow,
         envVars: Object.keys(managedCredentialEnv()),
         conflicts,
         claude,

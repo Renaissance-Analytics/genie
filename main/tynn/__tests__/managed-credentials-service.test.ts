@@ -274,6 +274,73 @@ describe('startManagedCredentials', () => {
         expect(managedCredentialEnv()).toEqual({});
     });
 
+    it('SAYS SO when the owner provisioned credentials this host cannot open', async () => {
+        // The silent-but-wrong state: without this the host just looks like it
+        // has no credentials, with nothing pointing at why.
+        const escrow = await generateEncryptionKeypair();
+        const tynn = fakeTynn(escrow);
+        tynn.state.publishedPublicKey = null; // never wrapped for us
+        const logs: string[] = [];
+        setSecretEncryptor(fakeEncryptor());
+
+        await startManagedCredentials({
+            enabled: true,
+            identity,
+            tynnApiBaseUrl: BASE,
+            fetchImpl: (async (url: string, init?: RequestInit) => {
+                // Swallow the publish so the fake never learns our public key and
+                // therefore never wraps the escrow key to us.
+                if (String(url).endsWith('/encryption-key')) {
+                    return { ok: true, status: 200, json: async () => ({}) } as Response;
+                }
+                return tynn.fetchImpl(url as string, init);
+            }) as unknown as typeof fetch,
+            encryptionKey: memoryKeyStore(),
+            materialize: memoryFsDeps().deps,
+            rotation: { watch: () => ({ close: vi.fn() }) },
+            log: (m) => logs.push(m),
+        });
+
+        const joined = logs.join('\n');
+        expect(joined).toContain('no-escrow-key');
+        expect(joined).toMatch(/awaiting this host's escrow key/i);
+        expect(joined).toContain('c1');
+        // Names the remedy, not just the symptom.
+        expect(joined).toMatch(/peer|backup/i);
+        // …and still leaks nothing.
+        for (const value of Object.values(FAKE)) expect(joined).not.toContain(value);
+    });
+
+    it('stays QUIET about escrow when the owner has provisioned nothing', async () => {
+        const escrow = await generateEncryptionKeypair();
+        const logs: string[] = [];
+        setSecretEncryptor(fakeEncryptor());
+
+        await startManagedCredentials({
+            enabled: true,
+            identity,
+            tynnApiBaseUrl: BASE,
+            fetchImpl: (async (url: string) =>
+                ({
+                    ok: true,
+                    status: 200,
+                    json: async () =>
+                        String(url).endsWith('/provider-credentials')
+                            ? {
+                                  escrow: { publicKey: escrow.publicKeyB64, wrappedPrivateKey: null },
+                                  credentials: [],
+                              }
+                            : { hosts: [] },
+                }) as Response) as unknown as typeof fetch,
+            encryptionKey: memoryKeyStore(),
+            materialize: memoryFsDeps().deps,
+            rotation: { watch: () => ({ close: vi.fn() }) },
+            log: (m) => logs.push(m),
+        });
+
+        expect(logs.join('\n')).not.toMatch(/awaiting/i);
+    });
+
     it('never breaks boot when Tynn is unreachable', async () => {
         const keys = memoryKeyStore();
         setSecretEncryptor(fakeEncryptor());
