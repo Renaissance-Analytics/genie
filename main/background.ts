@@ -157,7 +157,6 @@ import {
     wireTerminalAdapter,
     killHostForUpdate,
     snapshotHostTerminalsForUpdate,
-    detachedTerminalsEnabled,
     electronEncryptor,
 } from './terminal/genie-adapter';
 import { setSecretEncryptor } from './secrets/store';
@@ -858,18 +857,19 @@ app.on('open-url', (event, url) => {
 
 /**
  * Desktop wrapper over the extracted, GUI-free backend selection — injects the
- * Electron/E2E-derived inputs. Reused by startup and the `genie host
- * start/restart` control commands.
+ * Electron-derived inputs. Reused by startup and the `genie host start/restart`
+ * control commands.
  *
- * Never attempt the detached host under E2E: the --no-pack test build ships no
- * standalone runtime, and a detached + unref'd host child would outlive the test
- * by design. The E2E specs don't exercise terminals, so in-process keeps boot
- * deterministic. The production default is ON.
+ * genie #63 Phase 1: the local Host starts on EVERY launch — no setting, no
+ * opt-in. The single exception is E2E, and it is not a preference: the --no-pack
+ * test build ships no standalone runtime, and a detached + unref'd host child
+ * would outlive the test run by design. The E2E specs don't exercise terminals,
+ * so in-process keeps their boot deterministic.
  */
 async function runBackendSelection() {
     return runBackendSelectionCore({
         userDataDir: app.getPath('userData'),
-        detachedEnabled: detachedTerminalsEnabled() && !isE2E(),
+        forceInProcess: isE2E(),
     });
 }
 
@@ -1038,28 +1038,26 @@ app.whenReady().then(async () => {
     // shared snapshot store). __dirname is the compiled main bundle dir, where
     // the detached pty-host script sits beside background.js.
     wireTerminalAdapter(__dirname);
-    // Tier 3: choose the terminal backend BEFORE registering the terminal IPC.
-    // initTerminalBackend connects-or-spawns the detached pty-host when the
-    // `detached_terminals` setting is ON — now the DEFAULT (explicit 'off' →
-    // in-process). It NEVER
-    // throws — any failure degrades to the in-process backend with a non-fatal
-    // toast. Doing this first means registerTerminalIpc binds its data/exit
-    // fan-out to whichever backend won (subscribeBackendEvents also re-binds on
-    // any later swap, so a mid-session fallback still routes correctly).
-    // BACKEND SELECTION (fallback chain: service → detached-spawn → in-process).
+    // START THE LOCAL HOST — before registering the terminal IPC, so
+    // registerTerminalIpc binds its data/exit fan-out to whichever backend won
+    // (subscribeBackendEvents also re-binds on any later swap, so a mid-session
+    // fallback still routes correctly).
     //
-    //   1. detached_terminals OFF (an explicit opt-out now) → in-process only.
-    //      Skip the whole host path.
-    //   2. ON → FIRST try the per-user OS service (fancy-term-host@0.2.0
-    //      /service): install-if-missing/stale → start → connect a HostClient to
-    //      the SAME socket. A service-backed host runs on its OWN standalone Node
-    //      runtime, so it survives BOTH a quit AND an update (it never pins
-    //      Genie's binary). ensureHostService NEVER throws → on {ok:false} (no
-    //      runtime shipped, unsupported OS, install/connect failure) we FALL BACK.
-    //   3. Fallback → initTerminalBackend(): connect-to-existing-or-spawn the
-    //      DETACHED host (Genie's execPath child — pins the binary, survives a
-    //      normal quit, must be killed on update). It too NEVER throws → on
-    //      failure it degrades to in-process with a non-fatal toast.
+    // genie #63 Phase 1: the Host is not optional. Genie IS a Client attached to
+    // a Host; locally that Host is this machine's own, and it comes up on every
+    // launch with no setting in front of it. The ladder:
+    //
+    //   1. FIRST the per-user OS service (fancy-term-host /service):
+    //      install-if-missing/stale → start → connect a HostClient to the socket.
+    //      A service-backed host runs on its OWN standalone Node runtime, so it
+    //      survives BOTH a quit AND an update (it never pins Genie's binary).
+    //      ensureHostService NEVER throws → on {ok:false} (no runtime shipped,
+    //      unsupported OS, install/connect failure) we FALL BACK.
+    //   2. initTerminalBackend(): connect-to-existing-or-spawn the DETACHED host.
+    //      It too NEVER throws → on failure it degrades with a non-fatal toast.
+    //   3. LAST RESORT in-process — the Client runs the ptys itself. Reached ONLY
+    //      when both host paths genuinely failed; `selection.inprocessReason`
+    //      carries the diagnosis and the host-service log gets a loud banner.
     //
     // selectTerminalBackend records which one won via setHostBackendKind, so
     // hostBackendKind() drives the update-teardown branch + willRestartPtyHost.
@@ -1077,6 +1075,16 @@ app.whenReady().then(async () => {
     } else if (selection.serviceReason) {
         // eslint-disable-next-line no-console
         console.log(`[terminal] OS service not used: ${selection.serviceReason}`);
+    }
+    if (selection.kind === 'inprocess') {
+        // Degraded: no Host at all. Loud on stderr too, not just the log file —
+        // terminals won't survive quit/update and agent ptys start late.
+        // eslint-disable-next-line no-console
+        console.error(
+            `[terminal] LAST RESORT — running IN-PROCESS, no Host: ${
+                selection.inprocessReason ?? 'unknown'
+            }`,
+        );
     }
     // Static imports above — earlier dynamic imports could fail silently
     // on some bundlers, leaving the IPC channels unregistered and

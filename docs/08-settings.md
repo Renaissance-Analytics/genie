@@ -28,15 +28,11 @@ full command line.
 
 Each terminal panel can still switch shells from its own toolbar.
 
-### Keep terminals running after quit
-
-A toggle: **"Keep terminals running after quit"** (default **off**). When on,
-Genie runs terminals in a **detached background process** so dev servers and
-shells **survive a full quit** and reattach on next launch.
-
-> Experimental. If the background process can't start, Genie falls back to
-> in-process terminals — which still restore from a snapshot, but don't survive
-> a full quit. See **[Terminal session persistence](05-session-persistence.md)**.
+> **Terminals surviving a quit is no longer a setting.** Genie always runs your
+> terminals in the local **Genie Host** — a background process that outlives the
+> window — so dev servers, shells, and the agents in them survive a full quit and
+> reattach on next launch, with nothing to turn on. See
+> **[Terminal session persistence](05-session-persistence.md)**.
 
 ## Specialized terminals
 

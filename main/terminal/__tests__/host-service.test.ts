@@ -290,7 +290,16 @@ describe('shouldKillHostForUpdate (update-teardown decision)', () => {
     });
 });
 
-describe('selectTerminalBackend (fallback chain)', () => {
+/**
+ * genie #63 Phase 1 — the local Host is ALWAYS attempted.
+ *
+ * The `detachedEnabled` opt-in (Settings → "Keep terminals running after quit")
+ * used to decide whether the Host was even tried; `inprocess` was the DEFAULT.
+ * That gate is gone: the ladder is service → detached → (loud) inprocess, and
+ * `inprocess` is only ever reached because BOTH host paths genuinely failed —
+ * with the diagnosis recorded on the selection AND written to the log.
+ */
+describe('selectTerminalBackend (always-on local Host — no opt-in gate)', () => {
     const okService = async () =>
         ({
             ok: true as const,
@@ -300,27 +309,25 @@ describe('selectTerminalBackend (fallback chain)', () => {
     const failService = async () =>
         ({ ok: false as const, reason: 'no runtime' });
 
-    it('uses in-process and makes NO host attempt when detached_terminals is OFF', async () => {
+    it('ALWAYS attempts the Host — there is no setting that can skip it', async () => {
         const activate = vi.fn(okService);
         const init = vi.fn(async () => ({ host: true, reattachIds: ['x'] }));
+        state.isHostBacked = true;
         const sel = await selectTerminalBackend({
-            detachedEnabled: false,
             activateService: activate,
             initDetached: init,
-            isHostBackedProbe: () => true,
+            isHostBackedProbe: () => state.isHostBacked,
         });
-        expect(sel.kind).toBe('inprocess');
-        expect(sel.host).toBe(false);
-        expect(activate).not.toHaveBeenCalled();
-        expect(init).not.toHaveBeenCalled();
-        expect(hostBackendKind()).toBe('inprocess');
+        expect(activate).toHaveBeenCalledTimes(1);
+        expect(sel.kind).toBe('service');
+        expect(sel.host).toBe(true);
+        expect(hostBackendKind()).toBe('service');
     });
 
     it('prefers the service when ensureHostService is ok (no detached spawn)', async () => {
         const init = vi.fn(async () => ({ host: true, reattachIds: ['x'] }));
         state.isHostBacked = true; // service connected → backed
         const sel = await selectTerminalBackend({
-            detachedEnabled: true,
             activateService: okService,
             initDetached: init,
             isHostBackedProbe: () => state.isHostBacked,
@@ -330,6 +337,7 @@ describe('selectTerminalBackend (fallback chain)', () => {
         expect(sel.reattachIds).toEqual(['a', 'b']);
         // Service won → the detached spawn path is never taken.
         expect(init).not.toHaveBeenCalled();
+        expect(sel.inprocessReason).toBeUndefined();
         expect(hostBackendKind()).toBe('service');
     });
 
@@ -337,7 +345,6 @@ describe('selectTerminalBackend (fallback chain)', () => {
         const init = vi.fn(async () => ({ host: true, reattachIds: ['d1'] }));
         state.isHostBacked = true; // detached host actually came up + is backing us
         const sel = await selectTerminalBackend({
-            detachedEnabled: true,
             activateService: failService,
             initDetached: init,
             isHostBackedProbe: () => state.isHostBacked,
@@ -347,35 +354,59 @@ describe('selectTerminalBackend (fallback chain)', () => {
         expect(sel.host).toBe(true);
         expect(sel.reattachIds).toEqual(['d1']);
         expect(sel.serviceReason).toBe('no runtime');
+        expect(sel.inprocessReason).toBeUndefined();
         expect(hostBackendKind()).toBe('detached');
     });
 
-    it('falls back to in-process when both the service AND the detached spawn fail', async () => {
+    it('reaches in-process ONLY when BOTH host paths fail — and says so LOUDLY', async () => {
+        const log = vi.fn();
         const init = vi.fn(async () => ({ host: false, reattachIds: [] }));
         const sel = await selectTerminalBackend({
-            detachedEnabled: true,
             activateService: failService,
             initDetached: init,
             isHostBackedProbe: () => false, // detached did not come up
+            log,
         });
         expect(init).toHaveBeenCalled();
         expect(sel.kind).toBe('inprocess');
         expect(sel.host).toBe(false);
         expect(hostBackendKind()).toBe('inprocess');
+        // The diagnosis rides the selection …
+        expect(sel.inprocessReason).toContain('no runtime');
+        // … and is LOUD in the host-service log (this is a degraded mode, not
+        // a normal one — it must never fall back silently again).
+        const logged = log.mock.calls.map((c) => String(c[0])).join('\n');
+        expect(logged).toMatch(/LAST RESORT/i);
+        expect(logged).toContain('no runtime');
     });
 
-    it('degrades to in-process if the service attempt THROWS', async () => {
+    it('degrades to in-process if the service attempt THROWS (and diagnoses it)', async () => {
+        const log = vi.fn();
         const init = vi.fn(async () => ({ host: false, reattachIds: [] }));
         const sel = await selectTerminalBackend({
-            detachedEnabled: true,
             activateService: async () => {
                 throw new Error('boom');
             },
             initDetached: init,
             isHostBackedProbe: () => false,
+            log,
         });
         // A thrown service attempt is caught → falls through to the detached path.
         expect(init).toHaveBeenCalled();
         expect(sel.kind).toBe('inprocess');
+        expect(sel.inprocessReason).toContain('boom');
+    });
+
+    it('does NOT log the last-resort banner when a host actually backs us', async () => {
+        const log = vi.fn();
+        state.isHostBacked = true;
+        await selectTerminalBackend({
+            activateService: failService,
+            initDetached: async () => ({ host: true, reattachIds: [] }),
+            isHostBackedProbe: () => state.isHostBacked,
+            log,
+        });
+        const logged = log.mock.calls.map((c) => String(c[0])).join('\n');
+        expect(logged).not.toMatch(/LAST RESORT/i);
     });
 });
