@@ -15,6 +15,7 @@ import {
     listTerminals,
     MobileApiError,
     onNeedsPair,
+    type MobileControl,
     type MobileEvent,
     type MobileState,
     type MobileTerminal,
@@ -48,6 +49,7 @@ export default function MobilePage() {
     const [questionCount, setQuestionCount] = useState(0);
     const [questions, setQuestions] = useState<PendingQuestion[]>([]);
     const [locked, setLocked] = useState(false);
+    const [control, setControl] = useState<MobileControl | null>(null);
     const [connected, setConnected] = useState(false);
 
     // The shared /ws/events subscriber registry. Tabs register a callback; the
@@ -87,6 +89,10 @@ export default function MobilePage() {
                 const snapshot = await getState();
                 if (cancelled) return;
                 setState(snapshot);
+                if (snapshot.control) {
+                    setControl(snapshot.control);
+                    setLocked(snapshot.control.locked);
+                }
                 setQuestions(snapshot.questions);
                 setQuestionCount(snapshot.questions.length);
                 setBootError(null);
@@ -136,6 +142,20 @@ export default function MobilePage() {
     // tab is missed (badge never updates, the list stays at the stale bootstrap)
     // until a manual reload. Refresh on every `question:changed` push AND whenever
     // the Questions tab is opened (covers a push missed during a WS reconnect).
+    // The baton moved: the host pushes each client ITS OWN view, so this is both
+    // "am I view-only now" and "who took over" — no polling, no guessing why a
+    // keystroke did nothing.
+    useEffect(() => {
+        if (!token || !booted) return;
+        const off = subscribe((e) => {
+            if (e.type !== 'control:changed') return;
+            const view = e.payload as MobileControl;
+            setControl(view);
+            setLocked(!!view?.locked);
+        });
+        return off;
+    }, [token, booted, subscribe]);
+
     useEffect(() => {
         if (!token || !booted) return;
         const off = subscribe((e) => {
@@ -222,7 +242,30 @@ export default function MobilePage() {
             {locked && (
                 <div className="m-banner m-banner-lock">
                     <Icon name="lock" size="xs" />
-                    <Text size="xs">Locked on desktop — actions are disabled.</Text>
+                    <Text size="xs">
+                        {control?.holderEmoji
+                            ? `${control.holderEmoji} ${
+                                  control.participants.find((p) => p.id === control.holder)
+                                      ?.name ?? 'Someone else'
+                              } has control — you're view-only.`
+                            : 'Locked on desktop — actions are disabled.'}
+                    </Text>
+                </div>
+            )}
+            {/* Who else is here. Everyone's actions are signed with their emoji, so
+                the same glyph you see here is the one in the audit trail. */}
+            {control && control.participants.length > 1 && (
+                <div className="m-banner">
+                    <Text size="xs">
+                        {control.participants
+                            .map(
+                                (p) =>
+                                    `${p.emoji} ${p.name}${p.holdsControl ? ' (driving)' : ''}${
+                                        p.id === control.you ? ' — you' : ''
+                                    }`,
+                            )
+                            .join(' · ')}
+                    </Text>
                 </div>
             )}
 

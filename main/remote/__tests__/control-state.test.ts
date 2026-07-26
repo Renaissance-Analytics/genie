@@ -13,10 +13,17 @@ import {
     remoteControlStateFor,
 } from '../index';
 
+/** Attribution emoji the fake host's control views carry. */
+const DESKTOP = '🖥️';
+const TURTLE = '🐢';
+const FOX = '🦊';
+
 interface FakeHost {
     port: number;
     setLocked(v: boolean): void;
     pushControl(locked: boolean): void;
+    /** Push a multi-user control view: another USER took the baton, not the host. */
+    pushControlHeldBy(user: { id: string; name: string; emoji: string }): void;
     dropAllSockets(): void;
     eventsSocketCount(): number;
     termOpenCount(id: string): number;
@@ -49,7 +56,32 @@ function startFakeHost(): Promise<FakeHost> {
         }
         if (url.pathname === '/api/state') {
             res.writeHead(200, { 'content-type': 'application/json' });
-            res.end(JSON.stringify({ locked, workspaces: [], terminals: [], processes: [], questions: [] }));
+            res.end(
+                JSON.stringify({
+                    locked,
+                    control: {
+                        locked,
+                        holder: locked ? 'desktop' : null,
+                        holderEmoji: locked ? DESKTOP : null,
+                        you: 'me',
+                        participants: locked
+                            ? [
+                                  {
+                                      id: 'desktop',
+                                      name: 'This computer',
+                                      emoji: DESKTOP,
+                                      isOwner: true,
+                                      holdsControl: true,
+                                  },
+                              ]
+                            : [],
+                    },
+                    workspaces: [],
+                    terminals: [],
+                    processes: [],
+                    questions: [],
+                }),
+            );
             return;
         }
         res.writeHead(404);
@@ -94,6 +126,24 @@ function startFakeHost(): Promise<FakeHost> {
                     locked = l;
                     for (const ws of eventsSockets) {
                         if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'control:changed', payload: { locked: l } }));
+                    }
+                },
+                pushControlHeldBy(user) {
+                    locked = true;
+                    const payload = {
+                        locked: true,
+                        holder: user.id,
+                        holderEmoji: user.emoji,
+                        you: 'me',
+                        participants: [
+                            { ...user, isOwner: false, holdsControl: true },
+                            { id: 'me', name: 'Me', emoji: FOX, isOwner: false, holdsControl: false },
+                        ],
+                    };
+                    for (const ws of eventsSockets) {
+                        if (ws.readyState === 1) {
+                            ws.send(JSON.stringify({ type: 'control:changed', payload }));
+                        }
                     }
                 },
                 dropAllSockets() {
@@ -153,29 +203,67 @@ describe('control model - single source of truth (host kill-switch)', () => {
     it('seeds view-only control from the host /api/state on connect', async () => {
         host.setLocked(true);
         await connect();
-        expect(remoteControlStateFor(WC_ID)).toEqual({ locked: true });
+        expect(remoteControlStateFor(WC_ID)).toMatchObject({ locked: true });
     });
 
     it('connects writable when the host has NOT taken control', async () => {
         await connect();
-        expect(remoteControlStateFor(WC_ID)).toEqual({ locked: false });
+        expect(remoteControlStateFor(WC_ID)).toMatchObject({ locked: false });
     });
 
     it('propagates a live handoff and pushes remote:control to the window', async () => {
         await connect();
-        expect(remoteControlStateFor(WC_ID)).toEqual({ locked: false });
+        expect(remoteControlStateFor(WC_ID)).toMatchObject({ locked: false });
         // The events bridge opens asynchronously after connect resolves; a live
         // push only reaches us once its socket is established.
         await vi.waitFor(() => expect(host.eventsSocketCount()).toBe(1));
 
         host.pushControl(true);
 
-        await vi.waitFor(() => expect(remoteControlStateFor(WC_ID)).toEqual({ locked: true }));
-        expect(win.webContents.send).toHaveBeenCalledWith('remote:control', { locked: true });
+        await vi.waitFor(() => expect(remoteControlStateFor(WC_ID)).toMatchObject({ locked: true }));
+        expect(win.webContents.send).toHaveBeenCalledWith(
+            'remote:control',
+            expect.objectContaining({ locked: true }),
+        );
 
         host.pushControl(false);
-        await vi.waitFor(() => expect(remoteControlStateFor(WC_ID)).toEqual({ locked: false }));
-        expect(win.webContents.send).toHaveBeenCalledWith('remote:control', { locked: false });
+        await vi.waitFor(() => expect(remoteControlStateFor(WC_ID)).toMatchObject({ locked: false }));
+        expect(win.webContents.send).toHaveBeenCalledWith(
+            'remote:control',
+            expect.objectContaining({ locked: false }),
+        );
+    });
+});
+
+describe('control model - WHO holds it, not just whether', () => {
+    it('names the user driving, so a remote member is not told "the host" took over', async () => {
+        await connect();
+        await vi.waitFor(() => expect(host.eventsSocketCount()).toBe(1));
+
+        host.pushControlHeldBy({ id: 'u-2', name: 'Turtle', emoji: TURTLE });
+
+        await vi.waitFor(() =>
+            expect(remoteControlStateFor(WC_ID)).toEqual({
+                locked: true,
+                holderEmoji: TURTLE,
+                holderName: 'Turtle',
+            }),
+        );
+        expect(win.webContents.send).toHaveBeenCalledWith('remote:control', {
+            locked: true,
+            holderEmoji: TURTLE,
+            holderName: 'Turtle',
+        });
+    });
+
+    it('seeds the holder from /api/state on connect, not just the locked flag', async () => {
+        host.setLocked(true);
+        await connect();
+        expect(remoteControlStateFor(WC_ID)).toEqual({
+            locked: true,
+            holderEmoji: DESKTOP,
+            holderName: 'This computer',
+        });
     });
 });
 
@@ -191,7 +279,7 @@ describe('control gate - a view-only driver cannot write', () => {
         );
 
         host.pushControl(true);
-        await vi.waitFor(() => expect(remoteControlStateFor(WC_ID)).toEqual({ locked: true }));
+        await vi.waitFor(() => expect(remoteControlStateFor(WC_ID)).toMatchObject({ locked: true }));
         const before = host.termInputs('t-1').length;
         remoteTerminalInput(WC_ID, 't-1', 'echo hi\n');
         await new Promise((r) => setTimeout(r, 60));
@@ -211,7 +299,7 @@ describe('reconnect - restores terminal streams AND re-reads control', () => {
         await vi.waitFor(() => expect(host.termOpenCount('t-9')).toBeGreaterThanOrEqual(2), {
             timeout: 15000,
         });
-        await vi.waitFor(() => expect(remoteControlStateFor(WC_ID)).toEqual({ locked: true }), {
+        await vi.waitFor(() => expect(remoteControlStateFor(WC_ID)).toMatchObject({ locked: true }), {
             timeout: 15000,
         });
     }, 30000);

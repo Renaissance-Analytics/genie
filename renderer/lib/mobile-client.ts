@@ -53,12 +53,37 @@ export interface PendingQuestion {
     index: number;
 }
 
+/** One connected user, with the emoji their actions are signed with. */
+export interface MobileParticipant {
+    id: string;
+    name: string;
+    emoji: string;
+    isOwner: boolean;
+    holdsControl: boolean;
+}
+
+/**
+ * Who is driving, as THIS client sees it (`GET /api/state`, then live on
+ * `control:changed`). Exactly one user holds control at a time; `locked` means
+ * somebody else does and this client is view-only.
+ */
+export interface MobileControl {
+    locked: boolean;
+    holder: string | null;
+    holderEmoji: string | null;
+    /** This client's own principal id. */
+    you: string | null;
+    participants: MobileParticipant[];
+}
+
 /** The bootstrap snapshot returned by `GET /api/state`. */
 export interface MobileState {
     workspaces: MobileWorkspace[];
     terminals: MobileTerminal[];
     processes: ProcessListItem[];
     questions: PendingQuestion[];
+    /** The baton: who is connected and who is driving. */
+    control: MobileControl;
 }
 
 /**

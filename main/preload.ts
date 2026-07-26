@@ -59,6 +59,21 @@ interface MobileStatus {
         secure: boolean;
     }>;
     locked: boolean;
+    /** Everyone who can drive right now, with their attribution emoji. */
+    participants: Array<{
+        id: string;
+        name: string;
+        emoji: string;
+        isOwner: boolean;
+        holdsControl: boolean;
+    }>;
+    /** The desktop's view of the baton (who is driving, with which emoji). */
+    control: {
+        locked: boolean;
+        holder: string | null;
+        holderEmoji: string | null;
+        you: string | null;
+    };
     pin: string;
     qrDataUrl: string | null;
     /** win32 only: server listening but no inbound firewall rule for the port. */
@@ -66,6 +81,16 @@ interface MobileStatus {
     /** True when served over browser-trusted HTTPS (Tailscale cert); false = http. */
     secure: boolean;
 }
+/** Who holds the host's baton, as this driver sees it (mirrors main/remote). */
+interface RemoteControlState {
+    /** True when SOMEBODY ELSE is driving and this window is view-only. */
+    locked: boolean;
+    /** The holder's attribution emoji (null when free / an older host). */
+    holderEmoji?: string | null;
+    /** The holder's display name (null when free / an older host). */
+    holderName?: string | null;
+}
+
 const api = {
     auth: {
         startSignIn: (kind?: 'tynn' | 'aionima') =>
@@ -207,6 +232,11 @@ const api = {
             >,
         lock: (locked: boolean) =>
             ipcRenderer.invoke('mobile:lock', locked) as Promise<MobileStatus>,
+        /** Hand the baton to a connected user (the desktop must be holding it). */
+        giveControl: (principalId: string) =>
+            ipcRenderer.invoke('mobile:give-control', principalId) as Promise<
+                MobileStatus & { ok: boolean; error?: string }
+            >,
     },
 
     // Work Mode — Tailscale lifecycle management (status / bring online / install).
@@ -307,9 +337,9 @@ const api = {
         // host took control and this driver is view-only. Read on mount + live via
         // `remote:control`.
         controlState: () =>
-            ipcRenderer.invoke('remote:control-state') as Promise<{ locked: boolean }>,
-        onControl: (cb: (s: { locked: boolean }) => void) => {
-            const handler = (_e: unknown, payload: { locked: boolean }) => cb(payload);
+            ipcRenderer.invoke('remote:control-state') as Promise<RemoteControlState>,
+        onControl: (cb: (s: RemoteControlState) => void) => {
+            const handler = (_e: unknown, payload: RemoteControlState) => cb(payload);
             ipcRenderer.on('remote:control', handler);
             return () => ipcRenderer.off('remote:control', handler);
         },

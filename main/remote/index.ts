@@ -162,14 +162,21 @@ interface RemoteConnection {
      */
     attachedTerminals: Set<string>;
     /**
-     * The host has TAKEN CONTROL (its kill-switch is engaged) => this driver is
-     * VIEW-ONLY. The single source of truth for "who holds control", mirrored from
-     * the host's `locked` flag: seeded on connect from `/api/state`, re-read on
-     * every reconnect, and updated live by the host's `control:changed` push. Gates
+     * SOMEBODY ELSE holds the host's baton => this driver is VIEW-ONLY. The single
+     * source of truth for "who holds control", mirrored from the host's `locked`
+     * flag: seeded on connect from `/api/state`, re-read on every reconnect, and
+     * updated live by the host's `control:changed` push. Gates
      * `remoteTerminalInput` (keystrokes dropped at the source, not silently eaten
      * host-side) and drives the window's view-only banner via `remote:control`.
      */
     controlLocked: boolean;
+    /**
+     * WHO holds it — the host owner at the desktop, or another member driving the
+     * same workstation. Carried so the view-only banner can say "🐢 Turtle has
+     * control" instead of blaming "the host" for a peer's handoff. Null when the
+     * baton is free, or when the host predates multi-user control.
+     */
+    controlHolder: { emoji: string | null; name: string | null } | null;
     // --- link health (version match + upgrade/limbo reconnect) ---
 
     /** The events bridge has reached `open` at least once (a healthy session). */
@@ -722,24 +729,69 @@ function setConnLinkState(conn: RemoteConnection, state: LinkState): void {
 // live deltas from the host's `control:changed` push — so the rendered control
 // state can never drift from the host's actual gate across handoff/upgrade/reconnect.
 
+/** The control state a window renders: view-only, and WHO is driving. */
+export interface RemoteControlState {
+    locked: boolean;
+    /** The holder's attribution emoji (null when free / an older host). */
+    holderEmoji: string | null;
+    /** The holder's display name (null when free / an older host). */
+    holderName: string | null;
+}
+
 /** The control state for the host a window is bound to (read on mount by the
  *  view-only banner; live changes arrive via the `remote:control` event). */
-export function remoteControlStateFor(wcId: number): { locked: boolean } {
+export function remoteControlStateFor(wcId: number): RemoteControlState {
     const conn = connForWebContents(wcId);
-    return { locked: conn?.controlLocked ?? false };
+    return {
+        locked: conn?.controlLocked ?? false,
+        holderEmoji: conn?.controlHolder?.emoji ?? null,
+        holderName: conn?.controlHolder?.name ?? null,
+    };
+}
+
+/**
+ * The holder's identity out of a host control view (`/api/state.control` or a
+ * `control:changed` payload). An older host sends neither, which reads as "locked
+ * by someone we can't name" — the gate still works, the banner just stays generic.
+ */
+function holderIdentity(
+    view: {
+        holder?: string | null;
+        holderEmoji?: string | null;
+        participants?: Array<{ id: string; name?: string; emoji?: string }>;
+    } | null,
+): { emoji: string | null; name: string | null } | null {
+    if (!view?.holder) return null;
+    const p = view.participants?.find((x) => x.id === view.holder);
+    return { emoji: view.holderEmoji ?? p?.emoji ?? null, name: p?.name ?? null };
 }
 
 /** Store + push a connection's control state to its bound window(s). Pushes only
  *  on an actual CHANGE, so a reconnect that re-reads the same value is a no-op. */
-function setConnControl(conn: RemoteConnection, locked: boolean): void {
-    if (conn.controlLocked === locked) return;
+function setConnControl(
+    conn: RemoteConnection,
+    locked: boolean,
+    holder: { emoji: string | null; name: string | null } | null = null,
+): void {
+    const sameHolder =
+        (conn.controlHolder?.emoji ?? null) === (holder?.emoji ?? null) &&
+        (conn.controlHolder?.name ?? null) === (holder?.name ?? null);
+    if (conn.controlLocked === locked && sameHolder) return;
+    const lockChanged = conn.controlLocked !== locked;
     conn.controlLocked = locked;
-    emitToConn(conn, 'remote:control', { locked });
+    conn.controlHolder = holder;
+    emitToConn(conn, 'remote:control', {
+        locked,
+        holderEmoji: holder?.emoji ?? null,
+        holderName: holder?.name ?? null,
+    });
     // Keep forwarded questions consistent with who currently holds control. The
     // lock can engage while a forwarded modal is already open on the driver, and
     // that modal is now unanswerable (the host refuses the answer POST) — so
     // retract it rather than leave a prompt that silently cannot be submitted.
-    // Unlocking re-syncs, bringing anything still pending back.
+    // Unlocking re-syncs, bringing anything still pending back. A baton moving
+    // BETWEEN two other users doesn't change our answerability, so it skips this.
+    if (!lockChanged) return;
     if (locked) dismissForwardedQuestionsForConn(conn.connKey);
     else void syncForwardedQuestions(conn);
 }
@@ -750,8 +802,13 @@ function setConnControl(conn: RemoteConnection, locked: boolean): void {
  *  truth, not left stale. Best-effort: a transient failure keeps the last state. */
 async function refreshControlState(conn: RemoteConnection): Promise<void> {
     try {
-        const st = (await connRequest(conn, '/api/state')) as { locked?: boolean };
-        if (typeof st?.locked === 'boolean') setConnControl(conn, st.locked);
+        const st = (await connRequest(conn, '/api/state')) as {
+            locked?: boolean;
+            control?: Parameters<typeof holderIdentity>[0];
+        };
+        if (typeof st?.locked === 'boolean') {
+            setConnControl(conn, st.locked, holderIdentity(st.control ?? null));
+        }
     } catch {
         /* host briefly unreachable — keep the last known control state */
     }
@@ -1069,11 +1126,13 @@ function handleBridgeMessage(conn: RemoteConnection, raw: string): void {
         // not re-emitted to the renderer): mirror the host's ForceTheQuestion
         // modal locally + carry the imDone chime/toast.
         if (msg.type === 'control:changed') {
-            // The host took or released control (kill-switch toggled). Mirror it so
-            // this driver flips to/from view-only immediately — the handoff the
-            // owner does from the host's "Take control" overlay.
-            const locked = !!(msg.payload as { locked?: boolean } | null)?.locked;
-            setConnControl(conn, locked);
+            // The baton moved — the host owner took it, or another member driving
+            // this same workstation did. Mirror it so this driver flips to/from
+            // view-only immediately, carrying WHO now holds it for the banner.
+            const view = msg.payload as Parameters<typeof holderIdentity>[0] & {
+                locked?: boolean;
+            };
+            setConnControl(conn, !!view?.locked, holderIdentity(view ?? null));
         } else if (msg.type === 'question:changed') {
             void syncForwardedQuestions(conn);
         } else if (msg.type === 'notify:imdone') {
@@ -1671,6 +1730,7 @@ async function connectRemoteInner(
     // saved token is dead (host re-paired / forgot the device) → forget it + ask
     // for the PIN rather than failing opaquely.
     let seedLocked = false;
+    let seedHolder: { emoji: string | null; name: string | null } | null = null;
     try {
         const res = await fetch(`${hostHttpBase(host)}/api/state`, {
             headers: { Authorization: `Bearer ${token}` },
@@ -1682,14 +1742,18 @@ async function connectRemoteInner(
         if (!res.ok && res.status !== 423) {
             return { ok: false, error: `Host returned HTTP ${res.status}.` };
         }
-        // Seed control from the host's kill-switch: a remote that connects while the
-        // host ALREADY has control opens view-only, never falsely writable. A 423
-        // (some routes lock) also implies control is held. Best-effort — an older
-        // host omits `locked` and defaults to writable.
+        // Seed control from the host's baton: a remote that connects while someone
+        // else ALREADY has control opens view-only, never falsely writable, and
+        // knows WHO to ask for it. A 423 (some routes lock) also implies control is
+        // held. Best-effort — an older host omits both and defaults to writable.
         if (res.status === 423) seedLocked = true;
         try {
-            const st = (await res.json()) as { locked?: boolean };
+            const st = (await res.json()) as {
+                locked?: boolean;
+                control?: Parameters<typeof holderIdentity>[0];
+            };
             if (typeof st?.locked === 'boolean') seedLocked = st.locked;
+            seedHolder = holderIdentity(st?.control ?? null);
         } catch {
             /* older host / non-JSON body — leave the default */
         }
@@ -1716,6 +1780,7 @@ async function connectRemoteInner(
         termSize: new Map(),
         attachedTerminals: new Set(),
         controlLocked: seedLocked,
+        controlHolder: seedHolder,
 
         everConnected: false,
         upgrading: false,
@@ -1842,6 +1907,7 @@ async function connectWorkstationInner(
         termSize: new Map(),
         attachedTerminals: new Set(),
         controlLocked: false,
+        controlHolder: null,
 
         everConnected: false,
         upgrading: false,

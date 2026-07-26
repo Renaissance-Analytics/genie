@@ -1,7 +1,8 @@
 import http from 'node:http';
 import https from 'node:https';
 import type { Duplex } from 'node:stream';
-import { isLocked, audit } from './audit';
+import { audit } from './audit';
+import { isLocked } from './baton';
 import { sessionFromAuthHeader, validateSession } from './auth';
 import type { SiteScheme } from './hosts';
 

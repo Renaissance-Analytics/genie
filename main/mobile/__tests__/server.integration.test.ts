@@ -12,8 +12,14 @@ import {
     mobileTermFanout,
     setLocked,
 } from '../server';
-import { _resetAuthForTest, currentPin } from '../auth';
-import { _resetAuditForTest } from '../audit';
+import {
+    _resetAuthForTest,
+    currentPin,
+    setSessionIdentity,
+    validateSession,
+} from '../auth';
+import { _resetAuditForTest, recentAudit } from '../audit';
+import { _resetBatonForTest } from '../baton';
 import { _resetBridgeForTest } from '../terminal-bridge';
 import type { MobileDataDeps } from '../api';
 
@@ -267,6 +273,7 @@ async function pair(port: number): Promise<string> {
 beforeEach(() => {
     _resetAuthForTest();
     _resetAuditForTest();
+    _resetBatonForTest();
     _resetBridgeForTest();
     written.length = 0;
     updateReady = false;
@@ -1098,5 +1105,199 @@ describe('mobile server (integration, 127.0.0.1)', () => {
             { network: 'local', ip: '127.0.0.1', secure: false },
         ]);
         expect(st.tailnetNotDetected).toBe(false);
+    });
+});
+
+/**
+ * MULTI-USER BATON, over the real HTTP/WS stack.
+ *
+ * A Tynn workstation runs on ONE set of credentials but several people may drive
+ * its agents, so the host must answer two questions on every action: is this user
+ * allowed to drive right now (exactly one is), and WHO was it? These drive the
+ * real `/ws/term` input frame and real `/api/*` calls — the paths a phone, a
+ * remote Genie window and a relayed member all funnel through.
+ */
+describe('multi-user baton (integration, 127.0.0.1)', () => {
+    /** Stamp a paired session with a Tynn-style identity (the access grant's job). */
+    function identify(
+        token: string,
+        identity: { name: string; emoji: string; role: 'owner' | 'member' },
+    ): void {
+        const session = validateSession(token);
+        expect(session).toBeTruthy();
+        setSessionIdentity(session!.id, identity);
+    }
+
+    const settle = () => new Promise((r) => setTimeout(r, 40));
+
+    /** Pair two users: 🦊 (a workstation owner) and 🐢 (a member). */
+    async function twoUsers(port: number): Promise<{ fox: string; turtle: string }> {
+        const fox = await pair(port);
+        identify(fox, { name: 'Fox', emoji: '🦊', role: 'owner' });
+        const turtle = await pair(port);
+        identify(turtle, { name: 'Turtle', emoji: '🐢', role: 'member' });
+        return { fox, turtle };
+    }
+
+    /** The control view a token sees (roster + who is driving). */
+    async function control(port: number, token: string) {
+        const r = await req(port, 'GET', '/api/state', { token });
+        expect(r.status).toBe(200);
+        return r.json.control as {
+            locked: boolean;
+            holder: string | null;
+            holderEmoji: string | null;
+            you: string | null;
+            participants: Array<{
+                id: string;
+                name: string;
+                emoji: string;
+                isOwner: boolean;
+                holdsControl: boolean;
+            }>;
+        };
+    }
+
+    it('drives an agent terminal for the baton holder only, signing each write with their emoji', async () => {
+        const port = await start();
+        const { fox, turtle } = await twoUsers(port);
+
+        // 🦊 types first — a free baton is claimed by the first driver.
+        const foxTerm = await openWs(`ws://127.0.0.1:${port}/ws/term?terminal=t-1&token=${fox}`);
+        foxTerm.send(JSON.stringify({ type: 'input', data: 'echo fox\r' }));
+        await settle();
+
+        // 🐢 types while 🦊 holds control — the input never reaches the pty.
+        const turtleTerm = await openWs(
+            `ws://127.0.0.1:${port}/ws/term?terminal=t-1&token=${turtle}`,
+        );
+        turtleTerm.send(JSON.stringify({ type: 'input', data: 'echo turtle\r' }));
+        await settle();
+
+        expect(written).toEqual([{ id: 't-1', data: 'echo fox\r' }]);
+
+        // The audit trail names WHO drove, even though the creds are the owner's.
+        const writes = recentAudit().filter((e) => e.action === 'terminal.write');
+        expect(writes).toHaveLength(1);
+        expect(writes[0]!.emoji).toBe('🦊');
+        expect(writes[0]!.byName).toBe('Fox');
+
+        foxTerm.close();
+        turtleTerm.close();
+    });
+
+    it('refuses a MEMBER taking control, then lets the holder GIVE it', async () => {
+        const port = await start();
+        const { fox, turtle } = await twoUsers(port);
+
+        const foxTerm = await openWs(`ws://127.0.0.1:${port}/ws/term?terminal=t-1&token=${fox}`);
+        foxTerm.send(JSON.stringify({ type: 'input', data: 'echo fox\r' }));
+        await settle();
+
+        // 🐢 is a member: taking is refused outright.
+        const refused = await req(port, 'POST', '/api/control/take', { token: turtle });
+        expect(refused.status).toBe(403);
+        expect(String(refused.json.error)).toMatch(/owner/i);
+
+        // The roster tells 🦊 who else is connected, so it can hand control over.
+        const view = await control(port, fox);
+        expect(view.participants.find((p) => p.emoji === '🦊')!.holdsControl).toBe(true);
+        const turtleId = view.participants.find((p) => p.emoji === '🐢')!.id;
+
+        const given = await req(port, 'POST', '/api/control/give', {
+            token: fox,
+            body: { to: turtleId },
+        });
+        expect(given.status).toBe(200);
+
+        // Control really moved: 🐢 drives, 🦊 is now view-only.
+        const turtleTerm = await openWs(
+            `ws://127.0.0.1:${port}/ws/term?terminal=t-1&token=${turtle}`,
+        );
+        turtleTerm.send(JSON.stringify({ type: 'input', data: 'echo turtle\r' }));
+        foxTerm.send(JSON.stringify({ type: 'input', data: 'echo fox again\r' }));
+        await settle();
+
+        expect(written).toEqual([
+            { id: 't-1', data: 'echo fox\r' },
+            { id: 't-1', data: 'echo turtle\r' },
+        ]);
+        expect(recentAudit().filter((e) => e.action === 'terminal.write').at(-1)!.emoji).toBe('🐢');
+
+        foxTerm.close();
+        turtleTerm.close();
+    });
+
+    it('lets an OWNER take control off the current holder', async () => {
+        const port = await start();
+        const { fox, turtle } = await twoUsers(port);
+
+        // 🐢 (member) drives first — a free baton is anyone's to claim.
+        const turtleTerm = await openWs(
+            `ws://127.0.0.1:${port}/ws/term?terminal=t-1&token=${turtle}`,
+        );
+        turtleTerm.send(JSON.stringify({ type: 'input', data: 'echo turtle\r' }));
+        await settle();
+        expect(written).toHaveLength(1);
+
+        const taken = await req(port, 'POST', '/api/control/take', { token: fox });
+        expect(taken.status).toBe(200);
+        expect(taken.json.control.holder).toBe(taken.json.control.you);
+
+        turtleTerm.send(JSON.stringify({ type: 'input', data: 'echo turtle again\r' }));
+        await settle();
+        expect(written).toHaveLength(1); // the member was cut off mid-session
+
+        turtleTerm.close();
+    });
+
+    it('423s a state-changing REST action for a user who does not hold control', async () => {
+        const port = await start();
+        const { fox, turtle } = await twoUsers(port);
+
+        const foxTerm = await openWs(`ws://127.0.0.1:${port}/ws/term?terminal=t-1&token=${fox}`);
+        foxTerm.send(JSON.stringify({ type: 'input', data: 'echo fox\r' }));
+        await settle();
+
+        const blocked = await req(port, 'POST', '/api/terminal/t-1/kill', { token: turtle });
+        expect(blocked.status).toBe(423);
+        expect(String(blocked.json.error)).toMatch(/control/i);
+
+        foxTerm.close();
+    });
+
+    it('lists the connected users with their emoji and pushes each client its own view', async () => {
+        const port = await start();
+        const { fox, turtle } = await twoUsers(port);
+
+        const evFox: any[] = [];
+        const foxEvents = await openWs(`ws://127.0.0.1:${port}/ws/events?token=${fox}`, evFox);
+        const turtleEvents = await openWs(`ws://127.0.0.1:${port}/ws/events?token=${turtle}`);
+        await settle();
+
+        const view = await control(port, turtle);
+        expect(
+            view.participants.map((p) => [p.name, p.emoji, p.isOwner]).sort(),
+        ).toEqual([
+            ['Fox', '🦊', true],
+            ['Turtle', '🐢', false],
+        ]);
+        expect(view.you).toBe(view.participants.find((p) => p.emoji === '🐢')!.id);
+        const turtleId = view.you!;
+
+        // A hand-over pushes each client ITS OWN view: the giver learns it is now
+        // view-only, and who took over.
+        await req(port, 'POST', '/api/control/take', { token: fox });
+        evFox.length = 0;
+        await req(port, 'POST', '/api/control/give', { token: fox, body: { to: turtleId } });
+        await settle();
+
+        const pushed = evFox.filter((f) => f.type === 'control:changed').at(-1);
+        expect(pushed).toBeTruthy();
+        expect(pushed.payload.locked).toBe(true);
+        expect(pushed.payload.holderEmoji).toBe('🐢');
+
+        foxEvents.close();
+        turtleEvents.close();
     });
 });

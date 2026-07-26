@@ -16,7 +16,7 @@ import {
     SITE_PROXY_PREFIX,
     type SiteProxyDeps,
 } from './site-proxy';
-import { setEventSockets, mobileEmit } from './bus';
+import { setEventSockets, setEventSocketPrincipal, mobileEmit } from './bus';
 import {
     attachTerminalSocket,
     mobileTermFanout,
@@ -25,8 +25,25 @@ import {
     setTerminalRepaintHandler,
 } from './terminal-bridge';
 import { isUsableGrid } from '../terminal/size-tracker';
-import { initAuth, validateSession, type ConfirmPairHook } from './auth';
-import { initAudit, setLocked, isLocked, audit } from './audit';
+import {
+    initAuth,
+    validateSession,
+    sessionPrincipal,
+    type ConfirmPairHook,
+} from './auth';
+import { initAudit, audit } from './audit';
+import {
+    authorizeDrive,
+    batonRoster,
+    controlViewFor,
+    isLocked,
+    joinControl,
+    leaveControl,
+    setLocked,
+    DESKTOP_PRINCIPAL,
+    type BatonRosterEntry,
+    type ControlView,
+} from './baton';
 import { onQuestionsChanged } from '../ask/force-question';
 import { hostInstallId } from '../host-identity';
 
@@ -124,16 +141,30 @@ let questionSubWired = false;
 const eventSockets = new Set<WebSocket>();
 
 /** A connected remote/phone session — surfaced to the HOST so it can SEE (and
- *  pause/end) who's controlling it, without having to kill the pairing. */
+ *  pause/end) who's controlling it, without having to kill the pairing. With
+ *  several people on one workstation it also carries WHO: their principal id,
+ *  name, attribution emoji, and whether they currently hold the baton. */
 export interface MobilePeer {
     ip: string;
     since: number;
+    /** The baton principal id (session id, or the Tynn user id when identified). */
+    id: string;
+    /** Display name for the connected-users list. */
+    name: string;
+    /** The user's attribution emoji — the same one their actions are signed with. */
+    emoji: string;
+    /** True for the one user currently driving. */
+    holdsControl: boolean;
 }
-/** Per-events-socket peer info (ip + connect time) for the host presence overlay. */
-const peerByEventSocket = new Map<WebSocket, MobilePeer>();
+/** Per-events-socket peer info (identity + connect time) for the host overlay. */
+const peerByEventSocket = new Map<WebSocket, Omit<MobilePeer, 'holdsControl'>>();
 /** The remotes currently connected to `/ws/events` (drives host presence). */
 export function activeMobilePeers(): MobilePeer[] {
-    return [...peerByEventSocket.values()];
+    const roster = new Map(batonRoster().map((p) => [p.id, p]));
+    return [...peerByEventSocket.values()].map((p) => ({
+        ...p,
+        holdsControl: roster.get(p.id)?.holdsControl ?? false,
+    }));
 }
 
 // --- static serving --------------------------------------------------------
@@ -363,6 +394,9 @@ function attachWebSocket(srv: http.Server | https.Server): void {
     const socketServer = new WebSocketServer({ noServer: true });
     websocketServers.add(socketServer);
     setEventSockets(eventSockets);
+    // Let the bus personalise control:changed — each client is told whether IT is
+    // driving, which is a different answer per recipient.
+    setEventSocketPrincipal((ws) => peerByEventSocket.get(ws)?.id ?? null);
 
     srv.on('upgrade', (req, socket, head) => {
         const url = new URL(req.url ?? '/', `http://${boundIp ?? '127.0.0.1'}`);
@@ -389,12 +423,29 @@ function attachWebSocket(srv: http.Server | https.Server): void {
 
         if (pathname === '/ws/events') {
             const ip = req.socket.remoteAddress ?? 'unknown';
+            // The dashboard socket IS the user's presence: opening it puts them on
+            // the connected-users list (so others can hand them the baton), closing
+            // it takes them off and frees the baton if they were driving.
+            const principal = sessionPrincipal(validateSession(token)!);
             socketServer.handleUpgrade(req, socket, head, (ws) => {
                 eventSockets.add(ws);
-                peerByEventSocket.set(ws, { ip, since: Date.now() });
+                peerByEventSocket.set(ws, {
+                    ip,
+                    since: Date.now(),
+                    id: principal.id,
+                    name: principal.name,
+                    emoji: principal.emoji,
+                });
+                joinControl(principal);
                 const drop = () => {
                     eventSockets.delete(ws);
                     peerByEventSocket.delete(ws);
+                    // Only release presence once this user's LAST socket is gone —
+                    // a second tab/window shouldn't drop them off the roster.
+                    const stillHere = [...peerByEventSocket.values()].some(
+                        (p) => p.id === principal.id,
+                    );
+                    if (!stillHere) leaveControl(principal.id);
                 };
                 ws.on('close', drop);
                 ws.on('error', drop);
@@ -456,7 +507,15 @@ function attachTerminalSocketAndDrive(
         return;
     }
     const detach = attachTerminalSocket(terminalId, ws);
-    const actor = token.slice(0, 8);
+    const session = validateSession(token);
+    // The socket was already token-gated on upgrade, so a session is always here;
+    // fail closed on the impossible case rather than driving an anonymous pty.
+    if (!session) {
+        detach();
+        ws.close();
+        return;
+    }
+    const principal = sessionPrincipal(session);
 
     // Catch-up: send the current scrollback so the phone paints history at once.
     try {
@@ -476,12 +535,18 @@ function attachTerminalSocketAndDrive(
             return;
         }
         if (!deps) return;
-        // Terminal writes honour the global kill-switch (free once paired, but a
-        // locked desktop freezes everything).
+        // Driving an agent terminal needs the BATON: exactly one user types at a
+        // time, and a locked desktop (the host owner holding it) freezes them all.
+        // Every accepted keystroke is signed with the driver's emoji, so the audit
+        // trail says who did what even though the creds are the owner's.
         if (msg.type === 'input' && typeof msg.data === 'string') {
-            if (isLocked()) return;
+            if (!authorizeDrive(principal).allowed) return;
             deps.data.writeToTerminal(terminalId, msg.data);
-            audit('terminal.write', `${terminalId} (${msg.data.length}b)`, actor);
+            audit('terminal.write', `${terminalId} (${msg.data.length}b)`, {
+                id: principal.id,
+                emoji: principal.emoji,
+                name: principal.name,
+            });
         } else if (msg.type === 'resize') {
             const cols = Number(msg.cols);
             const rows = Number(msg.rows);
@@ -673,7 +738,9 @@ export function stopMobileServer(): void {
         }
     }
     eventSockets.clear();
+    peerByEventSocket.clear();
     setEventSockets(null);
+    setEventSocketPrincipal(null);
     for (const socketServer of websocketServers) socketServer.close();
     websocketServers.clear();
     for (const srv of servers.values()) srv.close();
@@ -725,7 +792,7 @@ export function setRemoteEnabled(enabled: boolean): void {
 
 // Re-export the kill-switch + revoke so the desktop IPC layer drives them
 // through one module (server.ts) without reaching into auth/audit directly.
-export { setLocked, isLocked } from './audit';
+export { setLocked, isLocked, requestControl, batonRoster } from './baton';
 export {
     regeneratePin,
     currentPin,
@@ -762,10 +829,14 @@ export interface MobileServerState {
     conflict: boolean;
     /** True when the server is enabled but no Tailscale interface was found. */
     tailnetNotDetected: boolean;
-    /** True when the global kill-switch is engaged. */
+    /** True when the DESKTOP holds the baton (the kill-switch, as it always read). */
     locked: boolean;
     /** Remotes currently connected (drives the host's "remote session" overlay). */
     peers: MobilePeer[];
+    /** Everyone who can drive right now + their emoji (the connected-users list). */
+    participants: BatonRosterEntry[];
+    /** The desktop's own view of the baton: who is driving, and with which emoji. */
+    control: ControlView;
     listeners: Array<{
         network: 'local' | 'lan' | 'tailscale';
         ip: string;
@@ -795,6 +866,8 @@ export function mobileServerState(): MobileServerState {
         tailnetNotDetected: notDetected,
         locked: isLocked(),
         peers: activeMobilePeers(),
+        participants: batonRoster(),
+        control: controlViewFor(DESKTOP_PRINCIPAL),
         listeners: [...servers.entries()].map(([ip, srv]) => {
             const address = srv.address();
             return {

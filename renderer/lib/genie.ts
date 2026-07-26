@@ -621,8 +621,12 @@ export interface MobileStatus {
         port: number;
         secure: boolean;
     }>;
-    /** True when the global kill-switch ("Lock") is engaged. */
+    /** True when the DESKTOP holds the baton (the kill-switch, as it always read). */
     locked: boolean;
+    /** Everyone who can drive right now + their emoji (the connected-users list). */
+    participants: BatonParticipant[];
+    /** The desktop's own view of the baton — who is driving, with which emoji. */
+    control: ControlView;
     /** The 6-digit pairing PIN (shown big + in the QR). */
     pin: string;
     /** A data-URL PNG QR of `<url>?pair=<pin>`, or null when not bound. */
@@ -638,10 +642,49 @@ export interface MobileStatus {
     secure: boolean;
 }
 
-/** A remote/phone currently controlling THIS host. */
+/** A remote/phone currently connected to THIS host. */
 export interface MobilePeer {
     ip: string;
     since: number;
+    /** The baton principal id (session id, or the Tynn user id when identified). */
+    id: string;
+    /** Display name for the connected-users list. */
+    name: string;
+    /** The user's attribution emoji — what their actions are signed with. */
+    emoji: string;
+    /** True for the one user currently driving. */
+    holdsControl: boolean;
+}
+
+/** One row of the connected-users list (everyone who could drive). */
+export interface BatonParticipant {
+    id: string;
+    name: string;
+    emoji: string;
+    /** Owners may TAKE the baton; everyone else can only be GIVEN it. */
+    isOwner: boolean;
+    holdsControl: boolean;
+}
+
+/** Who holds the HOST's baton, as a remote driver window sees it. */
+export interface RemoteControlState {
+    /** True when SOMEBODY ELSE is driving and this window is view-only. */
+    locked: boolean;
+    /** The holder's attribution emoji (null when free / an older host). */
+    holderEmoji?: string | null;
+    /** The holder's display name (null when free / an older host). */
+    holderName?: string | null;
+}
+
+/** Who holds the baton, as one client sees it. */
+export interface ControlView {
+    /** True when SOMEONE ELSE is driving and this client is view-only. */
+    locked: boolean;
+    holder: string | null;
+    holderEmoji: string | null;
+    /** This client's own principal id. */
+    you: string | null;
+    participants: BatonParticipant[];
 }
 
 /** A peer node on the tailnet (from `tailscale status`). */
@@ -1685,6 +1728,10 @@ export interface GenieApi {
         /** Unpair one device by its roster id. */
         revokeSession: (id: string) => Promise<MobileStatus & { ok: boolean }>;
         lock: (locked: boolean) => Promise<MobileStatus>;
+        /** Hand the baton to a connected user (the desktop must be holding it). */
+        giveControl: (
+            principalId: string,
+        ) => Promise<MobileStatus & { ok: boolean; error?: string }>;
     };
     tailscale: {
         status: () => Promise<TailscaleStatus>;
@@ -1725,8 +1772,8 @@ export interface GenieApi {
         /** Control state: `locked:true` ⇒ the host has taken control and this
          *  driver is view-only. Read on mount; live changes arrive via `onControl`.
          *  Drives the view-only banner + the remote-bridge input gate. */
-        controlState: () => Promise<{ locked: boolean }>;
-        onControl: (cb: (s: { locked: boolean }) => void) => () => void;
+        controlState: () => Promise<RemoteControlState>;
+        onControl: (cb: (s: RemoteControlState) => void) => () => void;
         /** Attach to a host pty. `cols`/`rows` (the client's fitted grid, when known)
          *  are held by main and applied once the term socket opens — a resize sent
          *  before then would hit a CONNECTING socket and be discarded. */
