@@ -5,8 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import type { ForceAnswer } from '../mcp/protocol';
 import type { PendingQuestion } from '../ask/force-question';
-import { sessionFromAuthHeader, attemptPair } from './auth';
-import { audit, isLocked } from './audit';
+import {
+    sessionFromAuthHeader,
+    attemptPair,
+    sessionPrincipal,
+    type MobileSession,
+} from './auth';
+import { audit, type AuditActor } from './audit';
+import { authorizeDrive, controlViewFor, joinControl, requestControl } from './baton';
 import type { SiteView, TunnelSiteConfig } from './hosts';
 import type { EnabledGenSite } from '../remote';
 import { isHeadless } from '../runtime-mode';
@@ -71,9 +77,10 @@ import type { ProjectJsonTynn } from '../workspace/project-json';
  *
  * AUTH: `/api/pair` is the ONLY unauthed data route. Every other `/api/*`
  * request must carry a valid `Authorization: Bearer <token>` (validated here).
- * State-changing actions also honour the global kill-switch (audit.isLocked):
- * when locked they return 423 and run nothing. Every state-changing action is
- * appended to the audit log.
+ * State-changing actions also need the BATON (baton.ts): exactly one connected
+ * user drives at a time, so a request from anyone else returns 423 and runs
+ * nothing. Every state-changing action is appended to the audit log, signed with
+ * the driving user's emoji.
  */
 
 /** Hard cap on an uploaded file's decoded size (25 MiB). */
@@ -611,9 +618,13 @@ function readJsonBodyCapped<T>(req: http.IncomingMessage, maxBytes: number): Pro
     });
 }
 
-/** The session-token id we record in the audit log (first 8 chars). */
-function actorOf(token: string): string {
-    return token.slice(0, 8);
+/**
+ * Who to record in the audit log for a request: the session's principal, carrying
+ * their emoji so the trail reads as "🐢 killed t-3" and not just a token prefix.
+ */
+function actorOf(session: MobileSession): AuditActor {
+    const p = sessionPrincipal(session);
+    return { id: p.id, emoji: p.emoji, name: p.name };
 }
 
 /**
@@ -621,7 +632,7 @@ function actorOf(token: string): string {
  * the dashboard in one round-trip: workspaces, terminals (with live flag),
  * processes, and pending questions.
  */
-function buildState(deps: MobileDataDeps) {
+function buildState(deps: MobileDataDeps, principalId: string | null = null) {
     const live = new Set(deps.liveTerminalIds());
     // Headless: drop every System / null-workspace task so the member never sees
     // (or can address) a workspace outside their served set. Desktop: unchanged.
@@ -629,14 +640,17 @@ function buildState(deps: MobileDataDeps) {
     const served = servedWorkspaceIds(deps);
     const serves = (workspaceId: string | null) =>
         !headless || boundToServedWorkspace(workspaceId, served);
+    const control = controlViewFor(principalId);
     return {
-        // The global kill-switch state -- the SINGLE source of truth for "who
-        // holds control". locked:true => the host has taken control (a remote/
-        // phone is view-only); locked:false => the remote may drive. A connecting/
-        // reconnecting remote seeds + re-reads this here, and live toggles arrive
-        // via the control:changed push (see audit.setLocked), so the two never
-        // diverge.
-        locked: isLocked(),
+        // The BATON -- the SINGLE source of truth for "who holds control".
+        // `locked:true` => somebody else is driving (the desktop, or another user)
+        // and THIS client is view-only; `locked:false` => it may drive. A
+        // connecting/reconnecting client seeds + re-reads it here, and live
+        // handoffs arrive via the control:changed push (baton.ts), so the two
+        // never diverge. `control` carries the rest: who holds it, and everyone
+        // connected with their emoji.
+        locked: control.locked,
+        control,
         workspaces: deps.listWorkspaces().map((w) => ({
             id: w.id,
             name: w.project_name,
@@ -702,7 +716,9 @@ export async function handleApi(
             sendJson(res, result.status, { error: result.error });
             return true;
         }
-        audit('pair.ok', info.ip, actorOf(result.token));
+        // No principal yet — the session was minted a line ago and its identity
+        // (name/emoji) is stamped by the access grant, so record the token prefix.
+        audit('pair.ok', info.ip, result.token.slice(0, 8));
         sendJson(res, 200, { token: result.token });
         return true;
     }
@@ -743,20 +759,74 @@ export async function handleApi(
         sendJson(res, 401, { error: 'unauthorised' });
         return true;
     }
-    const actor = actorOf(session.token);
+    const principal = sessionPrincipal(session);
+    const actor = actorOf(session);
 
-    // A state-changing action is refused while the global kill-switch is on.
-    const guardLocked = (): boolean => {
-        if (isLocked()) {
-            sendJson(res, 423, { error: 'locked — remote control is disabled on the desktop' });
+    /**
+     * The BATON gate: a state-changing action needs control, and exactly one user
+     * has it. Claims a free baton (so a lone user drives with no handshake) and
+     * refuses with 423 when the desktop or another user is driving.
+     */
+    const guardControl = (): boolean => {
+        const d = authorizeDrive(principal);
+        if (!d.allowed) {
+            sendJson(res, 423, {
+                error: d.reason ?? 'another user has control',
+                control: controlViewFor(principal.id),
+            });
             return true;
         }
         return false;
     };
 
+    // --- control (the baton) ----------------------------------------------
+    // take    — seize control. OWNERS only while someone else is driving; anyone
+    //           may claim it while it is free.
+    // give    — hand control to another connected user. Holder only.
+    // release — drop control, leaving it free for whoever drives next.
+    // A refusal is a 403 with the reason (a member being told to ask for it),
+    // NOT a 423: the request was understood and denied on identity.
+    if (pathname.startsWith('/api/control/') && method === 'POST') {
+        const action = pathname.slice('/api/control/'.length);
+        // Asking for the baton makes you present: you must be on the roster to
+        // hold it (and for the holder to be able to hand it to you).
+        joinControl(principal);
+        let body: { to?: string } = {};
+        if (action === 'give') {
+            try {
+                body = await readJsonBody<{ to?: string }>(req);
+            } catch {
+                sendJson(res, 400, { error: 'invalid body' });
+                return true;
+            }
+        }
+        const decision =
+            action === 'take'
+                ? requestControl({ kind: 'take', by: principal.id })
+                : action === 'release'
+                  ? requestControl({ kind: 'release', by: principal.id })
+                  : action === 'give'
+                    ? requestControl({
+                          kind: 'give',
+                          from: principal.id,
+                          to: String(body.to ?? ''),
+                      })
+                    : null;
+        if (decision === null) {
+            sendJson(res, 404, { error: `unknown control action: ${action}` });
+            return true;
+        }
+        sendJson(res, decision.allowed ? 200 : 403, {
+            ok: decision.allowed,
+            ...(decision.allowed ? {} : { error: decision.reason }),
+            control: controlViewFor(principal.id),
+        });
+        return true;
+    }
+
     // --- reads ------------------------------------------------------------
     if (pathname === '/api/state' && method === 'GET') {
-        sendJson(res, 200, buildState(deps));
+        sendJson(res, 200, buildState(deps, principal.id));
         return true;
     }
 
@@ -768,7 +838,7 @@ export async function handleApi(
     // locked host returns 423. `?workspaceId=` merges that workspace's settings;
     // `?refresh=1` re-probes scheme/port.
     if (pathname === '/api/sites' && method === 'GET') {
-        if (guardLocked()) return true;
+        if (guardControl()) return true;
         if (!deps.listSites) {
             sendJson(res, 200, { sites: [] });
             return true;
@@ -795,7 +865,7 @@ export async function handleApi(
     // `listLocalEnabledGenSites()`. Token- + kill-switch-gated like `/api/sites`;
     // an empty set on a host that predates the feature.
     if (pathname === '/api/sites/enabled' && method === 'GET') {
-        if (guardLocked()) return true;
+        if (guardControl()) return true;
         if (!deps.listEnabledSites) {
             sendJson(res, 200, { sites: [] });
             return true;
@@ -810,7 +880,7 @@ export async function handleApi(
     // SCOPE-FILTERED to served workspaces (a scoped grant can only touch its own
     // workspaces), mirroring /api/desktop/issue-watch/set.
     if (pathname === '/api/sites/set' && method === 'POST') {
-        if (guardLocked()) return true;
+        if (guardControl()) return true;
         if (!deps.setSiteConfig) {
             sendJson(res, 500, { error: 'sites not supported on this host' });
             return true;
@@ -838,7 +908,7 @@ export async function handleApi(
         return true;
     }
     if (pathname === '/api/workspaces' && method === 'GET') {
-        sendJson(res, 200, { workspaces: buildState(deps).workspaces });
+        sendJson(res, 200, { workspaces: buildState(deps, principal.id).workspaces });
         return true;
     }
     if (pathname === '/api/processes' && method === 'GET') {
@@ -846,7 +916,7 @@ export async function handleApi(
         return true;
     }
     if (pathname === '/api/terminals' && method === 'GET') {
-        sendJson(res, 200, { terminals: buildState(deps).terminals });
+        sendJson(res, 200, { terminals: buildState(deps, principal.id).terminals });
         return true;
     }
     if (pathname === '/api/questions' && method === 'GET') {
@@ -872,7 +942,7 @@ export async function handleApi(
             sendJson(res, 405, { error: 'method not allowed' });
             return true;
         }
-        if (guardLocked()) return true;
+        if (guardControl()) return true;
         const result = deps.installUpdate();
         if (!result.ok) {
             // not-ready (nothing downloaded yet) and unsupported (non-packaged
@@ -896,7 +966,7 @@ export async function handleApi(
             sendJson(res, 405, { error: 'method not allowed' });
             return true;
         }
-        if (guardLocked()) return true;
+        if (guardControl()) return true;
         const id = decodeURIComponent(proc[1]);
         // Headless: refuse to drive a System / unattached process (fail-closed).
         if (!processServable(deps, id)) {
@@ -914,7 +984,7 @@ export async function handleApi(
 
     // --- terminal create: POST /api/terminal/create ----------------------
     if (pathname === '/api/terminal/create' && method === 'POST') {
-        if (guardLocked()) return true;
+        if (guardControl()) return true;
         let body: { workspaceId?: string; cwd?: string; label?: string };
         try {
             body = await readJsonBody(req);
@@ -946,7 +1016,7 @@ export async function handleApi(
     // or post-restart-dead panel permanently dead. Idempotent (a live id reattaches +
     // replays scrollback), served-gated + cwd-confined exactly like /api/terminal/create.
     if (pathname === '/api/desktop/terminal-open' && method === 'POST') {
-        if (guardLocked()) return true;
+        if (guardControl()) return true;
         let body: {
             id?: string;
             workspaceId?: string;
@@ -1008,7 +1078,7 @@ export async function handleApi(
             sendJson(res, 405, { error: 'method not allowed' });
             return true;
         }
-        if (guardLocked()) return true;
+        if (guardControl()) return true;
         const id = decodeURIComponent(killT[1]);
         // Headless: never let a member kill a System / unattached terminal.
         if (!terminalServable(deps, id)) {
@@ -1028,7 +1098,7 @@ export async function handleApi(
             sendJson(res, 405, { error: 'method not allowed' });
             return true;
         }
-        if (guardLocked()) return true;
+        if (guardControl()) return true;
         const workspaceId = decodeURIComponent(upload[1]);
         const ws = deps.listWorkspaces().find((w) => w.id === workspaceId);
         if (!ws) {
@@ -1093,7 +1163,7 @@ export async function handleApi(
     // unwired → `supported:false`, and the client no-ops the image (never breaking
     // text paste).
     if (pathname === '/api/clipboard/image' && method === 'POST') {
-        if (guardLocked()) return true;
+        if (guardControl()) return true;
         if (!deps.writeClipboardImage) {
             // No clipboard on this host (headless) — tell the client to no-op.
             sendJson(res, 200, { ok: false, supported: false });
@@ -1144,7 +1214,7 @@ export async function handleApi(
             sendJson(res, 405, { error: 'method not allowed' });
             return true;
         }
-        if (guardLocked()) return true;
+        if (guardControl()) return true;
         const id = decodeURIComponent(ansQ[1]);
         let body: { answers?: ForceAnswer[] };
         try {
@@ -1172,7 +1242,7 @@ export async function handleApi(
     // MUST precede the generic `/api/files/` block below (that one reads an uncapped
     // JSON body and has no `dataBase64` field).
     if (pathname === '/api/files/import-external' && method === 'POST') {
-        if (guardLocked()) return true;
+        if (guardControl()) return true;
         let ib: {
             workspacePath?: string;
             destFolder?: string;
@@ -1300,7 +1370,7 @@ export async function handleApi(
                 return true;
             }
             // Mutations — also gated by the kill-switch.
-            if (guardLocked()) return true;
+            if (guardControl()) return true;
             if (pathname === '/api/files/write') {
                 const r = await writeFile(wp, String(f.relPath ?? ''), String(f.content ?? ''));
                 audit('files.write', `${f.relPath} → ${wsRow.project_name}`, actor);
@@ -1365,7 +1435,7 @@ export async function handleApi(
             sendJson(res, 405, { error: 'method not allowed' });
             return true;
         }
-        if (guardLocked()) return true;
+        if (guardControl()) return true;
         let body: { patch?: Record<string, unknown> };
         try {
             body = await readJsonBody(req);
@@ -1409,7 +1479,7 @@ export async function handleApi(
             sendJson(res, 501, { error: 'setup not supported on this host' });
             return true;
         }
-        if (guardLocked()) return true;
+        if (guardControl()) return true;
         const result = await deps.completeSetup();
         audit('setup.complete', result.ok ? 'ok' : 'failed', actor);
         sendJson(res, 200, result);
@@ -1471,7 +1541,7 @@ export async function handleApi(
             sendJson(res, 405, { error: 'method not allowed' });
             return true;
         }
-        if (guardLocked()) return true;
+        if (guardControl()) return true;
         let iw: { workspaceId?: string; owner?: string; repo?: string; enabled?: boolean };
         try {
             iw = await readJsonBody(req);
@@ -1567,7 +1637,7 @@ export async function handleApi(
             return true;
         }
         if (pathname === '/api/desktop/agentinbox/post') {
-            if (guardLocked()) return true;
+            if (guardControl()) return true;
             if (!wb.text || !wb.text.trim()) {
                 sendJson(res, 200, { ok: false, error: 'Message is empty.' });
                 return true;
@@ -1590,7 +1660,7 @@ export async function handleApi(
         // Same broker ops the local IPC handlers call, so local and remote wipe
         // identically — the one protocol, one implementation.
         if (pathname === '/api/desktop/agentinbox/clear') {
-            if (guardLocked()) return true;
+            if (guardControl()) return true;
             if (!wb.channelKey) {
                 sendJson(res, 200, { ok: false, cleared: 0, error: 'No channel given.' });
                 return true;
@@ -1599,7 +1669,7 @@ export async function handleApi(
             return true;
         }
         if (pathname === '/api/desktop/agentinbox/delete-thread') {
-            if (guardLocked()) return true;
+            if (guardControl()) return true;
             if (!wb.pairKey) {
                 sendJson(res, 200, { ok: false, cleared: 0, error: 'No thread given.' });
                 return true;
@@ -1611,7 +1681,7 @@ export async function handleApi(
         // kill-switch gate as the single-target wipes; the broker batches over the
         // very same ops, so local and remote behave identically.
         if (pathname === '/api/desktop/agentinbox/wipe-many') {
-            if (guardLocked()) return true;
+            if (guardControl()) return true;
             sendJson(
                 res,
                 200,
@@ -1626,7 +1696,7 @@ export async function handleApi(
             // "Drive the host" mutation (edit the host agent's identity) — kill-switch
             // gated like post. Routes to the SAME updateAgentInboxChannel the local IPC
             // handler uses, so a remote "Agent settings…" edit is byte-identical.
-            if (guardLocked()) return true;
+            if (guardControl()) return true;
             if (!deps.updateAgentInboxChannel) {
                 sendJson(res, 501, {
                     ok: false,
@@ -1695,7 +1765,7 @@ export async function handleApi(
             return true;
         }
         // Mutations — kill-switch-gated.
-        if (guardLocked()) return true;
+        if (guardControl()) return true;
         if (pathname === '/api/desktop/tynn/link') {
             linkWorkspaceTynn(wsPath, tb.link ?? {});
             audit('tynn.link', wsPath, actor);
@@ -1749,7 +1819,7 @@ export async function handleApi(
             return true;
         }
         if (pathname === '/api/desktop/docs/repair') {
-            if (guardLocked()) return true; // write — kill-switch gated
+            if (guardControl()) return true; // write — kill-switch gated
             const result = repairWorkspaceDocs(ws.path, ws.project_name, ws.project_name);
             audit('docs.repair', ws.path, actor);
             sendJson(res, 200, { result });
@@ -1790,7 +1860,7 @@ export async function handleApi(
             );
             return true;
         }
-        if (guardLocked()) return true; // write — kill-switch gated
+        if (guardControl()) return true; // write — kill-switch gated
         sendJson(
             res,
             200,
@@ -1833,7 +1903,7 @@ export async function handleApi(
                 return true;
             }
             // Mutations — kill-switch-gated.
-            if (guardLocked()) return true;
+            if (guardControl()) return true;
             if (pathname === '/api/desktop/terminal-spec/create' && d.input) {
                 sendJson(res, 200, { spec: createTerminalSpec(d.input) });
                 return true;

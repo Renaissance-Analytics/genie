@@ -8,7 +8,8 @@ import {
     _setPinForTest,
     _resetAuthForTest,
 } from '../auth';
-import { setLocked, _resetAuditForTest } from '../audit';
+import { _resetAuditForTest } from '../audit';
+import { setLocked, _resetBatonForTest } from '../baton';
 
 /**
  * `GET /api/sites` is the remote/programmatic view of the host's discovered dev
@@ -83,10 +84,12 @@ const bearer = (t: string): http.IncomingHttpHeaders => ({ authorization: `Beare
 beforeEach(() => {
     _resetAuthForTest();
     _resetAuditForTest();
+    _resetBatonForTest();
 });
 afterEach(() => {
     _resetAuthForTest();
     _resetAuditForTest();
+    _resetBatonForTest();
 });
 
 describe('GET /api/sites', () => {

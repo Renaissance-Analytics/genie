@@ -6,6 +6,8 @@ import {
     decryptSecret,
     secretEncryptionAvailable,
 } from '../secrets/store';
+import { assignEmoji } from './emoji';
+import type { BatonPrincipal } from './baton';
 
 /**
  * Pairing PIN + session-token store for the mobile remote-control server.
@@ -30,6 +32,27 @@ import {
  *     (and, by the desktop's choice, may also revoke).
  */
 
+/**
+ * WHO a session belongs to — stamped by whatever granted the access.
+ *
+ * PIN pairing happens on the host's own screen and needs a desktop confirm, so a
+ * PIN-paired device is the host OWNER's (the default below). A Tynn-managed
+ * workstation instead hands each member an identity — name, the emoji Tynn
+ * assigned them, and whether they're an owner — which is applied to the session
+ * via `setSessionIdentity`. The baton and the audit trail read this, and nothing
+ * else, to decide who may drive and to sign what they did.
+ */
+export interface SessionIdentity {
+    /** Stable user id from the access grant. Defaults to the session id. */
+    userId?: string;
+    /** Display name for the connected-users list. */
+    name?: string;
+    /** The attribution emoji assigned where access was granted (Tynn). */
+    emoji?: string;
+    /** 'owner' may TAKE the baton; 'member' can only be GIVEN it. */
+    role?: 'owner' | 'member';
+}
+
 /** A minted session for one paired device. */
 export interface MobileSession {
     /** Stable, NON-secret id for the Settings roster + per-device revoke. The
@@ -43,6 +66,8 @@ export interface MobileSession {
     createdAt: number;
     /** A short human label for the Settings list (derived from the UA / time). */
     label: string;
+    /** Who is behind this session (see SessionIdentity). Absent ⇒ the host owner. */
+    identity?: SessionIdentity;
 }
 
 /**
@@ -56,6 +81,7 @@ function normalizeSession(s: Partial<MobileSession> & { token: string }): Mobile
         ip: s.ip ?? '',
         createdAt: s.createdAt ?? Date.now(),
         label: s.label ?? 'Device',
+        ...(s.identity ? { identity: s.identity } : {}),
     };
 }
 
@@ -307,6 +333,54 @@ export function revokeSession(id: string): boolean {
 /** The live sessions (for the Settings device list). */
 export function listSessions(): MobileSession[] {
     return state ? [...state.sessions.values()] : [];
+}
+
+/**
+ * Attach (or update) the identity behind a session, by its non-secret id.
+ *
+ * This is the seam a Tynn-managed workstation uses: workstation access is granted
+ * in Tynn — which is also where each user's emoji is assigned — and the host
+ * stamps that identity onto the session it minted for them. Returns false for an
+ * unknown session id.
+ */
+export function setSessionIdentity(id: string, identity: SessionIdentity): boolean {
+    if (!state) return false;
+    for (const s of state.sessions.values()) {
+        if (s.id === id) {
+            s.identity = { ...s.identity, ...identity };
+            persist();
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * The baton principal for a session: WHO is driving, what they sign their actions
+ * with, and whether they may take control.
+ *
+ * The emoji is resolved ONCE and cached on the session so it can't drift as other
+ * users come and go — a person's signature has to stay put for the audit trail to
+ * be readable. A session with no identity is the host owner's own paired device
+ * (PIN + desktop confirm), so it defaults to an owner.
+ */
+export function sessionPrincipal(session: MobileSession): BatonPrincipal {
+    const identity = session.identity;
+    if (!identity?.emoji) {
+        const taken = listSessions()
+            .map((s) => s.identity?.emoji)
+            .filter((e): e is string => !!e);
+        const emoji = assignEmoji(identity?.userId ?? session.id, taken);
+        setSessionIdentity(session.id, { ...identity, emoji });
+    }
+    const resolved = session.identity ?? {};
+    return {
+        id: resolved.userId ?? session.id,
+        name: resolved.name ?? session.label,
+        emoji: resolved.emoji ?? assignEmoji(session.id),
+        isOwner: (resolved.role ?? 'owner') === 'owner',
+        since: session.createdAt,
+    };
 }
 
 /** Reset module state (test-only). */

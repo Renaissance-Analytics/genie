@@ -118,6 +118,7 @@ import {
     setMobileEnabled,
     setRemoteEnabled,
     setLocked,
+    requestControl,
     regeneratePin,
     currentPin,
     revokeAllSessions,
@@ -125,6 +126,7 @@ import {
     listSessions,
     type MobileServerState,
 } from './mobile/server';
+import { DESKTOP_PRINCIPAL } from './mobile/baton';
 import { firewallRuleExists, ensureFirewallRule } from './mobile/firewall';
 import { getTailscaleStatus, tailscaleUp, installTailscale } from './tailscale';
 import { discoverHosts, openRemoteWindow } from './workmode';
@@ -643,6 +645,17 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('mobile:lock', async (_e, locked: boolean) => {
         setLocked(!!locked);
         return mobileStatus();
+    });
+    // Hand the baton from the desktop to a connected user — the "give" half of the
+    // control model (the desktop is an owner, so it may also just TAKE it back via
+    // mobile:lock). Refused unless the desktop currently holds control.
+    ipcMain.handle('mobile:give-control', async (_e, principalId: string) => {
+        const d = requestControl({
+            kind: 'give',
+            from: DESKTOP_PRINCIPAL,
+            to: String(principalId ?? ''),
+        });
+        return { ok: d.allowed, error: d.reason, ...(await mobileStatus()) };
     });
 
     // Work Mode — Tailscale lifecycle management (status / bring online / install).

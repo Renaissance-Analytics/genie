@@ -21,6 +21,9 @@ import type { WebSocket } from 'ws';
 /** The set of live dashboard sockets. Registered by server.ts on upgrade. */
 let eventSockets: Set<WebSocket> | null = null;
 
+/** Resolve the principal driving a socket (null = unidentified). Set by server.ts. */
+let principalOfSocket: ((ws: WebSocket) => string | null) | null = null;
+
 /** A dashboard push message. `type` discriminates; `payload` is event-specific. */
 export interface MobileEvent {
     type: string;
@@ -30,6 +33,17 @@ export interface MobileEvent {
 /** Point the bus at the server's live `/ws/events` socket set (or null = off). */
 export function setEventSockets(sockets: Set<WebSocket> | null): void {
     eventSockets = sockets;
+}
+
+/**
+ * Teach the bus which principal each socket belongs to, so a push can be
+ * PERSONALISED (`mobileEmitEach`). Needed by the baton: "who is driving" is one
+ * fact, but "are YOU view-only" differs per recipient. Null clears the mapping.
+ */
+export function setEventSocketPrincipal(
+    resolve: ((ws: WebSocket) => string | null) | null,
+): void {
+    principalOfSocket = resolve;
 }
 
 /**
@@ -45,6 +59,29 @@ export function mobileEmit(type: string, payload?: unknown): void {
         if (ws.readyState !== 1) continue;
         try {
             ws.send(msg);
+        } catch {
+            /* socket went away mid-send — the close handler drops it */
+        }
+    }
+}
+
+/**
+ * Fan an event out with a payload built PER RECIPIENT from that socket's
+ * principal. Used for `control:changed`, where each client needs its own answer
+ * to "is someone else driving?" — a single broadcast would tell every non-holder
+ * it can drive and then silently drop its keystrokes.
+ */
+export function mobileEmitEach(
+    type: string,
+    payloadFor: (principalId: string | null) => unknown,
+): void {
+    const sockets = eventSockets;
+    if (!sockets || sockets.size === 0) return;
+    for (const ws of sockets) {
+        if (ws.readyState !== 1) continue;
+        try {
+            const principalId = principalOfSocket ? principalOfSocket(ws) : null;
+            ws.send(JSON.stringify({ type, payload: payloadFor(principalId) }));
         } catch {
             /* socket went away mid-send — the close handler drops it */
         }

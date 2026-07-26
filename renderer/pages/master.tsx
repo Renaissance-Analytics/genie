@@ -81,6 +81,7 @@ import {
     type RemoteStatus,
     type RemoteLinkState,
     type MobilePeer,
+    type BatonParticipant,
     type KnownHost,
     type GenieHost,
     type ConnectableWorkstation,
@@ -150,14 +151,24 @@ export default function MasterPage() {
     // on mount + live via `onControl`, so a control handoff reflects immediately and
     // is restored correctly across reconnect/upgrade (main re-reads it on recovery).
     const [viewOnly, setViewOnly] = useState(false);
+    // WHO took it — several members can drive one workstation, so the banner names
+    // the person holding the baton rather than blaming "the host" for a peer.
+    const [controlHolder, setControlHolder] = useState<{
+        emoji?: string | null;
+        name?: string | null;
+    } | null>(null);
     useEffect(() => {
         if (!isHostWindow || !ready) return;
         let alive = true;
+        const apply = (s: { locked: boolean; holderEmoji?: string | null; holderName?: string | null }) => {
+            setViewOnly(s.locked);
+            setControlHolder(s.locked ? { emoji: s.holderEmoji, name: s.holderName } : null);
+        };
         api()
             .remote.controlState()
-            .then((s) => alive && setViewOnly(s.locked))
+            .then((s) => alive && apply(s))
             .catch(() => {});
-        const off = api().remote.onControl((s) => setViewOnly(s.locked));
+        const off = api().remote.onControl(apply);
         return () => {
             alive = false;
             off();
@@ -184,7 +195,7 @@ export default function MasterPage() {
             {/* Owner connected to a workstation: open the setup wizard if the host
                 still needs setup (idempotent; the launcher decides via the host). */}
             {isHostWindow && link.phase === 'connected' && <WorkstationSetupLauncher />}
-            {isHostWindow && viewOnly && <RemoteViewOnlyBanner />}
+            {isHostWindow && viewOnly && <RemoteViewOnlyBanner holder={controlHolder} />}
         </>
 
     );
@@ -3154,13 +3165,18 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
 }
 
 /**
- * Remote-side VIEW-ONLY banner. Shown in a host window when the HOST owner has
- * taken control (its kill-switch). It's the mirror of the host's HostSessionOverlay
- * "Take control" state: it makes it obvious WHY keystrokes do nothing here (the
- * remote-bridge drops them), so control never silently diverges from what's shown.
- * Clears the instant the host resumes the remote (the `control:changed` push).
+ * Remote-side VIEW-ONLY banner. Shown in a host window when SOMEONE ELSE holds
+ * that host's baton — the owner at the desktop, or another member driving the same
+ * workstation, which is why it names them when the host says who. It's the mirror
+ * of the host's HostSessionOverlay: it makes it obvious WHY keystrokes do nothing
+ * here (the remote-bridge drops them), so control never silently diverges from
+ * what's shown. Clears the instant control comes back (the `control:changed` push).
  */
-function RemoteViewOnlyBanner() {
+function RemoteViewOnlyBanner({
+    holder,
+}: {
+    holder?: { emoji?: string | null; name?: string | null } | null;
+}) {
     return (
         <div
             style={{
@@ -3185,20 +3201,32 @@ function RemoteViewOnlyBanner() {
             <span
                 style={{ width: 8, height: 8, borderRadius: 999, background: '#fbbf24' }}
             />
-            <span>View only — the host has taken control</span>
+            <span>
+                {holder?.name
+                    ? `View only — ${holder.emoji ?? ''} ${holder.name} has control`.replace(
+                          /\s+/g,
+                          ' ',
+                      )
+                    : 'View only — someone else has control'}
+            </span>
         </div>
     );
 }
 
 /**
- * Host-side remote-session overlay. When a REMOTE is currently controlling THIS
- * machine, a loud banner makes that obvious + shows where it's from, and lets the
- * host TAKE BACK CONTROL (pauses the remote's input via the kill-switch — the
- * session stays CONNECTED, not killed) or END the session outright.
+ * Host-side remote-session overlay — WHO is on this machine and who is driving.
+ *
+ * Several people can be connected to one workstation, so the banner lists every
+ * connected user with the emoji their actions are signed with, marks the ONE
+ * holding the baton, and lets the host hand it over (click a user) or TAKE it
+ * back (the desktop is an owner, so it always can — the session stays CONNECTED,
+ * not killed). "End session" still drops the pairing outright.
  */
 function HostSessionOverlay() {
 
     const [peers, setPeers] = useState<MobilePeer[]>([]);
+    const [participants, setParticipants] = useState<BatonParticipant[]>([]);
+    const [holder, setHolder] = useState<string | null>(null);
     const [locked, setLocked] = useState(false);
     const [busy, setBusy] = useState(false);
 
@@ -3210,6 +3238,8 @@ function HostSessionOverlay() {
                 .then((s) => {
                     if (!alive) return;
                     setPeers(s.peers ?? []);
+                    setParticipants(s.participants ?? []);
+                    setHolder(s.control?.holder ?? null);
                     setLocked(s.locked);
                 })
                 .catch(() => {});
@@ -3223,17 +3253,35 @@ function HostSessionOverlay() {
 
     if (peers.length === 0) return null;
 
-    const from = peers.map((p) => p.ip.replace(/^::ffff:/, '')).join(', ');
-    const act = async (fn: () => Promise<{ peers: MobilePeer[]; locked: boolean }>) => {
+    const act = async (
+        fn: () => Promise<{
+            peers: MobilePeer[];
+            participants?: BatonParticipant[];
+            control?: { holder: string | null };
+            locked: boolean;
+        }>,
+    ) => {
         setBusy(true);
         try {
             const s = await fn();
             setPeers(s.peers ?? []);
+            setParticipants(s.participants ?? []);
+            setHolder(s.control?.holder ?? null);
             setLocked(s.locked);
         } finally {
             setBusy(false);
         }
     };
+
+    // The people on the other end — the desktop itself is a participant only while
+    // it holds control, and it's already represented by this window.
+    const users = participants.filter((p) => p.id !== 'desktop');
+    const driver = participants.find((p) => p.id === holder) ?? null;
+    const status = locked
+        ? 'Paused — you have control'
+        : driver
+          ? `${driver.emoji} ${driver.name} has control`
+          : 'Connected — nobody is driving yet';
     const btn = {
         background: 'rgba(255,255,255,0.18)',
         color: '#fff',
@@ -3273,10 +3321,46 @@ function HostSessionOverlay() {
                     background: locked ? '#fbbf24' : '#7dd3fc',
                 }}
             />
-            <span>
-                {locked
-                    ? `Remote paused — you have control (from ${from})`
-                    : `Remote session active — controlling from ${from}`}
+            <span>{status}</span>
+            {/* Everyone connected, with the emoji their actions are signed with.
+                While the desktop holds the baton, clicking a user hands it to them. */}
+            <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                {users.map((u) => (
+                    <button
+                        key={u.id}
+                        type="button"
+                        disabled={busy || !locked || u.holdsControl}
+                        onClick={() => void act(() => api().mobile.giveControl(u.id))}
+                        title={
+                            u.holdsControl
+                                ? `${u.name} is driving — every action is signed ${u.emoji}`
+                                : locked
+                                  ? `Hand control to ${u.name}`
+                                  : `${u.name} is connected (signs actions ${u.emoji})`
+                        }
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            background: u.holdsControl
+                                ? 'rgba(255,255,255,0.3)'
+                                : 'rgba(255,255,255,0.1)',
+                            color: '#fff',
+                            border: u.holdsControl
+                                ? '1px solid rgba(255,255,255,0.75)'
+                                : '1px solid rgba(255,255,255,0.25)',
+                            borderRadius: 999,
+                            padding: '2px 8px',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            cursor: locked && !u.holdsControl ? 'pointer' : 'default',
+                        }}
+                    >
+                        <span aria-hidden>{u.emoji}</span>
+                        <span>{u.name}</span>
+                        {u.isOwner && <span title="Workstation owner">★</span>}
+                    </button>
+                ))}
             </span>
             <button
                 type="button"
@@ -3284,12 +3368,12 @@ function HostSessionOverlay() {
                 style={btn}
                 title={
                     locked
-                        ? 'Hand control back to the remote (it stayed connected)'
-                        : 'Pause the remote and take control — without disconnecting it'
+                        ? 'Release control — whoever drives next picks it up'
+                        : 'Take the baton off whoever is driving, without disconnecting them'
                 }
                 onClick={() => void act(() => api().mobile.lock(!locked))}
             >
-                {locked ? 'Resume remote' : 'Take control'}
+                {locked ? 'Release control' : 'Take control'}
             </button>
             <button
                 type="button"
