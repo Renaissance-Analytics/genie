@@ -10,6 +10,7 @@ import {
     type CredentialBundle,
 } from '../escrow';
 import type { MaterializerFs } from '../credential-materializer';
+import { resetClaudeRotation, syncClaudeCredentialRotation } from '../claude-rotation';
 import {
     applyCredentialRevoke,
     bootstrapEscrowForPeers,
@@ -39,7 +40,10 @@ beforeAll(async () => {
     await sodiumReady();
 });
 
-afterEach(() => resetManagedCredentials());
+afterEach(() => {
+    resetManagedCredentials();
+    resetClaudeRotation();
+});
 
 async function buildBundle(
     escrow: EncryptionKeypair,
@@ -239,6 +243,51 @@ describe('refreshManagedCredentials', () => {
 
         expect(summary.github?.ok).toBe(false);
         expect(JSON.stringify(summary)).not.toContain(FAKE.github);
+    });
+});
+
+describe('rotation baseline', () => {
+    it("records OUR OWN write as the baseline so it is not mistaken for a CLI rotation", async () => {
+        const escrow = await generateEncryptionKeypair();
+        const host = await generateEncryptionKeypair();
+        const client = fakeClient(await buildBundle(escrow, host));
+        const m = materializeDeps();
+
+        await refreshManagedCredentials(client, host, m.deps);
+
+        // The file we just materialized IS the baseline — a sync right now must
+        // see no change and PUT nothing back.
+        const rotationFs = {
+            ...m.deps.fs,
+            readFileSync: (file: string) => m.files.get(file)!.data,
+        };
+        const result = await syncClaudeCredentialRotation(client, {
+            homeDir: m.deps.homeDir,
+            fs: rotationFs,
+            escrowPublicKey: escrow.publicKeyB64,
+        });
+
+        expect(result.status).toBe('unchanged');
+        expect(client.puts).toEqual([]);
+    });
+
+    it('clears the baseline on an all-revoke so a later host re-adopts cleanly', async () => {
+        const escrow = await generateEncryptionKeypair();
+        const host = await generateEncryptionKeypair();
+        const client = fakeClient(await buildBundle(escrow, host));
+        const m = materializeDeps();
+        await refreshManagedCredentials(client, host, m.deps);
+
+        applyCredentialRevoke({ all: true }, m.deps);
+
+        // Nothing on disk and no baseline: a sync is a clean no-op, not a PUT.
+        const result = await syncClaudeCredentialRotation(client, {
+            homeDir: m.deps.homeDir,
+            fs: { ...m.deps.fs, readFileSync: () => '' },
+            escrowPublicKey: escrow.publicKeyB64,
+        });
+        expect(result.status).toBe('absent');
+        expect(client.puts).toEqual([]);
     });
 });
 

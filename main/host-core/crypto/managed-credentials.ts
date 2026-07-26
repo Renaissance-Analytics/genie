@@ -16,6 +16,7 @@ import {
     type CommandRunner,
     type MaterializeDeps,
 } from './credential-materializer';
+import { noteClaudeCredentialBlob, resetClaudeRotation } from './claude-rotation';
 import type { EncryptionKeypair } from './sealed-box';
 
 /**
@@ -172,7 +173,13 @@ export async function refreshManagedCredentials(
     if (claudeBlob) {
         const written = materializeClaudeCredentials(claudeBlob, deps);
         claude = written.ok ? { ok: true } : { ok: false, reason: written.reason };
-        if (written.ok) providers.push(CLAUDE_SUBSCRIPTION);
+        if (written.ok) {
+            providers.push(CLAUDE_SUBSCRIPTION);
+            // Our OWN write is the rotation baseline. Without this the watcher
+            // would see the file appear, call it a rotation, and PUT the value
+            // straight back to the store it just came from.
+            noteClaudeCredentialBlob(claudeBlob);
+        }
     }
 
     let github: ApplyResult | null = null;
@@ -224,6 +231,7 @@ export function applyCredentialRevoke(
         // file — a previous process on this host may have, and a revoke must
         // leave nothing behind either way.
         wipeClaudeCredentials(deps);
+        resetClaudeRotation();
         if (state.claudeMaterialized) revoked.push(CLAUDE_SUBSCRIPTION);
         revoked.push(...Object.keys(state.envValues));
         state = emptyState();
@@ -232,6 +240,7 @@ export function applyCredentialRevoke(
 
     if (event.provider === CLAUDE_SUBSCRIPTION) {
         wipeClaudeCredentials(deps);
+        resetClaudeRotation();
         if (state.claudeMaterialized) revoked.push(CLAUDE_SUBSCRIPTION);
         state = { ...state, claudeMaterialized: false };
         return { revoked };
