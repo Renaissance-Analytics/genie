@@ -117,8 +117,18 @@ vi.mock('electron', () => {
     };
 });
 
-// notify chime reads settings — keep it inert so it never throws/sends.
-vi.mock('../../db', () => ({ getAllSettings: () => ({ notify_sound: 'off' }) }));
+// notify chime reads settings — mutable so a test can flip notify_sound /
+// ftq_dnd_sound; defaults keep it inert (off) for every other test.
+const mockDb = vi.hoisted(() => ({
+    settings: { notify_sound: 'off' } as Record<string, string>,
+}));
+vi.mock('../../db', () => ({ getAllSettings: () => mockDb.settings }));
+// Spy the chime delivery so the DND-sound path is observable.
+const soundMock = vi.hoisted(() => ({ deliver: vi.fn() }));
+vi.mock('../../notify-sound', () => ({
+    resolveAlertSound: () => ({ kind: 'synth' }),
+    deliverAlertSound: (...a: unknown[]) => soundMock.deliver(...a),
+}));
 
 import {
     forceQuestion,
@@ -430,9 +440,28 @@ describe('ForceTheQuestion DND availability', () => {
     afterEach(() => {
         setAvailabilityReader(null); // restore the settings-backed reader
         setDeferredAnswerSink(null); // restore no deferred-answer delivery
+        mockDb.settings = { notify_sound: 'off' }; // restore inert chime settings
         // Clear anything left in the inbox (deferred + queue) so tests don't leak.
         for (const p of listPendingQuestions()) answerPendingQuestion(p.id, []);
         vi.clearAllMocks();
+    });
+
+    it('DND + ftq_dnd_sound on: plays the chime (audible cue) but NEVER pops a modal', async () => {
+        setAvailabilityReader(() => ({ availability: 'dnd', dndMessage: 'x' }));
+        mockDb.settings = { notify_sound: 'on', ftq_dnd_sound: 'on' };
+        const before = state.windows.length;
+        await forceQuestion(Q('A'), 'Wonder', 'normal', { workspaceId: 'ws1' });
+        // The chime fired — the owner HEARS it land...
+        expect(soundMock.deliver).toHaveBeenCalledTimes(1);
+        // ...but no window/modal was ever created (no focus steal — DND's whole point).
+        expect(state.windows.length).toBe(before);
+    });
+
+    it('DND with ftq_dnd_sound OFF: stays silent (default DND behaviour)', async () => {
+        setAvailabilityReader(() => ({ availability: 'dnd', dndMessage: 'x' }));
+        mockDb.settings = { notify_sound: 'on', ftq_dnd_sound: 'off' };
+        await forceQuestion(Q('B'), 'Wonder', 'normal', { workspaceId: 'ws1' });
+        expect(soundMock.deliver).not.toHaveBeenCalled();
     });
 
     it('DND: delivers the answer back to the asking agent on answer (ping/poll/pull), and marks the result deferred', async () => {

@@ -828,6 +828,10 @@ export interface Settings {
     /** The agent-facing reply when the user is in DND (user-configurable). Empty
      *  ⇒ the built-in default (availability.ts DEFAULT_DND_MESSAGE). */
     ftq_dnd_message?: string;
+    /** Still play the ForceTheQuestion chime while in DND (no modal, no focus steal),
+     *  so a heads-down owner HEARS a question land without a fullscreen app being
+     *  yanked out. Gated by `notify_sound` too. Default 'off'. */
+    ftq_dnd_sound?: 'on' | 'off';
     /** Fixed port for the mobile server, bound on the Tailscale IP. String-
      *  encoded; default '51718' (obscure, beside the MCP port). Same Integer/
      *  range guard as mcp_port. Changing it requires restarting the server. */
@@ -983,6 +987,7 @@ export function getAllSettings(): Settings {
         ftq_availability_workspaces: out['ftq_availability_workspaces'] ?? '',
         ftq_availability_workstations: out['ftq_availability_workstations'] ?? '',
         ftq_dnd_message: out['ftq_dnd_message'] ?? '',
+        ftq_dnd_sound: (out['ftq_dnd_sound'] as 'on' | 'off') ?? 'off',
         mobile_port: out['mobile_port'] ?? '51718',
         local_sites_enabled:
             (out['local_sites_enabled'] as 'on' | 'off') ?? 'off',

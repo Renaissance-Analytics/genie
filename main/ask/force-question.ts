@@ -189,22 +189,38 @@ function notifyForceQuestion(): void {
     // the sound toggle, like the glow. The modal itself floats above every app;
     // this additionally flashes the taskbar / bounces the dock.
     demandWindowAttention(config?.getMasterWindow() ?? null);
+    playForceQuestionChime();
+}
+
+/**
+ * Play the FTQ chime ONLY — no window-attention / focus steal. Split out of
+ * notifyForceQuestion so the DND path can give an AUDIBLE cue that a question
+ * landed WITHOUT popping the modal or stealing focus (so a fullscreen game isn't
+ * yanked out) when the owner opts in via `ftq_dnd_sound`. Gated by notify_sound
+ * like every other chime; a null descriptor / unreadable settings → silent.
+ */
+function playForceQuestionChime(): void {
     try {
         if (getAllSettings().notify_sound !== 'on') return;
     } catch {
         return; // settings unreadable — skip the chime, never block the modal
     }
-    // Resolve the per-alert sound (synth / bundled wav / custom data-URL / off).
-    // A null descriptor means this alert is set to "off" — skip the chime.
     const sound = resolveAlertSound('forceQuestion');
     if (!sound) return;
-    // Deliver to the master renderer (the only `notify:sound` subscriber),
-    // deferring to did-finish-load if it's still loading. When tray-resident the
-    // chime can't play (no renderer), but the always-on-top modal is unmissable.
     deliverAlertSound(config?.getMasterWindow() ?? null, {
         kind: 'force-question',
         sound,
     });
+}
+
+/** True when the owner opted to still HEAR a question land while in DND (the chime
+ *  plays, but the focus-stealing modal never pops). Fail-safe silent on error. */
+function dndSoundEnabled(): boolean {
+    try {
+        return getAllSettings().ftq_dnd_sound === 'on';
+    } catch {
+        return false;
+    }
 }
 
 let config: Config | null = null;
@@ -590,13 +606,17 @@ function raiseDesktopModal(
         const id = crypto.randomBytes(9).toString('hex');
         const decision = availabilityReader(scope ?? {});
         if (decision.availability === 'dnd') {
-            // DND for this scope: NEVER pop the modal or chime. Park the question in
-            // the top-bar inbox (deferred) to answer at leisure. Record the asking
+            // DND for this scope: NEVER pop the modal or steal focus. Park the question
+            // in the top-bar inbox (deferred) to answer at leisure. Record the asking
             // terminal so the eventual flyout answer is delivered back to that agent's
             // AgentInbox (ping/poll/pull) — a deferred ForceTheQuestion is NOT a dead
             // end. Resolve NOW (never block) with the notice + questionId so the agent
             // knows to pull the answer later. `cancelled: true` marks "not inline".
             deferred.push({ id, questions, workspaceLabel, priority, askerTerminalId });
+            // Opt-in AUDIBLE cue: a chime (no modal, no focus steal) so the owner
+            // knows a question landed while heads-down — the whole point of DND is to
+            // stop focus theft, not to go silent.
+            if (dndSoundEnabled()) playForceQuestionChime();
             notifyQuestionsChanged();
             resolve({
                 cancelled: true,
@@ -699,6 +719,9 @@ export function raiseForwardedQuestion(opts: {
                 resolve,
                 forward: { connKey: opts.connKey, hostId: opts.hostId },
             });
+            // Opt-in audible cue for a forwarded (remote-host) question too — chime,
+            // no modal/focus steal (ftq_dnd_sound).
+            if (dndSoundEnabled()) playForceQuestionChime();
             notifyQuestionsChanged();
             return;
         }

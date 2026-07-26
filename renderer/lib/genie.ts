@@ -464,6 +464,9 @@ export interface Settings {
     /** The reply an agent gets when the user is in DND, so it can hold or proceed.
      *  Empty = the built-in default sentence (see main/ask/availability.ts). */
     ftq_dnd_message?: string;
+    /** Still play the ForceTheQuestion chime while in DND (no modal / focus steal).
+     *  Default 'off'. */
+    ftq_dnd_sound?: 'on' | 'off';
     /** Fixed loopback port for the agent-integration MCP server. String-encoded;
      *  default '51717'. Changing it requires restarting the MCP server. */
     mcp_port?: string;
