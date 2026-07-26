@@ -772,12 +772,12 @@ export interface Settings {
     /** Inject a per-shell OSC-7 prompt hook so resumed terminals start in the
      *  right cwd. 'off' disables it; anything else (incl. unset) is ON. */
     track_cwd?: 'on' | 'off';
-    /** Tier 3: keep terminals running in a detached pty-host so they survive a
-     *  full quit of the app. Defaults ON — an unset value resolves to 'on' so
-     *  terminals AND the agents running in them survive a Genie restart
-     *  everywhere; an explicit 'off' opts back into the in-process T1/T2 backend
-     *  (which restores panels from a snapshot but cold-spawns a fresh shell). */
-    detached_terminals?: 'on' | 'off';
+    /* NOTE (genie #63 Phase 1): `detached_terminals` is GONE. Terminals always
+     * run in the local Host and always survive a quit — there is nothing left to
+     * opt into, so the setting is no longer read, written, defaulted, or shown.
+     * A stale row may still sit in the settings table on an upgraded install; it
+     * is inert (see `hostLifecycleSettings`, which answers the package's own
+     * copy of the retired gate). */
     /** Whether Genie launches minimized to the tray instead of opening its
      *  window. Defaults 'off' — Genie starts OPEN. 'on' starts in the tray only
      *  (the window opens on the first tray click / global hotkey). */
@@ -962,7 +962,6 @@ export function getAllSettings(): Settings {
         layout_json: out['layout_json'] ?? '{}',
         view_state_json: out['view_state_json'] ?? '{}',
         track_cwd: (out['track_cwd'] as 'on' | 'off') ?? 'on',
-        detached_terminals: (out['detached_terminals'] as 'on' | 'off') ?? 'on',
         start_minimized: (out['start_minimized'] as 'on' | 'off') ?? 'off',
         notify_sound: (out['notify_sound'] as 'on' | 'off') ?? 'off',
         notify_toast: (out['notify_toast'] as 'on' | 'off') ?? 'off',

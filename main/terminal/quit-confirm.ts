@@ -4,12 +4,13 @@ import { getHostClient, terminalManager, type TerminalInfo } from '@particle-aca
 /**
  * Manual-quit terminal confirmation (the counterpart to the update-quit flow).
  *
- * THE PROBLEM. With Tier 3 detached terminals (`detached_terminals` ON →
- * host-backed), a NORMAL quit deliberately LEAVES the ptys running — the host
- * outlives Genie so the next launch reattaches live sessions
- * (`disconnectHostLeaveRunning`). That's the whole point of T3. But it means
- * quitting Genie silently leaves shells (dev servers, agents, …) running in the
- * background, which can surprise a user who thinks "quit" means "stop".
+ * THE PROBLEM. The ptys live in the Host, not in Genie, so a NORMAL quit
+ * deliberately LEAVES them running — the host outlives Genie and the next launch
+ * reattaches live sessions (`disconnectHostLeaveRunning`). That's the whole
+ * point. But it means quitting Genie silently leaves shells (dev servers,
+ * agents, …) running in the background, which can surprise a user who thinks
+ * "quit" means "stop". Since genie #63 Phase 1 the Host is ALWAYS on, so this is
+ * now the ordinary quit path rather than an opted-in one.
  *
  * THE FEATURE. On a MANUAL quit, when host-backed AND there is ≥1 live host
  * terminal AND a master window is open, we intercept the quit and ask the user

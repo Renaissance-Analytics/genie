@@ -723,22 +723,12 @@ export async function ensureRunKeyAutostart(deps: {
     }
 }
 
-/** Best-effort removal, for when detached terminals are turned OFF. No-op when
- *  the autostart was never registered (the vbs wrapper is the cheap witness),
- *  so in-process users don't get a failed `reg delete` in the log every boot. */
-export async function removeRunKeyAutostart(userDataDir: string): Promise<void> {
-    if (process.platform !== 'win32') return;
-    try {
-        const vbsPath = path.join(userDataDir, `${HOST_SERVICE_LABEL}.vbs`);
-        if (!fs.existsSync(vbsPath)) return;
-        const io = genieServiceIo();
-        await io.run(['reg', 'delete', RUN_KEY, '/v', HOST_SERVICE_LABEL, '/f']);
-        await io.rm(vbsPath);
-        logHostService('Run-key autostart removed (detached terminals disabled)');
-    } catch {
-        /* best-effort */
-    }
-}
+/* NOTE (genie #63 Phase 1): there is no longer a `removeRunKeyAutostart`. It
+ * existed solely to UNREGISTER the logon autostart when the user turned the
+ * `detached_terminals` opt-in OFF. The local Host is now unconditional — nothing
+ * can turn it off — so the only caller is gone and the autostart is always meant
+ * to stay registered. Keeping an unreachable un-register would be exactly the
+ * half-wired remnant this phase is removing. */
 
 /**
  * A {@link ServiceIo} that runs commands WITHOUT a shell, and logs each one.
@@ -980,38 +970,49 @@ export interface BackendSelection {
     /** Diagnostics — how the service attempt resolved (when one was made). */
     serviceReason?: string;
     serviceAction?: string;
+    /** Set ONLY when the ladder bottomed out at 'inprocess' — the combined
+     *  diagnosis of why NO Host could be brought up. Its presence means Genie is
+     *  running degraded (see the LAST RESORT log line). */
+    inprocessReason?: string;
 }
 
 /**
- * The full backend-selection fallback chain, as a single injectable orchestrator
+ * The full backend-selection fallback ladder, as a single injectable orchestrator
  * so it's unit-testable without booting the whole app:
  *
- *   detached_terminals OFF                  → in-process (no host attempt)
- *   ON → service ok                         → 'service'
- *   ON → service {ok:false} → detached ok   → 'detached'
- *   ON → service {ok:false} → detached fails → 'inprocess'
+ *   service ok                          → 'service'
+ *   service {ok:false} → detached ok    → 'detached'
+ *   service {ok:false} → detached fails → 'inprocess'  (LAST RESORT — logged loud)
+ *
+ * genie #63 Phase 1 — THE HOST IS ALWAYS ATTEMPTED. There is no `detachedEnabled`
+ * parameter and no setting behind it: the local Host is part of what Genie *is*
+ * (the Client attaches a viewer to ptys the Host already runs), so a launch never
+ * asks permission to start it. `inprocess` survives ONLY as the floor beneath a
+ * genuine failure of both host paths — and taking it is recorded on the selection
+ * (`inprocessReason`) AND written to the host-service log with a LAST RESORT
+ * banner, because the old silent fallback is what made "my terminals died on
+ * update" invisible for so long.
  *
  * Each step is graceful: a thrown service attempt or a thrown initDetached both
  * degrade to the next link, and `setHostBackendKind` records the winner. The
  * detached path's `initDetached` is `initTerminalBackend` from the package (it
  * connects-or-spawns the detached host and never throws), and `isHostBackedProbe`
- * is the package's `isHostBacked` (true → a detached host actually came up).
+ * is the package's `isHostBacked` (true → a host actually came up).
  *
  * Returns the reattach contract background.ts hands the renderer.
  */
 export async function selectTerminalBackend(deps: {
-    detachedEnabled: boolean;
     activateService: () => Promise<
         | { ok: true; client: HostClient; result: EnsureResult }
         | { ok: false; reason: string; result?: EnsureResult }
     >;
     initDetached: () => Promise<{ host: boolean; reattachIds: string[] }>;
     isHostBackedProbe: () => boolean;
+    /** Diagnostics sink — defaults to the host-service log. Injected in tests. */
+    log?: (line: string) => void;
 }): Promise<BackendSelection> {
+    const log = deps.log ?? logHostService;
     setHostBackendKind('inprocess');
-    if (!deps.detachedEnabled) {
-        return { kind: 'inprocess', host: false, reattachIds: [] };
-    }
 
     // 1) Service first.
     let svc:
@@ -1040,10 +1041,12 @@ export async function selectTerminalBackend(deps: {
 
     // 2) Fall back to the detached-spawn → in-process path.
     let detached = { host: false, reattachIds: [] as string[] };
+    let detachedReason: string | null = null;
     try {
         detached = await deps.initDetached();
-    } catch {
+    } catch (e) {
         /* initTerminalBackend is internally guarded; belt-and-braces */
+        detachedReason = `initDetached threw: ${e instanceof Error ? e.message : String(e)}`;
     }
     let backed = false;
     try {
@@ -1051,12 +1054,33 @@ export async function selectTerminalBackend(deps: {
     } catch {
         backed = false;
     }
-    const kind: HostBackendKind = backed ? 'detached' : 'inprocess';
-    setHostBackendKind(kind);
+    if (backed) {
+        setHostBackendKind('detached');
+        return {
+            kind: 'detached',
+            host: detached.host,
+            reattachIds: detached.reattachIds,
+            serviceReason: svc.reason,
+        };
+    }
+
+    // 3) THE FLOOR. No Host of any kind came up — the Client has to run the pty
+    //    itself. Terminals then die with the app (and with every update), and
+    //    agent-created ptys don't start until a panel mounts. This is a genuine
+    //    failure, never a preference, so it is diagnosed LOUDLY rather than
+    //    silently accepted the way the old opt-in default did.
+    setHostBackendKind('inprocess');
+    const inprocessReason =
+        `service: ${svc.reason} · detached: ${detachedReason ?? 'host did not come up'}`;
+    log(
+        `LAST RESORT — no Host could be started; running IN-PROCESS (degraded: ` +
+            `terminals will not survive quit/update and agent ptys start late). ${inprocessReason}`,
+    );
     return {
-        kind,
+        kind: 'inprocess',
         host: detached.host,
         reattachIds: detached.reattachIds,
         serviceReason: svc.reason,
+        inprocessReason,
     };
 }

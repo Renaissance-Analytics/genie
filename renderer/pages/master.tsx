@@ -29,6 +29,7 @@ import { terminalTypeById, type TerminalTypeId } from '../lib/terminal-types';
 import SignInPrompt from '../components/SignInPrompt';
 import type { AgentType, BackendUser, ViewType, AgentInboxScope } from '../lib/genie';
 import { resolveShortcut } from '../lib/master-shortcuts';
+import { shouldShowRemoteIndicator } from '../lib/remote-host';
 import { computeLaunchSelection } from '../lib/launch-restore';
 import { applyPanelOrder } from '../lib/panel-reorder';
 import {
@@ -2592,9 +2593,15 @@ function TitleBar({
 }
 
 /**
- * Title-bar remote-session indicator. When this Genie is driving a HOST over
- * Tailscale, shows a loud red "● REMOTE — <host>" badge + a one-click disconnect,
- * so it's always obvious you're controlling another machine. Nothing locally.
+ * Title-bar remote-session indicator. When this Genie is driving a HOST on
+ * ANOTHER MACHINE, shows a loud red "● REMOTE — <host>" badge + a one-click
+ * disconnect, so it's always obvious you're controlling someone else's desktop.
+ * Nothing locally.
+ *
+ * genie #63 rule 3 — "Local never renders as Remote": with the always-on local
+ * Host, merely HAVING a host connection means nothing (every Genie has one), so
+ * the badge is gated on the host address being non-loopback. See
+ * `shouldShowRemoteIndicator`.
  */
 function RemoteIndicator() {
     const [status, setStatus] = useState<RemoteStatus | null>(null);
@@ -2614,7 +2621,7 @@ function RemoteIndicator() {
             window.close();
         }
     }, [status, isHostWindow]);
-    if (!status?.connected || !status.host) return null;
+    if (!shouldShowRemoteIndicator(status) || !status?.host) return null;
     const host = status.host;
     return (
         <span
