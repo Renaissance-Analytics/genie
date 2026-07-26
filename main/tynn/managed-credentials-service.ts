@@ -23,6 +23,17 @@ import {
 import { createManagedCredentialClient, type HostSigner } from './managed-credential-client';
 import { readWorkstationIdentity } from './workstation-identity';
 import { tynnHost } from '../tynn-api';
+import { getAllSettings } from '../db';
+
+/** Read the `managed_credentials` gate, defaulting OFF — including when the DB
+ *  isn't up yet, so a boot-order surprise can never turn the feature ON. */
+function managedCredentialsEnabled(): boolean {
+    try {
+        return getAllSettings().managed_credentials === 'on';
+    } catch {
+        return false;
+    }
+}
 
 /**
  * Boot wiring for Tynn-managed agent credentials — the one call the host shell
@@ -41,6 +52,10 @@ import { tynnHost } from '../tynn-api';
  */
 
 export interface StartManagedCredentialsDeps {
+    /** Feature gate. Default: the `managed_credentials` setting, which defaults
+     *  to OFF. Off means fully dark — no keypair is generated and no request is
+     *  made, so a host whose owner has not opted in is byte-for-byte unchanged. */
+    enabled?: boolean;
     /** The Ed25519 host proof. Default: the persisted local identity; null ⇒ this
      *  machine isn't an enrolled workstation and the feature stays off. */
     identity?: HostSigner | null;
@@ -69,6 +84,8 @@ export async function startManagedCredentials(
     deps: StartManagedCredentialsDeps = {},
 ): Promise<ManagedCredentialsHandle | null> {
     const log = deps.log ?? (() => {});
+    if (!(deps.enabled ?? managedCredentialsEnabled())) return null;
+
     const identity = deps.identity !== undefined ? deps.identity : readWorkstationIdentity();
     if (!identity) return null;
 

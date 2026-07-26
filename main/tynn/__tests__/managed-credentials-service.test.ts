@@ -181,6 +181,7 @@ async function start(overrides: Record<string, unknown> = {}) {
     setSecretEncryptor(fakeEncryptor());
 
     const handle = await startManagedCredentials({
+        enabled: true,
         identity,
         tynnApiBaseUrl: BASE,
         fetchImpl: tynn.fetchImpl,
@@ -194,6 +195,26 @@ async function start(overrides: Record<string, unknown> = {}) {
 }
 
 describe('startManagedCredentials', () => {
+    it('stays completely dark when the feature is off — no keygen, no request', async () => {
+        const keys = memoryKeyStore();
+        const tynn = fakeTynn(await generateEncryptionKeypair());
+        setSecretEncryptor(fakeEncryptor());
+
+        const handle = await startManagedCredentials({
+            enabled: false,
+            identity,
+            tynnApiBaseUrl: BASE,
+            fetchImpl: tynn.fetchImpl,
+            encryptionKey: { read: keys.read, write: keys.write },
+            materialize: memoryFsDeps().deps,
+        });
+
+        expect(handle).toBeNull();
+        expect(tynn.state.requests).toEqual([]);
+        expect(keys.rows).toEqual({});
+        expect(managedCredentialEnv()).toEqual({});
+    });
+
     it('runs the whole flow: keygen -> publish -> fetch -> open -> materialize', async () => {
         const { escrow, tynn, keys, mat, handle } = await start();
 
@@ -222,6 +243,7 @@ describe('startManagedCredentials', () => {
     it('returns null and touches nothing when this machine is not enrolled', async () => {
         const fetchImpl = vi.fn();
         const handle = await startManagedCredentials({
+            enabled: true,
             identity: null,
             tynnApiBaseUrl: BASE,
             fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -237,6 +259,7 @@ describe('startManagedCredentials', () => {
         setSecretEncryptor(fakeEncryptor());
 
         const handle = await startManagedCredentials({
+            enabled: true,
             identity,
             tynnApiBaseUrl: BASE,
             fetchImpl: (async () => {
@@ -258,6 +281,7 @@ describe('startManagedCredentials', () => {
         const logs: string[] = [];
 
         const handle = await startManagedCredentials({
+            enabled: true,
             identity,
             tynnApiBaseUrl: BASE,
             fetchImpl: fakeTynn(await generateEncryptionKeypair()).fetchImpl,
@@ -281,6 +305,7 @@ describe('startManagedCredentials', () => {
         setSecretEncryptor(fakeEncryptor());
 
         await startManagedCredentials({
+            enabled: true,
             identity,
             tynnApiBaseUrl: BASE,
             fetchImpl: tynn.fetchImpl,
