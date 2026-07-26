@@ -32,6 +32,7 @@ import {
     movePanel,
     type PanelDragHandlers,
 } from '../../lib/panel-reorder';
+import { panelResetKeys } from '../../lib/panel-reset-keys';
 
 export type { LayoutMode } from '../../lib/terminal-grid-layout';
 
@@ -461,12 +462,17 @@ const ResizableGrid = ({
                 {panels.map((p) => (
                     // Per-panel boundary: a crash in one view (e.g. the code
                     // tree) shows a compact card in THAT panel instead of taking
-                    // down the whole app. Keyed on spec.id so it stays mounted.
+                    // down the whole app. Keyed on spec.id so it stays mounted —
+                    // which is also why spec.id alone can't be the RESET key: it
+                    // never changes, so a crashed panel used to keep its error
+                    // card in every workspace until the app was reloaded. The
+                    // workspace + open file come along so navigating away heals
+                    // it (see panelResetKeys).
                     <ErrorBoundary
                         key={p.spec.id}
                         compact
                         name={String(p.spec.label ?? 'Panel')}
-                        resetKeys={[p.spec.id]}
+                        resetKeys={panelResetKeys(p.spec, activeWorkspaceId)}
                     >
                         <PanelFor
                             spec={p.spec}
