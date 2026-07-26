@@ -304,6 +304,53 @@ describe('provisionAssignedWorkspace', () => {
         expect(clone).not.toHaveBeenCalled();
     });
 
+    // genie-cloud#13 — an error the host only RETURNS is an error Tynn never hears.
+    // Tynn #114 persists a terminal tick onto the workspace instance, so an `error`
+    // becomes a stored failure the owner can read; a workspace whose provisioning
+    // fails WITHOUT a tick just sits at 'unknown' forever. This early return bailed
+    // out above the `report` closure, so the one failure a user can actually fix
+    // (a workspace with no resolvable `.agi` URL) was the one Tynn never showed.
+    it('EMITS a provision-progress error when no clone URL can be resolved (genie-cloud#13)', async () => {
+        const reportProgress = vi.fn();
+        const { deps } = fakeDeps({ reportProgress });
+
+        const r = await provisionAssignedWorkspace(
+            assignment({ cloneUrl: null, ownerSlug: null, repoOwner: null, repoName: null }),
+            deps,
+        );
+
+        expect(r.status).toBe('error');
+        expect(reportProgress.mock.calls.map(([i]) => `${i.step}:${i.status}`)).toEqual([
+            'cloning:error',
+        ]);
+        const tick = reportProgress.mock.calls.at(-1)?.[0];
+        expect(tick.workspaceId).toBe('p1');
+        // The reported reason must match the returned one — same failure, one story.
+        expect(tick.message).toBe(r.error);
+        expect(tick.message).toMatch(/no .agi clone URL/);
+        expect(typeof tick.seq).toBe('number');
+    });
+
+    // genie-cloud#13 — the 'exists' short-circuit reported nothing at all, and per
+    // Tynn's recordProvisionResult ONLY a `ready`+`done` clears a stored error. So a
+    // workspace that failed once and is present on the next reconcile (adopted, or
+    // provisioned by an earlier host) stayed ERROR in Tynn permanently — a failure
+    // that had already healed and could never be un-said.
+    it('EMITS ready:done for an already-registered workspace so a stored error can clear (genie-cloud#13)', async () => {
+        const reportProgress = vi.fn();
+        const { deps, existing, clone } = fakeDeps({ reportProgress });
+        existing.push({ id: 'p1' });
+
+        const r = await provisionAssignedWorkspace(assignment(), deps);
+
+        expect(r.status).toBe('exists');
+        expect(clone).not.toHaveBeenCalled();
+        expect(reportProgress.mock.calls.map(([i]) => `${i.step}:${i.status}`)).toEqual([
+            'ready:done',
+        ]);
+        expect(reportProgress.mock.calls[0][0]).toMatchObject({ workspaceId: 'p1' });
+    });
+
     it('captures a clone failure as an error result (best-effort)', async () => {
         const { deps, register, notifyChanged } = fakeDeps({
             clone: vi.fn(async () => {
@@ -560,6 +607,43 @@ describe('reconcileAssignedWorkspaces', () => {
         expect(res.errors).toHaveLength(1);
         expect(res.errors[0]).toMatch(/^Bad: /);
         expect(res.deprovisioned).toEqual([]);
+    });
+
+    // genie-cloud#13 — `errors` is a local rollup that only ever reached a console
+    // line. Whatever the reconcile concludes about a workspace has to reach TYNN,
+    // per workspace: the one that failed gets an error tick carrying the reason, and
+    // the ones that are fine get a terminal ready:done that clears any stored error.
+    it('EMITS a per-workspace tick to Tynn for every outcome, not just the console rollup', async () => {
+        const reportProgress = vi.fn();
+        const { deps, existing, managed } = fakeDeps({ reportProgress });
+        existing.push({ id: 'have' });
+        managed.push({ id: 'have' });
+
+        const res = await reconcileAssignedWorkspaces(
+            [
+                assignment({ workspaceId: 'have', projectId: 'have', name: 'Have' }),
+                assignment({ workspaceId: 'new1', projectId: 'new1', name: 'New1', slug: 'new1' }),
+                assignment({ workspaceId: 'bad', projectId: 'bad', name: 'Bad', cloneUrl: null, ownerSlug: null, repoOwner: null, repoName: null }),
+            ],
+            deps,
+        );
+
+        expect(res.errors).toHaveLength(1);
+
+        const ticksFor = (id: string) =>
+            reportProgress.mock.calls
+                .map(([i]) => i)
+                .filter((i) => i.workspaceId === id)
+                .map((i) => `${i.step}:${i.status}`);
+
+        // The failure Tynn must store, with the reason attached.
+        expect(ticksFor('bad')).toEqual(['cloning:error']);
+        expect(
+            reportProgress.mock.calls.map(([i]) => i).find((i) => i.workspaceId === 'bad').message,
+        ).toMatch(/no .agi clone URL/);
+        // The successes Tynn must be able to clear a previous failure with.
+        expect(ticksFor('new1').at(-1)).toBe('ready:done');
+        expect(ticksFor('have')).toEqual(['ready:done']);
     });
 
     it('CONVERGES: deprovisions assignment-managed locals Tynn no longer assigns', async () => {
