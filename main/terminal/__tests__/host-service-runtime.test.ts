@@ -121,6 +121,44 @@ function makeHostSources(opts: {
     };
 }
 
+/**
+ * Apply Windows' directory-rename rule on every platform: a directory cannot be
+ * renamed while any file inside it is open — the move is refused with
+ * ERROR_ACCESS_DENIED → EPERM.
+ *
+ * This is the race behind #72. Both materializers used to fill a
+ * `<key>.staging-<pid>` dir and rename it onto `<key>`; the tree being renamed
+ * had been written microseconds earlier, which is exactly when the real-time
+ * scanner still holds a handle on one of those files, so the rename
+ * intermittently failed and the swallowed error cost the copy. Verified against
+ * the real filesystem on Windows: renaming a populated directory with one open
+ * handle inside fails EPERM, while `rmSync` of the same directory succeeds
+ * (Node opens with FILE_SHARE_DELETE) — deleting was never the problem.
+ *
+ * Timing cannot be asserted on, so the rule is asserted instead: NO directory
+ * rename may be relied on to publish a copy. File renames still pass through to
+ * the real filesystem.
+ */
+function forbidDirectoryRename(): void {
+    const realRenameSync = fs.renameSync;
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+        let isDir = false;
+        try {
+            isDir = fs.statSync(String(from)).isDirectory();
+        } catch {
+            /* missing source — let the real call raise the honest error */
+        }
+        if (isDir) {
+            const err: NodeJS.ErrnoException = new Error(
+                `EPERM: operation not permitted, rename '${String(from)}' -> '${String(to)}'`,
+            );
+            err.code = 'EPERM';
+            throw err;
+        }
+        realRenameSync(from, to);
+    });
+}
+
 describe('runtimeKeyFor — the versioned copy key', () => {
     it('uses the shipped version marker, trimmed', () => {
         expect(runtimeKeyFor('20.20.2-win32-x64\n', 123)).toBe('20.20.2-win32-x64');
@@ -194,6 +232,25 @@ describe('materializeRuntimeToUserData — the update-survival copy', () => {
         expect(fs.existsSync(path.join(dest, 'node.exe'))).toBe(true);
         expect(fs.existsSync(path.join(dest, 'garbage'))).toBe(false); // torn attempt replaced
         expect(fs.existsSync(path.join(base, '20.20.2-win32-x64.staging-99999'))).toBe(false);
+    });
+
+    it('commits without renaming a directory into place (#72)', () => {
+        const shipped = makeShipped('20.20.2-win32-x64');
+        const base = path.join(tmp, 'userData-runtime');
+        const dest = path.join(base, '20.20.2-win32-x64');
+        // A torn previous attempt, so the full build-and-commit path runs.
+        fs.mkdirSync(dest, { recursive: true });
+        fs.writeFileSync(path.join(dest, 'garbage'), 'torn');
+        forbidDirectoryRename();
+
+        const out = materializeRuntimeToUserData(shipped, 'node.exe', base);
+
+        // null here means the host runs the SHIPPED in-place runtime and the
+        // next update kills live terminals — the whole reason this exists.
+        expect(out).toBe(dest);
+        expect(fs.existsSync(path.join(dest, '.complete'))).toBe(true);
+        expect(fs.existsSync(path.join(dest, 'node.exe'))).toBe(true);
+        expect(fs.existsSync(path.join(dest, 'garbage'))).toBe(false);
     });
 
     it('returns null when the shipped node binary is missing (caller falls back in place)', () => {
@@ -320,6 +377,29 @@ describe('materializeHostToUserData — co-located node-pty so the host survives
         expect(fs.existsSync(path.join(base, key, '.complete'))).toBe(true);
         expect(fs.existsSync(path.join(base, key, 'garbage'))).toBe(false); // torn attempt replaced
         expect(fs.existsSync(path.join(base, `${key}.staging-99999`))).toBe(false);
+    });
+
+    it('commits without renaming a directory into place (#72)', () => {
+        const src = makeHostSources({ fthVersion: '0.3.0', nptyVersion: '1.1.0' });
+        const base = path.join(tmp, 'pty-host');
+        const key = hostKeyFor('0.3.0', '1.1.0');
+        const dest = path.join(base, key);
+        // A torn previous attempt, so the full build-and-commit path runs.
+        fs.mkdirSync(dest, { recursive: true });
+        fs.writeFileSync(path.join(dest, 'garbage'), 'torn');
+        forbidDirectoryRename();
+
+        const script = materializeHostToUserData({ ...src, hostKey: key }, base);
+
+        // null ⇒ the host launches the INSTALL-DIR script, maps install-dir
+        // node-pty, and the next auto-update kills live terminals.
+        expect(script).not.toBeNull();
+        expect(fs.existsSync(script!)).toBe(true);
+        expect(
+            fs.existsSync(path.join(dest, 'node_modules', 'node-pty', 'build', 'Release', 'conpty.node')),
+        ).toBe(true);
+        expect(fs.existsSync(path.join(dest, '.complete'))).toBe(true);
+        expect(fs.existsSync(path.join(dest, 'garbage'))).toBe(false);
     });
 
     it('returns null when a source is missing (caller falls back to the in-place script)', () => {
