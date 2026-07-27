@@ -1067,6 +1067,9 @@ export const PASSTHROUGH_EVENTS = new Set([
     'terminal:attention',
     'workspace:pulse',
     'process:status',
+    // A scheduled task armed / fired / was disarmed on the host — keeps a remote
+    // window's Processes panel showing the HOST's real next-run times.
+    'schedule:next',
     'terminal-spec:changed',
     'workspaces:changed',
     // Host IssueWatch pushes its per-workspace counts/errors here; re-emitting it

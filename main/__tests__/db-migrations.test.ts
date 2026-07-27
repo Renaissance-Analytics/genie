@@ -936,3 +936,37 @@ describe('db migration v26 (IssueWatch designated handlers column)', () => {
         expect(JSON.parse(row?.issuewatch_handlers ?? 'null')).toEqual(['term-a', 'term-b']);
     });
 });
+
+describe('db migration v28 (per-workspace scheduled-task approval gate)', () => {
+    it('adds the schedule_approval column to workspaces', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(cols(db, 'workspaces').has('schedule_approval')).toBe(true);
+    });
+
+    // The safe default is require-approval (1), exactly like process_approval
+    // (v13) and terminal_approval (v14): an agent must NOT be able to arm a
+    // recurring task that runs unattended, forever, without the user seeing it.
+    it('a raw workspace row defaults to schedule_approval=1 (require approval)', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces
+               (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, last_opened_at, created_by_genie)
+             VALUES ('w-sa', 'tynn', 'p', 'P', 'p', 'P', 'simple', '/tmp/sa', NULL, 0)`,
+        ).run();
+        const row = db
+            .prepare<[string], { schedule_approval: number }>(
+                'SELECT schedule_approval FROM workspaces WHERE id = ?',
+            )
+            .get('w-sa');
+        expect(row?.schedule_approval).toBe(1);
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'workspaces').has('schedule_approval')).toBe(true);
+    });
+});

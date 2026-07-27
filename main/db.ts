@@ -704,6 +704,26 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v28: per-workspace "Scheduled task approval" gate — the third
+            // sibling of process_approval (v13) and terminal_approval (v14).
+            // When ON (the safe default), an agent that arms a SCHEDULED task
+            // (a process spec carrying `meta.schedule`) must be approved by the
+            // user first; OFF arms it immediately. Its own toggle because a
+            // schedule is qualitatively different from a one-off process: it
+            // runs unattended, on the Host, forever — so the user should get to
+            // see the recurrence before it starts, even in a workspace where
+            // they've already loosened plain process approval.
+            version: 28,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('schedule_approval')) {
+                    db.exec(
+                        `ALTER TABLE workspaces ADD COLUMN schedule_approval INTEGER NOT NULL DEFAULT 1`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1069,6 +1089,11 @@ export interface WorkspaceRow {
      *  agent. 1=require approval (default), 0=auto-run. Higher-power sibling of
      *  process_approval. */
     terminal_approval: number;
+    /** Require user approval before an agent (manageProcess MCP tool) arms a
+     *  SCHEDULED task — a process spec with `meta.schedule`. 1=require approval
+     *  (default), 0=arm immediately. Sibling of process_approval, separate
+     *  because a schedule runs unattended and recurs. */
+    schedule_approval: number;
     /** AgentInbox OUTER tier — who may reach INTO this workspace (its channels and
      *  its agents) from another workspace. 'all' (default) preserves the
      *  pre-feature behaviour where channels were ungoverned. Resolve via
@@ -1173,6 +1198,7 @@ export function addWorkspace(
         | 'mcp_enabled'
         | 'process_approval'
         | 'terminal_approval'
+        | 'schedule_approval'
         | 'assignment_managed'
         | 'agent_access'
     > & {
@@ -1180,6 +1206,7 @@ export function addWorkspace(
         mcp_enabled?: number;
         process_approval?: number;
         terminal_approval?: number;
+        schedule_approval?: number;
         assignment_managed?: number;
         agent_access?: WorkspaceAgentAccess;
     },
@@ -1320,6 +1347,30 @@ export function workspaceTerminalApproval(id: string): boolean {
         )
         .get(id);
     return !row || row.terminal_approval !== 0;
+}
+
+/**
+ * Toggle the "require approval before an agent arms a scheduled task" gate
+ * (a manageProcess create carrying a `schedule`).
+ */
+export function setWorkspaceScheduleApproval(id: string, require: boolean): void {
+    getDb()
+        .prepare('UPDATE workspaces SET schedule_approval = ? WHERE id = ?')
+        .run(require ? 1 : 0, id);
+}
+
+/**
+ * Whether an agent-armed SCHEDULED task needs user approval in this workspace.
+ * Defaults to TRUE (require approval) — for an unknown id too, so the safe gate
+ * is the fallback, never a silently-armed recurring job.
+ */
+export function workspaceScheduleApproval(id: string): boolean {
+    const row = getDb()
+        .prepare<[string], { schedule_approval: number } | undefined>(
+            'SELECT schedule_approval FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    return !row || row.schedule_approval !== 0;
 }
 
 const AGENT_ACCESS_VALUES: readonly WorkspaceAgentAccess[] = ['none', 'self', 'specific', 'all'];
@@ -1720,6 +1771,42 @@ export interface TerminalSpecMeta {
      * user opts into); this tracks live state.
      */
     was_running?: boolean;
+    /**
+     * SCHEDULED TASK: a 5-field cron expression (min hour dom month dow), in the
+     * HOST's local time. Its PRESENCE is what makes a process spec a scheduled
+     * task rather than a long-running service: the scheduler arms one timer to
+     * the next occurrence, runs the spec ONE-SHOT per fire, and re-arms —
+     * `restart_on_exit` / `autostart` / `was_running` do not apply, because the
+     * schedule (not the supervisor) decides when it runs again.
+     */
+    schedule?: string;
+    /**
+     * SCHEDULED TASK: what a fire actually does. `command` (the default) spawns
+     * `command` exactly like a process run; `agent-nudge` delivers
+     * `nudge_prompt` to an agent terminal through AgentInbox, waking it if it is
+     * provably idle.
+     */
+    schedule_kind?: 'command' | 'agent-nudge';
+    /** agent-nudge: the terminal to nudge (preferred — it is the stable handle). */
+    nudge_target_terminal_id?: string;
+    /** agent-nudge: the AgentInbox agent id to nudge, when the terminal isn't known. */
+    nudge_agent_id?: string;
+    /** agent-nudge: the prompt text delivered to the agent on each fire. */
+    nudge_prompt?: string;
+    /** SCHEDULED TASK: epoch ms the last fire STARTED. Absent = never run. */
+    last_run_at?: number;
+    /**
+     * SCHEDULED TASK: how the last fire went — `ok` (it ran), `failed` (the
+     * spawn/nudge threw or was refused), `skipped` (the previous run was still
+     * in flight, so this occurrence was dropped rather than overlapped).
+     */
+    last_run_status?: 'ok' | 'failed' | 'skipped';
+    /**
+     * SCHEDULED TASK: set while an agent-armed schedule is waiting on the user's
+     * approval. The spec exists (so the user can see it) but is `enabled: false`
+     * and MUST NOT be armed. Cleared on approve; the spec is deleted on deny.
+     */
+    schedule_pending_approval?: boolean;
     /** Plugin editor view: the owning plugin id (§6.1). */
     plugin_id?: string;
     /** Plugin editor view: the plugin's editor id from its manifest. */

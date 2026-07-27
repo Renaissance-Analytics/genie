@@ -97,6 +97,8 @@ const deps = (): MobileDataDeps => ({
     startProcess: () => {},
     stopProcess: () => {},
     restartProcess: () => {},
+    scheduleInfo: () => ({}),
+    runScheduleNow: () => {},
     createAgentTerminal: (o) => {
         termOpens.push(o);
         return { id: o.id ?? 't-new', scrollback: 'catch-up', existing: false };

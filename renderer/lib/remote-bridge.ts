@@ -17,6 +17,7 @@ import type {
     AgentInboxChannelInfo,
     AgentInboxDmThreadInfo,
     AgentInboxMessage,
+    ScheduleInfo,
 } from './genie';
 import { isHostSourcedSettingKey } from './settings-nav';
 
@@ -347,6 +348,18 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         clearLog: async () => ({ ok: true }),
     };
 
+    // Scheduled tasks are HOST-owned work (the timers live on the host), so the
+    // remote window reads them from the host rather than keeping any local state.
+    const schedule: GenieApi['schedule'] = {
+        info: async () =>
+            ((await req('/api/schedules')) as { schedules: Record<string, ScheduleInfo> })
+                .schedules,
+        runNow: async (id) => {
+            await req(`/api/process/${encodeURIComponent(id)}/run-now`, { method: 'POST' });
+            return { ok: true };
+        },
+    };
+
     // xterm forwards the host app's mouse-tracking (CSI M / CSI < … M|m) as input
     // whenever the host program (tmux, vim, htop, `less -M`, …) turns mouse-
     // tracking mode on — which also makes xterm stop doing its OWN client-side
@@ -651,6 +664,7 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         terminalSpec,
         files,
         process,
+        schedule,
         terminal,
         clipboard,
         issueWatch,

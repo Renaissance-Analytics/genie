@@ -110,6 +110,12 @@ import {
     restartProcess,
     getProcessStatuses,
 } from './terminal/process-supervisor';
+import {
+    getScheduleInfo,
+    runScheduleNow,
+    startSchedules,
+    stopSchedules,
+} from './terminal/process-scheduler';
 import type {
     ManageProcessRequest,
     ManageProcessResult,
@@ -1254,6 +1260,12 @@ app.whenReady().then(async () => {
     // they run in the pty backend with no panel; the supervisor broadcasts
     // status to the workspace-row indicator + inline manager.
     startAutostartProcesses();
+    // Re-arm every approved SCHEDULED task (a process spec with meta.schedule).
+    // This is what makes a schedule survive quit/crash/auto-update: the timers
+    // died with the process, the specs did not, so each is armed forward from
+    // now — deliberately WITHOUT catching up the fires that were missed while
+    // the Host was down.
+    startSchedules();
     // ForceTheQuestion modal IPC (the agent-integration MCP raises it).
     registerForceQuestionIpc({
         isDev,
@@ -1591,6 +1603,8 @@ app.whenReady().then(async () => {
             startProcess: (id) => startProcess(id),
             stopProcess: (id) => stopProcess(id),
             restartProcess: (id) => restartProcess(id),
+            scheduleInfo: () => getScheduleInfo(),
+            runScheduleNow: (id) => runScheduleNow(id),
             createAgentTerminal: (opts) => createAgentTerminal(opts),
             createSpecializedAgentTerminal: (input) => createSpecializedAgentTerminal(input),
             restartAgentTerminal: (id) => restartAgentTerminal(id),
@@ -1702,6 +1716,11 @@ app.whenReady().then(async () => {
     // Returns a promise so the before-quit second phase can AWAIT the bounded
     // host kill before letting the quit proceed.
     const teardownTerminals = async (): Promise<void> => {
+        // Cancel every armed schedule timer first — a fire mid-teardown would
+        // spawn a pty we're in the middle of tearing down. The schedules
+        // themselves live in the DB and are re-armed by startSchedules() on the
+        // next launch, so nothing is lost.
+        stopSchedules();
         const forUpdate = isQuittingForUpdate();
         const kind = hostBackendKind();
         if (isHostBacked()) {

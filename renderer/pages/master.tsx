@@ -899,6 +899,7 @@ function MasterInner() {
             label?: string,
             cwd?: string,
             shell?: string,
+            schedule?: string,
         ) => {
             const ws = workspacesById.get(workspaceId);
             if (!ws || !command.trim()) return;
@@ -924,8 +925,12 @@ function MasterInner() {
                 type: 'process',
                 meta: {
                     command: cmd,
+                    // A SCHEDULED task is one-shot per fire, so the service
+                    // behaviours are off: its schedule (not the supervisor)
+                    // decides when it runs again.
                     autostart: false,
-                    restart_on_exit: true,
+                    restart_on_exit: !schedule?.trim(),
+                    ...(schedule?.trim() ? { schedule: schedule.trim() } : {}),
                     ...(system ? { system: true } : {}),
                 },
             });
@@ -941,16 +946,31 @@ function MasterInner() {
     const editProcess = useCallback(
         async (
             id: string,
-            patch: { command: string; label?: string; cwd?: string; shell?: string },
+            patch: {
+                command: string;
+                label?: string;
+                cwd?: string;
+                shell?: string;
+                schedule?: string;
+            },
             wasRunning: boolean,
         ) => {
             const spec = specs.find((s) => s.id === id);
             if (!spec) return;
+            // An EMPTY schedule clears one (the task becomes a service again),
+            // so this is written unconditionally rather than merged — and main
+            // re-arms or disarms off the updated spec.
+            const schedule = patch.schedule?.trim() ?? '';
             const updated = await api().terminalSpec.update(id, {
                 label: (patch.label?.trim() || spec.label).slice(0, 60),
                 cwd: patch.cwd?.trim() || spec.cwd,
                 shell: patch.shell?.trim() || null,
-                meta: { ...spec.meta, command: patch.command.trim() },
+                meta: {
+                    ...spec.meta,
+                    command: patch.command.trim(),
+                    schedule: schedule || undefined,
+                    restart_on_exit: schedule ? false : spec.meta?.restart_on_exit,
+                },
             });
             if (updated) {
                 setSpecs((prev) => prev.map((s) => (s.id === id ? updated : s)));
@@ -1649,8 +1669,8 @@ function MasterInner() {
                         }
                         onAddWorkspace={() => setAddingWorkspace(true)}
                         onReorderWorkspaces={reorderWorkspaces}
-                        onAddProcess={(wsId, command, label, cwd, shell) =>
-                            void addProcess(wsId, command, label, cwd, shell)
+                        onAddProcess={(wsId, command, label, cwd, shell, schedule) =>
+                            void addProcess(wsId, command, label, cwd, shell, schedule)
                         }
                         onUpdateProcess={(id, patch, wasRunning) =>
                             void editProcess(id, patch, wasRunning)

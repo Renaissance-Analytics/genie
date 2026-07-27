@@ -1,10 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { pickPath } from '../FilePickerModal';
+import { Input, Select } from '@particle-academy/react-fancy';
 import {
     IconAlert,
     IconBox,
     IconChevronDown,
+    IconClock,
     IconCode,
     IconEye,
     IconEyeOff,
@@ -27,6 +29,13 @@ import { showPrompt } from './Prompt';
 import TerminalTypeSplitButton from './TerminalTypeSplitButton';
 import { terminalTypeForAgent, type TerminalTypeId } from '../../lib/terminal-types';
 import { workspaceNeedsAttention } from '../../lib/attention';
+import {
+    formatLastRun,
+    formatNextRun,
+    isScheduledSpec,
+    lastRunTone,
+    SCHEDULE_PRESETS,
+} from '../../lib/schedule-view';
 import { issueWatchBadge } from '../../lib/issuewatch';
 import {
     enterableWorkspaceIds,
@@ -39,6 +48,7 @@ import {
     SYSTEM_WORKSPACE_ID,
     type McpStatus,
     type ProcessStatus,
+    type ScheduleInfo,
     type WatchTypeCounts,
     type ShellDetection,
     type StructureDocStatus,
@@ -83,11 +93,20 @@ interface Props {
         label?: string,
         cwd?: string,
         shell?: string,
+        /** A 5-field cron expression makes it a SCHEDULED task; '' = a service. */
+        schedule?: string,
     ) => void;
-    /** Edit an existing Process (right-click → Edit). Restarts it if running. */
+    /** Edit an existing Process (right-click → Edit). Restarts it if running.
+     *  `schedule` is always sent: '' CLEARS a schedule (back to a service). */
     onUpdateProcess: (
         id: string,
-        patch: { command: string; label?: string; cwd?: string; shell?: string },
+        patch: {
+            command: string;
+            label?: string;
+            cwd?: string;
+            shell?: string;
+            schedule?: string;
+        },
         wasRunning: boolean,
     ) => void;
     /** Issue Watch: per-workspace unread counts by type (the 3-dot pill). */
@@ -160,6 +179,10 @@ export default function Chooser({
     // directory the user picked (via the native picker). Only used when the
     // open form belongs to the System Workspace; '' = not yet chosen.
     const [procDir, setProcDir] = useState('');
+    // Scheduled task: the cron expression ('' = a plain long-running process).
+    // `procSchedPreset` drives the dropdown; 'custom' reveals the raw field.
+    const [procSchedule, setProcSchedule] = useState('');
+    const [procSchedPreset, setProcSchedPreset] = useState('');
 
     const loadProcFormMeta = (ws: WorkspaceRow) => {
         setProcRepos([]);
@@ -184,6 +207,8 @@ export default function Chooser({
         // Default the picked dir to the System Workspace's home path.
         setProcDir(isSystemWorkspace(ws) ? ws.path : '');
         setProcShell('');
+        setProcSchedule('');
+        setProcSchedPreset('');
         loadProcFormMeta(ws);
     };
 
@@ -203,6 +228,17 @@ export default function Chooser({
             setProcDir('');
         }
         setProcShell(s.shell ?? '');
+        const expr = s.meta?.schedule ?? '';
+        setProcSchedule(expr);
+        // Show the matching preset when the expression IS one; otherwise the
+        // task was hand-written, so open straight into the custom field.
+        setProcSchedPreset(
+            !expr
+                ? ''
+                : SCHEDULE_PRESETS.some((p) => p.value === expr)
+                  ? expr
+                  : 'custom',
+        );
         loadProcFormMeta(ws);
     };
 
@@ -220,6 +256,15 @@ export default function Chooser({
             .catch(() => {});
     };
 
+    // Arm / suspend a scheduled task WITHOUT deleting it. Main re-arms (or
+    // disarms) off the spec's `enabled` flag on every terminal-spec:update, so
+    // flipping the flag is the whole operation.
+    const setProcessEnabled = async (spec: TerminalSpec, enable: boolean) => {
+        await api()
+            .terminalSpec.update(spec.id, { enabled: enable })
+            .catch(() => {});
+    };
+
     const submitAddProcess = (ws: WorkspaceRow) => {
         const cmd = procCommand.trim();
         if (!cmd) return;
@@ -233,10 +278,15 @@ export default function Chooser({
             : procCwd
               ? `${ws.path}/repos/${procCwd}`
               : undefined;
+        const schedule = procSchedule.trim();
         if (editProcId) {
-            const wasRunning = ['running', 'restarting'].includes(
-                processStatus.get(editProcId) ?? 'stopped',
-            );
+            // A SCHEDULED task has nothing running between fires, so the
+            // "restart it after an edit" rule only applies to services.
+            const wasRunning =
+                !schedule &&
+                ['running', 'restarting'].includes(
+                    processStatus.get(editProcId) ?? 'stopped',
+                );
             onUpdateProcess(
                 editProcId,
                 {
@@ -244,6 +294,7 @@ export default function Chooser({
                     label: procLabel.trim() || undefined,
                     cwd,
                     shell: procShell || undefined,
+                    schedule,
                 },
                 wasRunning,
             );
@@ -254,6 +305,7 @@ export default function Chooser({
                 procLabel.trim() || undefined,
                 cwd,
                 procShell || undefined,
+                schedule,
             );
         }
         setAddProcFor(null);
@@ -361,6 +413,42 @@ export default function Chooser({
         return () => {
             alive = false;
             off();
+        };
+    }, []);
+
+    // Scheduled-task display info (next run + the HOST-formatted description).
+    // The Host computes both — the renderer never parses a cron expression — and
+    // pushes `schedule:next` whenever a task is armed, fires, or is disarmed, so
+    // this stays live without polling.
+    const [scheduleInfo, setScheduleInfo] = useState<Map<string, ScheduleInfo>>(
+        () => new Map(),
+    );
+
+    useEffect(() => {
+        let alive = true;
+        const load = () =>
+            void api()
+                .schedule.info()
+                .then((m) => {
+                    if (alive) setScheduleInfo(new Map(Object.entries(m)));
+                })
+                .catch(() => {});
+        load();
+        const offNext = api().on.scheduleNext(({ id, nextAt, description }) =>
+            setScheduleInfo((prev) => {
+                const next = new Map(prev);
+                if (description === null) next.delete(id); // no longer a scheduled task
+                else next.set(id, { nextAt, description });
+                return next;
+            }),
+        );
+        // A spec set change can ADD a scheduled task created elsewhere (the MCP
+        // tool, another window) — re-read so its row shows a schedule immediately.
+        const offSpecs = api().on.terminalSpecsChanged(load);
+        return () => {
+            alive = false;
+            offNext();
+            offSpecs();
         };
     }, []);
 
@@ -1149,6 +1237,15 @@ export default function Chooser({
                                                 const live =
                                                     st === 'running' ||
                                                     st === 'restarting';
+                                                // A scheduled task swaps the
+                                                // service controls (start/stop/
+                                                // restart) for run-now + an
+                                                // enable/disable arm toggle.
+                                                const sched = isScheduledSpec(s);
+                                                const schedInfo = scheduleInfo.get(s.id);
+                                                const suspended = s.enabled === false;
+                                                const pendingApproval =
+                                                    s.meta?.schedule_pending_approval === true;
                                                 return (
                                                     <div
                                                         key={s.id}
@@ -1174,8 +1271,80 @@ export default function Chooser({
                                                         />
                                                         <span className="proc-name">
                                                             {s.label}
+                                                            {sched && (
+                                                                <span className="sched-line">
+                                                                    <IconClock size={10} />
+                                                                    <span className="sched-when">
+                                                                        {schedInfo?.description ??
+                                                                            s.meta?.schedule}
+                                                                    </span>
+                                                                    <span className="sched-sep">
+                                                                        ·
+                                                                    </span>
+                                                                    <span className="sched-next">
+                                                                        {formatNextRun(
+                                                                            schedInfo?.nextAt ??
+                                                                                null,
+                                                                        )}
+                                                                    </span>
+                                                                    <span
+                                                                        className={`sched-dot sched-dot-${lastRunTone(
+                                                                            s.meta
+                                                                                ?.last_run_status,
+                                                                        )}`}
+                                                                    />
+                                                                    <span className="sched-last">
+                                                                        {formatLastRun(
+                                                                            s.meta?.last_run_at,
+                                                                            s.meta
+                                                                                ?.last_run_status,
+                                                                        )}
+                                                                    </span>
+                                                                    {pendingApproval && (
+                                                                        <span className="sched-pending">
+                                                                            awaiting approval
+                                                                        </span>
+                                                                    )}
+                                                                </span>
+                                                            )}
                                                         </span>
-                                                        {live ? (
+                                                        {sched ? (
+                                                            <>
+                                                                <button
+                                                                    type="button"
+                                                                    className="proc-act proc-go"
+                                                                    title="Run now"
+                                                                    onClick={() =>
+                                                                        void api().schedule.runNow(
+                                                                            s.id,
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    <IconPlay size={12} />
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    className="proc-act"
+                                                                    title={
+                                                                        suspended
+                                                                            ? 'Enable — arm this schedule'
+                                                                            : 'Disable — stop firing (keeps the task)'
+                                                                    }
+                                                                    onClick={() =>
+                                                                        void setProcessEnabled(
+                                                                            s,
+                                                                            suspended,
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    {suspended ? (
+                                                                        <IconEye size={12} />
+                                                                    ) : (
+                                                                        <IconEyeOff size={12} />
+                                                                    )}
+                                                                </button>
+                                                            </>
+                                                        ) : live ? (
                                                             <button
                                                                 type="button"
                                                                 className="proc-act"
@@ -1202,18 +1371,20 @@ export default function Chooser({
                                                                 <IconPlay size={12} />
                                                             </button>
                                                         )}
-                                                        <button
-                                                            type="button"
-                                                            className="proc-act"
-                                                            title="Restart"
-                                                            onClick={() =>
-                                                                void api().process.restart(
-                                                                    s.id,
-                                                                )
-                                                            }
-                                                        >
-                                                            <IconRefresh size={12} />
-                                                        </button>
+                                                        {!sched && (
+                                                            <button
+                                                                type="button"
+                                                                className="proc-act"
+                                                                title="Restart"
+                                                                onClick={() =>
+                                                                    void api().process.restart(
+                                                                        s.id,
+                                                                    )
+                                                                }
+                                                            >
+                                                                <IconRefresh size={12} />
+                                                            </button>
+                                                        )}
                                                         <button
                                                             type="button"
                                                             className="proc-act proc-del"
@@ -1316,6 +1487,30 @@ export default function Chooser({
                                                             </option>
                                                         ))}
                                                     </select>
+                                                    <Select
+                                                        value={procSchedPreset}
+                                                        onValueChange={(v) => {
+                                                            setProcSchedPreset(v);
+                                                            // A preset IS the
+                                                            // expression; 'custom'
+                                                            // hands the field over
+                                                            // to the user, and ''
+                                                            // clears the schedule
+                                                            // (back to a service).
+                                                            if (v !== 'custom') {
+                                                                setProcSchedule(v);
+                                                            }
+                                                        }}
+                                                        list={[...SCHEDULE_PRESETS]}
+                                                    />
+                                                    {procSchedPreset === 'custom' && (
+                                                        <Input
+                                                            value={procSchedule}
+                                                            onValueChange={setProcSchedule}
+                                                            placeholder="min hour day-of-month month day-of-week — e.g. 0 3 * * *"
+                                                            description="5 cron fields, in this machine's local time."
+                                                        />
+                                                    )}
                                                     <div className="proc-add-actions">
                                                         <button
                                                             type="button"

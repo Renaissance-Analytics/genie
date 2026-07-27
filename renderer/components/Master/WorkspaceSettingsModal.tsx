@@ -70,6 +70,9 @@ export default function WorkspaceSettingsModal({
     // Per-workspace "require approval before an agent spawns a terminal /
     // launches a coding agent" (the higher-power manageTerminals / runAgent gate).
     const [terminalApproval, setTerminalApproval] = useState<boolean | null>(null);
+    // Per-workspace "require approval before an agent arms a SCHEDULED task".
+    // Separate from processApproval: a schedule keeps running unattended.
+    const [scheduleApproval, setScheduleApproval] = useState<boolean | null>(null);
     // Per-workspace IssueWatch remediation policy, PER BUCKET (security/issue/pr).
     // Null until the resolved value loads; we render the defaults optimistically.
     const [iwPolicy, setIwPolicy] = useState<IssuewatchPolicyBuckets | null>(null);
@@ -104,11 +107,13 @@ export default function WorkspaceSettingsModal({
                 if (alive) {
                     setProcessApproval(ws ? ws.process_approval !== 0 : true);
                     setTerminalApproval(ws ? ws.terminal_approval !== 0 : true);
+                    setScheduleApproval(ws ? ws.schedule_approval !== 0 : true);
                 }
             } catch {
                 if (alive) {
                     setProcessApproval(true);
                     setTerminalApproval(true);
+                    setScheduleApproval(true);
                 }
             }
             try {
@@ -172,6 +177,15 @@ export default function WorkspaceSettingsModal({
             await api().workspaces.setTerminalApproval(workspace.id, require);
         } catch {
             setTerminalApproval((prev) => !prev); // revert
+        }
+    };
+
+    const toggleScheduleApproval = async (require: boolean) => {
+        setScheduleApproval(require); // optimistic
+        try {
+            await api().workspaces.setScheduleApproval(workspace.id, require);
+        } catch {
+            setScheduleApproval((prev) => !prev); // revert
         }
     };
 
@@ -406,6 +420,18 @@ export default function WorkspaceSettingsModal({
                             disabled={processApproval === null}
                             onChange={(e) => void toggleProcessApproval(e.target.checked)}
                             aria-label="Require approval before an agent starts a process"
+                        />
+                    </Row>
+                    <Row
+                        label="Scheduled task approval"
+                        sub="Approve before an agent arms a recurring task (manageProcess with a schedule)"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={scheduleApproval ?? true}
+                            disabled={scheduleApproval === null}
+                            onChange={(e) => void toggleScheduleApproval(e.target.checked)}
+                            aria-label="Require approval before an agent arms a scheduled task"
                         />
                     </Row>
                     <Row

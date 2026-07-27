@@ -438,6 +438,10 @@ function buildMobileE2EDeps(): MobileDataDeps {
         startProcess: () => setProc('running'),
         stopProcess: () => setProc('stopped'),
         restartProcess: () => setProc('running'),
+        // Scheduled tasks aren't part of the mobile E2E fixture — no armed
+        // timers, and a run-now just runs the mock process.
+        scheduleInfo: () => ({}),
+        runScheduleNow: () => setProc('running'),
 
         createAgentTerminal: (opts) => ({
             id: opts.id ?? `term-e2e-${Date.now()}`,
