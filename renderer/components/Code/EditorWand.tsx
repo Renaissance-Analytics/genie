@@ -6,6 +6,7 @@ import {
     useState,
 } from 'react';
 import { useCodeEditor } from '@particle-academy/fancy-code';
+import { clampWandX, sameAnchor, type WandAnchor } from '../../lib/wand-anchor';
 
 /**
  * EditorWand — a selection-anchored floating toolbar for the Code editor.
@@ -44,7 +45,7 @@ function selectionAnchor(
     ta: HTMLTextAreaElement,
     start: number,
     end: number,
-): { x: number; y: number } | null {
+): WandAnchor | null {
     const div = document.createElement('div');
     const style = getComputedStyle(ta);
     const props = [
@@ -112,7 +113,7 @@ export default function EditorWand() {
     const { textareaRef, getSelection, replaceSelection, focus } = editor;
 
     const wandRef = useRef<HTMLDivElement>(null);
-    const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+    const [pos, setPos] = useState<WandAnchor | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
 
     const hide = useCallback(() => {
@@ -132,16 +133,41 @@ export default function EditorWand() {
             setPos(null);
             return;
         }
-        setPos(selectionAnchor(ta, start, end));
+        const next = selectionAnchor(ta, start, end);
+        // Keep the SAME object when the anchor didn't actually move: returning
+        // `prev` lets React bail out of the render entirely. A fresh `{x, y}`
+        // per event would re-render, re-run the clamp below, and tear down and
+        // re-subscribe the scroll/click-away listeners for nothing.
+        setPos((prev) => (sameAnchor(prev, next) ? prev : next));
     }, [textareaRef]);
 
     // Track selection changes on the editor's textarea. `selectionchange`
     // fires for textarea caret/selection moves and is simpler than juggling
     // keyup/mouseup/select on a ref that may not exist on first render.
-    useEffect(() => {
-        document.addEventListener('selectionchange', measure);
-        return () => document.removeEventListener('selectionchange', measure);
+    //
+    // Coalesced to one measurement per frame: a burst (select-all, drag-select,
+    // a focus fight) can fire selectionchange many times per frame, and each
+    // measurement mirrors the WHOLE textarea into a hidden div and forces a
+    // synchronous layout of it — O(document) work per event. One frame, one
+    // measurement, and the rAF also guarantees `measure` can never re-enter
+    // itself through its own DOM mutation.
+    const rafRef = useRef<number | null>(null);
+    const scheduleMeasure = useCallback(() => {
+        if (rafRef.current !== null) return;
+        rafRef.current = requestAnimationFrame(() => {
+            rafRef.current = null;
+            measure();
+        });
     }, [measure]);
+
+    useEffect(() => {
+        document.addEventListener('selectionchange', scheduleMeasure);
+        return () => {
+            document.removeEventListener('selectionchange', scheduleMeasure);
+            if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+            rafRef.current = null;
+        };
+    }, [scheduleMeasure]);
 
     // Auto-hide on scroll (the anchor would drift) and on click-away.
     useEffect(() => {
@@ -161,16 +187,32 @@ export default function EditorWand() {
     }, [pos, hide, textareaRef]);
 
     // Keep the pill clamped on-screen horizontally once it renders.
+    //
+    // This runs DURING the commit and sets state, so it is the one place the
+    // wand can drive React into "Maximum update depth exceeded" (#185): every
+    // correction re-renders, which re-runs this effect, which may correct
+    // again. Two things make that impossible. `clampWandX` is a fixed point —
+    // one pass lands the offending edge exactly on its margin, and a pill too
+    // wide to satisfy both margins is pinned to one of them rather than
+    // ping-ponging. And `clampedRef` marks the corrected anchor as final, so
+    // even a layout where the correction ISN'T one-to-one (a scaled ancestor,
+    // a shrink-to-fit width that tracks `left`) gets exactly ONE pass per
+    // measured selection instead of an unbounded chase.
+    const clampedRef = useRef<WandAnchor | null>(null);
     useLayoutEffect(() => {
         const el = wandRef.current;
-        if (!el || !pos) return;
+        if (!el || !pos || clampedRef.current === pos) return;
         const rect = el.getBoundingClientRect();
-        const pad = 6;
-        let nx = pos.x;
-        if (rect.left < pad) nx += pad - rect.left;
-        else if (rect.right > window.innerWidth - pad)
-            nx -= rect.right - (window.innerWidth - pad);
-        if (nx !== pos.x) setPos((p) => (p ? { ...p, x: nx } : p));
+        const nx = clampWandX({
+            x: pos.x,
+            left: rect.left,
+            right: rect.right,
+            viewportWidth: window.innerWidth,
+        });
+        if (nx === null) return;
+        const clamped = { ...pos, x: nx };
+        clampedRef.current = clamped;
+        setPos(clamped);
     }, [pos]);
 
     const actions: WandAction[] = [
@@ -221,14 +263,16 @@ export default function EditorWand() {
                 if (action.hideAfter === false) {
                     setBusy(null);
                     // Re-measure: Select All grows the selection, so the pill
-                    // should re-anchor rather than vanish.
-                    measure();
+                    // should re-anchor rather than vanish. Through the same
+                    // per-frame schedule, so this and the `selectionchange`
+                    // the action itself fires collapse into ONE measurement.
+                    scheduleMeasure();
                 } else {
                     hide();
                 }
             }
         },
-        [getSelection, measure, hide],
+        [getSelection, scheduleMeasure, hide],
     );
 
     if (!pos) return null;
