@@ -200,6 +200,35 @@ export function runtimeKeyFor(versionTxt: string | null, nodeSize: number): stri
     return raw.replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
+/*
+ * THE COMMIT DISCIPLINE, shared by both materializers below: a copy is committed
+ * by the `.complete` MARKER FILE, written last — never by renaming a staging
+ * directory into place.
+ *
+ * The rename is the more familiar shape and both functions used to do it: fill a
+ * sibling `<key>.staging-<pid>`, then rename it onto `<key>`. On Windows that is
+ * unsound. A directory CANNOT be renamed while any file inside it is open — the
+ * move is refused with ERROR_ACCESS_DENIED → EPERM — and the directory being
+ * renamed is a tree written microseconds earlier (a whole node runtime, or
+ * fancy-term-host + node-pty with its `conpty.node`/`.dll`), which is exactly
+ * when the real-time scanner still holds a handle on one of those files. So the
+ * rename failed intermittently, the callers' catch swallowed it, materialize
+ * returned null, and the host silently fell back to the install-dir tree —
+ * losing the update-survival these functions exist to provide. Filed as a flaky
+ * test (#72); the flake and the product bug are the same line.
+ *
+ * Deleting is NOT affected: Node opens with FILE_SHARE_DELETE, so `rmSync`
+ * succeeds straight through an open handle. Only the directory rename is. Hence
+ * building in place and publishing a single small file, which is an operation
+ * Windows will always do. The marker carries the guarantee the rename was there
+ * for: until it exists the directory is torn, and a torn directory is discarded
+ * and rebuilt, never trusted.
+ *
+ * Building in place is safe because we only build when `<key>` is absent or torn
+ * — a COMPLETE copy short-circuits untouched, so a live host is never written
+ * over.
+ */
+
 /**
  * Materialize the SHIPPED runtime into a per-user, VERSIONED copy under
  * `<baseDir>/<key>/` (default `<userData>/runtime/<key>/`) and return that
@@ -213,8 +242,8 @@ export function runtimeKeyFor(versionTxt: string | null, nodeSize: number): stri
  * place (deleting files a live host may still lazily read is not worth the
  * ~80 MB); only crashed `.staging-*` leftovers are pruned.
  *
- * The copy is staged into `<key>.staging-<pid>` then renamed into place with a
- * `.complete` marker, so a torn half-copy can never masquerade as complete.
+ * The copy is COMMITTED by the `.complete` marker, written last — see THE COMMIT
+ * DISCIPLINE above — so a torn half-copy can never masquerade as complete.
  */
 export function materializeRuntimeToUserData(
     shippedRoot: string,
@@ -244,13 +273,10 @@ export function materializeRuntimeToUserData(
             return dest;
         }
 
-        const staging = path.join(base, `${key}.staging-${process.pid}`);
-        fs.rmSync(staging, { recursive: true, force: true });
-        fs.mkdirSync(staging, { recursive: true });
-        fs.cpSync(shippedRoot, staging, { recursive: true });
-        fs.writeFileSync(path.join(staging, '.complete'), new Date().toISOString());
-        fs.rmSync(dest, { recursive: true, force: true }); // clear a torn earlier attempt
-        fs.renameSync(staging, dest);
+        fs.rmSync(dest, { recursive: true, force: true }); // discard a torn earlier attempt
+        fs.mkdirSync(dest, { recursive: true });
+        fs.cpSync(shippedRoot, dest, { recursive: true });
+        fs.writeFileSync(path.join(dest, '.complete'), new Date().toISOString()); // COMMIT
         pruneRuntimeStaging(base);
         logHostService(`runtime materialized to user-data → ${dest}`);
         return dest;
@@ -264,8 +290,9 @@ export function materializeRuntimeToUserData(
     }
 }
 
-/** Remove crashed `.staging-*` leftovers (never in use). Completed version dirs
- *  are kept — see materializeRuntimeToUserData. */
+/** Remove `.staging-*` leftovers from builds before #72 (which staged into a
+ *  sibling dir) and any crashed copy that predates them — never in use. Completed
+ *  version dirs are kept — see materializeRuntimeToUserData. */
 function pruneRuntimeStaging(base: string): void {
     try {
         for (const name of fs.readdirSync(base)) {
@@ -324,7 +351,7 @@ export function hostKeyFor(
  * The WHOLE fancy-term-host package dir is copied — its sibling `chunk-*.js` AND
  * the `package.json` that marks it `"type":"module"` (without which node would
  * parse the ESM host as CommonJS and its `import`s would throw). Same `.complete`
- * + versioned-key + staging-rename discipline as materializeRuntimeToUserData: an
+ * marker + versioned-key discipline as materializeRuntimeToUserData: an
  * existing complete copy is reused byte-for-byte (a live host is never disturbed),
  * a torn/half copy can never masquerade as complete, and superseded version dirs
  * are LEFT in place (an old host may still be running one).
@@ -357,17 +384,14 @@ export function materializeHostToUserData(
             return materializedScript;
         }
 
-        const staging = path.join(base, `${deps.hostKey}.staging-${process.pid}`);
-        fs.rmSync(staging, { recursive: true, force: true });
-        const stagingPkg = path.join(staging, 'node_modules', ...nameParts);
-        fs.mkdirSync(path.dirname(stagingPkg), { recursive: true });
-        fs.cpSync(deps.packageRoot, stagingPkg, { recursive: true });
-        fs.cpSync(deps.nodePtySource, path.join(staging, 'node_modules', 'node-pty'), {
+        fs.rmSync(dest, { recursive: true, force: true }); // discard a torn earlier attempt
+        const destPkg = path.join(dest, 'node_modules', ...nameParts);
+        fs.mkdirSync(path.dirname(destPkg), { recursive: true });
+        fs.cpSync(deps.packageRoot, destPkg, { recursive: true });
+        fs.cpSync(deps.nodePtySource, path.join(dest, 'node_modules', 'node-pty'), {
             recursive: true,
         });
-        fs.writeFileSync(path.join(staging, '.complete'), new Date().toISOString());
-        fs.rmSync(dest, { recursive: true, force: true }); // clear a torn earlier attempt
-        fs.renameSync(staging, dest);
+        fs.writeFileSync(path.join(dest, '.complete'), new Date().toISOString()); // COMMIT
         pruneRuntimeStaging(base);
         logHostService(`pty-host materialized to user-data → ${materializedScript}`);
         return materializedScript;
