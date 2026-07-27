@@ -13,6 +13,7 @@ import {
     setWorkspaceMcp,
     setWorkspaceProcessApproval,
     setWorkspaceTerminalApproval,
+    setWorkspaceScheduleApproval,
     getWorkspaceAgentAccess,
     setWorkspaceAgentAccess,
     getWorkspaceIssuewatchPolicyBuckets,
@@ -69,6 +70,7 @@ import {
     createKnowledgeFolder,
 } from './workspace/envelope';
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
+import { armSchedule, forgetSchedule } from './terminal/process-scheduler';
 import { broadcastTerminalSpecsChanged } from './terminal/ipc';
 import { agentPulse } from './terminal/agent-pulse';
 import {
@@ -416,6 +418,13 @@ export function registerIpcHandlers(): void {
         'workspaces:set-terminal-approval',
         (_e, id: string, require: boolean) => {
             setWorkspaceTerminalApproval(id, require);
+            return { ok: true };
+        },
+    );
+    ipcMain.handle(
+        'workspaces:set-schedule-approval',
+        (_e, id: string, require: boolean) => {
+            setWorkspaceScheduleApproval(id, require);
             return { ok: true };
         },
     );
@@ -915,13 +924,27 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('terminal-spec:list', (): TerminalSpecRow[] => listTerminalSpecs());
     ipcMain.handle(
         'terminal-spec:create',
-        (_e, input: Parameters<typeof createTerminalSpec>[0]) =>
-            createTerminalSpec(input),
+        (_e, input: Parameters<typeof createTerminalSpec>[0]) => {
+            const row = createTerminalSpec(input);
+            // A spec created here is created BY THE HUMAN, so a schedule on it is
+            // approved by definition (the agent path gates in host-tools.ts).
+            armSchedule(row.id);
+            return row;
+        },
     );
     ipcMain.handle(
         'terminal-spec:update',
-        (_e, id: string, patch: Record<string, unknown>) =>
-            updateTerminalSpec(id, patch as Parameters<typeof updateTerminalSpec>[1]),
+        (_e, id: string, patch: Record<string, unknown>) => {
+            const row = updateTerminalSpec(
+                id,
+                patch as Parameters<typeof updateTerminalSpec>[1],
+            );
+            // Re-arm from the CURRENT spec after any edit: a changed expression
+            // retargets the timer, and a removed schedule / disabled task disarms
+            // (armSchedule disarms whatever is no longer armable).
+            armSchedule(id);
+            return row;
+        },
     );
     ipcMain.handle('terminal-spec:delete', (_e, id: string) => {
         // If it's a running Process, stop + forget it before dropping the spec.
@@ -929,6 +952,7 @@ export function registerIpcHandlers(): void {
         if (spec?.type === 'process') {
             stopProcess(id);
             forgetProcess(id);
+            forgetSchedule(id);
         }
         return deleteTerminalSpec(id);
     });

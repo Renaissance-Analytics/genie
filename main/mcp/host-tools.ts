@@ -16,6 +16,8 @@ import {
     updateTerminalSpec,
     workspaceProcessApproval,
     workspaceTerminalApproval,
+    workspaceScheduleApproval,
+    deleteTerminalSpec,
     getWorkspaceIssuewatchPolicyBuckets,
     removeWorkspace,
     type TerminalSpecMeta,
@@ -48,8 +50,17 @@ import {
     startProcess,
     stopProcess,
     restartProcess,
+    forgetProcess,
     getProcessStatuses,
 } from '../terminal/process-supervisor';
+import {
+    armSchedule,
+    disarmSchedule,
+    forgetSchedule,
+    nextRunAt,
+    runScheduleNow,
+} from '../terminal/process-scheduler';
+import { describeCron, isValidCron } from '../terminal/cron';
 import { resolveRestartCommand } from '../agentinbox/session-capture';
 import { detectFolder } from '../workspace/detect';
 import { workspaceDocHealth } from '../workspace/create-agi';
@@ -335,14 +346,32 @@ function processInfo(workspaceRoot: string, statuses: Record<string, string>) {
         } catch {
             rel = '';
         }
-        return {
+        const info: ManagedProcessInfo = {
             id: spec.id,
             label: spec.label,
             command: spec.meta?.command ?? '',
             status: statuses[spec.id] ?? 'stopped',
             autostart: spec.meta?.autostart === true,
             cwd: rel,
+            enabled: spec.enabled !== false,
         };
+        // Scheduled tasks carry their recurrence + run history. Ordinary
+        // processes leave every one of these fields ABSENT, so an agent reading
+        // a list can tell the two shapes apart by presence alone.
+        const schedule = spec.meta?.schedule;
+        if (typeof schedule === 'string' && schedule.trim()) {
+            info.schedule = schedule;
+            info.scheduleDescription = describeCron(schedule);
+            info.scheduleKind = spec.meta?.schedule_kind ?? 'command';
+            const next = nextRunAt(spec.id);
+            if (next !== null) info.nextRunAt = new Date(next).toISOString();
+            if (typeof spec.meta?.last_run_at === 'number') {
+                info.lastRunAt = new Date(spec.meta.last_run_at).toISOString();
+            }
+            if (spec.meta?.last_run_status) info.lastRunStatus = spec.meta.last_run_status;
+            if (spec.meta?.schedule_pending_approval === true) info.pendingApproval = true;
+        }
+        return info;
     };
 }
 
@@ -372,6 +401,41 @@ async function approveProcessRun(
                 options: [
                     { label: 'Approve', description: `Let the agent ${what.verb} this process.` },
                     { label: 'Deny', description: 'Block it — nothing runs.' },
+                ],
+            },
+        ],
+        ws.project_name,
+    );
+    if (result.cancelled) return false; // dismissed = deny
+    const selected = result.answers[0]?.selected ?? [];
+    return selected.includes('Approve');
+}
+
+/**
+ * The scheduled-task sibling of {@link approveProcessRun}, gated by the
+ * workspace's `schedule_approval` (Settings → Agent MCP). Same shape, same
+ * fail-closed rules — dismissed is a deny — but the question leads with the
+ * RECURRENCE, because that's the part a user is actually consenting to: this
+ * will run again, unattended, on the Host, until they stop it.
+ */
+async function approveScheduledTask(
+    ws: { id: string; project_name: string },
+    what: { label: string; schedule: string; what: string; cwd: string },
+): Promise<boolean> {
+    const result = await forceQuestion(
+        [
+            {
+                header: 'Arm scheduled task?',
+                question:
+                    `An agent wants to schedule a recurring task in this workspace:\n\n` +
+                    `• ${what.label}\n` +
+                    `• when: ${describeCron(what.schedule)}  (${what.schedule})\n` +
+                    `• runs: ${what.what}\n` +
+                    `• in: ${what.cwd}\n\n` +
+                    `It will keep running on this schedule, without asking again, until you disable it.`,
+                options: [
+                    { label: 'Approve', description: 'Arm the task on this schedule.' },
+                    { label: 'Deny', description: 'Block it — nothing is scheduled.' },
                 ],
             },
         ],
@@ -428,8 +492,41 @@ export async function manageProcessForMcp(
             case 'create': {
                 const label = req.label?.trim();
                 const command = req.command?.trim();
-                if (!label || !command) {
-                    return { ok: false, error: 'create requires `label` and `command`.', processes: listFor() };
+                const schedule = req.schedule?.trim();
+                const scheduleKind = schedule ? req.scheduleKind ?? 'command' : undefined;
+                const prompt = req.prompt?.trim();
+                if (!label) {
+                    return { ok: false, error: 'create requires `label`.', processes: listFor() };
+                }
+                // Validate the recurrence BEFORE anything else: a broken
+                // expression must never reach the user's approval modal, and
+                // must never leave a spec behind that can't be armed.
+                if (schedule && !isValidCron(schedule)) {
+                    return {
+                        ok: false,
+                        error:
+                            `Invalid \`schedule\` "${schedule}". Expected 5 cron fields — minute hour day-of-month month day-of-week — e.g. "0 3 * * *".`,
+                        processes: listFor(),
+                    };
+                }
+                if (scheduleKind === 'agent-nudge') {
+                    if (!prompt) {
+                        return {
+                            ok: false,
+                            error: 'An `agent-nudge` task requires `prompt` — the text delivered to the agent on each fire.',
+                            processes: listFor(),
+                        };
+                    }
+                    if (!req.nudgeTerminalId && !req.nudgeAgentId) {
+                        return {
+                            ok: false,
+                            error: 'An `agent-nudge` task requires `nudgeTerminalId` or `nudgeAgentId` — who to nudge.',
+                            processes: listFor(),
+                        };
+                    }
+                } else if (!command) {
+                    // Every other shape runs a command line.
+                    return { ok: false, error: 'create requires `command`.', processes: listFor() };
                 }
                 // Optional repo subfolder → cwd; else the workspace root. Validate
                 // the repo name against the envelope's detected repos.
@@ -450,14 +547,88 @@ export async function manageProcessForMcp(
                     }
                     cwd = path.join(ws.path, 'repos', req.repo);
                 }
-                // Approval gate: when the workspace requires it, block until the
-                // user approves THIS process (label/command/cwd). Deny → nothing
-                // is created or started. OFF → straight through (current behavior).
-                if (workspaceProcessApproval(ws.id)) {
+                // The scheduled-task meta, built once and reused by both the
+                // pending-approval write and the final one. A scheduled task is
+                // one-shot per fire, so `autostart` / `restart_on_exit` are
+                // deliberately NOT carried over — they would fight the schedule.
+                const scheduleMeta = (): TerminalSpecMeta => ({
+                    ...(command ? { command } : {}),
+                    schedule,
+                    schedule_kind: scheduleKind,
+                    ...(scheduleKind === 'agent-nudge'
+                        ? {
+                              nudge_prompt: prompt,
+                              ...(req.nudgeTerminalId
+                                  ? { nudge_target_terminal_id: req.nudgeTerminalId }
+                                  : {}),
+                              ...(req.nudgeAgentId ? { nudge_agent_id: req.nudgeAgentId } : {}),
+                          }
+                        : {}),
+                });
+                // Approval gate. A SCHEDULED task answers to `schedule_approval`,
+                // a plain process to `process_approval` — separate settings, so a
+                // workspace that has loosened one-off process runs still gets asked
+                // before an agent arms something recurring. Both fail closed: deny
+                // (or a dismissed modal) → nothing is created, started or armed.
+                //
+                // A scheduled task is created BEFORE the question, DISABLED and
+                // flagged `schedule_pending_approval`: the row is visible in the
+                // Processes panel while the modal is up (so the user can see
+                // exactly what they're approving) and, crucially, a deferred or
+                // headless approval leaves a record instead of the request simply
+                // vanishing. Disabled + flagged means nothing can arm it —
+                // isArmable() and startSchedules() both refuse — so the visible
+                // row is inert until approved. Denied → deleted, which is the same
+                // end state as the plain-process gate.
+                if (schedule && workspaceScheduleApproval(ws.id)) {
+                    const pendingId = crypto.randomUUID();
+                    createTerminalSpec({
+                        id: pendingId,
+                        workspace_id: ws.id,
+                        label,
+                        cwd,
+                        type: 'process',
+                        meta: { ...scheduleMeta(), schedule_pending_approval: true },
+                    });
+                    // `enabled` isn't part of the create shape (the column
+                    // defaults on), so suspend it immediately — a pending task
+                    // must be inert, not merely flagged.
+                    updateTerminalSpec(pendingId, { enabled: false });
+                    broadcastTerminalSpecsChanged();
+                    const approved = await approveScheduledTask(ws, {
+                        label,
+                        schedule,
+                        what:
+                            scheduleKind === 'agent-nudge'
+                                ? `nudge ${req.nudgeTerminalId ?? req.nudgeAgentId} — "${prompt}"`
+                                : (command ?? ''),
+                        cwd,
+                    });
+                    if (!approved) {
+                        deleteTerminalSpec(pendingId);
+                        broadcastTerminalSpecsChanged();
+                        return {
+                            ok: false,
+                            error: 'Denied by user — the scheduled task was not created.',
+                            processes: listFor(),
+                        };
+                    }
+                    // Approved → clear the flag, enable, and arm. This is the only
+                    // place an agent-created schedule starts ticking.
+                    updateTerminalSpec(pendingId, {
+                        enabled: true,
+                        meta: { ...scheduleMeta(), schedule_pending_approval: undefined },
+                    });
+                    affectedId = pendingId;
+                    broadcastTerminalSpecsChanged();
+                    armSchedule(pendingId);
+                    break;
+                }
+                if (!schedule && workspaceProcessApproval(ws.id)) {
                     const approved = await approveProcessRun(ws, {
                         verb: 'run',
                         label,
-                        command,
+                        command: command ?? '',
                         cwd,
                     });
                     if (!approved) {
@@ -469,13 +640,16 @@ export async function manageProcessForMcp(
                     }
                 }
                 const id = crypto.randomUUID();
+                const meta: TerminalSpecMeta = schedule
+                    ? scheduleMeta()
+                    : { command, autostart: req.autostart === true };
                 createTerminalSpec({
                     id,
                     workspace_id: ws.id,
                     label,
                     cwd,
                     type: 'process',
-                    meta: { command, autostart: req.autostart === true },
+                    meta,
                 });
                 affectedId = id;
                 // The renderer mirrors its OWN spec edits locally but can't see
@@ -484,14 +658,28 @@ export async function manageProcessForMcp(
                 // fire whether or not we autostart below (a non-autostart process
                 // emits no process:status, so this is its only signal).
                 broadcastTerminalSpecsChanged();
-                // autostart → start it now too (matches the "starts on launch" intent).
-                if (req.autostart === true) startProcess(id);
+                if (schedule) {
+                    // Approved (or ungated) → arm it now. This is the ONLY place a
+                    // freshly-created schedule starts ticking.
+                    armSchedule(id);
+                } else if (req.autostart === true) {
+                    // autostart → start it now too (matches the "starts on launch" intent).
+                    startProcess(id);
+                }
                 break;
             }
             case 'start':
             case 'stop':
-            case 'restart': {
-                const id = req.processId;
+            case 'restart':
+            case 'enable':
+            case 'disable':
+            case 'delete':
+            case 'run-now': {
+                // `id` is the field `list` reports and the schema's primary name;
+                // `processId` is the back-compat alias (issue #7). The MCP layer
+                // folds one into the other, but a DIRECT caller may set either, so
+                // accept both here rather than silently resolving nothing.
+                const id = req.id ?? req.processId;
                 const target = id
                     ? listTerminalSpecs().find(
                           (s) => s.id === id && s.workspace_id === ws.id && s.type === 'process',
@@ -503,6 +691,52 @@ export async function manageProcessForMcp(
                         error: `No process "${id ?? ''}" in this workspace. Use action "list" to see ids.`,
                         processes: listFor(),
                     };
+                }
+                if (req.action === 'enable' || req.action === 'disable') {
+                    const enable = req.action === 'enable';
+                    updateTerminalSpec(target.id, { enabled: enable });
+                    // A disabled task must not fire; an enabled one re-arms from
+                    // its CURRENT expression. Enabling also clears a leftover
+                    // pending-approval flag — the user just approved it by hand.
+                    if (enable) {
+                        if (target.meta?.schedule_pending_approval) {
+                            updateTerminalSpec(target.id, {
+                                meta: { ...target.meta, schedule_pending_approval: undefined },
+                            });
+                        }
+                        armSchedule(target.id);
+                    } else {
+                        disarmSchedule(target.id);
+                        // A disabled LONG-RUNNING process should also stop; a
+                        // scheduled task has nothing running between fires.
+                        if (!target.meta?.schedule) stopProcess(target.id);
+                    }
+                    broadcastTerminalSpecsChanged();
+                    affectedId = target.id;
+                    break;
+                }
+                if (req.action === 'delete') {
+                    stopProcess(target.id);
+                    forgetProcess(target.id);
+                    forgetSchedule(target.id);
+                    deleteTerminalSpec(target.id);
+                    broadcastTerminalSpecsChanged();
+                    affectedId = target.id;
+                    break;
+                }
+                if (req.action === 'run-now') {
+                    if (!target.meta?.schedule) {
+                        return {
+                            ok: false,
+                            error: `"${target.label}" has no \`schedule\` — use action "start" to run an ordinary process.`,
+                            processes: listFor(),
+                        };
+                    }
+                    // Already approved when it was armed, and the user can fire it
+                    // from the Processes panel, so this isn't separately gated.
+                    runScheduleNow(target.id);
+                    affectedId = target.id;
+                    break;
                 }
                 if (req.action === 'start') {
                     // Starting is an agent spawning a process — gate it too.

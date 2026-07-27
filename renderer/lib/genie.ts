@@ -65,6 +65,10 @@ export interface WorkspaceRow {
      *  a terminal, writes to one, or launches/drives a coding agent. 1=require
      *  approval (default), 0=auto-run. */
     terminal_approval?: number;
+    /** Require user approval before an agent (manageProcess) arms a SCHEDULED
+     *  task — a process with `meta.schedule`. 1=require approval (default),
+     *  0=arm immediately. */
+    schedule_approval?: number;
     /** AgentInbox OUTER tier — who may reach INTO this workspace (its channels and
      *  its agents) from another workspace. 'all' is the default and preserves the
      *  pre-feature behaviour. Resolve via `workspaces.getAgentAccess`. */
@@ -980,6 +984,24 @@ export interface ViewMeta {
     /** Process view: persisted "was running" intent — restores the process on
      *  next launch if Genie went down while it was running (service-like). */
     was_running?: boolean;
+    /** SCHEDULED TASK: a 5-field cron expression in the HOST's local time. Its
+     *  presence turns a process into a scheduled task — one-shot per fire,
+     *  armed by the Host so it runs with no UI attached and across restarts. */
+    schedule?: string;
+    /** SCHEDULED TASK: what a fire does. Default 'command'. */
+    schedule_kind?: 'command' | 'agent-nudge';
+    /** agent-nudge: the terminal to nudge. */
+    nudge_target_terminal_id?: string;
+    /** agent-nudge: the AgentInbox agent id to nudge. */
+    nudge_agent_id?: string;
+    /** agent-nudge: the prompt delivered on each fire. */
+    nudge_prompt?: string;
+    /** SCHEDULED TASK: epoch ms the last fire started. */
+    last_run_at?: number;
+    /** SCHEDULED TASK: how the last fire went. */
+    last_run_status?: 'ok' | 'failed' | 'skipped';
+    /** SCHEDULED TASK: set while an agent-armed schedule awaits approval. */
+    schedule_pending_approval?: boolean;
     /** System Workspace tag (unattached spec grouped under the System Workspace). */
     system?: boolean;
     /** Plugin editor view: the owning plugin id (§6.1). */
@@ -1577,6 +1599,16 @@ export interface KnowledgeInput {
     links?: string[];
 }
 
+/** What the Host reports for one scheduled task, for display only. The HOST owns
+ *  the cron evaluator; the renderer never parses or evaluates an expression. */
+export interface ScheduleInfo {
+    /** Epoch ms of the armed next occurrence; null when the task isn't armed
+     *  (disabled, awaiting approval, or an expression that can never fire). */
+    nextAt: number | null;
+    /** Human rendering of the expression, e.g. "Daily at 03:00". */
+    description: string;
+}
+
 export interface GenieApi {
     auth: {
         startSignIn: (kind?: BackendKind) => Promise<{
@@ -1919,6 +1951,12 @@ export interface GenieApi {
             id: string,
             require: boolean,
         ) => Promise<{ ok: boolean }>;
+        /** Toggle "require approval before an agent arms a scheduled task"
+         *  (a manageProcess create carrying a `schedule`). */
+        setScheduleApproval: (
+            id: string,
+            require: boolean,
+        ) => Promise<{ ok: boolean }>;
         /** This workspace's AgentInbox front door — who may reach into it. */
         getAgentAccess: (
             id: string,
@@ -2189,6 +2227,16 @@ export interface GenieApi {
         clearLog: (id: string) => Promise<{ ok: boolean }>;
         /** Every process across every workspace (+ System) for the Task Manager. */
         list: () => Promise<ProcessListItem[]>;
+    };
+    /** Scheduled tasks — a Process whose spec carries `meta.schedule`. The
+     *  schedule itself is edited through `terminalSpec.update` (it lives on the
+     *  spec's meta); these are the runtime-only bits the Host owns. */
+    schedule: {
+        /** Per-task next-run instant + human description, keyed by spec id. The
+         *  HOST formats the description — the renderer never parses cron. */
+        info: () => Promise<Record<string, ScheduleInfo>>;
+        /** Fire a scheduled task now, without disturbing its schedule. */
+        runNow: (id: string) => Promise<{ ok: boolean }>;
     };
     updater: {
         mode: () => Promise<'phase1' | 'phase2'>;
@@ -2668,6 +2716,14 @@ export interface GenieApi {
         processStatus: (
             cb: (payload: { id: string; status: ProcessStatus }) => void,
         ) => () => void;
+        /** A scheduled task was armed, fired, or disarmed — its next run moved. */
+        scheduleNext: (
+            cb: (payload: {
+                id: string;
+                nextAt: number | null;
+                description: string | null;
+            }) => void,
+        ) => () => void;
         /** The set of terminal specs changed outside the renderer's own edits
          *  (e.g. an MCP-created process) — re-fetch the spec list to stay live. */
         terminalSpecsChanged: (cb: () => void) => () => void;
@@ -2930,6 +2986,7 @@ export function makeSystemWorkspace(homePath: string): WorkspaceRow {
         mcp_enabled: 0,
         process_approval: 1,
         terminal_approval: 1,
+        schedule_approval: 1,
     };
 }
 

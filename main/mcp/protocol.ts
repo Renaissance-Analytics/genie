@@ -390,10 +390,34 @@ export interface ManagedProcessInfo {
     autostart: boolean;
     /** cwd relative to the workspace root, or '' for the root. */
     cwd: string;
+    /** False when the task is suspended (a disabled scheduled task never fires). */
+    enabled: boolean;
+    // --- scheduled tasks only (absent on an ordinary process) --------------
+    /** The 5-field cron expression. Its PRESENCE means "this is a scheduled task". */
+    schedule?: string;
+    /** Human rendering of {@link schedule}, e.g. "Daily at 03:00". */
+    scheduleDescription?: string;
+    scheduleKind?: 'command' | 'agent-nudge';
+    /** ISO timestamp of the armed next occurrence; absent when not armed. */
+    nextRunAt?: string;
+    /** ISO timestamp the last run started. */
+    lastRunAt?: string;
+    lastRunStatus?: 'ok' | 'failed' | 'skipped';
+    /** True while the task is waiting on the user's approval (created, not armed). */
+    pendingApproval?: boolean;
 }
 
 export interface ManageProcessRequest {
-    action: 'list' | 'create' | 'start' | 'stop' | 'restart';
+    action:
+        | 'list'
+        | 'create'
+        | 'start'
+        | 'stop'
+        | 'restart'
+        | 'enable'
+        | 'disable'
+        | 'delete'
+        | 'run-now';
     /** create: human label. */
     label?: string;
     /** create: the command line the runner executes. */
@@ -402,7 +426,21 @@ export interface ManageProcessRequest {
     repo?: string;
     /** create: start now + on every launch. Default false. */
     autostart?: boolean;
-    /** start | stop | restart: the target process id (the `id` from a prior list). */
+    /**
+     * create: a 5-field cron expression (min hour day-of-month month day-of-week)
+     * in the HOST's local time. Supplying it makes the process a SCHEDULED TASK —
+     * it runs one-shot on each occurrence instead of as a long-running service.
+     */
+    schedule?: string;
+    /** create + schedule: what a fire does. Default 'command'. */
+    scheduleKind?: 'command' | 'agent-nudge';
+    /** create + schedule_kind 'agent-nudge': the terminal to nudge. */
+    nudgeTerminalId?: string;
+    /** create + schedule_kind 'agent-nudge': the AgentInbox agent id to nudge. */
+    nudgeAgentId?: string;
+    /** create + schedule_kind 'agent-nudge': the prompt delivered on each fire. */
+    prompt?: string;
+    /** The target process id (the `id` from a prior list) for every non-create action. */
     id?: string;
     /** Deprecated alias for {@link id}, kept for back-compat (issue #7). */
     processId?: string;
@@ -907,23 +945,34 @@ const INITIALIZE_WORKSPACE_PROMPT = {
 const MANAGE_PROCESS_TOOL = {
     name: 'manageProcess',
     description:
-        "Manage this workspace's background processes (Genie's Processes feature — long-running dev servers, queue workers, SSR, etc., supervised with status + crash auto-restart). Use it to set up or control processes you need while working. Actions: `list` (current processes + status); `create` (register a new one — needs `label` + `command`, optional `repo` to run inside repos/<repo>, optional `autostart` to start it now and on every launch); `start` / `stop` / `restart` (by `processId` from a prior list). Returns the resulting process list. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
+        "Manage this workspace's background processes AND scheduled tasks (Genie's Processes feature). Two shapes, one tool: a PROCESS is a long-running service (dev server, queue worker, SSR) supervised with status + crash auto-restart; a SCHEDULED TASK is the same thing with a `schedule` — it runs one-shot on a cron schedule instead of staying up, and because it lives on the Host it fires whether or not anyone has Genie open, and survives restarts. Actions: `list` (everything + status; scheduled rows also carry `schedule`, `scheduleDescription`, `nextRunAt`, `lastRunAt`, `lastRunStatus`); `create` (register one — needs `label`, plus `command` for a process, optional `repo` to run inside repos/<repo>, optional `autostart` to start it now and on every launch; add `schedule` to make it a scheduled task); `start` / `stop` / `restart` (a service, by `id` from a prior list); `enable` / `disable` (suspend a task without deleting it — a disabled task never fires); `delete`; `run-now` (fire a scheduled task immediately without disturbing its schedule). SCHEDULING: `schedule` is a standard 5-field cron expression — minute hour day-of-month month day-of-week — in the HOST's local timezone, supporting `*`, `*/step`, `a-b` ranges and `a,b,c` lists (e.g. `*/15 * * * *` every 15 minutes, `0 3 * * *` daily at 03:00, `0 9 * * 1-5` weekday mornings). Set `scheduleKind` to `agent-nudge` (with `prompt` and `nudgeTerminalId` or `nudgeAgentId`) to have each fire deliver a prompt to an agent through AgentInbox instead of running a command — the nudge goes to the agent's inbox and only wakes the terminal when it is provably idle, so it can never interrupt a live turn. If a fire comes due while the previous run is still going it is SKIPPED, not overlapped, and runs missed while the Host was down are NOT caught up. SAFETY: creating a scheduled task is APPROVAL-GATED — when the workspace requires it (the default), it blocks on an OS modal showing the command and the recurrence until the user approves; deny means nothing is created. Returns the resulting process list. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
     inputSchema: {
         type: 'object',
         properties: {
             ...TERMINAL_ID_PROP,
             action: {
                 type: 'string',
-                enum: ['list', 'create', 'start', 'stop', 'restart'],
+                enum: [
+                    'list',
+                    'create',
+                    'start',
+                    'stop',
+                    'restart',
+                    'enable',
+                    'disable',
+                    'delete',
+                    'run-now',
+                ],
                 description: 'What to do.',
             },
             label: {
                 type: 'string',
-                description: 'create: a human label for the process.',
+                description: 'create: a human label for the process or scheduled task.',
             },
             command: {
                 type: 'string',
-                description: 'create: the command line the runner executes (e.g. "npm run dev").',
+                description:
+                    'create: the command line the runner executes (e.g. "npm run dev"). Required unless `scheduleKind` is "agent-nudge".',
             },
             repo: {
                 type: 'string',
@@ -932,12 +981,39 @@ const MANAGE_PROCESS_TOOL = {
             },
             autostart: {
                 type: 'boolean',
-                description: 'create (optional): start now and on every launch. Default false.',
+                description:
+                    'create (optional): start now and on every launch. Default false. Ignored for a scheduled task — its schedule decides when it runs.',
+            },
+            schedule: {
+                type: 'string',
+                description:
+                    'create (optional): a 5-field cron expression in the HOST\'s local time — "minute hour day-of-month month day-of-week". Supplying it makes this a SCHEDULED TASK. Supports `*`, `*/step`, `a-b`, `a,b,c`. Examples: "*/15 * * * *" (every 15 min), "0 3 * * *" (daily 03:00), "30 6 * * 1" (Mondays 06:30).',
+            },
+            scheduleKind: {
+                type: 'string',
+                enum: ['command', 'agent-nudge'],
+                description:
+                    'create + `schedule` (optional): "command" (default) runs `command` on each fire; "agent-nudge" delivers `prompt` to an agent through AgentInbox instead.',
+            },
+            prompt: {
+                type: 'string',
+                description:
+                    'create + `scheduleKind: "agent-nudge"`: the prompt text delivered to the agent on every fire.',
+            },
+            nudgeTerminalId: {
+                type: 'string',
+                description:
+                    'create + `scheduleKind: "agent-nudge"`: the terminal id to nudge. Prefer this — it is the stable handle.',
+            },
+            nudgeAgentId: {
+                type: 'string',
+                description:
+                    'create + `scheduleKind: "agent-nudge"`: the AgentInbox agent id to nudge, when the terminal id is not known.',
             },
             id: {
                 type: 'string',
                 description:
-                    'start | stop | restart: the target process id — the `id` field from a `list` result, passed back verbatim.',
+                    'Every action except `list` and `create`: the target id — the `id` field from a `list` result, passed back verbatim.',
             },
             processId: {
                 type: 'string',
@@ -1783,17 +1859,22 @@ export async function handleMcpMessage(
             if (params.name === 'manageProcess') {
                 const a = params.arguments ?? {};
                 const action = a.action;
-                if (
-                    action !== 'list' &&
-                    action !== 'create' &&
-                    action !== 'start' &&
-                    action !== 'stop' &&
-                    action !== 'restart'
-                ) {
+                const ACTIONS: ReadonlyArray<ManageProcessRequest['action']> = [
+                    'list',
+                    'create',
+                    'start',
+                    'stop',
+                    'restart',
+                    'enable',
+                    'disable',
+                    'delete',
+                    'run-now',
+                ];
+                if (!action || !ACTIONS.includes(action)) {
                     return err(
                         msg.id,
                         -32602,
-                        'manageProcess requires `action`: list | create | start | stop | restart.',
+                        `manageProcess requires \`action\`: ${ACTIONS.join(' | ')}.`,
                     );
                 }
                 const result = await ctx.manageProcess(ctx.terminalId, {
@@ -1802,6 +1883,11 @@ export async function handleMcpMessage(
                     command: a.command,
                     repo: a.repo,
                     autostart: a.autostart,
+                    schedule: a.schedule,
+                    scheduleKind: a.scheduleKind,
+                    prompt: a.prompt,
+                    nudgeTerminalId: a.nudgeTerminalId,
+                    nudgeAgentId: a.nudgeAgentId,
                     // `list` reports each process keyed `id`, so accept `id` as the
                     // primary field (what callers naturally copy back); `processId`
                     // stays a back-compat alias. This mismatch was issue #7.

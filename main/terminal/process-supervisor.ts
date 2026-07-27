@@ -41,6 +41,30 @@ interface ProcState {
 
 const procs = new Map<string, ProcState>();
 
+/**
+ * A process spec carrying `meta.schedule` is a SCHEDULED TASK, not a service:
+ * process-scheduler.ts decides when it runs, so each run is ONE-SHOT. The
+ * supervisor still owns the spawn, the output log and the status broadcast
+ * (that's the whole point of reusing it) but must not apply the service
+ * behaviours — no crash auto-restart, no `was_running` restore.
+ */
+function isScheduled(spec: { meta?: { schedule?: string } } | null | undefined): boolean {
+    return typeof spec?.meta?.schedule === 'string' && spec.meta.schedule.trim() !== '';
+}
+
+/**
+ * Called when a SCHEDULED task's pty exits, with the exit code. Registered by
+ * process-scheduler.ts (which imports this module, never the other way round) so
+ * it can clear the in-flight guard and record `last_run_status`.
+ */
+let scheduledRunEnd: ((specId: string, exitCode: number) => void) | null = null;
+
+export function setScheduledRunEndHandler(
+    fn: (specId: string, exitCode: number) => void,
+): void {
+    scheduledRunEnd = fn;
+}
+
 /** Recent stdout/stderr per process, for the hover log popover. Capped so a
  *  chatty process can't grow this unbounded; we only keep the tail. */
 const procLogs = new Map<string, string>();
@@ -131,6 +155,10 @@ function persistWasRunning(id: string, value: boolean): void {
     try {
         const spec = getTerminalSpec(id);
         if (!spec || spec.type !== 'process') return;
+        // A scheduled task must never be restored as a service on next launch —
+        // its schedule is re-armed instead (startSchedules), which is what
+        // "survives restart" means for it.
+        if (isScheduled(spec)) return;
         if ((spec.meta?.was_running ?? false) === value) return; // no change
         updateTerminalSpec(id, { meta: { ...spec.meta, was_running: value } });
     } catch {
@@ -255,6 +283,16 @@ export function onProcessPtyExit(
         return;
     }
     const spec = getTerminalSpec(id);
+    if (isScheduled(spec)) {
+        // ONE-SHOT: the run is over, full stop. No decideOnExit, so no backoff
+        // restart — a nightly job that exits non-zero must wait for its next
+        // occurrence, not hot-loop until then. The scheduler records the outcome.
+        st.attempt = 0;
+        st.userStopped = false;
+        setStatus(id, 'stopped');
+        scheduledRunEnd?.(id, payload.exitCode ?? 0);
+        return;
+    }
     const restartOnExit = spec?.meta?.restart_on_exit !== false;
     const d = decideOnExit({
         userStopped: st.userStopped,
@@ -292,6 +330,9 @@ export function startAutostartProcesses(): void {
         if (
             spec.type === 'process' &&
             spec.enabled !== false &&
+            // Scheduled tasks are startSchedules()' business — starting one here
+            // would run it at launch instead of at its scheduled time.
+            !isScheduled(spec) &&
             (spec.meta?.autostart === true || spec.meta?.was_running === true) &&
             spec.meta?.command
         ) {

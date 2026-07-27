@@ -605,6 +605,8 @@ const api = {
             ipcRenderer.invoke('workspaces:set-process-approval', id, require),
         setTerminalApproval: (id: string, require: boolean) =>
             ipcRenderer.invoke('workspaces:set-terminal-approval', id, require),
+        setScheduleApproval: (id: string, require: boolean) =>
+            ipcRenderer.invoke('workspaces:set-schedule-approval', id, require),
         getAgentAccess: (id: string) => ipcRenderer.invoke('workspaces:get-agent-access', id),
         setAgentAccess: (id: string, access: string, workspaces?: string[]) =>
             ipcRenderer.invoke('workspaces:set-agent-access', id, access, workspaces),
@@ -826,6 +828,19 @@ const api = {
         clearLog: (id: string) =>
             ipcRenderer.invoke('process:clear-log', id) as Promise<{ ok: boolean }>,
         list: () => ipcRenderer.invoke('process:list'),
+    },
+
+    /** Scheduled tasks — a Process with `meta.schedule`. The schedule itself is
+     *  edited through terminalSpec.update (it lives on the spec's meta); these
+     *  are the runtime-only bits the Host owns. */
+    schedule: {
+        /** Per-task next-run instant + human description, keyed by spec id. */
+        info: () =>
+            ipcRenderer.invoke('schedule:info') as Promise<
+                Record<string, { nextAt: number | null; description: string }>
+            >,
+        runNow: (id: string) =>
+            ipcRenderer.invoke('schedule:run-now', id) as Promise<{ ok: boolean }>,
     },
 
     terminalSpec: {
@@ -1329,6 +1344,21 @@ const api = {
             ) => cb(payload);
             ipcRenderer.on('process:status', handler);
             return () => ipcRenderer.off('process:status', handler);
+        },
+        /** A scheduled task was armed, fired, or disarmed — its next run moved. */
+        scheduleNext: (
+            cb: (payload: {
+                id: string;
+                nextAt: number | null;
+                description: string | null;
+            }) => void,
+        ) => {
+            const handler = (
+                _e: unknown,
+                payload: { id: string; nextAt: number | null; description: string | null },
+            ) => cb(payload);
+            ipcRenderer.on('schedule:next', handler);
+            return () => ipcRenderer.off('schedule:next', handler);
         },
         /** The set of terminal specs changed outside the renderer's own edits
          *  (e.g. a process created via the MCP manageProcess tool) — re-fetch

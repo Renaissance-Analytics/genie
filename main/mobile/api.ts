@@ -279,6 +279,12 @@ export interface MobileDataDeps {
     stopProcess: (id: string) => void;
     restartProcess: (id: string) => void;
 
+    // --- scheduled tasks (a process with meta.schedule) ---
+    /** Per-scheduled-task next-run instant + human description, keyed by spec id. */
+    scheduleInfo: () => Record<string, { nextAt: number | null; description: string }>;
+    /** Fire a scheduled task now, without disturbing its schedule. */
+    runScheduleNow: (id: string) => void;
+
     // --- terminal control ---
     createAgentTerminal: (opts: {
         /** Honor a caller-supplied id — a remote plain spawn keys all its I/O off it. */
@@ -959,8 +965,15 @@ export async function handleApi(
         return true;
     }
 
-    // --- process control: POST /api/process/:id/{start,stop,restart} ------
-    const proc = /^\/api\/process\/([^/]+)\/(start|stop|restart)$/.exec(pathname);
+    // Armed next-run instants for the remote Processes panel. A read, so it
+    // rides the same auth as /api/processes and skips the control kill-switch.
+    if (pathname === '/api/schedules' && method === 'GET') {
+        sendJson(res, 200, { schedules: deps.scheduleInfo() });
+        return true;
+    }
+
+    // --- process control: POST /api/process/:id/{start,stop,restart,run-now} ---
+    const proc = /^\/api\/process\/([^/]+)\/(start|stop|restart|run-now)$/.exec(pathname);
     if (proc) {
         if (method !== 'POST') {
             sendJson(res, 405, { error: 'method not allowed' });
@@ -973,9 +986,10 @@ export async function handleApi(
             sendJson(res, 404, { error: 'unknown process' });
             return true;
         }
-        const action = proc[2] as 'start' | 'stop' | 'restart';
+        const action = proc[2] as 'start' | 'stop' | 'restart' | 'run-now';
         if (action === 'start') deps.startProcess(id);
         else if (action === 'stop') deps.stopProcess(id);
+        else if (action === 'run-now') deps.runScheduleNow(id);
         else deps.restartProcess(id);
         audit(`process.${action}`, id, actor);
         sendJson(res, 200, { ok: true, processes: servedProcesses(deps) });

@@ -53,6 +53,7 @@ import {
     getProcessLog,
     clearProcessLog,
 } from './process-supervisor';
+import { getScheduleInfo, runScheduleNow } from './process-scheduler';
 import {
     registerTerminalEndpoint,
     unregisterTerminalEndpoint,
@@ -916,6 +917,16 @@ export function registerTerminalIpc(): void {
     // Task Manager: every process across every workspace (+ System), each row
     // tagged with the workspace that spawned it.
     ipcMain.handle('process:list', () => listAllProcesses());
+
+    // --- Scheduled tasks (a process + meta.schedule) --------------------
+    // Per-task next-run instant + human description, so the Processes panel can
+    // paint "next run" without a second cron parser in the renderer. Live updates
+    // arrive on the `schedule:next` broadcast.
+    ipcMain.handle('schedule:info', () => getScheduleInfo());
+    ipcMain.handle('schedule:run-now', (_e, id: string) => {
+        runScheduleNow(id);
+        return { ok: true };
+    });
 }
 
 /** Tear down every pty on app quit so dangling shell processes don't survive. */

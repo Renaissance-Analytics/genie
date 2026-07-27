@@ -3413,6 +3413,77 @@ body.gutter-dragging .grid-gutter {
     background: #f48771;
 }
 
+/* Scheduled tasks — the second line under a task's name: when it runs, when it
+   runs NEXT, and how the last run went. The name row stays single-line, so the
+   name cell relaxes its nowrap to stack the two. */
+.tproj-procs .proc-row .proc-name:has(.sched-line) {
+    white-space: normal;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.sched-line {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10.5px;
+    color: var(--fg-3);
+    overflow: hidden;
+    white-space: nowrap;
+}
+.sched-line svg {
+    flex: 0 0 auto;
+    opacity: 0.8;
+}
+.sched-when {
+    color: var(--fg-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.sched-sep {
+    opacity: 0.5;
+}
+.sched-next {
+    flex: 0 0 auto;
+}
+.sched-last {
+    flex: 0 0 auto;
+    opacity: 0.85;
+}
+/* Last-run outcome dot: green ok · red failed · amber skipped · hidden when the
+   task has never run (nothing to report is not a status). */
+.sched-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    margin-left: 2px;
+}
+.sched-dot-ok {
+    background: #10b981;
+}
+.sched-dot-failed {
+    background: var(--term-err, #f48771);
+}
+.sched-dot-skipped {
+    background: var(--term-warn, #e2c08d);
+}
+.sched-dot-none {
+    display: none;
+}
+/* An agent armed this task but the user hasn't approved it yet — it exists in
+   the list (so it's visible) but is NOT armed. */
+.sched-pending {
+    flex: 0 0 auto;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: rgba(226, 192, 141, 0.15);
+    color: var(--term-warn, #e2c08d);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
 /* add-terminal tile (used in 4-panel layout) */
 .addtile {
     display: flex;
