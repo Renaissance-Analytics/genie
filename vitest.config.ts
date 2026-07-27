@@ -24,6 +24,11 @@ export default defineConfig({
             'main/**/__tests__/**/*.test.ts',
             'renderer/**/__tests__/**/*.test.ts',
         ],
+        // Every file shares ONE fork (below), so a file that swaps a global
+        // timer and doesn't restore it breaks whichever file runs next. This
+        // guard fails the file that LEAKED instead of the innocent one that
+        // trips over it — see test/timer-globals-guard.ts and genie#76.
+        setupFiles: ['test/timer-globals-guard.ts'],
         // Run main-process tests serially. The git + filesystem fixtures
         // mutate cwd-adjacent state and the suite is small — parallelism
         // buys little and risks flakes from racing temp directories.
