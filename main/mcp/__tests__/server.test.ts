@@ -97,6 +97,89 @@ function rpcStream(
     });
 }
 
+/**
+ * A heartbeat scheduler the TEST drives, injected in place of the server's real
+ * `setInterval`.
+ *
+ * These tests used to prove the keepalive by setting GENIE_MCP_HEARTBEAT_MS=20
+ * and having the handler resolve after a real 120ms — i.e. betting that a real
+ * interval fires inside a real delay. That bet is off the moment anything
+ * disturbs the ambient clock: in genie#76 an earlier test file left
+ * `globalThis.setInterval` bound to an uninstalled fake clock, the interval
+ * never fired at all, and these five tests failed while looking like CI load.
+ *
+ * With the beat injected there is no clock in the loop: the handler fires the
+ * beat itself, so "heartbeat, then response" is an ORDERING the test states
+ * rather than a race it hopes to win.
+ */
+function manualHeartbeat() {
+    const beats = new Set<() => void>();
+    return {
+        /** The port handed to the server; returns its unsubscribe. */
+        schedule: (beat: () => void): (() => void) => {
+            beats.add(beat);
+            return () => beats.delete(beat);
+        },
+        /** Emit one beat on every stream currently waiting, synchronously. */
+        fire: (): void => {
+            for (const beat of beats) beat();
+        },
+        /** Streams still subscribed — 0 after the server tears a beat down. */
+        get scheduled(): number {
+            return beats.size;
+        },
+    };
+}
+
+/**
+ * POST a JSON-RPC message and hand back the stream WHILE it is still open, so a
+ * test can wait on bytes (a heartbeat) before letting the handler settle.
+ * `done` resolves with the full raw stream once the socket closes.
+ */
+function rpcStreamOpen(
+    port: number,
+    token: string,
+    msg: unknown,
+): Promise<{ read: () => string; done: Promise<string> }> {
+    return new Promise((resolve, reject) => {
+        const data = JSON.stringify(msg);
+        const req = http.request(
+            {
+                host: '127.0.0.1',
+                port,
+                path: `/mcp/${token}`,
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json, text/event-stream',
+                    'Content-Length': Buffer.byteLength(data),
+                },
+            },
+            (res) => {
+                let raw = '';
+                res.on('data', (c) => (raw += c));
+                resolve({
+                    read: () => raw,
+                    done: new Promise<string>((r) => res.on('end', () => r(raw))),
+                });
+            },
+        );
+        req.on('error', reject);
+        req.end(data);
+    });
+}
+
+/** Poll `fn` until it holds. Waits FOR a condition — never a bare sleep that
+ *  assumes one has happened by now. */
+const until = async (fn: () => boolean, ms = 5000): Promise<void> => {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+        if (fn()) return;
+        await new Promise((r) => setTimeout(r, 5));
+    }
+    throw new Error('condition not met in time');
+};
+
 const deps = (
     userDataDir: string,
     configuredPort: number,
@@ -331,42 +414,39 @@ describe('mcp server', () => {
 
     it('serves a manageProcess CREATE over SSE so an approval gate never times out', async () => {
         // A create can block on the per-workspace process-approval prompt, so it
-        // must take the heartbeat SSE path (like ForceTheQuestion). Simulate the
-        // gate wait with a manageProcess dep that resolves after a delay.
-        const prev = process.env.GENIE_MCP_HEARTBEAT_MS;
-        process.env.GENIE_MCP_HEARTBEAT_MS = '20';
-        try {
-            const dir = tmpUserDir();
-            await startMcpServer(
-                deps(
-                    dir,
-                    0,
-                    { ids: ['t-a'], lastActive: 't-a' },
-                    () => {},
-                    undefined,
-                    () =>
-                        new Promise((r) =>
-                            setTimeout(() => r({ ok: true, processes: [] }), 120),
-                        ),
-                ),
-            );
-            const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
-            const res = await rpcStream(mcpServerPort()!, token, {
-                jsonrpc: '2.0',
-                id: 11,
-                method: 'tools/call',
-                params: {
-                    name: 'manageProcess',
-                    arguments: { action: 'create', label: 'dev', command: 'npm run dev' },
+        // must take the heartbeat SSE path (like ForceTheQuestion). The dep
+        // stands in for that parked gate: it beats the keepalive while the user
+        // would be deciding, then answers.
+        const hb = manualHeartbeat();
+        const dir = tmpUserDir();
+        await startMcpServer({
+            ...deps(
+                dir,
+                0,
+                { ids: ['t-a'], lastActive: 't-a' },
+                () => {},
+                undefined,
+                async () => {
+                    hb.fire();
+                    return { ok: true, processes: [] };
                 },
-            });
-            expect(res.contentType).toContain('text/event-stream');
-            expect(res.raw).toContain(': heartbeat'); // kept alive during the gate
-            expect(res.events.some((e) => e.id === 11)).toBe(true); // final response delivered
-        } finally {
-            if (prev === undefined) delete process.env.GENIE_MCP_HEARTBEAT_MS;
-            else process.env.GENIE_MCP_HEARTBEAT_MS = prev;
-        }
+            ),
+            scheduleHeartbeat: hb.schedule,
+        });
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+        const res = await rpcStream(mcpServerPort()!, token, {
+            jsonrpc: '2.0',
+            id: 11,
+            method: 'tools/call',
+            params: {
+                name: 'manageProcess',
+                arguments: { action: 'create', label: 'dev', command: 'npm run dev' },
+            },
+        });
+        expect(res.contentType).toContain('text/event-stream');
+        expect(res.raw).toContain(': heartbeat'); // kept alive during the gate
+        expect(res.events.some((e) => e.id === 11)).toBe(true); // final response delivered
+        expect(hb.scheduled).toBe(0); // and the beat is torn down with the stream
     });
 
     it('serves a manageProcess LIST as a single JSON response (no blocking path)', async () => {
@@ -386,43 +466,39 @@ describe('mcp server', () => {
     });
 
     it('serves a manageTerminals CREATE over SSE so the approval gate never times out', async () => {
-        const prev = process.env.GENIE_MCP_HEARTBEAT_MS;
-        process.env.GENIE_MCP_HEARTBEAT_MS = '20';
-        try {
-            const dir = tmpUserDir();
-            await startMcpServer(
-                deps(
-                    dir,
-                    0,
-                    { ids: ['t-a'], lastActive: 't-a' },
-                    () => {},
-                    undefined,
-                    undefined,
-                    undefined,
-                    // manageTerminals dep resolves after a delay (simulating the gate).
-                    () =>
-                        new Promise((r) =>
-                            setTimeout(() => r({ ok: true, terminals: [] }), 120),
-                        ),
-                ),
-            );
-            const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
-            const res = await rpcStream(mcpServerPort()!, token, {
-                jsonrpc: '2.0',
-                id: 50,
-                method: 'tools/call',
-                params: {
-                    name: 'manageTerminals',
-                    arguments: { action: 'create', label: 'agent' },
+        const hb = manualHeartbeat();
+        const dir = tmpUserDir();
+        await startMcpServer({
+            ...deps(
+                dir,
+                0,
+                { ids: ['t-a'], lastActive: 't-a' },
+                () => {},
+                undefined,
+                undefined,
+                undefined,
+                // manageTerminals dep parked on the gate: beat, then answer.
+                async () => {
+                    hb.fire();
+                    return { ok: true, terminals: [] };
                 },
-            });
-            expect(res.contentType).toContain('text/event-stream');
-            expect(res.raw).toContain(': heartbeat');
-            expect(res.events.some((e) => e.id === 50)).toBe(true);
-        } finally {
-            if (prev === undefined) delete process.env.GENIE_MCP_HEARTBEAT_MS;
-            else process.env.GENIE_MCP_HEARTBEAT_MS = prev;
-        }
+            ),
+            scheduleHeartbeat: hb.schedule,
+        });
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+        const res = await rpcStream(mcpServerPort()!, token, {
+            jsonrpc: '2.0',
+            id: 50,
+            method: 'tools/call',
+            params: {
+                name: 'manageTerminals',
+                arguments: { action: 'create', label: 'agent' },
+            },
+        });
+        expect(res.contentType).toContain('text/event-stream');
+        expect(res.raw).toContain(': heartbeat');
+        expect(res.events.some((e) => e.id === 50)).toBe(true);
+        expect(hb.scheduled).toBe(0);
     });
 
     it('serves a manageTerminals READ as a single JSON response (no blocking path)', async () => {
@@ -452,86 +528,74 @@ describe('mcp server', () => {
     });
 
     it('serves a runAgent START over SSE so the approval gate never times out', async () => {
-        const prev = process.env.GENIE_MCP_HEARTBEAT_MS;
-        process.env.GENIE_MCP_HEARTBEAT_MS = '20';
-        try {
-            const dir = tmpUserDir();
-            await startMcpServer(
-                deps(
-                    dir,
-                    0,
-                    { ids: ['t-a'], lastActive: 't-a' },
-                    () => {},
-                    undefined,
-                    undefined,
-                    undefined,
-                    undefined,
-                    () =>
-                        new Promise((r) =>
-                            setTimeout(() => r({ ok: true, id: 'a-1' }), 120),
-                        ),
-                ),
-            );
-            const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
-            const res = await rpcStream(mcpServerPort()!, token, {
-                jsonrpc: '2.0',
-                id: 52,
-                method: 'tools/call',
-                params: { name: 'runAgent', arguments: { action: 'start', agent: 'claude' } },
-            });
-            expect(res.contentType).toContain('text/event-stream');
-            expect(res.raw).toContain(': heartbeat');
-            expect(res.events.some((e) => e.id === 52)).toBe(true);
-        } finally {
-            if (prev === undefined) delete process.env.GENIE_MCP_HEARTBEAT_MS;
-            else process.env.GENIE_MCP_HEARTBEAT_MS = prev;
-        }
+        const hb = manualHeartbeat();
+        const dir = tmpUserDir();
+        await startMcpServer({
+            ...deps(
+                dir,
+                0,
+                { ids: ['t-a'], lastActive: 't-a' },
+                () => {},
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                async () => {
+                    hb.fire();
+                    return { ok: true, id: 'a-1' };
+                },
+            ),
+            scheduleHeartbeat: hb.schedule,
+        });
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+        const res = await rpcStream(mcpServerPort()!, token, {
+            jsonrpc: '2.0',
+            id: 52,
+            method: 'tools/call',
+            params: { name: 'runAgent', arguments: { action: 'start', agent: 'claude' } },
+        });
+        expect(res.contentType).toContain('text/event-stream');
+        expect(res.raw).toContain(': heartbeat');
+        expect(res.events.some((e) => e.id === 52)).toBe(true);
+        expect(hb.scheduled).toBe(0);
     });
 
     it('serves an agentinbox RECEIVE+wait over SSE so a long-poll never times out', async () => {
         // A `receive` with wait:true parks a long-poll waiter; it must ride the
         // heartbeat SSE path (like ForceTheQuestion) so the client never times
-        // out. Simulate the wait with an agentinbox dep that resolves after a delay.
-        const prev = process.env.GENIE_MCP_HEARTBEAT_MS;
-        process.env.GENIE_MCP_HEARTBEAT_MS = '20';
-        try {
-            const dir = tmpUserDir();
-            await startMcpServer(
-                deps(
-                    dir,
-                    0,
-                    { ids: ['t-a'], lastActive: 't-a' },
-                    () => {},
-                    undefined,
-                    undefined,
-                    undefined,
-                    undefined,
-                    undefined,
-                    undefined,
-                    // agentinbox dep resolves after a delay (simulating the long-poll).
-                    () =>
-                        new Promise((r) =>
-                            setTimeout(
-                                () => r({ ok: true, messages: [{ seq: 1, text: 'hi' }], cursor: 1 }),
-                                120,
-                            ),
-                        ),
-                ),
-            );
-            const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
-            const res = await rpcStream(mcpServerPort()!, token, {
-                jsonrpc: '2.0',
-                id: 80,
-                method: 'tools/call',
-                params: { name: 'agentinbox', arguments: { action: 'receive', wait: true } },
-            });
-            expect(res.contentType).toContain('text/event-stream');
-            expect(res.raw).toContain(': heartbeat'); // kept alive while polling
-            expect(res.events.some((e) => e.id === 80)).toBe(true); // final response delivered
-        } finally {
-            if (prev === undefined) delete process.env.GENIE_MCP_HEARTBEAT_MS;
-            else process.env.GENIE_MCP_HEARTBEAT_MS = prev;
-        }
+        // out. The dep stands in for that parked poll: beat, then deliver.
+        const hb = manualHeartbeat();
+        const dir = tmpUserDir();
+        await startMcpServer({
+            ...deps(
+                dir,
+                0,
+                { ids: ['t-a'], lastActive: 't-a' },
+                () => {},
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                async () => {
+                    hb.fire();
+                    return { ok: true, messages: [{ seq: 1, text: 'hi' }], cursor: 1 };
+                },
+            ),
+            scheduleHeartbeat: hb.schedule,
+        });
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+        const res = await rpcStream(mcpServerPort()!, token, {
+            jsonrpc: '2.0',
+            id: 80,
+            method: 'tools/call',
+            params: { name: 'agentinbox', arguments: { action: 'receive', wait: true } },
+        });
+        expect(res.contentType).toContain('text/event-stream');
+        expect(res.raw).toContain(': heartbeat'); // kept alive while polling
+        expect(res.events.some((e) => e.id === 80)).toBe(true); // final response delivered
+        expect(hb.scheduled).toBe(0);
     });
 
     it('serves an agentinbox LIST as a single JSON response (no blocking path)', async () => {
@@ -601,9 +665,71 @@ describe('mcp server', () => {
     });
 
     it('heartbeats a pending ForceTheQuestion so the request stays alive past the idle window', async () => {
-        // Tiny heartbeat for the test; restored after.
+        const hb = manualHeartbeat();
+        const dir = tmpUserDir();
+        await startMcpServer({
+            ...deps(
+                dir,
+                0,
+                { ids: ['t-a'], lastActive: 't-a' },
+                () => {},
+                // The user takes their time: three keepalive beats pass before
+                // an answer comes back. Driving the beats here rather than
+                // waiting out three real intervals makes the COUNT assertable.
+                async () => {
+                    hb.fire();
+                    hb.fire();
+                    hb.fire();
+                    return { cancelled: false, answers: [] };
+                },
+            ),
+            scheduleHeartbeat: hb.schedule,
+        });
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+        const res = await rpcStream(mcpServerPort()!, token, {
+            jsonrpc: '2.0',
+            id: 9,
+            method: 'tools/call',
+            // Opt into progress so we get spec notifications too.
+            params: {
+                name: 'ForceTheQuestion',
+                _meta: { progressToken: 'p9' },
+                arguments: {
+                    questions: [
+                        { header: 'Q', question: 'Wait?', options: [{ label: 'A' }, { label: 'B' }] },
+                    ],
+                },
+            },
+        });
+        // Every beat kept the stream warm before the answer — exactly the three
+        // we drove, no more (a comment line per beat).
+        expect(res.raw.match(/: heartbeat/g)).toHaveLength(3);
+        // Each beat also emitted a spec progress notification against the
+        // supplied token, and `progress` rises monotonically as the spec requires.
+        const progress = res.events.filter((e) => e.method === 'notifications/progress');
+        expect(progress.map((e) => e.params.progress)).toEqual([1, 2, 3]);
+        expect(progress.every((e) => e.params.progressToken === 'p9')).toBe(true);
+        // And the final response still arrived after all that waiting.
+        expect(res.events.some((e) => e.id === 9)).toBe(true);
+        expect(hb.scheduled).toBe(0);
+    });
+
+    it('beats on a REAL interval when no scheduler is injected (the production path)', async () => {
+        // The tests above inject the beat, which proves the SSE wiring but would
+        // happily keep passing if the default scheduler were deleted — and that
+        // default is what ships. So exercise it: no scheduleHeartbeat, a real
+        // timer, GENIE_MCP_HEARTBEAT_MS to keep the cadence short.
+        //
+        // It waits FOR a beat instead of racing one: the handler stays parked
+        // until the client has actually received ': heartbeat', so a slow runner
+        // makes this test slower, never red. (If a real interval genuinely never
+        // fires — the genie#76 breakage — it fails here, correctly.)
         const prev = process.env.GENIE_MCP_HEARTBEAT_MS;
         process.env.GENIE_MCP_HEARTBEAT_MS = '20';
+        let release = (): void => {};
+        const parked = new Promise<void>((r) => {
+            release = () => r();
+        });
         try {
             const dir = tmpUserDir();
             await startMcpServer(
@@ -612,43 +738,31 @@ describe('mcp server', () => {
                     0,
                     { ids: ['t-a'], lastActive: 't-a' },
                     () => {},
-                    // Resolve only after several heartbeat intervals have passed.
-                    () =>
-                        new Promise((r) =>
-                            setTimeout(
-                                () => r({ cancelled: false, answers: [] }),
-                                150,
-                            ),
-                        ),
+                    undefined,
+                    async () => {
+                        await parked;
+                        return { ok: true, processes: [] };
+                    },
                 ),
             );
             const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
-            const res = await rpcStream(mcpServerPort()!, token, {
+            const s = await rpcStreamOpen(mcpServerPort()!, token, {
                 jsonrpc: '2.0',
-                id: 9,
+                id: 13,
                 method: 'tools/call',
-                // Opt into progress so we get spec notifications too.
                 params: {
-                    name: 'ForceTheQuestion',
-                    _meta: { progressToken: 'p9' },
-                    arguments: {
-                        questions: [
-                            { header: 'Q', question: 'Wait?', options: [{ label: 'A' }, { label: 'B' }] },
-                        ],
-                    },
+                    name: 'manageProcess',
+                    arguments: { action: 'create', label: 'dev', command: 'npm run dev' },
                 },
             });
-            // At least one heartbeat comment kept the stream warm before the answer.
-            expect(res.raw).toContain(': heartbeat');
-            // Progress notifications were emitted against the supplied token.
-            const progress = res.events.filter(
-                (e) => e.method === 'notifications/progress',
-            );
-            expect(progress.length).toBeGreaterThan(0);
-            expect(progress[0].params.progressToken).toBe('p9');
-            // And the final response still arrived after all that waiting.
-            expect(res.events.some((e) => e.id === 9)).toBe(true);
+            // The gate is still open; the keepalive must arrive on its own.
+            await until(() => s.read().includes(': heartbeat'));
+            release();
+            const raw = await s.done;
+            expect(raw).toContain(': heartbeat');
+            expect(raw).toContain('"id":13'); // and the response still followed
         } finally {
+            release();
             if (prev === undefined) delete process.env.GENIE_MCP_HEARTBEAT_MS;
             else process.env.GENIE_MCP_HEARTBEAT_MS = prev;
         }
@@ -726,15 +840,6 @@ describe('mcp server — GET server-push stream', () => {
             req.end(data);
         });
     }
-
-    const until = async (fn: () => boolean, ms = 2000): Promise<void> => {
-        const deadline = Date.now() + ms;
-        while (Date.now() < deadline) {
-            if (fn()) return;
-            await new Promise((r) => setTimeout(r, 15));
-        }
-        throw new Error('condition not met in time');
-    };
 
     it('answers a GET with an SSE stream instead of 405', async () => {
         const dir = tmpUserDir();

@@ -149,6 +149,19 @@ export interface ServerDeps {
         args: Record<string, unknown>,
         terminalId: string,
     ) => Promise<McpToolCallResult>;
+    /**
+     * How a blocking call's SSE keepalive is scheduled: subscribe a beat, get
+     * back its unsubscribe. Optional — production leaves it unset and gets the
+     * real `setInterval` at {@link heartbeatMs}.
+     *
+     * It exists so tests can DRIVE the beat instead of racing one. Proving the
+     * keepalive by starting a short real interval and hoping it fires before a
+     * short real handler delay makes the assertion a bet on the ambient clock,
+     * and that bet is lost whenever anything disturbs `setInterval` — which is
+     * exactly how genie#76 presented (a neighbouring test file left the global
+     * bound to an uninstalled fake clock, so the beat never came).
+     */
+    scheduleHeartbeat?: (beat: () => void) => () => void;
 }
 
 let server: http.Server | null = null;
@@ -330,6 +343,21 @@ function heartbeatMs(): number {
 }
 
 /**
+ * Start beating for one blocking request; the returned function stops it.
+ * Defers to an injected {@link ServerDeps.scheduleHeartbeat} when there is one,
+ * so a test can emit beats on demand; otherwise it's the real interval, exactly
+ * as before.
+ */
+function scheduleHeartbeat(beat: () => void): () => void {
+    const injected = deps?.scheduleHeartbeat;
+    if (injected) return injected(beat);
+    const timer = setInterval(beat, heartbeatMs());
+    // Don't let the heartbeat keep the process alive on its own.
+    if (typeof timer.unref === 'function') timer.unref();
+    return () => clearInterval(timer);
+}
+
+/**
  * True for a `tools/call` that may BLOCK on the user — so it gets the SSE
  * keepalive path (heartbeat) below instead of a single JSON response, and never
  * times the client out while it waits:
@@ -384,9 +412,10 @@ function progressTokenOf(msg: JsonRpcRequest): string | number | undefined {
 /**
  * Respond to a long-blocking request over an SSE stream (the MCP Streamable
  * HTTP transport's other allowed response shape for a POSTed request). While
- * the handler is pending we emit a heartbeat every HEARTBEAT_MS — an SSE
- * comment line always (resets the client's socket/idle timer) plus a spec
- * `notifications/progress` when the client supplied a progressToken. Each beat
+ * the handler is pending we emit a heartbeat on each beat of
+ * {@link scheduleHeartbeat} — an SSE comment line always (resets the client's
+ * socket/idle timer) plus a spec `notifications/progress` when the client
+ * supplied a progressToken. Each beat
  * keeps the call alive, so an unanswered ForceTheQuestion never times out. When
  * the handler settles we send the JSON-RPC response as a final SSE event and
  * end the stream.
@@ -422,7 +451,7 @@ async function sendBlockingViaSse(
 
     const token = progressTokenOf(msg);
     let progress = 0;
-    const beat = setInterval(() => {
+    const stopBeating = scheduleHeartbeat(() => {
         // Transport-level keepalive — a comment line carries no JSON-RPC
         // meaning but counts as activity, so the client's idle timeout resets.
         write(': heartbeat\n\n');
@@ -441,16 +470,14 @@ async function sendBlockingViaSse(
                 },
             });
         }
-    }, heartbeatMs());
-    // Don't let the heartbeat keep the process alive on its own.
-    if (typeof beat.unref === 'function') beat.unref();
+    });
 
     try {
         const response = await run();
         // The final JSON-RPC response rides the stream as the last event.
         if (response !== null) sseMessage(response);
     } finally {
-        clearInterval(beat);
+        stopBeating();
         if (!res.writableEnded) res.end();
     }
 }

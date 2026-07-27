@@ -697,40 +697,56 @@ function fakeTransport() {
 describe('WorkspaceAssignmentSubscriber', () => {
     it('reconciles on connect, provisions on push, deprovisions on unassign — no timers', async () => {
         vi.useFakeTimers();
-        const setInterval = vi.spyOn(globalThis, 'setInterval');
-        const t = fakeTransport();
-        const reconcile = vi.fn(async () => {});
-        const provision = vi.fn(async (_a: WorkspaceAssignment) => {});
-        const deprovision = vi.fn(async (_id: string) => {});
+        // Count setInterval calls WITHOUT vi.spyOn. Fake timers already own this
+        // global slot, and a spy taken on top of it records the fake clock's
+        // shim as the value to put back — which vitest then does at end of file,
+        // long after the clock is uninstalled. That left every later test file
+        // in the fork (they all share one) with a setInterval wired to a clock
+        // nobody advances, so it never fired: the MCP server's SSE heartbeat
+        // stopped beating and genie#76 looked like a CI load flake. A plain
+        // vi.fn() belongs to no slot, so nothing can reinstate it behind us.
+        const clockSetInterval = globalThis.setInterval;
+        const setInterval = vi.fn(clockSetInterval);
+        globalThis.setInterval = setInterval as unknown as typeof globalThis.setInterval;
+        try {
+            const t = fakeTransport();
+            const reconcile = vi.fn(async () => {});
+            const provision = vi.fn(async (_a: WorkspaceAssignment) => {});
+            const deprovision = vi.fn(async (_id: string) => {});
 
-        const sub = new WorkspaceAssignmentSubscriber({ transport: t.transport, reconcile, provision, deprovision });
-        sub.start();
-        expect(t.opened).toBe(true);
+            const sub = new WorkspaceAssignmentSubscriber({ transport: t.transport, reconcile, provision, deprovision });
+            sub.start();
+            expect(t.opened).toBe(true);
 
-        // Each (re)connect drives ONE reconcile.
-        t.connect();
-        t.connect();
-        await vi.runAllTimersAsync();
-        expect(reconcile).toHaveBeenCalledTimes(2);
+            // Each (re)connect drives ONE reconcile.
+            t.connect();
+            t.connect();
+            await vi.runAllTimersAsync();
+            expect(reconcile).toHaveBeenCalledTimes(2);
 
-        // Each assignment push provisions that one workspace.
-        t.push(assignment({ workspaceId: 'x' }));
-        await vi.runAllTimersAsync();
-        expect(provision).toHaveBeenCalledTimes(1);
-        expect(provision.mock.calls[0][0].workspaceId).toBe('x');
+            // Each assignment push provisions that one workspace.
+            t.push(assignment({ workspaceId: 'x' }));
+            await vi.runAllTimersAsync();
+            expect(provision).toHaveBeenCalledTimes(1);
+            expect(provision.mock.calls[0][0].workspaceId).toBe('x');
 
-        // Each unassignment push deprovisions that one workspace.
-        t.unassign('x');
-        await vi.runAllTimersAsync();
-        expect(deprovision).toHaveBeenCalledTimes(1);
-        expect(deprovision.mock.calls[0][0]).toBe('x');
+            // Each unassignment push deprovisions that one workspace.
+            t.unassign('x');
+            await vi.runAllTimersAsync();
+            expect(deprovision).toHaveBeenCalledTimes(1);
+            expect(deprovision.mock.calls[0][0]).toBe('x');
 
-        // NEVER a polling loop.
-        expect(setInterval).not.toHaveBeenCalled();
+            // NEVER a polling loop.
+            expect(setInterval).not.toHaveBeenCalled();
 
-        sub.stop();
-        expect(t.close).toHaveBeenCalledTimes(1);
-        vi.useRealTimers();
+            sub.stop();
+            expect(t.close).toHaveBeenCalledTimes(1);
+        } finally {
+            // Unwind in the reverse order we wrapped: put the clock's own shim
+            // back, THEN uninstall the clock so the real setInterval returns.
+            globalThis.setInterval = clockSetInterval;
+            vi.useRealTimers();
+        }
     });
 
     it('start is idempotent — one connection even if called twice', () => {
