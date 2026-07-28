@@ -4096,10 +4096,11 @@ body.gutter-dragging .grid-gutter {
 }
 
 /* In-app file/folder picker modal (FilePickerModal — replaces native OS dialogs).
- * Uses the shared .ctx-scrim; the body hosts the react-fancy FileBrowser. */
-/* The file picker rides `.ctx-scrim`'s look but NOT its rung — see the picker
-   layer note at the top of this file (genie #86). Declared after `.ctx-scrim`
-   because both are single-class selectors: equal specificity, source order wins. */
+ * Borrows the shared .ctx-scrim's LOOK but not its rung — the picker opens from
+ * Fancy modals, so it carries .file-picker-scrim too and rides `--z-picker` (see
+ * the picker layer note at the top of this file, genie #86). That override has to
+ * be declared after .ctx-scrim: equal specificity, so source order wins.
+ * The body hosts the react-fancy FileBrowser. */
 .file-picker-scrim {
     z-index: var(--z-picker);
 }
