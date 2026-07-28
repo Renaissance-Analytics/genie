@@ -138,6 +138,7 @@ import {
     listPendingQuestions,
     answerPendingQuestion,
     setAvailabilityReader,
+    setQuestionClock,
     setQuestionTransport,
     setDeferredAnswerSink,
 } from '../force-question';
@@ -646,6 +647,74 @@ describe('forwarded question DND (per-remote-host availability)', () => {
             workstationId: 'host:abc',
         });
         expect(state.windows.length).toBe(before + 1);
+        win().close();
+    });
+});
+
+// --- "when did this come in?" (genie #60) -----------------------------------
+// The inbox lists questions that may have been waiting minutes or hours; without
+// an arrival time the owner can't tell a just-asked question from a stale one.
+// The stamp is taken at ENQUEUE (not when the inbox reads the list) and rides
+// listPendingQuestions() to every consumer — the flyout, the phone, and a remote
+// driver reading `/api/questions`.
+describe('pending-question arrival time (createdAt)', () => {
+    beforeEach(() => {
+        setQuestionTransport(null);
+        registerForceQuestionIpc({ isDev: false, preloadPath: '/p.js', getMasterWindow: () => null });
+    });
+    afterEach(() => {
+        setQuestionClock(null); // restore the real clock
+        setAvailabilityReader(null);
+        for (const p of listPendingQuestions()) answerPendingQuestion(p.id, []);
+        for (const w of state.windows) w.close();
+        vi.clearAllMocks();
+    });
+
+    it('stamps a queued question at enqueue time and carries it through listPendingQuestions', async () => {
+        setQuestionClock(() => 1_000);
+        const p = forceQuestion(Q('A'), 'Wonder');
+        // Time passes while it WAITS — the stamp must be the arrival, not the read.
+        setQuestionClock(() => 9_999);
+        const row = listPendingQuestions().find((q) => q.questions[0].header === 'A')!;
+        expect(row.createdAt).toBe(1_000);
+        win().close();
+        await p;
+    });
+
+    it('stamps a DND-deferred question too (it waits longest of all)', async () => {
+        setAvailabilityReader(() => ({ availability: 'dnd', dndMessage: 'x' }));
+        setQuestionClock(() => 2_500);
+        await forceQuestion(Q('B'), 'Wonder', 'normal', { workspaceId: 'ws1' });
+        const row = listPendingQuestions().find((q) => q.questions[0].header === 'B')!;
+        expect(row.createdAt).toBe(2_500);
+    });
+
+    it('preserves the HOST’s arrival time on a forwarded question (not the moment we forwarded it)', () => {
+        setAvailabilityReader(() => ({ availability: 'available', dndMessage: 'x' }));
+        setQuestionClock(() => 8_000); // the driver forwards it much later
+        void raiseForwardedQuestion({
+            connKey: 'host:abc',
+            hostId: 'Q5',
+            questions: Q('Z'),
+            remoteHost: 'abc.geniecloud.link',
+            createdAt: 42, // when the HOST's agent actually asked
+        });
+        const row = listPendingQuestions().find((q) => q.questions[0].header === 'Z')!;
+        expect(row.createdAt).toBe(42);
+        win().close();
+    });
+
+    it('falls back to the forward time when the host is too old to send one', () => {
+        setAvailabilityReader(() => ({ availability: 'available', dndMessage: 'x' }));
+        setQuestionClock(() => 8_000);
+        void raiseForwardedQuestion({
+            connKey: 'host:abc',
+            hostId: 'Q6',
+            questions: Q('Old'),
+            remoteHost: 'abc.geniecloud.link',
+        });
+        const row = listPendingQuestions().find((q) => q.questions[0].header === 'Old')!;
+        expect(row.createdAt).toBe(8_000);
         win().close();
     });
 });
