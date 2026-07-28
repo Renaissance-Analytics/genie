@@ -7,7 +7,7 @@
  * GENIE_E2E_TUNNEL=1.
  */
 
-import { webContents } from 'electron';
+import { webContents, type WebContents } from 'electron';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,12 +24,30 @@ import { currentPin } from '../mobile/auth';
 import { mobileServerState, startMobileServer } from '../mobile/server';
 import type { MobileDataDeps } from '../mobile/api';
 import type { ResolvedSite, SiteProxyDeps } from '../mobile/site-proxy';
+import { pendingTunnelLegs, type TunnelProbeShape } from './tunnel-legs';
+import { tunnelProbeScript } from './tunnel-probe';
 
 const SITE_ID = 'e2e-app-test';
 const VITE_SITE_ID = 'e2e-vite-test';
 const NEXT_SITE_ID = 'e2e-next-test';
 const REVERB_SITE_ID = 'e2e-reverb-test';
 const WORKSPACE_ID = 'e2e-workspace';
+
+/** The origin the Testing Browser must sit on — the `.gen` alias, never the
+ *  upstream `.test` vhost the harness opened (genie#29). */
+const GEN_ORIGIN = 'https://app.gen';
+
+/**
+ * How long the harness converges before publishing whatever state it has.
+ *
+ * Past this the probe is published with `ready: true` and its residual flags, so
+ * a genuinely broken tunnel fails the spec with the REAL diff (exactly which
+ * legs never came up) instead of timing out on an opaque poll.
+ */
+const READY_DEADLINE_MS = 40_000;
+
+/** Floor between re-run kicks, so a fast-failing leg cannot spin the page. */
+const RERUN_INTERVAL_MS = 250;
 
 export function isE2ETunnel(): boolean {
     return process.env.GENIE_E2E === '1' && process.env.GENIE_E2E_TUNNEL === '1';
@@ -52,145 +70,7 @@ function fixtureHtml(): string {
   <div id="style-probe">fixture</div>
   <script src="https://app.test/absolute.js"></script>
   <script>
-  window.__tunnelProbe = {
-    ready: false,
-    origin: location.origin,
-    absoluteScript: false,
-    absoluteStyle: false,
-    bearer: { ok: false, authorization: null },
-    cookie: false,
-    redirect: { ok: false, url: '' },
-    stream: false,
-    websocket: false,
-    vite: { manifest: false, module: false, sourceMap: false, hmr: false, debugger: false },
-    next: { module: false, sourceMap: false, fastRefresh: false },
-    reverb: false,
-    errors: [],
-  };
-  const p = window.__tunnelProbe;
-  const attempt = async (name, fn) => {
-    try { await fn(); } catch (error) { p.errors.push(name + ': ' + String(error)); }
-  };
-  // The absolute script + stylesheet are EXTERNAL subresources: reading them the
-  // instant this runs races their load, which is why Windows (the slowest runner)
-  // intermittently reported absoluteStyle:false while macOS/Linux passed. Poll
-  // briefly instead of sampling once.
-  const settle = async (check) => {
-    // 15s (was 5s): the slow Windows CI runner loads these external subresources
-    // over the tunnel well after 5s, which is why absoluteStyle:false flaked there
-    // (genie#20) while macOS/Linux passed.
-    const deadline = Date.now() + 15000;
-    while (Date.now() < deadline) {
-      if (check()) return true;
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    return check();
-  };
-  (async () => {
-    // Settle the two external subresources CONCURRENTLY. Sequentially, the
-    // stylesheet's window only opened AFTER the script settled, so on a slow
-    // runner it could exhaust its budget before the stylesheet applied. In
-    // parallel each gets the full window from t=0.
-    [p.absoluteScript, p.absoluteStyle] = await Promise.all([
-      settle(() => window.__absoluteScriptLoaded === true),
-      settle(
-        () => getComputedStyle(document.getElementById('style-probe')).color === 'rgb(1, 2, 3)',
-      ),
-    ]);
-    await attempt('bearer', async () => {
-      const response = await fetch('/api/bearer', {
-        headers: { Authorization: 'Bearer fixture-application-token' },
-      });
-      p.bearer = await response.json();
-    });
-    await attempt('cookie', async () => {
-      await fetch('/api/cookie', { credentials: 'include' });
-      p.cookie = (await (await fetch('/api/cookie-check', { credentials: 'include' })).json()).ok;
-    });
-    await attempt('redirect', async () => {
-      const response = await fetch('/redirect');
-      const body = await response.json();
-      p.redirect = { ok: body.ok === true, url: response.url };
-    });
-    await attempt('stream', () => new Promise((resolve, reject) => {
-      const events = new EventSource('/api/stream');
-      const timeout = setTimeout(() => { events.close(); reject(new Error('timeout')); }, 3000);
-      events.addEventListener('fixture', (event) => {
-        clearTimeout(timeout);
-        events.close();
-        p.stream = event.data === 'stream-ok';
-        resolve();
-      });
-      events.onerror = () => { clearTimeout(timeout); events.close(); reject(new Error('failed')); };
-    }));
-    await attempt('websocket', () => new Promise((resolve, reject) => {
-      const socket = new WebSocket('wss://' + location.host + '/ws');
-      const timeout = setTimeout(() => { socket.close(); reject(new Error('timeout')); }, 3000);
-      socket.onmessage = (event) => {
-        clearTimeout(timeout);
-        p.websocket = event.data === 'ws-ok';
-        socket.close();
-        resolve();
-      };
-      socket.onerror = () => { clearTimeout(timeout); reject(new Error('failed')); };
-    }));
-    await attempt('vite-manifest', async () => {
-      const response = await fetch('https://assets.dev.app.test/build/manifest.json');
-      const manifest = await response.json();
-      p.vite.manifest = manifest['resources/js/app.ts'].isEntry === true;
-    });
-    await attempt('vite-module', async () => {
-      await import('https://assets.dev.app.test/@vite/client');
-      p.vite.module = window.__viteClientLoaded === true;
-      const response = await fetch('https://assets.dev.app.test/@vite/client.map');
-      const sourceMap = await response.json();
-      p.vite.sourceMap = sourceMap.sources.includes('/@vite/client');
-    });
-    await attempt('vite-hmr', () => new Promise((resolve, reject) => {
-      const socket = new WebSocket('wss://assets.dev.app.test/hmr', 'vite-hmr');
-      const timeout = setTimeout(() => { socket.close(); reject(new Error('timeout')); }, 3000);
-      socket.onmessage = (event) => {
-        clearTimeout(timeout);
-        const message = JSON.parse(String(event.data));
-        p.vite.hmr = message.type === 'connected';
-        socket.close();
-        resolve();
-      };
-      socket.onerror = () => { clearTimeout(timeout); reject(new Error('failed')); };
-    }));
-    await attempt('next-module', async () => {
-      await import('https://next.dev.app.test/_next/static/chunks/app.js');
-      p.next.module = window.__nextDevChunkLoaded === true;
-      const response = await fetch('https://next.dev.app.test/_next/static/chunks/app.js.map');
-      const sourceMap = await response.json();
-      p.next.sourceMap = sourceMap.sources.includes('webpack://app/page.tsx');
-    });
-    await attempt('next-fast-refresh', () => new Promise((resolve, reject) => {
-      const socket = new WebSocket('wss://next.dev.app.test/_next/webpack-hmr');
-      const timeout = setTimeout(() => { socket.close(); reject(new Error('timeout')); }, 3000);
-      socket.onmessage = (event) => {
-        clearTimeout(timeout);
-        const message = JSON.parse(String(event.data));
-        p.next.fastRefresh = message.action === 'sync';
-        socket.close();
-        resolve();
-      };
-      socket.onerror = () => { clearTimeout(timeout); reject(new Error('failed')); };
-    }));
-    await attempt('reverb', () => new Promise((resolve, reject) => {
-      const socket = new WebSocket('wss://ws.app.test/app/e2e-key?protocol=7&client=js');
-      const timeout = setTimeout(() => { socket.close(); reject(new Error('timeout')); }, 3000);
-      socket.onmessage = (event) => {
-        clearTimeout(timeout);
-        const message = JSON.parse(String(event.data));
-        p.reverb = message.event === 'pusher:connection_established';
-        socket.close();
-        resolve();
-      };
-      socket.onerror = () => { clearTimeout(timeout); reject(new Error('failed')); };
-    }));
-    p.ready = true;
-  })();
+${tunnelProbeScript()}
   </script>
 </body>
 </html>`;
@@ -525,35 +405,79 @@ export async function startTunnelE2EHarness(): Promise<void> {
     );
     handle.opened = opened;
 
+    // Drive the probe to a READY-STATE rather than sampling it once. `ready` now
+    // means "every capability has been observed working over the tunnel" — see
+    // pendingTunnelLegs. Until then, re-run the outstanding legs.
+    let debuggerConfirmed = false;
+    let polling = false;
+    let lastRun = 0;
+    const deadline = Date.now() + READY_DEADLINE_MS;
+
     const timer = setInterval(async () => {
+        // One outstanding read at a time — a slow `executeJavaScript` must not
+        // stack up ticks that then re-kick a pass already in flight.
+        if (polling) return;
         const id = testingBrowserContentIdForE2E();
         const contents = id ? webContents.fromId(id) : null;
         if (!contents || contents.isDestroyed()) return;
+        polling = true;
         try {
-            if (!contents.debugger.isAttached()) {
-                contents.debugger.attach('1.3');
-                await contents.debugger.sendCommand('Runtime.enable');
-                const evaluated = await contents.debugger.sendCommand('Runtime.evaluate', {
-                    expression: 'location.origin',
-                    returnByValue: true,
-                });
+            if (!debuggerConfirmed) debuggerConfirmed = await confirmDebuggerOrigin(contents);
+            const probe = (await contents.executeJavaScript(
+                'window.__tunnelProbe ? JSON.parse(JSON.stringify(window.__tunnelProbe)) : null',
+                true,
+            )) as (TunnelProbeShape & Record<string, unknown>) | null;
+            if (!probe) return; // page not parsed yet
+            const pending = pendingTunnelLegs(probe);
+            probe.ready = pending.length === 0 || Date.now() >= deadline;
+            if (isE2ETailscaleTunnel()) probe.transport = 'tailscale';
+            handle.probe = probe;
+            if (probe.ready) {
+                clearInterval(timer);
+                return;
+            }
+            // The `debugger` leg is main-side (confirmDebuggerOrigin retries it);
+            // everything else is re-run in the page.
+            const retry = pending.filter((leg) => leg !== 'debugger');
+            if (retry.length && !probe.running && Date.now() - lastRun >= RERUN_INTERVAL_MS) {
+                lastRun = Date.now();
                 await contents.executeJavaScript(
-                    `window.__tunnelProbe.vite.debugger = ${
-                        evaluated?.result?.value === 'https://app.gen'
-                    }`,
+                    `window.__tunnelRun(${JSON.stringify(retry)})`,
                     true,
                 );
             }
-            const probe = await contents.executeJavaScript(
-                'window.__tunnelProbe ? JSON.parse(JSON.stringify(window.__tunnelProbe)) : null',
-                true,
-            );
-            if (isE2ETailscaleTunnel() && probe) probe.transport = 'tailscale';
-            handle.probe = probe;
-            if (probe?.ready) clearInterval(timer);
         } catch {
             // Navigation/TLS handshake may still be in flight; poll again.
+        } finally {
+            polling = false;
         }
     }, 100);
     timer.unref?.();
+}
+
+/**
+ * Confirm over the DevTools protocol that the page really sits on the `.gen`
+ * origin, and record it on the probe. Returns false while the answer is not yet
+ * trustworthy — debugger not attached, page mid-navigation, probe not published —
+ * so the caller RETRIES.
+ *
+ * The old harness did this exactly once, keyed off `debugger.isAttached()`. The
+ * attach succeeded on the first 100 ms tick, i.e. while the very first navigation
+ * was still in flight, so `location.origin` could be sampled as `about:blank` and
+ * written as a permanent `false`; and any throw from the write (probe not defined
+ * yet) still left `isAttached()` true, so the block never ran again. Either way
+ * `vite.debugger` stuck false and the spec failed on a warm-up artifact.
+ */
+async function confirmDebuggerOrigin(contents: WebContents): Promise<boolean> {
+    if (!contents.debugger.isAttached()) {
+        contents.debugger.attach('1.3');
+        await contents.debugger.sendCommand('Runtime.enable');
+    }
+    const evaluated = await contents.debugger.sendCommand('Runtime.evaluate', {
+        expression: 'location.origin',
+        returnByValue: true,
+    });
+    if (evaluated?.result?.value !== GEN_ORIGIN) return false;
+    await contents.executeJavaScript('window.__tunnelProbe.vite.debugger = true', true);
+    return true;
 }

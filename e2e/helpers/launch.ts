@@ -152,7 +152,16 @@ export async function launchGenieTunnelE2E(): Promise<{
 }
 
 export interface TunnelProbe {
+    /** Set by the MAIN process, not the page: true once every capability leg has
+     *  been observed working over the tunnel (or the harness's convergence
+     *  deadline expired, so the spec fails with the real residual state rather
+     *  than an opaque poll timeout). See main/e2e/tunnel-legs.ts. */
     ready: boolean;
+    /** True while a probe pass is mid-flight (the flags are partial). */
+    running: boolean;
+    /** Legs that failed at least once before succeeding — surfaced by the spec so
+     *  a genuinely intermittent tunnel stays visible. */
+    recovered: string[];
     transport?: 'tailscale';
     origin: string;
     absoluteScript: boolean;
