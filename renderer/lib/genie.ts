@@ -123,6 +123,10 @@ export interface PendingQuestionSpec {
     remoteHost?: string;
     /** True for a DND-deferred question (never popped a modal). */
     deferred?: boolean;
+    /** When the question ARRIVED (ms epoch), stamped at enqueue — the inbox shows
+     *  it as "came in 5m ago". Absent when it was forwarded from a host running an
+     *  older build, so render nothing rather than assuming a time. */
+    createdAt?: number;
 }
 
 /** Pending questions grouped by workspace for the inbox panel (main-side grouping). */

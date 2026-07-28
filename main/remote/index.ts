@@ -618,6 +618,10 @@ async function syncForwardedQuestions(conn: RemoteConnection): Promise<void> {
             // v2 — preserve the host's priority (so a host's urgent sorts up in the
             // driver's queue) + attribute it to the host (§8: never shown as local).
             priority: q.priority,
+            // When the HOST's agent actually asked (absent on an older host, which
+            // then falls back to the forward time) — so a driver's inbox reports
+            // the question's real age, not the moment we picked it up.
+            createdAt: q.createdAt,
             remoteHost: conn.host.hostname,
             // PendingQuestions UX — the host's workstation identity, so the DRIVER's
             // per-workstation DND for THIS host diverts its questions to the inbox
@@ -661,6 +665,25 @@ async function syncForwardedQuestions(conn: RemoteConnection): Promise<void> {
             dismissForwardedQuestion(conn.connKey, hostId);
         }
     }
+}
+
+/**
+ * The host's pending-question set moved: forward what needs forwarding AND tell
+ * the bound window(s) to re-read their (host-sourced) question badge.
+ *
+ * The nudge is separate from the sync for two reasons. A host on an older build
+ * pushes ONLY the singular `question:changed`, which main consumes here and never
+ * re-emitted — so a bound window's badge never moved (genie #60); the plural
+ * `questions:changed` a current host also pushes rides PASSTHROUGH_EVENTS with
+ * its own count, and a second, idempotent re-read costs one small GET. And the
+ * sync itself returns early on a locked/readonly link, where the badge is still
+ * worth showing even though the questions can't be answered from here. Payload-
+ * less on purpose: the window re-reads the HOST, so no client-side count can go
+ * stale in flight.
+ */
+function refreshConnQuestions(conn: RemoteConnection): void {
+    emitToConn(conn, 'questions:changed', undefined);
+    void syncForwardedQuestions(conn);
 }
 
 /** Surface a host's imDone chime + toast on THIS driver (the glow + window-flash
@@ -1137,7 +1160,7 @@ function handleBridgeMessage(conn: RemoteConnection, raw: string): void {
             };
             setConnControl(conn, !!view?.locked, holderIdentity(view ?? null));
         } else if (msg.type === 'question:changed') {
-            void syncForwardedQuestions(conn);
+            refreshConnQuestions(conn);
         } else if (msg.type === 'notify:imdone') {
             forwardImDoneToDriver(conn, msg.payload as { label?: string } | null);
         }
@@ -1198,8 +1221,9 @@ function startRelayEventsBridge(conn: RemoteConnection): void {
     // the first attach already knows whether it may key its own stream.
     void probeRelayFeatures(conn);
     // Pick up any questions the host already had pending before we attached (the
-    // `question:changed` push only fires on a CHANGE, not on connect).
-    void syncForwardedQuestions(conn);
+    // `question:changed` push only fires on a CHANGE, not on connect) — and
+    // re-seed the bound window's badge from the host for the same reason.
+    refreshConnQuestions(conn);
     // NOTE: control state on the relay path is driven purely by the live
     // `control:changed` push (handleBridgeMessage), not proactively seeded — relay
     // reconnect/re-seed is a later increment (mirrors the events-bridge comment).
@@ -1268,7 +1292,10 @@ function startEventsBridge(conn: RemoteConnection): void {
                 reattachTerminals(conn);
                 void refreshControlState(conn);
             }
-            void syncForwardedQuestions(conn);
+            // Sync the host's already-pending questions AND re-seed the bound
+            // window's badge — after a dropped bridge the window kept rendering
+            // whatever count it last heard, which the host has since moved past.
+            refreshConnQuestions(conn);
         });
 
         ws.on('message', (raw) => handleBridgeMessage(conn, String(raw)));

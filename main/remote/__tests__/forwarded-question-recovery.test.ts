@@ -114,6 +114,8 @@ interface FakeHost {
     setAnswerStatus(status: number): void;
     /** Host-side `question:changed` push over /ws/events. */
     pushQuestionChanged(): void;
+    /** Host-side PLURAL `questions:changed` push (a host on a CURRENT build). */
+    pushQuestionsChanged(payload: unknown): void;
     /** Host-side kill-switch toggle + `control:changed` push. */
     pushControl(locked: boolean): void;
     answerPosts(): { id: string; body: string }[];
@@ -218,6 +220,7 @@ function startFakeHost(): Promise<FakeHost> {
                     answerStatus = s;
                 },
                 pushQuestionChanged: () => emit('question:changed', {}),
+                pushQuestionsChanged: (payload) => emit('questions:changed', payload),
                 pushControl: (l) => {
                     locked = l;
                     emit('control:changed', { locked: l });
@@ -251,20 +254,33 @@ const Q1: HostQuestion = {
 
 let host: FakeHost;
 let connKey: string;
+/** The window bound to the host — its `webContents.send` is what a bound window
+ *  actually receives, so the badge assertions read it. */
+let bound: ReturnType<typeof fakeWindow>;
+
+/** Every local channel pushed to the bound window (badge assertions). */
+function sentTo(channel: string): unknown[] {
+    return bound.webContents.send.mock.calls
+        .filter((c) => c[0] === channel)
+        .map((c) => c[1]);
+}
 
 /** Connect the driver and wait until its /ws/events bridge is live, so a
- *  host-side push in the test can actually reach it. */
+ *  host-side push in the test can actually reach it. The window is bound BEFORE
+ *  connecting so pushes emitted as the bridge comes up have somewhere to land
+ *  (binding is just a map entry — it doesn't require a live connection). */
 async function connect(): Promise<void> {
     connKey = '127.0.0.1:' + host.port;
+    bound = fakeWindow(WC_ID);
     vi.spyOn(BrowserWindow, 'getAllWindows').mockReturnValue([
-        fakeWindow(WC_ID),
+        bound,
     ] as unknown as Electron.BrowserWindow[]);
+    bindWindowToConnection(WC_ID, connKey);
     const res = await connectRemote(
         { ip: '127.0.0.1', port: host.port, hostname: 'fake' },
         '123456',
     );
     expect(res.ok).toBe(true);
-    bindWindowToConnection(WC_ID, connKey);
     await vi.waitFor(() => expect(host.eventsSocketCount()).toBe(1));
 }
 
@@ -432,5 +448,51 @@ describe('forwardedShown bookkeeping — one modal per host question', () => {
         host.setQuestions([Q1]);
         host.pushQuestionChanged();
         await vi.waitFor(() => expect(ask.raiseCount('hq-1')).toBe(2));
+    });
+});
+
+/**
+ * genie #60 — the top-bar QUESTIONS badge on a window bound to this host.
+ *
+ * The badge is HOST-SOURCED (the bridge's `questions.list` reads the host), so a
+ * bound window only needs a nudge on the local `questions:changed` channel to
+ * re-read it. Two host builds push two DIFFERENT names for the same event:
+ * a CURRENT host pushes the plural `questions:changed` (passthrough), an older
+ * one only the singular `question:changed` — which main consumes for forwarding
+ * and never re-emitted, so a badge bound to a deployed (older) host never moved.
+ * Both must land, and a reconnect must re-seed.
+ */
+describe('host-sourced question badge (genie #60)', () => {
+    it('nudges the bound window when an OLDER host pushes the singular question:changed', async () => {
+        host.setQuestions([]);
+        await connect();
+        const before = sentTo('questions:changed').length;
+
+        host.setQuestions([Q1]);
+        host.pushQuestionChanged();
+
+        // The window is told to re-read (its list() reads the HOST) — without this
+        // the singular push is consumed by the forwarding path and the badge
+        // stays at whatever it was seeded with.
+        await vi.waitFor(() =>
+            expect(sentTo('questions:changed').length).toBeGreaterThan(before),
+        );
+    });
+
+    it('passes a CURRENT host’s plural questions:changed through with its payload', async () => {
+        host.setQuestions([]);
+        await connect();
+
+        host.pushQuestionsChanged({ count: 3, workspaces: 2 });
+
+        await vi.waitFor(() =>
+            expect(sentTo('questions:changed')).toContainEqual({ count: 3, workspaces: 2 }),
+        );
+    });
+
+    it('re-seeds the badge when the events bridge comes up (reconnect)', async () => {
+        host.setQuestions([Q1]);
+        await connect();
+        await vi.waitFor(() => expect(sentTo('questions:changed')).not.toHaveLength(0));
     });
 });

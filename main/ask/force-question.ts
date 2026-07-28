@@ -89,6 +89,16 @@ export interface DeferredAnswerDelivery {
     /** The user's answer (selected options + note per question). */
     answers: ForceAnswer[];
 }
+/**
+ * The clock every pending question is stamped with. Injectable so the arrival
+ * time is assertable without freezing global time (tests install a fake; pass
+ * null to restore the real clock).
+ */
+let questionClock: () => number = () => Date.now();
+export function setQuestionClock(fn: (() => number) | null): void {
+    questionClock = fn ?? (() => Date.now());
+}
+
 let deferredAnswerSink: ((d: DeferredAnswerDelivery) => void) | null = null;
 /** Install the deferred-answer delivery sink (composition root → AgentInbox broker).
  *  Pass null to disable delivery (the default; internal gates don't route back). */
@@ -109,6 +119,10 @@ interface DeferredQuestion {
     workspaceLabel?: string;
     priority?: QuestionPriority;
     remoteHost?: string;
+    /** When the question ARRIVED (ms epoch) — stamped as it's deferred, so the
+     *  inbox can say how long it has been waiting. A deferred question waits
+     *  longest of all, which is exactly when "came in 3h ago" matters. */
+    createdAt?: number;
     /**
      * Present ONLY for a FORWARDED DND deferral (a remote host the driver set to
      * DND). Its promise is still LIVE: answering it from the inbox must resolve
@@ -172,6 +186,10 @@ interface QueueItem {
      * local agent's promise.
      */
     forward?: { connKey: string; hostId: string; hostLabel?: string };
+    /** When the question ARRIVED (ms epoch), stamped in `enqueue`. For a FORWARDED
+     *  question this is the HOST's stamp when it sent one, so the driver sees when
+     *  the agent actually asked rather than when we picked it up. */
+    createdAt?: number;
     /** The asking agent's terminal — carried so that if the modal CAN'T be shown
      *  (createAskWindow throws) the question defers with a delivery handle, exactly
      *  like the DND path. Absent for an internal gate / forwarded question. */
@@ -274,6 +292,14 @@ export interface PendingQuestion {
      *  modal (the user was heads-down), it's here to answer at leisure. The inbox
      *  styles it without the blocking-modal urgency. */
     deferred?: boolean;
+    /**
+     * When the question ARRIVED (ms epoch), stamped at enqueue — so the inbox can
+     * say "came in 5m ago" instead of leaving the owner guessing whether an agent
+     * has been blocked for seconds or all afternoon. Locally-raised questions
+     * always carry it; a question FORWARDED from a host on an older build has
+     * none, so consumers must degrade (show nothing) rather than assume epoch 0.
+     */
+    createdAt?: number;
 }
 
 /**
@@ -289,6 +315,7 @@ export function listPendingQuestions(): PendingQuestion[] {
         index,
         priority: item.priority,
         remoteHost: item.forward?.hostLabel,
+        createdAt: item.createdAt,
     }));
     const dnd: PendingQuestion[] = deferred.map((d, i) => ({
         id: d.id,
@@ -298,6 +325,7 @@ export function listPendingQuestions(): PendingQuestion[] {
         priority: d.priority,
         remoteHost: d.remoteHost,
         deferred: true,
+        createdAt: d.createdAt,
     }));
     return [...active, ...dnd];
 }
@@ -366,7 +394,7 @@ export function _seedPendingQuestionForTest(
     workspaceLabel?: string,
 ): string {
     const id = crypto.randomBytes(9).toString('hex');
-    queue.push({ id, resolve: () => {}, questions, workspaceLabel });
+    queue.push({ id, resolve: () => {}, questions, workspaceLabel, createdAt: questionClock() });
     notifyQuestionsChanged();
     return id;
 }
@@ -537,6 +565,10 @@ function createAskWindow(): BrowserWindow {
  * both. On a window-open failure the item is dropped and resolved cancelled.
  */
 function enqueue(item: QueueItem): void {
+    // Stamp the ARRIVAL here — the single choke point every question funnels
+    // through — so the inbox reports when it came in, not when it was read. A
+    // forwarded question arrives with the HOST's stamp; keep it.
+    item.createdAt ??= questionClock();
     // First in line opens the shared window; later ones enqueue BY PRIORITY (v2)
     // and wait their turn — a higher-priority arrival jumps ahead of lower-priority
     // waiters but never preempts the shown head (the window reuses each in turn).
@@ -566,6 +598,7 @@ function enqueue(item: QueueItem): void {
             questions: item.questions,
             workspaceLabel: item.workspaceLabel,
             priority: item.priority,
+            createdAt: item.createdAt,
             askerTerminalId: item.askerTerminalId,
         });
         notifyQuestionsChanged();
@@ -612,7 +645,14 @@ function raiseDesktopModal(
             // AgentInbox (ping/poll/pull) — a deferred ForceTheQuestion is NOT a dead
             // end. Resolve NOW (never block) with the notice + questionId so the agent
             // knows to pull the answer later. `cancelled: true` marks "not inline".
-            deferred.push({ id, questions, workspaceLabel, priority, askerTerminalId });
+            deferred.push({
+                id,
+                questions,
+                workspaceLabel,
+                priority,
+                createdAt: questionClock(),
+                askerTerminalId,
+            });
             // Opt-in AUDIBLE cue: a chime (no modal, no focus steal) so the owner
             // knows a question landed while heads-down — the whole point of DND is to
             // stop focus theft, not to go silent.
@@ -697,6 +737,10 @@ export function raiseForwardedQuestion(opts: {
     workstationId?: string;
     /** The remote workspace id, when known — for a per-workspace override. */
     workspaceId?: string;
+    /** The HOST's arrival stamp for this question, when it sent one. Preserved so
+     *  the driver's inbox shows when the agent ASKED, not when we forwarded it.
+     *  Absent from a host on an older build ⇒ we stamp the forward time. */
+    createdAt?: number;
 }): Promise<ForceQuestionResult> {
     return new Promise((resolve) => {
         const id = crypto.randomBytes(9).toString('hex');
@@ -716,6 +760,7 @@ export function raiseForwardedQuestion(opts: {
                 workspaceLabel: opts.workspaceLabel,
                 priority: opts.priority,
                 remoteHost: opts.remoteHost,
+                createdAt: opts.createdAt ?? questionClock(),
                 resolve,
                 forward: { connKey: opts.connKey, hostId: opts.hostId },
             });
@@ -731,6 +776,7 @@ export function raiseForwardedQuestion(opts: {
             questions: opts.questions,
             workspaceLabel: opts.workspaceLabel,
             priority: opts.priority,
+            createdAt: opts.createdAt,
             forward: { connKey: opts.connKey, hostId: opts.hostId, hostLabel: opts.remoteHost },
         });
     });

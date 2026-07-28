@@ -18,8 +18,13 @@ import type {
     AgentInboxDmThreadInfo,
     AgentInboxMessage,
     ScheduleInfo,
+    PendingQuestionSpec,
 } from './genie';
 import { isHostSourcedSettingKey } from './settings-nav';
+// The PURE inbox grouping main uses (electron-free by construction — see the
+// module header). Shared rather than re-implemented so a host-sourced group is
+// keyed, counted and ordered EXACTLY like a local one.
+import { groupPendingByWorkspace, pendingCount } from '../../main/ask/inbox';
 
 /**
  * The remote-desktop bridge — a `GenieApi` backed by a HOST Genie over Tailscale.
@@ -570,6 +575,40 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             })) as { ok: boolean; cleared: number; channels: number; threads: number },
     };
 
+    // Host-sourced PendingQuestions. The agents that ASK live on the HOST, so its
+    // pending questions are the ones a host window must show — the client's own
+    // queue is empty (which is why the top-bar QUESTIONS badge sat at 0 on a
+    // host-bound window: it seeded from `groups.length` of the LOCAL list). Same
+    // treatment as the AgentInbox lag badge above: read the host, render the host.
+    //
+    // The read hits the LONG-STANDING `/api/questions` (not a new /api/desktop/*
+    // route) so this works against hosts already deployed on older builds, and the
+    // flat list is grouped HERE with the very same pure grouping main uses — one
+    // implementation, so a host group and a local group key/sort identically.
+    //
+    // Answering targets the host too: the ids in that list are the HOST's, and
+    // `answerPendingQuestion` on the client would find no such question and
+    // silently do nothing. The host applies its own kill-switch to the POST.
+    // Live refresh needs no work here — main re-emits the host's questions:changed
+    // onto this window's local channel (PASSTHROUGH_EVENTS), including for hosts
+    // old enough to only push the singular question:changed.
+    const questions: GenieApi['questions'] = {
+        ...local.questions,
+        list: async () => {
+            const pending =
+                ((await req('/api/questions')) as { questions?: PendingQuestionSpec[] })
+                    ?.questions ?? [];
+            return { groups: groupPendingByWorkspace(pending), count: pendingCount(pending) };
+        },
+        answer: async (id, answers) =>
+            (
+                (await req(`/api/questions/${encodeURIComponent(id)}/answer`, {
+                    method: 'POST',
+                    json: { answers },
+                })) as { ok: boolean; answered?: boolean }
+            ).answered === true,
+    };
+
     // Host-sourced Tynn provisioning. The workspace-settings "Tynn agent" panel writes
     // the MCP agent token into a workspace's .mcp.json — but the workspace files, the
     // running agent, and the user's Tynn session all live on the HOST. So a remote
@@ -671,6 +710,7 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         sites,
         settings,
         agentInbox,
+        questions,
         tynn,
         tynnHost,
         mcp,
