@@ -3,7 +3,15 @@ import os from 'os';
 import path from 'path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from 'electron';
-import { initDatabase, upsertPlugin, getPlugin, deletePlugin, emptyPluginGrants } from '../../db';
+import {
+    initDatabase,
+    upsertPlugin,
+    getPlugin,
+    deletePlugin,
+    emptyPluginGrants,
+    setPluginEnabled,
+    setSettings,
+} from '../../db';
 import {
     revalidateAllPluginTrust,
     reconcileBundledPlugins,
@@ -49,6 +57,9 @@ beforeAll(() => {
 beforeEach(() => {
     // Bundled plugins materialise + install under app.getPath('userData')/plugins.
     vi.spyOn(app, 'getPath').mockReturnValue(userData);
+    // The gate-disabled repair is a ONE-SHOT keyed on a settings flag — clear it so
+    // each test drives it from a clean slate (the real app runs it once, ever).
+    setSettings({ plugins_bundled_enable_repair: '' });
 });
 
 afterEach(() => {
@@ -82,6 +93,28 @@ function seedStaleBundled(over: Partial<Parameters<typeof upsertPlugin>[0]> = {}
         manifest_json: JSON.stringify(staleBundledManifest()),
         grants: { fs: { workspace: true }, network: {}, genieApi: {} },
         trust: 'trusted', // it was trusted the day it was installed
+        ...over,
+    });
+}
+
+/**
+ * Seed a bundled plugin whose stored manifest is ALREADY current (no drift, so the
+ * self-heal has nothing to do) — the shape a profile is left in AFTER a self-heal.
+ */
+function seedCurrentBundled(over: Partial<Parameters<typeof upsertPlugin>[0]> = {}): void {
+    upsertPlugin({
+        id: 'ai.genie.presentation',
+        namespace: 'presentation',
+        name: 'Presentation',
+        version: '0.1.0',
+        source_type: 'folder',
+        install_path: path.join(userData, 'plugins', 'ai.genie.presentation'),
+        enabled: false,
+        manifest_json: JSON.stringify(PRESENTATION.manifest),
+        // The user completed the enable-time consent at some point: grants are only
+        // ever written by that flow, so holding one means the plugin WAS on.
+        grants: { fs: { workspace: true }, network: {}, genieApi: {} },
+        trust: 'trusted',
         ...over,
     });
 }
@@ -127,6 +160,70 @@ describe('reconcileBundledPlugins (proactive self-heal)', () => {
     });
 });
 
+/**
+ * genie #83 — the damage the trust gate LEFT BEHIND.
+ *
+ * `enabled` is the user's INTENT, but the gate wrote to it (`setPluginEnabled(id,
+ * false)`) whenever it refused a plugin — so the 7eeb297 schema tightening turned
+ * Presentation + Spreadsheet OFF, and the 4b2cf01 self-heal then "preserved"
+ * (`record()`: `enabled: prior?.enabled ?? false`) the zero the bug had written.
+ * Live profile evidence: both sit trusted + disabled while STILL holding the
+ * user's `fs.workspace` grant, and no boot ever brings them back — the stored
+ * manifest is current, so the drift-triggered self-heal never fires again.
+ */
+describe('reconcileBundledPlugins — one-time repair of gate-disabled bundled plugins', () => {
+    it('re-enables a bundled plugin the trust gate disabled, and only ONCE', async () => {
+        seedCurrentBundled(); // trusted + disabled + holds the consent grant
+        await reconcileBundledPlugins();
+        expect(getPlugin('ai.genie.presentation')!.enabled).toBe(true);
+
+        // …and once repaired it is never re-enabled again: a DELIBERATE "off" sticks.
+        setPluginEnabled('ai.genie.presentation', false);
+        await reconcileBundledPlugins();
+        expect(getPlugin('ai.genie.presentation')!.enabled).toBe(false);
+    });
+
+    it('leaves a bundled plugin the user never consented to alone (no grants → never enabled)', async () => {
+        seedCurrentBundled({ grants: emptyPluginGrants() });
+        await reconcileBundledPlugins();
+        // Installed-but-never-enabled is the desktop's user-choice model — untouched.
+        expect(getPlugin('ai.genie.presentation')!.enabled).toBe(false);
+    });
+
+    it('never repairs a THIRD-PARTY plugin — the repair is scoped to first-party bundled ids', async () => {
+        upsertPlugin({
+            id: 'com.thirdparty.stale',
+            namespace: 'stale',
+            name: 'Third Party',
+            version: '1.0.0',
+            source_type: 'repo',
+            install_path: path.join(userData, 'thirdparty-stale'),
+            enabled: false,
+            manifest_json: JSON.stringify({
+                id: 'com.thirdparty.stale',
+                namespace: 'stale',
+                name: 'Third Party',
+                version: '1.0.0',
+            }),
+            grants: { fs: { workspace: true }, network: {}, genieApi: {} },
+            trust: 'trusted',
+        });
+        await reconcileBundledPlugins();
+        expect(getPlugin('com.thirdparty.stale')!.enabled).toBe(false);
+    });
+
+    it('heals a bundled plugin whose trust verdict drifted off "trusted" even without manifest drift', async () => {
+        // The trap door: a prior boot left it `outdated`; its manifest is CURRENT, so
+        // the drift check alone would skip it forever.
+        seedCurrentBundled({ trust: 'outdated' });
+        await reconcileBundledPlugins();
+
+        const row = getPlugin('ai.genie.presentation')!;
+        expect(row.trust).toBe('trusted');
+        expect(row.enabled).toBe(true);
+    });
+});
+
 describe('revalidateAllPluginTrust — bundled self-heal + third-party split', () => {
     it('self-heals a stale bundled plugin instead of flipping it to untrusted', () => {
         seedStaleBundled();
@@ -136,6 +233,36 @@ describe('revalidateAllPluginTrust — bundled self-heal + third-party split', (
         expect(row.trust).toBe('trusted'); // NOT 'untrusted' (the bug)
         expect(row.enabled).toBe(true); // NOT disabled (the bug)
         expect(JSON.parse(row.manifest_json).agent?.guide).toBeTruthy();
+    });
+
+    it('re-recognises a bundled plugin as FIRST-PARTY after its verdict left "trusted"', () => {
+        // genie #83: `firstParty` was inferred from `row.trust === 'trusted'` — the
+        // very verdict being recomputed. One boot at `outdated` and the plugin was
+        // forever re-evaluated as an ordinary unsigned third-party → non-surfaceable,
+        // unrecoverable. First-partyness is a property of the ID, not of the cache.
+        seedCurrentBundled({ trust: 'outdated', enabled: true });
+        revalidateAllPluginTrust();
+
+        const row = getPlugin('ai.genie.presentation')!;
+        expect(row.trust).toBe('trusted'); // NOT 'unsigned' (the trap door)
+        expect(row.enabled).toBe(true);
+    });
+
+    it('keeps a bundled plugin ENABLED (user intent) when the gate cannot load it, and REPORTS the failure', async () => {
+        seedStaleBundled(); // schema-invalid stored manifest → the self-heal path
+        // Make the re-materialise fail deterministically: point userData at a FILE.
+        const blocker = path.join(userData, 'blocked-userdata');
+        fs.writeFileSync(blocker, 'not a directory');
+        vi.spyOn(app, 'getPath').mockReturnValue(blocker);
+        const reported = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        revalidateAllPluginTrust();
+        await new Promise((r) => setImmediate(r)); // the self-heal .catch is a microtask
+
+        const row = getPlugin('ai.genie.presentation')!;
+        expect(row.trust).toBe('outdated'); // honestly gated — it genuinely can't load
+        expect(row.enabled).toBe(true); // but the user's intent is NOT destroyed
+        expect(reported).toHaveBeenCalled(); // and the failure is never swallowed
     });
 
     it('does NOT over-heal a third-party plugin with a bad signature — it stays untrusted + disabled', () => {
