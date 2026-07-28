@@ -38,15 +38,17 @@ export const E2E_USERDATA = path.join(os.tmpdir(), 'genie-e2e-profile');
 /**
  * Which harness window to open. `issuewatch` mounts the IssueWatchFlyout (the
  * default — back-compat with the existing spec); `ghcaps` mounts the
- * GithubCapabilitiesFlyout (per-install resolve flow). Maps to `GENIE_E2E_PAGE`,
- * which `showE2EWindow` (background.ts) reads to pick the route.
+ * GithubCapabilitiesFlyout (per-install resolve flow); `picker-layer` mounts the
+ * real AddWorkspaceModal so the file picker can be opened from inside it. Maps to
+ * `GENIE_E2E_PAGE`, which `showE2EWindow` (background.ts) reads to pick the route.
  */
-export type E2EHarnessPage = 'issuewatch' | 'ghcaps' | 'agent-access';
+export type E2EHarnessPage = 'issuewatch' | 'ghcaps' | 'agent-access' | 'picker-layer';
 
 const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
     issuewatch: 'e2e-issuewatch',
     ghcaps: 'e2e-ghcaps',
     'agent-access': 'e2e-agent-access',
+    'picker-layer': 'e2e-picker-layer',
 };
 
 export async function launchGenieE2E(

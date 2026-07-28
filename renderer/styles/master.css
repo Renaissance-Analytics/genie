@@ -16,14 +16,30 @@
    is a notification and must stay visible over a modal).
 
    Genie ladder for reference: flyout 60 · ctx-scrim 80 · prompt-scrim 100 ·
-   proc menus 119/120 · [fancy overlays 900] · toasts 1000 · boot screen 9999.
+   proc menus 119/120 · [fancy overlays 900] · [picker 950] · toasts 1000 ·
+   boot screen 9999.
 
    The selectors pick the POSITIONED element in each portal: the modal's is the
    portal child that wraps the `[data-react-fancy-modal]` panel; the popover's
    carries `[data-react-fancy-popover]` itself. The portal wrapper is
-   `display: contents`, so it forms no stacking context of its own. */
+   `display: contents`, so it forms no stacking context of its own.
+
+   --- Picker layer (genie #86) ---
+   `--z-picker` is the rung ABOVE that, and it exists because #66 has a mirror
+   image: the in-app file picker (FilePickerModal / `pickPath`) is opened FROM
+   Fancy modals — Add workspace → Local folder → Browse — yet it rode the shared
+   `.ctx-scrim` at 80, i.e. chrome. So the picker painted under the very modal
+   that launched it: dimmed by that modal's own backdrop and, since the backdrop
+   is on top, completely unclickable.
+
+   The picker is a LEAF dialog — nothing opens from it — so it gets its own rung
+   above every dialog layer rather than a raised `.ctx-scrim` (which is shared
+   with the agent-settings modal and would drag all of Genie's chrome back over
+   Fancy dialogs, undoing #66). It stays below toasts for the same reason the
+   Fancy layer does: a notification must survive over a dialog. */
 :root {
     --z-fancy-overlay: 900;
+    --z-picker: 950;
 }
 [data-react-fancy-portal] > div:has([data-react-fancy-modal]),
 [data-react-fancy-portal] > [data-react-fancy-popover] {
@@ -4081,6 +4097,12 @@ body.gutter-dragging .grid-gutter {
 
 /* In-app file/folder picker modal (FilePickerModal — replaces native OS dialogs).
  * Uses the shared .ctx-scrim; the body hosts the react-fancy FileBrowser. */
+/* The file picker rides `.ctx-scrim`'s look but NOT its rung — see the picker
+   layer note at the top of this file (genie #86). Declared after `.ctx-scrim`
+   because both are single-class selectors: equal specificity, source order wins. */
+.file-picker-scrim {
+    z-index: var(--z-picker);
+}
 .file-picker-modal {
     display: flex;
     flex-direction: column;
