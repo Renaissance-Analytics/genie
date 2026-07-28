@@ -933,6 +933,12 @@ export interface Settings {
      *  developer-trusted signing keys. Default 'off' — the signed registry is the
      *  production path (§12.3). */
     plugins_developer_mode?: 'on' | 'off';
+    /** ONE-SHOT marker for the genie #83 repair: 'done' once boot has re-enabled the
+     *  BUNDLED first-party plugins that the old trust gate silently switched off
+     *  (`setPluginEnabled(id, false)` destroyed the user's intent, and the self-heal
+     *  then faithfully preserved the zero). Set after the pass runs — so a plugin the
+     *  user DELIBERATELY turns off afterwards is never switched back on. */
+    plugins_bundled_enable_repair?: string;
     /** This machine's Tynn Workstation id — set once the local Genie SELF-REGISTERS
      *  + enrolls as a workstation (design brief genie-service-separation §2a). In
      *  the clear (like `github_user`) so the transport can address the

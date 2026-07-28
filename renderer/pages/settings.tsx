@@ -2831,7 +2831,7 @@ function TrustBadge({ plugin }: { plugin: InstalledPluginView }) {
             : plugin.trust === 'unsigned'
               ? 'Not signed by a trusted publisher'
               : plugin.trust === 'outdated'
-                ? "Manifest predates a newer Genie requirement — reinstall to update"
+                ? "Manifest predates a newer Genie requirement — reinstall to update; it can't load until then"
                 : 'Signature invalid or code tampered';
     return (
         <span
@@ -2891,7 +2891,7 @@ function PluginCard({
                     {plugin.trust === 'outdated' && (
                         <span className="set-row-desc" style={{ color: '#fb923c' }}>
                             Needs an update — this plugin&apos;s manifest predates a newer Genie requirement. Reinstall it to
-                            update; it cannot be enabled until then.
+                            update; it can&apos;t load until then.
                         </span>
                     )}
                     {plugin.trust === 'unsigned' && (

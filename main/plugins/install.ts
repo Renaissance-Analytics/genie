@@ -40,12 +40,20 @@ import {
     deletePluginMarketplace,
     listPlugins,
     emptyPluginGrants,
+    getAllSettings,
+    setSettings,
     type PluginGrants,
+    type PluginRow,
     type PluginSourceType,
     type PluginTrustStatus,
 } from '../db';
 import { disposePlugin } from './registry';
-import { BUNDLED_PLUGIN_SOURCES, materialiseBundled, type BundledPluginSource } from './official';
+import {
+    BUNDLED_PLUGIN_SOURCES,
+    materialiseBundled,
+    isBundledPluginId,
+    type BundledPluginSource,
+} from './official';
 import { computeBundleIntegrity } from './signing';
 import { collectBundleFiles } from './bundle-files';
 import {
@@ -302,16 +310,51 @@ async function selfHealBundled(id: string): Promise<void> {
     await installPluginFromFolder(materialised.path, true);
 }
 
+/** Has the user ever completed the enable-time CONSENT flow for this plugin? */
+function holdsConsentGrant(row: PluginRow): boolean {
+    return Object.values(row.grants).some((cat) => Object.values(cat).some(Boolean));
+}
+
+/**
+ * ONE-TIME repair of the damage the old trust gate left behind (genie #83).
+ *
+ * `enabled` is the user's INTENT, but the gate used to WRITE to it: refusing a
+ * plugin called `setPluginEnabled(id, false)`, and `record()` then "preserved" that
+ * zero on the next self-heal. So the `agent.guide` schema tightening switched the
+ * bundled Presentation + Spreadsheet OFF, the later self-heal restored their
+ * manifest + trust, and they stayed dark forever — a green "Trusted" chip above a
+ * switch nobody had touched.
+ *
+ * A bundled plugin that is trusted, disabled, and STILL HOLDS a consent grant can
+ * only have got there that way: grants are written by the enable-time consent flow,
+ * so holding one means the user had it ON. Turn it back on — once. The marker is
+ * then recorded, so a deliberate "off" afterwards is never undone. Scoped to
+ * FIRST-PARTY bundled ids; third-party plugins are never touched.
+ */
+function repairGateDisabledBundledPlugins(): void {
+    if (getAllSettings().plugins_bundled_enable_repair === 'done') return;
+    for (const src of BUNDLED_PLUGIN_SOURCES) {
+        const row = getPlugin(src.id);
+        if (!row || row.enabled || row.trust !== 'trusted' || !holdsConsentGrant(row)) continue;
+        setPluginEnabled(src.id, true);
+    }
+    setSettings({ plugins_bundled_enable_repair: 'done' });
+}
+
 /**
  * STARTUP SELF-HEAL: for every BUNDLED plugin ALREADY installed whose stored
- * manifest/version has drifted from the source Genie now ships, re-materialise +
- * re-install it (preserving `enabled` + grants).
+ * manifest/version has drifted from the source Genie now ships — or whose trust
+ * verdict has drifted off `trusted`, which for a first-party plugin is always
+ * wrong — re-materialise + re-install it (preserving `enabled` + grants).
  *
  * This is the ROOT-CAUSE fix for bundled plugins installed before a schema
  * tightening (e.g. `agent.guide` became mandatory when `mcpTools` are present):
  * their stale stored manifest fails validation on the next boot, and without this
- * they would be wrongly refused. Idempotent — a plugin already matching the
- * embedded source is skipped. Runs BEFORE `revalidateAllPluginTrust()` on boot.
+ * they would be wrongly refused. Re-installing also re-asserts first-party trust,
+ * which is what recovers a plugin an earlier boot gated as `outdated` — its stored
+ * manifest is CURRENT by then, so a drift check alone would skip it forever.
+ * Idempotent — a trusted plugin already matching the embedded source is skipped.
+ * Runs BEFORE `revalidateAllPluginTrust()` on boot.
  */
 export async function reconcileBundledPlugins(): Promise<void> {
     for (const src of BUNDLED_PLUGIN_SOURCES) {
@@ -319,12 +362,21 @@ export async function reconcileBundledPlugins(): Promise<void> {
             const row = getPlugin(src.id);
             if (!row) continue; // not installed → nothing to reconcile
             const srcVersion = typeof src.manifest.version === 'string' ? src.manifest.version : '';
-            if (row.version === srcVersion && !bundledManifestDrifted(row.manifest_json, src)) continue;
+            if (
+                row.version === srcVersion &&
+                row.trust === 'trusted' &&
+                !bundledManifestDrifted(row.manifest_json, src)
+            )
+                continue;
             await selfHealBundled(src.id);
-        } catch {
-            /* best-effort per plugin — one failure must not block the others or boot */
+        } catch (e) {
+            // Fail-soft per plugin — one failure must not block the others or boot —
+            // but NEVER silent: a first-party plugin that cannot be healed is exactly
+            // the state that used to disappear without a trace.
+            console.error(`[plugins] self-heal failed for bundled "${src.id}":`, e);
         }
     }
+    repairGateDisabledBundledPlugins();
 }
 
 /**
@@ -358,17 +410,32 @@ export async function ensureBundledPluginsInstalled(opts?: { enable?: boolean })
  * Gate a plugin whose STORED manifest no longer validates. This is NOT a
  * signature/tamper failure — the manifest merely predates a newer schema — so it
  * is reported as `outdated` (a distinct, accurate reason the UI describes as
- * "needs an update"), never the misleading `untrusted`. Fail-closed: an unloadable
- * manifest cannot surface, so it is disabled.
+ * "needs an update"), never the misleading `untrusted`.
+ *
+ * Fail-closed via {@link revokeSurface}: an unloadable manifest cannot surface.
  */
 function gateOutdatedManifest(id: string): void {
     const row = getPlugin(id);
     if (!row) return;
     if (row.trust !== 'outdated') setPluginTrust(id, 'outdated', false);
-    if (row.enabled) {
-        setPluginEnabled(id, false);
-        disposePlugin(id);
-    }
+    revokeSurface(row);
+}
+
+/**
+ * Take a plugin off the runtime surface NOW (instant revoke): tear down its worker
+ * and, for a THIRD-PARTY plugin, clear `enabled` too.
+ *
+ * A FIRST-PARTY BUNDLED plugin keeps its `enabled` flag, because that flag is the
+ * USER'S INTENT and clearing it is both redundant and destructive (genie #83):
+ * `pluginRowIsSurfaceable()` already fail-closes on `trust !== 'trusted'`, and every
+ * surface — registry, editor bridge, editor routing, recipes — goes through it, so
+ * nothing loads either way. Writing the flag merely erased "I want this on" for
+ * good: the plugin was later healed back to `trusted` and still sat there dark.
+ * Keep the intent and a self-heal brings the plugin straight back, no user action.
+ */
+function revokeSurface(row: PluginRow): void {
+    if (row.enabled && !isBundledPluginId(row.id)) setPluginEnabled(row.id, false);
+    disposePlugin(row.id);
 }
 
 /**
@@ -380,7 +447,6 @@ function gateOutdatedManifest(id: string): void {
  */
 export function revalidateAllPluginTrust(): void {
     const store = productionTrustStore();
-    const bundledIds = new Set(BUNDLED_PLUGIN_SOURCES.map((b) => b.id));
     for (const row of listPlugins()) {
         try {
             const parsed = validatePluginManifest(JSON.parse(row.manifest_json));
@@ -388,10 +454,14 @@ export function revalidateAllPluginTrust(): void {
                 // A FIRST-PARTY bundled plugin can never be "invalid": its stored
                 // manifest merely predates a schema tightening. Self-heal it from the
                 // embedded source — NEVER punish it as untrusted. The folder-install
-                // path does no awaits, so the row is corrected in place here; a rare
-                // failure falls back to `outdated` (still never `untrusted`).
-                if (bundledIds.has(row.id)) {
-                    void selfHealBundled(row.id).catch(() => gateOutdatedManifest(row.id));
+                // path does no awaits, so the row is corrected in place here; a
+                // genuine failure is REPORTED and falls back to `outdated` (still
+                // never `untrusted`, and never at the cost of the enabled flag).
+                if (isBundledPluginId(row.id)) {
+                    void selfHealBundled(row.id).catch((e) => {
+                        console.error(`[plugins] self-heal failed for bundled "${row.id}":`, e);
+                        gateOutdatedManifest(row.id);
+                    });
                     continue;
                 }
                 // Third-party: a stored manifest that no longer validates is OUTDATED
@@ -400,18 +470,23 @@ export function revalidateAllPluginTrust(): void {
                 continue;
             }
             // Signature-only re-check (code unchanged since install; skip re-hash).
-            // First-party bundled plugins stay trusted.
-            const firstParty = row.trust === 'trusted' && !row.signature && !row.publisher_key_id;
+            // First-party is decided by BUNDLED membership — an ID, not the cached
+            // verdict this very call recomputes. Inferring it from
+            // `row.trust === 'trusted'` was circular: one boot at `outdated` and a
+            // bundled plugin was re-read as an ordinary unsigned third-party, went
+            // non-surfaceable and could never climb back (genie #83). It also handed
+            // free first-party trust to any row edited to claim `trusted` with no
+            // signature.
+            const firstParty = isBundledPluginId(row.id);
             const verdict = evaluateManifestTrust(parsed.manifest, store, { firstParty });
             const devApproved = verdict.status === 'unsigned' ? row.dev_approved : false;
             if (verdict.status !== row.trust || devApproved !== row.dev_approved) {
                 setPluginTrust(row.id, verdict.status, devApproved);
             }
-            // If it can no longer surface, disable it now (instant revoke).
+            // If it can no longer surface, revoke it now.
             const refreshed = getPlugin(row.id);
             if (refreshed && refreshed.enabled && !pluginRowIsSurfaceable(refreshed)) {
-                setPluginEnabled(row.id, false);
-                disposePlugin(row.id);
+                revokeSurface(refreshed);
             }
         } catch {
             /* skip a row that can't be evaluated — leave it as-is (still gated) */

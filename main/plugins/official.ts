@@ -369,6 +369,18 @@ export const BUNDLED_PLUGIN_SOURCES: BundledPluginSource[] = [
     DOCUMENT_SOURCE,
 ];
 
+/**
+ * Is `id` one of the FIRST-PARTY plugins Genie ships in the box?
+ *
+ * The authoritative first-party test. Trust for a bundled plugin is rooted in the
+ * APP signature (it is materialised from Genie's own bundle), so first-partyness is
+ * a property of the ID — never of a cached trust verdict, which is the thing being
+ * recomputed (genie #83).
+ */
+export function isBundledPluginId(id: string): boolean {
+    return BUNDLED_PLUGIN_SOURCES.some((b) => b.id === id);
+}
+
 /** A materialised bundled plugin as the Settings "Official" tab renders it. */
 export interface BundledPlugin {
     id: string;
