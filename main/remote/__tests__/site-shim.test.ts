@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import crypto from 'node:crypto';
 import http from 'node:http';
 import net from 'node:net';
 import tls from 'node:tls';
@@ -293,6 +294,45 @@ describe('shim end-to-end (no display)', () => {
             expect(issueLeaf).toHaveBeenCalledWith(GEN);
         } finally {
             socket?.destroy();
+            await shim.close();
+        }
+    });
+
+    it('serves a .gen whose session CA drew a leading-zero serial (genie#78)', async () => {
+        // The serial is the one random field in these certs. A draw beginning
+        // `00 <msb-clear>` used to survive node-forge's single-pad-byte strip as a
+        // non-minimally-encoded DER INTEGER, so `tls.createSecureContext` threw
+        // `asn1 encoding routines::illegal padding` — which the CONNECT handler
+        // turns into the `CONNECT 502` reported in genie#78. Pinning the draw makes
+        // that ~1-in-500 case deterministic. See site-ca.test.ts for the encoding.
+        const realRandomBytes = crypto.randomBytes;
+        const spy = vi.spyOn(crypto, 'randomBytes').mockImplementation(((size: number) => {
+            const bytes = Buffer.from(realRandomBytes(size));
+            bytes[0] = 0x00;
+            bytes[1] = 0x03;
+            return bytes;
+        }) as typeof crypto.randomBytes);
+        let ca: SessionCa;
+        try {
+            ca = new SessionCa();
+            // Warm both leaves createSiteShim uses, so every cert in this test came
+            // from the pathological draw (issueLeaf caches per name).
+            ca.issueLeaf('default.invalid');
+            ca.issueLeaf(GEN);
+        } finally {
+            spy.mockRestore();
+        }
+        const genMap = new Map<string, GenTarget>([[GEN, {
+            workspaceId: 'workspace-1',
+            siteId: SITE_ID,
+            hostname: HOSTNAME,
+        }]]);
+        const shim = await makeShim(ca, genMap);
+        try {
+            const res = await fetchThroughShim(shim, GEN, '/', ca.caPem);
+            expect(res.status).toBe(200);
+            expect(res.body).toBe('hello from the host site');
+        } finally {
             await shim.close();
         }
     });

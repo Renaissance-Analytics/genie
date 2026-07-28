@@ -113,10 +113,27 @@ function signCertificate(cert: ForgeCertificate, privateKeyPem: string): void {
         .toString('binary');
 }
 
-/** A short random hex serial (positive, ≤20 bytes) for each cert. */
+/**
+ * A random hex serial (positive, ≤20 bytes) for each cert.
+ *
+ * The serial is the one RANDOM field in these certificates, and a DER INTEGER must
+ * be both POSITIVE and MINIMALLY encoded — a leading `0x00` is legal ONLY when it
+ * is needed to keep the next byte from reading as a sign bit. Anything else makes
+ * OpenSSL reject the whole certificate with
+ * `error:068000DD:asn1 encoding routines::illegal padding` (genie#78).
+ *
+ * Prefixing a literal `00` pad byte does NOT guarantee that: node-forge's DER
+ * writer strips exactly ONE redundant pad byte, so a draw that itself began
+ * `00 <msb-clear>` still emitted a non-minimal `00 <msb-clear>` — ~1 cert in 500,
+ * which intermittently broke `new SessionCa()` and every leaf the shim issued.
+ * Instead we make the leading byte minimal by construction: clear its sign bit so
+ * no pad byte is needed at all, and keep it non-zero so it can't BE a pad byte.
+ * That is valid DER whether or not forge normalises it.
+ */
 function randomSerial(): string {
-    // Leading '00' keeps the DER INTEGER positive; the rest is random.
-    return `00${crypto.randomBytes(15).toString('hex')}`;
+    const bytes = crypto.randomBytes(16);
+    bytes[0] = (bytes[0] & 0x7f) || 0x01;
+    return bytes.toString('hex');
 }
 
 /**
