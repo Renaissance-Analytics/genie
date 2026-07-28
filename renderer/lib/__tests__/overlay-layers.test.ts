@@ -77,3 +77,51 @@ describe('Fancy portal overlay layer (genie #66)', () => {
         expect(rules.length).toBeGreaterThanOrEqual(1);
     });
 });
+
+/**
+ * genie #86 — the MIRROR of #66: a picker opened FROM a Fancy modal.
+ *
+ * #66 lifted every Fancy portal surface above Genie's chrome, and `.ctx-scrim`
+ * (z-index 80) is chrome. But the in-app file picker rides that same scrim, and
+ * it is opened FROM Fancy modals — Add workspace → Local folder → Browse. So the
+ * picker painted UNDER the very modal that launched it: dimmed by the modal's
+ * own backdrop and, because the backdrop sits on top, not clickable at all.
+ *
+ * A picker is a LEAF dialog — nothing opens from it — so it belongs on its own
+ * documented rung above every dialog layer and below notifications, rather than
+ * on the shared chrome scrim. These tests guard that ordering, and guard that
+ * fixing it did not simply undo #66 by shoving `.ctx-scrim` back on top.
+ */
+describe('File-picker layer (genie #86)', () => {
+    it('declares a --z-picker token', () => {
+        expect(tokenValue(CSS, '--z-picker')).toBeTypeOf('number');
+    });
+
+    it('sits ABOVE the Fancy overlay — the bug was the launching modal painting over the picker', () => {
+        const picker = tokenValue(CSS, '--z-picker');
+        const fancy = tokenValue(CSS, '--z-fancy-overlay');
+        expect(picker).toBeTypeOf('number');
+        expect(picker).toBeGreaterThan(fancy!);
+    });
+
+    it('stays BELOW toasts, so a notification still survives over the picker', () => {
+        const picker = tokenValue(CSS, '--z-picker')!;
+        const toast = zIndexOf(CSS, '.g-toast');
+        expect(toast).toBeTypeOf('number');
+        expect(picker).toBeLessThan(toast!);
+    });
+
+    it('lifts the picker via its OWN scrim class, leaving .ctx-scrim on the chrome rung', () => {
+        // The picker gets a second class rather than a raised `.ctx-scrim`: the
+        // scrim is shared with the agent-settings modal, and raising it above
+        // `--z-fancy-overlay` would regress genie #66 for every Fancy dialog.
+        const at = CSS.indexOf('.file-picker-scrim {');
+        expect(at, '.file-picker-scrim should exist').toBeGreaterThan(-1);
+        expect(CSS.slice(at, CSS.indexOf('}', at))).toContain('var(--z-picker)');
+        // …and it must come AFTER `.ctx-scrim`, or equal specificity lets the
+        // chrome rung win on source order.
+        expect(CSS.indexOf('.file-picker-scrim {')).toBeGreaterThan(CSS.indexOf('.ctx-scrim {'));
+        // #66's invariant still holds for the shared scrim.
+        expect(tokenValue(CSS, '--z-fancy-overlay')!).toBeGreaterThan(zIndexOf(CSS, '.ctx-scrim')!);
+    });
+});

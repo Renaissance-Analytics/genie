@@ -1901,7 +1901,12 @@ function showE2EWindow(): void {
     // Allowlist the harness routes so a stray env value can't load an arbitrary
     // page; default to the issue-watch harness for back-compat.
     const requested = process.env.GENIE_E2E_PAGE ?? 'e2e-issuewatch';
-    const ALLOWED = ['e2e-ghcaps', 'e2e-issuewatch', 'e2e-agent-access'] as const;
+    const ALLOWED = [
+        'e2e-ghcaps',
+        'e2e-issuewatch',
+        'e2e-agent-access',
+        'e2e-picker-layer',
+    ] as const;
     const page = (ALLOWED as readonly string[]).includes(requested)
         ? requested
         : 'e2e-issuewatch';

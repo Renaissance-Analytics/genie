@@ -67,16 +67,25 @@ export default function FilePickerModal({
         [],
     );
 
+    // Escape closes the picker — and ONLY the picker. It is the top-most layer
+    // (see `--z-picker` in master.css), and it is usually opened from a dialog:
+    // react-fancy's Modal listens for Escape on `document` in the bubble phase,
+    // so a plain window/bubble listener here let one keypress dismiss the picker
+    // AND the Add-workspace modal underneath it, throwing away the user's input.
+    // Capturing on `window` runs before anything on `document` and stops the
+    // event there, so the top layer owns the key.
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') onCancel();
+            if (e.key !== 'Escape') return;
+            e.stopPropagation();
+            onCancel();
         };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
     }, [onCancel]);
 
     return (
-        <div className="ctx-scrim" onMouseDown={onCancel}>
+        <div className="ctx-scrim file-picker-scrim" onMouseDown={onCancel}>
             <div
                 className="file-picker-modal"
                 role="dialog"
