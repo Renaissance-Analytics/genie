@@ -58,6 +58,7 @@ import {
 import { agentInboxBroker } from '../agentinbox/broker';
 import { listAllProjects, getTynnBackend } from '../backend/registry';
 import { workspaceDocHealth, repairWorkspaceDocs } from '../workspace/create-agi';
+import { runHostSessionSave, type SessionSaveReport } from '../workspace/session-save';
 import { runPluginEditorFs } from '../plugins/editor-bridge';
 import {
     provisionWorkspaceTynn,
@@ -1497,6 +1498,49 @@ export async function handleApi(
         const result = await deps.completeSetup();
         audit('setup.complete', result.ok ? 'ok' : 'failed', actor);
         sendJson(res, 200, result);
+        return true;
+    }
+
+    // --- git-save before teardown — the data-safety gate for a SESSION host ----
+    // A session workstation is transient compute: when the session ends the box is
+    // destroyed and only what reached a REMOTE survives. The GCC / Tynn calls this
+    // FIRST and tears down only on a success, so the contract here is about not
+    // lying: the endpoint answers 2xx if and only if every repo is safe.
+    //
+    //   200 + { report }  every repo `saved` or `clean` — teardown may proceed.
+    //   409 + { report }  at least one repo `failed` (report.ok === false). The
+    //                     work is NOT on a remote; teardown must block, or the
+    //                     operator must override with the loss warning shown. A
+    //                     200 here would let a naive `if (res.ok) teardown()`
+    //                     destroy it, so the refusal is in the STATUS as well as
+    //                     the body — the body still carries every per-repo reason.
+    //   500 + { error }   the walk itself blew up; no report, so nothing is safe.
+    //
+    // Takes NO body and is idempotent: a host with nothing to save reports every
+    // repo `clean` and touches no branch, and concurrent callers coalesce onto one
+    // walk (runHostSessionSave). Wiring is the op's own real host providers — DB
+    // workspaces, simple-git, the OWNER's gh push auth (never the App token, never
+    // a token persisted or logged on a box about to be destroyed); push failures
+    // reach us already redacted. Authed + baton-gated like every other host
+    // mutation: a 423 refusal is the SAFE outcome (teardown blocks, work survives).
+    if (pathname === '/api/desktop/session-save') {
+        if (method !== 'POST') {
+            sendJson(res, 405, { error: 'method not allowed' });
+            return true;
+        }
+        if (guardControl()) return true;
+        let report: SessionSaveReport;
+        try {
+            report = await runHostSessionSave();
+        } catch (e) {
+            console.error('[mobile-api] session save failed:', e);
+            sendJson(res, 500, { error: 'session save failed' });
+            return true;
+        }
+        const { saved, clean, failed } = report.counts;
+        // Counts only — a repo path, branch or push error never enters the trail.
+        audit('session.save', `saved=${saved} clean=${clean} failed=${failed}`, actor);
+        sendJson(res, report.ok ? 200 : 409, { report });
         return true;
     }
 
