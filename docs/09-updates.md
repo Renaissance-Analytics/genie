@@ -46,10 +46,12 @@ rebuilding**:
 
 ## The background-terminals (pty-host) restart warning
 
-If you've enabled **"Keep terminals running after quit"** (detached terminals,
-Tier 3), applying an update has to **restart the background terminal process** —
-the running app binary is held open by that process, and the installer can't
-replace a file that's in use.
+Your terminals run in the local **Genie Host**, a background process. On most
+installs the Host runs on its own bundled runtime, so an update replaces Genie
+underneath it and your sessions never notice. On an install where the Host had
+to fall back to running on Genie's own binary, applying an update has to
+**restart** it — the running binary is held open by that process, and the
+installer can't replace a file that's in use.
 
 So when an update will restart the host, Genie warns you, e.g.:
 

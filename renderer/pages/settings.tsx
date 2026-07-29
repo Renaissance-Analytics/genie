@@ -247,20 +247,11 @@ export default function SettingsPage() {
                     )}
                 </SettingRow>
 
-                <SettingRow
-                    label="Keep terminals running after quit"
-                    desc={s.detached_terminals === 'off'
-                        ? 'Off — quitting or updating Genie will close every terminal and agent. Turn this on to preserve them and reattach on next launch.'
-                        : 'On by default. Runs terminals in a detached background process so dev servers, shells, and the agents running in them survive a full quit of Genie and reattach on next launch. Falls back to in-process terminals if the background process can’t start.'}
-                    keywords="detached terminals keep running quit background survive reattach dev server"
-                >
-                    <Switch
-                        checked={s.detached_terminals === 'on'}
-                        onCheckedChange={(on: boolean) =>
-                            patch({ detached_terminals: on ? 'on' : 'off' })
-                        }
-                    />
-                </SettingRow>
+                {/* "Keep terminals running after quit" used to live here. genie #63
+                    Phase 1 retired it: terminals ALWAYS run in the local Host and
+                    always survive a quit, so the switch had nothing left to
+                    control. A toggle that can't change anything is a lie in the
+                    UI, so it's gone rather than disabled. */}
             </SetSection>
 
                             </SearchGroup>

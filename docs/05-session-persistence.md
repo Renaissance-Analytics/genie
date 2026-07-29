@@ -30,22 +30,24 @@ This is the "I don't need to watch my dev server right now, but don't kill it"
 tier. It only lasts while Genie is open. There's a cap on how many terminals can
 be kept this way. See **[Terminals → Suspend / re-enable](04-terminals.md)**.
 
-### Tier 3 — Detached terminals survive a full quit
+### Tier 3 — Terminals survive a full quit
 
-With **"Keep terminals running after quit"** turned on (Settings → Default
-terminal), Genie runs your terminals in a **separate background process** that
-keeps living even after you fully quit Genie. On the next launch, Genie
-**reattaches** to those still-running sessions — your dev server never stopped.
+Your terminals don't run inside the Genie window — they run in the **local
+Genie Host**, a background process of its own, and the window is a viewer
+attached to them. The Host keeps living after you fully quit Genie, so on the
+next launch Genie **reattaches** to those still-running sessions — your dev
+server never stopped.
 
-This tier is **experimental** and **off by default**. If the background process
-can't start, Genie falls back to in-process terminals (which still restore from
-a Tier 1 snapshot, but don't survive a full quit).
+There is **no setting for this**: the local Host starts with Genie, every
+launch. In the rare case it can't start at all, Genie says so in its log and
+falls back to running terminals in-process — they still restore from a Tier 1
+snapshot, but they won't survive a full quit until the Host comes back.
 
 ## The quit confirmation
 
-When detached terminals (Tier 3) are on and you have live background terminals
-*and* a window open, **manually quitting** Genie pops a confirmation so you can
-decide, per terminal, **which to keep running and which to shut down**.
+When you have live terminals in the Host *and* a window open, **manually
+quitting** Genie pops a confirmation so you can decide, per terminal, **which to
+keep running and which to shut down**.
 
 - Tick the terminals you want to **keep running** after Genie quits; the rest
   are shut down cleanly.

@@ -72,30 +72,8 @@ export function electronEncryptor(): Encryptor {
     };
 }
 
-/** True when the user has opted into detached/persistent terminals (Settings →
- *  Terminal → "Keep terminals running after quit"). Mirrors the same setting the
- *  package's host lifecycle reads via the SettingsProvider, surfaced here so the
- *  composition root (background.ts) can decide whether to even ATTEMPT the
- *  per-user OS service / detached host before calling initTerminalBackend.
- *
- *  Defaults ON: getAllSettings() resolves an unset value to 'on', so an
- *  unconfigured install opts INTO the detached host (terminals + their agents
- *  survive a restart). An explicit 'on'/'true'/'1' also enables it; only an
- *  explicit 'off' — or a db error, which fails SAFE to in-process so a read
- *  failure can't force the heavy detached path on — returns false. */
-export function detachedTerminalsEnabled(): boolean {
-    try {
-        const v = (getAllSettings() as Record<string, string | undefined>)[
-            'detached_terminals'
-        ];
-        return v === 'on' || v === 'true' || v === '1';
-    } catch {
-        return false;
-    }
-}
-
 /** SettingsProvider over the SQLite settings table (typed defaults applied by
- *  getAllSettings — e.g. track_cwd defaults 'on', detached_terminals 'on'). */
+ *  getAllSettings — e.g. track_cwd defaults 'on'). */
 export function dbSettingsProvider(): SettingsProvider {
     return {
         get: (key: string) => {
@@ -105,6 +83,35 @@ export function dbSettingsProvider(): SettingsProvider {
                 return undefined;
             }
         },
+    };
+}
+
+/**
+ * The SettingsProvider handed to the package's HOST LIFECYCLE — the db provider
+ * with the retired `detached_terminals` opt-in pinned ON.
+ *
+ * genie #63 Phase 1: the local Host is always running; there is no setting that
+ * can turn it off, and Genie's own `detachedTerminalsEnabled()` gate is deleted.
+ * But fancy-term-host carries its OWN copy of that gate inside
+ * `initTerminalBackend()` — it reads `settings.get('detached_terminals') === 'on'`
+ * through this provider and refuses to connect-or-spawn the host otherwise. An
+ * install that persisted an explicit `'off'` before this release would therefore
+ * still veto the always-on Host from inside the package, and the gate removal
+ * would be half-wired.
+ *
+ * The composition root owns that seam, so it answers for the retired gate here.
+ * The setting is no longer written by anything (the Settings row is gone) and
+ * `getAllSettings()` no longer defaults it; this is the single place that still
+ * has an opinion about it, and the opinion is "retired → on". The upstream fix is
+ * for fancy-term-host to drop its gate (issue-first, per the Fancy contributing
+ * protocol); until it does, this is the downstream mitigation.
+ *
+ * Every other key passes straight through untouched.
+ */
+export function hostLifecycleSettings(): SettingsProvider {
+    const db = dbSettingsProvider();
+    return {
+        get: (key: string) => (key === 'detached_terminals' ? 'on' : db.get(key)),
     };
 }
 
@@ -263,10 +270,14 @@ export function wireTerminalAdapter(dirname: string): void {
         }
     });
 
-    // Host lifecycle (T3): spawner + settings + snapshot store + host-status sink.
+    // Host lifecycle: spawner + settings + snapshot store + host-status sink.
+    // NOTE the provider — `hostLifecycleSettings()`, not the plain db one: the
+    // package still consults the retired `detached_terminals` opt-in before it
+    // will spawn the host, and genie #63 Phase 1 says nothing may gate the local
+    // Host. See hostLifecycleSettings.
     configureHostLifecycle({
         spawner: electronHostSpawner(dirname),
-        settings,
+        settings: hostLifecycleSettings(),
         snapshots,
         onHostStatus: broadcastHostStatus,
     });

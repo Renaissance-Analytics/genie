@@ -436,9 +436,8 @@ export interface Settings {
      *  `${connKey}|${workspaceId}`, JSON-encoded. Local-only (never bridged to a
      *  host). See `renderer/lib/view-state.ts`. */
     view_state_json?: string;
-    /** Tier 3: keep terminals running in a detached host so they survive a full
-     *  quit. Defaults 'off' (in-process). 'on' opts in. */
-    detached_terminals?: 'on' | 'off';
+    /* genie #63 Phase 1: `detached_terminals` is retired — the local Host always
+     * runs, so terminals always survive a quit. No setting, no row. */
     /** Whether Genie launches minimized to the tray (default 'off' = start open). */
     start_minimized?: 'on' | 'off';
     /** Play a chime when an agent calls imDone. Defaults 'off'. */
