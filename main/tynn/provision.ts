@@ -7,6 +7,7 @@ import {
     writeProjectJson,
     type ProjectJsonTynn,
 } from '../workspace/project-json';
+import { readTynnLink, resolveTynnLinkForRow } from '../workspace/tynn-link';
 import { hasTynnLiteralToken, writeWorkspaceTynnMcp } from '../mcp/agent-config';
 
 /**
@@ -89,54 +90,11 @@ export function cookieProvisionAuth(
     };
 }
 
-/**
- * The link block AS STORED IN project.json — null unless it carries a
- * projectId. The narrow, file-only view; most callers want `resolveTynnLink`,
- * which also honours the durable workspace row.
- */
-export function readTynnLink(workspacePath: string): ProjectJsonTynn | null {
-    const pj = readProjectJson(workspacePath);
-    const tynn = pj?.tynn;
-    if (!tynn || !tynn.projectId) return null;
-    return tynn;
-}
-
-/**
- * Pure: decide a workspace's effective Tynn link from its two possible homes.
- *
- * A Tynn link lives in TWO places: the secret-free `tynn` block in project.json
- * (written on link / provision) AND the durable `tynn_project_id` recorded on
- * the workspace row at creation. project.json is AUTHORITATIVE when it carries a
- * `tynn` key — *including an empty `{}`*, which is the deliberate "unlinked"
- * marker `unlinkWorkspaceTynn` writes, so an explicit unlink is never silently
- * re-linked from the row. Only when project.json has NO `tynn` key at all do we
- * fall back to the row, so a workspace that was associated with a Tynn project
- * but whose project.json never got (or lost) its `tynn` block is still
- * recognised as linked rather than reported 'unlinked'.
- */
-export function pickTynnLink(input: {
-    /** project.json's `tynn` value (may be {} for an explicit unlink). */
-    projectJsonTynn: ProjectJsonTynn | undefined;
-    /** Whether project.json carries a `tynn` key at all (vs the key absent). */
-    hasTynnKey: boolean;
-    /** The durable workspace row, if one matches this path. */
-    row: {
-        backend: string;
-        tynnProjectId?: string | null;
-        tynnProjectName?: string | null;
-    } | null;
-}): ProjectJsonTynn | null {
-    if (input.hasTynnKey) {
-        return input.projectJsonTynn?.projectId ? input.projectJsonTynn : null;
-    }
-    if (input.row && input.row.backend === 'tynn' && input.row.tynnProjectId) {
-        return {
-            projectId: input.row.tynnProjectId,
-            project: input.row.tynnProjectName || undefined,
-        };
-    }
-    return null;
-}
+// `pickTynnLink` / `readTynnLink` now live in ../workspace/tynn-link so
+// IssueWatch can resolve a workspace's Tynn project id without pulling in this
+// module's graph (tynn.ai#134). Re-exported here — this is still their public
+// import path.
+export { pickTynnLink, readTynnLink } from '../workspace/tynn-link';
 
 /**
  * A workspace's effective Tynn link, resolving project.json against the durable
@@ -145,18 +103,12 @@ export function pickTynnLink(input: {
  * — its `tynn` block.
  */
 export function resolveTynnLink(workspacePath: string): ProjectJsonTynn | null {
-    const pj = readProjectJson(workspacePath);
     const ws = getWorkspaceByPath(workspacePath);
-    return pickTynnLink({
-        projectJsonTynn: pj?.tynn,
-        hasTynnKey: !!pj && Object.prototype.hasOwnProperty.call(pj, 'tynn'),
-        row: ws
-            ? {
-                  backend: ws.backend,
-                  tynnProjectId: ws.tynn_project_id,
-                  tynnProjectName: ws.tynn_project_name,
-              }
-            : null,
+    return resolveTynnLinkForRow({
+        backend: ws?.backend ?? '',
+        path: workspacePath,
+        tynn_project_id: ws?.tynn_project_id,
+        tynn_project_name: ws?.tynn_project_name,
     });
 }
 

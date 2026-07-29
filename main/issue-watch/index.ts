@@ -22,6 +22,7 @@ import {
     type IssueWatchDispatchSinks,
 } from './ping';
 import { detectFolder } from '../workspace/detect';
+import { resolveTynnLinkForRow } from '../workspace/tynn-link';
 import {
     fetchRepoWatchItemsResult,
     fetchUpstreamWatchItems,
@@ -225,6 +226,34 @@ export function setReconcileDelivered(delivered: boolean): void {
 }
 
 /**
+ * Resolve a SERVER-side workspace id to the LOCAL workspace it belongs to.
+ *
+ * Tynn keys every `issuewatch.delta` — and the `/api/v1/user/issue-watch`
+ * reconcile — by the TYNN PROJECT id. Genie keys every IssueWatch read by the
+ * LOCAL workspace id. The two coincide only by CONSTRUCTION: the Add-workspace
+ * flow uses `id := project.id` when a Tynn project was picked, and the
+ * assignment provisioner uses `id := assignment.workspaceId`. A locally
+ * scaffolded `.agi` envelope mints its OWN id and records the Tynn link in
+ * project.json instead — so its snapshot used to land under an id no read path
+ * ever asked for, and the flyout reported "Tynn isn't tracking this workspace
+ * yet" for a healthy, actively-polled feed (tynn.ai#134).
+ *
+ * Normalising HERE (the one write path) rather than at each read keeps every
+ * consumer — feed, counts, errors, isServerFed — keyed by local id as before.
+ * A pushed id that matches a local workspace id IS that workspace (the common
+ * case, and no file read); otherwise match on the workspace's effective Tynn
+ * link. An unmatched id is stored verbatim: harmless, since nothing reads it,
+ * and it self-heals the moment the workspace is added.
+ */
+function localWorkspaceIdFor(pushedWorkspaceId: string): string {
+    if (getWorkspace(pushedWorkspaceId)) return pushedWorkspaceId;
+    for (const ws of listWorkspaces()) {
+        if (resolveTynnLinkForRow(ws)?.projectId === pushedWorkspaceId) return ws.id;
+    }
+    return pushedWorkspaceId;
+}
+
+/**
  * Apply a server-side IssueWatch delta for a workspace (Tynn → the assignment
  * transport → here). Stores the snapshot (switching the workspace to server-fed)
  * and rebroadcasts so the rail pills / flyout / titlebar reflect it immediately.
@@ -247,17 +276,21 @@ export function applyPushedDelta(delta: PushedIssueWatchDelta): void {
                 unread: it.unread ?? false,
             }) as WorkspaceFeedItem,
     );
+    // Tynn keys the delta by its PROJECT id; every read path here is keyed by
+    // the LOCAL workspace id. Resolve once, up front, so the snapshot, the ping
+    // dedup baseline and the ping recipients all land on the same workspace.
+    const workspaceId = localWorkspaceIdFor(delta.workspaceId);
     // Ping the workspace's handler agents — but ONLY on a genuinely new/changed
     // item, and never on the session's first (baseline) snapshot, so a reconnect
     // or an unrelated re-push can't spam. Compute the change against the prior
     // signature BEFORE overwriting it.
-    const changed = hasNewOrChangedItems(iwSignatureByWorkspace.get(delta.workspaceId), feed);
-    iwSignatureByWorkspace.set(delta.workspaceId, feedSignature(feed));
-    pushedByWorkspace.set(delta.workspaceId, { counts: { ...delta.counts }, feed });
+    const changed = hasNewOrChangedItems(iwSignatureByWorkspace.get(workspaceId), feed);
+    iwSignatureByWorkspace.set(workspaceId, feedSignature(feed));
+    pushedByWorkspace.set(workspaceId, { counts: { ...delta.counts }, feed });
     serviceState = 'connected';
     // A live delta IS authoritative delivery — the feed is now in hand.
     reconcileDelivered = true;
-    if (changed) pingIssueWatchHandlers(delta.workspaceId);
+    if (changed) pingIssueWatchHandlers(workspaceId);
     void broadcastUpdate();
 }
 
@@ -266,10 +299,13 @@ export function applyPushedDelta(delta: PushedIssueWatchDelta): void {
  * local polling. No-op when it wasn't server-fed.
  */
 export function clearPushedDelta(workspaceId: string): void {
+    // Same server-id → local-id resolution applyPushedDelta stores under, so a
+    // drop by Tynn project id clears the entry it actually wrote.
+    const localId = localWorkspaceIdFor(workspaceId);
     // Drop the dedup baseline too, so a later re-assignment re-baselines (its
     // first snapshot won't ping) instead of diffing against a stale signature.
-    iwSignatureByWorkspace.delete(workspaceId);
-    if (pushedByWorkspace.delete(workspaceId)) void broadcastUpdate();
+    iwSignatureByWorkspace.delete(localId);
+    if (pushedByWorkspace.delete(localId)) void broadcastUpdate();
 }
 
 /** Whether a workspace's IssueWatch is currently server-fed (skip local polling). */
