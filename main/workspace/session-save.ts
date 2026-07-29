@@ -469,3 +469,30 @@ export function hostSessionSaveDeps(): SessionSaveDeps {
         now: () => new Date(),
     };
 }
+
+/** The save currently walking this host, if any. See {@link runHostSessionSave}. */
+let inFlightHostSave: Promise<SessionSaveReport> | null = null;
+
+/**
+ * Run the session save on THIS host — what `POST /api/desktop/session-save` calls.
+ *
+ * Single-flight, because teardown can plausibly ask twice (an operator's "End
+ * session" racing the idle-timeout, or a caller retrying a slow request). Two
+ * concurrent walks would fight over the same git indexes and the second
+ * `checkout -b` would find the branch already there — turning a good save into a
+ * `failed` report that blocks a teardown which should have been allowed. A second
+ * caller therefore joins the run already in progress and reads the SAME report.
+ *
+ * The slot is released once the run settles — including on a throw — so a failed
+ * attempt never wedges the host into refusing every later save.
+ */
+export function runHostSessionSave(
+    deps: SessionSaveDeps = hostSessionSaveDeps(),
+): Promise<SessionSaveReport> {
+    if (inFlightHostSave) return inFlightHostSave;
+    const run = saveWorkspacesForTeardown(deps).finally(() => {
+        if (inFlightHostSave === run) inFlightHostSave = null;
+    });
+    inFlightHostSave = run;
+    return run;
+}

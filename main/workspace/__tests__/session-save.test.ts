@@ -10,6 +10,7 @@ vi.mock('../../db', () => ({ listWorkspaces: () => [] }));
 import {
     SESSION_BRANCH_PREFIX,
     discoverWorkspaceRepos,
+    runHostSessionSave,
     saveWorkspacesForTeardown,
     sessionBranchName,
     type SessionSaveDeps,
@@ -523,5 +524,84 @@ describe('discoverWorkspaceRepos', () => {
 
     it('returns nothing for a path that is not a repo at all', () => {
         expect(discoverWorkspaceRepos(path.join(tmp(), 'missing'))).toEqual([]);
+    });
+});
+
+/**
+ * `runHostSessionSave` is what the HOST endpoint (`POST /api/desktop/session-save`)
+ * calls. Teardown can plausibly fire it twice — an operator's "End session" racing
+ * the idle-timeout — and two concurrent walks over the SAME repos collide: they
+ * fight over the git index, and the second `checkout -b` finds the branch already
+ * there. That turns a perfectly good save into a `failed` report and blocks a
+ * teardown that should have been allowed. So concurrent callers coalesce onto the
+ * one in-flight run, and the slot is released whether it resolves OR throws.
+ */
+describe('runHostSessionSave — single-flight', () => {
+    /** Deps for one clean repo whose git only resolves once `release()` is called. */
+    function gated() {
+        let release!: () => void;
+        const gate = new Promise<void>((r) => {
+            release = r;
+        });
+        let walks = 0;
+        const deps: SessionSaveDeps = {
+            listWorkspaces: () => {
+                walks += 1;
+                return [ws('w1', '/ws/one.agi')];
+            },
+            discoverRepos: () => ['/ws/one.agi'],
+            git: async (_repo, args) => {
+                await gate;
+                if (args[0] === 'rev-parse') return 'main\n';
+                if (args[0] === 'rev-list') return '0\n';
+                return '';
+            },
+            auth: () => ({ config: [], secrets: [] }),
+            now: () => NOW,
+        };
+        return { deps, release: () => release(), walks: () => walks };
+    }
+
+    it('coalesces concurrent callers onto ONE walk', async () => {
+        const g = gated();
+        const a = runHostSessionSave(g.deps);
+        const b = runHostSessionSave(g.deps);
+        g.release();
+        const [ra, rb] = await Promise.all([a, b]);
+
+        expect(g.walks()).toBe(1);
+        expect(ra).toBe(rb); // the very same report — not two racing walks
+        expect(ra.counts).toEqual({ saved: 0, clean: 1, failed: 0 });
+        expect(ra.ok).toBe(true);
+    });
+
+    it('runs again once the in-flight save has settled', async () => {
+        const first = gated();
+        first.release();
+        await runHostSessionSave(first.deps);
+
+        const second = gated();
+        second.release();
+        const report = await runHostSessionSave(second.deps);
+
+        expect(second.walks()).toBe(1); // a later teardown is not served a stale report
+        expect(report.ok).toBe(true);
+    });
+
+    it('releases the slot when a save THROWS, so a retry is still possible', async () => {
+        const boom: SessionSaveDeps = {
+            listWorkspaces: () => {
+                throw new Error('workspace db unreadable');
+            },
+            discoverRepos: () => [],
+            git: async () => '',
+            auth: () => ({ config: [], secrets: [] }),
+            now: () => NOW,
+        };
+        await expect(runHostSessionSave(boom)).rejects.toThrow('workspace db unreadable');
+
+        const g = gated();
+        g.release();
+        await expect(runHostSessionSave(g.deps)).resolves.toMatchObject({ ok: true });
     });
 });
