@@ -13,6 +13,12 @@
  * and works identically in dev and packaged (asar) builds — it runs from a
  * writable path outside the archive.
  *
+ * TERMINOLOGY: "host" in this file means the MAIN PROCESS hosting the worker —
+ * a different axis from the client/host MACHINE split in `side.ts`. They never
+ * disagree about a plugin (tool code runs in the main process of the machine
+ * holding the workspace, i.e. host on both readings); they answer different
+ * questions — which process, versus which machine.
+ *
  * NOTE (honest scope): the utilityProcess is a Node process, so a determined
  * plugin could still `require('fs')` directly inside the worker. Phase 0
  * delivers the PROCESS boundary + the mediated capability bridge; a locked-down

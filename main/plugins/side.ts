@@ -1,25 +1,38 @@
 /**
- * WHERE a plugin's surfaces run: the CLIENT / HOST split.
+ * WHICH MACHINE a plugin's surfaces run on: the CLIENT / HOST split.
  *
- * A Genie plugin is not wholly "client" or "host" — its individual SURFACES are,
- * and conflating the two is what broke remote document editing:
+ * This adds NO manifest field and NO new runtime. It names, in one place, the
+ * split the existing surface registries already draw — so the two sides can be
+ * enforced on their own terms instead of one gate standing in for both:
  *
- *   - `editors[]`  → a CLIENT surface. The plugin ships no editor code (§12.2 —
- *     it DECLARES a first-party Fancy component + the file types it opens); the
- *     component renders in whichever window the user is sitting at. Which editor
- *     claims a file, and whether the user wants that editor at all, are the
- *     CLIENT's decisions ({@link ../plugins/editor-routing} runs client-side, and
- *     `remote-bridge` deliberately keeps `editorFor` local).
+ *   - `editors[]` → a CLIENT surface, served by `editor-routing.ts` (which editor
+ *     claims a file type) and `editor-bridge.ts` (the renderer-facing document
+ *     I/O). The plugin ships no editor code (§12.2 — it DECLARES a first-party
+ *     Fancy component plus the file types it opens), so the component renders in
+ *     whichever window the user is sitting at. `remote-bridge` already treats it
+ *     this way: it keeps `editorFor` client-local and forwards only the bytes.
  *
- *   - `mcpTools[]` / `recipes[]` → HOST surfaces. That code RUNS on the host: the
- *     worker executes tool handlers against the host filesystem, recipes spawn
- *     host terminals. Enabling them, and granting their capabilities, is the HOST
- *     user's decision, and stays fully gated (`pluginRowIsSurfaceable`).
+ *   - `mcpTools[]` → a HOST surface, served by `registry.ts`
+ *     (`pluginToolDescriptors` / tool dispatch / `pluginAgentSkills`, each gated
+ *     on `pluginRowIsSurfaceable`) and executed by `worker-host.ts`.
+ *   - `recipes[]` → a HOST surface, served by `recipes.ts` (same gate); its
+ *     terminal steps spawn processes on the machine holding the workspace.
  *
- * So over a remote connection the host is asked for ONE thing on behalf of a
- * client editor: the document's BYTES. It must not demand that the client's
- * editor plugin also be switched on locally — but it must still sandbox the read
- * (see `editor-bridge.ts` → `runPluginDocumentFsOp`).
+ * `host` here therefore means exactly "the set `registry.ts` + `recipes.ts`
+ * surface". Note the deliberate distinction from `worker-host.ts`, where "host"
+ * is the MAIN PROCESS hosting the utility-process worker — a different axis
+ * (which process) from this one (which machine). Both host surfaces above run in
+ * the main process AND on the host machine, so the two readings never disagree
+ * about a plugin; they just answer different questions.
+ *
+ * A plugin is commonly BOTH — Presentation contributes a deck editor and
+ * `presentation.createDeck` — which is why the classification is per-surface and
+ * never a single label on the plugin.
+ *
+ * Over a remote connection the host is asked for ONE thing on behalf of a client
+ * editor: the document's BYTES. It must not demand that the client's editor
+ * plugin also be switched on locally — but it must still sandbox the read (see
+ * `editor-bridge.ts` → `runPluginDocumentFsOp`).
  *
  * PURE: no Electron, no DB, no fs — so the classification is unit-testable and
  * usable from both the desktop shell and a headless host.

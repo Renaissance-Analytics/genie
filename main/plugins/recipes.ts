@@ -4,6 +4,10 @@
  * SURFACEABLE plugin that DECLARES `recipes[]` AND HOLDS the grantable `recipes`
  * Genie-API permission the user consented to at enable-time.
  *
+ * A HOST-side surface (`side.ts`), like `registry.ts`: a recipe's terminal steps
+ * spawn processes on the machine that holds the workspace, so it stays gated on
+ * that machine's enable + consent decision.
+ *
  * Fail-closed on every axis: a disabled / untrusted plugin never reaches here
  * (pluginRowIsSurfaceable), a malformed manifest is skipped, and a plugin that
  * declares recipes but was NOT granted the `recipes` capability contributes

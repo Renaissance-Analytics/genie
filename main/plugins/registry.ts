@@ -15,6 +15,12 @@
  * executor (a `utilityProcess` worker by default). The executor is INJECTABLE so
  * the seam is testable without spinning up Electron; the production default is
  * the worker executor (`./worker-host`), loaded lazily.
+ *
+ * This is the HOST-side plugin surface (`side.ts`): the code runs on the machine
+ * that holds the workspace, so it stays gated on that machine's enable + consent
+ * decision (`pluginRowIsSurfaceable`). The client-side counterpart — editors —
+ * is `editor-routing.ts` + `editor-bridge.ts` and is deliberately NOT gated that
+ * way.
  */
 
 import {
