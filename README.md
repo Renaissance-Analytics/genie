@@ -187,4 +187,7 @@ private disclosure path.
 
 ## Licence
 
-[MIT](LICENSE).
+**Proprietary — © 2026 Wishborn. All rights reserved.** This source is made
+publicly viewable for reference, but it is **not** free or open-source software:
+no right to use, copy, modify, or distribute is granted except under a separate
+written agreement. See [LICENSE](LICENSE).
