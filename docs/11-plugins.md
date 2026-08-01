@@ -27,10 +27,26 @@ Everything lives in **Settings → Plugins**.
 - **From a repo URL / from a folder** — install a single plugin directly, for
   plugins that aren't in any marketplace (or your own, while developing).
 
-After installing, **enable** the plugin in the *Installed plugins* list. The
-first enable shows exactly which capabilities the plugin asked for (for
-example: read/write `.pptx` files inside the workspace it runs in) — nothing is
-granted silently, and you can revoke any grant later from the same list.
+After installing, **enable** the plugin in the *Installed plugins* list. If the
+plugin adds **agent tools**, the first enable shows exactly which capabilities
+it asked for (for example: read/write `.pptx` files inside the workspace it runs
+in) — nothing is granted silently, and you can revoke any grant later from the
+same list. A plugin that only adds **editors** runs no code on your machine, so
+it needs no permissions and enables straight away.
+
+### Where a plugin runs
+
+A plugin's surfaces split across two sides, and the *Installed plugins* card
+labels each one:
+
+- **Editors are client-side.** They render in whichever Genie window opens the
+  file. Enabling one here decides whether files open in it *in this window*.
+- **Agent tools and recipes are host-side.** That code runs on the machine that
+  holds the workspace, which is why it's the side that asks for permissions.
+
+This matters over a remote connection: when you open a document on a Genie you've
+connected to, your own Genie supplies the editor and the host supplies only the
+file's bytes. You don't need the editor plugin enabled on the host as well.
 
 ## Using plugin editors
 
@@ -41,9 +57,11 @@ dirty-dot, **Ctrl/Cmd+S** save, close confirmation, session restore, and
 live-refresh-on-disk-change as any other tab. Unsaved plugin-tab edits survive
 switching tabs.
 
-Plugin editors read and write files through a **capability-scoped bridge**: a
-plugin can only touch the file types it declared, inside the workspace it was
-granted, and only while it's enabled.
+Plugin editors read and write files through a **capability-scoped bridge**: an
+editor can only touch the file types it declares it opens, inside the workspace
+the file belongs to, and only for a plugin whose signature Genie trusts. Nothing
+outside the workspace, and no other file type, is reachable — locally or from a
+remote client.
 
 ## Agent tools from plugins
 

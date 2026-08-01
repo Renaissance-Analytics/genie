@@ -385,12 +385,17 @@ export async function reconcileBundledPlugins(): Promise<void> {
  *
  * The desktop installs bundled plugins on user action (Settings → Official →
  * install), so a HEADLESS host — which has no such UI — would have an EMPTY plugin
- * registry. A remote member's plugin editors (e.g. the Document editor a `.md`
- * opens into) then fail closed on the host: `runPluginEditorFs` → `getPlugin` →
- * null → `deny('unknown plugin')`. This materialises + installs every FIRST-PARTY
- * bundled plugin (trusted by construction) and, with `enable`, turns it on so the
- * host's fs trust gate passes. Idempotent + fail-soft per plugin; NEVER call it on
- * the desktop (that keeps its user-choice model) — only the host-core boot does.
+ * registry and none of the first-party MCP tools (deck/workbook generation) its
+ * agents expect. This materialises + installs every FIRST-PARTY bundled plugin
+ * (trusted by construction) and, with `enable`, turns its HOST surfaces on.
+ *
+ * It is NOT what makes a remote member's document editor work: an editor is a
+ * CLIENT surface, and `runPluginEditorFs` authorises it from the plugin's manifest
+ * (installed-and-trusted, or Genie's own bundled source) rather than from this
+ * host's enabled set — see `plugins/side.ts`.
+ *
+ * Idempotent + fail-soft per plugin; NEVER call it on the desktop (that keeps its
+ * user-choice model) — only the host-core boot does.
  */
 export async function ensureBundledPluginsInstalled(opts?: { enable?: boolean }): Promise<void> {
     for (const src of BUNDLED_PLUGIN_SOURCES) {

@@ -1889,8 +1889,15 @@ export async function handleApi(
 
     // genie#54 — plugin-editor binary I/O for a remote window. A `.md`/`.docx` file
     // opens as a plugin tab whose bytes live on the HOST, so resolve + read/write here
-    // (host POSIX path) instead of the client's win32 FS. `root` must be one of the
-    // host's OWN workspaces; runPluginEditorFs re-applies the plugin trust + fs sandbox.
+    // (host POSIX path) instead of the client's win32 FS.
+    //
+    // The editor itself is a CLIENT surface (see plugins/side.ts): the client chose it
+    // and renders it. So this endpoint does NOT require the editor plugin to be enabled
+    // or granted on the host — that gate is what made every remote document open fail
+    // with the redacted "plugin file operation failed". What still holds, all host-side:
+    // `root` must be one of the host's OWN workspaces, the member must be authorised for
+    // it, and runPluginEditorFs re-applies the plugin's TRUST check + the path-guarded,
+    // editor-extension-limited, size-capped document sandbox.
     if (pathname === '/api/plugins/editor-read' || pathname === '/api/plugins/editor-write') {
         if (method !== 'POST') {
             sendJson(res, 405, { error: 'method not allowed' });

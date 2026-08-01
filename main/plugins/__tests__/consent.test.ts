@@ -76,7 +76,7 @@ beforeAll(() => {
 });
 
 afterEach(() => {
-    for (const id of ['test.consent.deck', 'test.consent.nocaps'])
+    for (const id of ['test.consent.deck', 'test.consent.nocaps', 'test.consent.editor'])
         try {
             deletePlugin(id);
         } catch {
@@ -140,6 +140,72 @@ describe('consentAndEnablePlugin', () => {
         expect(r.enabled).toBe(true);
         expect(asked).toBe(0); // nothing to consent → no modal
         expect(getPlugin('test.consent.nocaps')!.enabled).toBe(true);
+    });
+
+    it('enables a CLIENT-SIDE (editors-only) plugin silently — it runs no code here', async () => {
+        // Client/host split: an editors-only plugin contributes no host surface, so
+        // there is no host code to grant capabilities TO. Its declared fs scope is
+        // the client editor's SANDBOX, not a permission to run — asking the user to
+        // grant it offered a switch that gated nothing (and, answered "Deny", used
+        // to break the editor).
+        seed('test.consent.editor', {
+            id: 'test.consent.editor',
+            manifest_json: JSON.stringify({
+                id: 'test.consent.editor',
+                namespace: 'consenttest',
+                name: 'Consent Test',
+                version: '0.1.0',
+                editors: [
+                    {
+                        id: 'doc',
+                        title: 'Document',
+                        extensions: ['.md'],
+                        fancyEditor: {
+                            package: '@particle-academy/react-fancy',
+                            version: '>=4.9.0',
+                            export: 'Editor',
+                        },
+                    },
+                ],
+                capabilities: { fs: { scope: 'workspace', extensions: ['.md'] } },
+            }),
+        });
+
+        const r = await consentAndEnablePlugin('test.consent.editor');
+
+        expect(r.ok).toBe(true);
+        expect(r.enabled).toBe(true);
+        expect(asked).toBe(0); // no host surface → nothing to consent to → no modal
+        expect(getPlugin('test.consent.editor')!.enabled).toBe(true);
+    });
+
+    it('still asks for capabilities when the plugin ALSO has a host surface', async () => {
+        // Presentation's shape: a deck editor (client) PLUS a generator tool (host).
+        // The host tool is real code running here, so the grant question stands.
+        seed('test.consent.deck', {
+            manifest_json: JSON.stringify({
+                ...MANIFEST,
+                editors: [
+                    {
+                        id: 'deck',
+                        title: 'Slides',
+                        extensions: ['.pptx'],
+                        fancyEditor: {
+                            package: '@particle-academy/fancy-slides',
+                            version: '>=0.1.0',
+                            export: 'DeckEditor',
+                        },
+                    },
+                ],
+            }),
+        });
+        nextResult = answer(['Grant'], ['Grant']);
+
+        const r = await consentAndEnablePlugin('test.consent.deck');
+
+        expect(r.ok).toBe(true);
+        expect(asked).toBe(1);
+        expect(getPlugin('test.consent.deck')!.grants.fs.workspace).toBe(true);
     });
 
     it('re-enables an already-consented plugin silently', async () => {

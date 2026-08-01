@@ -381,6 +381,18 @@ export function isBundledPluginId(id: string): boolean {
     return BUNDLED_PLUGIN_SOURCES.some((b) => b.id === id);
 }
 
+/**
+ * The EMBEDDED manifest of a bundled first-party plugin, or null when `id` isn't
+ * one. Pure (no disk, no DB): the manifest is compiled into Genie, so the host
+ * always has a bundled plugin's declared editors + fs scope even on a machine
+ * where nobody ever installed it. That is what lets the host serve a CLIENT-side
+ * editor's document bytes under the plugin's OWN sandbox rules without demanding
+ * a local install/enable (see `editor-bridge.ts`).
+ */
+export function bundledPluginManifest(id: string): Record<string, unknown> | null {
+    return BUNDLED_PLUGIN_SOURCES.find((b) => b.id === id)?.manifest ?? null;
+}
+
 /** A materialised bundled plugin as the Settings "Official" tab renders it. */
 export interface BundledPlugin {
     id: string;
