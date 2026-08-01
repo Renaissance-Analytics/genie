@@ -163,6 +163,7 @@ import { listLocalEnabledGenSites } from './sites/local-sites';
 import { hostingManager } from './hosting/manager';
 import { serviceManager } from './hosting/services/manager';
 import { isServiceKind } from './hosting/services/types';
+import { restartSitesForWorkspace } from './hosting/restart-sites';
 import { scanWorkspaceCandidates } from './hosting/candidates';
 import { ensureFrankenPhp, frankenPhpStatus } from './hosting/frankenphp-fetch';
 import type { HostedSiteConfig } from './hosting/sites-config';
@@ -603,6 +604,12 @@ export function registerIpcHandlers(): void {
             // soon as the toggle is on.
             await serviceManager()?.reconcile();
             const env = await serviceManager()?.writeEnvFile(workspaceId);
+            // …and hand the new environment to the sites that are supposed to
+            // use it. A running site read its `DB_*` at start and will never
+            // re-read them, so without this "enable Postgres" leaves the app
+            // 500ing on a database it cannot see. See `hosting/restart-sites.ts`.
+            await restartSitesForWorkspace(hostingManager(), workspaceId);
+            broadcastHostingChanged();
             return { ok: true, serviceId, env: env ?? null };
         },
     );
@@ -611,6 +618,11 @@ export function registerIpcHandlers(): void {
         await serviceManager()?.stop(workspaceId, kind);
         deleteWorkspaceService(workspaceId, kind);
         const env = await serviceManager()?.writeEnvFile(workspaceId);
+        // Removing one matters as much as adding one: a site left holding
+        // credentials for a server that is no longer listening fails with a
+        // connection error instead of falling back to its own configuration.
+        await restartSitesForWorkspace(hostingManager(), workspaceId);
+        broadcastHostingChanged();
         return { ok: true, env: env ?? null };
     });
     ipcMain.handle('services:start', async (_e, workspaceId: string, kind: ServiceKind) => {
@@ -618,8 +630,20 @@ export function registerIpcHandlers(): void {
         if (!manager) return { ok: false, error: 'services are not available on this host' };
         if (!isServiceKind(kind)) return { ok: false, error: `unknown service ${String(kind)}` };
         const status = await manager.start(workspaceId, kind);
+        // A site started while this service was down holds NO environment for
+        // it — `envFor` reports the RUNNING instances — so bringing the service
+        // up has to hand the site its credentials or the button does nothing the
+        // app can see.
+        if (status.state === 'running') {
+            await restartSitesForWorkspace(hostingManager(), workspaceId);
+            broadcastHostingChanged();
+        }
         return { ok: status.state === 'running', status };
     });
+    // No site restart on STOP, deliberately: the service is still configured, so
+    // the `.env` managed block still names it and a restarted site would come
+    // back pointing at the same port that is no longer listening. Identical
+    // outcome for the app, one gratuitous outage of the web tier.
     ipcMain.handle('services:stop', async (_e, workspaceId: string, kind: ServiceKind) => {
         if (!isServiceKind(kind)) return { ok: false, error: `unknown service ${String(kind)}` };
         await serviceManager()?.stop(workspaceId, kind);

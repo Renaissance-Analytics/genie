@@ -179,6 +179,27 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         installRuntime: async () => unavailable,
     };
 
+    /**
+     * The backing SERVICES (#232 P3) — inert for exactly the reason `hosting` is,
+     * and more sharply: a database is STATE. Passing these through would initialise
+     * a Postgres cluster on the CLIENT and write its credentials into a `.env`
+     * that lives on the HOST, so the app would be pointed at a server on a machine
+     * it cannot reach. The Services tab reads this as its "managed over there"
+     * state (`servicesUnavailableNote('remote')`) and offers no actions.
+     *
+     * Host-sourcing it needs `/api/services/*` on the host, alongside the
+     * `/api/hosting/*` the sites half is waiting on.
+     */
+    const services: GenieApi['services'] = {
+        list: async () => [],
+        set: async () => unavailable,
+        remove: async () => ({ ok: false }),
+        start: async () => unavailable,
+        stop: async () => ({ ok: false }),
+        logs: async () => '',
+        writeEnv: async () => ({ path: null, changed: false, conflicts: [] }),
+    };
+
     // The host's terminal-spec model (the grid's backbone) — pass-through.
     const terminalSpec: GenieApi['terminalSpec'] = {
         list: async () =>
@@ -734,6 +755,7 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         issueWatch,
         sites,
         hosting,
+        services,
         settings,
         agentInbox,
         questions,

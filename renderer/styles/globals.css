@@ -872,6 +872,24 @@ textarea.input {
     flex: 1;
     min-width: 0;
 }
+/* Services tab: the `.env` block Genie writes, and a service's server log.
+   Both are TEXT the user could have opened in an editor, so both render in a
+   CodeView rather than as a styled key/value list — what is on screen is what
+   is in the file. */
+.svc-env {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+.svc-env-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--fg-4);
+}
+
 /* Narrow modal / small window: one column rather than two cramped ones. */
 @media (max-width: 640px) {
     .site-card-fields {

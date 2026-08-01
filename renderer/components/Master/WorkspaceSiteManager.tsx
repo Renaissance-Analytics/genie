@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
     Action,
+    Badge,
+    Callout,
+    CodeView,
     Heading,
     Icon,
     Input,
@@ -10,7 +13,15 @@ import {
     Text,
 } from '@particle-academy/react-fancy';
 import { pickPath } from '../FilePickerModal';
-import { api, type HostedSiteCandidate, type HostedSiteRow, type WorkspaceRow } from '../../lib/genie';
+import {
+    api,
+    isRemoteWindow,
+    type HostedSiteCandidate,
+    type HostedSiteRow,
+    type ServiceEnvWrite,
+    type ServiceRow,
+    type WorkspaceRow,
+} from '../../lib/genie';
 import {
     canOpenInBrowser,
     relativeDocroot,
@@ -19,6 +30,18 @@ import {
     siteStatusTone,
     type SiteManagerRow,
 } from '../../lib/hosting';
+import {
+    enabledServiceCount,
+    envWriteNote,
+    serviceEngineNote,
+    serviceEnvPreview,
+    serviceManagerRows,
+    serviceStatusLabel,
+    serviceStatusTone,
+    servicesUnavailableNote,
+    type ServiceManagerRow,
+    type ServicesAvailability,
+} from '../../lib/services';
 
 /**
  * The WORKSPACE SITE MANAGER (Tynn #232) — the per-workspace hosting control
@@ -40,12 +63,14 @@ import {
  *     it is not — and starts/stops it;
  *   - opens a running site in the Genie Browser.
  *
- * SERVICES (databases, cache, queues, object storage) are the next chunk; the
- * tab is here, clearly labelled, rather than absent — the panel's shape is part
- * of the decision the owner already made.
+ * The SERVICES tab is the other half of "hosted": the database and cache those
+ * sites connect to, per workspace, each on its own port with its own data and
+ * credential. Same card, same status rule, plus the two things a backing service
+ * has that a web root does not — the `.env` block Genie writes into the user's
+ * repository, and a server log to read when it will not start.
  *
- * All the decisions this renders from are pure functions in `lib/hosting.ts`
- * (the renderer test env has no DOM); this file is the wiring.
+ * All the decisions this renders from are pure functions in `lib/hosting.ts` and
+ * `lib/services.ts` (the renderer test env has no DOM); this file is the wiring.
  */
 
 type Tab = 'sites' | 'services';
@@ -71,6 +96,24 @@ export default function WorkspaceSiteManager({
     /** Local edits to a row's fields, committed on blur / change. */
     const [draft, setDraft] = useState<Record<string, Partial<SiteManagerRow>>>({});
     const [adding, setAdding] = useState(false);
+    const [services, setServices] = useState<ServiceRow[] | null>(null);
+    /**
+     * Whether services can be driven from HERE at all.
+     *
+     * A remote window is the case that matters: it drives another machine, and a
+     * database is state — initialising a cluster on the client and writing its
+     * credentials into a `.env` that lives on the host would point the app at a
+     * server it cannot reach. `remote-bridge.ts` makes the calls inert; this is
+     * what says so out loud instead of showing two switches that do nothing.
+     */
+    const [availability, setAvailability] = useState<ServicesAvailability>(
+        isRemoteWindow() ? 'remote' : 'ready',
+    );
+    /** The one service whose log is open, and its tail. */
+    const [logs, setLogs] = useState<{ key: string; text: string } | null>(null);
+    /** What the last `.env` write did — including which of the user's own keys it
+     *  supersedes, which is the whole reason main reports them. */
+    const [envNote, setEnvNote] = useState<string | null>(null);
 
     const refresh = useCallback(async () => {
         try {
@@ -84,16 +127,133 @@ export default function WorkspaceSiteManager({
             setConfigured([]);
             setCandidates([]);
         }
+        try {
+            setServices(await api().services.list(workspace.id));
+        } catch {
+            // The channel isn't there at all (a host with no service manager).
+            // An empty list would read as "no services yet" — a state the user
+            // could act on — so record that this host simply cannot.
+            setServices([]);
+            setAvailability((a) => (a === 'remote' ? a : 'unsupported'));
+        }
     }, [workspace.id]);
 
     useEffect(() => {
         void refresh();
         // PUSH, not a poll: a site can take a build (or the first 277 MB runtime
-        // download) to come up, so main tells us when anything moved.
+        // download) to come up, so main tells us when anything moved. Services
+        // ride the same signal — main's boot reconcile starts them BEFORE the
+        // sites that depend on them and fires this once both have settled.
         return api().on.hostingChanged(() => void refresh());
     }, [refresh]);
 
     const rows = siteManagerRows(configured ?? [], candidates);
+    const serviceRows = serviceManagerRows(services ?? []);
+    const servicesOn = enabledServiceCount(serviceRows);
+    const unavailableNote = servicesUnavailableNote(availability);
+
+    /** Every service write reports what it did to the workspace's `.env`. */
+    const noteEnv = (result: ServiceEnvWrite | null | undefined) =>
+        setEnvNote(envWriteNote(result));
+
+    /** Turn a service on/off. Enabling is what CREATES it — main mints the
+     *  credential, converges the runtime and rewrites the `.env` in one call. */
+    const setServiceEnabled = async (row: ServiceManagerRow, enabled: boolean) => {
+        setBusy(row.key);
+        setError(null);
+        try {
+            const res = await api().services.set(workspace.id, row.kind, { enabled });
+            if (!res.ok) setError(res.error ?? 'Could not change that service.');
+            noteEnv(res.env);
+            await refresh();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    /** Rename the app's database. Postgres only, and only once the service
+     *  exists — there is nothing to rename before that. */
+    const setServiceDatabase = async (row: ServiceManagerRow, database: string) => {
+        if (!row.configured || database === (row.database ?? '')) return;
+        setBusy(row.key);
+        setError(null);
+        try {
+            const res = await api().services.set(workspace.id, row.kind, { database });
+            if (!res.ok) setError(res.error ?? 'Could not rename that database.');
+            noteEnv(res.env);
+            await refresh();
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    const startStopService = async (row: ServiceManagerRow, start: boolean) => {
+        setBusy(row.key);
+        setError(null);
+        try {
+            if (start) {
+                // The first start of a kind DOWNLOADS its engine, so this can be
+                // a long call; the row's own status carries the reason after.
+                const res = await api().services.start(workspace.id, row.kind);
+                if (!res.ok && res.error) setError(res.error);
+            } else {
+                await api().services.stop(workspace.id, row.kind);
+            }
+            await refresh();
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    /** Forget the service. Main leaves its data directory alone, and the button
+     *  says so — a click here must never be how someone loses a database. */
+    const removeService = async (row: ServiceManagerRow) => {
+        if (!row.configured) return;
+        setBusy(row.key);
+        try {
+            const res = await api().services.remove(workspace.id, row.kind);
+            noteEnv(res.env);
+            if (logs?.key === row.key) setLogs(null);
+            await refresh();
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    const toggleServiceLogs = async (row: ServiceManagerRow) => {
+        if (logs?.key === row.key) {
+            setLogs(null);
+            return;
+        }
+        setBusy(row.key);
+        try {
+            setLogs({ key: row.key, text: await api().services.logs(workspace.id, row.kind) });
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    /** Re-write the managed block by hand — for after the user has edited their
+     *  `.env`, or created one Genie previously found missing. */
+    const rewriteEnv = async () => {
+        setBusy('env');
+        setError(null);
+        try {
+            const result = await api().services.writeEnv(workspace.id);
+            setEnvNote(
+                envWriteNote(result) ??
+                    (result.changed
+                        ? 'Updated the managed block in this workspace’s .env.'
+                        : 'This workspace’s .env is already up to date.'),
+            );
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(null);
+        }
+    };
 
     /** Persist one site, then re-read. Every write goes through here so the
      *  panel always reflects what the RUNTIME did, not what we asked for. */
@@ -212,7 +372,7 @@ export default function WorkspaceSiteManager({
                         className={tab === 'services' ? 'active' : ''}
                         onClick={() => setTab('services')}
                     >
-                        Services
+                        Services{servicesOn ? ` (${servicesOn})` : ''}
                     </button>
                 </div>
 
@@ -346,21 +506,76 @@ export default function WorkspaceSiteManager({
                         </section>
                     </>
                 ) : (
-                    <section className="set-section">
-                        <div className="set-section-head">
-                            <h2>Services</h2>
-                            <span className="set-section-desc">
-                                Per-workspace backing services
-                            </span>
-                        </div>
-                        <div className="set-note warn">
-                            <strong>Not built yet.</strong> Databases (MySQL / PostgreSQL),
-                            cache + queues (Redis), object storage (S3-compatible) and mail
-                            capture will be started, stopped and monitored per workspace
-                            from here — the same panel as the sites they back. Until then,
-                            point a site at whatever you already run.
-                        </div>
-                    </section>
+                    <>
+                        <section className="set-section">
+                            <div className="set-section-head">
+                                <h2>Services</h2>
+                                <span className="set-section-desc">
+                                    What this workspace&apos;s app connects TO — its own
+                                    database and cache, on their own ports, sharing nothing
+                                    with another workspace&apos;s.
+                                </span>
+                            </div>
+
+                            {unavailableNote ? (
+                                <Callout color="amber" icon={<Icon name="info" size="sm" />}>
+                                    {unavailableNote}
+                                </Callout>
+                            ) : services === null ? (
+                                <Text size="xs" className="text-zinc-500">
+                                    Reading this workspace&apos;s services…
+                                </Text>
+                            ) : (
+                                <div className="site-list">
+                                    {serviceRows.map((row) => (
+                                        <ServiceCard
+                                            key={row.key}
+                                            row={row}
+                                            busy={busy === row.key}
+                                            logs={logs?.key === row.key ? logs.text : null}
+                                            onToggle={(on) => void setServiceEnabled(row, on)}
+                                            onRenameDatabase={(name) =>
+                                                void setServiceDatabase(row, name)
+                                            }
+                                            onStart={() => void startStopService(row, true)}
+                                            onStop={() => void startStopService(row, false)}
+                                            onToggleLogs={() => void toggleServiceLogs(row)}
+                                            onRemove={() => void removeService(row)}
+                                        />
+                                    ))}
+                                </div>
+                            )}
+                        </section>
+
+                        {!unavailableNote && (
+                            <section className="set-section">
+                                <div className="set-section-head">
+                                    <h2>How your app gets these</h2>
+                                    <span style={{ marginLeft: 'auto' }}>
+                                        <Action
+                                            size="sm"
+                                            variant="ghost"
+                                            icon="refresh-cw"
+                                            disabled={busy === 'env'}
+                                            onClick={() => void rewriteEnv()}
+                                        >
+                                            Rewrite .env block
+                                        </Action>
+                                    </span>
+                                </div>
+                                <div className="set-note">
+                                    The hosted site is started WITH these settings, so it
+                                    picks them up without any file. Genie also writes them
+                                    into a delimited block at the end of the app&apos;s{' '}
+                                    <code>.env</code> — that is what makes{' '}
+                                    <code>artisan migrate</code> and{' '}
+                                    <code>tinker</code> reach the same database. Everything
+                                    outside those markers is yours and is never touched.
+                                </div>
+                                {envNote && <div className="set-note warn">{envNote}</div>}
+                            </section>
+                        )}
+                    </>
                 )}
             </div>
         </Modal>
@@ -502,6 +717,166 @@ function SiteCard({
                 )}
                 {row.configured && (
                     <Action size="sm" variant="ghost" icon="trash-2" disabled={busy} onClick={onRemove}>
+                        Remove
+                    </Action>
+                )}
+            </div>
+        </div>
+    );
+}
+
+/** One backing service: what it is, whether it is on, where it listens, and the
+ *  `.env` lines it puts in the user's repository. */
+function ServiceCard({
+    row,
+    busy,
+    logs,
+    onToggle,
+    onRenameDatabase,
+    onStart,
+    onStop,
+    onToggleLogs,
+    onRemove,
+}: {
+    row: ServiceManagerRow;
+    busy: boolean;
+    /** The open log tail, or null when this row's log is closed. */
+    logs: string | null;
+    onToggle: (on: boolean) => void;
+    onRenameDatabase: (name: string) => void;
+    onStart: () => void;
+    onStop: () => void;
+    onToggleLogs: () => void;
+    onRemove: () => void;
+}) {
+    const tone = serviceStatusTone(row);
+    const engineNote = serviceEngineNote(row);
+    const env = serviceEnvPreview(row);
+    // Edited locally and committed on blur, exactly like a site's fields: every
+    // write reconciles the runtime, so a save per keystroke would restart a
+    // database while it is being named.
+    const [database, setDatabase] = useState(row.database ?? '');
+    useEffect(() => setDatabase(row.database ?? ''), [row.database]);
+
+    return (
+        <div className={`site-card${row.configured ? '' : ' is-candidate'}`}>
+            <div className="site-card-head">
+                <span className={`site-dot site-${tone}`} aria-hidden="true" />
+                <div className="site-card-name">
+                    <Text size="sm" style={{ fontWeight: 600 }}>
+                        <Icon name={row.icon} size="xs" /> {row.name}
+                        {row.engine !== row.kind && (
+                            <>
+                                {' '}
+                                <Badge size="sm" variant="soft" color="zinc">
+                                    {row.engine}
+                                </Badge>
+                            </>
+                        )}
+                    </Text>
+                    <Text size="xs" className="text-zinc-500">
+                        {row.blurb}
+                    </Text>
+                </div>
+                <Switch
+                    checked={row.enabled}
+                    disabled={busy}
+                    onCheckedChange={onToggle}
+                    aria-label={`Run ${row.name} for this workspace`}
+                />
+            </div>
+
+            <div className={`site-card-status site-${tone}`}>{serviceStatusLabel(row)}</div>
+
+            {engineNote && (
+                <Text size="xs" className="text-zinc-500">
+                    <Icon name="info" size="xs" /> {engineNote}
+                </Text>
+            )}
+
+            {row.kind === 'postgres' && row.configured && (
+                <div className="site-card-fields">
+                    <label className="site-field">
+                        <span>Database</span>
+                        <Input
+                            value={database}
+                            disabled={busy}
+                            onValueChange={setDatabase}
+                            onBlur={() => onRenameDatabase(database)}
+                            placeholder="genie"
+                            aria-label={`Database name for ${row.name}`}
+                        />
+                    </label>
+                    <label className="site-field">
+                        <span>Connects as</span>
+                        <Input value={row.user ?? 'genie'} disabled readOnly />
+                    </label>
+                </div>
+            )}
+
+            {/* The block Genie writes, shown as the text it actually is. The
+                password is a placeholder on purpose — main never sends it, and
+                the app's own `.env` is the only place it belongs. */}
+            {env.length > 0 && (
+                <div className="svc-env">
+                    <span className="svc-env-label">In your .env</span>
+                    <CodeView
+                        value={env.map((line) => `${line.key}=${line.value}`).join('\n')}
+                        readOnly
+                        minHeight={0}
+                        maxHeight={160}
+                    />
+                </div>
+            )}
+
+            {logs !== null && (
+                <div className="svc-env">
+                    <span className="svc-env-label">Server log</span>
+                    <CodeView
+                        value={logs || 'Nothing logged yet — this service has not run.'}
+                        readOnly
+                        minHeight={0}
+                        maxHeight={220}
+                    />
+                </div>
+            )}
+
+            <div className="set-actions">
+                {row.state === 'running' ? (
+                    <Action size="sm" variant="ghost" icon="square" disabled={busy} onClick={onStop}>
+                        Stop
+                    </Action>
+                ) : (
+                    <Action
+                        size="sm"
+                        variant="ghost"
+                        icon="play"
+                        disabled={busy || !row.configured || !row.enabled}
+                        onClick={onStart}
+                    >
+                        {row.state === 'failed' ? 'Retry' : 'Start'}
+                    </Action>
+                )}
+                {row.configured && (
+                    <Action
+                        size="sm"
+                        variant="ghost"
+                        icon="file-text"
+                        disabled={busy}
+                        onClick={onToggleLogs}
+                    >
+                        {logs !== null ? 'Hide log' : 'Log'}
+                    </Action>
+                )}
+                {row.configured && (
+                    <Action
+                        size="sm"
+                        variant="ghost"
+                        icon="trash-2"
+                        disabled={busy}
+                        onClick={onRemove}
+                        title="Stops it and forgets the configuration. The data directory is left on disk."
+                    >
                         Remove
                     </Action>
                 )}

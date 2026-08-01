@@ -364,6 +364,61 @@ export interface HostedSitePatch {
     index?: string;
 }
 
+/* --- backing SERVICES for hosted sites (#232 P3) -------------------------- *
+ *
+ * The other half of "hosted". `hosting` above is what Genie SERVES; these are
+ * what those sites CONNECT TO — a per-workspace database and cache, each with
+ * its own data directory, port and credential. Driven by the Site Manager's
+ * Services tab via `api().services`.                                          */
+
+/** What the hosted APP sees (mirrors main/hosting/services/types.ts). */
+export type ServiceKind = 'postgres' | 'redis';
+
+/** What Genie actually RUNS for a kind. Kept separate from the kind because the
+ *  `redis` slot is served by Garnet — see `serviceEngineNote` in lib/services. */
+export type ServiceEngine = 'postgres' | 'garnet';
+
+/** One configured service plus what its runtime currently says about it
+ *  (mirrors `ServiceRow` in main/hosting/services/manager.ts). */
+export interface ServiceRow {
+    workspaceId: string;
+    /** Opaque, stable id derived from (workspace, kind). */
+    serviceId: string;
+    kind: ServiceKind;
+    /** Strict opt-in — nothing runs until this is true. */
+    enabled: boolean;
+    state: HostedState;
+    /** The loopback port it WOULD use, even while stopped. */
+    port: number;
+    /** Where the app dials while running, else null. */
+    endpoint: { host: string; port: number } | null;
+    /** The app's database (`postgres` only). */
+    database?: string;
+    /** The role the app connects as. NEVER the password — main does not send
+     *  it, because the only place it belongs is the app's own `.env`. */
+    user?: string;
+    error?: string;
+}
+
+/** A service config patch. The password is deliberately absent: it is minted in
+ *  main on first enable and never travels inbound. */
+export interface ServicePatch {
+    enabled?: boolean;
+    /** `postgres` only. Lowercase identifier; anything else is refused in main. */
+    database?: string;
+}
+
+/** What writing the `.env` managed block did (mirrors `EnvWriteResult` in
+ *  main/hosting/services/manager.ts). */
+export interface ServiceEnvWrite {
+    /** The `.env` written, or null when the workspace has none. */
+    path: string | null;
+    changed: boolean;
+    /** Managed keys the user ALSO assigns outside the block — their line is
+     *  untouched but superseded, which the Services tab reports. */
+    conflicts: string[];
+}
+
 /** Per-bucket IssueWatch remediation policy (mirrors main/db.ts). The three count
  *  buckets — security (dependabot + code-scanning + secret-scanning), issue, pr —
  *  each carry their own policy. */
@@ -1789,6 +1844,43 @@ export interface GenieApi {
         /** Fetch the PHP runtime now (the ~277 MB first-use download), instead of
          *  waiting for the first PHP site to trigger it. */
         installRuntime: () => Promise<{ ok: boolean; error?: string }>;
+    };
+    /**
+     * The backing SERVICES a hosted site connects to (#232 P3) — a per-workspace
+     * database and cache. Driven by the Site Manager's Services tab.
+     *
+     * LOCAL-ONLY, exactly like `hosting` above and for the same reason: a remote
+     * window drives another machine, and starting a database on the CLIENT while
+     * the surface lists the HOST's workspaces would wire an app to a server that
+     * is not where its files are. Host-sourcing needs `/api/services/*` on the
+     * host — the same follow-on `/api/hosting/*` is.
+     */
+    services: {
+        /** Configured services + their live state; one workspace, or all. */
+        list: (workspaceId?: string) => Promise<ServiceRow[]>;
+        /** Create or update one service, converge it, and rewrite the `.env`
+         *  managed block. Enabling one is what CREATES it. */
+        set: (
+            workspaceId: string,
+            kind: ServiceKind,
+            patch?: ServicePatch,
+        ) => Promise<{ ok: boolean; serviceId?: string; env?: ServiceEnvWrite | null; error?: string }>;
+        /** Forget the service. Leaves its data directory on disk. */
+        remove: (
+            workspaceId: string,
+            kind: ServiceKind,
+        ) => Promise<{ ok: boolean; env?: ServiceEnvWrite | null; error?: string }>;
+        /** Start / stop WITHOUT changing the stored `enabled` flag. */
+        start: (
+            workspaceId: string,
+            kind: ServiceKind,
+        ) => Promise<{ ok: boolean; error?: string }>;
+        stop: (workspaceId: string, kind: ServiceKind) => Promise<{ ok: boolean }>;
+        /** The server log tail — why a service will not start. */
+        logs: (workspaceId: string, kind: ServiceKind) => Promise<string>;
+        /** Rewrite the `.env` managed block from the current config, and report
+         *  which of the user's own keys it supersedes. */
+        writeEnv: (workspaceId: string) => Promise<ServiceEnvWrite>;
     };
     mcp: {
         status: () => Promise<McpServerState>;
