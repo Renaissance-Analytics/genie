@@ -33,6 +33,7 @@ import { OFFICIAL_PLUGINS, listBundledPlugins, materialiseBundled } from './offi
 import { consentAndEnablePlugin } from './consent';
 import { listPluginRecipes } from './recipes';
 import { userTrustedKeys, addUserTrustedKey, removeUserTrustedKey } from './trust';
+import { pluginSides, type PluginSides } from './side';
 
 /** One toggleable granular permission for the Settings UI (§12.1). */
 export interface PluginPermissionView {
@@ -58,6 +59,12 @@ export interface InstalledPluginView {
     tools: Array<{ name: string; description: string }>;
     /** Declared editor file-type → Fancy mappings (§12.2). */
     editors: Array<{ id: string; title: string; extensions: string[]; fancyEditor: string }>;
+    /**
+     * WHERE this plugin's surfaces run (`side.ts`). `host` is what the enable
+     * toggle + permissions below actually govern; a `client`-only plugin runs no
+     * code on this machine and needs no permissions here.
+     */
+    sides: PluginSides;
     /** The granular declared permissions + whether each is granted. */
     permissions: PluginPermissionView[];
     /** Signing-ready provenance surfaced in the UI. */
@@ -124,7 +131,10 @@ function toView(row: PluginRow): InstalledPluginView {
             extensions: e.extensions,
             fancyEditor: `${e.fancyEditor.package}@${e.fancyEditor.version}#${e.fancyEditor.export}`,
         })),
-        permissions: manifest ? permissionViews(manifest, row.grants) : [],
+        sides: manifest ? pluginSides(manifest) : { client: false, host: false },
+        // Permissions gate the plugin's HOST code only (see `sides`) — a client-side
+        // editor's file access is sandboxed per-read, not by a stored grant.
+        permissions: manifest && pluginSides(manifest).host ? permissionViews(manifest, row.grants) : [],
         integrity: row.integrity,
         signed: !!row.signature && !!row.publisher_key_id,
         trust: row.trust,

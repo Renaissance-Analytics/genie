@@ -1595,6 +1595,12 @@ export interface InstalledPluginView {
     publisher: string | null;
     tools: Array<{ name: string; description: string }>;
     editors: Array<{ id: string; title: string; extensions: string[]; fancyEditor: string }>;
+    /**
+     * WHERE this plugin's surfaces run. `client` = editors (rendered in whichever
+     * Genie window opens the file); `host` = MCP tools / recipes (code that runs on
+     * this machine). Only host surfaces need enabling + permissions here.
+     */
+    sides: { client: boolean; host: boolean };
     permissions: PluginPermissionView[];
     integrity: string | null;
     signed: boolean;

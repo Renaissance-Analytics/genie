@@ -2920,6 +2920,13 @@ function PluginCard({
                             Unsigned — not verified by a trusted publisher. Requires Developer Mode to enable.
                         </span>
                     )}
+                    {plugin.sides.client && !plugin.sides.host && (
+                        <span className="set-row-desc">
+                            Client-side — it only contributes editors, so it runs no code here. This switch
+                            controls whether files open in it in THIS window; a remote client connecting to
+                            this Genie uses its own setting and its own copy of the editor.
+                        </span>
+                    )}
                 </div>
                 <div className="set-actions">
                     <Switch checked={plugin.enabled} onCheckedChange={onEnable} />
@@ -2931,7 +2938,7 @@ function PluginCard({
 
             {plugin.tools.length > 0 && (
                 <>
-                    <SetSubhead>Agent tools</SetSubhead>
+                    <SetSubhead>Agent tools (run on this machine)</SetSubhead>
                     {plugin.tools.map((t) => (
                         <div className="plugin-row" key={t.name}>
                             <div className="set-row-main">
@@ -2947,7 +2954,11 @@ function PluginCard({
 
             {plugin.editors.length > 0 && (
                 <>
-                    <SetSubhead>Editors (declared)</SetSubhead>
+                    <SetSubhead>Editors (client-side)</SetSubhead>
+                    <Text size="xs" className="text-zinc-500">
+                        These render in whichever Genie window opens the file. The file types listed are
+                        also the sandbox: an editor only ever reads or writes those, inside the workspace.
+                    </Text>
                     {plugin.editors.map((e) => (
                         <div className="plugin-row" key={e.id}>
                             <div className="set-row-main">
@@ -2964,7 +2975,11 @@ function PluginCard({
             )}
 
             <SetSubhead>Permissions</SetSubhead>
-            {plugin.permissions.length === 0 ? (
+            {!plugin.sides.host ? (
+                <Text size="xs" className="text-zinc-500">
+                    None needed — this plugin runs no code on this machine.
+                </Text>
+            ) : plugin.permissions.length === 0 ? (
                 <Text size="xs" className="text-zinc-500">
                     This plugin declares no capabilities.
                 </Text>

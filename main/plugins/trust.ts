@@ -256,16 +256,31 @@ export interface SurfaceableRow {
 }
 
 /**
- * The FAIL-CLOSED runtime gate: which plugins may contribute tools / editors.
- * This is the authoritative enforcement — even a row force-flipped to
- * `enabled=1` contributes NOTHING unless it is trusted, or an unsigned plugin the
- * user explicitly dev-approved. Untrusted (tampered/wrong-key) NEVER surfaces.
+ * PROVENANCE only: is this plugin's code from a source we trust? Untrusted
+ * (tampered / wrong key / bad signature) and `outdated` are always false; an
+ * unsigned plugin passes only with the user's explicit Developer-Mode approval.
+ *
+ * Separated from {@link pluginRowIsSurfaceable} because the two questions belong
+ * to different axes of the client/host split (see `side.ts`). Running a plugin's
+ * HOST code needs BOTH: trusted AND the host user enabled it. Serving bytes to a
+ * CLIENT-side editor needs only the trust half — the "enabled" toggle is the host
+ * user's consent to run host surfaces, not a gate on the client's own editor.
  */
-export function pluginRowIsSurfaceable(row: SurfaceableRow): boolean {
-    if (!row.enabled) return false;
+export function pluginRowIsTrusted(row: Omit<SurfaceableRow, 'enabled'>): boolean {
     if (row.trust === 'trusted') return true;
     if (row.trust === 'unsigned' && row.dev_approved) return true;
     return false;
+}
+
+/**
+ * The FAIL-CLOSED runtime gate: which plugins may contribute HOST surfaces
+ * (MCP tools, recipes) and locally-routed editors. This is the authoritative
+ * enforcement — even a row force-flipped to `enabled=1` contributes NOTHING
+ * unless it is trusted, or an unsigned plugin the user explicitly dev-approved.
+ * Untrusted (tampered/wrong-key) NEVER surfaces.
+ */
+export function pluginRowIsSurfaceable(row: SurfaceableRow): boolean {
+    return row.enabled && pluginRowIsTrusted(row);
 }
 
 /**

@@ -727,8 +727,12 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
     // I/O (`editorRead`/`editorWrite`) resolves the file. Left on the client, its
     // win32 `path.resolve` mangled the host's POSIX root (`/data/…` → `C:\data\…`) and
     // `fsp.stat` ENOENT'd. Route the I/O to the host so it resolves with its OWN path.
-    // `editorFor` (which editor claims the extension) + the rest stay client-local —
-    // the client renders the plugin tab; only the bytes live on the host.
+    //
+    // This is the CLIENT/HOST seam for plugins (main/plugins/side.ts): a document
+    // editor is a CLIENT surface, so `editorFor` (which editor claims the extension),
+    // the editor component, and the .docx↔markdown conversion all stay client-local —
+    // only the BYTES live on the host, and the host authorises that read/write from
+    // the plugin's own manifest sandbox rather than from ITS enabled-plugin list.
     const plugins: GenieApi['plugins'] = {
         ...local.plugins,
         editorRead: async (pluginId, root, relPath) =>

@@ -12,6 +12,10 @@
  * needs it fails closed at the bridge. A previously-consented plugin (it already
  * holds a grant) re-enables silently, respecting the granular grants the user
  * set in Settings.
+ *
+ * Capability consent is scoped to HOST surfaces (see `side.ts`): a client-side,
+ * editors-only plugin runs no code on this machine, so it is enabled without a
+ * grant modal — its file access is sandboxed per-read by the document fs gate.
  */
 
 import {
@@ -24,6 +28,7 @@ import {
 } from '../db';
 import { validatePluginManifest, type PluginManifest } from './manifest';
 import { isDeveloperMode, restrictGrantsForTrust } from './trust';
+import { requiresHostEnablement } from './side';
 import { forceQuestion } from '../ask/force-question';
 import type { ForceQuestion } from '../mcp/protocol';
 
@@ -121,8 +126,15 @@ export async function consentAndEnablePlugin(id: string): Promise<ConsentResult>
 
     const parsed = validatePluginManifest(JSON.parse(row.manifest_json));
     const manifest = parsed.ok ? parsed.manifest : null;
+    // CLIENT/HOST split (`side.ts`): capabilities are what the plugin's HOST code
+    // — its MCP tools / recipes, running in the worker on this machine — is allowed
+    // to do. A plugin whose only surface is an EDITOR runs no code here, so there
+    // is nothing to grant it: its declared fs scope is the client editor's SANDBOX,
+    // enforced per-read in `fs-bridge.runPluginDocumentFsOp`. Asking anyway offered
+    // a switch that gated nothing and, answered "Deny", silently broke the editor.
+    const hostSurface = manifest ? requiresHostEnablement(manifest) : false;
     // Unsigned plugins run restricted: never offer (or keep) network grants.
-    const perms = (manifest ? declaredPermissions(manifest) : []).filter(
+    const perms = (manifest && hostSurface ? declaredPermissions(manifest) : []).filter(
         (p) => !(unsigned && p.category === 'network'),
     );
 
