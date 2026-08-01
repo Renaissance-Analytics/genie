@@ -6,6 +6,7 @@ import {
     sanitizeHostedSitePatch,
 } from '../sites-config';
 import { siteIdFor } from '../../mobile/hosts';
+import path from 'node:path';
 
 /**
  * The persisted per-workspace "sites enabled" model (Tynn #232, P2 item 5).
@@ -19,7 +20,11 @@ import { siteIdFor } from '../../mobile/hosts';
  * Everything here is pure; the DB round-trip is covered in `main/__tests__/db`.
  */
 
-const WORKSPACE = 'C:/repos/tynn';
+// Absolute on BOTH win32 and POSIX. A bare `C:/repos/tynn` is absolute only on
+// Windows, so on Linux CI `path.resolve` would treat it as relative and prepend
+// the CWD. `path.resolve('/repos/tynn')` is absolute everywhere (win32 stamps the
+// CWD drive), keeping the resolved-root assertions portable.
+const WORKSPACE = path.resolve('/repos/tynn');
 
 describe('hostedSiteIdFor', () => {
     it('is the SAME id a discovered site gets for that hostname', () => {
@@ -126,13 +131,13 @@ describe('resolveHostedSite', () => {
         const site = resolveHostedSite(WORKSPACE, config);
         expect(site).not.toBeNull();
         expect(site?.id).toBe(siteIdFor('tynn.test'));
-        expect(site?.root.replace(/\\/g, '/')).toBe('C:/repos/tynn/public');
+        expect(site?.root.replace(/\\/g, '/')).toBe(path.join(WORKSPACE, 'public').replace(/\\/g, '/'));
         expect(site?.kind).toBe('php');
     });
 
     it('serves the workspace root when the docroot is empty', () => {
         const site = resolveHostedSite(WORKSPACE, { ...config, kind: 'static', docroot: '' });
-        expect(site?.root.replace(/\\/g, '/')).toBe('C:/repos/tynn');
+        expect(site?.root.replace(/\\/g, '/')).toBe(WORKSPACE.replace(/\\/g, '/'));
     });
 
     it('returns null for a config that would escape the workspace', () => {

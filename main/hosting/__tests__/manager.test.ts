@@ -3,6 +3,7 @@ import { createHostingManager } from '../manager';
 import type { HostingManagerDeps } from '../manager';
 import type { HostedSites } from '../sites-config';
 import type { HostedSite, HostedStatus, SiteRuntime } from '../types';
+import path from 'node:path';
 
 /**
  * The hosting MANAGER — the piece that turns "this workspace has a site enabled"
@@ -79,6 +80,13 @@ const FRONTEND: HostedSites = {
     b: { enabled: true, hostname: 'fancy.test', kind: 'static', docroot: 'dist' },
 };
 
+// Workspace roots must be ABSOLUTE on every CI OS. A bare `C:/repos/ws1` is
+// absolute only on Windows, so on Linux `path.resolve` treats it as relative and
+// prepends the CWD — which is exactly what broke the resolved-root assertions on
+// ubuntu. `path.resolve('/repos', id)` is absolute on both (win32 stamps the CWD
+// drive), so the roots the manager resolves are comparable everywhere.
+const wsPath = (id: string) => path.resolve('/repos', id);
+
 function harness(sites: Record<string, HostedSites> = { ws1: LARAVEL }): Harness {
     const php = fakeRuntime('frankenphp');
     const stat = fakeRuntime('static');
@@ -98,7 +106,7 @@ function harness(sites: Record<string, HostedSites> = { ws1: LARAVEL }): Harness
         deps: {
             baseDir: 'C:/ud',
             listWorkspaces: () =>
-                Object.keys(sites).map((id) => ({ id, path: `C:/repos/${id}` })),
+                Object.keys(sites).map((id) => ({ id, path: wsPath(id) })),
             hostedSitesFor: (id) => sites[id] ?? {},
             ensureRuntime,
             ensureBuilt,
@@ -118,7 +126,9 @@ describe('hosting manager', () => {
 
         expect(h.ensureRuntime).toHaveBeenCalledTimes(1);
         expect(status.state).toBe('running');
-        expect(h.php.started[0]?.root.replace(/\\/g, '/')).toBe('C:/repos/ws1/public');
+        expect(h.php.started[0]?.root.replace(/\\/g, '/')).toBe(
+            path.join(wsPath('ws1'), 'public').replace(/\\/g, '/'),
+        );
         expect(h.php.started[0]?.hostname).toBe('tynn.test');
     });
 
@@ -137,7 +147,7 @@ describe('hosting manager', () => {
         await createHostingManager(front.deps).start('ws1', 'fancy.test');
         expect(front.ensureBuilt).toHaveBeenCalledTimes(1);
         expect(front.ensureBuilt.mock.calls[0]?.[0]).toMatchObject({
-            repoDir: 'C:/repos/ws1',
+            repoDir: wsPath('ws1'),
         });
 
         const php = harness();
