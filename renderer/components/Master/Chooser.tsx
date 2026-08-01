@@ -21,6 +21,7 @@ import {
     IconPlus,
     IconRefresh,
     IconSearch,
+    IconServer,
     IconTerminal,
     IconTrash,
     IconTynn,
@@ -37,6 +38,7 @@ import {
     SCHEDULE_PRESETS,
 } from '../../lib/schedule-view';
 import { issueWatchBadge } from '../../lib/issuewatch';
+import { railSitesTitle, railSitesTone } from '../../lib/hosting';
 import {
     enterableWorkspaceIds,
     newlyAddedWorkspaceIds,
@@ -46,6 +48,7 @@ import {
     detectedShells,
     isSystemWorkspace,
     SYSTEM_WORKSPACE_ID,
+    type HostedSiteRow,
     type McpStatus,
     type ProcessStatus,
     type ScheduleInfo,
@@ -113,6 +116,13 @@ interface Props {
     issueWatchCounts?: Record<string, WatchTypeCounts>;
     /** Open the Issue Watch flyout for a specific workspace (the pill click). */
     onShowIssueWatch: (workspaceId: string) => void;
+    /** Genie's own hosting (#232): every workspace's configured sites + live
+     *  state. Drives the sites indicator beside the Process one — a workspace
+     *  with no ENABLED site shows nothing at all. */
+    hostedSites?: HostedSiteRow[];
+    /** Open the Workspace Site Manager (the sites indicator's click). Absent in
+     *  a remote window, where hosting is the CLIENT's runtime, not the host's. */
+    onShowSiteManager?: (workspaceId: string) => void;
     /** Split Add-Terminal button: last-used type + its persistence. */
     lastTerminalType: TerminalTypeId;
     onLastTerminalType: (id: TerminalTypeId) => void;
@@ -153,6 +163,8 @@ export default function Chooser({
     onUpdateProcess,
     issueWatchCounts = {},
     onShowIssueWatch,
+    hostedSites = [],
+    onShowSiteManager,
     lastTerminalType,
     onLastTerminalType,
     onAgentCreated,
@@ -1110,7 +1122,13 @@ export default function Chooser({
                                     >
                                         <IconChevronDown />
                                     </span>
-                                    <span className="pico">{workspaceIcon(ws, 14)}</span>
+                                    {/* No leading workspace glyph here: it was
+                                        the same cube on every row (every Genie
+                                        workspace is an .agi envelope), so it
+                                        carried no information the name did not.
+                                        The 56px icon rail still identifies
+                                        workspaces by glyph — there it IS the
+                                        affordance. */}
                                     <span className="pname">{ws.project_name}</span>
                                     {ws.shape === 'agi' && <AgiHealth ws={ws} />}
                                     {/* Issue Watch is GitHub-scoped — not for the
@@ -1174,6 +1192,30 @@ export default function Chooser({
                                     >
                                         <IconCpu size={13} />
                                     </span>
+                                    {/* Genie HOSTS sites for this workspace
+                                        (#232). Shown only when at least one is
+                                        enabled — an absent icon means "this
+                                        workspace serves nothing", which is the
+                                        common case and must stay silent. Opens
+                                        the Site Manager. */}
+                                    {(() => {
+                                        const tone = railSitesTone(hostedSites, ws.id);
+                                        if (!tone || !onShowSiteManager) return null;
+                                        return (
+                                            <span
+                                                className={`sites-ind sites-${tone}`}
+                                                role="button"
+                                                tabIndex={-1}
+                                                title={railSitesTitle(hostedSites, ws.id)}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    onShowSiteManager(ws.id);
+                                                }}
+                                            >
+                                                <IconServer size={13} />
+                                            </span>
+                                        );
+                                    })()}
                                 </button>
                                 <div className="tproj-body">
                                     {wsSpecs.map((s) => (

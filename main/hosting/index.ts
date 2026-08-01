@@ -67,8 +67,19 @@ export { contentTypeFor, createStaticRuntime, resolveStaticFile, spaFallback } f
 export type { StaticRuntimeOptions } from './static';
 
 export {
+    candidateHostname,
+    candidatesForWorkspace,
+    candidatesFrom,
+    scanWorkspaceCandidates,
+    siteSlug,
+    BUILD_OUTPUT_DIRS,
+} from './candidates';
+export type { CandidateSeams, ProjectScan, SiteCandidate } from './candidates';
+
+export {
     assetNameFor,
     ensureFrankenPhp,
+    frankenPhpStatus,
     installDirFor,
     isArchive,
     layoutFor,
@@ -81,6 +92,7 @@ export type {
     EnsureFrankenPhpOptions,
     FrankenPhpFetchSeams,
     FrankenPhpInstall,
+    FrankenPhpStatus,
     GithubRelease,
     GithubReleaseAsset,
     RuntimeLayout,

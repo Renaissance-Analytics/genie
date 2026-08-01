@@ -154,7 +154,7 @@ import {
     provisionTargets,
     opsAutoProvisionEnabled,
 } from './tynn/ops-provision';
-import { broadcastWorkspacesChanged } from './ipc';
+import { broadcastHostingChanged, broadcastWorkspacesChanged } from './ipc';
 import {
     initTerminalBackend,
     isHostBacked,
@@ -1700,8 +1700,12 @@ app.whenReady().then(async () => {
     // and fire-and-forget: a PHP site downloads its runtime on first use, and
     // no site being served is a reason to hold up the app's startup. Failures
     // are per-site statuses the Site Manager surfaces, never a boot error.
+    // The push at the end is what lights the rail's sites icon on a cold start:
+    // a site can take a build (or a 277 MB runtime fetch) to come up, long after
+    // the first window rendered, and nothing polls for it.
     void hostingManager()
         ?.reconcile()
+        .then(() => broadcastHostingChanged())
         .catch((e) => console.error('[hosting] reconcile failed', e));
     // Two-phase quit (Tier 1 terminal persistence). On the FIRST before-quit we
     // hold the quit, ask every window to serialize its terminals one last time,

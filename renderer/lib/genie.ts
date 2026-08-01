@@ -280,6 +280,90 @@ export interface TunnelSiteConfig {
     }>;
 }
 
+/* --- Genie's own hosting runtime (#232) ---------------------------------- *
+ *
+ * The OPPOSITE of the `SiteView` types above. Those describe a site something
+ * ELSE on the machine serves (Herd, `artisan serve`) which Genie may carry over
+ * a tunnel; these describe the sites GENIE serves itself — a real server, a
+ * built app, one stable same-origin port. The Workspace Site Manager drives
+ * them via `api().hosting`.                                                   */
+
+/** How a hosted site's document root is served (mirrors main/hosting/types.ts). */
+export type HostedSiteKind = 'php' | 'static';
+
+/** A hosted site's lifecycle state (mirrors main/hosting/types.ts). */
+export type HostedState = 'stopped' | 'starting' | 'running' | 'failed';
+
+/** One configured hosted site plus what the runtime currently says about it
+ *  (mirrors `HostedSiteRow` in main/hosting/manager.ts). */
+export interface HostedSiteRow {
+    workspaceId: string;
+    /** Opaque, stable id derived from the hostname — the key for set/remove. */
+    siteId: string;
+    /** Browser-facing vhost Genie serves (e.g. `tynn.test`). */
+    hostname: string;
+    /** The `.gen` name that addresses it in the Genie Browser. */
+    genName: string;
+    kind: HostedSiteKind;
+    /** Document root RELATIVE to the workspace. */
+    docroot: string;
+    /** Front controller / SPA shell file name. */
+    index?: string;
+    /** Strict opt-in — nothing is served until this is true. */
+    enabled: boolean;
+    state: HostedState;
+    backend: 'frankenphp' | 'static' | null;
+    /** The stable same-origin URL while running, else null. */
+    origin: string | null;
+    /** Why it is not running, when it failed. */
+    error?: string;
+}
+
+/** A site Genie DETECTED in a workspace and can offer to host (mirrors
+ *  `SiteCandidate` in main/hosting/candidates.ts). */
+export interface HostedSiteCandidate {
+    /** The project directory it was found in, relative to the workspace. */
+    project: string;
+    name: string;
+    kind: HostedSiteKind;
+    /** Suggested document root, relative to the workspace. */
+    docroot: string;
+    /** Suggested vhost. */
+    hostname: string;
+    /** Why Genie thinks this is a site (shown in the row). */
+    reason: string;
+    /** Enabling it has to run the project's build first. */
+    needsBuild: boolean;
+}
+
+/** The PHP runtime's install state — the Workstation hosting diagnostics
+ *  (mirrors `FrankenPhpStatus` in main/hosting/frankenphp-fetch.ts). */
+export interface HostingRuntimeStatus {
+    version: string;
+    installDir: string;
+    binaryPath: string;
+    extensionDir: string | null;
+    /** The binary is on disk — a PHP site starts without a download. */
+    installed: boolean;
+    /** Upstream publishes a build for this platform/arch at all. */
+    supported: boolean;
+    assetName: string | null;
+    platform: string;
+    arch: string;
+}
+
+/** A hosted-site config patch — send only what changed. `siteId` targets an
+ *  existing site (so its hostname can be renamed). */
+export interface HostedSitePatch {
+    siteId?: string;
+    enabled?: boolean;
+    hostname?: string;
+    kind?: HostedSiteKind;
+    /** RELATIVE to the workspace; absolute or `..` paths are refused in main. */
+    docroot?: string;
+    index?: string;
+}
+
 /** Per-bucket IssueWatch remediation policy (mirrors main/db.ts). The three count
  *  buckets — security (dependabot + code-scanning + secret-scanning), issue, pr —
  *  each carry their own policy. */
@@ -495,6 +579,10 @@ export interface Settings {
      *  (default) | 'on'. Distinct from mobile_enabled — exposing your dev sites
      *  is a separate, deliberate decision. Per-repo `.gen` enables sit on top. */
     local_sites_enabled?: 'on' | 'off';
+    /** The Genie Browser — Genie's own built-in browser for `.gen` dev sites
+     *  (#232). Default 'on'; 'off' means Genie never opens one, and a `.gen`
+     *  site opens nowhere. Workstation-level, alongside the hosting runtime. */
+    genie_browser_enabled?: 'on' | 'off';
     /** Keep the Genie endpoint synced into each workspace's Claude `.mcp.json`.
      *  Default 'on'; 'off' leaves that file alone. */
     mcp_sync_claude?: 'on' | 'off';
@@ -1668,6 +1756,40 @@ export interface GenieApi {
          *  or the host's tunnel, by which window asked). */
         open: (genName: string) => Promise<{ ok: boolean; error?: string }>;
     };
+    /**
+     * Genie's own HOSTING runtime (#232) — the sites GENIE serves, as opposed to
+     * `sites` above (what something else on the machine serves). Driven by the
+     * Workspace Site Manager and the Workstation hosting settings page.
+     *
+     * LOCAL-ONLY for now: unlike `sites` these do NOT route to a host in a
+     * remote window, so the Site Manager is offered on a local Floor only (see
+     * `isRemoteWindow`). Host-sourcing them needs `/api/hosting/*` on the host,
+     * which is a follow-on.
+     */
+    hosting: {
+        /** Configured sites + their live state; one workspace, or all. */
+        list: (workspaceId?: string) => Promise<HostedSiteRow[]>;
+        /** Sites Genie detected in a workspace that are not configured yet. */
+        candidates: (workspaceId: string) => Promise<HostedSiteCandidate[]>;
+        /** Create or update one site, then start/stop it to match `enabled`. */
+        set: (
+            workspaceId: string,
+            patch: HostedSitePatch,
+        ) => Promise<{ ok: boolean; siteId?: string; error?: string }>;
+        /** Forget a site entirely (and stop it). */
+        remove: (workspaceId: string, siteId: string) => Promise<{ ok: boolean }>;
+        /** Start / stop WITHOUT changing the stored `enabled` flag. */
+        start: (
+            workspaceId: string,
+            hostname: string,
+        ) => Promise<{ ok: boolean; status?: HostedSiteRow; error?: string }>;
+        stop: (siteId: string) => Promise<{ ok: boolean }>;
+        /** The PHP runtime's install state (offline — never downloads). */
+        runtimeStatus: () => Promise<HostingRuntimeStatus | null>;
+        /** Fetch the PHP runtime now (the ~277 MB first-use download), instead of
+         *  waiting for the first PHP site to trigger it. */
+        installRuntime: () => Promise<{ ok: boolean; error?: string }>;
+    };
     mcp: {
         status: () => Promise<McpServerState>;
         restart: () => Promise<McpServerState>;
@@ -2734,6 +2856,11 @@ export interface GenieApi {
         /** The set of workspaces changed outside the renderer's own edits (e.g.
          *  MCP-provisioned child workspaces) — re-fetch the workspace list. */
         workspacesChanged: (cb: () => void) => () => void;
+        /** A hosted site was configured / started / stopped / removed (#232) —
+         *  the rail's sites icon and any open Site Manager re-read
+         *  `hosting.list()`. Push, never a poll: a site can come up long after
+         *  boot (a build, or the first PHP-runtime download). */
+        hostingChanged: (cb: () => void) => () => void;
         /** A file changed on disk in a watched workspace (an agent, a git op, a
          *  tool) — the Files panel re-lists its tree AND reloads ONLY the open
          *  tabs whose file is named in `changed` (forward-slashed rel paths). A

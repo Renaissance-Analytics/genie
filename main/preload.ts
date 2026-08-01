@@ -659,6 +659,11 @@ const api = {
     hosting: {
         /** Configured hosted sites + their live state. */
         list: (workspaceId?: string) => ipcRenderer.invoke('hosting:list', workspaceId),
+        /** Sites Genie DETECTED in the workspace (a Laravel public/, a built
+         *  dist/, a buildable frontend) — what the Site Manager offers so the
+         *  user picks a site instead of typing a document root. */
+        candidates: (workspaceId: string) =>
+            ipcRenderer.invoke('hosting:candidates', workspaceId),
         /** Create or update one site (`{ hostname, kind, docroot, index, enabled }`),
          *  then start/stop it to match. Returns its opaque siteId. */
         set: (workspaceId: string, patch: unknown) =>
@@ -669,6 +674,10 @@ const api = {
         start: (workspaceId: string, hostname: string) =>
             ipcRenderer.invoke('hosting:start', workspaceId, hostname),
         stop: (siteId: string) => ipcRenderer.invoke('hosting:stop', siteId),
+        /** The PHP runtime's install state. A filesystem read — never a fetch. */
+        runtimeStatus: () => ipcRenderer.invoke('hosting:runtime-status'),
+        /** Fetch the PHP runtime NOW rather than during the first PHP site. */
+        installRuntime: () => ipcRenderer.invoke('hosting:install-runtime'),
     },
 
     agi: {
@@ -1479,6 +1488,15 @@ const api = {
             const handler = () => cb();
             ipcRenderer.on('workspaces:changed', handler);
             return () => ipcRenderer.off('workspaces:changed', handler);
+        },
+        /** A hosted site was configured, started, stopped or removed (#232) —
+         *  the rail's sites icon and any open Site Manager re-read
+         *  `hosting:list`. Push, not a poll: a site can come up minutes after
+         *  boot (a build, or the first runtime download). */
+        hostingChanged: (cb: () => void) => {
+            const handler = () => cb();
+            ipcRenderer.on('hosting:changed', handler);
+            return () => ipcRenderer.off('hosting:changed', handler);
         },
         /** Tier 3 detached-host status — fired when the host is unavailable and
          *  Genie falls back to in-process. The renderer surfaces a non-fatal toast. */

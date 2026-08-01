@@ -894,6 +894,11 @@ export interface Settings {
      *  deliberate decision. Per-repo `.gen` enables (tunnel_sites) are the
      *  second opt-in on top of this. */
     local_sites_enabled?: 'on' | 'off';
+    /** The Genie Browser — Genie's own built-in browser for `.gen` dev sites
+     *  (#232). Default 'on': it is how a hosted or tunnelled site is opened at
+     *  all, so it is enabled unless the owner deliberately turns it off. Lives
+     *  with the hosting runtime on the workstation Hosting settings page. */
+    genie_browser_enabled?: 'on' | 'off';
     /** Keep the Genie endpoint synced into a workspace's Claude `.mcp.json`.
      *  Default 'on'; 'off' means Genie never touches that file (manual edits
      *  stick). */
@@ -1048,6 +1053,8 @@ export function getAllSettings(): Settings {
         mobile_port: out['mobile_port'] ?? '51718',
         local_sites_enabled:
             (out['local_sites_enabled'] as 'on' | 'off') ?? 'off',
+        genie_browser_enabled:
+            (out['genie_browser_enabled'] as 'on' | 'off') ?? 'on',
         mcp_sync_claude: (out['mcp_sync_claude'] as 'on' | 'off') ?? 'on',
         mcp_sync_cursor: (out['mcp_sync_cursor'] as 'on' | 'off') ?? 'on',
         mcp_sync_codex: (out['mcp_sync_codex'] as 'on' | 'off') ?? 'on',
