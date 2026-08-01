@@ -300,6 +300,23 @@ describe('createFrankenPhpRuntime', () => {
         expect(h.runtime.list()).toEqual([]);
     });
 
+    it('does not blame FrankenPHP when a site is stopped mid-startup', async () => {
+        // The exit that `stop()` causes arrives at the same handler a crash
+        // does. Without an explicit "we asked for this" flag, stopping a site
+        // that is still STARTING resolves its pending `start()` with
+        // "frankenphp exited (0)" — the caller is told the server fell over
+        // when it did exactly what it was told to do.
+        const h = harness();
+        const started = h.runtime.start(SITE);
+        await spawned(h, 0);
+        expect(h.runtime.status('site-abc').state).toBe('starting');
+        await h.runtime.stop('site-abc');
+        const status = await started;
+        expect(status.error).not.toMatch(/frankenphp exited/);
+        expect(status.error).toMatch(/stopped before it finished starting/);
+        expect(h.runtime.status('site-abc').state).toBe('stopped');
+    });
+
     it('stopping an unknown site is a no-op, not a throw', async () => {
         const h = harness();
         await expect(h.runtime.stop('never-started')).resolves.toBeUndefined();

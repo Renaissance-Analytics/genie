@@ -122,6 +122,8 @@ interface Entry {
     status: HostedStatus;
     proc?: HostedProcessHandle;
     stderr: string;
+    /** Set by `stop()` so the resulting exit is not reported as a crash. */
+    stopping?: boolean;
 }
 
 /** Where one site's generated config lives. Named `Caddyfile` so the base name
@@ -252,15 +254,21 @@ export function createFrankenPhpRuntime(opts: FrankenPhpRuntimeOptions): SiteRun
             });
 
             void entry.proc.exited.then((code) => {
-                // An exit BEFORE ready is the failure; after ready it is a crash,
-                // and either way the site is no longer serving.
-                finish('failed', `frankenphp exited (${code}): ${entry.stderr.slice(-500)}`);
+                // A stop WE asked for is not a crash. Without this, stopping a
+                // site that is still STARTING resolves its pending `start()` as
+                // `failed` with a spurious "frankenphp exited" error — the
+                // caller is told the site crashed when it did exactly what it
+                // was told to do.
+                if (entry.stopping) {
+                    finish('failed', 'stopped before it finished starting');
+                    return;
+                }
+                // An exit BEFORE ready is a start failure; after ready it is a
+                // crash. Either way the site is no longer serving.
+                const error = `frankenphp exited (${code}): ${entry.stderr.slice(-500)}`;
+                finish('failed', error);
                 if (entry.status.state === 'running') {
-                    entry.status = {
-                        ...stopped(site.id),
-                        state: 'failed',
-                        error: `frankenphp exited (${code})`,
-                    };
+                    entry.status = { ...stopped(site.id), state: 'failed', error };
                 }
             });
         });
@@ -271,6 +279,7 @@ export function createFrankenPhpRuntime(opts: FrankenPhpRuntimeOptions): SiteRun
     async function stop(siteId: string): Promise<void> {
         const entry = entries.get(siteId);
         if (!entry) return;
+        entry.stopping = true;
         entry.proc?.stop();
         if (entry.proc) await entry.proc.exited;
         entries.delete(siteId);
