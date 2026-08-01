@@ -5,6 +5,7 @@ import {
     IconGlobe,
     IconMaximize,
     IconPlus,
+    IconServer,
     IconSettings,
     IconTerminal,
     IconTrash,
@@ -24,6 +25,9 @@ interface Props {
     onOpenStage: () => void;
     onOpenInBrowser: () => void;
     onSettings: () => void;
+    /** Open the Workspace Site Manager (#232). Absent in a remote window, where
+     *  hosting drives the CLIENT's runtime rather than the host's. */
+    onSiteManager?: () => void;
     onRemove: () => void;
 }
 
@@ -41,6 +45,7 @@ export default function ProjectContextMenu({
     onOpenStage,
     onOpenInBrowser,
     onSettings,
+    onSiteManager,
     onRemove,
 }: Props) {
     const menuRef = useRef<HTMLDivElement>(null);
@@ -120,6 +125,19 @@ export default function ProjectContextMenu({
                         onClose();
                     }}
                 />
+                {/* The Site Manager is its OWN surface, not a settings section
+                    (owner decision) — so it gets its own entry, above settings,
+                    beside the other "do something with this workspace" items. */}
+                {onSiteManager && (
+                    <CtxItem
+                        icon={<IconServer size={14} />}
+                        label="Site Manager…"
+                        onClick={() => {
+                            onSiteManager();
+                            onClose();
+                        }}
+                    />
+                )}
                 <CtxItem
                     icon={<IconSettings size={14} />}
                     label="Workspace settings…"

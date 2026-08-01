@@ -1,5 +1,6 @@
 import React, {
     createContext,
+    useCallback,
     useContext,
     useEffect,
     useState,
@@ -31,9 +32,12 @@ import {
     type PluginDeveloperModeState,
     type SiteView,
     type SiteScheme,
+    type HostedSiteRow,
+    type HostingRuntimeStatus,
     type TunnelSiteConfig,
     type WorkspaceRow,
 } from '../lib/genie';
+import { runningSites, runtimeSummary } from '../lib/hosting';
 import {
     NAV_GROUPS,
     filterNavGroups,
@@ -626,6 +630,23 @@ export default function SettingsPage() {
                             <SearchGroup label=".gen Sites" searching={searching}>
 
             <SitesSection activeWorkspace={s.active_workspace} />
+
+                            </SearchGroup>
+                        )}
+                        {show('hosting') && (
+                            <SearchGroup label="Hosting" searching={searching}>
+
+            <HostingSection
+                genieBrowserEnabled={s.genie_browser_enabled !== 'off'}
+                onGenieBrowserChange={(on) => {
+                    const value = on ? 'on' : 'off';
+                    patch({ genie_browser_enabled: value });
+                    // Persist THIS key directly rather than through the page's
+                    // whole-object Save: that closes over the pre-toggle
+                    // snapshot, so it would write back the value we just changed.
+                    void api().settings.set({ genie_browser_enabled: value });
+                }}
+            />
 
                             </SearchGroup>
                         )}
@@ -3347,6 +3368,189 @@ function RemoteHostCard() {
 
             {msg && <div className="set-note">{msg}</div>}
         </SetSection>
+    );
+}
+
+/**
+ * Settings → Hosting (Tynn #232) — the WORKSTATION half of Genie's own hosting.
+ *
+ * The split is deliberate (owner decision, 2026-08-01): which sites a workspace
+ * serves is per-workspace and lives in the Workspace Site Manager; whether this
+ * MACHINE has a browser to view them in and a PHP runtime to serve them with is
+ * workstation-level and lives here, with the diagnostics.
+ *
+ * The diagnostics answer the three questions a broken preview raises — is the
+ * browser on, is the runtime here, and what is actually being served right now
+ * — so the answer is one page rather than a support conversation.
+ */
+function HostingSection({
+    genieBrowserEnabled,
+    onGenieBrowserChange,
+}: {
+    genieBrowserEnabled: boolean;
+    onGenieBrowserChange: (on: boolean) => void;
+}) {
+    const [runtime, setRuntime] = useState<HostingRuntimeStatus | null>(null);
+    const [sites, setSites] = useState<HostedSiteRow[]>([]);
+    const [installing, setInstalling] = useState(false);
+    const [message, setMessage] = useState<string | null>(null);
+
+    const refresh = useCallback(() => {
+        void api()
+            .hosting.runtimeStatus()
+            .then(setRuntime)
+            .catch(() => setRuntime(null));
+        void api()
+            .hosting.list()
+            .then(setSites)
+            .catch(() => setSites([]));
+    }, []);
+
+    useEffect(() => {
+        refresh();
+        // Push-driven, like every other live surface: main fires this whenever a
+        // site is configured, starts, stops, or the runtime lands.
+        return api().on.hostingChanged(refresh);
+    }, [refresh]);
+
+    const summary = runtimeSummary(runtime);
+    const live = runningSites(sites);
+    const failed = sites.filter((s) => s.enabled && s.state === 'failed');
+
+    return (
+        <>
+            <SetSection
+                title="Genie Browser"
+                desc="Genie's own browser — how a .gen dev site is opened, locally or over a remote connection"
+            >
+                <SettingRow
+                    label="Enable the Genie Browser"
+                    desc="On by default. It renders this machine's hosted and tunnelled sites with a valid https lock and device presets. Turning it off means a .gen site opens nowhere."
+                    keywords="genie browser testing browser gen sites preview enable"
+                >
+                    <Switch
+                        checked={genieBrowserEnabled}
+                        onCheckedChange={onGenieBrowserChange}
+                    />
+                </SettingRow>
+            </SetSection>
+
+            <SetSection
+                title="Hosting runtime"
+                desc="What Genie needs to serve a site itself, rather than tunnelling one something else started"
+                status={summary.tone === 'failed' ? 'Unavailable' : undefined}
+                statusColor={summary.tone === 'failed' ? 'var(--rose-500)' : undefined}
+            >
+                <SettingRow
+                    label="PHP runtime (FrankenPHP)"
+                    desc={summary.label}
+                    keywords="frankenphp php runtime install download hosting caddy"
+                >
+                    {summary.installable ? (
+                        <Action
+                            size="sm"
+                            color="blue"
+                            icon="download"
+                            disabled={installing}
+                            onClick={async () => {
+                                setInstalling(true);
+                                setMessage(null);
+                                try {
+                                    const res = await api().hosting.installRuntime();
+                                    setMessage(
+                                        res.ok
+                                            ? 'FrankenPHP installed — PHP sites now start without a download.'
+                                            : res.error ?? 'The download failed.',
+                                    );
+                                } finally {
+                                    setInstalling(false);
+                                    refresh();
+                                }
+                            }}
+                        >
+                            {installing ? 'Downloading…' : 'Download now'}
+                        </Action>
+                    ) : (
+                        <Text size="xs" className="text-zinc-500">
+                            {runtime?.installed ? runtime.version : '—'}
+                        </Text>
+                    )}
+                </SettingRow>
+
+                {message && <div className="set-note">{message}</div>}
+
+                {runtime?.installed && (
+                    <div className="set-note">
+                        Installed at <code>{runtime.installDir}</code>. It lives in Genie&apos;s
+                        user data so it survives app updates, and a newer version installs
+                        alongside rather than over a runtime that may be serving a site.
+                    </div>
+                )}
+            </SetSection>
+
+            <SetSection
+                title="Hosted sites"
+                desc="What this machine is serving right now. Set a workspace's sites up in its Site Manager."
+            >
+                <SettingRow
+                    label="Running"
+                    desc="Each site is served at ONE stable, same-origin URL — that is what makes it work in the Genie Browser and over a remote connection."
+                    keywords="hosted sites running url origin serve status diagnostics"
+                    vertical
+                >
+                    {live.length === 0 ? (
+                        <Text size="xs" className="text-zinc-500">
+                            Nothing hosted yet. Open a workspace&apos;s Site Manager (its
+                            server icon in the sidebar, or right-click the workspace) to
+                            enable a site.
+                        </Text>
+                    ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
+                            {live.map((site) => (
+                                <div
+                                    key={site.siteId}
+                                    style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: 8,
+                                        minWidth: 0,
+                                    }}
+                                >
+                                    <span className="site-dot site-running" aria-hidden="true" />
+                                    <Text size="xs" style={{ fontWeight: 600 }}>
+                                        {site.hostname}
+                                    </Text>
+                                    <Text size="xs" className="text-zinc-500">
+                                        {site.origin}
+                                    </Text>
+                                    <span style={{ marginLeft: 'auto' }}>
+                                        <Action
+                                            size="sm"
+                                            variant="ghost"
+                                            icon="external-link"
+                                            onClick={() => void api().sites.open(site.genName)}
+                                        >
+                                            Open
+                                        </Action>
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </SettingRow>
+
+                {failed.length > 0 && (
+                    <div className="set-note bad">
+                        <strong>
+                            {failed.length} enabled site{failed.length === 1 ? '' : 's'} could not
+                            start.
+                        </strong>{' '}
+                        Open the workspace&apos;s Site Manager for the reason — the failure is
+                        kept per site, so it says which build or docroot is wrong.
+                    </div>
+                )}
+            </SetSection>
+        </>
     );
 }
 

@@ -27,6 +27,10 @@ import {
     listWorkspaceIssuewatchAgents,
     getWorkspaceTunnelSites,
     setWorkspaceTunnelSite,
+    deleteWorkspaceHostedSite,
+    setWorkspaceHostedSite,
+    deleteWorkspaceService,
+    setWorkspaceService,
     setSettings,
     touchWorkspace,
     updateWorkspace,
@@ -156,6 +160,15 @@ import {
     type RemoteHost,
 } from './remote';
 import { listLocalEnabledGenSites } from './sites/local-sites';
+import { hostingManager } from './hosting/manager';
+import { serviceManager } from './hosting/services/manager';
+import { isServiceKind } from './hosting/services/types';
+import { restartSitesForWorkspace } from './hosting/restart-sites';
+import { scanWorkspaceCandidates } from './hosting/candidates';
+import { ensureFrankenPhp, frankenPhpStatus } from './hosting/frankenphp-fetch';
+import type { HostedSiteConfig } from './hosting/sites-config';
+import type { ServiceConfig } from './hosting/services/config';
+import type { ServiceKind } from './hosting/services/types';
 import { remoteGenUrl } from './sites/gen-url';
 import {
     openTestingBrowser,
@@ -497,6 +510,158 @@ export function registerIpcHandlers(): void {
         },
     );
 
+    // --- Genie's own HOSTING runtime (#232) --------------------------------
+    // The sibling of `sites:*` above, and its opposite: those carry what
+    // something ELSE on this machine serves, these are the sites GENIE serves —
+    // a real server, a built app, one stable same-origin port. The Workspace
+    // Site Manager (P3) is the UX for this; P2 ships the state + the enable
+    // path so a site can be turned on at all.
+    //
+    // Every handler tolerates hosting being uninitialised (headless host-core),
+    // reporting "unavailable" rather than throwing at a renderer.
+    ipcMain.handle('hosting:list', (_e, workspaceId?: string) =>
+        hostingManager()?.list(workspaceId) ?? [],
+    );
+    ipcMain.handle(
+        'hosting:set',
+        async (_e, workspaceId: string, patch: Partial<HostedSiteConfig> & { siteId?: string }) => {
+            const siteId = setWorkspaceHostedSite(workspaceId, patch ?? {});
+            if (!siteId) return { ok: false, error: 'a hosted site needs a valid hostname' };
+            // Converge immediately: enabling a site should serve it, disabling
+            // one should stop it, without waiting for a restart.
+            await hostingManager()?.reconcile();
+            broadcastHostingChanged();
+            return { ok: true, siteId };
+        },
+    );
+    ipcMain.handle('hosting:remove', async (_e, workspaceId: string, siteId: string) => {
+        deleteWorkspaceHostedSite(workspaceId, siteId);
+        await hostingManager()?.stop(siteId);
+        broadcastHostingChanged();
+        return { ok: true };
+    });
+    ipcMain.handle('hosting:start', async (_e, workspaceId: string, hostname: string) => {
+        const manager = hostingManager();
+        if (!manager) return { ok: false, error: 'hosting is not available on this host' };
+        const status = await manager.start(workspaceId, String(hostname));
+        broadcastHostingChanged();
+        return { ok: status.state === 'running', status };
+    });
+    ipcMain.handle('hosting:stop', async (_e, siteId: string) => {
+        await hostingManager()?.stop(String(siteId));
+        broadcastHostingChanged();
+        return { ok: true };
+    });
+
+    // The sites Genie DETECTED in a workspace — what the Site Manager offers so
+    // the user picks a site instead of typing a document root (getting that
+    // wrong means a 404, or publishing a directory that holds `.env`).
+    ipcMain.handle('hosting:candidates', (_e, workspaceId: string) => {
+        const ws = getWorkspace(String(workspaceId));
+        return ws?.path ? scanWorkspaceCandidates(ws.path) : [];
+    });
+
+    // Workstation diagnostics: is the PHP runtime here, and could it be. Purely
+    // a filesystem read — opening the settings page must never start a 277 MB
+    // download as a side effect of being looked at.
+    ipcMain.handle('hosting:runtime-status', () =>
+        frankenPhpStatus({ baseDir: app.getPath('userData') }),
+    );
+    // …and the deliberate opposite: fetch it NOW, so the download happens when
+    // the user asked for it rather than in the middle of their first PHP site.
+    ipcMain.handle('hosting:install-runtime', async () => {
+        try {
+            await ensureFrankenPhp({ baseDir: app.getPath('userData') });
+            broadcastHostingChanged();
+            return { ok: true };
+        } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+    });
+
+    // --- Backing SERVICES for hosted sites (#232 P3) -----------------------
+    // Postgres + Redis, per workspace, fetched on first use and isolated by
+    // data directory / port / credential. The Workspace Site Manager drives
+    // these; the site itself picks the credentials up as environment (see
+    // `hosting/services/env.ts`), and `services:env` additionally writes the
+    // managed block into the app's `.env` so `artisan migrate` works too.
+    //
+    // Kept as one self-contained block, and every handler tolerates services
+    // being uninitialised (headless host-core) rather than throwing at a
+    // renderer.
+    ipcMain.handle('services:list', (_e, workspaceId?: string) =>
+        serviceManager()?.list(workspaceId) ?? [],
+    );
+    ipcMain.handle(
+        'services:set',
+        async (_e, workspaceId: string, kind: ServiceKind, patch?: Partial<ServiceConfig>) => {
+            if (!isServiceKind(kind)) return { ok: false, error: `unknown service ${String(kind)}` };
+            const serviceId = setWorkspaceService(workspaceId, kind, patch ?? {});
+            if (!serviceId) return { ok: false, error: 'could not configure that service' };
+            // Converge immediately: enabling should start it, disabling should
+            // stop it, without waiting for a restart. The `.env` follows the
+            // config rather than the running state, so a user can migrate as
+            // soon as the toggle is on.
+            await serviceManager()?.reconcile();
+            const env = await serviceManager()?.writeEnvFile(workspaceId);
+            // …and hand the new environment to the sites that are supposed to
+            // use it. A running site read its `DB_*` at start and will never
+            // re-read them, so without this "enable Postgres" leaves the app
+            // 500ing on a database it cannot see. See `hosting/restart-sites.ts`.
+            await restartSitesForWorkspace(hostingManager(), workspaceId);
+            broadcastHostingChanged();
+            return { ok: true, serviceId, env: env ?? null };
+        },
+    );
+    ipcMain.handle('services:remove', async (_e, workspaceId: string, kind: ServiceKind) => {
+        if (!isServiceKind(kind)) return { ok: false, error: `unknown service ${String(kind)}` };
+        await serviceManager()?.stop(workspaceId, kind);
+        deleteWorkspaceService(workspaceId, kind);
+        const env = await serviceManager()?.writeEnvFile(workspaceId);
+        // Removing one matters as much as adding one: a site left holding
+        // credentials for a server that is no longer listening fails with a
+        // connection error instead of falling back to its own configuration.
+        await restartSitesForWorkspace(hostingManager(), workspaceId);
+        broadcastHostingChanged();
+        return { ok: true, env: env ?? null };
+    });
+    ipcMain.handle('services:start', async (_e, workspaceId: string, kind: ServiceKind) => {
+        const manager = serviceManager();
+        if (!manager) return { ok: false, error: 'services are not available on this host' };
+        if (!isServiceKind(kind)) return { ok: false, error: `unknown service ${String(kind)}` };
+        const status = await manager.start(workspaceId, kind);
+        // A site started while this service was down holds NO environment for
+        // it — `envFor` reports the RUNNING instances — so bringing the service
+        // up has to hand the site its credentials or the button does nothing the
+        // app can see.
+        if (status.state === 'running') {
+            await restartSitesForWorkspace(hostingManager(), workspaceId);
+            broadcastHostingChanged();
+        }
+        return { ok: status.state === 'running', status };
+    });
+    // No site restart on STOP, deliberately: the service is still configured, so
+    // the `.env` managed block still names it and a restarted site would come
+    // back pointing at the same port that is no longer listening. Identical
+    // outcome for the app, one gratuitous outage of the web tier.
+    ipcMain.handle('services:stop', async (_e, workspaceId: string, kind: ServiceKind) => {
+        if (!isServiceKind(kind)) return { ok: false, error: `unknown service ${String(kind)}` };
+        await serviceManager()?.stop(workspaceId, kind);
+        return { ok: true };
+    });
+    ipcMain.handle('services:logs', (_e, workspaceId: string, kind: ServiceKind) =>
+        isServiceKind(kind) ? serviceManager()?.logs(workspaceId, kind) ?? '' : '',
+    );
+    /** Rewrite the workspace's `.env` managed block from its current config.
+     *  Returns the conflicts so the UX can say which value is really in effect. */
+    ipcMain.handle('services:env', async (_e, workspaceId: string) =>
+        (await serviceManager()?.writeEnvFile(workspaceId)) ?? {
+            path: null,
+            changed: false,
+            conflicts: [],
+        },
+    );
+
     // `sites:all` — the header `.gen` popover's data, CONTEXTUAL to the window it
     // was asked from: a LOCAL Genie window lists THIS machine's enabled `.gen`
     // sites; a HOST window (driving a remote Genie) lists THAT host's enabled
@@ -522,6 +687,8 @@ export function registerIpcHandlers(): void {
     // HOST window opens the site on THAT host over the tunnel; a local window
     // opens it against this machine's loopback dial.
     ipcMain.handle('sites:open', (e, genName: string) => {
+        const off = genieBrowserDisabled();
+        if (off) return off;
         const connKey = connKeyForWindow(e.sender.id);
         if (connKey) {
             const host = listKnownHosts().find((h) => h.connKey === connKey);
@@ -772,9 +939,10 @@ export function registerIpcHandlers(): void {
     // per-connection session + shim + Genie CA and shows the browser window for an
     // already-connected host; the rest are the chrome's navigation/layout drivers,
     // each resolved by the CALLING chrome window (e.sender.id) → its instance.
-    ipcMain.handle('testing-browser:open', (_e, connKey: string, hostname: string) =>
-        openTestingBrowser(connKey, hostname),
-    );
+    ipcMain.handle('testing-browser:open', (_e, connKey: string, hostname: string) => {
+        const off = genieBrowserDisabled();
+        return off ?? openTestingBrowser(connKey, hostname);
+    });
     ipcMain.handle('testing-browser:state', (e) => testingBrowserState(e.sender.id));
     ipcMain.handle('testing-browser:navigate', (e, input: string) =>
         testingBrowserNavigate(e.sender.id, input),
@@ -1353,6 +1521,42 @@ function broadcast(channel: string, payload: unknown): void {
     for (const w of BrowserWindow.getAllWindows()) {
         w.webContents.send(channel, payload);
     }
+}
+
+/**
+ * The Genie Browser master switch (#232), as a refusal or `null`.
+ *
+ * Genie's own browser is what makes a `.gen` site openable at all, so it gets a
+ * workstation-level switch on the hosting settings page — some owners want the
+ * embedded browser off entirely. Default ON: this only ever refuses when the
+ * user has explicitly turned it off, and it refuses with a REASON, so the click
+ * doesn't read as Genie being broken.
+ */
+function genieBrowserDisabled(): { ok: false; error: string } | null {
+    if (getAllSettings().genie_browser_enabled === 'off') {
+        return {
+            ok: false,
+            error: 'The Genie Browser is turned off — enable it in Settings → Hosting.',
+        };
+    }
+    return null;
+}
+
+/**
+ * Push a `hosting:changed` event so every window's rail + Site Manager re-read
+ * `hosting:list` (#232).
+ *
+ * PUSH, never a poll: a site's state changes at exactly three moments — a
+ * config edit, a start/stop, and the boot reconcile — and each of them calls
+ * this. A window that opened the Site Manager in another workspace still needs
+ * it, because the rail icon is workspace-wide.
+ *
+ * LOCAL-only (like `workspaces:changed`): the hosting IPC drives THIS machine's
+ * runtime, so a host window — which shows the HOST's workspaces — must not
+ * repaint its rail from a local site starting.
+ */
+export function broadcastHostingChanged(): void {
+    broadcastLocal('hosting:changed');
 }
 
 /**

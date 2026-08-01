@@ -7,6 +7,22 @@ import {
     type TunnelSites,
     type TunnelSiteConfig,
 } from './mobile/hosts';
+import {
+    hostedSiteIdFor,
+    parseHostedSites,
+    sanitizeHostedSitePatch,
+    type HostedSiteConfig,
+    type HostedSites,
+} from './hosting/sites-config';
+import {
+    parseWorkspaceServices,
+    sanitizeServicePatch,
+    serviceIdFor,
+    withCredentials,
+    type ServiceConfig,
+    type ServiceKind,
+    type WorkspaceServices,
+} from './hosting/services/config';
 import type { AgentInboxScope, WorkspaceAgentAccess } from './agentinbox/types';
 
 /**
@@ -724,6 +740,56 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v29: per-workspace HOSTED SITES (Genie's own hosting runtime,
+            // Tynn #232 P2). A JSON blob mapping the opaque per-site id → its
+            // hosting config: { [siteId]: { enabled, hostname, kind, docroot } }.
+            //
+            // Deliberately a SIBLING of `tunnel_sites` (v19) rather than more
+            // fields on it, because the two express opposite things: a
+            // tunnel_sites row says "something else on this machine already
+            // serves this site — carry it", while a hosted_sites row says
+            // "Genie serves this site itself, from this document root". A
+            // workspace can legitimately have both for one hostname, and the
+            // hosted one wins (see main/sites/local-sites.ts).
+            //
+            // NULL/absent reads as {} (nothing hosted), so existing workspaces
+            // gain the column with the safe default. Resolved by
+            // getWorkspaceHostedSites — never parsed here.
+            version: 29,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('hosted_sites')) {
+                    db.exec(`ALTER TABLE workspaces ADD COLUMN hosted_sites TEXT`);
+                }
+            },
+        },
+        {
+            // v30: per-workspace BACKING SERVICES (Tynn #232 P3). A JSON blob
+            // mapping the opaque per-service id → its config:
+            // { [serviceId]: { enabled, kind, password?, database? } }.
+            //
+            // The companion of v29: `hosted_sites` says what Genie SERVES, this
+            // says what those sites CONNECT TO. Separate columns rather than one
+            // nested blob because their lifecycles differ — a workspace can run
+            // a database for `artisan` and its own tooling without hosting any
+            // site at all, and disabling a site must not tear down the data.
+            //
+            // Holds the generated database password. That is deliberate; see
+            // `main/hosting/services/config.ts` for why encrypting a credential
+            // whose entire purpose is to be written into a plaintext `.env` two
+            // directories away would buy nothing.
+            //
+            // NULL/absent reads as {} (no services). Resolved by
+            // getWorkspaceServices — never parsed here.
+            version: 30,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('workspace_services')) {
+                    db.exec(`ALTER TABLE workspaces ADD COLUMN workspace_services TEXT`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -863,6 +929,11 @@ export interface Settings {
      *  deliberate decision. Per-repo `.gen` enables (tunnel_sites) are the
      *  second opt-in on top of this. */
     local_sites_enabled?: 'on' | 'off';
+    /** The Genie Browser — Genie's own built-in browser for `.gen` dev sites
+     *  (#232). Default 'on': it is how a hosted or tunnelled site is opened at
+     *  all, so it is enabled unless the owner deliberately turns it off. Lives
+     *  with the hosting runtime on the workstation Hosting settings page. */
+    genie_browser_enabled?: 'on' | 'off';
     /** Keep the Genie endpoint synced into a workspace's Claude `.mcp.json`.
      *  Default 'on'; 'off' means Genie never touches that file (manual edits
      *  stick). */
@@ -1017,6 +1088,8 @@ export function getAllSettings(): Settings {
         mobile_port: out['mobile_port'] ?? '51718',
         local_sites_enabled:
             (out['local_sites_enabled'] as 'on' | 'off') ?? 'off',
+        genie_browser_enabled:
+            (out['genie_browser_enabled'] as 'on' | 'off') ?? 'on',
         mcp_sync_claude: (out['mcp_sync_claude'] as 'on' | 'off') ?? 'on',
         mcp_sync_cursor: (out['mcp_sync_cursor'] as 'on' | 'off') ?? 'on',
         mcp_sync_codex: (out['mcp_sync_codex'] as 'on' | 'off') ?? 'on',
@@ -1126,6 +1199,18 @@ export interface WorkspaceRow {
      *  the §5 allowlist. NULL/absent reads as {} (nothing enabled) — resolve it
      *  via {@link getWorkspaceTunnelSites}, never parse here. */
     tunnel_sites?: string | null;
+    /** Per-workspace HOSTED sites (Genie's own hosting runtime, #232),
+     *  JSON-encoded ({ [siteId]: { enabled, hostname, kind, docroot } }). Unlike
+     *  `tunnel_sites` (carry what something else serves) these are the sites
+     *  GENIE serves. NULL/absent reads as {} (nothing hosted) — resolve it via
+     *  {@link getWorkspaceHostedSites}, never parse here. */
+    hosted_sites?: string | null;
+    /** Per-workspace BACKING SERVICES (#232 P3), JSON-encoded
+     *  ({ [serviceId]: { enabled, kind, password?, database? } }). What the
+     *  hosted sites CONNECT TO, as opposed to what `hosted_sites` serves.
+     *  NULL/absent reads as {} — resolve it via {@link getWorkspaceServices},
+     *  never parse here. */
+    workspace_services?: string | null;
 }
 
 export function listWorkspaces(): WorkspaceRow[] {
@@ -1666,6 +1751,138 @@ export function setWorkspaceTunnelSite(
     const current = getWorkspaceTunnelSites(id);
     const merged = { ...(current[siteId] ?? {}), ...sanitizeTunnelPatch(patch) };
     setWorkspaceTunnelSites(id, { ...current, [siteId]: merged });
+}
+
+// Hosted sites (Genie's own hosting runtime, #232) ----------------------
+//
+// The sibling of tunnel_sites: those say "carry what something else serves",
+// these say "GENIE serves this, from this document root". Same single-column
+// JSON pattern, same opaque siteId key — which is what lets a hosted site
+// replace a discovered one in the Testing Browser's target map without any new
+// resolution path. Parse/sanitize live in main/hosting/sites-config.ts.
+
+/** This workspace's stored hosted-site configs (NULL/absent ⇒ {} = nothing
+ *  hosted). Keyed by {@link hostedSiteIdFor}. */
+export function getWorkspaceHostedSites(id: string): HostedSites {
+    const row = getDb()
+        .prepare<[string], { hosted_sites: string | null } | undefined>(
+            'SELECT hosted_sites FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    return parseHostedSites(row?.hosted_sites ?? null);
+}
+
+/** Replace this workspace's whole hosted-site map (JSON-encoded). */
+export function setWorkspaceHostedSites(id: string, sites: HostedSites): void {
+    getDb()
+        .prepare('UPDATE workspaces SET hosted_sites = ? WHERE id = ?')
+        .run(JSON.stringify(sites), id);
+}
+
+/**
+ * Merge ONE hosted site into this workspace's map, returning its id.
+ *
+ * The key is DERIVED from the (sanitized) hostname rather than supplied, so the
+ * stored id and the stored hostname can never disagree — a mismatch there would
+ * mean the runtime serves one vhost while the Testing Browser resolves another.
+ * Returns null when the patch carries no usable hostname and none is stored.
+ */
+export function setWorkspaceHostedSite(
+    id: string,
+    patch: Partial<HostedSiteConfig> & { siteId?: string },
+): string | null {
+    const current = getWorkspaceHostedSites(id);
+    const clean = sanitizeHostedSitePatch(patch);
+    const hostname = clean.hostname ?? (patch.siteId ? current[patch.siteId]?.hostname : undefined);
+    if (!hostname) return null;
+    const siteId = hostedSiteIdFor(hostname);
+    const previous = (patch.siteId ? current[patch.siteId] : undefined) ?? current[siteId] ?? {};
+    const merged = { ...previous, ...clean, hostname } as HostedSiteConfig;
+    const next = { ...current, [siteId]: merged };
+    // Renaming a site's hostname moves it to a new key; drop the old one so the
+    // map never holds two entries for one site.
+    if (patch.siteId && patch.siteId !== siteId) delete next[patch.siteId];
+    setWorkspaceHostedSites(id, next);
+    return siteId;
+}
+
+/** Forget one hosted site entirely (the Site Manager's "remove"). */
+export function deleteWorkspaceHostedSite(id: string, siteId: string): void {
+    const current = getWorkspaceHostedSites(id);
+    if (!(siteId in current)) return;
+    const next = { ...current };
+    delete next[siteId];
+    setWorkspaceHostedSites(id, next);
+}
+
+// Backing services (#232 P3) ---------------------------------------------
+//
+// The companion of hosted_sites: those say what Genie SERVES, these say what
+// those sites CONNECT TO. Same single-column JSON pattern, same opaque id key.
+// Parse/sanitize/credential-minting live in main/hosting/services/config.ts.
+
+/** This workspace's configured services (NULL/absent ⇒ {} = none). Keyed by
+ *  {@link serviceIdFor}. */
+export function getWorkspaceServices(id: string): WorkspaceServices {
+    const row = getDb()
+        .prepare<[string], { workspace_services: string | null } | undefined>(
+            'SELECT workspace_services FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    return parseWorkspaceServices(row?.workspace_services ?? null);
+}
+
+/** Replace this workspace's whole service map (JSON-encoded). */
+export function setWorkspaceServices(id: string, services: WorkspaceServices): void {
+    getDb()
+        .prepare('UPDATE workspaces SET workspace_services = ? WHERE id = ?')
+        .run(JSON.stringify(services), id);
+}
+
+/**
+ * Merge ONE service into this workspace's map, returning its id.
+ *
+ * The key is DERIVED from (workspace, kind) rather than supplied, so a workspace
+ * can never accumulate two Postgres entries fighting over one data directory.
+ *
+ * Credentials are minted HERE, on the way in, and only when absent — see
+ * `withCredentials`. Doing it on write rather than on read is what makes the
+ * password stable: regenerating it when the config is read would invalidate the
+ * `.env` the user's app is already using.
+ */
+export function setWorkspaceService(
+    id: string,
+    kind: ServiceKind,
+    patch: Partial<ServiceConfig>,
+): string | null {
+    const clean = sanitizeServicePatch({ ...patch, kind });
+    if (!clean.kind) return null;
+    const serviceId = serviceIdFor(id, clean.kind);
+    const current = getWorkspaceServices(id);
+    const merged = withCredentials({
+        ...(current[serviceId] ?? {}),
+        ...clean,
+        kind: clean.kind,
+    } as ServiceConfig);
+    setWorkspaceServices(id, { ...current, [serviceId]: merged });
+    return serviceId;
+}
+
+/**
+ * Forget one service entirely.
+ *
+ * Deliberately does NOT delete the data directory — that lives under userData
+ * and is removed by the service manager, which knows whether the server holding
+ * those files is still running. Dropping a database because a toggle was
+ * switched off is not something to do as a side effect of a config write.
+ */
+export function deleteWorkspaceService(id: string, kind: ServiceKind): void {
+    const serviceId = serviceIdFor(id, kind);
+    const current = getWorkspaceServices(id);
+    if (!(serviceId in current)) return;
+    const next = { ...current };
+    delete next[serviceId];
+    setWorkspaceServices(id, next);
 }
 
 // Fork → upstream cache -------------------------------------------------

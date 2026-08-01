@@ -652,6 +652,60 @@ const api = {
         open: (genName: string) => ipcRenderer.invoke('sites:open', genName),
     },
 
+    // Genie's own HOSTING runtime (#232). The sibling of `sites` above, and the
+    // opposite of it: `sites` carries what something ELSE on this machine
+    // serves, `hosting` is what GENIE serves. The Workspace Site Manager (P3)
+    // drives these; P2 ships the backing state and the enable path.
+    hosting: {
+        /** Configured hosted sites + their live state. */
+        list: (workspaceId?: string) => ipcRenderer.invoke('hosting:list', workspaceId),
+        /** Sites Genie DETECTED in the workspace (a Laravel public/, a built
+         *  dist/, a buildable frontend) — what the Site Manager offers so the
+         *  user picks a site instead of typing a document root. */
+        candidates: (workspaceId: string) =>
+            ipcRenderer.invoke('hosting:candidates', workspaceId),
+        /** Create or update one site (`{ hostname, kind, docroot, index, enabled }`),
+         *  then start/stop it to match. Returns its opaque siteId. */
+        set: (workspaceId: string, patch: unknown) =>
+            ipcRenderer.invoke('hosting:set', workspaceId, patch),
+        remove: (workspaceId: string, siteId: string) =>
+            ipcRenderer.invoke('hosting:remove', workspaceId, siteId),
+        /** Start/stop without changing the stored `enabled` flag. */
+        start: (workspaceId: string, hostname: string) =>
+            ipcRenderer.invoke('hosting:start', workspaceId, hostname),
+        stop: (siteId: string) => ipcRenderer.invoke('hosting:stop', siteId),
+        /** The PHP runtime's install state. A filesystem read — never a fetch. */
+        runtimeStatus: () => ipcRenderer.invoke('hosting:runtime-status'),
+        /** Fetch the PHP runtime NOW rather than during the first PHP site. */
+        installRuntime: () => ipcRenderer.invoke('hosting:install-runtime'),
+    },
+
+    // Backing SERVICES for hosted sites (#232 P3) — the database and cache a
+    // hosted app connects to, per workspace, fetched on first use. `hosting`
+    // above is what Genie SERVES; this is what those sites CONNECT TO.
+    services: {
+        /** Configured services + their live state. */
+        list: (workspaceId?: string) => ipcRenderer.invoke('services:list', workspaceId),
+        /** Create or update one service (`{ enabled, database }`) and converge,
+         *  then rewrite the app's `.env` managed block. */
+        set: (workspaceId: string, kind: string, patch?: unknown) =>
+            ipcRenderer.invoke('services:set', workspaceId, kind, patch),
+        /** Forget the service. Leaves its data directory alone. */
+        remove: (workspaceId: string, kind: string) =>
+            ipcRenderer.invoke('services:remove', workspaceId, kind),
+        /** Start/stop without changing the stored `enabled` flag. */
+        start: (workspaceId: string, kind: string) =>
+            ipcRenderer.invoke('services:start', workspaceId, kind),
+        stop: (workspaceId: string, kind: string) =>
+            ipcRenderer.invoke('services:stop', workspaceId, kind),
+        /** The server log tail, for the Site Manager's log panel. */
+        logs: (workspaceId: string, kind: string) =>
+            ipcRenderer.invoke('services:logs', workspaceId, kind),
+        /** Rewrite the `.env` managed block; reports any keys the user also sets
+         *  outside it. */
+        writeEnv: (workspaceId: string) => ipcRenderer.invoke('services:env', workspaceId),
+    },
+
     agi: {
         detect: (path: string) => ipcRenderer.invoke('agi:detect', path),
         create: (opts: Record<string, unknown>) =>
@@ -1460,6 +1514,15 @@ const api = {
             const handler = () => cb();
             ipcRenderer.on('workspaces:changed', handler);
             return () => ipcRenderer.off('workspaces:changed', handler);
+        },
+        /** A hosted site was configured, started, stopped or removed (#232) —
+         *  the rail's sites icon and any open Site Manager re-read
+         *  `hosting:list`. Push, not a poll: a site can come up minutes after
+         *  boot (a build, or the first runtime download). */
+        hostingChanged: (cb: () => void) => {
+            const handler = () => cb();
+            ipcRenderer.on('hosting:changed', handler);
+            return () => ipcRenderer.off('hosting:changed', handler);
         },
         /** Tier 3 detached-host status — fired when the host is unavailable and
          *  Genie falls back to in-process. The renderer surfaces a non-fatal toast. */

@@ -84,6 +84,21 @@ export const IconBox = ({ size = 14, ...p }: Props) =>
         p.className,
         p.style,
     );
+/** Stacked server — a workspace whose sites GENIE hosts (#232). Sits beside the
+ *  Process (cpu) indicator in the workspace rail, and reads as "this workspace
+ *  serves something" rather than as another kind of process. */
+export const IconServer = ({ size = 13, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <rect x="2" y="3" width="20" height="7" rx="2" />
+            <rect x="2" y="14" width="20" height="7" rx="2" />
+            <line x1="6" y1="6.5" x2="6.01" y2="6.5" />
+            <line x1="6" y1="17.5" x2="6.01" y2="17.5" />
+        </>,
+        p.className,
+        p.style,
+    );
 export const IconCpu = ({ size = 18, ...p }: Props) =>
     wrap(
         size,

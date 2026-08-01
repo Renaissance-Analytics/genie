@@ -1889,6 +1889,9 @@
 .tproj.collapsed .chev {
     transform: rotate(-90deg);
 }
+/* The chip a NON-workspace group row leads with (today only "Unattached").
+   Workspace rows no longer carry one — it was the same cube on every row and
+   said nothing the project name didn't. */
 .tproj-head .pico {
     position: relative;
     width: 22px;
@@ -1900,27 +1903,6 @@
     background: var(--bg-3);
     color: var(--fg-2);
     flex: 0 0 auto;
-}
-/* View count overlaid on the workspace icon (replaces the old trailing
-   .pcount pill). Hidden by the JSX when the workspace has ≤ 1 view. */
-.tproj-head .pico .pico-count {
-    position: absolute;
-    top: -5px;
-    right: -5px;
-    min-width: 15px;
-    height: 15px;
-    padding: 0 3px;
-    box-sizing: border-box;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 9.5px;
-    font-weight: 700;
-    line-height: 1;
-    color: var(--fg-1);
-    background: var(--bg-1);
-    border: 1px solid var(--border-2);
-    border-radius: var(--radius-full);
 }
 .tproj-head .pname {
     flex: 1;
@@ -1958,10 +1940,6 @@
 }
 
 /* ===== .agi envelope treatment ========================================= */
-/* Distinct badge so envelopes read differently from plain folders. */
-.tproj-head .pico {
-    color: var(--fg-2);
-}
 /* An .agi envelope is marked SOLELY by a 1px gold border around its row (the
    old "agi" text badge was removed as redundant). Drawn as an inset ring
    (box-shadow) so it adds no layout box and sits inside the rounded header.
@@ -3198,6 +3176,34 @@ body.gutter-dragging .grid-gutter {
 }
 .proc-ind.proc-crashed {
     color: #f48771;
+}
+
+/* Hosted-sites indicator (#232) — the sibling of .proc-ind, immediately after
+   it in the row. Rendered ONLY for a workspace with a site enabled, so its mere
+   presence is the signal; the colour says whether the site is actually up. */
+.tproj-head .sites-ind {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    cursor: pointer;
+    border-radius: var(--radius-sm, 4px);
+    padding: 1px;
+    color: var(--fg-4);
+    transition: color var(--dur-fast) var(--ease-out);
+}
+.tproj-head .sites-ind:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+.sites-ind.sites-running {
+    color: #10b981;
+}
+.sites-ind.sites-failed {
+    color: #f48771;
+}
+.sites-ind.sites-starting,
+.sites-ind.sites-idle {
+    color: var(--term-warn, #e2c08d);
 }
 
 /* Inline process manager, revealed under the row when the indicator is clicked. */

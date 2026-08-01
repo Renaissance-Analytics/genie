@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Chooser from '../components/Master/Chooser';
 import ProjectContextMenu from '../components/Master/ProjectContextMenu';
 import WorkspaceSettingsModal from '../components/Master/WorkspaceSettingsModal';
+import WorkspaceSiteManager from '../components/Master/WorkspaceSiteManager';
 import SpecContextMenu from '../components/Master/SpecContextMenu';
 import { PromptHost, showPrompt } from '../components/Master/Prompt';
 import QuitTerminalsModal, {
@@ -75,6 +76,7 @@ import {
     type Changelog,
     type WatchTypeCounts,
     type GenSitesAll,
+    type HostedSiteRow,
     type TerminalSpec,
     type UpdaterStatus,
     type WorkspaceRow,
@@ -274,6 +276,25 @@ function MasterInner() {
     } | null>(null);
     const [addingWorkspace, setAddingWorkspace] = useState(false);
     const [settingsWorkspaceId, setSettingsWorkspaceId] = useState<string | null>(null);
+    // Genie's own hosting (#232). One list for EVERY workspace — the rail's
+    // sites indicator is per-row, so a per-workspace fetch would be N calls for
+    // one paint. LOCAL-only: `api().hosting` is not host-sourced, so in a remote
+    // window (which lists the HOST's workspaces) this stays empty and the
+    // indicator + Site Manager entry points are absent rather than wrong.
+    const [siteManagerWsId, setSiteManagerWsId] = useState<string | null>(null);
+    const [hostedSites, setHostedSites] = useState<HostedSiteRow[]>([]);
+    useEffect(() => {
+        if (isRemoteWindow() || !hasGenieBridge()) return;
+        const load = () =>
+            void api()
+                .hosting.list()
+                .then(setHostedSites)
+                .catch(() => setHostedSites([]));
+        load();
+        // PUSH (no poll): main fires this on every config edit, start/stop and
+        // the boot reconcile — a site can come up minutes into the session.
+        return api().on.hostingChanged(load);
+    }, []);
     // Docs flyout (the ? titlebar button toggles this in-window panel rather
     // than opening a separate BrowserWindow).
     const [docsOpen, setDocsOpen] = useState(false);
@@ -1631,6 +1652,13 @@ function MasterInner() {
                         attentionIds={attentionIds}
                         issueWatchCounts={issueWatchCounts}
                         onShowIssueWatch={openIssueWatch}
+                        hostedSites={hostedSites}
+                        // Hosting drives THIS machine's runtime, so the Site
+                        // Manager is a local-Floor surface; a host window would
+                        // otherwise offer it against the wrong machine.
+                        onShowSiteManager={
+                            isRemoteWindow() ? undefined : setSiteManagerWsId
+                        }
                         activeWorkspaceId={activeWorkspaceId}
                         pinned={chooserPinned}
                         onTogglePin={() => setChooserPinned((p) => !p)}
@@ -1849,6 +1877,11 @@ function MasterInner() {
                         onOpenStage={() => openProjectInStage(ws.id)}
                         onOpenInBrowser={() => openProjectInBrowser(ws.id)}
                         onSettings={() => setSettingsWorkspaceId(ws.id)}
+                        onSiteManager={
+                            isRemoteWindow()
+                                ? undefined
+                                : () => setSiteManagerWsId(ws.id)
+                        }
                         onRemove={() => void removeWorkspaceRow(ws.id)}
                     />
                 );
@@ -1861,6 +1894,17 @@ function MasterInner() {
                     <WorkspaceSettingsModal
                         workspace={ws}
                         onClose={() => setSettingsWorkspaceId(null)}
+                    />
+                );
+            })()}
+
+            {siteManagerWsId && (() => {
+                const ws = workspacesById.get(siteManagerWsId);
+                if (!ws) return null;
+                return (
+                    <WorkspaceSiteManager
+                        workspace={ws}
+                        onClose={() => setSiteManagerWsId(null)}
                     />
                 );
             })()}

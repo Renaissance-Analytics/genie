@@ -765,6 +765,138 @@ textarea.input {
     cursor: default;
 }
 
+/* ===== Workspace Site Manager (#232) ===================================
+   Its own surface, not part of Workspace settings. Reuses the .ws-settings
+   modal column (bounded height + internal scroll) and the dense .set-*
+   primitives; these add the tab strip and the per-site card. */
+.site-manager .site-tabs {
+    align-self: flex-start;
+}
+.site-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 8px;
+}
+.site-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md);
+    background: var(--bg-2);
+}
+/* A site Genie DETECTED but that isn't set up yet reads quieter than one the
+   user has actually turned on — a proposal, not a state. */
+.site-card.is-candidate {
+    border-style: dashed;
+    background: transparent;
+}
+.site-card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.site-card-name {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    overflow: hidden;
+}
+.site-card-name > * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.site-dot {
+    flex: 0 0 auto;
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-full);
+    background: var(--fg-4);
+}
+.site-dot.site-running {
+    background: var(--emerald-500, #10b981);
+}
+.site-dot.site-failed {
+    background: var(--rose-500, #f43f5e);
+}
+.site-dot.site-starting {
+    background: var(--amber-500, #f59e0b);
+}
+/* The status line carries the one fact the user came for — the URL, or the
+   reason there isn't one. Monospaced so a URL and a compiler error both read. */
+.site-card-status {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.45;
+    color: var(--fg-3);
+    overflow-wrap: anywhere;
+}
+.site-card-status.site-running {
+    color: var(--emerald-500, #10b981);
+}
+.site-card-status.site-failed {
+    color: var(--rose-400, #fb7185);
+}
+.site-card-fields {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px 12px;
+}
+.site-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+.site-field > span {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--fg-4);
+}
+.site-field-wide {
+    grid-column: 1 / -1;
+}
+.site-docroot {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.site-docroot > :first-child {
+    flex: 1;
+    min-width: 0;
+}
+/* Services tab: the `.env` block Genie writes, and a service's server log.
+   Both are TEXT the user could have opened in an editor, so both render in a
+   CodeView rather than as a styled key/value list — what is on screen is what
+   is in the file. */
+.svc-env {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+.svc-env-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--fg-4);
+}
+
+/* Narrow modal / small window: one column rather than two cramped ones. */
+@media (max-width: 640px) {
+    .site-card-fields {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
 /* Interactive upgrade wizard tables — used inside the AddWorkspace modal. */
 .upgrade-tbl {
     width: 100%;
