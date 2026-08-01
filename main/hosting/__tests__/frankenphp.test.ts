@@ -137,6 +137,19 @@ function expectPort(status: { target: { port: number } | null }): number {
 
 // --- pure path helpers -----------------------------------------------------
 
+describe('READY_MARKER', () => {
+    it('is the exact line Caddy prints — pinned as a LITERAL, not via the constant', () => {
+        // Every other test in this file emits `READY_MARKER` and then asserts on
+        // it, so all of them keep passing if the constant is changed to any
+        // other string: the marker's only real requirement — that it matches
+        // what FrankenPHP actually writes to stderr — is invisible to them.
+        // Mutation-checked: changing the constant makes ONLY this test fail.
+        // Captured from FrankenPHP 1.12.6 / Caddy 2.11.4 during the P1 spike:
+        //   {"level":"info","ts":...,"msg":"serving initial configuration"}
+        expect(READY_MARKER).toBe('serving initial configuration');
+    });
+});
+
 describe('path helpers', () => {
     it('names each site config `Caddyfile` so the adapter is unambiguous', () => {
         expect(siteConfigPath('C:/state', 'abc').replace(/\\/g, '/')).toBe(
