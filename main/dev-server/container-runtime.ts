@@ -1,0 +1,290 @@
+/**
+ * Genie DEV SERVER (Tynn #234, P1) — the container-runtime type surface.
+ *
+ * The beta.218 hosting runtime served a workspace's site from HOST-NATIVE
+ * binaries: a fetched FrankenPHP, a fetched Postgres, a fetched Garnet. It works,
+ * and it is the wrong substrate. It is PHP-first (a Python or Go dev server has
+ * nowhere to run), it puts arbitrary project code on the user's machine with the
+ * user's own permissions, and every stack we add is another platform-specific
+ * binary to fetch and checksum on three operating systems.
+ *
+ * The dev server inverts that: **the sandbox boundary is the WORKSPACE, and the
+ * substrate is a container.** Each workspace gets an isolated container network
+ * and one long-lived dev container with the workspace directory mounted in. The
+ * repos' dev servers — `npm run dev`, `uvicorn`, `cargo run`, `artisan serve` —
+ * run INSIDE that, so the stack stops being Genie's problem: anything that can
+ * be expressed as "an image plus a command plus a port" is servable.
+ *
+ * ## Why an interface rather than "shell out to docker"
+ *
+ * The owner's decision (2026-08-01) was **detect Docker OR Podman, and guide the
+ * install when neither is there** — Genie Cloud pins Docker, but a desktop user
+ * may have either or neither, and "neither" is the COMMON case on first run.
+ * Everything above this file therefore talks to {@link ContainerRuntime} and
+ * never to a CLI, so:
+ *
+ *   - the podman adapter is a different `bin` and two path quirks, not a fork;
+ *   - the whole of P1 is unit-tested with a fake {@link CommandRunner}, with no
+ *     container runtime installed on the machine running the tests;
+ *   - "no runtime" is a *result* (see {@link RuntimeDetection}), never a throw.
+ *     A missing Docker is not an exception — it is the guided-install path, and
+ *     an exception thrown from a workspace-open handler is how that becomes a
+ *     crash instead of a hint.
+ *
+ * ## Shape
+ *
+ * Deliberately the same shape as the beta.218 `SiteRuntime` in `../hosting`:
+ * PURE decisions (`argv.ts`, `mount-path.ts`) separated from thin impure
+ * execution (`cli-runtime.ts`), and every byte of process I/O behind an injected
+ * seam. The reason is the same one that module's header gives, and so is the
+ * payoff — the lifecycle is provable without a daemon, a network or an image.
+ *
+ * P1 is the runtime + the per-workspace sandbox ONLY. Sites (P2), services (P3)
+ * and the UX (P4) are deliberately out of scope; nothing here knows what an
+ * HTTP surface is.
+ */
+
+// --- which runtime ---------------------------------------------------------
+
+/** The container runtimes Genie can drive. Both speak a Docker-compatible CLI. */
+export type ContainerRuntimeKind = 'docker' | 'podman';
+
+/**
+ * Docker first.
+ *
+ * Not a quality judgement — Genie Cloud's fleet runs Docker, so preferring it on
+ * the desktop means a workspace behaves the same in both places. Podman is the
+ * fallback, and on Linux it is often the one that is already installed.
+ */
+export const PREFERRED_RUNTIMES: readonly ContainerRuntimeKind[] = ['docker', 'podman'];
+
+/** Why no runtime is usable. The two need OPPOSITE advice, so they are distinct. */
+export type RuntimeUnavailableReason = 'not-installed' | 'not-running';
+
+/** What one candidate reported. Kept for the diagnostics pane — "docker: found,
+ *  engine unreachable" is the sentence that ends a support thread. */
+export interface RuntimeProbe {
+    kind: ContainerRuntimeKind;
+    /** The CLI is on PATH. */
+    installed: boolean;
+    /** The CLI answered AND its engine did. Only then is the runtime usable. */
+    running: boolean;
+    /** Engine version, when running. */
+    version?: string;
+    /** Redacted CLI output explaining a failed probe. */
+    detail?: string;
+}
+
+export interface RuntimeDetection {
+    /** `none` means nothing usable — read {@link reason} to know what to say. */
+    kind: ContainerRuntimeKind | 'none';
+    /** Engine version of the selected runtime. */
+    version?: string;
+    /** Present iff `kind === 'none'`: what the user should do about it. */
+    installHint?: string;
+    reason?: RuntimeUnavailableReason;
+    probes: RuntimeProbe[];
+}
+
+// --- what gets run ---------------------------------------------------------
+
+/**
+ * A host directory made visible inside a container.
+ *
+ * `source` is always the HOST path in the host's own notation (`C:\work\acme` on
+ * Windows). Translating it is the adapter's job, not the caller's — see
+ * `mount-path.ts` for why the same path is two different strings depending on
+ * which runtime is driving.
+ */
+export interface BindMount {
+    source: string;
+    target: string;
+    readOnly?: boolean;
+}
+
+/**
+ * A container port deliberately made reachable.
+ *
+ * `host` omitted means "let the runtime pick" — the caller then reads the real
+ * port back with {@link ContainerRuntime.portMappings}. `hostIp` defaults to
+ * loopback: a workspace's dev server is not put on the LAN unless someone asks.
+ */
+export interface PortPublish {
+    container: number;
+    host?: number;
+    hostIp?: string;
+    protocol?: 'tcp' | 'udp';
+}
+
+/** Everything needed to create one container. Workspace-scoped by construction. */
+export interface ContainerSpec {
+    /** The sandbox this belongs to. Becomes the `genie.workspace` label, which
+     *  is what every list and every teardown filters on. */
+    workspaceId: string;
+    /** Container name — derived, stable, and the way an existing container is
+     *  recognised on the next run (see `argv.ts#devContainerNameFor`). */
+    name: string;
+    image: string;
+    /** Literal argv appended after the image. Never a shell string. */
+    command?: string[];
+    env?: Record<string, string>;
+    mounts?: BindMount[];
+    /** ONLY these ports are reachable. An empty list is a closed container. */
+    ports?: PortPublish[];
+    /** Defaults to the workspace's own network — the isolation boundary. */
+    network?: string;
+    labels?: Record<string, string>;
+    workdir?: string;
+    restart?: 'no' | 'unless-stopped';
+    /** e.g. `2g`. */
+    memory?: string;
+    /** e.g. `2`. */
+    cpus?: string;
+    /** Reap zombies — a dev container runs whatever the repo spawns. */
+    init?: boolean;
+}
+
+export interface ContainerRef {
+    id: string;
+    name: string;
+}
+
+export type ContainerState =
+    | 'running'
+    | 'exited'
+    | 'created'
+    | 'paused'
+    | 'restarting'
+    | 'removing'
+    | 'dead'
+    | 'unknown';
+
+export interface ContainerSummary {
+    id: string;
+    name: string;
+    image: string;
+    state: ContainerState;
+    /** The CLI's human status column (`Up 3 minutes`). */
+    status?: string;
+    /** Set when the listing was filtered to one workspace — every row in such a
+     *  listing carries that label by construction, so it is not re-parsed. */
+    workspaceId?: string;
+}
+
+export interface PortMapping {
+    container: number;
+    protocol: 'tcp' | 'udp';
+    hostIp: string;
+    hostPort: number;
+}
+
+export interface NetworkRef {
+    name: string;
+    /** False when it already existed — this is what makes ensure idempotent. */
+    created: boolean;
+}
+
+export interface LogOptions {
+    tail?: number;
+}
+
+// --- the interface ---------------------------------------------------------
+
+/**
+ * "Given a workspace, give me an isolated network and containers on it; start,
+ * stop, inspect and tear them down."
+ *
+ * Every method is workspace-scoped or id-scoped, and everything created is
+ * labelled, so a workspace's footprint is always enumerable and always
+ * removable — which is what makes `teardownWorkspaceSandbox` able to converge.
+ */
+export interface ContainerRuntime {
+    readonly kind: ContainerRuntimeKind;
+
+    /** Is this runtime actually usable right now? Never throws. */
+    detect(): Promise<RuntimeDetection>;
+
+    /** The workspace's isolated network. Idempotent. */
+    networkEnsure(workspaceId: string): Promise<NetworkRef>;
+    /** Remove it. Removing one that is already gone is success. */
+    networkRemove(workspaceId: string): Promise<void>;
+
+    /** Is the image already local? P1 never pulls — see `images.ts`. */
+    imageExists(image: string): Promise<boolean>;
+
+    runContainer(spec: ContainerSpec): Promise<ContainerRef>;
+    start(id: string): Promise<void>;
+    /** Tolerant: stopping something already gone is success. */
+    stop(id: string): Promise<void>;
+    /** Tolerant, for the same reason. */
+    remove(id: string): Promise<void>;
+
+    /** Run a literal argv inside a container. Returns the result verbatim —
+     *  a non-zero exit is the CALLER's to interpret, not a failure here. */
+    exec(id: string, argv: string[]): Promise<CommandResult>;
+
+    /** A bounded log tail. */
+    logs(id: string, opts?: LogOptions): Promise<string>;
+    /**
+     * Live logs.
+     *
+     * Split from {@link logs} rather than expressed as `logs(id, { follow })`
+     * because the two genuinely differ in KIND: one resolves with a string, the
+     * other hands back something you must be able to stop. Folding them into one
+     * signature would make every caller narrow a union to find out which it got.
+     */
+    followLogs(id: string, onData: (chunk: string) => void): StreamHandle;
+
+    /** Containers in one workspace, or every Genie-managed container.
+     *  Returns `[]` — not a throw — when the engine is unreachable. */
+    ps(workspaceId?: string): Promise<ContainerSummary[]>;
+
+    portMappings(id: string): Promise<PortMapping[]>;
+}
+
+// --- injected seams (this is what makes the adapters unit-testable) --------
+
+export interface CommandResult {
+    /** `null` when the executable could not be spawned at all. */
+    code: number | null;
+    stdout: string;
+    stderr: string;
+}
+
+export interface RunOptions {
+    cwd?: string;
+    env?: Record<string, string>;
+    /** Kill the child after this long. A hung `docker` must not hang Genie. */
+    timeoutMs?: number;
+}
+
+export interface StreamOptions {
+    onData(chunk: string): void;
+    env?: Record<string, string>;
+}
+
+/** A long-lived child (a log follow), reduced to what callers need. */
+export interface StreamHandle {
+    readonly pid?: number;
+    /** Resolves once the child is gone. Never rejects. */
+    readonly exited: Promise<number | null>;
+    /** Idempotent. */
+    stop(): void;
+}
+
+/**
+ * The single process seam every adapter runs through.
+ *
+ * `run` is the one-shot form (`docker ps`, `docker run -d`) — the interesting
+ * thing about those is their EXIT. `stream` is the long-lived form (`docker logs
+ * -f`), where the interesting thing is the output as it arrives. Same split, and
+ * the same reasons, as `ProcessSpawner`/`CommandRunner` in `../hosting/services`.
+ *
+ * Injected rather than imported so the adapters' tests never load
+ * `node:child_process`, and so a fake can assert the exact argv Genie would have
+ * typed.
+ */
+export interface CommandRunner {
+    run(command: string, args: string[], opts?: RunOptions): Promise<CommandResult>;
+    stream(command: string, args: string[], opts: StreamOptions): StreamHandle;
+}
