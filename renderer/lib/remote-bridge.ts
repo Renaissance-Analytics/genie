@@ -154,6 +154,31 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         open: (genName) => local.sites.open(genName),
     };
 
+    /**
+     * Genie's own hosting runtime (#232) — DELIBERATELY INERT in a remote window.
+     *
+     * `...local` at the bottom of this file would otherwise pass the local
+     * preload's `hosting` straight through, and a host window drives ANOTHER
+     * machine: every call would configure and start sites on the CLIENT while
+     * the surface around it lists the HOST's workspaces. Silently hosting the
+     * wrong machine's directories is worse than not offering it, so the bridge
+     * reports "nothing, unavailable" and master.tsx hides the entry points.
+     *
+     * Host-sourcing this properly needs `/api/hosting/*` on the host, the same
+     * way `sites` is carried — a follow-on, not a bridge shim.
+     */
+    const unavailable = { ok: false as const, error: 'Hosting is managed on the machine itself.' };
+    const hosting: GenieApi['hosting'] = {
+        list: async () => [],
+        candidates: async () => [],
+        set: async () => unavailable,
+        remove: async () => ({ ok: false }),
+        start: async () => unavailable,
+        stop: async () => ({ ok: false }),
+        runtimeStatus: async () => null,
+        installRuntime: async () => unavailable,
+    };
+
     // The host's terminal-spec model (the grid's backbone) — pass-through.
     const terminalSpec: GenieApi['terminalSpec'] = {
         list: async () =>
@@ -708,6 +733,7 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         clipboard,
         issueWatch,
         sites,
+        hosting,
         settings,
         agentInbox,
         questions,

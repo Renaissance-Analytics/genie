@@ -57,6 +57,9 @@ describe('remote (restricted) Settings', () => {
             'workspaces',
             'mobile',
             'sites',
+            // Hosting configures THIS machine's runtime + its own browser — a
+            // driving window would be editing the wrong machine.
+            'hosting',
             'connections',
             'devices',
             'updates',

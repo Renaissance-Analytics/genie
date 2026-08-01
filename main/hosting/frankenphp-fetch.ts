@@ -220,6 +220,53 @@ export interface FrankenPhpInstall extends RuntimeLayout {
     downloaded: boolean;
 }
 
+/** What the hosting diagnostics panel reports about the PHP runtime. */
+export interface FrankenPhpStatus extends RuntimeLayout {
+    version: string;
+    installDir: string;
+    /** The binary is on disk — PHP sites can start without a download. */
+    installed: boolean;
+    /** Upstream publishes a build for this platform/arch. When false, a PHP site
+     *  can NEVER be hosted here and the UI must say so rather than offer a
+     *  download that is certain to fail. */
+    supported: boolean;
+    /** The official asset for this machine, or null when there is none. */
+    assetName: string | null;
+    platform: string;
+    arch: string;
+}
+
+/**
+ * Is the pinned runtime installed, and could it be?
+ *
+ * Read-only and OFFLINE by construction: it touches nothing but the filesystem,
+ * so the Settings page can render this on open without a network round-trip and
+ * without ever kicking off a 277 MB download as a side effect of being looked at.
+ */
+export async function frankenPhpStatus(
+    opts: Omit<EnsureFrankenPhpOptions, 'onPhase'>,
+): Promise<FrankenPhpStatus> {
+    const version = opts.version ?? FRANKENPHP_VERSION;
+    const platform = opts.platform ?? process.platform;
+    const arch = opts.arch ?? process.arch;
+    const seams = opts.seams ?? defaultSeams;
+
+    const installDir = installDirFor(opts.baseDir, version);
+    const layout = layoutFor(installDir, platform);
+    const assetName = assetNameFor(platform, arch);
+
+    return {
+        ...layout,
+        version,
+        installDir,
+        installed: await seams.fileExists(layout.binaryPath),
+        supported: assetName !== null,
+        assetName,
+        platform: String(platform),
+        arch: String(arch),
+    };
+}
+
 /**
  * Ensure the pinned FrankenPHP runtime is installed, downloading it once.
  *

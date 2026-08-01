@@ -163,6 +163,8 @@ import { listLocalEnabledGenSites } from './sites/local-sites';
 import { hostingManager } from './hosting/manager';
 import { serviceManager } from './hosting/services/manager';
 import { isServiceKind } from './hosting/services/types';
+import { scanWorkspaceCandidates } from './hosting/candidates';
+import { ensureFrankenPhp, frankenPhpStatus } from './hosting/frankenphp-fetch';
 import type { HostedSiteConfig } from './hosting/sites-config';
 import type { ServiceConfig } from './hosting/services/config';
 import type { ServiceKind } from './hosting/services/types';
@@ -527,23 +529,53 @@ export function registerIpcHandlers(): void {
             // Converge immediately: enabling a site should serve it, disabling
             // one should stop it, without waiting for a restart.
             await hostingManager()?.reconcile();
+            broadcastHostingChanged();
             return { ok: true, siteId };
         },
     );
     ipcMain.handle('hosting:remove', async (_e, workspaceId: string, siteId: string) => {
         deleteWorkspaceHostedSite(workspaceId, siteId);
         await hostingManager()?.stop(siteId);
+        broadcastHostingChanged();
         return { ok: true };
     });
     ipcMain.handle('hosting:start', async (_e, workspaceId: string, hostname: string) => {
         const manager = hostingManager();
         if (!manager) return { ok: false, error: 'hosting is not available on this host' };
         const status = await manager.start(workspaceId, String(hostname));
+        broadcastHostingChanged();
         return { ok: status.state === 'running', status };
     });
     ipcMain.handle('hosting:stop', async (_e, siteId: string) => {
         await hostingManager()?.stop(String(siteId));
+        broadcastHostingChanged();
         return { ok: true };
+    });
+
+    // The sites Genie DETECTED in a workspace — what the Site Manager offers so
+    // the user picks a site instead of typing a document root (getting that
+    // wrong means a 404, or publishing a directory that holds `.env`).
+    ipcMain.handle('hosting:candidates', (_e, workspaceId: string) => {
+        const ws = getWorkspace(String(workspaceId));
+        return ws?.path ? scanWorkspaceCandidates(ws.path) : [];
+    });
+
+    // Workstation diagnostics: is the PHP runtime here, and could it be. Purely
+    // a filesystem read — opening the settings page must never start a 277 MB
+    // download as a side effect of being looked at.
+    ipcMain.handle('hosting:runtime-status', () =>
+        frankenPhpStatus({ baseDir: app.getPath('userData') }),
+    );
+    // …and the deliberate opposite: fetch it NOW, so the download happens when
+    // the user asked for it rather than in the middle of their first PHP site.
+    ipcMain.handle('hosting:install-runtime', async () => {
+        try {
+            await ensureFrankenPhp({ baseDir: app.getPath('userData') });
+            broadcastHostingChanged();
+            return { ok: true };
+        } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
     });
 
     // --- Backing SERVICES for hosted sites (#232 P3) -----------------------
@@ -631,6 +663,8 @@ export function registerIpcHandlers(): void {
     // HOST window opens the site on THAT host over the tunnel; a local window
     // opens it against this machine's loopback dial.
     ipcMain.handle('sites:open', (e, genName: string) => {
+        const off = genieBrowserDisabled();
+        if (off) return off;
         const connKey = connKeyForWindow(e.sender.id);
         if (connKey) {
             const host = listKnownHosts().find((h) => h.connKey === connKey);
@@ -881,9 +915,10 @@ export function registerIpcHandlers(): void {
     // per-connection session + shim + Genie CA and shows the browser window for an
     // already-connected host; the rest are the chrome's navigation/layout drivers,
     // each resolved by the CALLING chrome window (e.sender.id) → its instance.
-    ipcMain.handle('testing-browser:open', (_e, connKey: string, hostname: string) =>
-        openTestingBrowser(connKey, hostname),
-    );
+    ipcMain.handle('testing-browser:open', (_e, connKey: string, hostname: string) => {
+        const off = genieBrowserDisabled();
+        return off ?? openTestingBrowser(connKey, hostname);
+    });
     ipcMain.handle('testing-browser:state', (e) => testingBrowserState(e.sender.id));
     ipcMain.handle('testing-browser:navigate', (e, input: string) =>
         testingBrowserNavigate(e.sender.id, input),
@@ -1462,6 +1497,42 @@ function broadcast(channel: string, payload: unknown): void {
     for (const w of BrowserWindow.getAllWindows()) {
         w.webContents.send(channel, payload);
     }
+}
+
+/**
+ * The Genie Browser master switch (#232), as a refusal or `null`.
+ *
+ * Genie's own browser is what makes a `.gen` site openable at all, so it gets a
+ * workstation-level switch on the hosting settings page — some owners want the
+ * embedded browser off entirely. Default ON: this only ever refuses when the
+ * user has explicitly turned it off, and it refuses with a REASON, so the click
+ * doesn't read as Genie being broken.
+ */
+function genieBrowserDisabled(): { ok: false; error: string } | null {
+    if (getAllSettings().genie_browser_enabled === 'off') {
+        return {
+            ok: false,
+            error: 'The Genie Browser is turned off — enable it in Settings → Hosting.',
+        };
+    }
+    return null;
+}
+
+/**
+ * Push a `hosting:changed` event so every window's rail + Site Manager re-read
+ * `hosting:list` (#232).
+ *
+ * PUSH, never a poll: a site's state changes at exactly three moments — a
+ * config edit, a start/stop, and the boot reconcile — and each of them calls
+ * this. A window that opened the Site Manager in another workspace still needs
+ * it, because the rail icon is workspace-wide.
+ *
+ * LOCAL-only (like `workspaces:changed`): the hosting IPC drives THIS machine's
+ * runtime, so a host window — which shows the HOST's workspaces — must not
+ * repaint its rail from a local site starting.
+ */
+export function broadcastHostingChanged(): void {
+    broadcastLocal('hosting:changed');
 }
 
 /**
