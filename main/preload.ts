@@ -652,6 +652,25 @@ const api = {
         open: (genName: string) => ipcRenderer.invoke('sites:open', genName),
     },
 
+    // Genie's own HOSTING runtime (#232). The sibling of `sites` above, and the
+    // opposite of it: `sites` carries what something ELSE on this machine
+    // serves, `hosting` is what GENIE serves. The Workspace Site Manager (P3)
+    // drives these; P2 ships the backing state and the enable path.
+    hosting: {
+        /** Configured hosted sites + their live state. */
+        list: (workspaceId?: string) => ipcRenderer.invoke('hosting:list', workspaceId),
+        /** Create or update one site (`{ hostname, kind, docroot, index, enabled }`),
+         *  then start/stop it to match. Returns its opaque siteId. */
+        set: (workspaceId: string, patch: unknown) =>
+            ipcRenderer.invoke('hosting:set', workspaceId, patch),
+        remove: (workspaceId: string, siteId: string) =>
+            ipcRenderer.invoke('hosting:remove', workspaceId, siteId),
+        /** Start/stop without changing the stored `enabled` flag. */
+        start: (workspaceId: string, hostname: string) =>
+            ipcRenderer.invoke('hosting:start', workspaceId, hostname),
+        stop: (siteId: string) => ipcRenderer.invoke('hosting:stop', siteId),
+    },
+
     agi: {
         detect: (path: string) => ipcRenderer.invoke('agi:detect', path),
         create: (opts: Record<string, unknown>) =>

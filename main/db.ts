@@ -7,6 +7,13 @@ import {
     type TunnelSites,
     type TunnelSiteConfig,
 } from './mobile/hosts';
+import {
+    hostedSiteIdFor,
+    parseHostedSites,
+    sanitizeHostedSitePatch,
+    type HostedSiteConfig,
+    type HostedSites,
+} from './hosting/sites-config';
 import type { AgentInboxScope, WorkspaceAgentAccess } from './agentinbox/types';
 
 /**
@@ -724,6 +731,30 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v29: per-workspace HOSTED SITES (Genie's own hosting runtime,
+            // Tynn #232 P2). A JSON blob mapping the opaque per-site id → its
+            // hosting config: { [siteId]: { enabled, hostname, kind, docroot } }.
+            //
+            // Deliberately a SIBLING of `tunnel_sites` (v19) rather than more
+            // fields on it, because the two express opposite things: a
+            // tunnel_sites row says "something else on this machine already
+            // serves this site — carry it", while a hosted_sites row says
+            // "Genie serves this site itself, from this document root". A
+            // workspace can legitimately have both for one hostname, and the
+            // hosted one wins (see main/sites/local-sites.ts).
+            //
+            // NULL/absent reads as {} (nothing hosted), so existing workspaces
+            // gain the column with the safe default. Resolved by
+            // getWorkspaceHostedSites — never parsed here.
+            version: 29,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('hosted_sites')) {
+                    db.exec(`ALTER TABLE workspaces ADD COLUMN hosted_sites TEXT`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1126,6 +1157,12 @@ export interface WorkspaceRow {
      *  the §5 allowlist. NULL/absent reads as {} (nothing enabled) — resolve it
      *  via {@link getWorkspaceTunnelSites}, never parse here. */
     tunnel_sites?: string | null;
+    /** Per-workspace HOSTED sites (Genie's own hosting runtime, #232),
+     *  JSON-encoded ({ [siteId]: { enabled, hostname, kind, docroot } }). Unlike
+     *  `tunnel_sites` (carry what something else serves) these are the sites
+     *  GENIE serves. NULL/absent reads as {} (nothing hosted) — resolve it via
+     *  {@link getWorkspaceHostedSites}, never parse here. */
+    hosted_sites?: string | null;
 }
 
 export function listWorkspaces(): WorkspaceRow[] {
@@ -1666,6 +1703,68 @@ export function setWorkspaceTunnelSite(
     const current = getWorkspaceTunnelSites(id);
     const merged = { ...(current[siteId] ?? {}), ...sanitizeTunnelPatch(patch) };
     setWorkspaceTunnelSites(id, { ...current, [siteId]: merged });
+}
+
+// Hosted sites (Genie's own hosting runtime, #232) ----------------------
+//
+// The sibling of tunnel_sites: those say "carry what something else serves",
+// these say "GENIE serves this, from this document root". Same single-column
+// JSON pattern, same opaque siteId key — which is what lets a hosted site
+// replace a discovered one in the Testing Browser's target map without any new
+// resolution path. Parse/sanitize live in main/hosting/sites-config.ts.
+
+/** This workspace's stored hosted-site configs (NULL/absent ⇒ {} = nothing
+ *  hosted). Keyed by {@link hostedSiteIdFor}. */
+export function getWorkspaceHostedSites(id: string): HostedSites {
+    const row = getDb()
+        .prepare<[string], { hosted_sites: string | null } | undefined>(
+            'SELECT hosted_sites FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    return parseHostedSites(row?.hosted_sites ?? null);
+}
+
+/** Replace this workspace's whole hosted-site map (JSON-encoded). */
+export function setWorkspaceHostedSites(id: string, sites: HostedSites): void {
+    getDb()
+        .prepare('UPDATE workspaces SET hosted_sites = ? WHERE id = ?')
+        .run(JSON.stringify(sites), id);
+}
+
+/**
+ * Merge ONE hosted site into this workspace's map, returning its id.
+ *
+ * The key is DERIVED from the (sanitized) hostname rather than supplied, so the
+ * stored id and the stored hostname can never disagree — a mismatch there would
+ * mean the runtime serves one vhost while the Testing Browser resolves another.
+ * Returns null when the patch carries no usable hostname and none is stored.
+ */
+export function setWorkspaceHostedSite(
+    id: string,
+    patch: Partial<HostedSiteConfig> & { siteId?: string },
+): string | null {
+    const current = getWorkspaceHostedSites(id);
+    const clean = sanitizeHostedSitePatch(patch);
+    const hostname = clean.hostname ?? (patch.siteId ? current[patch.siteId]?.hostname : undefined);
+    if (!hostname) return null;
+    const siteId = hostedSiteIdFor(hostname);
+    const previous = (patch.siteId ? current[patch.siteId] : undefined) ?? current[siteId] ?? {};
+    const merged = { ...previous, ...clean, hostname } as HostedSiteConfig;
+    const next = { ...current, [siteId]: merged };
+    // Renaming a site's hostname moves it to a new key; drop the old one so the
+    // map never holds two entries for one site.
+    if (patch.siteId && patch.siteId !== siteId) delete next[patch.siteId];
+    setWorkspaceHostedSites(id, next);
+    return siteId;
+}
+
+/** Forget one hosted site entirely (the Site Manager's "remove"). */
+export function deleteWorkspaceHostedSite(id: string, siteId: string): void {
+    const current = getWorkspaceHostedSites(id);
+    if (!(siteId in current)) return;
+    const next = { ...current };
+    delete next[siteId];
+    setWorkspaceHostedSites(id, next);
 }
 
 // Fork → upstream cache -------------------------------------------------

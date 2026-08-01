@@ -28,9 +28,11 @@ import {
     removeWorkspace,
     getWorkspaceTunnelSites,
     setWorkspaceTunnelSite,
+    getWorkspaceHostedSites,
 } from './db';
 import { discoverSites } from './mobile/hosts';
 import { listLocalEnabledGenSites } from './sites/local-sites';
+import { hostingManager, initHosting } from './hosting/manager';
 import {
     writeWorkspaceAgentMcp,
     healTynnLiteralToken,
@@ -1019,6 +1021,17 @@ app.whenReady().then(async () => {
     });
 
     initDatabase(app.getPath('userData'));
+    // Genie's own hosting runtime (#232). Reads workspaces + their hosted-site
+    // configs, so it must come after initDatabase. Creating it starts nothing —
+    // `reconcile()` (below, once the app is up) is what serves the enabled
+    // sites, and a PHP site's runtime is fetched on FIRST USE, never at boot.
+    // userData is the base dir: the fetched runtime and Caddy's local-CA state
+    // must survive app updates.
+    initHosting({
+        baseDir: app.getPath('userData'),
+        listWorkspaces: () => listWorkspaces().map((w) => ({ id: w.id, path: w.path })),
+        hostedSitesFor: (id) => getWorkspaceHostedSites(id),
+    });
     // Install the secrets-at-rest encryptor for ALL token stores (mobile / remote
     // / GitHub) BEFORE anything reads them. Desktop injects the Electron
     // safeStorage-backed impl; genie-cloud injects its KMS one. Fail-closed: if
@@ -1683,6 +1696,13 @@ app.whenReady().then(async () => {
     // bundle dir; resolveDocsDir uses it to find the bundled docs/ in both dev
     // and the packaged asar.
     registerDocsIpc(__dirname);
+    // Serve every workspace site that is ENABLED for hosting (#232). Deferred
+    // and fire-and-forget: a PHP site downloads its runtime on first use, and
+    // no site being served is a reason to hold up the app's startup. Failures
+    // are per-site statuses the Site Manager surfaces, never a boot error.
+    void hostingManager()
+        ?.reconcile()
+        .catch((e) => console.error('[hosting] reconcile failed', e));
     // Two-phase quit (Tier 1 terminal persistence). On the FIRST before-quit we
     // hold the quit, ask every window to serialize its terminals one last time,
     // wait a bounded window for those final `terminal:snapshot` messages to
@@ -1947,6 +1967,12 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
     (app as any).isQuiting = true;
     unregisterShortcuts();
+    // Kill every hosted site's server. Unlike the pty host these are ordinary
+    // children of this process with nothing to outlive the quit for — a
+    // FrankenPHP left holding port 20431 would make the next launch's start of
+    // that same site fail to bind. The kill itself is synchronous; only the
+    // exit we await is not, which is why this is fire-and-forget.
+    void hostingManager()?.stopAll();
 });
 
 // Bridge for getting the active project context (used by capture window).

@@ -27,6 +27,8 @@ import {
     listWorkspaceIssuewatchAgents,
     getWorkspaceTunnelSites,
     setWorkspaceTunnelSite,
+    deleteWorkspaceHostedSite,
+    setWorkspaceHostedSite,
     setSettings,
     touchWorkspace,
     updateWorkspace,
@@ -156,6 +158,8 @@ import {
     type RemoteHost,
 } from './remote';
 import { listLocalEnabledGenSites } from './sites/local-sites';
+import { hostingManager } from './hosting/manager';
+import type { HostedSiteConfig } from './hosting/sites-config';
 import { remoteGenUrl } from './sites/gen-url';
 import {
     openTestingBrowser,
@@ -496,6 +500,45 @@ export function registerIpcHandlers(): void {
             return { ok: true };
         },
     );
+
+    // --- Genie's own HOSTING runtime (#232) --------------------------------
+    // The sibling of `sites:*` above, and its opposite: those carry what
+    // something ELSE on this machine serves, these are the sites GENIE serves —
+    // a real server, a built app, one stable same-origin port. The Workspace
+    // Site Manager (P3) is the UX for this; P2 ships the state + the enable
+    // path so a site can be turned on at all.
+    //
+    // Every handler tolerates hosting being uninitialised (headless host-core),
+    // reporting "unavailable" rather than throwing at a renderer.
+    ipcMain.handle('hosting:list', (_e, workspaceId?: string) =>
+        hostingManager()?.list(workspaceId) ?? [],
+    );
+    ipcMain.handle(
+        'hosting:set',
+        async (_e, workspaceId: string, patch: Partial<HostedSiteConfig> & { siteId?: string }) => {
+            const siteId = setWorkspaceHostedSite(workspaceId, patch ?? {});
+            if (!siteId) return { ok: false, error: 'a hosted site needs a valid hostname' };
+            // Converge immediately: enabling a site should serve it, disabling
+            // one should stop it, without waiting for a restart.
+            await hostingManager()?.reconcile();
+            return { ok: true, siteId };
+        },
+    );
+    ipcMain.handle('hosting:remove', async (_e, workspaceId: string, siteId: string) => {
+        deleteWorkspaceHostedSite(workspaceId, siteId);
+        await hostingManager()?.stop(siteId);
+        return { ok: true };
+    });
+    ipcMain.handle('hosting:start', async (_e, workspaceId: string, hostname: string) => {
+        const manager = hostingManager();
+        if (!manager) return { ok: false, error: 'hosting is not available on this host' };
+        const status = await manager.start(workspaceId, String(hostname));
+        return { ok: status.state === 'running', status };
+    });
+    ipcMain.handle('hosting:stop', async (_e, siteId: string) => {
+        await hostingManager()?.stop(String(siteId));
+        return { ok: true };
+    });
 
     // `sites:all` — the header `.gen` popover's data, CONTEXTUAL to the window it
     // was asked from: a LOCAL Genie window lists THIS machine's enabled `.gen`

@@ -111,8 +111,17 @@ export interface FrankenPhpRuntimeOptions {
     writer?: ConfigWriter;
     /** See `CaddyfileOptions.skipInstallTrust` — defaults to skipping. */
     skipInstallTrust?: boolean;
-    /** Overrides {@link extensionDirFor}, for a runtime laid out differently. */
-    extensionDir?: string;
+    /**
+     * The runtime's dynamic-extension directory.
+     *
+     * `undefined` derives it from the binary (see {@link extensionDirFor}).
+     * `null` means THIS BUILD HAS NONE — the macOS/Linux artifacts are single
+     * static binaries with the extensions compiled in. That case must write no
+     * ini at all: an `extension_dir` pointing at a directory that does not exist
+     * plus `extension = curl` makes PHP fail to load a library it already has,
+     * so a generated ini would BREAK the platforms that need it least.
+     */
+    extensionDir?: string | null;
     /** Overrides {@link LARAVEL_EXTENSIONS}. */
     extensions?: readonly string[];
     startTimeoutMs?: number;
@@ -188,16 +197,21 @@ export function createFrankenPhpRuntime(opts: FrankenPhpRuntimeOptions): SiteRun
         });
         await writer.write(configPath, caddyfile);
 
-        // The archive ships no active php.ini, so without this a Laravel app
-        // boots with no PDO driver and no mbstring — see `php-ini.ts`.
-        const iniDir = phpIniDir(opts.stateDir);
-        await writer.write(
-            path.join(iniDir, 'genie.ini'),
-            renderPhpIni({
-                extensionDir: opts.extensionDir ?? extensionDirFor(opts.binaryPath),
-                extensions: opts.extensions,
-            }),
-        );
+        // The WINDOWS archive ships no active php.ini, so without this a Laravel
+        // app boots with no PDO driver and no mbstring — see `php-ini.ts`. A
+        // statically-linked build (mac/linux) declares `extensionDir: null` and
+        // gets no ini and no PHP_INI_SCAN_DIR at all.
+        const extensionDir =
+            opts.extensionDir === null ? null : opts.extensionDir ?? extensionDirFor(opts.binaryPath);
+        const env: Record<string, string> = {};
+        if (extensionDir !== null) {
+            const iniDir = phpIniDir(opts.stateDir);
+            await writer.write(
+                path.join(iniDir, 'genie.ini'),
+                renderPhpIni({ extensionDir, extensions: opts.extensions }),
+            );
+            env.PHP_INI_SCAN_DIR = iniDir;
+        }
 
         const entry: Entry = {
             status: {
@@ -246,7 +260,7 @@ export function createFrankenPhpRuntime(opts: FrankenPhpRuntimeOptions): SiteRun
                 // cwd is the document root so any relative path in the app (or in
                 // a worker `watch` pattern) resolves the way the app expects.
                 cwd: site.root,
-                env: { PHP_INI_SCAN_DIR: iniDir },
+                env,
                 onStderr: (chunk) => {
                     entry.stderr = (entry.stderr + chunk).slice(-STDERR_TAIL_LIMIT);
                     if (chunk.includes(READY_MARKER)) finish('running');

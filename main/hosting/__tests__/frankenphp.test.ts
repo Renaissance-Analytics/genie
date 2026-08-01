@@ -207,6 +207,33 @@ describe('createFrankenPhpRuntime', () => {
         });
     });
 
+    it('writes NO php.ini for a statically-linked runtime', async () => {
+        // The macOS/Linux artifacts are single binaries with the extensions
+        // compiled in — there is no `ext/` to point `extension_dir` at, and
+        // `extension = curl` against a build that already has curl makes PHP
+        // fail to load a library it has. So the layout says "no dynamic
+        // extensions" (extensionDir: null) and the adapter must then write
+        // nothing and set no PHP_INI_SCAN_DIR.
+        const { spawner, procs } = fakeSpawner();
+        const { writer, files } = fakeWriter();
+        const runtime = createFrankenPhpRuntime({
+            binaryPath: '/opt/genie/frankenphp/frankenphp',
+            stateDir: '/opt/genie/state',
+            spawner,
+            writer,
+            extensionDir: null,
+            startTimeoutMs: 50,
+        });
+        const started = runtime.start(SITE);
+        for (let i = 0; i < 100 && procs.length === 0; i += 1) {
+            await new Promise((r) => setImmediate(r));
+        }
+        procs[0]?.emitStderr(`{"msg":"${READY_MARKER}"}`);
+        expect((await started).state).toBe('running');
+        expect([...files.keys()].some((f) => f.endsWith('genie.ini'))).toBe(false);
+        expect(procs[0]?.opts.env).toEqual({});
+    });
+
     it('runs the process from the document root', async () => {
         const h = harness();
         await startReady(h);

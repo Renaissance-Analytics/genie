@@ -2,6 +2,7 @@ import http from 'node:http';
 import https from 'node:https';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { isInside } from './paths';
 import { assignPort, hostedOrigin } from './ports';
 import type {
     BoundServer,
@@ -80,11 +81,10 @@ export function resolveStaticFile(
     return { filePath: candidate, fallback: false };
 }
 
-/** Containment check that does not trip on a prefix like `/root-evil`. */
-export function isInside(rootAbs: string, candidate: string): boolean {
-    const rel = path.relative(rootAbs, candidate);
-    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
-}
+/** Containment check that does not trip on a prefix like `/root-evil`. Defined
+ *  in `paths.ts` (the persisted site config needs the same check without
+ *  dragging `node:http` in) and re-exported here, where it is used. */
+export { isInside };
 
 /** The SPA shell for a path that matched no file. */
 export function spaFallback(root: string, fallbackFile = 'index.html'): ResolvedStatic {

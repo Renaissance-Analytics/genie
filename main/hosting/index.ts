@@ -3,7 +3,7 @@ import { createStaticRuntime } from './static';
 import type { HostedSite, HostedStatus, HostingBackend, LocalTarget, SiteRuntime } from './types';
 
 /**
- * Genie's cross-platform hosting runtime — module surface (Tynn #232, P1).
+ * Genie's cross-platform hosting runtime — module surface (Tynn #232, P1–P2).
  *
  * ## What this replaces
  *
@@ -22,31 +22,34 @@ import type { HostedSite, HostedStatus, HostingBackend, LocalTarget, SiteRuntime
  * origin, a port we chose and can keep. Remote preview then carries a perfectly
  * ordinary origin.
  *
- * ## THE INTEGRATION SEAM (named, deliberately NOT rewired in P1)
+ * ## THE INTEGRATION SEAM (identified in P1, wired in P2)
  *
  * The join is `main/sites/local-sites.ts`:
  *
- *   - `listLocalEnabledGenSites()` returns `EnabledGenSite[]` — today built from
- *     hosts-file discovery + `probeSite`.
+ *   - `listLocalEnabledGenSites()` returns `EnabledGenSite[]` — historically
+ *     built only from hosts-file discovery + `probeSite`.
  *   - `localTargetsBySiteId(sites)` reduces those to `Map<siteId, LocalTarget>`.
- *   - `main/testing-browser/index.ts#refreshSites` (~line 343) fills both that
- *     map and `genMap`, and `createLocalSiteCarrier(...)` (wired at ~line 191)
- *     dials whatever `LocalTarget` it is handed.
+ *   - `main/testing-browser/index.ts#refreshSites` fills both that map and
+ *     `genMap`, and `createLocalSiteCarrier(...)` dials whatever `LocalTarget`
+ *     it is handed.
  *
  * A running site here reports `HostedStatus.target`, which IS a {@link LocalTarget}
  * — the same `{scheme, hostname, port, loopback}` tuple, just sourced from a port
- * we assigned instead of one we probed. So the integration is additive: have
- * `listLocalEnabledGenSites()` emit hosted sites alongside discovered ones and
- * prefer the hosted target when both exist for a hostname. Nothing downstream —
- * the carrier, the site shim, `SessionCa`, the browser chrome — needs to change,
- * because none of it ever learns where the target came from.
+ * we assigned instead of one we probed. The wiring is therefore purely ADDITIVE
+ * and lives in two places only:
  *
- * The second, smaller seam is `main/testing-browser/index.ts:191-193`, where the
- * carrier itself is chosen; swapping there would work too but is strictly more
- * invasive, so the recommendation is the first.
+ *   - `manager.ts#genSites()` emits RUNNING hosted sites as `EnabledGenSite`
+ *     rows, keyed by the SAME `siteIdFor(hostname)` a discovered site uses;
+ *   - `local-sites.ts#mergeHostedSites` overlays them, hosted winning.
  *
- * P1 stops at "the runtime exists, is tested, and the seam is identified". It
- * does not touch `sites/`, `testing-browser/`, IPC or the UI.
+ * Nothing downstream changed — the carrier, the site shim, `SessionCa` and the
+ * browser chrome are untouched, because none of them ever learns where a target
+ * came from. `testing-browser/index.ts` needed no edit at all.
+ *
+ * P2 additionally owns: fetch-on-first-use for FrankenPHP
+ * (`frankenphp-fetch.ts`), build-on-first-use for static sites (`build.ts`), the
+ * persisted per-workspace site config (`sites-config.ts` + `workspaces.hosted_sites`),
+ * and the manager that orchestrates them. The Site Manager UX is P3.
  */
 
 export {
@@ -60,14 +63,56 @@ export {
 } from './frankenphp';
 export type { FrankenPhpRuntimeOptions } from './frankenphp';
 
-export {
-    contentTypeFor,
-    createStaticRuntime,
-    isInside,
-    resolveStaticFile,
-    spaFallback,
-} from './static';
+export { contentTypeFor, createStaticRuntime, resolveStaticFile, spaFallback } from './static';
 export type { StaticRuntimeOptions } from './static';
+
+export {
+    assetNameFor,
+    ensureFrankenPhp,
+    installDirFor,
+    isArchive,
+    layoutFor,
+    releaseApiUrl,
+    selectAsset,
+    stagingRootFor,
+    FRANKENPHP_VERSION,
+} from './frankenphp-fetch';
+export type {
+    EnsureFrankenPhpOptions,
+    FrankenPhpFetchSeams,
+    FrankenPhpInstall,
+    GithubRelease,
+    GithubReleaseAsset,
+    RuntimeLayout,
+} from './frankenphp-fetch';
+
+export { buildPlanFor, ensureBuilt, npmExecutable, npxExecutable } from './build';
+export type { BuildPlan, BuildSeams, EnsureBuiltOptions } from './build';
+
+export {
+    hostedSiteIdFor,
+    parseHostedSites,
+    resolveHostedSite,
+    sanitizeHostedSitePatch,
+} from './sites-config';
+export type { HostedSiteConfig, HostedSites } from './sites-config';
+
+export {
+    createHostingManager,
+    hostedGenSites,
+    hostingManager,
+    initHosting,
+    resetHostingForTests,
+} from './manager';
+export type {
+    HostedGenSite,
+    HostedSiteRow,
+    HostingManager,
+    HostingManagerDeps,
+    HostingWorkspace,
+} from './manager';
+
+export { isInside } from './paths';
 
 export { caddyPath, globalBlock, quote, renderCaddyfile, siteBlock } from './caddyfile';
 export type { CaddyfileOptions } from './caddyfile';
