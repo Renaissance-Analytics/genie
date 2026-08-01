@@ -671,6 +671,32 @@ const api = {
         stop: (siteId: string) => ipcRenderer.invoke('hosting:stop', siteId),
     },
 
+    // Backing SERVICES for hosted sites (#232 P3) — the database and cache a
+    // hosted app connects to, per workspace, fetched on first use. `hosting`
+    // above is what Genie SERVES; this is what those sites CONNECT TO.
+    services: {
+        /** Configured services + their live state. */
+        list: (workspaceId?: string) => ipcRenderer.invoke('services:list', workspaceId),
+        /** Create or update one service (`{ enabled, database }`) and converge,
+         *  then rewrite the app's `.env` managed block. */
+        set: (workspaceId: string, kind: string, patch?: unknown) =>
+            ipcRenderer.invoke('services:set', workspaceId, kind, patch),
+        /** Forget the service. Leaves its data directory alone. */
+        remove: (workspaceId: string, kind: string) =>
+            ipcRenderer.invoke('services:remove', workspaceId, kind),
+        /** Start/stop without changing the stored `enabled` flag. */
+        start: (workspaceId: string, kind: string) =>
+            ipcRenderer.invoke('services:start', workspaceId, kind),
+        stop: (workspaceId: string, kind: string) =>
+            ipcRenderer.invoke('services:stop', workspaceId, kind),
+        /** The server log tail, for the Site Manager's log panel. */
+        logs: (workspaceId: string, kind: string) =>
+            ipcRenderer.invoke('services:logs', workspaceId, kind),
+        /** Rewrite the `.env` managed block; reports any keys the user also sets
+         *  outside it. */
+        writeEnv: (workspaceId: string) => ipcRenderer.invoke('services:env', workspaceId),
+    },
+
     agi: {
         detect: (path: string) => ipcRenderer.invoke('agi:detect', path),
         create: (opts: Record<string, unknown>) =>

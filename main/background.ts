@@ -29,10 +29,12 @@ import {
     getWorkspaceTunnelSites,
     setWorkspaceTunnelSite,
     getWorkspaceHostedSites,
+    getWorkspaceServices,
 } from './db';
 import { discoverSites } from './mobile/hosts';
 import { listLocalEnabledGenSites } from './sites/local-sites';
 import { hostingManager, initHosting } from './hosting/manager';
+import { initServices, serviceManager } from './hosting/services/manager';
 import {
     writeWorkspaceAgentMcp,
     healTynnLiteralToken,
@@ -1027,6 +1029,14 @@ app.whenReady().then(async () => {
     // sites, and a PHP site's runtime is fetched on FIRST USE, never at boot.
     // userData is the base dir: the fetched runtime and Caddy's local-CA state
     // must survive app updates.
+    // The backing services a hosted site connects to (#232 P3). Created BEFORE
+    // the hosting manager because the latter reads this one's environment when
+    // it starts a PHP site — creating it starts nothing either way.
+    initServices({
+        baseDir: app.getPath('userData'),
+        listWorkspaces: () => listWorkspaces().map((w) => ({ id: w.id, path: w.path })),
+        servicesFor: (id) => getWorkspaceServices(id),
+    });
     initHosting({
         baseDir: app.getPath('userData'),
         listWorkspaces: () => listWorkspaces().map((w) => ({ id: w.id, path: w.path })),
@@ -1700,9 +1710,21 @@ app.whenReady().then(async () => {
     // and fire-and-forget: a PHP site downloads its runtime on first use, and
     // no site being served is a reason to hold up the app's startup. Failures
     // are per-site statuses the Site Manager surfaces, never a boot error.
-    void hostingManager()
-        ?.reconcile()
-        .catch((e) => console.error('[hosting] reconcile failed', e));
+    // Services BEFORE sites, and awaited in between: a PHP site is started with
+    // its database credentials as environment, so a site that came up first
+    // would be serving an app pointed at a server that is not listening yet.
+    void (async () => {
+        try {
+            await serviceManager()?.reconcile();
+        } catch (e) {
+            console.error('[hosting] service reconcile failed', e);
+        }
+        try {
+            await hostingManager()?.reconcile();
+        } catch (e) {
+            console.error('[hosting] reconcile failed', e);
+        }
+    })();
     // Two-phase quit (Tier 1 terminal persistence). On the FIRST before-quit we
     // hold the quit, ask every window to serialize its terminals one last time,
     // wait a bounded window for those final `terminal:snapshot` messages to
@@ -1973,6 +1995,11 @@ app.on('before-quit', () => {
     // that same site fail to bind. The kill itself is synchronous; only the
     // exit we await is not, which is why this is fire-and-forget.
     void hostingManager()?.stopAll();
+    // And every backing service. A managed Postgres left running would hold
+    // both its port and its data directory's lock file, so the next launch of
+    // that workspace would fail to start a cluster that is, confusingly,
+    // already up.
+    void serviceManager()?.stopAll();
 });
 
 // Bridge for getting the active project context (used by capture window).

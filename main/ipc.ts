@@ -29,6 +29,8 @@ import {
     setWorkspaceTunnelSite,
     deleteWorkspaceHostedSite,
     setWorkspaceHostedSite,
+    deleteWorkspaceService,
+    setWorkspaceService,
     setSettings,
     touchWorkspace,
     updateWorkspace,
@@ -159,7 +161,11 @@ import {
 } from './remote';
 import { listLocalEnabledGenSites } from './sites/local-sites';
 import { hostingManager } from './hosting/manager';
+import { serviceManager } from './hosting/services/manager';
+import { isServiceKind } from './hosting/services/types';
 import type { HostedSiteConfig } from './hosting/sites-config';
+import type { ServiceConfig } from './hosting/services/config';
+import type { ServiceKind } from './hosting/services/types';
 import { remoteGenUrl } from './sites/gen-url';
 import {
     openTestingBrowser,
@@ -539,6 +545,66 @@ export function registerIpcHandlers(): void {
         await hostingManager()?.stop(String(siteId));
         return { ok: true };
     });
+
+    // --- Backing SERVICES for hosted sites (#232 P3) -----------------------
+    // Postgres + Redis, per workspace, fetched on first use and isolated by
+    // data directory / port / credential. The Workspace Site Manager drives
+    // these; the site itself picks the credentials up as environment (see
+    // `hosting/services/env.ts`), and `services:env` additionally writes the
+    // managed block into the app's `.env` so `artisan migrate` works too.
+    //
+    // Kept as one self-contained block, and every handler tolerates services
+    // being uninitialised (headless host-core) rather than throwing at a
+    // renderer.
+    ipcMain.handle('services:list', (_e, workspaceId?: string) =>
+        serviceManager()?.list(workspaceId) ?? [],
+    );
+    ipcMain.handle(
+        'services:set',
+        async (_e, workspaceId: string, kind: ServiceKind, patch?: Partial<ServiceConfig>) => {
+            if (!isServiceKind(kind)) return { ok: false, error: `unknown service ${String(kind)}` };
+            const serviceId = setWorkspaceService(workspaceId, kind, patch ?? {});
+            if (!serviceId) return { ok: false, error: 'could not configure that service' };
+            // Converge immediately: enabling should start it, disabling should
+            // stop it, without waiting for a restart. The `.env` follows the
+            // config rather than the running state, so a user can migrate as
+            // soon as the toggle is on.
+            await serviceManager()?.reconcile();
+            const env = await serviceManager()?.writeEnvFile(workspaceId);
+            return { ok: true, serviceId, env: env ?? null };
+        },
+    );
+    ipcMain.handle('services:remove', async (_e, workspaceId: string, kind: ServiceKind) => {
+        if (!isServiceKind(kind)) return { ok: false, error: `unknown service ${String(kind)}` };
+        await serviceManager()?.stop(workspaceId, kind);
+        deleteWorkspaceService(workspaceId, kind);
+        const env = await serviceManager()?.writeEnvFile(workspaceId);
+        return { ok: true, env: env ?? null };
+    });
+    ipcMain.handle('services:start', async (_e, workspaceId: string, kind: ServiceKind) => {
+        const manager = serviceManager();
+        if (!manager) return { ok: false, error: 'services are not available on this host' };
+        if (!isServiceKind(kind)) return { ok: false, error: `unknown service ${String(kind)}` };
+        const status = await manager.start(workspaceId, kind);
+        return { ok: status.state === 'running', status };
+    });
+    ipcMain.handle('services:stop', async (_e, workspaceId: string, kind: ServiceKind) => {
+        if (!isServiceKind(kind)) return { ok: false, error: `unknown service ${String(kind)}` };
+        await serviceManager()?.stop(workspaceId, kind);
+        return { ok: true };
+    });
+    ipcMain.handle('services:logs', (_e, workspaceId: string, kind: ServiceKind) =>
+        isServiceKind(kind) ? serviceManager()?.logs(workspaceId, kind) ?? '' : '',
+    );
+    /** Rewrite the workspace's `.env` managed block from its current config.
+     *  Returns the conflicts so the UX can say which value is really in effect. */
+    ipcMain.handle('services:env', async (_e, workspaceId: string) =>
+        (await serviceManager()?.writeEnvFile(workspaceId)) ?? {
+            path: null,
+            changed: false,
+            conflicts: [],
+        },
+    );
 
     // `sites:all` — the header `.gen` popover's data, CONTEXTUAL to the window it
     // was asked from: a LOCAL Genie window lists THIS machine's enabled `.gen`

@@ -3,6 +3,7 @@ import { ensureBuilt as realEnsureBuilt } from './build';
 import { createFrankenPhpRuntime } from './frankenphp';
 import { ensureFrankenPhp as realEnsureFrankenPhp } from './frankenphp-fetch';
 import { createStaticRuntime } from './static';
+import { workspaceServiceEnv } from './services/manager';
 import { hostedSiteIdFor, resolveHostedSite } from './sites-config';
 import type { EnsureBuiltOptions } from './build';
 import type { EnsureFrankenPhpOptions, FrankenPhpInstall } from './frankenphp-fetch';
@@ -55,6 +56,20 @@ export interface HostingManagerDeps {
     ensureBuilt?: (opts: EnsureBuiltOptions) => Promise<{ built: boolean }>;
     createFrankenPhp?: (opts: FrankenPhpRuntimeOptions) => SiteRuntime;
     createStatic?: () => SiteRuntime;
+    /**
+     * The managed-service environment for a workspace (#232 P3).
+     *
+     * A hosted Laravel app has to reach its database, and the cleanest way to
+     * tell it where is the one every real deployment uses: real environment
+     * variables on the server process. That path writes NOTHING to the user's
+     * repository — `services/env.ts` explains why there is a second, file-based
+     * path as well, and why it is the more dangerous of the two.
+     *
+     * Injected (rather than imported and called) so the site manager's tests
+     * stay free of the service manager, and so a host with no services at all
+     * simply supplies `{}`.
+     */
+    serviceEnvFor?: (workspaceId: string) => Record<string, string>;
 }
 
 /** One configured site plus whatever the runtime currently says about it. */
@@ -108,6 +123,7 @@ export function createHostingManager(deps: HostingManagerDeps): HostingManager {
     const ensureBuiltFn = deps.ensureBuilt ?? realEnsureBuilt;
     const makeFrankenPhp = deps.createFrankenPhp ?? createFrankenPhpRuntime;
     const makeStatic = deps.createStatic ?? createStaticRuntime;
+    const serviceEnvFor = deps.serviceEnvFor ?? workspaceServiceEnv;
 
     /** Sites we have started, so `genSites()` and `stop()` can find their
      *  runtime without re-deriving it from config that may have changed. */
@@ -196,6 +212,15 @@ export function createHostingManager(deps: HostingManagerDeps): HostingManager {
             let runtime: SiteRuntime;
             if (site.kind === 'php') {
                 runtime = await phpBackend();
+                // Managed services, as environment. Merged UNDER anything the
+                // stored site config already set, so a hand-configured
+                // `DB_HOST` on the site still wins over the one we would
+                // derive — same "never clobber what the user chose" rule the
+                // `.env` writer follows.
+                const serviceEnv = serviceEnvFor(workspaceId);
+                if (Object.keys(serviceEnv).length) {
+                    site.env = { ...serviceEnv, ...(site.env ?? {}) };
+                }
             } else {
                 // A built app or nothing to serve — produce it before binding a
                 // port, so "running" always means "there is something there".

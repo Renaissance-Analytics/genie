@@ -14,6 +14,15 @@ import {
     type HostedSiteConfig,
     type HostedSites,
 } from './hosting/sites-config';
+import {
+    parseWorkspaceServices,
+    sanitizeServicePatch,
+    serviceIdFor,
+    withCredentials,
+    type ServiceConfig,
+    type ServiceKind,
+    type WorkspaceServices,
+} from './hosting/services/config';
 import type { AgentInboxScope, WorkspaceAgentAccess } from './agentinbox/types';
 
 /**
@@ -755,6 +764,32 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v30: per-workspace BACKING SERVICES (Tynn #232 P3). A JSON blob
+            // mapping the opaque per-service id → its config:
+            // { [serviceId]: { enabled, kind, password?, database? } }.
+            //
+            // The companion of v29: `hosted_sites` says what Genie SERVES, this
+            // says what those sites CONNECT TO. Separate columns rather than one
+            // nested blob because their lifecycles differ — a workspace can run
+            // a database for `artisan` and its own tooling without hosting any
+            // site at all, and disabling a site must not tear down the data.
+            //
+            // Holds the generated database password. That is deliberate; see
+            // `main/hosting/services/config.ts` for why encrypting a credential
+            // whose entire purpose is to be written into a plaintext `.env` two
+            // directories away would buy nothing.
+            //
+            // NULL/absent reads as {} (no services). Resolved by
+            // getWorkspaceServices — never parsed here.
+            version: 30,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('workspace_services')) {
+                    db.exec(`ALTER TABLE workspaces ADD COLUMN workspace_services TEXT`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1163,6 +1198,12 @@ export interface WorkspaceRow {
      *  GENIE serves. NULL/absent reads as {} (nothing hosted) — resolve it via
      *  {@link getWorkspaceHostedSites}, never parse here. */
     hosted_sites?: string | null;
+    /** Per-workspace BACKING SERVICES (#232 P3), JSON-encoded
+     *  ({ [serviceId]: { enabled, kind, password?, database? } }). What the
+     *  hosted sites CONNECT TO, as opposed to what `hosted_sites` serves.
+     *  NULL/absent reads as {} — resolve it via {@link getWorkspaceServices},
+     *  never parse here. */
+    workspace_services?: string | null;
 }
 
 export function listWorkspaces(): WorkspaceRow[] {
@@ -1765,6 +1806,76 @@ export function deleteWorkspaceHostedSite(id: string, siteId: string): void {
     const next = { ...current };
     delete next[siteId];
     setWorkspaceHostedSites(id, next);
+}
+
+// Backing services (#232 P3) ---------------------------------------------
+//
+// The companion of hosted_sites: those say what Genie SERVES, these say what
+// those sites CONNECT TO. Same single-column JSON pattern, same opaque id key.
+// Parse/sanitize/credential-minting live in main/hosting/services/config.ts.
+
+/** This workspace's configured services (NULL/absent ⇒ {} = none). Keyed by
+ *  {@link serviceIdFor}. */
+export function getWorkspaceServices(id: string): WorkspaceServices {
+    const row = getDb()
+        .prepare<[string], { workspace_services: string | null } | undefined>(
+            'SELECT workspace_services FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    return parseWorkspaceServices(row?.workspace_services ?? null);
+}
+
+/** Replace this workspace's whole service map (JSON-encoded). */
+export function setWorkspaceServices(id: string, services: WorkspaceServices): void {
+    getDb()
+        .prepare('UPDATE workspaces SET workspace_services = ? WHERE id = ?')
+        .run(JSON.stringify(services), id);
+}
+
+/**
+ * Merge ONE service into this workspace's map, returning its id.
+ *
+ * The key is DERIVED from (workspace, kind) rather than supplied, so a workspace
+ * can never accumulate two Postgres entries fighting over one data directory.
+ *
+ * Credentials are minted HERE, on the way in, and only when absent — see
+ * `withCredentials`. Doing it on write rather than on read is what makes the
+ * password stable: regenerating it when the config is read would invalidate the
+ * `.env` the user's app is already using.
+ */
+export function setWorkspaceService(
+    id: string,
+    kind: ServiceKind,
+    patch: Partial<ServiceConfig>,
+): string | null {
+    const clean = sanitizeServicePatch({ ...patch, kind });
+    if (!clean.kind) return null;
+    const serviceId = serviceIdFor(id, clean.kind);
+    const current = getWorkspaceServices(id);
+    const merged = withCredentials({
+        ...(current[serviceId] ?? {}),
+        ...clean,
+        kind: clean.kind,
+    } as ServiceConfig);
+    setWorkspaceServices(id, { ...current, [serviceId]: merged });
+    return serviceId;
+}
+
+/**
+ * Forget one service entirely.
+ *
+ * Deliberately does NOT delete the data directory — that lives under userData
+ * and is removed by the service manager, which knows whether the server holding
+ * those files is still running. Dropping a database because a toggle was
+ * switched off is not something to do as a side effect of a config write.
+ */
+export function deleteWorkspaceService(id: string, kind: ServiceKind): void {
+    const serviceId = serviceIdFor(id, kind);
+    const current = getWorkspaceServices(id);
+    if (!(serviceId in current)) return;
+    const next = { ...current };
+    delete next[serviceId];
+    setWorkspaceServices(id, next);
 }
 
 // Fork → upstream cache -------------------------------------------------

@@ -27,6 +27,24 @@ export const HOSTED_PORT_MAX = 20_999;
 /** How many slots the range holds. */
 export const HOSTED_PORT_SLOTS = HOSTED_PORT_MAX - HOSTED_PORT_MIN + 1;
 
+/**
+ * A band of ports one kind of thing is allocated from.
+ *
+ * Sites and backing SERVICES draw from DISJOINT bands (see
+ * `services/ports.ts`). Sharing one band would work — the derivation is
+ * collision-tolerant — but it would let a workspace's Postgres take the port a
+ * site had last week, and the whole reason the port is derived rather than
+ * assigned is that a site's origin never moves.
+ */
+export interface PortRange {
+    min: number;
+    max: number;
+}
+
+export const HOSTED_PORTS: PortRange = { min: HOSTED_PORT_MIN, max: HOSTED_PORT_MAX };
+
+const slots = (range: PortRange): number => range.max - range.min + 1;
+
 // --- derivation ------------------------------------------------------------
 
 /**
@@ -36,11 +54,11 @@ export const HOSTED_PORT_SLOTS = HOSTED_PORT_MAX - HOSTED_PORT_MIN + 1;
  * `mobile/hosts.ts` so the mapping is reproducible across machines and across
  * Genie versions — never `Math.random`, never an incrementing counter.
  */
-export function preferredPort(siteId: string): number {
+export function preferredPort(siteId: string, range: PortRange = HOSTED_PORTS): number {
     const digest = crypto.createHash('sha256').update(siteId).digest();
     // 32 bits is plenty of entropy for a 1000-slot range and avoids BigInt.
     const n = digest.readUInt32BE(0);
-    return HOSTED_PORT_MIN + (n % HOSTED_PORT_SLOTS);
+    return range.min + (n % slots(range));
 }
 
 /**
@@ -54,13 +72,18 @@ export function preferredPort(siteId: string): number {
  * someone else owns; 1000 concurrently hosted sites on one machine is a bug,
  * not a capacity limit to paper over.
  */
-export function assignPort(siteId: string, taken: ReadonlySet<number>): number {
-    const start = preferredPort(siteId);
-    for (let i = 0; i < HOSTED_PORT_SLOTS; i += 1) {
-        const port = HOSTED_PORT_MIN + ((start - HOSTED_PORT_MIN + i) % HOSTED_PORT_SLOTS);
+export function assignPort(
+    siteId: string,
+    taken: ReadonlySet<number>,
+    range: PortRange = HOSTED_PORTS,
+): number {
+    const start = preferredPort(siteId, range);
+    const count = slots(range);
+    for (let i = 0; i < count; i += 1) {
+        const port = range.min + ((start - range.min + i) % count);
         if (!taken.has(port)) return port;
     }
-    throw new Error(`no free hosting port in ${HOSTED_PORT_MIN}-${HOSTED_PORT_MAX}`);
+    throw new Error(`no free hosting port in ${range.min}-${range.max}`);
 }
 
 // --- origin ----------------------------------------------------------------
