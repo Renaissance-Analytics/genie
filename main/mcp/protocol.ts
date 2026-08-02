@@ -634,6 +634,23 @@ export interface ManageSiteResult {
     applied?: DevSiteRunOption;
     /** logs: the container log tail. */
     logs?: string;
+    /**
+     * create: what Genie did about the framework's Host-header allowlist.
+     *
+     * A dev site is addressed as `<name>.gen`, and Vite, Django and Next check
+     * that header against a list they cannot know about — answering a "Blocked
+     * request" page from a container that is up, bound and probed healthy. This
+     * says whether Genie SOLVED it (something the framework definitely reads) or
+     * merely DOCUMENTED it (the repo has to change), so an agent stops guessing
+     * at a wall it was told had been removed.
+     */
+    hostAllowlist?: {
+        framework: string;
+        status: 'solved' | 'documented' | 'not-needed';
+        note: string;
+        /** On `documented`: the one-field escape, via `upstreamHost`. */
+        upstreamHostFallback?: string;
+    };
     /** Which container runtime is driving, or why none is. */
     runtime?: { kind: string; version?: string; installHint?: string };
 }

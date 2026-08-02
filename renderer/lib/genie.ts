@@ -374,6 +374,15 @@ export interface ManageSiteResult {
     options?: DevSiteRunOption[];
     applied?: DevSiteRunOption;
     logs?: string;
+    /** create: what Genie did about the framework's Host-header allowlist —
+     *  `solved` means it set something the framework definitely reads,
+     *  `documented` means the repo still has to change. */
+    hostAllowlist?: {
+        framework: string;
+        status: 'solved' | 'documented' | 'not-needed';
+        note: string;
+        upstreamHostFallback?: string;
+    };
     runtime?: DevRuntimeInfo;
 }
 

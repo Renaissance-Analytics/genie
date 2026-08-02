@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { isDevFramework } from './host-allowlist';
+import type { DevFramework } from './host-allowlist';
 import type { DevSiteRunMode } from './site-def';
 
 /**
@@ -52,6 +54,16 @@ export interface DevSiteConfig {
     env?: Record<string, string>;
     /** `http` is routable at `<genName>`; `tcp` is published and listed only. */
     kind: 'http' | 'tcp';
+    /**
+     * Which framework this site runs, when detection could tell.
+     *
+     * Stored rather than re-derived because the argv usually cannot say it:
+     * `npm run dev -- --host 0.0.0.0` contains no token spelling "vite", and
+     * Vite is exactly the framework that rejects the `.gen` Host header. This
+     * is what `host-allowlist.ts` uses to keep the real Host working instead of
+     * falling back to {@link upstreamHost}.
+     */
+    framework?: DevFramework;
     /**
      * The `Host` header sent upstream. Defaults to {@link genName}, so the dev
      * server sees the same origin the browser does and its absolute URLs,
@@ -193,6 +205,8 @@ export function sanitizeDevSitePatch(
     }
 
     if (patch.kind === 'http' || patch.kind === 'tcp') out.kind = patch.kind;
+
+    if (isDevFramework(patch.framework)) out.framework = patch.framework;
 
     if (typeof patch.upstreamHost === 'string') {
         const host = patch.upstreamHost.trim().toLowerCase();

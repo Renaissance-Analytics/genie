@@ -49,6 +49,34 @@ describe('the catalog', () => {
         expect(postgres.image('16')).toContain('16');
     });
 
+    it('builds the EXACT published tag for every default version', () => {
+        // Pinned literally, and here is why. `mailpit` originally declared
+        // version `1` and built `axllent/mailpit:v1` — a tag Mailpit does not
+        // publish (it ships `v<major>.<minor>` and `latest`, never a bare
+        // major). Every unit test passed; the image 404'd at the registry, and
+        // the P4 live smoke caught it on its first run.
+        //
+        // A test cannot ask Docker Hub what exists, so it does the next best
+        // thing: it makes the ref a DELIBERATE value rather than a side effect
+        // of a template, so changing one is a decision somebody made on purpose
+        // and checked. Each of these was pulled successfully against real Docker.
+        const ref = (engine: Parameters<typeof engineSpecFor>[0]) =>
+            engineSpecFor(engine).image(DEFAULT_VERSIONS[engine]);
+        expect(ref('postgres')).toBe('postgres:17-alpine');
+        expect(ref('mysql')).toBe('mysql:8.4');
+        expect(ref('redis')).toBe('redis:7-alpine');
+        expect(ref('meilisearch')).toBe('getmeili/meilisearch:v1');
+        expect(ref('minio')).toBe('minio/minio:latest');
+        expect(ref('mailpit')).toBe('axllent/mailpit:v1.30');
+    });
+
+    it('does not prefix `latest` with a `v` — that is a tag nobody publishes', () => {
+        // The engines whose upstream has no stable major to pin offer `latest`.
+        // A naive `v${version}` template would turn it into `vlatest`.
+        expect(engineSpecFor('mailpit').image('latest')).toBe('axllent/mailpit:latest');
+        expect(engineSpecFor('minio').image('latest')).toBe('minio/minio:latest');
+    });
+
     it('keys an engine by (engine, version) — that pair IS the sharing unit', () => {
         expect(engineKeyFor('postgres', '16')).toBe('postgres-16');
         expect(engineKeyFor('postgres', '16')).not.toBe(engineKeyFor('postgres', '15'));

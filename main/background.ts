@@ -1,6 +1,7 @@
 import {
     app,
     BrowserWindow,
+    dialog,
     ipcMain,
     nativeImage,
     Notification,
@@ -44,6 +45,7 @@ import {
     devServiceEnvFor,
 } from './dev-server/services/service-manager';
 import { resolveContainerRuntime } from './dev-server';
+import { waitForHttp, waitForPort } from './dev-server/port-probe';
 import { registerDevSiteTools } from './mcp/dev-site-tools';
 import {
     writeWorkspaceAgentMcp,
@@ -1050,6 +1052,14 @@ app.whenReady().then(async () => {
         // Machine-scoped, minted once per engine CONTAINER: a shared engine's
         // superuser credential cannot live in any one workspace's row.
         engineAdmin: (req) => getOrCreateDevServiceEngine(req),
+        // REQUIRED, not an optimisation. Mailpit, Meilisearch and MinIO have no
+        // in-container readiness check, so `waitReady` has nothing to ask and —
+        // without this — answers "not ready" honestly but immediately, failing
+        // every acquire of those three with "started but never became ready".
+        // Found by the live smoke; a unit test with a fake runtime cannot see it.
+        probeReady: ({ port, kind, timeoutMs }) =>
+            kind === 'http' ? waitForHttp(port, timeoutMs) : waitForPort(port, timeoutMs),
+        confirmImagePull: confirmContainerImagePull,
         onChanged: () => broadcastDevServerChanged(),
     });
     initDevSites({
@@ -1068,6 +1078,7 @@ app.whenReady().then(async () => {
         listWorkspaces: () =>
             listWorkspaces().map((w) => ({ id: w.id, path: w.path, label: w.project_name })),
         devSitesFor: (id) => getWorkspaceDevSites(id),
+        confirmImagePull: confirmContainerImagePull,
         // The `.gen` change event, so the header popover, the rail icon, the
         // Site Manager and the Testing Browser's resolver all re-pull when a
         // container starts or stops.
@@ -2040,6 +2051,40 @@ function showE2EWindow(): void {
         win.loadURL(`http://localhost:8888/${page}`);
     } else {
         win.loadFile(path.join(__dirname, `${page}.html`));
+    }
+}
+
+/**
+ * Consent for fetching a container image the Dev Server needs (#234 P4).
+ *
+ * The seam's default is NO PULL — deliberately, so a caller that has not built
+ * a consent surface cannot start a multi-gigabyte download by forgetting a
+ * field. That default is right for a library and wrong for the desktop: without
+ * this, clicking "Add Postgres" in the Site Manager fails with an instruction to
+ * go and run `docker pull` in a terminal, which is a dead end dressed as an
+ * error message.
+ *
+ * Asking is also the honest shape. An engine is 20 MB (Mailpit) to 600 MB
+ * (MySQL) and the workspace dev image is larger still; that is the user's disk
+ * and the user's bandwidth, and it is worth one question.
+ */
+async function confirmContainerImagePull(req: { image: string; reason: string }): Promise<boolean> {
+    try {
+        const { response } = await dialog.showMessageBox({
+            type: 'question',
+            title: 'Download a container image?',
+            message: `Genie needs the image ${req.image}.`,
+            detail: `${req.reason}\n\nIt is downloaded once and reused by every workspace that needs it afterwards.`,
+            buttons: ['Download', 'Cancel'],
+            defaultId: 0,
+            cancelId: 1,
+        });
+        return response === 0;
+    } catch {
+        // No window (headless, or a very early boot). Fail CLOSED, back to the
+        // library default: report the image as missing with the command to run,
+        // rather than silently downloading gigabytes nobody agreed to.
+        return false;
     }
 }
 

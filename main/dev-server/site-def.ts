@@ -1,3 +1,4 @@
+import type { DevFramework } from './host-allowlist';
 /**
  * PURE. How a repo RUNS — the layered site definition (Tynn #234, P2 item 2).
  *
@@ -78,6 +79,16 @@ export const DEFAULT_STACK_PORTS: Readonly<Record<DevStack, number>> = {
 export interface DevSiteOption {
     runMode: DevSiteRunMode;
     stack?: DevStack;
+    /**
+     * Which framework this command runs, when detection could tell.
+     *
+     * Recorded — and PERSISTED on the site — because the argv often cannot say
+     * it later: `npm run dev -- --host 0.0.0.0` contains no token spelling
+     * "vite", and yet Vite is exactly the framework that will reject the `.gen`
+     * Host header. This is the only moment the script body is in hand, so it is
+     * the only moment that fact can be captured. See `host-allowlist.ts`.
+     */
+    framework?: DevFramework;
     /** The repo entry that produced this option (`Dockerfile`, `go.mod`, …). */
     source: string;
     /** One sentence: what this runs, and why it was offered. */
@@ -149,14 +160,18 @@ interface Detector {
     stack: DevStack;
     /** Any one of these at the repo root selects this stack. */
     markers: readonly string[];
-    propose(entries: Set<string>, facts: RepoFacts, port: number): Omit<DevSiteOption, 'runMode' | 'stack' | 'source'>;
+    propose(
+        entries: Set<string>,
+        facts: RepoFacts,
+        port: number,
+    ): Omit<DevSiteOption, 'runMode' | 'stack' | 'source'>;
 }
 
 /** `npm run <script>`, plus the passthrough a vite/next script needs to bind. */
 function nodeCommand(
     scripts: Record<string, string>,
     port: number,
-): { command?: string[]; confident: boolean; needs?: string; reason: string } {
+): { command?: string[]; confident: boolean; needs?: string; reason: string; framework?: DevFramework } {
     const script = scripts.dev ? 'dev' : scripts.start ? 'start' : null;
     if (!script) {
         return {
@@ -173,6 +188,11 @@ function nodeCommand(
         return {
             command: ['npm', 'run', script, '--', '--host', '0.0.0.0', '--port', String(port)],
             confident: true,
+            // Captured HERE or nowhere: the generated argv reads `npm run dev`,
+            // so nothing downstream could recover which of the two this is —
+            // and Vite is exactly the framework that will reject the `.gen`
+            // Host header. See `host-allowlist.ts`.
+            framework: /\bvite\b/.test(body) ? 'vite' : 'next',
             reason: `\`npm run ${script}\` (${body.trim()}) — bound to 0.0.0.0 so the published port reaches it.`,
         };
     }
@@ -193,6 +213,7 @@ const DETECTORS: readonly Detector[] = [
                 return {
                     command: ['php', 'artisan', 'serve', '--host', '0.0.0.0', '--port', String(port)],
                     confident: true,
+                    framework: 'laravel',
                     reason: 'A Laravel app (artisan) — `php artisan serve` on 0.0.0.0.',
                 };
             }
@@ -220,6 +241,7 @@ const DETECTORS: readonly Detector[] = [
                 return {
                     command: ['python3', 'manage.py', 'runserver', `0.0.0.0:${port}`],
                     confident: true,
+                    framework: 'django',
                     reason: 'A Django project (manage.py) — `runserver` on 0.0.0.0.',
                 };
             }

@@ -99,6 +99,10 @@ export default function WorkspaceSiteManager({
     /** The connection env of the services tab, when asked for. */
     const [connEnv, setConnEnv] = useState<Record<string, string> | null>(null);
     const [adding, setAdding] = useState(false);
+    /** What the last create did about the framework's Host allowlist. Kept
+     *  visible after the form closes, because a `documented` outcome is
+     *  something the user still has to act on in the repo. */
+    const [hostNote, setHostNote] = useState<{ status: string; note: string } | null>(null);
 
     /**
      * Whether the Dev Server can be driven from HERE at all.
@@ -161,6 +165,9 @@ export default function WorkspaceSiteManager({
             setSites(res.sites ?? []);
             if (res.logs !== undefined && res.affectedId) {
                 setLogs({ id: res.affectedId, text: res.logs });
+            }
+            if (res.hostAllowlist && res.hostAllowlist.status !== 'not-needed') {
+                setHostNote(res.hostAllowlist);
             }
             return res;
         } catch (e) {
@@ -247,6 +254,7 @@ export default function WorkspaceSiteManager({
                                         hasRuntime={hasRuntime}
                                         adding={adding}
                                         onAddingChange={setAdding}
+                                        hostNote={hostNote}
                                         onAction={site}
                                         onToggleLog={(id) => void toggleLog(id, 'site')}
                                         onRefresh={() => void refresh()}
@@ -302,6 +310,7 @@ function SitesTab({
     hasRuntime,
     adding,
     onAddingChange,
+    hostNote,
     onAction,
     onToggleLog,
     onRefresh,
@@ -313,6 +322,7 @@ function SitesTab({
     hasRuntime: boolean;
     adding: boolean;
     onAddingChange: (v: boolean) => void;
+    hostNote: { status: string; note: string } | null;
     onAction: (id: string | null, req: Record<string, unknown>) => Promise<unknown>;
     onToggleLog: (id: string) => void;
     onRefresh: () => void;
@@ -368,6 +378,19 @@ function SitesTab({
                     {adding ? 'Cancel' : 'Add a site…'}
                 </Action>
             </div>
+
+            {/* A framework that checks the Host header answers a "Blocked
+                request" page from a container that is up, bound and probed
+                healthy — so nothing about the site's own status would ever say
+                why. `solved` is Genie's doing; `documented` is the user's. */}
+            {hostNote && (
+                <Callout
+                    color={hostNote.status === 'solved' ? 'emerald' : 'amber'}
+                    icon={<Icon name={hostNote.status === 'solved' ? 'check' : 'info'} size="sm" />}
+                >
+                    {hostNote.note}
+                </Callout>
+            )}
 
             {adding && (
                 <AddSiteForm

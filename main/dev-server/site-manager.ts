@@ -9,6 +9,7 @@ import {
 } from './argv';
 import { GENIE_DEV_BASE_IMAGE, WORKSPACE_MOUNT_TARGET } from './images';
 import { DEFAULT_READY_TIMEOUT_MS, waitForHttp, waitForPort } from './port-probe';
+import { planHostAllowlist } from './host-allowlist';
 import { resolveSiteRun } from './site-def';
 import { ensureWorkspaceSandbox } from './workspace-sandbox';
 import type { ContainerRuntime, RuntimeDetection } from './container-runtime';
@@ -399,10 +400,22 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 // never on the LAN, and never a fixed number two workspaces
                 // could fight over.
                 ports: [{ container: run.port, hostIp: '127.0.0.1' }],
-                // Services UNDER the site's own env: a value the user pinned
-                // beats the managed one.
+                // Layered, and the ORDER is the contract. The allow-host plan
+                // is the weakest — it is Genie's guess at making a framework
+                // accept the `.gen` Host — so services override it and the
+                // site's OWN env overrides everything. A value the user pinned
+                // always wins.
                 ...(() => {
-                    const env = { ...serviceEnv, ...(config.env ?? {}) };
+                    const env = {
+                        ...planHostAllowlist({
+                            genName: config.genName,
+                            ...(config.framework ? { framework: config.framework } : {}),
+                            ...(config.command ? { command: config.command } : {}),
+                            ...(config.upstreamHost ? { upstreamHost: config.upstreamHost } : {}),
+                        }).env,
+                        ...serviceEnv,
+                        ...(config.env ?? {}),
+                    };
                     return Object.keys(env).length ? { env } : {};
                 })(),
                 // A dev server spawns compilers and watchers; without a reaper

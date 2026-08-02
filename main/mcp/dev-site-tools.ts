@@ -10,6 +10,8 @@ import { devSiteManager } from '../dev-server/site-manager';
 import { resolveContainerRuntime } from '../dev-server';
 import { detectFolder } from '../workspace/detect';
 import { resolveAgentTarget } from './host-tools';
+import { planHostAllowlist } from '../dev-server/host-allowlist';
+import type { DevFramework } from '../dev-server/host-allowlist';
 import type { DevSiteOption } from '../dev-server/site-def';
 import type { DevSiteRow } from '../dev-server/site-manager';
 import type { DevSiteConfig } from '../dev-server/sites-config';
@@ -257,6 +259,7 @@ export async function runManageSite(
                 let runMode = req.runMode;
                 let applied: DevSiteOption | undefined;
                 let options: DevSiteOption[] | undefined;
+                let framework: DevFramework | undefined;
 
                 // Nothing explicit supplied → read the repo and take the
                 // recommendation, so "serve the frontend" is ONE call.
@@ -275,6 +278,10 @@ export async function runManageSite(
                     command = applied.command;
                     port = port ?? applied.port;
                     runMode = applied.runMode as ManageSiteRequest['runMode'];
+                    // The ONLY moment this is knowable: `npm run dev` does not
+                    // say whether it runs Vite, and Vite is what will reject the
+                    // `.gen` Host header. See `host-allowlist.ts`.
+                    framework = applied.framework;
                 }
 
                 if (!port) {
@@ -294,6 +301,7 @@ export async function runManageSite(
                     port,
                     ...(req.env ? { env: req.env } : {}),
                     kind: req.kind ?? 'http',
+                    ...(framework ? { framework } : {}),
                     ...(req.upstreamHost ? { upstreamHost: req.upstreamHost } : {}),
                     // Defined AND started unless the caller says otherwise: a
                     // site nobody asked to keep off is one they want serving.
@@ -317,12 +325,29 @@ export async function runManageSite(
                     };
                 }
                 const status = await manager.start(ws.id, siteId);
+                // Reported on CREATE, where it is actionable. A `documented`
+                // status means the repo still has to change, and an agent that
+                // does not hear that will debug a working container.
+                const plan = planHostAllowlist({
+                    genName: getWorkspaceDevSites(ws.id)[siteId]?.genName ?? '',
+                    ...(framework ? { framework } : {}),
+                    ...(command ? { command } : {}),
+                    ...(req.upstreamHost ? { upstreamHost: req.upstreamHost } : {}),
+                });
                 return {
                     ok: status.state !== 'failed',
                     ...(status.error ? { error: status.error } : {}),
                     sites: sites(),
                     affectedId: siteId,
                     runtime,
+                    hostAllowlist: {
+                        framework: plan.framework,
+                        status: plan.status,
+                        note: plan.note,
+                        ...(plan.upstreamHostFallback
+                            ? { upstreamHostFallback: plan.upstreamHostFallback }
+                            : {}),
+                    },
                     ...(options ? { options: options.map(toOption) } : {}),
                     ...(applied ? { applied: toOption(applied) } : {}),
                 };

@@ -211,8 +211,11 @@ const MAILPIT: EngineSpec = {
     label: 'Mailpit',
     summary:
         'Catch-all SMTP + a web inbox. Shared instance; each workspace tags its mail with its own namespace.',
-    versions: ['1'],
-    image: (version) => `axllent/mailpit:v${version}`,
+    // Mailpit publishes `v<major>.<minor>` and `latest` — there is NO bare
+    // `v1`, unlike Meilisearch. `v1` 404s at the registry, which is a failure
+    // that no unit test can see and that the live smoke found on the first run.
+    versions: ['1.30', 'latest'],
+    image: (version) => `axllent/mailpit:${version === 'latest' ? 'latest' : `v${version}`}`,
     ports: [
         { name: 'smtp', container: 1025, kind: 'tcp', primary: true },
         { name: 'ui', container: 8025, kind: 'http' },
