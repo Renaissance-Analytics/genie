@@ -251,7 +251,11 @@ the Floor) — instead of only describing a change or result, surface the actual
 file. It REUSES an editor panel already open for this workspace (adds the file as
 a tab and focuses it; just focuses the tab if it's already open), or opens a NEW
 panel when none is open. Args: \`path\` (workspace-relative — preferred — or
-absolute; System-workspace agents pass an absolute/system path), optional \`line\`
+absolute; System-workspace agents pass an absolute/system path). A relative
+\`path\` resolves against the WORKSPACE ROOT — not your shell's cwd — and keeps
+its full subdirectory path (\`.ai/plans/x.md\` opens \`<workspace>/.ai/plans/x.md\`);
+an absolute path inside ANOTHER Genie workspace opens in THAT workspace's editor,
+and one no workspace owns opens in the System workspace. Optional \`line\`
 (1-based) to reveal, and the usual \`terminalId\` (your \`GENIE_TERMINAL_ID\`) for
 exact workspace resolution (required when the workspace has several terminals). Benign DISPLAY
 action — like \`imDone\` it just surfaces something, so there's NO approval prompt.
