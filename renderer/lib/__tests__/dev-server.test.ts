@@ -1,0 +1,253 @@
+import { describe, expect, it } from 'vitest';
+import {
+    canOpenInBrowser,
+    devServerGuidance,
+    holdersNote,
+    isolationNote,
+    optionCaveat,
+    optionLabel,
+    railSitesTitle,
+    railSitesTone,
+    runtimeSummary,
+    serviceStatusLabel,
+    serviceStatusTone,
+    serviceTitle,
+    siteReach,
+    siteStatusLabel,
+    siteStatusTone,
+} from '../dev-server';
+import type { DevServiceInfo, DevSiteInfo } from '../genie';
+
+/**
+ * The Site Manager's DECISIONS (Tynn #234 P4), separated from its wiring.
+ *
+ * The renderer test environment has no DOM, so everything the panel decides
+ * lives here as a pure function and the component is the wiring — the same
+ * split the beta.218 Site Manager used, kept because it is what makes the
+ * judgements below assertable at all.
+ *
+ * Two of them are the reason this file exists rather than a handful of
+ * ternaries inline:
+ *
+ *   - **`running` is not `ready`.** A container can be up while the dev server
+ *     inside it has not bound its port. Reporting that as "running" sends the
+ *     user to a URL that refuses the connection, which reads as a Genie bug.
+ *   - **A shared engine's isolation is not uniform.** Postgres and MySQL give
+ *     server-enforced database+role separation; the namespace engines (Mailpit,
+ *     Meilisearch, MinIO) share a master key and are separated by a prefix. A
+ *     UI that renders both as "isolated" is lying about where data can leak.
+ */
+
+const SITE: DevSiteInfo = {
+    id: 'site-1',
+    name: 'web',
+    genName: 'web.acme.gen',
+    repo: 'app',
+    runMode: 'detected',
+    kind: 'http',
+    enabled: true,
+    state: 'running',
+    ready: true,
+    port: 5173,
+    hostPort: 49_812,
+    origin: 'https://web.acme.gen',
+    localOrigin: 'http://127.0.0.1:49812',
+};
+
+const PG: DevServiceInfo = {
+    id: 'svc-1',
+    engine: 'postgres',
+    version: '16',
+    engineKey: 'postgres-16',
+    dedicated: false,
+    enabled: true,
+    state: 'running',
+    ready: true,
+    holders: 3,
+    envKeys: ['DATABASE_URL', 'PGHOST'],
+};
+
+// --- a site's state ---------------------------------------------------------
+
+describe('site status', () => {
+    it('separates RUNNING from READY — a container that is up is not a site that answers', () => {
+        expect(siteStatusTone(SITE)).toBe('running');
+        expect(siteStatusTone({ ...SITE, ready: false })).toBe('starting');
+        expect(siteStatusLabel({ ...SITE, ready: false })).toMatch(/has not answered|not answered/i);
+    });
+
+    it('shows the runtime’s REASON on a failure, never a bare "failed"', () => {
+        const label = siteStatusLabel({
+            ...SITE,
+            state: 'failed',
+            ready: undefined,
+            error: 'Building app’s Dockerfile failed: no such file',
+        });
+        expect(siteStatusTone({ ...SITE, state: 'failed' })).toBe('failed');
+        expect(label).toContain('no such file');
+    });
+
+    it('refuses to offer the browser for a site that is not answering, or is not http', () => {
+        expect(canOpenInBrowser(SITE)).toBe(true);
+        // Up but not bound: the browser would show a connection refusal and the
+        // user would blame Genie.
+        expect(canOpenInBrowser({ ...SITE, ready: false })).toBe(false);
+        expect(canOpenInBrowser({ ...SITE, state: 'stopped' })).toBe(false);
+        // A TCP surface is published and listed; there is nothing to open.
+        expect(canOpenInBrowser({ ...SITE, kind: 'tcp' })).toBe(false);
+    });
+
+    it('reports BOTH reaches, because they are different machines’ answers', () => {
+        // The `.gen` origin works from a connected remote AND here; the loopback
+        // one only here. An agent or a user pasting the wrong one is the single
+        // most common dev-server confusion.
+        expect(siteReach(SITE)).toEqual({
+            browser: 'https://web.acme.gen',
+            local: 'http://127.0.0.1:49812',
+        });
+        expect(siteReach({ ...SITE, state: 'stopped', origin: undefined, localOrigin: undefined }))
+            .toEqual({ browser: null, local: null });
+    });
+});
+
+// --- the rail indicator -----------------------------------------------------
+
+describe('the rail sites indicator', () => {
+    it('is hidden for a workspace that defines nothing', () => {
+        expect(railSitesTone([], 'acme')).toBeNull();
+        expect(railSitesTone([{ ...SITE, enabled: false }], 'acme')).toBeNull();
+    });
+
+    it('lets RUNNING win over failed — an amber dot on a workspace that is serving is a lie', () => {
+        const rows = [
+            { ...SITE, id: 'a', state: 'failed' as const },
+            { ...SITE, id: 'b' },
+        ];
+        expect(railSitesTone(rows, 'acme')).toBe('running');
+    });
+
+    it('still surfaces a failure when nothing else is up', () => {
+        expect(railSitesTone([{ ...SITE, state: 'failed' }], 'acme')).toBe('failed');
+        expect(railSitesTone([{ ...SITE, state: 'stopped' }], 'acme')).toBe('idle');
+    });
+
+    it('counts what it found in the tooltip', () => {
+        const title = railSitesTitle([{ ...SITE }, { ...SITE, id: 'b', state: 'failed' }], 'acme');
+        expect(title).toContain('2 dev sites');
+        expect(title).toContain('1 running');
+        expect(title).toContain('1 failed');
+    });
+});
+
+// --- a service --------------------------------------------------------------
+
+describe('service status', () => {
+    it('names the engine and its version, because the VERSION is the sharing unit', () => {
+        expect(serviceTitle(PG)).toBe('Postgres 16');
+        expect(serviceTitle({ ...PG, engine: 'minio', version: '2025' })).toBe('MinIO 2025');
+        expect(serviceTitle({ ...PG, engine: 'custom', version: '' })).toBe('Custom image');
+    });
+
+    it('says how many OTHER workspaces a release would leave holding the engine', () => {
+        // The point of the shared model, and the thing that surprises people:
+        // "stop" here does not stop the container unless you were the last one.
+        expect(holdersNote({ ...PG, holders: 3 })).toMatch(/3 workspaces/);
+        expect(holdersNote({ ...PG, holders: 1 })).toMatch(/only this workspace/i);
+        expect(holdersNote({ ...PG, dedicated: true, holders: 1 })).toMatch(/dedicated/i);
+        expect(holdersNote({ ...PG, state: 'stopped', holders: undefined })).toBeNull();
+    });
+
+    it('tells the truth about how strong each provisioning strategy really is', () => {
+        // sql-database-role is server-enforced; a namespace engine is a shared
+        // master key and a prefix. Rendering them identically would claim an
+        // isolation that does not exist.
+        expect(isolationNote('sql-database-role')).toMatch(/own database and role/i);
+        expect(isolationNote('redis-acl')).toMatch(/ACL user/i);
+        const namespace = isolationNote('namespace');
+        expect(namespace).toMatch(/shares?.*(key|credential)/i);
+        expect(namespace).not.toMatch(/cannot reach/i);
+    });
+
+    it('surfaces a failed engine’s reason', () => {
+        expect(serviceStatusTone({ ...PG, state: 'failed' })).toBe('failed');
+        expect(
+            serviceStatusLabel({ ...PG, state: 'failed', error: 'Postgres never became ready' }),
+        ).toContain('never became ready');
+        expect(serviceStatusTone({ ...PG, ready: false })).toBe('starting');
+    });
+});
+
+// --- the runtime ------------------------------------------------------------
+
+describe('the container runtime', () => {
+    it('reports which runtime is driving', () => {
+        const s = runtimeSummary({ kind: 'docker', version: '29.6.1' });
+        expect(s.tone).toBe('running');
+        expect(s.label).toMatch(/Docker/);
+        expect(s.label).toContain('29.6.1');
+    });
+
+    it('turns "no runtime" into the install sentence, not an error', () => {
+        // The ordinary first-run state on most desktops. It has to read as a
+        // next step, because that is exactly what it is.
+        const s = runtimeSummary({ kind: 'none', installHint: 'Install Docker Desktop.' });
+        expect(s.tone).toBe('idle');
+        expect(s.guidance).toBe('Install Docker Desktop.');
+    });
+
+    it('always has SOMETHING to say when there is no runtime, even with no hint', () => {
+        expect(runtimeSummary({ kind: 'none' }).guidance).toBeTruthy();
+        expect(runtimeSummary(null).guidance).toBeTruthy();
+    });
+
+    it('guides a remote window to the machine that actually runs the containers', () => {
+        expect(devServerGuidance('remote')).toMatch(/machine itself|on that machine/i);
+        expect(devServerGuidance('ready')).toBeNull();
+    });
+});
+
+// --- the run-option picker --------------------------------------------------
+
+describe('the layered run options', () => {
+    it('leads with what the repo SAID about itself, and names the file it read', () => {
+        expect(
+            optionLabel({
+                runMode: 'dockerfile',
+                source: 'Dockerfile',
+                reason: 'ships a Dockerfile',
+                confident: false,
+            }),
+        ).toBe('Dockerfile — Dockerfile');
+        expect(
+            optionLabel({
+                runMode: 'detected',
+                stack: 'node',
+                source: 'package.json',
+                reason: 'npm run dev',
+                confident: true,
+                port: 5173,
+            }),
+        ).toBe('Node — package.json');
+    });
+
+    it('shows the GUESS, so nobody publishes 8080 and reports a working site', () => {
+        expect(
+            optionCaveat({
+                runMode: 'detected',
+                stack: 'go',
+                source: 'go.mod',
+                reason: 'go run .',
+                confident: false,
+                needs: 'the port this program listens on',
+            }),
+        ).toContain('the port this program listens on');
+        expect(
+            optionCaveat({
+                runMode: 'detected',
+                source: 'artisan',
+                reason: 'artisan serve',
+                confident: true,
+            }),
+        ).toBeNull();
+    });
+});

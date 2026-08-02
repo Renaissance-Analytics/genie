@@ -172,6 +172,16 @@ export interface DevSiteManager {
     start(workspaceId: string, siteId: string): Promise<DevSiteStatus>;
     stop(siteId: string): Promise<void>;
     restart(workspaceId: string, siteId: string): Promise<DevSiteStatus>;
+    /**
+     * Re-attach to site containers that are ALREADY running — never start one.
+     *
+     * A site container carries no restart policy, so it does not survive a
+     * reboot; but it easily survives a Genie restart or an app update, and a
+     * manager that does not know about it reports the site as stopped while it
+     * serves — which means {@link genSites} drops it and `<name>.gen` resolves
+     * nowhere. This is the counterpart of quitting without stopping anything.
+     */
+    adopt(): Promise<void>;
     /** Configured sites + live state. All workspaces, or one. */
     list(workspaceId?: string): DevSiteRow[];
     /** A bounded log tail for a running site. Never throws. */
@@ -196,6 +206,10 @@ interface Live {
 }
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** How long an ADOPTED container gets to answer before it is reported not-ready.
+ *  Far shorter than a start's budget — see {@link DevSiteManager.adopt}. */
+const ADOPT_PROBE_MS = 2_000;
 
 export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
     const devImage = deps.image ?? GENIE_DEV_BASE_IMAGE;
@@ -409,6 +423,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         siteId: string,
         config: DevSiteConfig,
         containerId: string,
+        probeTimeoutMs: number = readyTimeoutMs,
     ): Promise<DevSiteStatus> {
         const mappings = await runtime.portMappings(containerId);
         const mapping =
@@ -426,7 +441,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             port: mapping.hostPort,
             kind: config.kind,
             hostHeader: config.upstreamHost ?? config.genName,
-            timeoutMs: readyTimeoutMs,
+            timeoutMs: probeTimeoutMs,
         });
         live.set(siteId, {
             workspaceId,
@@ -504,6 +519,33 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         async restart(workspaceId, siteId) {
             await stop(siteId);
             return start(workspaceId, siteId);
+        },
+
+        async adopt() {
+            const { runtime } = await deps.resolveRuntime();
+            if (!runtime) return;
+            for (const workspace of deps.listWorkspaces()) {
+                let running: Awaited<ReturnType<ContainerRuntime['ps']>>;
+                try {
+                    running = await runtime.ps(workspace.id);
+                } catch {
+                    // One unreadable workspace must not abandon the others —
+                    // this runs once at boot and gets no second chance.
+                    continue;
+                }
+                for (const [siteId, config] of Object.entries(deps.devSitesFor(workspace.id))) {
+                    if (live.has(siteId)) continue;
+                    const name = siteContainerNameFor(workspace.id, config.name);
+                    const found = running.find((c) => c.name === name && c.state === 'running');
+                    if (!found) continue;
+                    // A SHORT probe, unlike a start's. The container is already
+                    // up, so a healthy site answers at once; one that does not
+                    // is reported `ready: false` — a visible, recoverable state
+                    // — rather than holding boot for the full start budget once
+                    // per broken site.
+                    await recordLive(runtime, workspace.id, siteId, config, found.id, ADOPT_PROBE_MS);
+                }
+            }
         },
 
         list(workspaceId) {

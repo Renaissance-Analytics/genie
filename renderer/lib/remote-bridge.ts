@@ -155,49 +155,34 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
     };
 
     /**
-     * Genie's own hosting runtime (#232) — DELIBERATELY INERT in a remote window.
+     * The container DEV SERVER (#234) — DELIBERATELY INERT in a remote window.
      *
      * `...local` at the bottom of this file would otherwise pass the local
-     * preload's `hosting` straight through, and a host window drives ANOTHER
-     * machine: every call would configure and start sites on the CLIENT while
-     * the surface around it lists the HOST's workspaces. Silently hosting the
-     * wrong machine's directories is worse than not offering it, so the bridge
-     * reports "nothing, unavailable" and master.tsx hides the entry points.
+     * preload's `devServer` straight through, and a host window drives ANOTHER
+     * machine: every call would start containers on the CLIENT while the surface
+     * around it lists the HOST's workspaces. And a service is STATE — a Postgres
+     * initialised on the client, with its credentials injected into containers
+     * that live on the host, points the app at a server on a machine it cannot
+     * reach. Silently serving the wrong machine is worse than not offering it,
+     * so the bridge reports "nothing, unavailable" and master.tsx hides the
+     * entry points.
      *
-     * Host-sourcing this properly needs `/api/hosting/*` on the host, the same
-     * way `sites` is carried — a follow-on, not a bridge shim.
+     * Host-sourcing this properly needs `/api/dev-server/*` on the host, the
+     * same way `sites` is carried — P5, not a bridge shim.
      */
-    const unavailable = { ok: false as const, error: 'Hosting is managed on the machine itself.' };
-    const hosting: GenieApi['hosting'] = {
-        list: async () => [],
-        candidates: async () => [],
-        set: async () => unavailable,
-        remove: async () => ({ ok: false }),
-        start: async () => unavailable,
-        stop: async () => ({ ok: false }),
-        runtimeStatus: async () => null,
-        installRuntime: async () => unavailable,
-    };
-
-    /**
-     * The backing SERVICES (#232 P3) — inert for exactly the reason `hosting` is,
-     * and more sharply: a database is STATE. Passing these through would initialise
-     * a Postgres cluster on the CLIENT and write its credentials into a `.env`
-     * that lives on the HOST, so the app would be pointed at a server on a machine
-     * it cannot reach. The Services tab reads this as its "managed over there"
-     * state (`servicesUnavailableNote('remote')`) and offers no actions.
-     *
-     * Host-sourcing it needs `/api/services/*` on the host, alongside the
-     * `/api/hosting/*` the sites half is waiting on.
-     */
-    const services: GenieApi['services'] = {
-        list: async () => [],
-        set: async () => unavailable,
-        remove: async () => ({ ok: false }),
-        start: async () => unavailable,
-        stop: async () => ({ ok: false }),
-        logs: async () => '',
-        writeEnv: async () => ({ path: null, changed: false, conflicts: [] }),
+    const devServer: GenieApi['devServer'] = {
+        site: async () => ({
+            ok: false,
+            error: 'The Dev Server is managed on the machine itself.',
+            sites: [],
+        }),
+        service: async () => ({
+            ok: false,
+            error: 'The Dev Server is managed on the machine itself.',
+            services: [],
+        }),
+        runtimeStatus: async () => ({ kind: 'none' }),
+        repos: async () => [],
     };
 
     // The host's terminal-spec model (the grid's backbone) — pass-through.
@@ -758,8 +743,7 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         clipboard,
         issueWatch,
         sites,
-        hosting,
-        services,
+        devServer,
         settings,
         agentInbox,
         questions,

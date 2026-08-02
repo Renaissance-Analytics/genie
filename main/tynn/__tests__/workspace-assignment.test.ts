@@ -547,12 +547,12 @@ describe('hostGenieMcpProvisioner (genie #55 loopback glue)', () => {
 });
 
 describe('deprovisionAssignedWorkspace', () => {
-    it('stops terminals, unregisters, and broadcasts an assignment-managed workspace', () => {
+    it('stops terminals, unregisters, and broadcasts an assignment-managed workspace', async () => {
         const { deps, stopTerminals, remove, notifyChanged, existing, managed } = fakeDeps();
         existing.push({ id: 'p1' });
         managed.push({ id: 'p1' });
 
-        const r = deprovisionAssignedWorkspace('p1', deps);
+        const r = await deprovisionAssignedWorkspace('p1', deps);
 
         expect(r.status).toBe('deprovisioned');
         expect(r.stopped).toEqual(['p1-t1']);
@@ -561,11 +561,11 @@ describe('deprovisionAssignedWorkspace', () => {
         expect(notifyChanged).toHaveBeenCalledTimes(1);
     });
 
-    it('REFUSES a present-but-unmanaged workspace (never touches ops/user rows)', () => {
+    it('REFUSES a present-but-unmanaged workspace (never touches ops/user rows)', async () => {
         const { deps, stopTerminals, remove, notifyChanged, existing } = fakeDeps();
         existing.push({ id: 'ops1' }); // exists but NOT in managed
 
-        const r = deprovisionAssignedWorkspace('ops1', deps);
+        const r = await deprovisionAssignedWorkspace('ops1', deps);
 
         expect(r.status).toBe('skipped');
         expect(stopTerminals).not.toHaveBeenCalled();
@@ -573,16 +573,16 @@ describe('deprovisionAssignedWorkspace', () => {
         expect(notifyChanged).not.toHaveBeenCalled();
     });
 
-    it('is an idempotent no-op (absent) when there is no such workspace', () => {
+    it('is an idempotent no-op (absent) when there is no such workspace', async () => {
         const { deps, remove } = fakeDeps();
-        const r = deprovisionAssignedWorkspace('ghost', deps);
+        const r = await deprovisionAssignedWorkspace('ghost', deps);
         expect(r.status).toBe('absent');
         expect(remove).not.toHaveBeenCalled();
     });
 
-    it('treats an empty id as absent', () => {
+    it('treats an empty id as absent', async () => {
         const { deps, remove } = fakeDeps();
-        expect(deprovisionAssignedWorkspace('', deps).status).toBe('absent');
+        expect((await deprovisionAssignedWorkspace('', deps)).status).toBe('absent');
         expect(remove).not.toHaveBeenCalled();
     });
 });

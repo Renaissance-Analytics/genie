@@ -8,22 +8,6 @@ import {
     type TunnelSiteConfig,
 } from './mobile/hosts';
 import {
-    hostedSiteIdFor,
-    parseHostedSites,
-    sanitizeHostedSitePatch,
-    type HostedSiteConfig,
-    type HostedSites,
-} from './hosting/sites-config';
-import {
-    parseWorkspaceServices,
-    sanitizeServicePatch,
-    serviceIdFor,
-    withCredentials,
-    type ServiceConfig,
-    type ServiceKind,
-    type WorkspaceServices,
-} from './hosting/services/config';
-import {
     devSiteIdFor,
     parseDevSites,
     sanitizeDevSitePatch,
@@ -891,6 +875,41 @@ export function runMigrations(d: Database.Database): void {
                 `);
             },
         },
+        {
+            // v34: DROP the beta.218 native-hosting columns (#234 P4).
+            //
+            // `hosted_sites` (v29) and `workspace_services` (v30) described the
+            // host-NATIVE hosting runtime — FrankenPHP, and Postgres/Redis
+            // fetched onto the user's machine — which P4 deletes. v31/v32 were
+            // deliberately NEW columns rather than reuses of these two, and this
+            // is the migration that collects on that decision: there is nothing
+            // to copy, because nothing was ever shared. A `dev_sites` row is not
+            // a converted `hosted_sites` row; a workspace that had native
+            // hosting configured simply no longer has it, and its Site Manager
+            // now offers the container path instead.
+            //
+            // Every earlier version is left exactly as it was, including the two
+            // ALTERs that add these columns. Rewriting v29/v30 into no-ops would
+            // make the chain lie about what it did, and it would mean a fresh
+            // database never exercises this DROP at all — so the one code path
+            // that has to work on every existing machine would be the one no
+            // test run ever touched.
+            //
+            // `ALTER TABLE ... DROP COLUMN` needs SQLite ≥ 3.35 (better-sqlite3
+            // ships far newer) and refuses a column that is indexed, unique, a
+            // primary key, or named in a CHECK/generated column. Both of these
+            // are plain unconstrained TEXT blobs, so neither restriction bites.
+            version: 34,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (cols.has('hosted_sites')) {
+                    db.exec(`ALTER TABLE workspaces DROP COLUMN hosted_sites`);
+                }
+                if (cols.has('workspace_services')) {
+                    db.exec(`ALTER TABLE workspaces DROP COLUMN workspace_services`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1300,30 +1319,18 @@ export interface WorkspaceRow {
      *  the §5 allowlist. NULL/absent reads as {} (nothing enabled) — resolve it
      *  via {@link getWorkspaceTunnelSites}, never parse here. */
     tunnel_sites?: string | null;
-    /** Per-workspace HOSTED sites (Genie's own hosting runtime, #232),
-     *  JSON-encoded ({ [siteId]: { enabled, hostname, kind, docroot } }). Unlike
-     *  `tunnel_sites` (carry what something else serves) these are the sites
-     *  GENIE serves. NULL/absent reads as {} (nothing hosted) — resolve it via
-     *  {@link getWorkspaceHostedSites}, never parse here. */
-    hosted_sites?: string | null;
-    /** Per-workspace BACKING SERVICES (#232 P3), JSON-encoded
-     *  ({ [serviceId]: { enabled, kind, password?, database? } }). What the
-     *  hosted sites CONNECT TO, as opposed to what `hosted_sites` serves.
-     *  NULL/absent reads as {} — resolve it via {@link getWorkspaceServices},
-     *  never parse here. */
-    workspace_services?: string | null;
     /** Per-workspace DEV SITES (the container Dev Server, #234 P2), JSON-encoded
      *  ({ [siteId]: { name, genName, repo, runMode, command?, port?, … } }).
-     *  The container-substrate sibling of `hosted_sites`: those are served by the
-     *  host-native runtime, these by a container in the workspace sandbox.
+     *  The sibling of `tunnel_sites` and its opposite: those carry what
+     *  something else on this machine serves, these are what GENIE serves, from
+     *  a container in the workspace sandbox.
      *  NULL/absent reads as {} — resolve via {@link getWorkspaceDevSites}. */
     dev_sites?: string | null;
     /** Per-workspace DEV SERVICES (the container Dev Server, #234 P3),
      *  JSON-encoded ({ [serviceId]: { engine, version, dedicated, password, … } }).
-     *  The container-substrate sibling of `workspace_services`: those are
-     *  host-native engines fetched per workspace, these are this workspace's
-     *  slice — its database, role and credentials — of a SHARED engine
-     *  container. NULL/absent reads as {} — resolve via
+     *  What this workspace's dev sites CONNECT TO: its slice — database, role
+     *  and credentials — of a SHARED engine container.
+     *  NULL/absent reads as {} — resolve via
      *  {@link getWorkspaceDevServices}. */
     dev_services?: string | null;
 }
@@ -1868,72 +1875,11 @@ export function setWorkspaceTunnelSite(
     setWorkspaceTunnelSites(id, { ...current, [siteId]: merged });
 }
 
-// Hosted sites (Genie's own hosting runtime, #232) ----------------------
-//
-// The sibling of tunnel_sites: those say "carry what something else serves",
-// these say "GENIE serves this, from this document root". Same single-column
-// JSON pattern, same opaque siteId key — which is what lets a hosted site
-// replace a discovered one in the Testing Browser's target map without any new
-// resolution path. Parse/sanitize live in main/hosting/sites-config.ts.
-
-/** This workspace's stored hosted-site configs (NULL/absent ⇒ {} = nothing
- *  hosted). Keyed by {@link hostedSiteIdFor}. */
-export function getWorkspaceHostedSites(id: string): HostedSites {
-    const row = getDb()
-        .prepare<[string], { hosted_sites: string | null } | undefined>(
-            'SELECT hosted_sites FROM workspaces WHERE id = ?',
-        )
-        .get(id);
-    return parseHostedSites(row?.hosted_sites ?? null);
-}
-
-/** Replace this workspace's whole hosted-site map (JSON-encoded). */
-export function setWorkspaceHostedSites(id: string, sites: HostedSites): void {
-    getDb()
-        .prepare('UPDATE workspaces SET hosted_sites = ? WHERE id = ?')
-        .run(JSON.stringify(sites), id);
-}
-
-/**
- * Merge ONE hosted site into this workspace's map, returning its id.
- *
- * The key is DERIVED from the (sanitized) hostname rather than supplied, so the
- * stored id and the stored hostname can never disagree — a mismatch there would
- * mean the runtime serves one vhost while the Testing Browser resolves another.
- * Returns null when the patch carries no usable hostname and none is stored.
- */
-export function setWorkspaceHostedSite(
-    id: string,
-    patch: Partial<HostedSiteConfig> & { siteId?: string },
-): string | null {
-    const current = getWorkspaceHostedSites(id);
-    const clean = sanitizeHostedSitePatch(patch);
-    const hostname = clean.hostname ?? (patch.siteId ? current[patch.siteId]?.hostname : undefined);
-    if (!hostname) return null;
-    const siteId = hostedSiteIdFor(hostname);
-    const previous = (patch.siteId ? current[patch.siteId] : undefined) ?? current[siteId] ?? {};
-    const merged = { ...previous, ...clean, hostname } as HostedSiteConfig;
-    const next = { ...current, [siteId]: merged };
-    // Renaming a site's hostname moves it to a new key; drop the old one so the
-    // map never holds two entries for one site.
-    if (patch.siteId && patch.siteId !== siteId) delete next[patch.siteId];
-    setWorkspaceHostedSites(id, next);
-    return siteId;
-}
-
-/** Forget one hosted site entirely (the Site Manager's "remove"). */
-export function deleteWorkspaceHostedSite(id: string, siteId: string): void {
-    const current = getWorkspaceHostedSites(id);
-    if (!(siteId in current)) return;
-    const next = { ...current };
-    delete next[siteId];
-    setWorkspaceHostedSites(id, next);
-}
-
 // Dev sites (the container Dev Server, #234 P2) --------------------------
 //
-// The container-substrate sibling of hosted_sites. Same single-column JSON
-// pattern; the id is workspace-SCOPED (two workspaces can each have a `web`).
+// The sibling of tunnel_sites and its opposite: those carry what something else
+// serves, these are what GENIE serves. Same single-column JSON pattern; the id
+// is workspace-SCOPED (two workspaces can each have a `web`).
 // Parse/sanitize live in main/dev-server/sites-config.ts.
 
 /** This workspace's stored dev sites (NULL/absent ⇒ {} = none defined). */
@@ -2135,76 +2081,6 @@ export function getOrCreateDevServiceEngine(req: {
  *  volume, since the credential is baked into the data directory. */
 export function deleteDevServiceEngine(recordKey: string): void {
     getDb().prepare('DELETE FROM dev_service_engines WHERE key = ?').run(recordKey);
-}
-
-// Backing services (#232 P3) ---------------------------------------------
-//
-// The companion of hosted_sites: those say what Genie SERVES, these say what
-// those sites CONNECT TO. Same single-column JSON pattern, same opaque id key.
-// Parse/sanitize/credential-minting live in main/hosting/services/config.ts.
-
-/** This workspace's configured services (NULL/absent ⇒ {} = none). Keyed by
- *  {@link serviceIdFor}. */
-export function getWorkspaceServices(id: string): WorkspaceServices {
-    const row = getDb()
-        .prepare<[string], { workspace_services: string | null } | undefined>(
-            'SELECT workspace_services FROM workspaces WHERE id = ?',
-        )
-        .get(id);
-    return parseWorkspaceServices(row?.workspace_services ?? null);
-}
-
-/** Replace this workspace's whole service map (JSON-encoded). */
-export function setWorkspaceServices(id: string, services: WorkspaceServices): void {
-    getDb()
-        .prepare('UPDATE workspaces SET workspace_services = ? WHERE id = ?')
-        .run(JSON.stringify(services), id);
-}
-
-/**
- * Merge ONE service into this workspace's map, returning its id.
- *
- * The key is DERIVED from (workspace, kind) rather than supplied, so a workspace
- * can never accumulate two Postgres entries fighting over one data directory.
- *
- * Credentials are minted HERE, on the way in, and only when absent — see
- * `withCredentials`. Doing it on write rather than on read is what makes the
- * password stable: regenerating it when the config is read would invalidate the
- * `.env` the user's app is already using.
- */
-export function setWorkspaceService(
-    id: string,
-    kind: ServiceKind,
-    patch: Partial<ServiceConfig>,
-): string | null {
-    const clean = sanitizeServicePatch({ ...patch, kind });
-    if (!clean.kind) return null;
-    const serviceId = serviceIdFor(id, clean.kind);
-    const current = getWorkspaceServices(id);
-    const merged = withCredentials({
-        ...(current[serviceId] ?? {}),
-        ...clean,
-        kind: clean.kind,
-    } as ServiceConfig);
-    setWorkspaceServices(id, { ...current, [serviceId]: merged });
-    return serviceId;
-}
-
-/**
- * Forget one service entirely.
- *
- * Deliberately does NOT delete the data directory — that lives under userData
- * and is removed by the service manager, which knows whether the server holding
- * those files is still running. Dropping a database because a toggle was
- * switched off is not something to do as a side effect of a config write.
- */
-export function deleteWorkspaceService(id: string, kind: ServiceKind): void {
-    const serviceId = serviceIdFor(id, kind);
-    const current = getWorkspaceServices(id);
-    if (!(serviceId in current)) return;
-    const next = { ...current };
-    delete next[serviceId];
-    setWorkspaceServices(id, next);
 }
 
 // Fork → upstream cache -------------------------------------------------

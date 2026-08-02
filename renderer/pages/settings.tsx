@@ -32,12 +32,11 @@ import {
     type PluginDeveloperModeState,
     type SiteView,
     type SiteScheme,
-    type HostedSiteRow,
-    type HostingRuntimeStatus,
+    type DevRuntimeInfo,
     type TunnelSiteConfig,
     type WorkspaceRow,
 } from '../lib/genie';
-import { runningSites, runtimeSummary } from '../lib/hosting';
+import { runtimeSummary } from '../lib/dev-server';
 import {
     NAV_GROUPS,
     filterNavGroups,
@@ -633,10 +632,10 @@ export default function SettingsPage() {
 
                             </SearchGroup>
                         )}
-                        {show('hosting') && (
-                            <SearchGroup label="Hosting" searching={searching}>
+                        {show('dev-server') && (
+                            <SearchGroup label="Dev Server" searching={searching}>
 
-            <HostingSection
+            <DevServerSection
                 genieBrowserEnabled={s.genie_browser_enabled !== 'off'}
                 onGenieBrowserChange={(on) => {
                     const value = on ? 'on' : 'off';
@@ -3387,50 +3386,43 @@ function RemoteHostCard() {
 }
 
 /**
- * Settings → Hosting (Tynn #232) — the WORKSTATION half of Genie's own hosting.
+ * Settings → Dev Server (Tynn #234) — the WORKSTATION half of the container
+ * Dev Server.
  *
- * The split is deliberate (owner decision, 2026-08-01): which sites a workspace
- * serves is per-workspace and lives in the Workspace Site Manager; whether this
- * MACHINE has a browser to view them in and a PHP runtime to serve them with is
+ * The split is deliberate (owner decision, 2026-08-01): WHICH sites a workspace
+ * serves is per-workspace and lives in its Site Manager; whether this MACHINE
+ * has a container runtime to run them and a browser to view them in is
  * workstation-level and lives here, with the diagnostics.
  *
- * The diagnostics answer the three questions a broken preview raises — is the
- * browser on, is the runtime here, and what is actually being served right now
- * — so the answer is one page rather than a support conversation.
+ * The diagnostics answer the two questions a dead preview raises — is there a
+ * runtime, and is the browser on — so the answer is one page rather than a
+ * support conversation. Everything here is a READ: opening this page must never
+ * pull an image or start a container as a side effect of being looked at.
  */
-function HostingSection({
+function DevServerSection({
     genieBrowserEnabled,
     onGenieBrowserChange,
 }: {
     genieBrowserEnabled: boolean;
     onGenieBrowserChange: (on: boolean) => void;
 }) {
-    const [runtime, setRuntime] = useState<HostingRuntimeStatus | null>(null);
-    const [sites, setSites] = useState<HostedSiteRow[]>([]);
-    const [installing, setInstalling] = useState(false);
-    const [message, setMessage] = useState<string | null>(null);
+    const [runtime, setRuntime] = useState<DevRuntimeInfo | null>(null);
 
     const refresh = useCallback(() => {
         void api()
-            .hosting.runtimeStatus()
+            .devServer.runtimeStatus()
             .then(setRuntime)
-            .catch(() => setRuntime(null));
-        void api()
-            .hosting.list()
-            .then(setSites)
-            .catch(() => setSites([]));
+            .catch(() => setRuntime({ kind: 'none' }));
     }, []);
 
     useEffect(() => {
         refresh();
         // Push-driven, like every other live surface: main fires this whenever a
-        // site is configured, starts, stops, or the runtime lands.
-        return api().on.hostingChanged(refresh);
+        // site or service is configured, starts or stops.
+        return api().on.devServerChanged(refresh);
     }, [refresh]);
 
     const summary = runtimeSummary(runtime);
-    const live = runningSites(sites);
-    const failed = sites.filter((s) => s.enabled && s.state === 'failed');
 
     return (
         <>
@@ -3440,7 +3432,7 @@ function HostingSection({
             >
                 <SettingRow
                     label="Enable the Genie Browser"
-                    desc="On by default. It renders this machine's hosted and tunnelled sites with a valid https lock and device presets. Turning it off means a .gen site opens nowhere."
+                    desc="On by default. It renders this machine's dev-server and tunnelled sites with a valid https lock and device presets. Turning it off means a .gen site opens nowhere."
                     keywords="genie browser testing browser gen sites preview enable"
                 >
                     <Switch
@@ -3451,117 +3443,29 @@ function HostingSection({
             </SetSection>
 
             <SetSection
-                title="Hosting runtime"
-                desc="What Genie needs to serve a site itself, rather than tunnelling one something else started"
-                status={summary.tone === 'failed' ? 'Unavailable' : undefined}
-                statusColor={summary.tone === 'failed' ? 'var(--rose-500)' : undefined}
+                title="Container runtime"
+                desc="What Genie runs a workspace's dev servers and services in — one container per site, sandboxed to its workspace"
             >
                 <SettingRow
-                    label="PHP runtime (FrankenPHP)"
+                    label="Docker or Podman"
                     desc={summary.label}
-                    keywords="frankenphp php runtime install download hosting caddy"
+                    keywords="docker podman container runtime dev server engine install"
                 >
-                    {summary.installable ? (
-                        <Action
-                            size="sm"
-                            color="blue"
-                            icon="download"
-                            disabled={installing}
-                            onClick={async () => {
-                                setInstalling(true);
-                                setMessage(null);
-                                try {
-                                    const res = await api().hosting.installRuntime();
-                                    setMessage(
-                                        res.ok
-                                            ? 'FrankenPHP installed — PHP sites now start without a download.'
-                                            : res.error ?? 'The download failed.',
-                                    );
-                                } finally {
-                                    setInstalling(false);
-                                    refresh();
-                                }
-                            }}
-                        >
-                            {installing ? 'Downloading…' : 'Download now'}
-                        </Action>
-                    ) : (
-                        <Text size="xs" className="text-zinc-500">
-                            {runtime?.installed ? runtime.version : '—'}
-                        </Text>
-                    )}
+                    <span className={`site-dot site-${summary.tone}`} aria-hidden="true" />
                 </SettingRow>
 
-                {message && <div className="set-note">{message}</div>}
-
-                {runtime?.installed && (
+                {summary.guidance ? (
                     <div className="set-note">
-                        Installed at <code>{runtime.installDir}</code>. It lives in Genie&apos;s
-                        user data so it survives app updates, and a newer version installs
-                        alongside rather than over a runtime that may be serving a site.
+                        {summary.guidance} Genie re-detects on every action, so once one is
+                        installed there is nothing to restart — and it never downloads anything
+                        because you opened this page.
                     </div>
-                )}
-            </SetSection>
-
-            <SetSection
-                title="Hosted sites"
-                desc="What this machine is serving right now. Set a workspace's sites up in its Site Manager."
-            >
-                <SettingRow
-                    label="Running"
-                    desc="Each site is served at ONE stable, same-origin URL — that is what makes it work in the Genie Browser and over a remote connection."
-                    keywords="hosted sites running url origin serve status diagnostics"
-                    vertical
-                >
-                    {live.length === 0 ? (
-                        <Text size="xs" className="text-zinc-500">
-                            Nothing hosted yet. Open a workspace&apos;s Site Manager (its
-                            server icon in the sidebar, or right-click the workspace) to
-                            enable a site.
-                        </Text>
-                    ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
-                            {live.map((site) => (
-                                <div
-                                    key={site.siteId}
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: 8,
-                                        minWidth: 0,
-                                    }}
-                                >
-                                    <span className="site-dot site-running" aria-hidden="true" />
-                                    <Text size="xs" style={{ fontWeight: 600 }}>
-                                        {site.hostname}
-                                    </Text>
-                                    <Text size="xs" className="text-zinc-500">
-                                        {site.origin}
-                                    </Text>
-                                    <span style={{ marginLeft: 'auto' }}>
-                                        <Action
-                                            size="sm"
-                                            variant="ghost"
-                                            icon="external-link"
-                                            onClick={() => void api().sites.open(site.genName)}
-                                        >
-                                            Open
-                                        </Action>
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </SettingRow>
-
-                {failed.length > 0 && (
-                    <div className="set-note bad">
-                        <strong>
-                            {failed.length} enabled site{failed.length === 1 ? '' : 's'} could not
-                            start.
-                        </strong>{' '}
-                        Open the workspace&apos;s Site Manager for the reason — the failure is
-                        kept per site, so it says which build or docroot is wrong.
+                ) : (
+                    <div className="set-note">
+                        Each workspace gets its own isolated container network and a dev
+                        container with the workspace mounted in. Set a workspace&apos;s sites
+                        and services up in its Site Manager — its server icon in the sidebar,
+                        or right-click the workspace.
                     </div>
                 )}
             </SetSection>

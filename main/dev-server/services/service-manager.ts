@@ -168,6 +168,20 @@ export interface DevServiceManager {
     acquire(workspaceId: string, serviceId: string): Promise<DevServiceStatus>;
     /** Let go. Detaches, and stops the engine when this was the last holder. */
     release(workspaceId: string, serviceId: string): Promise<void>;
+    /**
+     * Re-acquire the engines that are ALREADY running — never start one.
+     *
+     * An engine carries `restart: unless-stopped`, so after a reboot it is up
+     * with ZERO known holders. That is not a cosmetic gap: the first workspace
+     * that acquires it afterwards becomes its only holder, and its release then
+     * stops an engine every other workspace is still using. Adoption also
+     * RE-PROVISIONS, which is not optional — a Redis ACL user lives in memory
+     * and is gone the moment the container restarts.
+     *
+     * Engines that are NOT running stay stopped: boot must not pull images or
+     * start databases for workspaces nobody has opened.
+     */
+    adopt(): Promise<void>;
     /** Configured services + live state. All workspaces, or one. */
     list(workspaceId?: string): DevServiceRow[];
     /** A bounded log tail for the engine behind one service. Never throws. */
@@ -643,6 +657,39 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
     return {
         acquire,
         release,
+
+        async adopt() {
+            const { runtime } = await deps.resolveRuntime();
+            if (!runtime) return;
+            for (const workspace of deps.listWorkspaces()) {
+                for (const [serviceId, config] of Object.entries(
+                    deps.devServicesFor(workspace.id),
+                )) {
+                    if (!config.enabled || live.has(serviceId)) continue;
+                    const engineKey = engineKeyFor(config.engine, config.version);
+                    const dedicated =
+                        config.dedicated || Boolean(engineSpecFor(config.engine).alwaysDedicated);
+                    const containerName = serviceContainerNameFor(
+                        engineKey,
+                        dedicated ? workspace.id : undefined,
+                    );
+                    let found;
+                    try {
+                        found = (await runtime.psServices(engineKey)).find(
+                            (c) => c.name === containerName && c.state === 'running',
+                        );
+                    } catch {
+                        // One unreadable engine must not abandon the rest —
+                        // this runs once at boot and gets no second chance.
+                        continue;
+                    }
+                    // Not running: leave it. Adoption is for what Docker kept
+                    // alive, never a back door into starting things on boot.
+                    if (!found) continue;
+                    await acquire(workspace.id, serviceId);
+                }
+            }
+        },
 
         list(workspaceId) {
             const rows: DevServiceRow[] = [];

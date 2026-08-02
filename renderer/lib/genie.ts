@@ -280,143 +280,188 @@ export interface TunnelSiteConfig {
     }>;
 }
 
-/* --- Genie's own hosting runtime (#232) ---------------------------------- *
+/* --- the container DEV SERVER (#234) -------------------------------------- *
  *
  * The OPPOSITE of the `SiteView` types above. Those describe a site something
  * ELSE on the machine serves (Herd, `artisan serve`) which Genie may carry over
- * a tunnel; these describe the sites GENIE serves itself — a real server, a
- * built app, one stable same-origin port. The Workspace Site Manager drives
- * them via `api().hosting`.                                                   */
-
-/** How a hosted site's document root is served (mirrors main/hosting/types.ts). */
-export type HostedSiteKind = 'php' | 'static';
-
-/** A hosted site's lifecycle state (mirrors main/hosting/types.ts). */
-export type HostedState = 'stopped' | 'starting' | 'running' | 'failed';
-
-/** One configured hosted site plus what the runtime currently says about it
- *  (mirrors `HostedSiteRow` in main/hosting/manager.ts). */
-export interface HostedSiteRow {
-    workspaceId: string;
-    /** Opaque, stable id derived from the hostname — the key for set/remove. */
-    siteId: string;
-    /** Browser-facing vhost Genie serves (e.g. `tynn.test`). */
-    hostname: string;
-    /** The `.gen` name that addresses it in the Genie Browser. */
-    genName: string;
-    kind: HostedSiteKind;
-    /** Document root RELATIVE to the workspace. */
-    docroot: string;
-    /** Front controller / SPA shell file name. */
-    index?: string;
-    /** Strict opt-in — nothing is served until this is true. */
-    enabled: boolean;
-    state: HostedState;
-    backend: 'frankenphp' | 'static' | null;
-    /** The stable same-origin URL while running, else null. */
-    origin: string | null;
-    /** Why it is not running, when it failed. */
-    error?: string;
-}
-
-/** A site Genie DETECTED in a workspace and can offer to host (mirrors
- *  `SiteCandidate` in main/hosting/candidates.ts). */
-export interface HostedSiteCandidate {
-    /** The project directory it was found in, relative to the workspace. */
-    project: string;
-    name: string;
-    kind: HostedSiteKind;
-    /** Suggested document root, relative to the workspace. */
-    docroot: string;
-    /** Suggested vhost. */
-    hostname: string;
-    /** Why Genie thinks this is a site (shown in the row). */
-    reason: string;
-    /** Enabling it has to run the project's build first. */
-    needsBuild: boolean;
-}
-
-/** The PHP runtime's install state — the Workstation hosting diagnostics
- *  (mirrors `FrankenPhpStatus` in main/hosting/frankenphp-fetch.ts). */
-export interface HostingRuntimeStatus {
-    version: string;
-    installDir: string;
-    binaryPath: string;
-    extensionDir: string | null;
-    /** The binary is on disk — a PHP site starts without a download. */
-    installed: boolean;
-    /** Upstream publishes a build for this platform/arch at all. */
-    supported: boolean;
-    assetName: string | null;
-    platform: string;
-    arch: string;
-}
-
-/** A hosted-site config patch — send only what changed. `siteId` targets an
- *  existing site (so its hostname can be renamed). */
-export interface HostedSitePatch {
-    siteId?: string;
-    enabled?: boolean;
-    hostname?: string;
-    kind?: HostedSiteKind;
-    /** RELATIVE to the workspace; absolute or `..` paths are refused in main. */
-    docroot?: string;
-    index?: string;
-}
-
-/* --- backing SERVICES for hosted sites (#232 P3) -------------------------- *
+ * a tunnel; these describe what GENIE serves itself — a container in the
+ * workspace's sandbox, published to loopback and routed at `<name>.gen`.
  *
- * The other half of "hosted". `hosting` above is what Genie SERVES; these are
- * what those sites CONNECT TO — a per-workspace database and cache, each with
- * its own data directory, port and credential. Driven by the Site Manager's
- * Services tab via `api().services`.                                          */
+ * These mirror `main/mcp/protocol.ts` exactly, because the Site Manager and an
+ * MCP agent call the SAME main-side function (`runManageSite` /
+ * `runManageService`). Re-declared rather than imported for the same reason
+ * every other type here is: the renderer must not reach into main.            */
 
-/** What the hosted APP sees (mirrors main/hosting/services/types.ts). */
-export type ServiceKind = 'postgres' | 'redis';
+/** Which container runtime is driving, or why none is. */
+export interface DevRuntimeInfo {
+    /** `docker`, `podman`, or `none`. */
+    kind: string;
+    version?: string;
+    /** Present when `kind` is `none`: the sentence that says what to install. */
+    installHint?: string;
+}
 
-/** What Genie actually RUNS for a kind. Kept separate from the kind because the
- *  `redis` slot is served by Garnet — see `serviceEngineNote` in lib/services. */
-export type ServiceEngine = 'postgres' | 'garnet';
+/** One way a repo could be run — the layered site definition's offer. */
+export interface DevSiteRunOption {
+    runMode: string;
+    stack?: string;
+    /** The repo file that produced this option (`Dockerfile`, `go.mod`, …). */
+    source: string;
+    reason: string;
+    command?: string[];
+    port?: number;
+    /** False when something load-bearing here was guessed. */
+    confident: boolean;
+    /** Present when `confident` is false: what you must supply or check. */
+    needs?: string;
+}
 
-/** One configured service plus what its runtime currently says about it
- *  (mirrors `ServiceRow` in main/hosting/services/manager.ts). */
-export interface ServiceRow {
-    workspaceId: string;
-    /** Opaque, stable id derived from (workspace, kind). */
-    serviceId: string;
-    kind: ServiceKind;
-    /** Strict opt-in — nothing runs until this is true. */
+/** One configured dev site plus whatever is currently true about it. */
+export interface DevSiteInfo {
+    id: string;
+    name: string;
+    genName: string;
+    repo: string;
+    runMode: string;
+    kind: 'http' | 'tcp';
     enabled: boolean;
-    state: HostedState;
-    /** The loopback port it WOULD use, even while stopped. */
-    port: number;
-    /** Where the app dials while running, else null. */
-    endpoint: { host: string; port: number } | null;
-    /** The app's database (`postgres` only). */
-    database?: string;
-    /** The role the app connects as. NEVER the password — main does not send
-     *  it, because the only place it belongs is the app's own `.env`. */
-    user?: string;
+    /** running | stopped | failed */
+    state: string;
+    /** Whether the published port ANSWERED. `running` only says the container
+     *  is up; this says the dev server inside it has bound. */
+    ready?: boolean;
+    port?: number;
+    hostPort?: number;
+    origin?: string;
+    localOrigin?: string;
+    command?: string[];
+    image?: string;
     error?: string;
 }
 
-/** A service config patch. The password is deliberately absent: it is minted in
- *  main on first enable and never travels inbound. */
-export interface ServicePatch {
+export interface ManageSiteRequest {
+    action:
+        | 'list'
+        | 'detect'
+        | 'create'
+        | 'start'
+        | 'stop'
+        | 'restart'
+        | 'status'
+        | 'logs'
+        | 'open'
+        | 'remove';
+    name?: string;
+    repo?: string;
+    runMode?: string;
+    image?: string;
+    command?: string[];
+    port?: number;
+    env?: Record<string, string>;
+    kind?: 'http' | 'tcp';
+    genName?: string;
+    upstreamHost?: string;
     enabled?: boolean;
-    /** `postgres` only. Lowercase identifier; anything else is refused in main. */
-    database?: string;
+    id?: string;
+    tail?: number;
 }
 
-/** What writing the `.env` managed block did (mirrors `EnvWriteResult` in
- *  main/hosting/services/manager.ts). */
-export interface ServiceEnvWrite {
-    /** The `.env` written, or null when the workspace has none. */
-    path: string | null;
-    changed: boolean;
-    /** Managed keys the user ALSO assigns outside the block — their line is
-     *  untouched but superseded, which the Services tab reports. */
-    conflicts: string[];
+export interface ManageSiteResult {
+    ok: boolean;
+    error?: string;
+    sites: DevSiteInfo[];
+    affectedId?: string;
+    options?: DevSiteRunOption[];
+    applied?: DevSiteRunOption;
+    logs?: string;
+    runtime?: DevRuntimeInfo;
+}
+
+/** One reachable surface of a service, from BOTH sides of the boundary.
+ *
+ *  `host`/`port` are how a container ON THE WORKSPACE NETWORK dials the engine;
+ *  `hostPort`/`localAddress` are how THIS MACHINE does. A connection string
+ *  built from the second and handed to a container fails every time. */
+export interface DevServiceEndpoint {
+    name: string;
+    kind: 'http' | 'tcp';
+    host: string;
+    port: number;
+    hostPort?: number;
+    localAddress?: string;
+}
+
+/** One configured service plus whatever is currently true about it. */
+export interface DevServiceInfo {
+    id: string;
+    engine: string;
+    version: string;
+    /** `<engine>-<version>` — the unit engines are SHARED by. */
+    engineKey: string;
+    /** True when this workspace opted out of sharing and runs its own. */
+    dedicated: boolean;
+    enabled: boolean;
+    /** running | stopped | failed */
+    state: string;
+    ready?: boolean;
+    /** How many workspaces currently hold this engine (1 when dedicated). */
+    holders?: number;
+    endpoints?: DevServiceEndpoint[];
+    /** The per-workspace names carved out of the shared engine. */
+    namespace?: { identifier: string; dnsName: string };
+    /** The env keys injected into this workspace's site containers. */
+    envKeys?: string[];
+    error?: string;
+}
+
+/** One engine Genie can run, as the catalog offers it. */
+export interface DevServiceCatalogEntry {
+    engine: string;
+    label: string;
+    summary: string;
+    versions: string[];
+    defaultVersion?: string;
+    /** False for an engine that can only ever be dedicated (`custom`). */
+    shared: boolean;
+    /** `sql-database-role` | `redis-acl` | `namespace` — how strong the
+     *  per-workspace boundary inside a shared engine actually is. */
+    provision: string;
+}
+
+export interface ManageServiceRequest {
+    action:
+        | 'catalog'
+        | 'list'
+        | 'add'
+        | 'start'
+        | 'stop'
+        | 'status'
+        | 'logs'
+        | 'connection'
+        | 'dedicated'
+        | 'remove';
+    engine?: string;
+    version?: string;
+    dedicated?: boolean;
+    image?: string;
+    port?: number;
+    env?: Record<string, string>;
+    enabled?: boolean;
+    id?: string;
+    tail?: number;
+    purge?: boolean;
+}
+
+export interface ManageServiceResult {
+    ok: boolean;
+    error?: string;
+    services: DevServiceInfo[];
+    affectedId?: string;
+    catalog?: DevServiceCatalogEntry[];
+    /** `connection`: the env a site container is actually given. */
+    env?: Record<string, string>;
+    logs?: string;
+    runtime?: DevRuntimeInfo;
 }
 
 /** Per-bucket IssueWatch remediation policy (mirrors main/db.ts). The three count
@@ -1818,75 +1863,29 @@ export interface GenieApi {
         open: (genName: string) => Promise<{ ok: boolean; error?: string }>;
     };
     /**
-     * Genie's own HOSTING runtime (#232) — the sites GENIE serves, as opposed to
+     * The container DEV SERVER (#234) — the sites GENIE serves, as opposed to
      * `sites` above (what something else on the machine serves). Driven by the
-     * Workspace Site Manager and the Workstation hosting settings page.
+     * Workspace Site Manager and the Workstation Dev Server settings.
+     *
+     * TWO calls, mirroring the `manageSite` / `manageService` MCP tools: main
+     * runs literally the same function for an agent and for this, so the human
+     * surface can never drift from the agent one.
      *
      * LOCAL-ONLY for now: unlike `sites` these do NOT route to a host in a
      * remote window, so the Site Manager is offered on a local Floor only (see
-     * `isRemoteWindow`). Host-sourcing them needs `/api/hosting/*` on the host,
-     * which is a follow-on.
+     * `isRemoteWindow`). Host-sourcing them needs `/api/dev-server/*` on the
+     * host — P5.
      */
-    hosting: {
-        /** Configured sites + their live state; one workspace, or all. */
-        list: (workspaceId?: string) => Promise<HostedSiteRow[]>;
-        /** Sites Genie detected in a workspace that are not configured yet. */
-        candidates: (workspaceId: string) => Promise<HostedSiteCandidate[]>;
-        /** Create or update one site, then start/stop it to match `enabled`. */
-        set: (
-            workspaceId: string,
-            patch: HostedSitePatch,
-        ) => Promise<{ ok: boolean; siteId?: string; error?: string }>;
-        /** Forget a site entirely (and stop it). */
-        remove: (workspaceId: string, siteId: string) => Promise<{ ok: boolean }>;
-        /** Start / stop WITHOUT changing the stored `enabled` flag. */
-        start: (
-            workspaceId: string,
-            hostname: string,
-        ) => Promise<{ ok: boolean; status?: HostedSiteRow; error?: string }>;
-        stop: (siteId: string) => Promise<{ ok: boolean }>;
-        /** The PHP runtime's install state (offline — never downloads). */
-        runtimeStatus: () => Promise<HostingRuntimeStatus | null>;
-        /** Fetch the PHP runtime now (the ~277 MB first-use download), instead of
-         *  waiting for the first PHP site to trigger it. */
-        installRuntime: () => Promise<{ ok: boolean; error?: string }>;
-    };
-    /**
-     * The backing SERVICES a hosted site connects to (#232 P3) — a per-workspace
-     * database and cache. Driven by the Site Manager's Services tab.
-     *
-     * LOCAL-ONLY, exactly like `hosting` above and for the same reason: a remote
-     * window drives another machine, and starting a database on the CLIENT while
-     * the surface lists the HOST's workspaces would wire an app to a server that
-     * is not where its files are. Host-sourcing needs `/api/services/*` on the
-     * host — the same follow-on `/api/hosting/*` is.
-     */
-    services: {
-        /** Configured services + their live state; one workspace, or all. */
-        list: (workspaceId?: string) => Promise<ServiceRow[]>;
-        /** Create or update one service, converge it, and rewrite the `.env`
-         *  managed block. Enabling one is what CREATES it. */
-        set: (
-            workspaceId: string,
-            kind: ServiceKind,
-            patch?: ServicePatch,
-        ) => Promise<{ ok: boolean; serviceId?: string; env?: ServiceEnvWrite | null; error?: string }>;
-        /** Forget the service. Leaves its data directory on disk. */
-        remove: (
-            workspaceId: string,
-            kind: ServiceKind,
-        ) => Promise<{ ok: boolean; env?: ServiceEnvWrite | null; error?: string }>;
-        /** Start / stop WITHOUT changing the stored `enabled` flag. */
-        start: (
-            workspaceId: string,
-            kind: ServiceKind,
-        ) => Promise<{ ok: boolean; error?: string }>;
-        stop: (workspaceId: string, kind: ServiceKind) => Promise<{ ok: boolean }>;
-        /** The server log tail — why a service will not start. */
-        logs: (workspaceId: string, kind: ServiceKind) => Promise<string>;
-        /** Rewrite the `.env` managed block from the current config, and report
-         *  which of the user's own keys it supersedes. */
-        writeEnv: (workspaceId: string) => Promise<ServiceEnvWrite>;
+    devServer: {
+        /** Drive one workspace's SITES. */
+        site: (workspaceId: string, req: ManageSiteRequest) => Promise<ManageSiteResult>;
+        /** Drive one workspace's SERVICES. `catalog` answers with an empty
+         *  workspace id, so the picker can offer engines before any exist. */
+        service: (workspaceId: string, req: ManageServiceRequest) => Promise<ManageServiceResult>;
+        /** Which container runtime is driving, or why none is. Never downloads. */
+        runtimeStatus: () => Promise<DevRuntimeInfo>;
+        /** The repo subfolders a site can be created against. */
+        repos: (workspaceId: string) => Promise<string[]>;
     };
     mcp: {
         status: () => Promise<McpServerState>;
@@ -2954,11 +2953,11 @@ export interface GenieApi {
         /** The set of workspaces changed outside the renderer's own edits (e.g.
          *  MCP-provisioned child workspaces) — re-fetch the workspace list. */
         workspacesChanged: (cb: () => void) => () => void;
-        /** A hosted site was configured / started / stopped / removed (#232) —
-         *  the rail's sites icon and any open Site Manager re-read
-         *  `hosting.list()`. Push, never a poll: a site can come up long after
-         *  boot (a build, or the first PHP-runtime download). */
-        hostingChanged: (cb: () => void) => () => void;
+        /** A dev site or service was configured / started / stopped / removed
+         *  (#234) — the rail's sites icon and any open Site Manager re-read.
+         *  Push, never a poll: a site can come up long after boot (an image
+         *  pull, or a Dockerfile build). */
+        devServerChanged: (cb: () => void) => () => void;
         /** A file changed on disk in a watched workspace (an agent, a git op, a
          *  tool) — the Files panel re-lists its tree AND reloads ONLY the open
          *  tabs whose file is named in `changed` (forward-slashed rel paths). A

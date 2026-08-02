@@ -42,6 +42,14 @@ import type {
  * **The runtime's absence is data, not an exception.** Every result carries
  * `runtime`, so an agent that gets `ok: false` on a machine with no Docker reads
  * the install hint out of the same object instead of parsing a message.
+ *
+ * ## The human UX runs THIS code (P4)
+ *
+ * {@link runManageSite} is the whole tool with the agent's authorization lifted
+ * off the front. `manageSiteForMcp` is that plus `resolveAgentTarget`; the
+ * Site Manager's `dev:site` IPC is that plus "the workspace the window is
+ * showing". So the secondary UX is not a parallel implementation of the same
+ * verbs — it IS the verbs, and a behaviour can never drift between the two.
  */
 
 // --- the desktop seam -------------------------------------------------------
@@ -148,15 +156,38 @@ function toOption(option: DevSiteOption): DevSiteRunOption {
 
 // --- the tool ---------------------------------------------------------------
 
+/** The workspace fields the tool reads. Narrower than a `WorkspaceRow` so the
+ *  UX can call this without pretending to be an agent. */
+export interface DevSiteTarget {
+    id: string;
+    path: string;
+    project_name: string;
+}
+
 export async function manageSiteForMcp(
     terminalId: string,
     req: ManageSiteRequest,
 ): Promise<ManageSiteResult> {
+    const { decision, ws } = await resolveAgentTarget(terminalId, req.workspaceId);
+    if (!decision.allowed || !ws) {
+        return { ok: false, error: decision.reason, sites: [], runtime: await runtimeInfo() };
+    }
+    return runManageSite(ws, req);
+}
+
+/**
+ * The tool itself, against an ALREADY-RESOLVED workspace.
+ *
+ * The MCP path resolves it through the agent-access decision; the Site Manager
+ * resolves it from the window's own workspace. Everything after that point is
+ * identical, and deliberately so — see the file header.
+ */
+export async function runManageSite(
+    ws: DevSiteTarget,
+    req: ManageSiteRequest,
+): Promise<ManageSiteResult> {
     const runtime = await runtimeInfo();
     const bare = (error: string): ManageSiteResult => ({ ok: false, error, sites: [], runtime });
-
-    const { decision, ws } = await resolveAgentTarget(terminalId, req.workspaceId);
-    if (!decision.allowed || !ws) return bare(decision.reason);
 
     const manager = devSiteManager();
     if (!manager) {

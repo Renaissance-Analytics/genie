@@ -76,7 +76,7 @@ import {
     type Changelog,
     type WatchTypeCounts,
     type GenSitesAll,
-    type HostedSiteRow,
+    type DevSiteInfo,
     type TerminalSpec,
     type UpdaterStatus,
     type WorkspaceRow,
@@ -276,25 +276,31 @@ function MasterInner() {
     } | null>(null);
     const [addingWorkspace, setAddingWorkspace] = useState(false);
     const [settingsWorkspaceId, setSettingsWorkspaceId] = useState<string | null>(null);
-    // Genie's own hosting (#232). One list for EVERY workspace — the rail's
-    // sites indicator is per-row, so a per-workspace fetch would be N calls for
-    // one paint. LOCAL-only: `api().hosting` is not host-sourced, so in a remote
-    // window (which lists the HOST's workspaces) this stays empty and the
-    // indicator + Site Manager entry points are absent rather than wrong.
+    // The container Dev Server (#234). One map of workspaceId → its dev sites,
+    // because the rail's indicator is per-row and a per-workspace fetch on paint
+    // would be N calls. LOCAL-only: `api().devServer` is not host-sourced, so in
+    // a remote window (which lists the HOST's workspaces) this stays empty and
+    // the indicator + Site Manager entry points are absent rather than wrong.
     const [siteManagerWsId, setSiteManagerWsId] = useState<string | null>(null);
-    const [hostedSites, setHostedSites] = useState<HostedSiteRow[]>([]);
+    const [devSites, setDevSites] = useState<Record<string, DevSiteInfo[]>>({});
     useEffect(() => {
         if (isRemoteWindow() || !hasGenieBridge()) return;
-        const load = () =>
-            void api()
-                .hosting.list()
-                .then(setHostedSites)
-                .catch(() => setHostedSites([]));
+        const load = () => {
+            const ids = workspaces.map((w) => w.id);
+            void Promise.all(
+                ids.map((id) =>
+                    api()
+                        .devServer.site(id, { action: 'list' })
+                        .then((r) => [id, r.sites ?? []] as const)
+                        .catch(() => [id, [] as DevSiteInfo[]] as const),
+                ),
+            ).then((pairs) => setDevSites(Object.fromEntries(pairs)));
+        };
         load();
         // PUSH (no poll): main fires this on every config edit, start/stop and
-        // the boot reconcile — a site can come up minutes into the session.
-        return api().on.hostingChanged(load);
-    }, []);
+        // boot adoption — a site can come up minutes into the session.
+        return api().on.devServerChanged(load);
+    }, [workspaces]);
     // Docs flyout (the ? titlebar button toggles this in-window panel rather
     // than opening a separate BrowserWindow).
     const [docsOpen, setDocsOpen] = useState(false);
@@ -1652,10 +1658,11 @@ function MasterInner() {
                         attentionIds={attentionIds}
                         issueWatchCounts={issueWatchCounts}
                         onShowIssueWatch={openIssueWatch}
-                        hostedSites={hostedSites}
-                        // Hosting drives THIS machine's runtime, so the Site
-                        // Manager is a local-Floor surface; a host window would
-                        // otherwise offer it against the wrong machine.
+                        devSites={devSites}
+                        // The Dev Server drives THIS machine's containers, so
+                        // the Site Manager is a local-Floor surface; a host
+                        // window would otherwise offer it against the wrong
+                        // machine.
                         onShowSiteManager={
                             isRemoteWindow() ? undefined : setSiteManagerWsId
                         }

@@ -30,7 +30,6 @@ interface FakeSiteView {
     port: number;
 }
 
-const hostedGenSites = vi.fn((): EnabledGenSite[] => []);
 const devServerGenSites = vi.fn((): EnabledGenSite[] => []);
 const discoverSites = vi.fn(async (): Promise<FakeSiteView[]> => []);
 const listWorkspaces = vi.fn((): Array<{ id: string }> => [{ id: 'ws1' }]);
@@ -38,7 +37,6 @@ const getWorkspaceTunnelSites = vi.fn(
     (_workspaceId: string): Record<string, { enabled: boolean }> => ({ site: { enabled: true } }),
 );
 
-vi.mock('../../hosting/manager', () => ({ hostedGenSites: () => hostedGenSites() }));
 vi.mock('../../dev-server/site-manager', () => ({
     devServerGenSites: () => devServerGenSites(),
 }));
@@ -86,7 +84,6 @@ const CONTAINER: EnabledGenSite = {
 
 beforeEach(() => {
     vi.clearAllMocks();
-    hostedGenSites.mockReturnValue([]);
     devServerGenSites.mockReturnValue([]);
     listWorkspaces.mockReturnValue([{ id: 'ws1' }]);
     getWorkspaceTunnelSites.mockReturnValue({ site: { enabled: true } });
@@ -151,15 +148,15 @@ describe('mergeHostedSites', () => {
 // --- the emit --------------------------------------------------------------
 
 describe('listLocalEnabledGenSites', () => {
-    it('EMITS hosted sites, not just discovered ones', async () => {
+    it('EMITS dev-server sites, not just discovered ones', async () => {
         // Without this the pure overlay above is dead code: nothing would ever
-        // hand it a hosted row.
-        hostedGenSites.mockReturnValue([HOSTED]);
+        // hand it a served row.
+        devServerGenSites.mockReturnValue([HOSTED]);
         const sites = await listLocalEnabledGenSites();
         expect(sites).toEqual([HOSTED]);
     });
 
-    it('prefers the hosted target over the discovered one, end to end', async () => {
+    it('prefers the dev-server target over the discovered one, end to end', async () => {
         discoverSites.mockResolvedValue([
             {
                 enabled: true,
@@ -170,13 +167,13 @@ describe('listLocalEnabledGenSites', () => {
                 port: 443,
             },
         ]);
-        hostedGenSites.mockReturnValue([HOSTED]);
+        devServerGenSites.mockReturnValue([HOSTED]);
         const targets = localTargetsBySiteId(await listLocalEnabledGenSites());
         expect(targets.get('id-tynn')?.port).toBe(20_431);
     });
 
-    it('still returns discovered sites when nothing is hosted', async () => {
-        // The additive guarantee: a user with no hosted sites sees exactly what
+    it('still returns discovered sites when nothing is served here', async () => {
+        // The additive guarantee: a user serving nothing here sees exactly what
         // they saw before.
         discoverSites.mockResolvedValue([
             {
@@ -193,10 +190,10 @@ describe('listLocalEnabledGenSites', () => {
         expect(sites[0]?.port).toBe(443);
     });
 
-    it('emits hosted sites even when discovery throws', async () => {
+    it('emits dev-server sites even when discovery throws', async () => {
         // An unreadable hosts file must not hide sites Genie is serving itself.
         discoverSites.mockRejectedValue(new Error('hosts file unreadable'));
-        hostedGenSites.mockReturnValue([HOSTED]);
+        devServerGenSites.mockReturnValue([HOSTED]);
         expect(await listLocalEnabledGenSites()).toEqual([HOSTED]);
     });
 
@@ -218,22 +215,4 @@ describe('listLocalEnabledGenSites', () => {
         });
     });
 
-    it('lets a RUNNING container win over a native-hosted site of the same name', async () => {
-        // Both sources are overlaid; the dev server is applied last, so during
-        // the P4 migration a workspace that has moved a site to a container gets
-        // the container, not the retired FrankenPHP port.
-        const sameName = { ...HOSTED, siteId: 'id-web', genName: 'web.acme.gen' };
-        devServerGenSites.mockReturnValue([CONTAINER]);
-        hostedGenSites.mockReturnValue([sameName]);
-        const sites = await listLocalEnabledGenSites();
-        expect(sites).toHaveLength(1);
-        expect(sites[0]?.port).toBe(49_812);
-    });
-
-    it('carries hosted and container sites side by side', async () => {
-        devServerGenSites.mockReturnValue([CONTAINER]);
-        hostedGenSites.mockReturnValue([HOSTED]);
-        const sites = await listLocalEnabledGenSites();
-        expect(sites.map((s) => s.genName).sort()).toEqual(['tynn.gen', 'web.acme.gen']);
-    });
 });

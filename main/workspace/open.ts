@@ -3,6 +3,7 @@ import { simpleGit } from 'simple-git';
 import { getWorkspace, touchWorkspace, setSettings } from '../db';
 import { rebuildMenu } from '../tray';
 import { broadcastLocal } from '../remote';
+import { devLifecycle } from '../dev-server/lifecycle';
 import { detectFolder } from './detect';
 
 /**
@@ -62,4 +63,15 @@ async function openWorkspaceInner(id: string): Promise<void> {
 
     touchWorkspace(id);
     rebuildMenu();
+
+    // Warm the Dev Server sandbox (#234 P4). Fire-and-forget and AFTER the
+    // focus, deliberately: this talks to a container daemon, and the workspace
+    // must appear the instant it is clicked whether or not Docker answers. It
+    // no-ops for a workspace that defines no dev site or service, and it never
+    // downloads an image — see `dev-server/lifecycle.ts`.
+    void devLifecycle()
+        ?.onWorkspaceOpen(id)
+        .catch(() => {
+            /* the lifecycle already reports failure as a result; nothing to do */
+        });
 }

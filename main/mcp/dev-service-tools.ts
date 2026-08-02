@@ -47,6 +47,12 @@ import type {
  * cannot decide it goes away: releasing drops this workspace's hold, and the
  * container stops only if that was the last one. The result's `holders` count
  * is what makes that visible instead of surprising.
+ *
+ * ## The human UX runs THIS code (P4)
+ *
+ * {@link runManageService} is the tool with the agent's authorization lifted
+ * off the front, so the Site Manager's Services tab drives the identical verbs
+ * rather than a parallel implementation of them. See `dev-site-tools.ts`.
  */
 
 // --- shaping ----------------------------------------------------------------
@@ -86,8 +92,36 @@ function catalogEntries(): DevServiceCatalogEntry[] {
 
 // --- the tool ---------------------------------------------------------------
 
+/** The workspace fields the tool reads. Narrower than a `WorkspaceRow` so the
+ *  UX can call this without pretending to be an agent. */
+export interface DevServiceTarget {
+    id: string;
+    project_name: string;
+}
+
 export async function manageServiceForMcp(
     terminalId: string,
+    req: ManageServiceRequest,
+): Promise<ManageServiceResult> {
+    // The catalog is answerable with no workspace, no runtime and no manager —
+    // it is how an agent finds out what it could ask for, and refusing it
+    // because Docker is not running would be a dead end.
+    const { decision, ws } = await resolveAgentTarget(terminalId, req.workspaceId);
+    if (req.action === 'catalog') return runManageService(ws ?? null, req);
+    if (!decision.allowed || !ws) {
+        return { ok: false, error: decision.reason, services: [], runtime: await runtimeInfo() };
+    }
+    return runManageService(ws, req);
+}
+
+/**
+ * The tool itself, against an ALREADY-RESOLVED workspace.
+ *
+ * `null` is accepted for `catalog` alone — see the header on that action. Every
+ * other action refuses it, because a service is defined ON a workspace.
+ */
+export async function runManageService(
+    ws: DevServiceTarget | null,
     req: ManageServiceRequest,
 ): Promise<ManageServiceResult> {
     const runtime = await runtimeInfo();
@@ -98,11 +132,7 @@ export async function manageServiceForMcp(
         runtime,
     });
 
-    // The catalog is answerable with no workspace, no runtime and no manager —
-    // it is how an agent finds out what it could ask for, and refusing it
-    // because Docker is not running would be a dead end.
     if (req.action === 'catalog') {
-        const { ws } = await resolveAgentTarget(terminalId, req.workspaceId);
         const manager = devServiceManager();
         return {
             ok: true,
@@ -112,8 +142,7 @@ export async function manageServiceForMcp(
         };
     }
 
-    const { decision, ws } = await resolveAgentTarget(terminalId, req.workspaceId);
-    if (!decision.allowed || !ws) return bare(decision.reason);
+    if (!ws) return bare('This action needs a workspace.');
 
     const manager = devServiceManager();
     if (!manager) {

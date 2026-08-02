@@ -3,82 +3,81 @@ import {
     Action,
     Badge,
     Callout,
+    Card,
     CodeView,
     Heading,
     Icon,
     Input,
     Modal,
     Select,
-    Switch,
+    Tabs,
     Text,
 } from '@particle-academy/react-fancy';
-import { pickPath } from '../FilePickerModal';
 import {
     api,
     isRemoteWindow,
-    type HostedSiteCandidate,
-    type HostedSiteRow,
-    type ServiceEnvWrite,
-    type ServiceRow,
+    type DevRuntimeInfo,
+    type DevServiceCatalogEntry,
+    type DevServiceInfo,
+    type DevSiteInfo,
+    type DevSiteRunOption,
     type WorkspaceRow,
 } from '../../lib/genie';
 import {
     canOpenInBrowser,
-    relativeDocroot,
-    siteManagerRows,
-    siteStatusLabel,
-    siteStatusTone,
-    type SiteManagerRow,
-} from '../../lib/hosting';
-import {
-    enabledServiceCount,
-    envWriteNote,
-    serviceEngineNote,
-    serviceEnvPreview,
-    serviceManagerRows,
+    devServerGuidance,
+    holdersNote,
+    isolationNote,
+    optionCaveat,
+    optionLabel,
+    runtimeSummary,
     serviceStatusLabel,
     serviceStatusTone,
-    servicesUnavailableNote,
-    type ServiceManagerRow,
-    type ServicesAvailability,
-} from '../../lib/services';
+    serviceTitle,
+    siteReach,
+    siteStatusLabel,
+    siteStatusTone,
+    type DevAvailability,
+} from '../../lib/dev-server';
 
 /**
- * The WORKSPACE SITE MANAGER (Tynn #232) — the per-workspace hosting control
- * panel, deliberately SEPARATE from Workspace settings (owner decision,
- * 2026-08-01).
+ * The WORKSPACE SITE MANAGER (Tynn #234 P4) — the human view over the container
+ * Dev Server, and deliberately the SECONDARY one.
  *
- * Workspace settings is where a workspace's identity and agent policy live and
- * is opened rarely; hosting is an operational surface you come back to while
- * working — is my site up, what is its URL, why did it stop. Putting it in the
- * settings modal would bury it under nine other sections.
+ * The discovery decided agents administer this through the `manageSite` /
+ * `manageService` MCP tools and a human UX exists beside them. So this panel is
+ * not a second implementation of those verbs: every button here calls
+ * `api().devServer.site` / `.service`, which main routes into the SAME
+ * `runManageSite` / `runManageService` an agent reaches. A behaviour can be
+ * added once and appear in both, and neither can drift from the other.
  *
- * What it does:
- *   - lists what Genie could serve here (`hosting.candidates`) alongside what it
- *     is already configured to serve (`hosting.list`), so enabling a site is one
- *     click and nobody types a document root by hand;
- *   - lets each site be enabled/disabled, switched between PHP and static, and
- *     pointed at a different docroot;
- *   - shows the live state — the stable URL when it is running, the REASON when
- *     it is not — and starts/stops it;
- *   - opens a running site in the Genie Browser.
+ * It is also deliberately separate from Workspace settings (owner decision,
+ * 2026-08-01): settings is identity and policy, opened rarely; this is
+ * operational — is my site up, what is its URL, why did it stop.
  *
- * The SERVICES tab is the other half of "hosted": the database and cache those
- * sites connect to, per workspace, each on its own port with its own data and
- * credential. Same card, same status rule, plus the two things a backing service
- * has that a web root does not — the `.env` block Genie writes into the user's
- * repository, and a server log to read when it will not start.
+ * ## What each tab is
  *
- * All the decisions this renders from are pure functions in `lib/hosting.ts` and
- * `lib/services.ts` (the renderer test env has no DOM); this file is the wiring.
+ *   - **SITES** — what this workspace SERVES. Status (with `ready` shown apart
+ *     from `running`), both origins, start/stop/restart, the container log, open
+ *     in the Genie Browser, and the layered run-option picker that turns "this
+ *     repo" into a command and a port.
+ *   - **SERVICES** — what those sites CONNECT TO. The engine and version, how
+ *     many workspaces hold it, what isolation this workspace actually has, the
+ *     connection surface from both sides of the boundary, the injected env, the
+ *     dedicated opt-out, and the engine log.
+ *
+ * ## Host-awareness is a first-class state, not an error
+ *
+ * Most machines have no Docker the first time this is opened, and a remote
+ * window drives a different machine entirely. Neither is a failure: the panel
+ * leads with what to do, exactly as the MCP's `devServerAvailable` gate does for
+ * an agent, instead of rendering controls that cannot work.
+ *
+ * All the judgements this renders from are pure functions in `lib/dev-server.ts`
+ * (the renderer test env has no DOM); this file is the wiring.
  */
 
 type Tab = 'sites' | 'services';
-
-const KIND_OPTIONS = [
-    { value: 'php', label: 'PHP — a Laravel/front-controller app (needs FrankenPHP)' },
-    { value: 'static', label: 'Static — a built frontend (no PHP runtime needed)' },
-];
 
 export default function WorkspaceSiteManager({
     workspace,
@@ -88,493 +87,185 @@ export default function WorkspaceSiteManager({
     onClose: () => void;
 }) {
     const [tab, setTab] = useState<Tab>('sites');
-    const [configured, setConfigured] = useState<HostedSiteRow[] | null>(null);
-    const [candidates, setCandidates] = useState<HostedSiteCandidate[]>([]);
-    /** The row (by key) with an action in flight — disables just that row. */
+    const [sites, setSites] = useState<DevSiteInfo[] | null>(null);
+    const [services, setServices] = useState<DevServiceInfo[] | null>(null);
+    const [catalog, setCatalog] = useState<DevServiceCatalogEntry[]>([]);
+    const [runtime, setRuntime] = useState<DevRuntimeInfo | null>(null);
+    /** The row (by id) with an action in flight — disables just that row. */
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
-    /** Local edits to a row's fields, committed on blur / change. */
-    const [draft, setDraft] = useState<Record<string, Partial<SiteManagerRow>>>({});
+    /** The one row whose log is open, and its tail. */
+    const [logs, setLogs] = useState<{ id: string; text: string } | null>(null);
+    /** The connection env of the services tab, when asked for. */
+    const [connEnv, setConnEnv] = useState<Record<string, string> | null>(null);
     const [adding, setAdding] = useState(false);
-    const [services, setServices] = useState<ServiceRow[] | null>(null);
+
     /**
-     * Whether services can be driven from HERE at all.
+     * Whether the Dev Server can be driven from HERE at all.
      *
-     * A remote window is the case that matters: it drives another machine, and a
-     * database is state — initialising a cluster on the client and writing its
-     * credentials into a `.env` that lives on the host would point the app at a
-     * server it cannot reach. `remote-bridge.ts` makes the calls inert; this is
-     * what says so out loud instead of showing two switches that do nothing.
+     * A remote window is the case that matters: it drives another machine, and
+     * a container started on the CLIENT would mount the client's filesystem
+     * while the surface around it lists the HOST's workspaces.
+     * `remote-bridge.ts` makes the calls inert; this is what says so out loud
+     * instead of showing controls that do nothing.
      */
-    const [availability, setAvailability] = useState<ServicesAvailability>(
-        isRemoteWindow() ? 'remote' : 'ready',
-    );
-    /** The one service whose log is open, and its tail. */
-    const [logs, setLogs] = useState<{ key: string; text: string } | null>(null);
-    /** What the last `.env` write did — including which of the user's own keys it
-     *  supersedes, which is the whole reason main reports them. */
-    const [envNote, setEnvNote] = useState<string | null>(null);
+    const availability: DevAvailability = isRemoteWindow() ? 'remote' : 'ready';
+    const remoteNote = devServerGuidance(availability);
+    const runtimeInfo = runtimeSummary(runtime);
+    const hasRuntime = runtimeInfo.tone === 'running';
 
     const refresh = useCallback(async () => {
-        try {
-            const [rows, found] = await Promise.all([
-                api().hosting.list(workspace.id),
-                api().hosting.candidates(workspace.id).catch(() => []),
-            ]);
-            setConfigured(rows);
-            setCandidates(found);
-        } catch {
-            setConfigured([]);
-            setCandidates([]);
-        }
-        try {
-            setServices(await api().services.list(workspace.id));
-        } catch {
-            // The channel isn't there at all (a host with no service manager).
-            // An empty list would read as "no services yet" — a state the user
-            // could act on — so record that this host simply cannot.
+        if (availability === 'remote') {
+            setSites([]);
             setServices([]);
-            setAvailability((a) => (a === 'remote' ? a : 'unsupported'));
+            return;
         }
-    }, [workspace.id]);
+        try {
+            setRuntime(await api().devServer.runtimeStatus());
+        } catch {
+            setRuntime({ kind: 'none' });
+        }
+        try {
+            const res = await api().devServer.site(workspace.id, { action: 'list' });
+            setSites(res.sites ?? []);
+        } catch {
+            setSites([]);
+        }
+        try {
+            // `catalog` returns the engines AND this workspace's services in one
+            // call, so the picker can offer what is missing without a second
+            // round trip.
+            const res = await api().devServer.service(workspace.id, { action: 'catalog' });
+            setServices(res.services ?? []);
+            setCatalog(res.catalog ?? []);
+        } catch {
+            setServices([]);
+        }
+    }, [workspace.id, availability]);
 
     useEffect(() => {
         void refresh();
-        // PUSH, not a poll: a site can take a build (or the first 277 MB runtime
-        // download) to come up, so main tells us when anything moved. Services
-        // ride the same signal — main's boot reconcile starts them BEFORE the
-        // sites that depend on them and fires this once both have settled.
-        return api().on.hostingChanged(() => void refresh());
+        // PUSH, not a poll: a site can take an image pull or a Dockerfile build
+        // to come up, so main tells us when anything moved.
+        return api().on.devServerChanged(() => void refresh());
     }, [refresh]);
 
-    const rows = siteManagerRows(configured ?? [], candidates);
-    const serviceRows = serviceManagerRows(services ?? []);
-    const servicesOn = enabledServiceCount(serviceRows);
-    const unavailableNote = servicesUnavailableNote(availability);
-
-    /** Every service write reports what it did to the workspace's `.env`. */
-    const noteEnv = (result: ServiceEnvWrite | null | undefined) =>
-        setEnvNote(envWriteNote(result));
-
-    /** Turn a service on/off. Enabling is what CREATES it — main mints the
-     *  credential, converges the runtime and rewrites the `.env` in one call. */
-    const setServiceEnabled = async (row: ServiceManagerRow, enabled: boolean) => {
-        setBusy(row.key);
+    /** Every site action goes through here, so the panel always reflects what
+     *  the RUNTIME did rather than what we asked for. */
+    const site = async (id: string | null, req: Record<string, unknown>) => {
+        setBusy(id);
         setError(null);
         try {
-            const res = await api().services.set(workspace.id, row.kind, { enabled });
-            if (!res.ok) setError(res.error ?? 'Could not change that service.');
-            noteEnv(res.env);
-            await refresh();
+            const res = await api().devServer.site(workspace.id, req as never);
+            if (!res.ok && res.error) setError(res.error);
+            setSites(res.sites ?? []);
+            if (res.logs !== undefined && res.affectedId) {
+                setLogs({ id: res.affectedId, text: res.logs });
+            }
+            return res;
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
+            return null;
         } finally {
             setBusy(null);
         }
     };
 
-    /** Rename the app's database. Postgres only, and only once the service
-     *  exists — there is nothing to rename before that. */
-    const setServiceDatabase = async (row: ServiceManagerRow, database: string) => {
-        if (!row.configured || database === (row.database ?? '')) return;
-        setBusy(row.key);
+    const service = async (id: string | null, req: Record<string, unknown>) => {
+        setBusy(id);
         setError(null);
         try {
-            const res = await api().services.set(workspace.id, row.kind, { database });
-            if (!res.ok) setError(res.error ?? 'Could not rename that database.');
-            noteEnv(res.env);
-            await refresh();
-        } finally {
-            setBusy(null);
-        }
-    };
-
-    const startStopService = async (row: ServiceManagerRow, start: boolean) => {
-        setBusy(row.key);
-        setError(null);
-        try {
-            if (start) {
-                // The first start of a kind DOWNLOADS its engine, so this can be
-                // a long call; the row's own status carries the reason after.
-                const res = await api().services.start(workspace.id, row.kind);
-                if (!res.ok && res.error) setError(res.error);
-            } else {
-                await api().services.stop(workspace.id, row.kind);
+            const res = await api().devServer.service(workspace.id, req as never);
+            if (!res.ok && res.error) setError(res.error);
+            setServices(res.services ?? []);
+            if (res.catalog) setCatalog(res.catalog);
+            if (res.logs !== undefined && res.affectedId) {
+                setLogs({ id: res.affectedId, text: res.logs });
             }
-            await refresh();
+            if (res.env) setConnEnv(res.env);
+            return res;
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+            return null;
         } finally {
             setBusy(null);
         }
     };
 
-    /** Forget the service. Main leaves its data directory alone, and the button
-     *  says so — a click here must never be how someone loses a database. */
-    const removeService = async (row: ServiceManagerRow) => {
-        if (!row.configured) return;
-        setBusy(row.key);
-        try {
-            const res = await api().services.remove(workspace.id, row.kind);
-            noteEnv(res.env);
-            if (logs?.key === row.key) setLogs(null);
-            await refresh();
-        } finally {
-            setBusy(null);
-        }
-    };
-
-    const toggleServiceLogs = async (row: ServiceManagerRow) => {
-        if (logs?.key === row.key) {
+    const toggleLog = async (id: string, kind: 'site' | 'service') => {
+        if (logs?.id === id) {
             setLogs(null);
             return;
         }
-        setBusy(row.key);
-        try {
-            setLogs({ key: row.key, text: await api().services.logs(workspace.id, row.kind) });
-        } finally {
-            setBusy(null);
-        }
+        if (kind === 'site') await site(id, { action: 'logs', id, tail: 200 });
+        else await service(id, { action: 'logs', id, tail: 200 });
     };
 
-    /** Re-write the managed block by hand — for after the user has edited their
-     *  `.env`, or created one Genie previously found missing. */
-    const rewriteEnv = async () => {
-        setBusy('env');
-        setError(null);
-        try {
-            const result = await api().services.writeEnv(workspace.id);
-            setEnvNote(
-                envWriteNote(result) ??
-                    (result.changed
-                        ? 'Updated the managed block in this workspace’s .env.'
-                        : 'This workspace’s .env is already up to date.'),
-            );
-        } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
-        } finally {
-            setBusy(null);
-        }
-    };
-
-    /** Persist one site, then re-read. Every write goes through here so the
-     *  panel always reflects what the RUNTIME did, not what we asked for. */
-    const save = async (key: string, patch: Record<string, unknown>) => {
-        setBusy(key);
-        setError(null);
-        try {
-            const res = await api().hosting.set(workspace.id, patch);
-            if (!res.ok) setError(res.error ?? 'Could not save that site.');
-            setDraft((d) => {
-                const next = { ...d };
-                delete next[key];
-                return next;
-            });
-            await refresh();
-        } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
-        } finally {
-            setBusy(null);
-        }
-    };
-
-    /** Turn hosting on/off for a row. A candidate is CREATED by its first
-     *  enable, carrying the kind + docroot Genie detected. */
-    const setEnabled = (row: SiteManagerRow, enabled: boolean) =>
-        save(row.key, {
-            ...(row.siteId ? { siteId: row.siteId } : {}),
-            hostname: row.hostname,
-            kind: row.kind,
-            docroot: row.docroot,
-            enabled,
-        });
-
-    const startStop = async (row: SiteManagerRow, start: boolean) => {
-        setBusy(row.key);
-        setError(null);
-        try {
-            if (start) {
-                const res = await api().hosting.start(workspace.id, row.hostname);
-                // A start that didn't take reports WHY here; the row's own
-                // status carries the runtime's reason after the refresh.
-                if (!res.ok && res.error) setError(res.error);
-            } else {
-                await api().hosting.stop(row.siteId ?? '');
-            }
-            await refresh();
-        } finally {
-            setBusy(null);
-        }
-    };
-
-    const remove = async (row: SiteManagerRow) => {
-        if (!row.siteId) return;
-        setBusy(row.key);
-        try {
-            await api().hosting.remove(workspace.id, row.siteId);
-            await refresh();
-        } finally {
-            setBusy(null);
-        }
-    };
-
-    const open = async (row: SiteManagerRow) => {
-        const res = await api().sites.open(row.genName);
-        if (!res.ok && res.error) setError(res.error);
-    };
-
-    /** Pick a docroot with the in-app browser, seeded inside this workspace. A
-     *  directory outside it is refused HERE, with the reason, rather than by a
-     *  save that silently does nothing. */
-    const pickDocroot = async (row: SiteManagerRow) => {
-        const picked = await pickPath({
-            mode: 'directory',
-            title: `Document root for ${row.hostname}`,
-            initialPath: workspace.path,
-        });
-        if (!picked) return;
-        const rel = relativeDocroot(workspace.path, picked);
-        if (rel === null) {
-            setError(
-                'A document root has to be inside the workspace — Genie will not serve a directory from outside it.',
-            );
-            return;
-        }
-        if (row.configured) await save(row.key, { siteId: row.siteId, docroot: rel });
-        else setDraft((d) => ({ ...d, [row.key]: { ...d[row.key], docroot: rel } }));
-    };
+    const siteRows = sites ?? [];
+    const serviceRows = services ?? [];
+    const runningSites = siteRows.filter((s) => s.state === 'running').length;
 
     return (
         <Modal open onClose={onClose} size="xl">
             <div className="ws-settings site-manager">
                 <div className="ws-settings-head">
                     <Heading as="h2" size="sm">
-                        Site Manager — {workspace.project_name}
+                        Dev Server — {workspace.project_name}
                     </Heading>
                     <Text size="xs" className="text-zinc-500">
-                        Sites Genie serves itself from this workspace: a real server, a
-                        built app, one stable URL. Nothing is served until you enable it.
+                        This workspace&apos;s dev servers and the services they connect to, each
+                        in a container sandboxed to this workspace. Nothing runs until you start
+                        it.
                     </Text>
                 </div>
 
-                <div className="set-seg site-tabs" role="tablist">
-                    <button
-                        type="button"
-                        role="tab"
-                        aria-selected={tab === 'sites'}
-                        className={tab === 'sites' ? 'active' : ''}
-                        onClick={() => setTab('sites')}
-                    >
-                        Sites{rows.length ? ` (${rows.length})` : ''}
-                    </button>
-                    <button
-                        type="button"
-                        role="tab"
-                        aria-selected={tab === 'services'}
-                        className={tab === 'services' ? 'active' : ''}
-                        onClick={() => setTab('services')}
-                    >
-                        Services{servicesOn ? ` (${servicesOn})` : ''}
-                    </button>
-                </div>
-
-                {error && <div className="set-note bad">{error}</div>}
-
-                {tab === 'sites' ? (
-                    <>
-                        <section className="set-section">
-                            <div className="set-section-head">
-                                <h2>Sites</h2>
-                                <span className="set-section-desc">
-                                    Detected from this workspace&apos;s repos — a Laravel{' '}
-                                    <code>public/</code>, a built <code>dist/</code>, or a
-                                    frontend Genie can build.
-                                </span>
-                                <span style={{ marginLeft: 'auto' }}>
-                                    <Action
-                                        size="sm"
-                                        variant="ghost"
-                                        icon="refresh-cw"
-                                        onClick={() => void refresh()}
-                                    >
-                                        Rescan
-                                    </Action>
-                                </span>
-                            </div>
-
-                            {configured === null ? (
-                                <Text size="xs" className="text-zinc-500">
-                                    Looking for sites in this workspace…
-                                </Text>
-                            ) : rows.length === 0 ? (
-                                <div className="set-note">
-                                    Genie found nothing hostable here yet. A site is a
-                                    Laravel app (<code>public/index.php</code>) or a
-                                    frontend that builds to a folder with an{' '}
-                                    <code>index.html</code>. Add one by hand below if
-                                    yours lives somewhere else.
-                                </div>
-                            ) : (
-                                <div className="site-list">
-                                    {rows.map((row) => {
-                                        // EVERY handler works from the drafted
-                                        // row, not the fetched one: a user who
-                                        // renames a proposal (or repoints its
-                                        // docroot) and then flips it on must get
-                                        // the site they just described, not the
-                                        // one Genie originally guessed.
-                                        const live = { ...row, ...draft[row.key] };
-                                        return (
-                                            <SiteCard
-                                                key={row.key}
-                                                row={live}
-                                                busy={busy === row.key}
-                                                onToggle={(on) => void setEnabled(live, on)}
-                                                onPatch={(patch) =>
-                                                    setDraft((d) => ({
-                                                        ...d,
-                                                        [row.key]: { ...d[row.key], ...patch },
-                                                    }))
-                                                }
-                                                onCommit={(patch) => {
-                                                    // A proposal has nothing to
-                                                    // write to yet — its edits
-                                                    // live in the draft until the
-                                                    // enable creates it.
-                                                    if (!live.configured) return;
-                                                    // Blur fires whether or not
-                                                    // anything changed, and every
-                                                    // save reconciles the whole
-                                                    // runtime — so only write a
-                                                    // real edit.
-                                                    const changed = Object.entries(patch).some(
-                                                        ([k, v]) =>
-                                                            v !== row[k as keyof SiteManagerRow],
-                                                    );
-                                                    if (!changed) return;
-                                                    void save(live.key, {
-                                                        siteId: live.siteId,
-                                                        ...patch,
-                                                    });
-                                                }}
-                                                onPickDocroot={() => void pickDocroot(live)}
-                                                onStart={() => void startStop(live, true)}
-                                                onStop={() => void startStop(live, false)}
-                                                onOpen={() => void open(live)}
-                                                onRemove={() => void remove(live)}
-                                            />
-                                        );
-                                    })}
-                                </div>
-                            )}
-
-                            <div className="set-actions">
-                                <Action
-                                    size="sm"
-                                    variant="ghost"
-                                    icon="plus"
-                                    onClick={() => setAdding((v) => !v)}
-                                >
-                                    {adding ? 'Cancel' : 'Add a site by hand…'}
-                                </Action>
-                            </div>
-
-                            {adding && (
-                                <AddSiteForm
-                                    workspacePath={workspace.path}
-                                    onCancel={() => setAdding(false)}
-                                    onAdd={async (patch) => {
-                                        await save('new', { ...patch, enabled: true });
-                                        setAdding(false);
-                                    }}
-                                    onError={setError}
-                                />
-                            )}
-                        </section>
-
-                        <section className="set-section">
-                            <div className="set-section-head">
-                                <h2>How a site is served</h2>
-                            </div>
-                            <div className="set-note">
-                                A <strong>PHP</strong> site is served by FrankenPHP, which
-                                Genie downloads once, the first time one starts. A{' '}
-                                <strong>static</strong> site needs no download — Genie runs
-                                the project&apos;s build if the docroot has no{' '}
-                                <code>index.html</code> yet, then serves it. Either way the
-                                site gets ONE stable, same-origin URL, which is what makes
-                                it work in the Genie Browser and over a remote connection.
-                            </div>
-                        </section>
-                    </>
+                {remoteNote ? (
+                    <Callout color="amber" icon={<Icon name="info" size="sm" />}>
+                        {remoteNote}
+                    </Callout>
                 ) : (
                     <>
-                        <section className="set-section">
-                            <div className="set-section-head">
-                                <h2>Services</h2>
-                                <span className="set-section-desc">
-                                    What this workspace&apos;s app connects TO — its own
-                                    database and cache, on their own ports, sharing nothing
-                                    with another workspace&apos;s.
-                                </span>
-                            </div>
+                        <RuntimeBanner summary={runtimeInfo} />
+                        {error && <div className="set-note bad">{error}</div>}
 
-                            {unavailableNote ? (
-                                <Callout color="amber" icon={<Icon name="info" size="sm" />}>
-                                    {unavailableNote}
-                                </Callout>
-                            ) : services === null ? (
-                                <Text size="xs" className="text-zinc-500">
-                                    Reading this workspace&apos;s services…
-                                </Text>
-                            ) : (
-                                <div className="site-list">
-                                    {serviceRows.map((row) => (
-                                        <ServiceCard
-                                            key={row.key}
-                                            row={row}
-                                            busy={busy === row.key}
-                                            logs={logs?.key === row.key ? logs.text : null}
-                                            onToggle={(on) => void setServiceEnabled(row, on)}
-                                            onRenameDatabase={(name) =>
-                                                void setServiceDatabase(row, name)
-                                            }
-                                            onStart={() => void startStopService(row, true)}
-                                            onStop={() => void startStopService(row, false)}
-                                            onToggleLogs={() => void toggleServiceLogs(row)}
-                                            onRemove={() => void removeService(row)}
-                                        />
-                                    ))}
-                                </div>
-                            )}
-                        </section>
-
-                        {!unavailableNote && (
-                            <section className="set-section">
-                                <div className="set-section-head">
-                                    <h2>How your app gets these</h2>
-                                    <span style={{ marginLeft: 'auto' }}>
-                                        <Action
-                                            size="sm"
-                                            variant="ghost"
-                                            icon="refresh-cw"
-                                            disabled={busy === 'env'}
-                                            onClick={() => void rewriteEnv()}
-                                        >
-                                            Rewrite .env block
-                                        </Action>
-                                    </span>
-                                </div>
-                                <div className="set-note">
-                                    The hosted site is started WITH these settings, so it
-                                    picks them up without any file. Genie also writes them
-                                    into a delimited block at the end of the app&apos;s{' '}
-                                    <code>.env</code> — that is what makes{' '}
-                                    <code>artisan migrate</code> and{' '}
-                                    <code>tinker</code> reach the same database. Everything
-                                    outside those markers is yours and is never touched.
-                                </div>
-                                {envNote && <div className="set-note warn">{envNote}</div>}
-                            </section>
-                        )}
+                        <Tabs activeTab={tab} onTabChange={(t) => setTab(t as Tab)}>
+                            <Tabs.List>
+                                <Tabs.Tab value="sites">
+                                    Sites{siteRows.length ? ` (${runningSites}/${siteRows.length})` : ''}
+                                </Tabs.Tab>
+                                <Tabs.Tab value="services">
+                                    Services{serviceRows.length ? ` (${serviceRows.length})` : ''}
+                                </Tabs.Tab>
+                            </Tabs.List>
+                            <Tabs.Panels>
+                                <Tabs.Panel value="sites">
+                                    <SitesTab
+                                        workspace={workspace}
+                                        sites={sites}
+                                        busy={busy}
+                                        logs={logs}
+                                        hasRuntime={hasRuntime}
+                                        adding={adding}
+                                        onAddingChange={setAdding}
+                                        onAction={site}
+                                        onToggleLog={(id) => void toggleLog(id, 'site')}
+                                        onRefresh={() => void refresh()}
+                                    />
+                                </Tabs.Panel>
+                                <Tabs.Panel value="services">
+                                    <ServicesTab
+                                        services={services}
+                                        catalog={catalog}
+                                        busy={busy}
+                                        logs={logs}
+                                        connEnv={connEnv}
+                                        hasRuntime={hasRuntime}
+                                        onAction={service}
+                                        onToggleLog={(id) => void toggleLog(id, 'service')}
+                                    />
+                                </Tabs.Panel>
+                            </Tabs.Panels>
+                        </Tabs>
                     </>
                 )}
             </div>
@@ -582,112 +273,199 @@ export default function WorkspaceSiteManager({
     );
 }
 
-/** One site: what it is, where it comes from, whether it is on, and what the
- *  runtime says about it. */
+/** Which runtime is driving — or, on most first runs, what to install. Shown at
+ *  the top of both tabs because every action below depends on it. */
+function RuntimeBanner({ summary }: { summary: ReturnType<typeof runtimeSummary> }) {
+    if (!summary.guidance) {
+        return (
+            <Text size="xs" className="text-zinc-500">
+                <span className="site-dot site-running" aria-hidden="true" /> Running containers
+                with {summary.label}.
+            </Text>
+        );
+    }
+    return (
+        <Callout color="blue" icon={<Icon name="info" size="sm" />}>
+            <strong>{summary.label}.</strong> {summary.guidance} Genie detects Docker or Podman
+            whenever you act — there is no need to restart it once one is installed.
+        </Callout>
+    );
+}
+
+// --- sites ------------------------------------------------------------------
+
+function SitesTab({
+    workspace,
+    sites,
+    busy,
+    logs,
+    hasRuntime,
+    adding,
+    onAddingChange,
+    onAction,
+    onToggleLog,
+    onRefresh,
+}: {
+    workspace: WorkspaceRow;
+    sites: DevSiteInfo[] | null;
+    busy: string | null;
+    logs: { id: string; text: string } | null;
+    hasRuntime: boolean;
+    adding: boolean;
+    onAddingChange: (v: boolean) => void;
+    onAction: (id: string | null, req: Record<string, unknown>) => Promise<unknown>;
+    onToggleLog: (id: string) => void;
+    onRefresh: () => void;
+}) {
+    return (
+        <section className="set-section">
+            <div className="set-section-head">
+                <h2>Sites</h2>
+                <span className="set-section-desc">
+                    A repo&apos;s dev server, running in this workspace&apos;s container sandbox
+                    and reachable at a stable <code>.gen</code> address — from here and from a
+                    connected remote.
+                </span>
+                <span style={{ marginLeft: 'auto' }}>
+                    <Action size="sm" variant="ghost" icon="refresh-cw" onClick={onRefresh}>
+                        Refresh
+                    </Action>
+                </span>
+            </div>
+
+            {sites === null ? (
+                <Text size="xs" className="text-zinc-500">
+                    Reading this workspace&apos;s sites…
+                </Text>
+            ) : sites.length === 0 ? (
+                <div className="set-note">
+                    No dev sites here yet. Add one below — Genie reads the repo, offers how it
+                    could run (a Dockerfile it ships, or the stack it detects), and starts it.
+                </div>
+            ) : (
+                <div className="site-list">
+                    {sites.map((row) => (
+                        <SiteCard
+                            key={row.id}
+                            row={row}
+                            busy={busy === row.id}
+                            hasRuntime={hasRuntime}
+                            log={logs?.id === row.id ? logs.text : null}
+                            onAction={(req) => void onAction(row.id, { ...req, id: row.id })}
+                            onToggleLog={() => onToggleLog(row.id)}
+                        />
+                    ))}
+                </div>
+            )}
+
+            <div className="set-actions">
+                <Action
+                    size="sm"
+                    variant="ghost"
+                    icon="plus"
+                    onClick={() => onAddingChange(!adding)}
+                >
+                    {adding ? 'Cancel' : 'Add a site…'}
+                </Action>
+            </div>
+
+            {adding && (
+                <AddSiteForm
+                    workspace={workspace}
+                    onCancel={() => onAddingChange(false)}
+                    onCreate={async (req) => {
+                        await onAction(null, { action: 'create', ...req });
+                        onAddingChange(false);
+                    }}
+                />
+            )}
+        </section>
+    );
+}
+
+/** One dev site: what it serves, whether it is answering, where to reach it. */
 function SiteCard({
     row,
     busy,
-    onToggle,
-    onPatch,
-    onCommit,
-    onPickDocroot,
-    onStart,
-    onStop,
-    onOpen,
-    onRemove,
+    hasRuntime,
+    log,
+    onAction,
+    onToggleLog,
 }: {
-    row: SiteManagerRow;
+    row: DevSiteInfo;
     busy: boolean;
-    onToggle: (on: boolean) => void;
-    onPatch: (patch: Partial<SiteManagerRow>) => void;
-    onCommit: (patch: Record<string, unknown>) => void;
-    onPickDocroot: () => void;
-    onStart: () => void;
-    onStop: () => void;
-    onOpen: () => void;
-    onRemove: () => void;
+    hasRuntime: boolean;
+    log: string | null;
+    onAction: (req: Record<string, unknown>) => void;
+    onToggleLog: () => void;
 }) {
     const tone = siteStatusTone(row);
+    const reach = siteReach(row);
     return (
-        <div className={`site-card${row.configured ? '' : ' is-candidate'}`}>
+        <Card variant="outlined" padding="md" className="site-card">
             <div className="site-card-head">
                 <span className={`site-dot site-${tone}`} aria-hidden="true" />
                 <div className="site-card-name">
                     <Text size="sm" style={{ fontWeight: 600 }}>
-                        {row.name}
+                        {row.name}{' '}
+                        <Badge size="sm" variant="soft" color="zinc">
+                            {row.runMode}
+                        </Badge>
+                        {row.kind === 'tcp' && (
+                            <>
+                                {' '}
+                                <Badge size="sm" variant="soft" color="amber">
+                                    tcp
+                                </Badge>
+                            </>
+                        )}
                     </Text>
                     <Text size="xs" className="text-zinc-500">
-                        {row.hostname}
-                        {row.reason ? ` · ${row.reason}` : ''}
+                        {row.repo ? `repos/${row.repo}` : 'the workspace root'}
+                        {row.port ? ` · listens on :${row.port}` : ''}
                     </Text>
                 </div>
-                <Switch
-                    checked={row.enabled}
-                    disabled={busy}
-                    onCheckedChange={onToggle}
-                    aria-label={`Host ${row.hostname}`}
-                />
             </div>
 
             <div className={`site-card-status site-${tone}`}>{siteStatusLabel(row)}</div>
 
-            {/* Editable for a PROPOSAL too: those edits sit in the draft until
-                the enable creates the site with them. Forcing a user to accept
-                Genie's guess, host it, then correct it would start a server on
-                the wrong directory in between. */}
-            <div className="site-card-fields">
-                <label className="site-field">
-                    <span>Hostname</span>
-                    <Input
-                        value={row.hostname}
-                        disabled={busy}
-                        onValueChange={(v: string) => onPatch({ hostname: v })}
-                        onBlur={() => onCommit({ hostname: row.hostname })}
-                        placeholder="app.test"
-                        aria-label={`Hostname for ${row.name}`}
-                    />
-                </label>
-                <label className="site-field">
-                    <span>Serve as</span>
-                    <Select
-                        value={row.kind}
-                        disabled={busy}
-                        onValueChange={(v) => {
-                            onPatch({ kind: v as SiteManagerRow['kind'] });
-                            onCommit({ kind: v });
-                        }}
-                        list={KIND_OPTIONS}
-                    />
-                </label>
-                <label className="site-field site-field-wide">
-                    <span>Document root</span>
-                    <div className="site-docroot">
-                        <Input
-                            value={row.docroot}
-                            disabled={busy}
-                            onValueChange={(v: string) => onPatch({ docroot: v })}
-                            onBlur={() => onCommit({ docroot: row.docroot })}
-                            placeholder="repos/app/public"
-                            aria-label={`Document root for ${row.name}`}
-                        />
-                        <Action
-                            size="sm"
-                            variant="ghost"
-                            icon="folder"
-                            disabled={busy}
-                            onClick={onPickDocroot}
-                        >
-                            Browse
-                        </Action>
-                    </div>
-                </label>
-            </div>
+            {/* BOTH reaches. The `.gen` one works from a connected remote too;
+                the loopback one is what curl, a local browser or another program
+                on this machine dials. Showing one is how people paste the wrong
+                one at an agent. */}
+            {(reach.browser || reach.local) && (
+                <div className="site-card-fields">
+                    {reach.browser && (
+                        <label className="site-field">
+                            <span>In the Genie Browser</span>
+                            <Input value={reach.browser} readOnly disabled />
+                        </label>
+                    )}
+                    {reach.local && (
+                        <label className="site-field">
+                            <span>On this machine</span>
+                            <Input value={reach.local} readOnly disabled />
+                        </label>
+                    )}
+                </div>
+            )}
 
-            {row.needsBuild && (
+            {row.command && row.command.length > 0 && (
                 <Text size="xs" className="text-zinc-500">
-                    <Icon name="hammer" size="xs" /> Not built yet — enabling this runs the
-                    project&apos;s build first.
+                    <Icon name="terminal" size="xs" /> <code>{row.command.join(' ')}</code>
                 </Text>
+            )}
+
+            {log !== null && (
+                <div className="svc-env">
+                    <span className="svc-env-label">Container log</span>
+                    <CodeView
+                        value={log || 'Nothing logged yet.'}
+                        readOnly
+                        minHeight={0}
+                        maxHeight={240}
+                    />
+                </div>
             )}
 
             <div className="set-actions">
@@ -696,282 +474,491 @@ function SiteCard({
                     color="blue"
                     icon="external-link"
                     disabled={busy || !canOpenInBrowser(row)}
-                    onClick={onOpen}
+                    onClick={() => onAction({ action: 'open' })}
                 >
                     Open in Genie Browser
                 </Action>
                 {row.state === 'running' ? (
-                    <Action size="sm" variant="ghost" icon="square" disabled={busy} onClick={onStop}>
-                        Stop
-                    </Action>
-                ) : (
-                    <Action
-                        size="sm"
-                        variant="ghost"
-                        icon="play"
-                        disabled={busy || !row.configured || !row.enabled}
-                        onClick={onStart}
-                    >
-                        {row.state === 'failed' ? 'Retry' : 'Start'}
-                    </Action>
-                )}
-                {row.configured && (
-                    <Action size="sm" variant="ghost" icon="trash-2" disabled={busy} onClick={onRemove}>
-                        Remove
-                    </Action>
-                )}
-            </div>
-        </div>
-    );
-}
-
-/** One backing service: what it is, whether it is on, where it listens, and the
- *  `.env` lines it puts in the user's repository. */
-function ServiceCard({
-    row,
-    busy,
-    logs,
-    onToggle,
-    onRenameDatabase,
-    onStart,
-    onStop,
-    onToggleLogs,
-    onRemove,
-}: {
-    row: ServiceManagerRow;
-    busy: boolean;
-    /** The open log tail, or null when this row's log is closed. */
-    logs: string | null;
-    onToggle: (on: boolean) => void;
-    onRenameDatabase: (name: string) => void;
-    onStart: () => void;
-    onStop: () => void;
-    onToggleLogs: () => void;
-    onRemove: () => void;
-}) {
-    const tone = serviceStatusTone(row);
-    const engineNote = serviceEngineNote(row);
-    const env = serviceEnvPreview(row);
-    // Edited locally and committed on blur, exactly like a site's fields: every
-    // write reconciles the runtime, so a save per keystroke would restart a
-    // database while it is being named.
-    const [database, setDatabase] = useState(row.database ?? '');
-    useEffect(() => setDatabase(row.database ?? ''), [row.database]);
-
-    return (
-        <div className={`site-card${row.configured ? '' : ' is-candidate'}`}>
-            <div className="site-card-head">
-                <span className={`site-dot site-${tone}`} aria-hidden="true" />
-                <div className="site-card-name">
-                    <Text size="sm" style={{ fontWeight: 600 }}>
-                        <Icon name={row.icon} size="xs" /> {row.name}
-                        {row.engine !== row.kind && (
-                            <>
-                                {' '}
-                                <Badge size="sm" variant="soft" color="zinc">
-                                    {row.engine}
-                                </Badge>
-                            </>
-                        )}
-                    </Text>
-                    <Text size="xs" className="text-zinc-500">
-                        {row.blurb}
-                    </Text>
-                </div>
-                <Switch
-                    checked={row.enabled}
-                    disabled={busy}
-                    onCheckedChange={onToggle}
-                    aria-label={`Run ${row.name} for this workspace`}
-                />
-            </div>
-
-            <div className={`site-card-status site-${tone}`}>{serviceStatusLabel(row)}</div>
-
-            {engineNote && (
-                <Text size="xs" className="text-zinc-500">
-                    <Icon name="info" size="xs" /> {engineNote}
-                </Text>
-            )}
-
-            {row.kind === 'postgres' && row.configured && (
-                <div className="site-card-fields">
-                    <label className="site-field">
-                        <span>Database</span>
-                        <Input
-                            value={database}
+                    <>
+                        <Action
+                            size="sm"
+                            variant="ghost"
+                            icon="rotate-cw"
                             disabled={busy}
-                            onValueChange={setDatabase}
-                            onBlur={() => onRenameDatabase(database)}
-                            placeholder="genie"
-                            aria-label={`Database name for ${row.name}`}
-                        />
-                    </label>
-                    <label className="site-field">
-                        <span>Connects as</span>
-                        <Input value={row.user ?? 'genie'} disabled readOnly />
-                    </label>
-                </div>
-            )}
-
-            {/* The block Genie writes, shown as the text it actually is. The
-                password is a placeholder on purpose — main never sends it, and
-                the app's own `.env` is the only place it belongs. */}
-            {env.length > 0 && (
-                <div className="svc-env">
-                    <span className="svc-env-label">In your .env</span>
-                    <CodeView
-                        value={env.map((line) => `${line.key}=${line.value}`).join('\n')}
-                        readOnly
-                        minHeight={0}
-                        maxHeight={160}
-                    />
-                </div>
-            )}
-
-            {logs !== null && (
-                <div className="svc-env">
-                    <span className="svc-env-label">Server log</span>
-                    <CodeView
-                        value={logs || 'Nothing logged yet — this service has not run.'}
-                        readOnly
-                        minHeight={0}
-                        maxHeight={220}
-                    />
-                </div>
-            )}
-
-            <div className="set-actions">
-                {row.state === 'running' ? (
-                    <Action size="sm" variant="ghost" icon="square" disabled={busy} onClick={onStop}>
-                        Stop
-                    </Action>
+                            onClick={() => onAction({ action: 'restart' })}
+                        >
+                            Restart
+                        </Action>
+                        <Action
+                            size="sm"
+                            variant="ghost"
+                            icon="square"
+                            disabled={busy}
+                            onClick={() => onAction({ action: 'stop' })}
+                        >
+                            Stop
+                        </Action>
+                    </>
                 ) : (
                     <Action
                         size="sm"
                         variant="ghost"
                         icon="play"
-                        disabled={busy || !row.configured || !row.enabled}
-                        onClick={onStart}
+                        disabled={busy || !hasRuntime}
+                        onClick={() => onAction({ action: 'start' })}
                     >
                         {row.state === 'failed' ? 'Retry' : 'Start'}
                     </Action>
                 )}
-                {row.configured && (
-                    <Action
-                        size="sm"
-                        variant="ghost"
-                        icon="file-text"
-                        disabled={busy}
-                        onClick={onToggleLogs}
-                    >
-                        {logs !== null ? 'Hide log' : 'Log'}
-                    </Action>
-                )}
-                {row.configured && (
-                    <Action
-                        size="sm"
-                        variant="ghost"
-                        icon="trash-2"
-                        disabled={busy}
-                        onClick={onRemove}
-                        title="Stops it and forgets the configuration. The data directory is left on disk."
-                    >
-                        Remove
-                    </Action>
-                )}
+                <Action size="sm" variant="ghost" icon="file-text" disabled={busy} onClick={onToggleLog}>
+                    {log !== null ? 'Hide log' : 'Log'}
+                </Action>
+                <Action
+                    size="sm"
+                    variant="ghost"
+                    icon="trash-2"
+                    disabled={busy}
+                    onClick={() => onAction({ action: 'remove' })}
+                    title="Stops the container and forgets the definition. Your files are untouched."
+                >
+                    Remove
+                </Action>
             </div>
-        </div>
+        </Card>
     );
 }
 
-/** Add a site Genie did not detect — the escape hatch, so an unusual layout is
- *  never a dead end. */
+/**
+ * Add a site — the LAYERED run-option picker, as a form.
+ *
+ * Detect first, then let the user take an offer. The offers are ranked by what
+ * would actually start now, and each one that is a GUESS says what it guessed:
+ * an option whose port was defaulted rather than read will publish 8080, get a
+ * connection refused, and look like a working site.
+ */
 function AddSiteForm({
-    workspacePath,
-    onAdd,
+    workspace,
+    onCreate,
     onCancel,
-    onError,
 }: {
-    workspacePath: string;
-    onAdd: (patch: Record<string, unknown>) => Promise<void>;
+    workspace: WorkspaceRow;
+    onCreate: (req: Record<string, unknown>) => Promise<void>;
     onCancel: () => void;
-    onError: (message: string) => void;
 }) {
-    const [hostname, setHostname] = useState('');
-    const [kind, setKind] = useState('static');
-    const [docroot, setDocroot] = useState('');
+    const [name, setName] = useState('');
+    const [repo, setRepo] = useState('');
+    const [repos, setRepos] = useState<string[]>([]);
+    const [options, setOptions] = useState<DevSiteRunOption[] | null>(null);
+    const [chosen, setChosen] = useState<number>(0);
+    const [port, setPort] = useState('');
+    const [detecting, setDetecting] = useState(false);
     const [saving, setSaving] = useState(false);
 
-    const browse = async () => {
-        const picked = await pickPath({
-            mode: 'directory',
-            title: 'Document root for the new site',
-            initialPath: workspacePath,
-        });
-        if (!picked) return;
-        const rel = relativeDocroot(workspacePath, picked);
-        if (rel === null) {
-            onError(
-                'A document root has to be inside the workspace — Genie will not serve a directory from outside it.',
-            );
-            return;
+    useEffect(() => {
+        void api()
+            .devServer.repos(workspace.id)
+            .then(setRepos)
+            .catch(() => setRepos([]));
+    }, [workspace.id]);
+
+    const detect = async () => {
+        setDetecting(true);
+        try {
+            const res = await api().devServer.site(workspace.id, {
+                action: 'detect',
+                ...(repo ? { repo } : {}),
+            });
+            setOptions(res.options ?? []);
+            setChosen(0);
+            const first = res.options?.[0];
+            if (first?.port) setPort(String(first.port));
+        } finally {
+            setDetecting(false);
         }
-        setDocroot(rel);
     };
 
+    const option = options?.[chosen];
+
     return (
-        <div className="site-card">
+        <Card variant="outlined" padding="md" className="site-card">
             <div className="site-card-fields">
                 <label className="site-field">
-                    <span>Hostname</span>
+                    <span>Name</span>
                     <Input
-                        value={hostname}
-                        onValueChange={setHostname}
-                        placeholder="app.test"
-                        aria-label="Hostname for the new site"
+                        value={name}
+                        onValueChange={setName}
+                        placeholder="web"
+                        aria-label="Name for the new site"
                     />
                 </label>
                 <label className="site-field">
-                    <span>Serve as</span>
-                    <Select value={kind} onValueChange={setKind} list={KIND_OPTIONS} />
+                    <span>Repo</span>
+                    <Select
+                        value={repo}
+                        onValueChange={setRepo}
+                        list={[
+                            { value: '', label: 'The workspace root' },
+                            ...repos.map((r) => ({ value: r, label: `repos/${r}` })),
+                        ]}
+                    />
                 </label>
-                <label className="site-field site-field-wide">
-                    <span>Document root</span>
-                    <div className="site-docroot">
-                        <Input
-                            value={docroot}
-                            onValueChange={setDocroot}
-                            placeholder="repos/app/public"
-                            aria-label="Document root for the new site"
-                        />
-                        <Action size="sm" variant="ghost" icon="folder" onClick={() => void browse()}>
-                            Browse
-                        </Action>
-                    </div>
+                <label className="site-field">
+                    <span>Port inside the container</span>
+                    <Input
+                        value={port}
+                        onValueChange={setPort}
+                        placeholder="5173"
+                        aria-label="The port the server listens on inside the container"
+                    />
                 </label>
             </div>
+
+            <div className="set-actions">
+                <Action
+                    size="sm"
+                    variant="ghost"
+                    icon="search"
+                    disabled={detecting}
+                    onClick={() => void detect()}
+                >
+                    {detecting ? 'Reading the repo…' : 'See how this repo could run'}
+                </Action>
+            </div>
+
+            {options !== null && (
+                <div className="site-card-fields">
+                    <label className="site-field site-field-wide">
+                        <span>Run it as</span>
+                        <Select
+                            value={String(chosen)}
+                            onValueChange={(v) => {
+                                const i = Number(v);
+                                setChosen(i);
+                                const picked = options[i];
+                                if (picked?.port) setPort(String(picked.port));
+                            }}
+                            list={options.map((o, i) => ({
+                                value: String(i),
+                                label: optionLabel(o),
+                            }))}
+                        />
+                    </label>
+                </div>
+            )}
+
+            {option && (
+                <>
+                    <Text size="xs" className="text-zinc-500">
+                        {option.reason}
+                    </Text>
+                    {option.command && (
+                        <Text size="xs" className="text-zinc-500">
+                            <Icon name="terminal" size="xs" /> <code>{option.command.join(' ')}</code>
+                        </Text>
+                    )}
+                    {optionCaveat(option) && (
+                        <Callout color="amber" icon={<Icon name="alert-triangle" size="sm" />}>
+                            Check this before starting: {optionCaveat(option)}.
+                        </Callout>
+                    )}
+                </>
+            )}
+
             <div className="set-actions">
                 <Action
                     size="sm"
                     color="blue"
                     icon="check"
-                    disabled={saving || !hostname.trim()}
+                    disabled={saving || !name.trim()}
                     onClick={async () => {
                         setSaving(true);
                         try {
-                            await onAdd({ hostname: hostname.trim(), kind, docroot });
+                            await onCreate({
+                                name: name.trim(),
+                                ...(repo ? { repo } : {}),
+                                ...(option?.runMode ? { runMode: option.runMode } : {}),
+                                ...(option?.command ? { command: option.command } : {}),
+                                ...(port ? { port: Number(port) } : {}),
+                            });
                         } finally {
                             setSaving(false);
                         }
                     }}
                 >
-                    {saving ? 'Adding…' : 'Add & host'}
+                    {saving ? 'Starting…' : 'Add & start'}
                 </Action>
                 <Action size="sm" variant="ghost" onClick={onCancel}>
                     Cancel
                 </Action>
             </div>
-        </div>
+        </Card>
+    );
+}
+
+// --- services ---------------------------------------------------------------
+
+function ServicesTab({
+    services,
+    catalog,
+    busy,
+    logs,
+    connEnv,
+    hasRuntime,
+    onAction,
+    onToggleLog,
+}: {
+    services: DevServiceInfo[] | null;
+    catalog: DevServiceCatalogEntry[];
+    busy: string | null;
+    logs: { id: string; text: string } | null;
+    connEnv: Record<string, string> | null;
+    hasRuntime: boolean;
+    onAction: (id: string | null, req: Record<string, unknown>) => Promise<unknown>;
+    onToggleLog: (id: string) => void;
+}) {
+    const byEngine = new Map(catalog.map((c) => [c.engine, c]));
+    const configured = new Set((services ?? []).map((s) => s.engine));
+    const available = catalog.filter((c) => !configured.has(c.engine) && c.engine !== 'custom');
+
+    return (
+        <>
+            <section className="set-section">
+                <div className="set-section-head">
+                    <h2>Services</h2>
+                    <span className="set-section-desc">
+                        What this workspace&apos;s apps connect TO. One engine per version is
+                        SHARED across every workspace that wants it — this workspace gets its own
+                        slice of it, not its own copy.
+                    </span>
+                </div>
+
+                {services === null ? (
+                    <Text size="xs" className="text-zinc-500">
+                        Reading this workspace&apos;s services…
+                    </Text>
+                ) : services.length === 0 ? (
+                    <div className="set-note">
+                        No services here yet. Add one below and Genie starts (or adopts) the
+                        shared engine, creates this workspace&apos;s database and role on it, and
+                        injects the credentials into this workspace&apos;s sites.
+                    </div>
+                ) : (
+                    <div className="site-list">
+                        {services.map((row) => (
+                            <ServiceCard
+                                key={row.id}
+                                row={row}
+                                entry={byEngine.get(row.engine) ?? null}
+                                busy={busy === row.id}
+                                hasRuntime={hasRuntime}
+                                log={logs?.id === row.id ? logs.text : null}
+                                onAction={(req) => void onAction(row.id, { ...req, id: row.id })}
+                                onToggleLog={() => onToggleLog(row.id)}
+                            />
+                        ))}
+                    </div>
+                )}
+
+                {available.length > 0 && (
+                    <div className="set-actions">
+                        {available.map((entry) => (
+                            <Action
+                                key={entry.engine}
+                                size="sm"
+                                variant="ghost"
+                                icon="plus"
+                                disabled={busy !== null || !hasRuntime}
+                                title={entry.summary}
+                                onClick={() =>
+                                    void onAction(null, { action: 'add', engine: entry.engine })
+                                }
+                            >
+                                {entry.label}
+                            </Action>
+                        ))}
+                    </div>
+                )}
+            </section>
+
+            {connEnv && Object.keys(connEnv).length > 0 && (
+                <section className="set-section">
+                    <div className="set-section-head">
+                        <h2>What your app is given</h2>
+                    </div>
+                    <div className="set-note">
+                        These are injected into this workspace&apos;s site containers at start.
+                        They address each engine by its CONTAINER NAME on the workspace network —
+                        not the loopback port above, which only this machine can reach. A site&apos;s
+                        own <code>env</code> always wins over these.
+                    </div>
+                    <div className="svc-env">
+                        <CodeView
+                            value={Object.entries(connEnv)
+                                .map(([k, v]) => `${k}=${v}`)
+                                .join('\n')}
+                            readOnly
+                            minHeight={0}
+                            maxHeight={200}
+                        />
+                    </div>
+                </section>
+            )}
+        </>
+    );
+}
+
+/** One service: which engine, who else holds it, what isolation this workspace
+ *  really has, and how to reach it from either side of the boundary. */
+function ServiceCard({
+    row,
+    entry,
+    busy,
+    hasRuntime,
+    log,
+    onAction,
+    onToggleLog,
+}: {
+    row: DevServiceInfo;
+    entry: DevServiceCatalogEntry | null;
+    busy: boolean;
+    hasRuntime: boolean;
+    log: string | null;
+    onAction: (req: Record<string, unknown>) => void;
+    onToggleLog: () => void;
+}) {
+    const tone = serviceStatusTone(row);
+    const holders = holdersNote(row);
+    const isolation = isolationNote(row.dedicated ? 'dedicated' : entry?.provision ?? '');
+
+    return (
+        <Card variant="outlined" padding="md" className="site-card">
+            <div className="site-card-head">
+                <span className={`site-dot site-${tone}`} aria-hidden="true" />
+                <div className="site-card-name">
+                    <Text size="sm" style={{ fontWeight: 600 }}>
+                        {serviceTitle(row)}{' '}
+                        <Badge size="sm" variant="soft" color={row.dedicated ? 'amber' : 'zinc'}>
+                            {row.dedicated ? 'dedicated' : 'shared'}
+                        </Badge>
+                    </Text>
+                    {entry && (
+                        <Text size="xs" className="text-zinc-500">
+                            {entry.summary}
+                        </Text>
+                    )}
+                </div>
+            </div>
+
+            <div className={`site-card-status site-${tone}`}>{serviceStatusLabel(row)}</div>
+
+            {holders && (
+                <Text size="xs" className="text-zinc-500">
+                    <Icon name="users" size="xs" /> {holders}
+                </Text>
+            )}
+            <Text size="xs" className="text-zinc-500">
+                <Icon name="shield" size="xs" /> {isolation}
+            </Text>
+
+            {/* BOTH sides of the boundary. `host:port` is how a container on the
+                workspace network dials the engine; the local address is how psql
+                or an agent on this machine does. A connection string built from
+                the second and handed to a container fails every time. */}
+            {row.endpoints && row.endpoints.length > 0 && (
+                <div className="site-card-fields">
+                    {row.endpoints.map((e) => (
+                        <label className="site-field" key={e.name}>
+                            <span>{e.name}</span>
+                            <Input
+                                value={`${e.host}:${e.port}${e.localAddress ? `  ·  ${e.localAddress}` : ''}`}
+                                readOnly
+                                disabled
+                            />
+                        </label>
+                    ))}
+                </div>
+            )}
+
+            {row.envKeys && row.envKeys.length > 0 && (
+                <Text size="xs" className="text-zinc-500">
+                    <Icon name="key" size="xs" /> Injects {row.envKeys.join(', ')}
+                </Text>
+            )}
+
+            {log !== null && (
+                <div className="svc-env">
+                    <span className="svc-env-label">Engine log</span>
+                    <CodeView
+                        value={log || 'Nothing logged yet.'}
+                        readOnly
+                        minHeight={0}
+                        maxHeight={240}
+                    />
+                </div>
+            )}
+
+            <div className="set-actions">
+                {row.state === 'running' ? (
+                    <Action
+                        size="sm"
+                        variant="ghost"
+                        icon="square"
+                        disabled={busy}
+                        onClick={() => onAction({ action: 'stop' })}
+                        title="Releases this workspace's hold. The engine stops only if nobody else is using it."
+                    >
+                        Release
+                    </Action>
+                ) : (
+                    <Action
+                        size="sm"
+                        variant="ghost"
+                        icon="play"
+                        disabled={busy || !hasRuntime}
+                        onClick={() => onAction({ action: 'start' })}
+                    >
+                        {row.state === 'failed' ? 'Retry' : 'Start'}
+                    </Action>
+                )}
+                <Action
+                    size="sm"
+                    variant="ghost"
+                    icon="plug"
+                    disabled={busy}
+                    onClick={() => onAction({ action: 'connection' })}
+                >
+                    Connection
+                </Action>
+                {entry?.shared && (
+                    <Action
+                        size="sm"
+                        variant="ghost"
+                        icon={row.dedicated ? 'users' : 'user'}
+                        disabled={busy}
+                        onClick={() => onAction({ action: 'dedicated', dedicated: !row.dedicated })}
+                        title={
+                            row.dedicated
+                                ? 'Move back to the shared engine. Shared and dedicated engines have SEPARATE volumes, so this workspace gets a freshly provisioned, EMPTY database.'
+                                : 'Run a container just for this workspace. Shared and dedicated engines have SEPARATE volumes, so this starts from an EMPTY database.'
+                        }
+                    >
+                        {row.dedicated ? 'Use the shared engine' : 'Give it a dedicated one'}
+                    </Action>
+                )}
+                <Action size="sm" variant="ghost" icon="file-text" disabled={busy} onClick={onToggleLog}>
+                    {log !== null ? 'Hide log' : 'Log'}
+                </Action>
+                <Action
+                    size="sm"
+                    variant="ghost"
+                    icon="trash-2"
+                    disabled={busy}
+                    onClick={() => onAction({ action: 'remove' })}
+                    title="Releases this workspace's hold and forgets the definition. The engine's data is left alone."
+                >
+                    Remove
+                </Action>
+            </div>
+        </Card>
     );
 }
