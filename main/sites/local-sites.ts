@@ -1,5 +1,5 @@
 import { listWorkspaces, getWorkspaceTunnelSites } from '../db';
-import { hostedGenSites } from '../hosting/manager';
+import { devServerGenSites } from '../dev-server/site-manager';
 import { discoverSites } from '../mobile/hosts';
 import type { EnabledGenSite } from '../remote';
 import type { LocalTarget } from './local-carrier';
@@ -106,11 +106,18 @@ export async function listLocalEnabledGenSites(): Promise<EnabledGenSite[]> {
             }
         }
     }
-    // Hosted sites are emitted OUTSIDE the discovery loop on purpose: they need
-    // no hosts-file entry (Genie is the server, so there is nothing for the OS
-    // to resolve) and they must survive a discovery failure — an unreadable
-    // hosts file should not hide a site Genie is serving right now.
-    return mergeHostedSites([...byGen.values()], hostedGenSites());
+    // DEV-SERVER sites (#234) are emitted OUTSIDE the discovery loop on purpose:
+    // they need no hosts-file entry (Genie is the server, so there is nothing for
+    // the OS to resolve) and they must survive a discovery failure — an
+    // unreadable hosts file should not hide a site Genie is serving right now.
+    //
+    // This is the entire routing story for the container Dev Server: a running
+    // container's PUBLISHED LOOPBACK PORT arrives here as an ordinary
+    // `EnabledGenSite`, so `localTargetsBySiteId` → the local carrier (local)
+    // and `/api/sites/enabled` → the remote shim (remote) both serve it with no
+    // code of their own. Overlaid LAST, so a container that is actually running
+    // wins over a hosts-file entry claiming the same name.
+    return mergeHostedSites([...byGen.values()], devServerGenSites());
 }
 
 /** The loopback-dial target for each enabled site, keyed by siteId — what the

@@ -1,0 +1,9 @@
+# This directory is a Linux container build context, and the repo is developed
+# on Windows with core.autocrlf=true — which would hand `docker build` a
+# CRLF-terminated entrypoint.sh and produce the single most confusing failure in
+# containers: `exec /usr/local/bin/genie-entrypoint: no such file or directory`,
+# because the kernel reads the shebang as `/bin/sh\r`.
+#
+# CI never sees it (Linux checkouts are LF either way). A developer building the
+# image on their own machine does. Pin the working tree, not just the blob.
+* text eol=lf

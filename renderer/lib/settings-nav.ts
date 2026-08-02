@@ -16,7 +16,7 @@ export type SectionId =
     | 'plugins'
     | 'mobile'
     | 'sites'
-    | 'hosting'
+    | 'dev-server'
     | 'connections'
     | 'devices'
     | 'updates';
@@ -52,10 +52,11 @@ export const NAV_GROUPS: NavGroup[] = [
             { id: 'plugins', label: 'Plugins', icon: 'puzzle' },
             { id: 'mobile', label: 'Work Mode', icon: 'monitor' },
             { id: 'sites', label: '.gen Sites', icon: 'globe' },
-            // Workstation-level hosting: the Genie Browser switch + the runtime
-            // diagnostics (#232). Per-workspace sites are set up in the Site
-            // Manager, not here — this is the machine's half.
-            { id: 'hosting', label: 'Hosting', icon: 'server' },
+            // Workstation-level Dev Server: the Genie Browser switch + the
+            // container-runtime diagnostics (#234). Per-workspace sites and
+            // services are set up in the Site Manager, not here — this is the
+            // machine's half.
+            { id: 'dev-server', label: 'Dev Server', icon: 'server' },
             { id: 'connections', label: 'Connections', icon: 'link' },
             { id: 'devices', label: 'Devices', icon: 'smartphone' },
         ],

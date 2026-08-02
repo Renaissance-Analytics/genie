@@ -970,3 +970,131 @@ describe('db migration v28 (per-workspace scheduled-task approval gate)', () => 
         expect(cols(db, 'workspaces').has('schedule_approval')).toBe(true);
     });
 });
+
+describe('db migration v34 (retiring the beta.218 native hosting columns, #234 P4)', () => {
+    it('drops hosted_sites and workspace_services, and leaves the rest of the row intact', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const c = cols(db, 'workspaces');
+        expect(c.has('hosted_sites')).toBe(false);
+        expect(c.has('workspace_services')).toBe(false);
+        // The neighbouring JSON-blob columns are untouched — a DROP COLUMN that
+        // took a sibling with it would silently lose every workspace's tunnel
+        // sites or dev-server definitions.
+        expect(c.has('tunnel_sites')).toBe(true);
+        expect(c.has('dev_sites')).toBe(true);
+        expect(c.has('dev_services')).toBe(true);
+        expect(c.has('path')).toBe(true);
+    });
+
+    it('drops them on an UPGRADE too, not just a fresh database', () => {
+        // The case that matters: a user on beta.218 has both columns, full of
+        // configuration for a runtime that no longer exists. A migration that
+        // only worked on a fresh install would leave every existing machine
+        // carrying dead columns forever.
+        const db = new Database(':memory:');
+        db.exec('CREATE TABLE schema_version (version INTEGER PRIMARY KEY)');
+        const upTo33 = () => {
+            runMigrations(db);
+            db.exec('DELETE FROM schema_version WHERE version = 34');
+            db.exec('ALTER TABLE workspaces ADD COLUMN hosted_sites TEXT');
+            db.exec('ALTER TABLE workspaces ADD COLUMN workspace_services TEXT');
+        };
+        upTo33();
+        expect(cols(db, 'workspaces').has('hosted_sites')).toBe(true);
+
+        runMigrations(db);
+
+        const c = cols(db, 'workspaces');
+        expect(c.has('hosted_sites')).toBe(false);
+        expect(c.has('workspace_services')).toBe(false);
+    });
+
+    it('is idempotent — a database that already lacks them converges', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'workspaces').has('hosted_sites')).toBe(false);
+    });
+});
+
+describe('db migrations v32 + v33 (the container Dev Server’s services, #234 P3)', () => {
+    it('adds the per-workspace dev_services column, defaulting to nothing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(cols(db, 'workspaces').has('dev_services')).toBe(true);
+
+        db.prepare(
+            `INSERT INTO workspaces
+               (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, last_opened_at, created_by_genie)
+             VALUES ('w-svc', 'tynn', 'p', 'P', 'p', 'P', 'simple', '/tmp/svc', NULL, 0)`,
+        ).run();
+        const row = db
+            .prepare<[string], { dev_services: string | null }>(
+                'SELECT dev_services FROM workspaces WHERE id = ?',
+            )
+            .get('w-svc');
+        // NULL, not '{}' — an existing workspace gains the column with the safe
+        // default (nothing configured, nothing running).
+        expect(row?.dev_services ?? null).toBeNull();
+    });
+
+    it('kept dev_services SEPARATE from workspace_services, which is what let P4 DELETE it', () => {
+        // v31/v32 were third and fourth columns rather than reuses of v29/v30
+        // precisely so that retiring the beta.218 path would be a deletion and
+        // not a data migration. v34 collects: the container columns survive, the
+        // native ones are gone, and nothing had to be copied between them.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const c = cols(db, 'workspaces');
+        expect(c.has('dev_sites')).toBe(true);
+        expect(c.has('dev_services')).toBe(true);
+        expect(c.has('hosted_sites')).toBe(false);
+        expect(c.has('workspace_services')).toBe(false);
+    });
+
+    it('creates the machine-scoped engine table — a shared engine belongs to no workspace', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const c = cols(db, 'dev_service_engines');
+        expect([...c].sort()).toEqual(
+            ['admin_password', 'admin_user', 'created_at', 'engine', 'key', 'version', 'workspace_id'].sort(),
+        );
+        // Nullable workspace: NULL is the shared engine, a value is a
+        // workspace's opt-in dedicated one.
+        db.prepare(
+            `INSERT INTO dev_service_engines (key, engine, version, workspace_id, admin_user, admin_password, created_at)
+             VALUES ('postgres-16', 'postgres', '16', NULL, 'postgres', 'pw', 1)`,
+        ).run();
+        expect(
+            db
+                .prepare<[], { n: number }>('SELECT COUNT(*) AS n FROM dev_service_engines')
+                .get()?.n,
+        ).toBe(1);
+    });
+
+    it('keys an engine record by the CONTAINER, so a second insert cannot fork the credential', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const insert = () =>
+            db
+                .prepare(
+                    `INSERT OR IGNORE INTO dev_service_engines (key, engine, version, workspace_id, admin_user, admin_password, created_at)
+                     VALUES ('postgres-16', 'postgres', '16', NULL, 'postgres', ?, 1)`,
+                )
+                .run('pw-' + Math.random());
+        insert();
+        insert();
+        const rows = db
+            .prepare<[], { admin_password: string }>('SELECT admin_password FROM dev_service_engines')
+            .all();
+        expect(rows).toHaveLength(1);
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'workspaces').has('dev_services')).toBe(true);
+    });
+});

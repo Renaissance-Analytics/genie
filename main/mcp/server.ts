@@ -22,6 +22,10 @@ import {
     type ManageProcessResult,
     type ProvisionWorkspacesRequest,
     type ProvisionWorkspacesResult,
+    type ManageSiteRequest,
+    type ManageSiteResult,
+    type ManageServiceRequest,
+    type ManageServiceResult,
     type ManageTerminalsRequest,
     type ManageTerminalsResult,
     type RunAgentRequest,
@@ -109,6 +113,16 @@ export interface ServerDeps {
         terminalId: string,
         req: ProvisionWorkspacesRequest,
     ) => Promise<ProvisionWorkspacesResult>;
+    /** Serve a repo's dev server from a container + route it at `<name>.gen` (manageSite tool). */
+    manageSite: (terminalId: string, req: ManageSiteRequest) => Promise<ManageSiteResult>;
+    /** Give a workspace a backing service on a SHARED, reference-counted engine
+     *  (manageService tool). Optional: absent contributes no tool. */
+    manageService?: (
+        terminalId: string,
+        req: ManageServiceRequest,
+    ) => Promise<ManageServiceResult>;
+    /** Is a container runtime usable here? Gates manageSite/manageService out of tools/list. */
+    devServerAvailable?: (terminalId: string) => Promise<boolean>;
     /** Spawn/drive terminals in the caller's or a governed workspace (manageTerminals tool). */
     manageTerminals: (
         terminalId: string,
@@ -367,6 +381,8 @@ function scheduleHeartbeat(beat: () => void): () => void {
  *    the response at once — harmless). stop/restart/list never block.
  *  - provisionWorkspaces `provision` can block on the ops-auto-provision gate
  *    (same harmless fast-path when the toggle is ON). `status` never blocks.
+ *  - manageSite create/start/restart can build an image, pull one, and wait for
+ *    a dev server to bind. list/status/logs never block.
  *  - manageTerminals create/write can block on the per-workspace terminal-
  *    approval gate (OFF resolves immediately). read/list/kill never block.
  *  - runAgent start/send can block on the same gate. read/stop never block.
@@ -384,6 +400,22 @@ function isBlockingCall(msg: JsonRpcRequest): boolean {
     }
     if (name === 'provisionWorkspaces') {
         return params?.arguments?.action === 'provision';
+    }
+    if (name === 'manageSite') {
+        // These three can build a repo's Dockerfile, pull a multi-gigabyte dev
+        // image, and then wait out a dev server's readiness probe — minutes, on
+        // a first run. Without the keepalive the client times the call out and
+        // the agent reports a failure for something that is still working.
+        const action = params?.arguments?.action;
+        return action === 'create' || action === 'start' || action === 'restart';
+    }
+    if (name === 'manageService') {
+        // Same reason as manageSite's three: these pull a multi-hundred-megabyte
+        // engine image, wait out `initdb`, and then provision — minutes, on a
+        // first run. Without the keepalive the client times the call out and the
+        // agent reports a failure for something that is still working.
+        const action = params?.arguments?.action;
+        return action === 'add' || action === 'start' || action === 'dedicated';
     }
     if (name === 'manageTerminals') {
         const action = params?.arguments?.action;
@@ -614,6 +646,9 @@ async function handle(
         onForceQuestion: deps.onForceQuestion,
         describeWorkspace: deps.describeWorkspace,
         manageProcess: deps.manageProcess,
+        manageSite: deps.manageSite,
+        manageService: deps.manageService,
+        devServerAvailable: deps.devServerAvailable,
         provisionWorkspaces: deps.provisionWorkspaces,
         manageTerminals: deps.manageTerminals,
         runAgent: deps.runAgent,

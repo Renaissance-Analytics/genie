@@ -1,6 +1,7 @@
 import {
     app,
     BrowserWindow,
+    dialog,
     ipcMain,
     nativeImage,
     Notification,
@@ -28,13 +29,24 @@ import {
     removeWorkspace,
     getWorkspaceTunnelSites,
     setWorkspaceTunnelSite,
-    getWorkspaceHostedSites,
-    getWorkspaceServices,
+    getWorkspaceDevSites,
+    getWorkspaceDevServices,
+    getOrCreateDevServiceEngine,
 } from './db';
 import { discoverSites } from './mobile/hosts';
 import { listLocalEnabledGenSites } from './sites/local-sites';
-import { hostingManager, initHosting } from './hosting/manager';
-import { initServices, serviceManager } from './hosting/services/manager';
+import { remoteGenUrl } from './sites/gen-url';
+import { LOCAL_CONN_KEY, openTestingBrowser } from './testing-browser';
+import { initDevSites, devSiteManager } from './dev-server/site-manager';
+import { devLifecycle, initDevLifecycle } from './dev-server/lifecycle';
+import {
+    initDevServices,
+    devServiceManager,
+    devServiceEnvFor,
+} from './dev-server/services/service-manager';
+import { resolveContainerRuntime } from './dev-server';
+import { waitForHttp, waitForPort } from './dev-server/port-probe';
+import { registerDevSiteTools } from './mcp/dev-site-tools';
 import {
     writeWorkspaceAgentMcp,
     healTynnLiteralToken,
@@ -156,7 +168,7 @@ import {
     provisionTargets,
     opsAutoProvisionEnabled,
 } from './tynn/ops-provision';
-import { broadcastHostingChanged, broadcastWorkspacesChanged } from './ipc';
+import { broadcastDevServerChanged, broadcastWorkspacesChanged } from './ipc';
 import {
     initTerminalBackend,
     isHostBacked,
@@ -1023,24 +1035,75 @@ app.whenReady().then(async () => {
     });
 
     initDatabase(app.getPath('userData'));
-    // Genie's own hosting runtime (#232). Reads workspaces + their hosted-site
-    // configs, so it must come after initDatabase. Creating it starts nothing —
-    // `reconcile()` (below, once the app is up) is what serves the enabled
-    // sites, and a PHP site's runtime is fetched on FIRST USE, never at boot.
-    // userData is the base dir: the fetched runtime and Caddy's local-CA state
-    // must survive app updates.
-    // The backing services a hosted site connects to (#232 P3). Created BEFORE
-    // the hosting manager because the latter reads this one's environment when
-    // it starts a PHP site — creating it starts nothing either way.
-    initServices({
-        baseDir: app.getPath('userData'),
-        listWorkspaces: () => listWorkspaces().map((w) => ({ id: w.id, path: w.path })),
-        servicesFor: (id) => getWorkspaceServices(id),
+    // The container DEV SERVER (#234 P2). Creating the manager starts NOTHING —
+    // it probes no runtime and touches no daemon until a site is acted on, so a
+    // machine with no Docker pays nothing for this line. Sites are started by
+    // `manageSite`, by the Site Manager, or by a workspace the user opens —
+    // never implicitly on boot of a workspace nobody asked to serve.
+    // The container Dev Server's SERVICES (#234 P3). Created BEFORE the site
+    // manager because the latter reads this one's env when it starts a site —
+    // creating it starts nothing either way, and no engine is pulled or run
+    // until a workspace actually asks for one.
+    initDevServices({
+        resolveRuntime: () => resolveContainerRuntime(),
+        listWorkspaces: () =>
+            listWorkspaces().map((w) => ({ id: w.id, path: w.path, label: w.project_name })),
+        devServicesFor: (id) => getWorkspaceDevServices(id),
+        // Machine-scoped, minted once per engine CONTAINER: a shared engine's
+        // superuser credential cannot live in any one workspace's row.
+        engineAdmin: (req) => getOrCreateDevServiceEngine(req),
+        // REQUIRED, not an optimisation. Mailpit, Meilisearch and MinIO have no
+        // in-container readiness check, so `waitReady` has nothing to ask and —
+        // without this — answers "not ready" honestly but immediately, failing
+        // every acquire of those three with "started but never became ready".
+        // Found by the live smoke; a unit test with a fake runtime cannot see it.
+        probeReady: ({ port, kind, timeoutMs }) =>
+            kind === 'http' ? waitForHttp(port, timeoutMs) : waitForPort(port, timeoutMs),
+        confirmImagePull: confirmContainerImagePull,
+        onChanged: () => broadcastDevServerChanged(),
     });
-    initHosting({
-        baseDir: app.getPath('userData'),
-        listWorkspaces: () => listWorkspaces().map((w) => ({ id: w.id, path: w.path })),
-        hostedSitesFor: (id) => getWorkspaceHostedSites(id),
+    initDevSites({
+        resolveRuntime: () => resolveContainerRuntime(),
+        // A site gets its workspace's services as env — and asking for them
+        // ENSURES they are running first, so a dev server never comes up
+        // pointed at an engine that is not there.
+        serviceEnvFor: async (workspaceId) => {
+            const services = devServiceManager();
+            if (!services) return {};
+            for (const row of services.list(workspaceId)) {
+                if (row.enabled) await services.acquire(workspaceId, row.serviceId);
+            }
+            return devServiceEnvFor(workspaceId);
+        },
+        listWorkspaces: () =>
+            listWorkspaces().map((w) => ({ id: w.id, path: w.path, label: w.project_name })),
+        devSitesFor: (id) => getWorkspaceDevSites(id),
+        confirmImagePull: confirmContainerImagePull,
+        // The `.gen` change event, so the header popover, the rail icon, the
+        // Site Manager and the Testing Browser's resolver all re-pull when a
+        // container starts or stops.
+        onChanged: () => broadcastDevServerChanged(),
+    });
+    // The app LIFECYCLE hooks (#234 P4). Created after both managers because it
+    // orchestrates them, and reading them lazily so the order stops mattering.
+    // Creating it starts nothing; `onBoot` (below) only ADOPTS what is already
+    // running, and `onWorkspaceOpen` only warms a workspace that uses this.
+    initDevLifecycle({
+        resolveRuntime: () => resolveContainerRuntime(),
+        workspaceFor: (id) => {
+            const row = getWorkspace(id);
+            return row ? { id: row.id, path: row.path, label: row.project_name } : null;
+        },
+        devSitesFor: (id) => getWorkspaceDevSites(id),
+        devServicesFor: (id) => getWorkspaceDevServices(id),
+        sites: () => devSiteManager(),
+        services: () => devServiceManager(),
+    });
+    // `manageSite open` — the ONE desktop-shaped action, injected so the headless
+    // build reports "no browser here" instead of failing obscurely.
+    registerDevSiteTools({
+        openInBrowser: (genName) =>
+            openTestingBrowser(LOCAL_CONN_KEY, 'This machine', remoteGenUrl(genName)),
     });
     // Install the secrets-at-rest encryptor for ALL token stores (mobile / remote
     // / GitHub) BEFORE anything reads them. Desktop injects the Electron
@@ -1706,29 +1769,33 @@ app.whenReady().then(async () => {
     // bundle dir; resolveDocsDir uses it to find the bundled docs/ in both dev
     // and the packaged asar.
     registerDocsIpc(__dirname);
-    // Serve every workspace site that is ENABLED for hosting (#232). Deferred
-    // and fire-and-forget: a PHP site downloads its runtime on first use, and
-    // no site being served is a reason to hold up the app's startup. Failures
-    // are per-site statuses the Site Manager surfaces, never a boot error.
-    // Services BEFORE sites, and awaited in between: a PHP site is started with
-    // its database credentials as environment, so a site that came up first
-    // would be serving an app pointed at a server that is not listening yet.
+    // ADOPT the Dev Server containers that are already running (#234 P4) — and
+    // start NOTHING. Two different reasons, both load-bearing:
     //
-    // The push at the end is what lights the rail's sites icon on a cold start:
-    // a site can take a build (or a 277 MB runtime fetch) to come up, long after
-    // the first window rendered, and nothing polls for it.
+    //   - A service ENGINE carries `restart: unless-stopped`, so after a reboot
+    //     it is up before Genie is, with zero known holders. Left unadopted the
+    //     reference count is a lie, and the first workspace to acquire it later
+    //     becomes its only holder — so that workspace's release stops an engine
+    //     every other workspace is still using.
+    //   - A SITE container easily outlives a Genie restart or an app update.
+    //     Unadopted it keeps serving while `genSites()` does not know it exists,
+    //     so `<name>.gen` resolves to nothing and the user sees a dead site that
+    //     is, in fact, running.
+    //
+    // What is deliberately NOT here is a `reconcile()`: a workspace nobody asked
+    // to serve must not begin serving because the app launched. This is the
+    // counterpart of quitting without stopping anything — see `lifecycle.ts`.
+    //
+    // Deferred and fire-and-forget: nothing here is a reason to hold up startup,
+    // and the push at the end is what lights the rail's sites icon on a cold
+    // start, since nothing polls for it.
     void (async () => {
         try {
-            await serviceManager()?.reconcile();
+            await devLifecycle()?.onBoot();
         } catch (e) {
-            console.error('[hosting] service reconcile failed', e);
+            console.error('[dev-server] boot adoption failed', e);
         }
-        try {
-            await hostingManager()?.reconcile();
-        } catch (e) {
-            console.error('[hosting] reconcile failed', e);
-        }
-        broadcastHostingChanged();
+        broadcastDevServerChanged();
     })();
     // Two-phase quit (Tier 1 terminal persistence). On the FIRST before-quit we
     // hold the quit, ask every window to serialize its terminals one last time,
@@ -1987,6 +2054,40 @@ function showE2EWindow(): void {
     }
 }
 
+/**
+ * Consent for fetching a container image the Dev Server needs (#234 P4).
+ *
+ * The seam's default is NO PULL — deliberately, so a caller that has not built
+ * a consent surface cannot start a multi-gigabyte download by forgetting a
+ * field. That default is right for a library and wrong for the desktop: without
+ * this, clicking "Add Postgres" in the Site Manager fails with an instruction to
+ * go and run `docker pull` in a terminal, which is a dead end dressed as an
+ * error message.
+ *
+ * Asking is also the honest shape. An engine is 20 MB (Mailpit) to 600 MB
+ * (MySQL) and the workspace dev image is larger still; that is the user's disk
+ * and the user's bandwidth, and it is worth one question.
+ */
+async function confirmContainerImagePull(req: { image: string; reason: string }): Promise<boolean> {
+    try {
+        const { response } = await dialog.showMessageBox({
+            type: 'question',
+            title: 'Download a container image?',
+            message: `Genie needs the image ${req.image}.`,
+            detail: `${req.reason}\n\nIt is downloaded once and reused by every workspace that needs it afterwards.`,
+            buttons: ['Download', 'Cancel'],
+            defaultId: 0,
+            cancelId: 1,
+        });
+        return response === 0;
+    } catch {
+        // No window (headless, or a very early boot). Fail CLOSED, back to the
+        // library default: report the image as missing with the command to run,
+        // rather than silently downloading gigabytes nobody agreed to.
+        return false;
+    }
+}
+
 app.on('window-all-closed', () => {
     // Genie stays alive in the tray. Do nothing.
 });
@@ -1994,17 +2095,19 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
     (app as any).isQuiting = true;
     unregisterShortcuts();
-    // Kill every hosted site's server. Unlike the pty host these are ordinary
-    // children of this process with nothing to outlive the quit for — a
-    // FrankenPHP left holding port 20431 would make the next launch's start of
-    // that same site fail to bind. The kill itself is synchronous; only the
-    // exit we await is not, which is why this is fire-and-forget.
-    void hostingManager()?.stopAll();
-    // And every backing service. A managed Postgres left running would hold
-    // both its port and its data directory's lock file, so the next launch of
-    // that workspace would fail to start a cluster that is, confusingly,
-    // already up.
-    void serviceManager()?.stopAll();
+    // The Dev Server is deliberately NOT torn down here (#234 P4).
+    //
+    // beta.218's native hosting had to be: FrankenPHP and a native Postgres were
+    // ordinary children of this process, and one left holding port 20431 would
+    // break the next launch. A container is the opposite — it is not our child,
+    // a service engine is created `restart: unless-stopped` precisely so it
+    // outlives us, and the most common reason Genie quits is to APPLY AN UPDATE.
+    // Killing a user's running dev servers to install a patch is the same
+    // mistake as killing their terminals.
+    //
+    // What is not stopped here is re-ADOPTED on the next boot (`onBoot`), which
+    // is the half of the pair that makes leaving them running safe rather than
+    // merely convenient.
 });
 
 // Bridge for getting the active project context (used by capture window).

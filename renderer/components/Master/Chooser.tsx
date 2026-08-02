@@ -38,7 +38,7 @@ import {
     SCHEDULE_PRESETS,
 } from '../../lib/schedule-view';
 import { issueWatchBadge } from '../../lib/issuewatch';
-import { railSitesTitle, railSitesTone } from '../../lib/hosting';
+import { railSitesTitle, railSitesTone } from '../../lib/dev-server';
 import {
     enterableWorkspaceIds,
     newlyAddedWorkspaceIds,
@@ -48,7 +48,7 @@ import {
     detectedShells,
     isSystemWorkspace,
     SYSTEM_WORKSPACE_ID,
-    type HostedSiteRow,
+    type DevSiteInfo,
     type McpStatus,
     type ProcessStatus,
     type ScheduleInfo,
@@ -116,12 +116,13 @@ interface Props {
     issueWatchCounts?: Record<string, WatchTypeCounts>;
     /** Open the Issue Watch flyout for a specific workspace (the pill click). */
     onShowIssueWatch: (workspaceId: string) => void;
-    /** Genie's own hosting (#232): every workspace's configured sites + live
-     *  state. Drives the sites indicator beside the Process one — a workspace
-     *  with no ENABLED site shows nothing at all. */
-    hostedSites?: HostedSiteRow[];
+    /** The container Dev Server (#234): each workspace's dev sites + live
+     *  state, keyed by workspace id. Drives the sites indicator beside the
+     *  Process one — a workspace with no ENABLED site shows nothing at all. */
+    devSites?: Record<string, DevSiteInfo[]>;
     /** Open the Workspace Site Manager (the sites indicator's click). Absent in
-     *  a remote window, where hosting is the CLIENT's runtime, not the host's. */
+     *  a remote window, where the containers would be the CLIENT's, not the
+     *  host's. */
     onShowSiteManager?: (workspaceId: string) => void;
     /** Split Add-Terminal button: last-used type + its persistence. */
     lastTerminalType: TerminalTypeId;
@@ -163,7 +164,7 @@ export default function Chooser({
     onUpdateProcess,
     issueWatchCounts = {},
     onShowIssueWatch,
-    hostedSites = [],
+    devSites = {},
     onShowSiteManager,
     lastTerminalType,
     onLastTerminalType,
@@ -1192,21 +1193,22 @@ export default function Chooser({
                                     >
                                         <IconCpu size={13} />
                                     </span>
-                                    {/* Genie HOSTS sites for this workspace
-                                        (#232). Shown only when at least one is
+                                    {/* Genie runs DEV SERVERS for this workspace
+                                        (#234). Shown only when at least one is
                                         enabled — an absent icon means "this
                                         workspace serves nothing", which is the
                                         common case and must stay silent. Opens
                                         the Site Manager. */}
                                     {(() => {
-                                        const tone = railSitesTone(hostedSites, ws.id);
+                                        const mine = devSites[ws.id] ?? [];
+                                        const tone = railSitesTone(mine, ws.id);
                                         if (!tone || !onShowSiteManager) return null;
                                         return (
                                             <span
                                                 className={`sites-ind sites-${tone}`}
                                                 role="button"
                                                 tabIndex={-1}
-                                                title={railSitesTitle(hostedSites, ws.id)}
+                                                title={railSitesTitle(mine, ws.id)}
                                                 onClick={(e) => {
                                                     e.stopPropagation();
                                                     onShowSiteManager(ws.id);

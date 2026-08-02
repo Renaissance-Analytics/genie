@@ -24,6 +24,7 @@ import {
     type TerminalSpecRow,
 } from '../db';
 import { agentInboxBroker } from '../agentinbox/broker';
+import { devLifecycle } from '../dev-server/lifecycle';
 import { getKnowledgeStore } from '../knowledge/store';
 import { workspaceSlug } from '../agentinbox/slug';
 import { appendLaunchFlags } from '../agentinbox/session-capture';
@@ -1090,7 +1091,7 @@ export async function isOpsProjectFor(callerWorkspacePath: string): Promise<bool
  * only when the caller governs it. Returns the decision (with the resolved
  * workspace row when allowed) so handlers share one chokepoint.
  */
-async function resolveAgentTarget(
+export async function resolveAgentTarget(
     callerTerminalId: string,
     requestedWorkspaceId: string | undefined,
 ): Promise<{ decision: TargetDecision; ws: ReturnType<typeof getWorkspace> | null }> {
@@ -2055,6 +2056,12 @@ export async function manageWorkspacesForMcp(
                         workspaces,
                     };
                 }
+                // Same order as the `workspaces:remove` IPC: the Dev Server
+                // teardown reads this workspace's sites and services, so it has
+                // to run while the row still exists. (#234 P4)
+                await devLifecycle()
+                    ?.onWorkspaceRemove(ws.id)
+                    .catch((e) => console.error('[dev-server] teardown failed', e));
                 removeWorkspace(ws.id);
                 broadcastWorkspacesChanged();
                 deps.rebuildMenu();

@@ -8,21 +8,22 @@ import {
     type TunnelSiteConfig,
 } from './mobile/hosts';
 import {
-    hostedSiteIdFor,
-    parseHostedSites,
-    sanitizeHostedSitePatch,
-    type HostedSiteConfig,
-    type HostedSites,
-} from './hosting/sites-config';
+    devSiteIdFor,
+    parseDevSites,
+    sanitizeDevSitePatch,
+    type DevSiteConfig,
+    type DevSites,
+} from './dev-server/sites-config';
 import {
-    parseWorkspaceServices,
-    sanitizeServicePatch,
-    serviceIdFor,
-    withCredentials,
-    type ServiceConfig,
-    type ServiceKind,
-    type WorkspaceServices,
-} from './hosting/services/config';
+    devServiceIdFor,
+    generateServicePassword,
+    parseDevServices,
+    sanitizeDevServicePatch,
+    withServiceCredentials,
+    type DevServiceConfig,
+    type DevServices,
+} from './dev-server/services/services-config';
+import { engineKeyFor, resolveEngineVersion, type ServiceEngine } from './dev-server/services/catalog';
 import type { AgentInboxScope, WorkspaceAgentAccess } from './agentinbox/types';
 
 /**
@@ -790,6 +791,125 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v31: per-workspace DEV SITES (the container Dev Server, Tynn #234
+            // P2). A JSON blob mapping the opaque per-site id → its definition:
+            // { [siteId]: { name, genName, repo, runMode, image?, command?,
+            //   port?, env?, kind, enabled } }.
+            //
+            // A THIRD column rather than a rename of v29's `hosted_sites`,
+            // because the two name different substrates and both are live: a
+            // hosted_sites row is served by the beta.218 host-NATIVE runtime
+            // (FrankenPHP, PHP-first), a dev_sites row by a container in the
+            // workspace sandbox (any stack). P4 retires the former; folding them
+            // together now would make that retirement a data migration instead
+            // of a deletion.
+            //
+            // NULL/absent reads as {} (nothing defined), so existing workspaces
+            // gain the column with the safe default. Resolved by
+            // getWorkspaceDevSites — never parsed here.
+            version: 31,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('dev_sites')) {
+                    db.exec(`ALTER TABLE workspaces ADD COLUMN dev_sites TEXT`);
+                }
+            },
+        },
+        {
+            // v32: per-workspace DEV SERVICES (the container Dev Server, Tynn
+            // #234 P3). A JSON blob mapping the opaque per-service id → what
+            // this workspace wants: { [serviceId]: { engine, version, dedicated,
+            //   password, image?, port?, env?, enabled } }.
+            //
+            // A FOURTH column rather than a reuse of v30's `workspace_services`,
+            // for exactly the reason v31 gave for `dev_sites`: a v30 row
+            // describes a HOST-NATIVE Postgres fetched onto the user's machine
+            // (the beta.218 path), this one describes a workspace's slice of a
+            // SHARED container. Both are live until P4 retires the former, and
+            // folding them together now would make that retirement a data
+            // migration instead of a deletion.
+            //
+            // Holds the workspace's generated credential in the clear. Same
+            // reasoning as v30's: its purpose is to reach a `.env` and a
+            // container environment in the clear, because that is the only way
+            // the app can use it.
+            //
+            // NULL/absent reads as {} (nothing configured). Resolved by
+            // getWorkspaceDevServices — never parsed here.
+            version: 32,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('dev_services')) {
+                    db.exec(`ALTER TABLE workspaces ADD COLUMN dev_services TEXT`);
+                }
+            },
+        },
+        {
+            // v33: the SHARED service engines themselves (#234 P3).
+            //
+            // A machine-scoped table rather than a workspace column, because a
+            // shared engine IS machine-scoped: one `postgres:16` container
+            // serves every workspace pinned to Postgres 16, so its superuser
+            // credential cannot live in any one workspace's row.
+            //
+            // `key` is the container's identity: `postgres-16` for the shared
+            // engine, `postgres-16@<workspaceId>` for a workspace's opt-in
+            // dedicated one. The admin password is minted ONCE per key and never
+            // regenerated — every engine image bakes the credential into its
+            // data directory on first init and ignores the environment
+            // afterwards, so a new password would simply lock Genie out of the
+            // engine it created.
+            version: 33,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS dev_service_engines (
+                        key TEXT PRIMARY KEY,
+                        engine TEXT NOT NULL,
+                        version TEXT NOT NULL,
+                        workspace_id TEXT,
+                        admin_user TEXT NOT NULL,
+                        admin_password TEXT NOT NULL,
+                        created_at INTEGER NOT NULL
+                    )
+                `);
+            },
+        },
+        {
+            // v34: DROP the beta.218 native-hosting columns (#234 P4).
+            //
+            // `hosted_sites` (v29) and `workspace_services` (v30) described the
+            // host-NATIVE hosting runtime — FrankenPHP, and Postgres/Redis
+            // fetched onto the user's machine — which P4 deletes. v31/v32 were
+            // deliberately NEW columns rather than reuses of these two, and this
+            // is the migration that collects on that decision: there is nothing
+            // to copy, because nothing was ever shared. A `dev_sites` row is not
+            // a converted `hosted_sites` row; a workspace that had native
+            // hosting configured simply no longer has it, and its Site Manager
+            // now offers the container path instead.
+            //
+            // Every earlier version is left exactly as it was, including the two
+            // ALTERs that add these columns. Rewriting v29/v30 into no-ops would
+            // make the chain lie about what it did, and it would mean a fresh
+            // database never exercises this DROP at all — so the one code path
+            // that has to work on every existing machine would be the one no
+            // test run ever touched.
+            //
+            // `ALTER TABLE ... DROP COLUMN` needs SQLite ≥ 3.35 (better-sqlite3
+            // ships far newer) and refuses a column that is indexed, unique, a
+            // primary key, or named in a CHECK/generated column. Both of these
+            // are plain unconstrained TEXT blobs, so neither restriction bites.
+            version: 34,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (cols.has('hosted_sites')) {
+                    db.exec(`ALTER TABLE workspaces DROP COLUMN hosted_sites`);
+                }
+                if (cols.has('workspace_services')) {
+                    db.exec(`ALTER TABLE workspaces DROP COLUMN workspace_services`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1199,18 +1319,20 @@ export interface WorkspaceRow {
      *  the §5 allowlist. NULL/absent reads as {} (nothing enabled) — resolve it
      *  via {@link getWorkspaceTunnelSites}, never parse here. */
     tunnel_sites?: string | null;
-    /** Per-workspace HOSTED sites (Genie's own hosting runtime, #232),
-     *  JSON-encoded ({ [siteId]: { enabled, hostname, kind, docroot } }). Unlike
-     *  `tunnel_sites` (carry what something else serves) these are the sites
-     *  GENIE serves. NULL/absent reads as {} (nothing hosted) — resolve it via
-     *  {@link getWorkspaceHostedSites}, never parse here. */
-    hosted_sites?: string | null;
-    /** Per-workspace BACKING SERVICES (#232 P3), JSON-encoded
-     *  ({ [serviceId]: { enabled, kind, password?, database? } }). What the
-     *  hosted sites CONNECT TO, as opposed to what `hosted_sites` serves.
-     *  NULL/absent reads as {} — resolve it via {@link getWorkspaceServices},
-     *  never parse here. */
-    workspace_services?: string | null;
+    /** Per-workspace DEV SITES (the container Dev Server, #234 P2), JSON-encoded
+     *  ({ [siteId]: { name, genName, repo, runMode, command?, port?, … } }).
+     *  The sibling of `tunnel_sites` and its opposite: those carry what
+     *  something else on this machine serves, these are what GENIE serves, from
+     *  a container in the workspace sandbox.
+     *  NULL/absent reads as {} — resolve via {@link getWorkspaceDevSites}. */
+    dev_sites?: string | null;
+    /** Per-workspace DEV SERVICES (the container Dev Server, #234 P3),
+     *  JSON-encoded ({ [serviceId]: { engine, version, dedicated, password, … } }).
+     *  What this workspace's dev sites CONNECT TO: its slice — database, role
+     *  and credentials — of a SHARED engine container.
+     *  NULL/absent reads as {} — resolve via
+     *  {@link getWorkspaceDevServices}. */
+    dev_services?: string | null;
 }
 
 export function listWorkspaces(): WorkspaceRow[] {
@@ -1753,136 +1875,212 @@ export function setWorkspaceTunnelSite(
     setWorkspaceTunnelSites(id, { ...current, [siteId]: merged });
 }
 
-// Hosted sites (Genie's own hosting runtime, #232) ----------------------
+// Dev sites (the container Dev Server, #234 P2) --------------------------
 //
-// The sibling of tunnel_sites: those say "carry what something else serves",
-// these say "GENIE serves this, from this document root". Same single-column
-// JSON pattern, same opaque siteId key — which is what lets a hosted site
-// replace a discovered one in the Testing Browser's target map without any new
-// resolution path. Parse/sanitize live in main/hosting/sites-config.ts.
+// The sibling of tunnel_sites and its opposite: those carry what something else
+// serves, these are what GENIE serves. Same single-column JSON pattern; the id
+// is workspace-SCOPED (two workspaces can each have a `web`).
+// Parse/sanitize live in main/dev-server/sites-config.ts.
 
-/** This workspace's stored hosted-site configs (NULL/absent ⇒ {} = nothing
- *  hosted). Keyed by {@link hostedSiteIdFor}. */
-export function getWorkspaceHostedSites(id: string): HostedSites {
+/** This workspace's stored dev sites (NULL/absent ⇒ {} = none defined). */
+export function getWorkspaceDevSites(id: string): DevSites {
     const row = getDb()
-        .prepare<[string], { hosted_sites: string | null } | undefined>(
-            'SELECT hosted_sites FROM workspaces WHERE id = ?',
+        .prepare<[string], { dev_sites: string | null } | undefined>(
+            'SELECT dev_sites FROM workspaces WHERE id = ?',
         )
         .get(id);
-    return parseHostedSites(row?.hosted_sites ?? null);
+    return parseDevSites(row?.dev_sites ?? null);
 }
 
-/** Replace this workspace's whole hosted-site map (JSON-encoded). */
-export function setWorkspaceHostedSites(id: string, sites: HostedSites): void {
-    getDb()
-        .prepare('UPDATE workspaces SET hosted_sites = ? WHERE id = ?')
-        .run(JSON.stringify(sites), id);
+/** Replace this workspace's whole dev-site map (JSON-encoded). */
+export function setWorkspaceDevSites(id: string, sites: DevSites): void {
+    getDb().prepare('UPDATE workspaces SET dev_sites = ? WHERE id = ?').run(JSON.stringify(sites), id);
 }
 
 /**
- * Merge ONE hosted site into this workspace's map, returning its id.
+ * Merge ONE dev site into this workspace's map, returning its id.
  *
- * The key is DERIVED from the (sanitized) hostname rather than supplied, so the
- * stored id and the stored hostname can never disagree — a mismatch there would
- * mean the runtime serves one vhost while the Testing Browser resolves another.
- * Returns null when the patch carries no usable hostname and none is stored.
+ * The key is DERIVED from the (sanitized) name rather than supplied, so the
+ * stored id and the stored name can never disagree — a mismatch there would mean
+ * the manager starts a container for one site while the Testing Browser resolves
+ * another. Returns null when the patch carries no usable name and none is stored.
  */
-export function setWorkspaceHostedSite(
+export function setWorkspaceDevSite(
     id: string,
-    patch: Partial<HostedSiteConfig> & { siteId?: string },
+    patch: Partial<DevSiteConfig> & { siteId?: string },
 ): string | null {
-    const current = getWorkspaceHostedSites(id);
-    const clean = sanitizeHostedSitePatch(patch);
-    const hostname = clean.hostname ?? (patch.siteId ? current[patch.siteId]?.hostname : undefined);
-    if (!hostname) return null;
-    const siteId = hostedSiteIdFor(hostname);
+    const current = getWorkspaceDevSites(id);
+    const clean = sanitizeDevSitePatch(patch);
+    const name = clean.name ?? (patch.siteId ? current[patch.siteId]?.name : undefined);
+    if (!name) return null;
+    const siteId = devSiteIdFor(id, name);
     const previous = (patch.siteId ? current[patch.siteId] : undefined) ?? current[siteId] ?? {};
-    const merged = { ...previous, ...clean, hostname } as HostedSiteConfig;
+    // Defaults UNDER the stored row, which is under the patch — a create gets a
+    // complete row, an update touches only what it named.
+    const combined: Partial<DevSiteConfig> = { ...previous, ...clean, name };
+    const merged: DevSiteConfig = {
+        ...combined,
+        name,
+        genName: combined.genName ?? '',
+        repo: combined.repo ?? '',
+        runMode: combined.runMode ?? 'explicit',
+        kind: combined.kind ?? 'http',
+        enabled: combined.enabled ?? false,
+    };
+    if (!merged.genName) return null;
     const next = { ...current, [siteId]: merged };
-    // Renaming a site's hostname moves it to a new key; drop the old one so the
-    // map never holds two entries for one site.
+    // Renaming a site moves it to a new key; drop the old one so the map never
+    // holds two entries for one site.
     if (patch.siteId && patch.siteId !== siteId) delete next[patch.siteId];
-    setWorkspaceHostedSites(id, next);
+    setWorkspaceDevSites(id, next);
     return siteId;
 }
 
-/** Forget one hosted site entirely (the Site Manager's "remove"). */
-export function deleteWorkspaceHostedSite(id: string, siteId: string): void {
-    const current = getWorkspaceHostedSites(id);
+/** Forget one dev site entirely (`manageSite remove`). */
+export function deleteWorkspaceDevSite(id: string, siteId: string): void {
+    const current = getWorkspaceDevSites(id);
     if (!(siteId in current)) return;
     const next = { ...current };
     delete next[siteId];
-    setWorkspaceHostedSites(id, next);
+    setWorkspaceDevSites(id, next);
 }
 
-// Backing services (#232 P3) ---------------------------------------------
+// Dev services (the container Dev Server, #234 P3) ------------------------
 //
-// The companion of hosted_sites: those say what Genie SERVES, these say what
-// those sites CONNECT TO. Same single-column JSON pattern, same opaque id key.
-// Parse/sanitize/credential-minting live in main/hosting/services/config.ts.
+// This workspace's SLICE of a shared engine — which engine, which version,
+// shared or dedicated, and its own credential. The engine CONTAINER itself is
+// machine-scoped and lives in `dev_service_engines` below, because one postgres
+// serves many workspaces and its superuser credential belongs to none of them.
+// Parse/sanitize live in main/dev-server/services/services-config.ts.
 
-/** This workspace's configured services (NULL/absent ⇒ {} = none). Keyed by
- *  {@link serviceIdFor}. */
-export function getWorkspaceServices(id: string): WorkspaceServices {
+/** This workspace's stored services (NULL/absent ⇒ {} = none configured). */
+export function getWorkspaceDevServices(id: string): DevServices {
     const row = getDb()
-        .prepare<[string], { workspace_services: string | null } | undefined>(
-            'SELECT workspace_services FROM workspaces WHERE id = ?',
+        .prepare<[string], { dev_services: string | null } | undefined>(
+            'SELECT dev_services FROM workspaces WHERE id = ?',
         )
         .get(id);
-    return parseWorkspaceServices(row?.workspace_services ?? null);
+    return parseDevServices(row?.dev_services ?? null);
 }
 
 /** Replace this workspace's whole service map (JSON-encoded). */
-export function setWorkspaceServices(id: string, services: WorkspaceServices): void {
+export function setWorkspaceDevServices(id: string, services: DevServices): void {
     getDb()
-        .prepare('UPDATE workspaces SET workspace_services = ? WHERE id = ?')
+        .prepare('UPDATE workspaces SET dev_services = ? WHERE id = ?')
         .run(JSON.stringify(services), id);
 }
 
 /**
  * Merge ONE service into this workspace's map, returning its id.
  *
- * The key is DERIVED from (workspace, kind) rather than supplied, so a workspace
- * can never accumulate two Postgres entries fighting over one data directory.
+ * The key is DERIVED from (workspace, engine, VERSION) rather than supplied, so
+ * a workspace can hold a `postgres-15` and a `postgres-16` at once but can never
+ * accumulate two `postgres-16` entries fighting over one database name.
  *
- * Credentials are minted HERE, on the way in, and only when absent — see
- * `withCredentials`. Doing it on write rather than on read is what makes the
- * password stable: regenerating it when the config is read would invalidate the
- * `.env` the user's app is already using.
+ * The credential is minted HERE, on the way in, and only when absent — doing it
+ * on write rather than on read is what makes it stable, and a password
+ * regenerated on read would lock the workspace out of the database that was
+ * created with it.
  */
-export function setWorkspaceService(
+export function setWorkspaceDevService(
     id: string,
-    kind: ServiceKind,
-    patch: Partial<ServiceConfig>,
+    patch: Partial<DevServiceConfig>,
 ): string | null {
-    const clean = sanitizeServicePatch({ ...patch, kind });
-    if (!clean.kind) return null;
-    const serviceId = serviceIdFor(id, clean.kind);
-    const current = getWorkspaceServices(id);
-    const merged = withCredentials({
-        ...(current[serviceId] ?? {}),
-        ...clean,
-        kind: clean.kind,
-    } as ServiceConfig);
-    setWorkspaceServices(id, { ...current, [serviceId]: merged });
+    const clean = sanitizeDevServicePatch(patch);
+    if (!clean.engine) return null;
+    const version = clean.version ?? resolveEngineVersion(clean.engine, undefined);
+    if (!version) return null;
+    const serviceId = devServiceIdFor(id, engineKeyFor(clean.engine, version));
+    const current = getWorkspaceDevServices(id);
+    const previous = current[serviceId];
+    // Defaults under the stored row, which is under the patch — a create gets a
+    // complete row, an update touches only what it named. The password comes
+    // ONLY from the stored row (a patch can never carry one), so an update can
+    // never silently re-key a workspace out of its own database.
+    const combined = { ...previous, ...clean };
+    const merged = withServiceCredentials(
+        {
+            engine: clean.engine,
+            version,
+            dedicated: combined.dedicated ?? false,
+            enabled: combined.enabled ?? false,
+            password: previous?.password ?? '',
+            ...(combined.image ? { image: combined.image } : {}),
+            ...(combined.port ? { port: combined.port } : {}),
+            ...(combined.env ? { env: combined.env } : {}),
+        },
+        generateServicePassword,
+    );
+    setWorkspaceDevServices(id, { ...current, [serviceId]: merged });
     return serviceId;
 }
 
-/**
- * Forget one service entirely.
- *
- * Deliberately does NOT delete the data directory — that lives under userData
- * and is removed by the service manager, which knows whether the server holding
- * those files is still running. Dropping a database because a toggle was
- * switched off is not something to do as a side effect of a config write.
- */
-export function deleteWorkspaceService(id: string, kind: ServiceKind): void {
-    const serviceId = serviceIdFor(id, kind);
-    const current = getWorkspaceServices(id);
+/** Forget one dev service entirely (`manageService remove`). */
+export function deleteWorkspaceDevService(id: string, serviceId: string): void {
+    const current = getWorkspaceDevServices(id);
     if (!(serviceId in current)) return;
     const next = { ...current };
     delete next[serviceId];
-    setWorkspaceServices(id, next);
+    setWorkspaceDevServices(id, next);
+}
+
+/**
+ * The superuser credential for one engine CONTAINER, minted once and then
+ * stable.
+ *
+ * Machine-scoped, keyed by the container's identity (`postgres-16`, or
+ * `postgres-16@<workspaceId>` for a dedicated one) — a shared engine's admin
+ * password cannot live in one workspace's row, because the container outlives
+ * any one workspace's interest in it.
+ *
+ * NEVER regenerated. Every engine image bakes its credential into the data
+ * directory on first init and ignores the environment afterwards, so handing
+ * back a fresh password would lock Genie out of the engine it created.
+ */
+export function getOrCreateDevServiceEngine(req: {
+    recordKey: string;
+    engine: ServiceEngine;
+    version: string;
+    workspaceId: string | null;
+    adminUser: string;
+    newPassword?: () => string;
+}): { user: string; password: string } {
+    const db = getDb();
+    const existing = db
+        .prepare<[string], { admin_user: string; admin_password: string } | undefined>(
+            'SELECT admin_user, admin_password FROM dev_service_engines WHERE key = ?',
+        )
+        .get(req.recordKey);
+    if (existing) return { user: existing.admin_user, password: existing.admin_password };
+
+    const password = (req.newPassword ?? generateServicePassword)();
+    db.prepare(
+        `INSERT OR IGNORE INTO dev_service_engines
+         (key, engine, version, workspace_id, admin_user, admin_password, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+        req.recordKey,
+        req.engine,
+        req.version,
+        req.workspaceId,
+        req.adminUser,
+        password,
+        Date.now(),
+    );
+    // Re-read rather than trusting the insert: two windows can reach this at
+    // once, and the loser must use the winner's credential, not its own.
+    const row = db
+        .prepare<[string], { admin_user: string; admin_password: string } | undefined>(
+            'SELECT admin_user, admin_password FROM dev_service_engines WHERE key = ?',
+        )
+        .get(req.recordKey);
+    return { user: row?.admin_user ?? req.adminUser, password: row?.admin_password ?? password };
+}
+
+/** Forget an engine record — only ever alongside removing its container AND its
+ *  volume, since the credential is baked into the data directory. */
+export function deleteDevServiceEngine(recordKey: string): void {
+    getDb().prepare('DELETE FROM dev_service_engines WHERE key = ?').run(recordKey);
 }
 
 // Fork → upstream cache -------------------------------------------------

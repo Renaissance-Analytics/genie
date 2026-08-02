@@ -425,6 +425,17 @@ export interface AssignmentDeprovisionDeps {
      *  stopWorkspaceTerminals, lazy-required so this module stays electron-free at
      *  import — unit tests inject this and never reach the require). */
     stopTerminals?: (workspaceId: string) => string[];
+    /**
+     * Release the workspace's Dev Server: its shared service engines, its site
+     * containers, and its sandbox (default: the real `devLifecycle()`, lazy-
+     * required so this module stays electron-free at import).
+     *
+     * Runs BEFORE `remove`, and that ordering is load-bearing: the teardown
+     * resolves the workspace's sites and services through `listWorkspaces()`, so
+     * against a row that is already gone it would find nothing to release and
+     * would leave this workspace counted as a holder of a shared engine forever.
+     */
+    teardownDevServer?: (id: string) => Promise<unknown>;
     /** Unregister the workspace row — LEAVES the on-disk clone (default: removeWorkspace). */
     remove?: (id: string) => void;
     /** Announce the workspace-list change to clients (default: broadcastWorkspacesChanged). */
@@ -451,10 +462,10 @@ export interface AssignmentDeprovisionResult {
  * user-local or ops-provisioned workspace) is refused → `skipped`. An id with no
  * local row is an idempotent no-op → `absent` (a duplicate push is harmless).
  */
-export function deprovisionAssignedWorkspace(
+export async function deprovisionAssignedWorkspace(
     workspaceId: string,
     deps: AssignmentDeprovisionDeps = {},
-): AssignmentDeprovisionResult {
+): Promise<AssignmentDeprovisionResult> {
     const listManaged = deps.listManaged ?? listAssignmentWorkspaces;
     const hasWorkspace = deps.hasWorkspace ?? ((id: string) => !!getWorkspace(id));
     const stopTerminals =
@@ -463,6 +474,13 @@ export function deprovisionAssignedWorkspace(
             // Lazy require keeps this module electron-free at import (unit tests
             // inject stopTerminals; only the real host reaches this).
             (require('../terminal/ipc') as typeof import('../terminal/ipc')).stopWorkspaceTerminals(id));
+    const teardownDevServer =
+        deps.teardownDevServer ??
+        (async (id: string) =>
+            // Lazy require for the same reason as stopTerminals above.
+            (require('../dev-server/lifecycle') as typeof import('../dev-server/lifecycle'))
+                .devLifecycle()
+                ?.onWorkspaceRemove(id));
     const remove = deps.remove ?? removeWorkspace;
     const notifyChanged = deps.notifyChanged ?? broadcastWorkspacesChanged;
 
@@ -474,6 +492,11 @@ export function deprovisionAssignedWorkspace(
     }
 
     const stopped = stopTerminals(workspaceId);
+    // Best-effort, and BEFORE `remove` — see the seam's docblock. A container
+    // daemon that will not answer must not strand a detached workspace.
+    await teardownDevServer(workspaceId).catch((e) =>
+        console.error('[dev-server] teardown failed', e),
+    );
     remove(workspaceId);
     // The same broadcast attach uses — remote sessions re-fetch and fade it OUT.
     notifyChanged();
@@ -520,7 +543,7 @@ export async function reconcileAssignedWorkspaces(
     const listManaged = deps.listManaged ?? listAssignmentWorkspaces;
     for (const w of listManaged()) {
         if (assignedIds.has(w.id)) continue;
-        const r = deprovisionAssignedWorkspace(w.id, deps);
+        const r = await deprovisionAssignedWorkspace(w.id, deps);
         if (r.status === 'deprovisioned') out.deprovisioned.push(w.id);
     }
     return out;
@@ -758,7 +781,7 @@ export function createWorkspaceAssignmentSubscriber(
             );
         },
         deprovision: async (workspaceId) => {
-            deprovisionAssignedWorkspace(workspaceId, deps);
+            await deprovisionAssignedWorkspace(workspaceId, deps);
         },
         applyIssueWatchDelta: w.applyIssueWatchDelta,
         clearIssueWatchDelta: w.clearIssueWatchDelta,

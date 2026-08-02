@@ -20,6 +20,8 @@ import {
     isOpsProjectFor,
     workspaceRootForTerminal,
 } from '../mcp/host-tools';
+import { devServerAvailableForMcp, manageSiteForMcp } from '../mcp/dev-site-tools';
+import { manageServiceForMcp } from '../mcp/dev-service-tools';
 import { openFileForUserForMcp } from '../editor/open-file';
 import { applySetEnv, applyCheckEnv } from '../env-store';
 import { pluginToolDescriptors, dispatchPluginTool } from '../plugins/registry';
@@ -99,6 +101,17 @@ export function buildHostServerDeps(
         },
         describeWorkspace: (terminalId) => describeWorkspaceForMcp(terminalId),
         manageProcess: (terminalId, req) => manageProcessForMcp(terminalId, req),
+        // The container Dev Server (#234 P2). Both shells get it: the runtime
+        // abstraction is the same Docker on a cloud workstation as on a desktop,
+        // so a headless host serves a workspace's sites identically. `open` is
+        // the one desktop-shaped action, and it is an injected seam that says so
+        // when absent rather than silently doing nothing.
+        manageSite: (terminalId, req) => manageSiteForMcp(terminalId, req),
+        // The Dev Server's backing services (#234 P3). Both shells again: a
+        // shared engine is the same container on a cloud workstation as on a
+        // desktop, and nothing here is GUI-shaped.
+        manageService: (terminalId, req) => manageServiceForMcp(terminalId, req),
+        devServerAvailable: () => devServerAvailableForMcp(),
         provisionWorkspaces: (terminalId, req) => provisionWorkspacesForMcp(terminalId, req),
         manageTerminals: (terminalId, req) => manageTerminalsForMcp(terminalId, req),
         runAgent: (terminalId, req) => runAgentForMcp(terminalId, req),
