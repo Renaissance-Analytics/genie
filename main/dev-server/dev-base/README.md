@@ -107,9 +107,11 @@ starts and says what it did.
 > **Podman, rootless: not covered by this.** Rootless Podman maps container uids
 > through the user's *subuid* range, so container-1000 is not host-1000 and
 > `HOST_UID` alignment does not produce host-owned files. The fix there is
-> `--userns=keep-id`, which is a `ContainerSpec` field P2 has to add — not
-> something this image can do from the inside. Rootful Podman behaves like
-> Docker and works as described above.
+> `--userns=keep-id` — not something this image can do from the inside. That is
+> now `ContainerSpec.userns`, set by `workspace-sandbox.ts` when the runtime is
+> podman AND the invoking uid is non-zero (as root the flag is an error, not a
+> no-op), and DROPPED by the argv builder for docker, whose `--userns` accepts
+> only `host`. Rootful Podman behaves like Docker and works as described above.
 
 ---
 

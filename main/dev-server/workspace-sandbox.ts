@@ -1,6 +1,8 @@
 import { ROLE_LABEL, WORKSPACE_DEV_ROLE, WORKSPACE_LABEL, devContainerNameFor } from './argv';
+import { detectHostIds } from './host-ids';
 import { DEV_CONTAINER_HOLD_COMMAND, GENIE_DEV_BASE_IMAGE, WORKSPACE_MOUNT_TARGET } from './images';
 import { toMountSource } from './mount-path';
+import type { HostIds } from './host-ids';
 import type { ContainerRef, ContainerRuntime } from './container-runtime';
 
 /**
@@ -40,8 +42,12 @@ import type { ContainerRef, ContainerRuntime } from './container-runtime';
 export type SandboxFailureReason =
     /** No usable Docker/Podman — `installHint` says what to do. */
     | 'runtime-unavailable'
-    /** The dev image is not on this machine. */
+    /** The dev image is not on this machine, and no consent seam offered to get it. */
     | 'image-missing'
+    /** It could have been fetched; the user (or agent) said no. */
+    | 'image-pull-declined'
+    /** We tried to fetch it and the registry / network said no. */
+    | 'image-pull-failed'
     /** The workspace directory cannot be bind-mounted (a network share). */
     | 'unsupported-path'
     /** Anything the runtime threw. */
@@ -57,6 +63,8 @@ export interface SandboxOk {
     mountTarget: string;
     /** What this call actually made, as opposed to adopted. */
     created: { network: boolean; container: boolean };
+    /** True when this call fetched the image (a first run, with consent). */
+    pulledImage?: boolean;
 }
 
 export interface SandboxFailed {
@@ -70,6 +78,13 @@ export interface SandboxFailed {
 
 export type SandboxResult = SandboxOk | SandboxFailed;
 
+/** What a caller is being asked to agree to before a multi-gigabyte download. */
+export interface ImagePullConsent {
+    image: string;
+    /** One sentence naming the image, the workspace, and why it is needed. */
+    reason: string;
+}
+
 export interface SandboxDeps {
     runtime: ContainerRuntime;
     platform?: NodeJS.Platform | string;
@@ -79,6 +94,23 @@ export interface SandboxDeps {
     /** Resource ceilings, e.g. `4g` / `2`. Unset means the runtime's default. */
     memory?: string;
     cpus?: string;
+    /**
+     * Consent for FETCHING a missing dev image.
+     *
+     * ABSENT MEANS NO PULL — the P1 behaviour, verbatim: report `image-missing`
+     * with the command to run. That default is the point of the seam. The dev
+     * image is multi-gigabyte, this function is called from workspace-open, and
+     * a caller that has not yet built a progress surface must not be able to
+     * start a silent download by forgetting a field.
+     */
+    confirmImagePull?: (req: ImagePullConsent) => Promise<boolean> | boolean;
+    /** Raw pull progress, chunk by chunk, for whatever is showing it. */
+    onImagePullProgress?: (chunk: string) => void;
+    /**
+     * The host uid/gid handed to the dev image's entrypoint. Omit to detect
+     * (`host-ids.ts`); pass `null` to suppress it deliberately.
+     */
+    hostIds?: HostIds | null;
 }
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -138,16 +170,56 @@ export async function ensureWorkspaceSandbox(
             };
         }
 
+        let pulledImage = false;
         if (!(await deps.runtime.imageExists(image))) {
-            // P1 never pulls — see `images.ts`. The message has to name the way
-            // out, because a bare "image missing" is a dead end for a user AND
-            // for an agent driving this through the MCP.
-            return failed(
-                'image-missing',
-                `The workspace dev image ${image} is not on this machine. ` +
-                    `Run \`${deps.runtime.kind} pull ${image}\` and open the workspace again.`,
-            );
+            // The message has to name the way out, because a bare "image
+            // missing" is a dead end for a user AND for an agent driving this
+            // through the MCP.
+            if (!deps.confirmImagePull) {
+                return failed(
+                    'image-missing',
+                    `The workspace dev image ${image} is not on this machine. ` +
+                        `Run \`${deps.runtime.kind} pull ${image}\` and open the workspace again.`,
+                );
+            }
+            const agreed = await deps.confirmImagePull({
+                image,
+                reason:
+                    `The workspace ${workspaceId} needs the dev image ${image}, which is not on ` +
+                    'this machine yet. It is a multi-gigabyte download, fetched once and shared ' +
+                    'by every workspace afterwards.',
+            });
+            if (!agreed) {
+                return failed(
+                    'image-pull-declined',
+                    `The dev image ${image} was not downloaded, so the workspace sandbox was not created. ` +
+                        `Approve the download, or run \`${deps.runtime.kind} pull ${image}\` yourself.`,
+                );
+            }
+            const pull = await deps.runtime.pullImage(image, {
+                ...(deps.onImagePullProgress ? { onProgress: deps.onImagePullProgress } : {}),
+            });
+            if (!pull.ok) {
+                // Distinct from `image-missing`: "we tried and it refused" needs
+                // different advice from "nobody has fetched it yet".
+                return failed(
+                    'image-pull-failed',
+                    `Downloading the dev image ${image} failed: ${pull.error ?? 'unknown error'}`,
+                );
+            }
+            pulledImage = true;
         }
+
+        // The host identity the dev image's entrypoint renumbers itself to, so
+        // files written into the bind mount stay editable by their owner. Null
+        // everywhere the concept does not apply — see `host-ids.ts`.
+        const hostIds = deps.hostIds === undefined ? detectHostIds(platform) : deps.hostIds;
+        const identityEnv: Record<string, string> = hostIds
+            ? { HOST_UID: String(hostIds.uid), HOST_GID: String(hostIds.gid) }
+            : {};
+        // Podman's half of the same problem, and rootless-ONLY: as root
+        // `--userns=keep-id` is an error rather than a no-op.
+        const keepId = deps.runtime.kind === 'podman' && hostIds !== null && hostIds.uid !== 0;
 
         const container = await deps.runtime.runContainer({
             workspaceId,
@@ -158,6 +230,8 @@ export async function ensureWorkspaceSandbox(
             labels: { [WORKSPACE_LABEL]: workspaceId, [ROLE_LABEL]: WORKSPACE_DEV_ROLE },
             mounts: [{ source: workspacePath, target: mountTarget }],
             workdir: mountTarget,
+            ...(Object.keys(identityEnv).length ? { env: identityEnv } : {}),
+            ...(keepId ? { userns: 'keep-id' as const } : {}),
             // Survive a machine restart: the sandbox should be there when the
             // user comes back, not something they have to remember to recreate.
             restart: 'unless-stopped',
@@ -175,6 +249,7 @@ export async function ensureWorkspaceSandbox(
             container,
             mountTarget,
             created: { network: network.created, container: true },
+            ...(pulledImage ? { pulledImage: true } : {}),
         };
     } catch (e) {
         return failed('error', messageOf(e));

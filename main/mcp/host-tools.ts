@@ -1090,7 +1090,7 @@ export async function isOpsProjectFor(callerWorkspacePath: string): Promise<bool
  * only when the caller governs it. Returns the decision (with the resolved
  * workspace row when allowed) so handlers share one chokepoint.
  */
-async function resolveAgentTarget(
+export async function resolveAgentTarget(
     callerTerminalId: string,
     requestedWorkspaceId: string | undefined,
 ): Promise<{ decision: TargetDecision; ws: ReturnType<typeof getWorkspace> | null }> {

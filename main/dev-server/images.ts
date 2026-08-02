@@ -25,19 +25,28 @@
  * codebase. A same-major republish (`:1` moving) needs no change here at all;
  * only adopting a new major is an edit, and it is this line.
  *
- * ## Still open
+ * ## How it arrives
  *
- *   1. **How it arrives.** A `pullImage` on {@link ContainerRuntime} plus a
- *      first-run progress surface. P1 reports {@link SandboxFailureReason}
- *      `image-missing` with the exact `docker pull` to run instead of pulling
- *      silently — a multi-GB download must be something the user agreed to.
- *   2. **Passing the host's uid.** Nothing sets `HOST_UID`/`HOST_GID` yet;
- *      `ContainerSpec.env` is where they go. Rootless Podman needs a different
- *      answer (`--userns=keep-id`, a spec field that does not exist), so the two
- *      runtimes do NOT share one fix — see `dev-base/README.md`.
- *   3. **Escape hatch.** A workspace that needs something else sets its own
- *      image; the layered site resolution in P2 (Dockerfile / devcontainer /
- *      detected / explicit) is where that surfaces.
+ * `ContainerRuntime.pullImage`, behind a CONSENT seam. `ensureWorkspaceSandbox`
+ * takes `confirmImagePull`, and its absence means NO pull — P1's behaviour
+ * verbatim, reporting `image-missing` with the exact `docker pull` to run. That
+ * default is deliberate: this is called from workspace-open, and a caller who
+ * has not built a progress surface must not be able to start a multi-gigabyte
+ * download by forgetting a field.
+ *
+ * ## The host's identity
+ *
+ * `HOST_UID`/`HOST_GID` ride `ContainerSpec.env`, detected by `host-ids.ts` (and
+ * `null` on Windows and macOS, where the runtime's VM already translates
+ * ownership). Rootless Podman needs a different answer — `ContainerSpec.userns:
+ * 'keep-id'`, which the argv builder drops for docker — so the two runtimes do
+ * NOT share one fix. See `dev-base/README.md`.
+ *
+ * ## Escape hatch
+ *
+ * A workspace that needs something else sets its own image; the layered site
+ * resolution in `site-def.ts` (Dockerfile / devcontainer / detected / explicit)
+ * is where that surfaces.
  */
 
 /** The default workspace dev image. Pinned — never `:latest`. */

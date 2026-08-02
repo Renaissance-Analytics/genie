@@ -228,6 +228,9 @@ const deps = (
     onForceQuestion,
     describeWorkspace: async () => null,
     manageProcess,
+    // The container Dev Server is not exercised by these transport tests; a stub
+    // keeps the deps complete without pulling a runtime probe into them.
+    manageSite: async () => ({ ok: true, sites: [] }),
     provisionWorkspaces,
     manageTerminals,
     runAgent,

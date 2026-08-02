@@ -30,11 +30,17 @@ import {
     setWorkspaceTunnelSite,
     getWorkspaceHostedSites,
     getWorkspaceServices,
+    getWorkspaceDevSites,
 } from './db';
 import { discoverSites } from './mobile/hosts';
 import { listLocalEnabledGenSites } from './sites/local-sites';
+import { remoteGenUrl } from './sites/gen-url';
+import { LOCAL_CONN_KEY, openTestingBrowser } from './testing-browser';
 import { hostingManager, initHosting } from './hosting/manager';
 import { initServices, serviceManager } from './hosting/services/manager';
+import { initDevSites, devSiteManager } from './dev-server/site-manager';
+import { resolveContainerRuntime } from './dev-server';
+import { registerDevSiteTools } from './mcp/dev-site-tools';
 import {
     writeWorkspaceAgentMcp,
     healTynnLiteralToken,
@@ -1041,6 +1047,27 @@ app.whenReady().then(async () => {
         baseDir: app.getPath('userData'),
         listWorkspaces: () => listWorkspaces().map((w) => ({ id: w.id, path: w.path })),
         hostedSitesFor: (id) => getWorkspaceHostedSites(id),
+    });
+    // The container DEV SERVER (#234 P2). Creating the manager starts NOTHING —
+    // it probes no runtime and touches no daemon until a site is acted on, so a
+    // machine with no Docker pays nothing for this line. Sites are started by
+    // `manageSite` or by the reconcile below, never implicitly on boot of a
+    // workspace nobody asked to serve.
+    initDevSites({
+        resolveRuntime: () => resolveContainerRuntime(),
+        listWorkspaces: () =>
+            listWorkspaces().map((w) => ({ id: w.id, path: w.path, label: w.project_name })),
+        devSitesFor: (id) => getWorkspaceDevSites(id),
+        // The same `.gen` change event the hosting manager fires, so the header
+        // popover and the Testing Browser's resolver re-pull when a container
+        // starts or stops.
+        onChanged: () => broadcastHostingChanged(),
+    });
+    // `manageSite open` — the ONE desktop-shaped action, injected so the headless
+    // build reports "no browser here" instead of failing obscurely.
+    registerDevSiteTools({
+        openInBrowser: (genName) =>
+            openTestingBrowser(LOCAL_CONN_KEY, 'This machine', remoteGenUrl(genName)),
     });
     // Install the secrets-at-rest encryptor for ALL token stores (mobile / remote
     // / GitHub) BEFORE anything reads them. Desktop injects the Electron

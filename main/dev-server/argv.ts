@@ -37,6 +37,13 @@ export const ROLE_LABEL = 'genie.role';
 
 export const WORKSPACE_DEV_ROLE = 'workspace-dev';
 
+/** A container serving one dev SITE (P2). */
+export const SITE_ROLE = 'site';
+
+/** Which site a `site`-role container serves — its opaque `devSiteIdFor` id.
+ *  Read back on adopt, so a restarted Genie recognises what is already up. */
+export const SITE_LABEL = 'genie.site';
+
 const NAME_PREFIX = 'genie-ws-';
 
 // --- names -----------------------------------------------------------------
@@ -80,9 +87,29 @@ export function networkNameFor(workspaceId: string): string {
     return `${NAME_PREFIX}${workspaceSlugFor(workspaceId)}`;
 }
 
-/** The workspace's long-lived dev container — where repo dev servers run. */
+/** The workspace's long-lived dev container — the toolchain/shell home. */
 export function devContainerNameFor(workspaceId: string): string {
     return `${networkNameFor(workspaceId)}-dev`;
+}
+
+/**
+ * The container serving one dev site.
+ *
+ * A site gets its OWN container rather than an `exec` into the workspace dev
+ * container, for one hard reason: a published port is fixed when a container is
+ * CREATED. There is no way to add one to a container that is already running, so
+ * a dev server exec'd into the long-lived sandbox could never be reached from
+ * the host no matter what it bound. The site container joins the same network,
+ * mounts the same workspace and carries the same labels — it is inside the
+ * sandbox in every sense that matters — and in exchange `start`, `stop`,
+ * `restart` and `logs` map one-to-one onto container verbs instead of onto
+ * process bookkeeping we would have to invent.
+ *
+ * Derived, not stored: the next run finds what this one made even after a reboot
+ * or a database that has forgotten.
+ */
+export function siteContainerNameFor(workspaceId: string, siteName: string): string {
+    return `${networkNameFor(workspaceId)}-site-${workspaceSlugFor(siteName)}`;
 }
 
 // --- guards ----------------------------------------------------------------
@@ -159,6 +186,10 @@ export function runArgv(spec: ContainerSpec, opts: ArgvOptions): string[] {
     }
 
     args.push('--network', spec.network ?? networkNameFor(spec.workspaceId));
+    // Podman ONLY. Docker's `--userns` takes `host` or empty, so `keep-id`
+    // there is a hard CLI error rather than a no-op — the flag has to be
+    // dropped here, where the runtime kind is known, and not by every caller.
+    if (spec.userns === 'keep-id' && opts.kind === 'podman') args.push('--userns=keep-id');
     if (spec.restart) args.push('--restart', spec.restart);
     if (spec.workdir) args.push('--workdir', spec.workdir);
     if (spec.init) args.push('--init');
@@ -226,6 +257,40 @@ export function execArgv(id: string, argv: string[]): string[] {
 
 export function imageInspectArgv(image: string): string[] {
     return ['image', 'inspect', image];
+}
+
+/** Fetch one image. Streamed, not run — a pull can take minutes. */
+export function pullArgv(image: string): string[] {
+    const args = ['pull', image];
+    assertLiteralArgv(args);
+    return args;
+}
+
+/**
+ * Build a repo's own Dockerfile into a tagged image (the layer-1 run mode).
+ *
+ * `dockerfile` is deliberately relative to the context and passed as `--file`
+ * BEFORE the context, which is the only ordering both CLIs accept. The context
+ * is a host path the caller has already translated (`toMountSource`), for the
+ * same reason a bind-mount source is.
+ */
+export function buildArgv(spec: {
+    tag: string;
+    context: string;
+    dockerfile?: string;
+    buildArgs?: Record<string, string>;
+}): string[] {
+    const args = ['build', '--tag', spec.tag];
+    if (spec.dockerfile) args.push('--file', spec.dockerfile);
+    for (const [name, value] of Object.entries(spec.buildArgs ?? {})) {
+        if (!ENV_NAME.test(name)) {
+            throw new Error(`dev-server: refusing build-arg name ${JSON.stringify(name)}`);
+        }
+        args.push('--build-arg', `${name}=${value}`);
+    }
+    args.push(spec.context);
+    assertLiteralArgv(args);
+    return args;
 }
 
 /** Keep a log read bounded — it exists to explain something, not to dump. */

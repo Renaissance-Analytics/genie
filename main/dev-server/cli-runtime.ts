@@ -1,4 +1,5 @@
 import {
+    buildArgv,
     execArgv,
     imageInspectArgv,
     logsArgv,
@@ -8,6 +9,7 @@ import {
     networkRemoveArgv,
     portArgv,
     psArgv,
+    pullArgv,
     removeArgv,
     runArgv,
     startArgv,
@@ -15,6 +17,7 @@ import {
 } from './argv';
 import { installHintFor, notRunningHintFor, probeRuntime } from './runtime-detect';
 import { defaultCommandRunner } from './seams';
+import { toMountSource } from './mount-path';
 import type {
     CommandResult,
     CommandRunner,
@@ -24,6 +27,9 @@ import type {
     ContainerSpec,
     ContainerState,
     ContainerSummary,
+    ImageBuildSpec,
+    ImageProgressOptions,
+    ImageResult,
     LogOptions,
     NetworkRef,
     PortMapping,
@@ -74,6 +80,9 @@ const ALREADY_GONE = /no such |not found|is not running|no container|removal .* 
 /** A create that lost a race with another `ensure`. */
 const ALREADY_EXISTS = /already exists/i;
 
+/** How much of a chatty build/pull log we keep for an error message. */
+const OUTPUT_TAIL_LIMIT = 8_000;
+
 const CONTAINER_STATES: readonly ContainerState[] = [
     'running',
     'exited',
@@ -109,6 +118,42 @@ export function createCliRuntime(
         const result = await run(args);
         if (ok(result) || ALREADY_GONE.test(detailOf(result))) return;
         fail(verb, result);
+    };
+
+    /**
+     * A long image operation (pull / build): stream it, relay every chunk, and
+     * resolve with a RESULT.
+     *
+     * Never throws, for the same reason `ps` doesn't: this is called from a
+     * first-run path where the honest outcomes are "it worked", "the registry
+     * said no" and "there is no CLI", and only one of those is exceptional in
+     * any sense a caller can act on differently.
+     */
+    const streamImageOp = async (
+        image: string,
+        args: string[],
+        imageOpts: ImageProgressOptions,
+    ): Promise<ImageResult> => {
+        let tail = '';
+        const handle = runner.stream(bin, args, {
+            onData: (chunk) => {
+                // Keep only the tail: the failure message needs the END of a
+                // build log, and a full one can be megabytes.
+                tail = (tail + chunk).slice(-OUTPUT_TAIL_LIMIT);
+                imageOpts.onProgress?.(chunk);
+            },
+        });
+        const code = await handle.exited;
+        if (code === 0) return { ok: true, image };
+        const detail = tail.trim().slice(-600);
+        return {
+            ok: false,
+            image,
+            error:
+                code === null
+                    ? `${bin} could not be run${detail ? `: ${detail}` : ''}`
+                    : `${bin} ${args[0]} failed (${code})${detail ? `: ${detail}` : ''}`,
+        };
     };
 
     return {
@@ -155,6 +200,27 @@ export function createCliRuntime(
 
         async imageExists(image: string): Promise<boolean> {
             return ok(await run(imageInspectArgv(image)));
+        },
+
+        pullImage(image: string, pullOpts: ImageProgressOptions = {}): Promise<ImageResult> {
+            // STREAMED, not `run`: a pull has no useful timeout (a 2 GB image on
+            // a slow line legitimately takes ten minutes, and `run`'s watchdog
+            // would kill it), and its output is only useful live.
+            return streamImageOp(image, pullArgv(image), pullOpts);
+        },
+
+        buildImage(spec: ImageBuildSpec, buildOpts: ImageProgressOptions = {}): Promise<ImageResult> {
+            const context = toMountSource(spec.context, { platform, kind });
+            if (!context) {
+                return Promise.resolve({
+                    ok: false,
+                    image: spec.tag,
+                    error:
+                        `${spec.context} cannot be used as a build context — it must be a local ` +
+                        'absolute path (a network share cannot be read by the container runtime).',
+                });
+            }
+            return streamImageOp(spec.tag, buildArgv({ ...spec, context }), buildOpts);
         },
 
         async runContainer(spec: ContainerSpec): Promise<ContainerRef> {

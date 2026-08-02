@@ -7,10 +7,13 @@ import type { CommandRunner, ContainerRuntime, RuntimeDetection } from './contai
 /**
  * Genie DEV SERVER (Tynn #234) — the public surface of the module.
  *
- * P1 (this) is the container-runtime abstraction and the per-workspace sandbox.
- * P2 adds sites, P3 services, P4 the UX and the retirement of the beta.218
- * native hosting path in `../hosting`. Nothing in `../hosting` is touched by
- * this module: the two run side by side until P4 removes the old one.
+ * P1 is the container-runtime abstraction and the per-workspace sandbox. P2
+ * (now) adds SITES: the layered site definition (`site-def.ts` + `repo-facts.ts`),
+ * the persisted model (`sites-config.ts`), and the manager that runs a repo's dev
+ * server in the sandbox and emits it as a routable `.gen` row
+ * (`site-manager.ts`). P3 adds services, P4 the UX and the retirement of the
+ * beta.218 native hosting path in `../hosting`. Nothing in `../hosting` is
+ * touched by this module: the two run side by side until P4 removes the old one.
  *
  * Callers should reach for {@link resolveContainerRuntime} rather than an
  * adapter, so "which runtime, and is it usable" is answered in one place.
@@ -45,6 +48,7 @@ export { createPodmanRuntime } from './podman-adapter';
 export { defaultCommandRunner } from './seams';
 export { ensureWorkspaceSandbox, teardownWorkspaceSandbox } from './workspace-sandbox';
 export type {
+    ImagePullConsent,
     SandboxDeps,
     SandboxFailed,
     SandboxFailureReason,
@@ -52,6 +56,51 @@ export type {
     SandboxResult,
     TeardownResult,
 } from './workspace-sandbox';
+export { detectHostIds } from './host-ids';
+export type { HostIds } from './host-ids';
+export type {
+    ImageBuildSpec,
+    ImageProgressOptions,
+    ImageResult,
+} from './container-runtime';
+
+// --- P2: sites --------------------------------------------------------------
+
+export { DEFAULT_STACK_PORTS, detectRunOptions, recommendedOption, resolveSiteRun } from './site-def';
+export type {
+    DevSiteOption,
+    DevSiteRunMode,
+    DevStack,
+    RepoFacts,
+    ResolvedRun,
+} from './site-def';
+export { describeRepoRun, readRepoFacts } from './repo-facts';
+export {
+    defaultGenNameFor,
+    devSiteIdFor,
+    parseDevSites,
+    sanitizeDevSitePatch,
+    slugLabel,
+} from './sites-config';
+export type { DevSiteConfig, DevSites } from './sites-config';
+export { DEFAULT_READY_TIMEOUT_MS, waitForHttp, waitForPort } from './port-probe';
+export {
+    createDevSiteManager,
+    devServerGenSites,
+    devSiteManager,
+    initDevSites,
+    resetDevSitesForTests,
+    siteImageTagFor,
+} from './site-manager';
+export type {
+    DevGenSite,
+    DevSiteManager,
+    DevSiteManagerDeps,
+    DevSiteRow,
+    DevSiteState,
+    DevSiteStatus,
+    DevWorkspace,
+} from './site-manager';
 
 export interface ResolveRuntimeOptions {
     runner?: CommandRunner;

@@ -32,6 +32,8 @@ interface Fake extends ContainerRuntime {
     readonly started: string[];
     readonly removed: string[];
     readonly removedNetworks: string[];
+    /** Images `pullImage` was asked for, in order. */
+    readonly pulled: string[];
 }
 
 interface FakeOptions {
@@ -41,6 +43,9 @@ interface FakeOptions {
     existingNetworks?: string[];
     /** Blow up on this verb, to prove the sandbox converts throws to statuses. */
     throwOn?: 'networkEnsure' | 'runContainer' | 'ps';
+    kind?: 'docker' | 'podman';
+    /** What a pull does. Default: succeeds and makes the image present. */
+    pullFails?: string;
 }
 
 const DOCKER_OK: RuntimeDetection = { kind: 'docker', version: '27.3.1', probes: [] };
@@ -54,18 +59,21 @@ function fakeRuntime(opts: FakeOptions = {}): Fake {
     const started: string[] = [];
     const removed: string[] = [];
     const removedNetworks: string[] = [];
+    const pulled: string[] = [];
+    let imagePresent = opts.imagePresent ?? true;
     const boom = (verb: FakeOptions['throwOn']) => {
         if (opts.throwOn === verb) throw new Error(`fake: ${verb} exploded`);
     };
 
     return {
-        kind: 'docker',
+        kind: opts.kind ?? 'docker',
         containers,
         networks,
         ran,
         started,
         removed,
         removedNetworks,
+        pulled,
 
         async detect() {
             return opts.detection ?? DOCKER_OK;
@@ -83,7 +91,16 @@ function fakeRuntime(opts: FakeOptions = {}): Fake {
             networks.delete(name);
         },
         async imageExists() {
-            return opts.imagePresent ?? true;
+            return imagePresent;
+        },
+        async pullImage(image) {
+            pulled.push(image);
+            if (opts.pullFails) return { ok: false, image, error: opts.pullFails };
+            imagePresent = true;
+            return { ok: true, image };
+        },
+        async buildImage(spec) {
+            return { ok: true, image: spec.tag };
         },
         async runContainer(spec) {
             boom('runContainer');
@@ -293,6 +310,128 @@ describe('ensureWorkspaceSandbox', () => {
         expect(result.message).toContain(GENIE_DEV_BASE_IMAGE);
         expect(result.message).toMatch(/pull/i);
         expect(runtime.ran).toHaveLength(0);
+    });
+
+    // --- P2: the missing image can now be FETCHED, with consent -------------
+
+    it('asks for consent and PULLS the missing image when it is granted', async () => {
+        const runtime = fakeRuntime({ imagePresent: false });
+        const asked: string[] = [];
+        const progress: string[] = [];
+
+        const result = await ensureWorkspaceSandbox('acme', WS_PATH, {
+            runtime,
+            platform: 'linux',
+            confirmImagePull: async (req) => {
+                asked.push(req.image);
+                return true;
+            },
+            onImagePullProgress: (chunk) => progress.push(chunk),
+        });
+
+        expect(asked).toEqual([GENIE_DEV_BASE_IMAGE]);
+        expect(runtime.pulled).toEqual([GENIE_DEV_BASE_IMAGE]);
+        expect(result).toMatchObject({ ok: true, pulledImage: true });
+        expect(runtime.ran).toHaveLength(1);
+        // The progress sink is threaded to the runtime, not swallowed here.
+        expect(progress).toEqual([]);
+    });
+
+    it('does NOT pull when consent is refused, and says so', async () => {
+        // A multi-gigabyte download is not something an app starts because a
+        // user opened a workspace.
+        const runtime = fakeRuntime({ imagePresent: false });
+        const result = await ensureWorkspaceSandbox('acme', WS_PATH, {
+            runtime,
+            platform: 'linux',
+            confirmImagePull: async () => false,
+        });
+
+        expect(runtime.pulled).toEqual([]);
+        expect(result).toMatchObject({ ok: false, reason: 'image-pull-declined' });
+        expect(runtime.ran).toHaveLength(0);
+    });
+
+    it('never pulls when there is no consent seam at all', async () => {
+        // The default has to stay P1's: report it, don't fetch it. A caller that
+        // forgot to wire a consent surface must not get a silent download.
+        const runtime = fakeRuntime({ imagePresent: false });
+        const result = await ensureWorkspaceSandbox('acme', WS_PATH, {
+            runtime,
+            platform: 'linux',
+        });
+        expect(runtime.pulled).toEqual([]);
+        expect(result).toMatchObject({ ok: false, reason: 'image-missing' });
+    });
+
+    it('reports a FAILED pull distinctly from a missing one', async () => {
+        // "Not here" and "we tried and the registry said no" need different
+        // advice, so they cannot share a reason code.
+        const runtime = fakeRuntime({ imagePresent: false, pullFails: 'manifest unknown' });
+        const result = await ensureWorkspaceSandbox('acme', WS_PATH, {
+            runtime,
+            platform: 'linux',
+            confirmImagePull: async () => true,
+        });
+        expect(result).toMatchObject({ ok: false, reason: 'image-pull-failed' });
+        if (result.ok) throw new Error('unreachable');
+        expect(result.message).toMatch(/manifest unknown/);
+        expect(runtime.ran).toHaveLength(0);
+    });
+
+    // --- P2: host identity --------------------------------------------------
+
+    it('hands the dev image the host uid/gid so bind-mounted files stay ours', async () => {
+        // Without this the entrypoint cannot renumber its `genie` user, and
+        // everything the container writes into the workspace comes out owned by
+        // a uid the user cannot edit.
+        const runtime = fakeRuntime();
+        await ensureWorkspaceSandbox('acme', WS_PATH, {
+            runtime,
+            platform: 'linux',
+            hostIds: { uid: 1000, gid: 1001 },
+        });
+        expect(runtime.ran[0]?.env).toMatchObject({ HOST_UID: '1000', HOST_GID: '1001' });
+    });
+
+    it('omits them where there are none (Windows has no uid)', async () => {
+        const runtime = fakeRuntime();
+        await ensureWorkspaceSandbox('acme', 'C:\\work\\acme', {
+            runtime,
+            platform: 'win32',
+            hostIds: null,
+        });
+        expect(runtime.ran[0]?.env?.HOST_UID).toBeUndefined();
+    });
+
+    it('asks rootless PODMAN to keep the user id, and never asks docker', async () => {
+        const podman = fakeRuntime({ kind: 'podman' });
+        await ensureWorkspaceSandbox('acme', WS_PATH, {
+            runtime: podman,
+            platform: 'linux',
+            hostIds: { uid: 1000, gid: 1000 },
+        });
+        expect(podman.ran[0]?.userns).toBe('keep-id');
+
+        const docker = fakeRuntime();
+        await ensureWorkspaceSandbox('acme', WS_PATH, {
+            runtime: docker,
+            platform: 'linux',
+            hostIds: { uid: 1000, gid: 1000 },
+        });
+        expect(docker.ran[0]?.userns).toBeUndefined();
+    });
+
+    it('does not ask ROOTFUL podman to keep-id — it would refuse', async () => {
+        // `--userns=keep-id` is rootless-only; as root it is an error, not a
+        // no-op, so the flag is conditioned on a non-root uid.
+        const podman = fakeRuntime({ kind: 'podman' });
+        await ensureWorkspaceSandbox('acme', WS_PATH, {
+            runtime: podman,
+            platform: 'linux',
+            hostIds: { uid: 0, gid: 0 },
+        });
+        expect(podman.ran[0]?.userns).toBeUndefined();
     });
 
     it('accepts any base image, so the sandbox is provable without the Genie image', async () => {

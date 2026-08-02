@@ -20,6 +20,7 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
         onForceQuestion: vi.fn().mockResolvedValue({ cancelled: true, answers: [] }),
         describeWorkspace: vi.fn().mockResolvedValue(null),
         manageProcess: vi.fn().mockResolvedValue({ ok: true, processes: [] }),
+        manageSite: vi.fn().mockResolvedValue({ ok: true, sites: [] }),
         provisionWorkspaces: vi
             .fn()
             .mockResolvedValue({ ok: true, isOps: true, children: [] }),

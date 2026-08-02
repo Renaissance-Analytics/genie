@@ -142,6 +142,21 @@ export interface ContainerSpec {
     cpus?: string;
     /** Reap zombies — a dev container runs whatever the repo spawns. */
     init?: boolean;
+    /**
+     * Rootless-Podman user-namespace mode. **Podman only** — the argv builder
+     * DROPS it for docker.
+     *
+     * Rootless podman maps the invoking user to root inside the container, so a
+     * bind-mounted workspace comes out owned by a subuid the host cannot write
+     * to. `keep-id` maps the user to the SAME uid inside, which is the podman
+     * answer to the problem `HOST_UID`/`HOST_GID` solves for docker.
+     *
+     * Not shared with docker because docker's `--userns` accepts only `host` or
+     * empty: passing `keep-id` there is not ignored, it is a hard CLI error.
+     * That asymmetry is exactly why this is a spec FIELD rather than something
+     * a caller appends — see `dev-base/README.md` item 2.
+     */
+    userns?: 'keep-id';
 }
 
 export interface ContainerRef {
@@ -188,6 +203,45 @@ export interface LogOptions {
     tail?: number;
 }
 
+// --- getting an image onto the machine -------------------------------------
+
+/**
+ * A long image operation's progress, and its outcome.
+ *
+ * `onProgress` is the whole reason pulls and builds are not just another
+ * `CommandResult`: a multi-gigabyte pull that reports only on completion is
+ * indistinguishable from a hang, and the caller — a first-run dialog, or an MCP
+ * agent relaying to a user — needs the line as it arrives.
+ */
+export interface ImageProgressOptions {
+    /** Raw CLI output, chunk by chunk, as the operation runs. */
+    onProgress?: (chunk: string) => void;
+}
+
+/** The outcome of a pull or a build. Never a rejection — see the interface. */
+export interface ImageResult {
+    ok: boolean;
+    /** The image that was pulled, or the tag the build produced. */
+    image: string;
+    /** True when nothing was fetched because the image was already local. */
+    alreadyPresent?: boolean;
+    /** Set when `ok` is false: the tail of what the CLI said. */
+    error?: string;
+}
+
+/** What to build, and from where. `context` is a HOST path — the adapter
+ *  translates it exactly as it does a bind-mount source. */
+export interface ImageBuildSpec {
+    /** The tag the built image gets. This is what a spec then runs. */
+    tag: string;
+    /** The build context directory, on the host. */
+    context: string;
+    /** A Dockerfile path RELATIVE to the context. Omit for `<context>/Dockerfile`. */
+    dockerfile?: string;
+    /** `--build-arg` pairs. */
+    buildArgs?: Record<string, string>;
+}
+
 // --- the interface ---------------------------------------------------------
 
 /**
@@ -209,8 +263,21 @@ export interface ContainerRuntime {
     /** Remove it. Removing one that is already gone is success. */
     networkRemove(workspaceId: string): Promise<void>;
 
-    /** Is the image already local? P1 never pulls — see `images.ts`. */
+    /** Is the image already local? */
     imageExists(image: string): Promise<boolean>;
+
+    /**
+     * Fetch an image, reporting progress as it goes.
+     *
+     * NOT called on its own initiative anywhere: a multi-gigabyte download is
+     * something the user (or an agent acting for them) agrees to first — see the
+     * consent seam on `ensureWorkspaceSandbox`. This is the mechanism, not the
+     * policy.
+     */
+    pullImage(image: string, opts?: ImageProgressOptions): Promise<ImageResult>;
+
+    /** Build an image from a repo's own Dockerfile (the layer-1 run mode). */
+    buildImage(spec: ImageBuildSpec, opts?: ImageProgressOptions): Promise<ImageResult>;
 
     runContainer(spec: ContainerSpec): Promise<ContainerRef>;
     start(id: string): Promise<void>;

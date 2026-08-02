@@ -283,6 +283,24 @@ export interface McpContext {
         req: ProvisionWorkspacesRequest,
     ) => Promise<ProvisionWorkspacesResult>;
     /**
+     * Serve a repo's dev server from a container in the caller's workspace
+     * sandbox and route it at `<name>.gen` (the manageSite tool, #234 P2):
+     * detect / list / create / start / stop / restart / status / logs / open /
+     * remove. Does the container-runtime + db + Genie-Browser I/O (kept out of
+     * this pure module).
+     */
+    manageSite: (terminalId: string, req: ManageSiteRequest) => Promise<ManageSiteResult>;
+    /**
+     * Is the container Dev Server usable on this machine at all?
+     *
+     * Gates `manageSite` OUT of `tools/list` when no Docker/Podman is present —
+     * the same discipline as the Ops gate on `provisionWorkspaces`, and FAIL
+     * CLOSED for the same reason: a tool an agent cannot possibly succeed with
+     * is worse than an absent one, because every failure looks like a bug in the
+     * agent's own call. Optional: absent contributes no tool.
+     */
+    devServerAvailable?: (terminalId: string) => Promise<boolean>;
+    /**
      * Drive terminals in the caller's workspace OR a workspace it governs (the
      * manageTerminals tool): spawn a pty, write input/keystrokes, read recent
      * output (from a bounded ring buffer), list, kill. create/write are
@@ -498,6 +516,113 @@ export interface ProvisionWorkspacesResult {
     scaffolded?: string[];
     /** provision/scaffold: per-child failures (best-effort — one bad child doesn't abort). */
     errors?: string[];
+}
+
+// --- manageSite (the container Dev Server, #234 P2) --------------------------
+
+/** One dev site as the `manageSite` tool reports it. */
+export interface DevSiteInfo {
+    /** The opaque id every non-create action takes back. */
+    id: string;
+    /** The site's name inside its workspace (a DNS label). */
+    name: string;
+    /** The browser-facing `.gen` name. */
+    genName: string;
+    /** The repo subfolder it runs in, or '' for the workspace root. */
+    repo: string;
+    runMode: string;
+    kind: 'http' | 'tcp';
+    enabled: boolean;
+    /** running | stopped | failed */
+    state: string;
+    /** Whether the published port ACCEPTED a connection. `running` only says
+     *  the container is up; this says the dev server has bound. */
+    ready?: boolean;
+    /** The port inside the container. */
+    port?: number;
+    /** The loopback port the runtime published on the host. */
+    hostPort?: number;
+    /** The routable origin through the Genie Browser (http sites). */
+    origin?: string;
+    /** The direct loopback origin (curl, a local browser, another program). */
+    localOrigin?: string;
+    command?: string[];
+    image?: string;
+    error?: string;
+}
+
+/** One way a repo could be run — the layered site definition's offer. */
+export interface DevSiteRunOption {
+    runMode: string;
+    stack?: string;
+    /** The repo file that produced this option. */
+    source: string;
+    reason: string;
+    command?: string[];
+    port?: number;
+    /** False when something load-bearing here was guessed. */
+    confident: boolean;
+    /** Present when `confident` is false: what you must supply or check. */
+    needs?: string;
+}
+
+export interface ManageSiteRequest {
+    action:
+        | 'list'
+        | 'detect'
+        | 'create'
+        | 'start'
+        | 'stop'
+        | 'restart'
+        | 'status'
+        | 'logs'
+        | 'open'
+        | 'remove';
+    /** Target workspace. Omit for your own; an Ops agent may pass a governed one. */
+    workspaceId?: string;
+    /** create: the site name (a DNS label) — also the first `.gen` label. */
+    name?: string;
+    /** create/detect: a repo subfolder (repos/<repo>); omit for the workspace root. */
+    repo?: string;
+    /** create: how it runs. Omit to take the detected recommendation. */
+    runMode?: 'dockerfile' | 'devcontainer' | 'compose' | 'detected' | 'explicit';
+    /** create: an explicit image. Omit to run in the workspace dev image. */
+    image?: string;
+    /** create: literal argv (NOT a shell string) — e.g. ["npm","run","dev"]. */
+    command?: string[];
+    /** create: the port the server listens on INSIDE the container. */
+    port?: number;
+    env?: Record<string, string>;
+    /** create: `http` (routable at `.gen`) or `tcp` (published + listed only). */
+    kind?: 'http' | 'tcp';
+    /** create: override the browser-facing `.gen` name. */
+    genName?: string;
+    /** create: the Host header sent upstream (default: the `.gen` name). */
+    upstreamHost?: string;
+    /** create: leave it defined but not started. Default true (start it). */
+    enabled?: boolean;
+    /** Every action except list/detect/create: the site `id` from a prior list. */
+    id?: string;
+    /** logs: how many lines. */
+    tail?: number;
+}
+
+export interface ManageSiteResult {
+    ok: boolean;
+    /** Set when ok is false (no runtime, bad args, unknown id, …). */
+    error?: string;
+    /** The workspace's sites after the action (always returned on ok). */
+    sites: DevSiteInfo[];
+    /** The site the action targeted/created. */
+    affectedId?: string;
+    /** detect/create: every way the repo could run, best-offer first. */
+    options?: DevSiteRunOption[];
+    /** create: which option was applied, when none was supplied. */
+    applied?: DevSiteRunOption;
+    /** logs: the container log tail. */
+    logs?: string;
+    /** Which container runtime is driving, or why none is. */
+    runtime?: { kind: string; version?: string; installHint?: string };
 }
 
 // --- manageTerminals ---------------------------------------------------------
@@ -1052,6 +1177,108 @@ const PROVISION_WORKSPACES_TOOL = {
     },
 };
 
+const MANAGE_SITE_TOOL = {
+    name: 'manageSite',
+    description:
+        "Serve a repo's DEV SERVER from a container in this workspace's sandbox, and route it into the Genie Browser at a stable `https://<name>.gen` origin — reachable the same way whether the viewer is on this machine or connected remotely. Stack-agnostic: anything expressible as an image + a command + a port is servable (Node, Python, PHP, Go, Rust, …). The container joins the workspace's isolated network with the workspace directory mounted at /workspace, and publishes ONLY its own port, to loopback. Actions: `detect` (read a repo and return every way it could run — its Dockerfile, or a stack detected from package.json / composer.json / pyproject.toml / go.mod / Cargo.toml — each with `confident` and, when it is a guess, `needs`); `list` (every site + live state); `create` (define one and start it — `name` (a DNS label) plus either an explicit `command` + `port`, or nothing at all to take the detected recommendation; optional `repo` to run inside repos/<repo>, `image`, `env`, `kind`); `start` / `stop` / `restart` / `status` (by `id` from a prior list); `logs` (the container's log tail, `tail` lines); `open` (show the site in the Genie Browser for the user); `remove` (stop it and forget the definition). READ THE RESULT: `state:'running'` means the CONTAINER is up; `ready:true` means the published port actually accepted a connection — a dev server that is still compiling is running-but-not-ready, and reporting it as live is wrong. `origin` is the routable `https://<name>.gen`; `localOrigin` is the direct loopback origin for curl or another program. BINDING: a dev server that listens on `localhost` inside a container is unreachable no matter what is published — every command this tool generates binds 0.0.0.0, and one you supply must too. HOST ALLOWLISTS: upstream is sent `Host: <name>.gen`, which Vite (`server.allowedHosts`), Django (`ALLOWED_HOSTS`) and Rails (`config.hosts`) will reject unless told about it — either add the `.gen` name there, or pass `upstreamHost:'localhost'` on create. Requires Docker or Podman; when neither is usable the result carries the install hint instead of a site. `command` is literal argv (`[\"npm\",\"run\",\"dev\"]`), never a shell string. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            ...TERMINAL_ID_PROP,
+            action: {
+                type: 'string',
+                enum: [
+                    'list',
+                    'detect',
+                    'create',
+                    'start',
+                    'stop',
+                    'restart',
+                    'status',
+                    'logs',
+                    'open',
+                    'remove',
+                ],
+                description: 'What to do.',
+            },
+            workspaceId: {
+                type: 'string',
+                description:
+                    'The workspace to act in. Omit for YOUR OWN. An Ops agent may pass a workspace it governs.',
+            },
+            name: {
+                type: 'string',
+                description:
+                    'create: the site name — a DNS label (`web`, `api`). Becomes the first label of `<name>.<workspace>.gen`.',
+            },
+            repo: {
+                type: 'string',
+                description:
+                    'create/detect (optional): a repo subfolder to run inside (repos/<repo>); omit for the workspace root.',
+            },
+            runMode: {
+                type: 'string',
+                enum: ['dockerfile', 'devcontainer', 'compose', 'detected', 'explicit'],
+                description:
+                    "create (optional): how it runs. `dockerfile` builds the repo's own Dockerfile; `detected` uses a stack-detected command; `explicit` uses exactly the `command`/`image` you pass. Omit to take the detected recommendation. `devcontainer` and `compose` are not runnable yet.",
+            },
+            image: {
+                type: 'string',
+                description:
+                    "create (optional): the image to run. Omit to run in Genie's multi-language workspace dev image.",
+            },
+            command: {
+                type: 'array',
+                items: { type: 'string' },
+                description:
+                    'create: LITERAL ARGV, not a shell string — ["npm","run","dev","--","--host","0.0.0.0"]. Must bind 0.0.0.0.',
+            },
+            port: {
+                type: 'number',
+                description:
+                    'create: the port the server listens on INSIDE the container. Genie publishes it to an ephemeral loopback port and routes `.gen` there.',
+            },
+            env: {
+                type: 'object',
+                additionalProperties: { type: 'string' },
+                description: 'create (optional): environment for the container.',
+            },
+            kind: {
+                type: 'string',
+                enum: ['http', 'tcp'],
+                description:
+                    "create (optional): `http` (default) is routed at `<name>.gen`; `tcp` is published to loopback and listed, but the browser has nothing to open.",
+            },
+            genName: {
+                type: 'string',
+                description:
+                    'create (optional): override the browser-facing name. Must end `.gen`. Default `<name>.<workspace>.gen`.',
+            },
+            upstreamHost: {
+                type: 'string',
+                description:
+                    "create (optional): the Host header sent to the dev server. Defaults to the `.gen` name so origins line up; set `localhost` when a framework's host allowlist rejects it.",
+            },
+            enabled: {
+                type: 'boolean',
+                description:
+                    'create (optional): default true — define AND start it. Pass false to define it without starting.',
+            },
+            id: {
+                type: 'string',
+                description:
+                    'Every action except list/detect/create: the target site `id`, passed back verbatim from a `list` result.',
+            },
+            tail: {
+                type: 'number',
+                description: 'logs (optional): how many lines of the container log to return.',
+            },
+        },
+        required: ['action'],
+        additionalProperties: false,
+    },
+};
+
 const TARGET_WORKSPACE_PROP = {
     workspaceId: {
         type: 'string',
@@ -1531,6 +1758,40 @@ export function formatIssueCountsLine(snap: IssueWatchSnapshot): string | null {
 }
 
 /**
+ * PURE. The one-line headline above a `manageSite` result.
+ *
+ * It leads with the distinction an agent most often gets wrong: a container that
+ * is `running` is not the same as a dev server that has BOUND its port. So when
+ * a site is running but not ready, the headline says so and says what to do
+ * about it, instead of handing back an origin that will 502.
+ */
+export function manageSiteSummary(result: ManageSiteResult): string {
+    if (!result.ok) {
+        const hint = result.runtime?.installHint;
+        return `manageSite failed: ${result.error ?? 'unknown error'}${hint ? ` ${hint}` : ''}`;
+    }
+    const target = result.affectedId
+        ? result.sites.find((s) => s.id === result.affectedId)
+        : undefined;
+    if (target) {
+        if (target.state === 'failed') {
+            return `${target.name} could not start: ${target.error ?? 'unknown error'}`;
+        }
+        if (target.state !== 'running') {
+            return `${target.name} is ${target.state}.`;
+        }
+        const where = target.origin ?? target.localOrigin ?? '';
+        return target.ready
+            ? `${target.name} is serving at ${where}.`
+            : `${target.name}'s container is up, but nothing is listening on port ${
+                  target.port ?? '?'
+              } yet — it may still be starting. Check \`logs\`, then \`status\` again before reporting it live.`;
+    }
+    const running = result.sites.filter((s) => s.state === 'running').length;
+    return `${result.sites.length} site${result.sites.length === 1 ? '' : 's'} in this workspace, ${running} running.`;
+}
+
+/**
  * The concise AgentInbox nudge folded into an `imDone` response (Track A). Turns
  * an unread summary into e.g. `📬 2 unread AgentInbox message(s) from claude·general,
  * codex — call agentinbox(action:"receive") before you stop.` Returns null when nothing is
@@ -1763,6 +2024,13 @@ export async function handleMcpMessage(
             } catch {
                 pluginTools = [];
             }
+            // `manageSite` needs a container runtime to do anything at all. List
+            // it only where one is usable — fail CLOSED on any error, so a
+            // machine with no Docker never sees a tool whose every call would
+            // fail with the same install hint.
+            const hasDevServer = await (ctx.devServerAvailable?.(ctx.terminalId) ?? Promise.resolve(false)).catch(
+                () => false,
+            );
             return ok(msg.id, {
                 tools: [
                     IMDONE_TOOL,
@@ -1770,6 +2038,7 @@ export async function handleMcpMessage(
                     FORCE_QUESTION_TOOL,
                     MANAGE_PROCESS_TOOL,
                     ...(isOps ? [PROVISION_WORKSPACES_TOOL] : []),
+                    ...(hasDevServer ? [MANAGE_SITE_TOOL] : []),
                     MANAGE_TERMINALS_TOOL,
                     RUN_AGENT_TOOL,
                     MANAGE_WORKSPACES_TOOL,
@@ -1910,6 +2179,53 @@ export async function handleMcpMessage(
                         {
                             type: 'text',
                             text: `${summary}\n\n${JSON.stringify(result, null, 2)}`,
+                        },
+                    ],
+                });
+            }
+            if (params.name === 'manageSite') {
+                const a = (params.arguments ?? {}) as Partial<ManageSiteRequest>;
+                const ACTIONS: ReadonlyArray<ManageSiteRequest['action']> = [
+                    'list',
+                    'detect',
+                    'create',
+                    'start',
+                    'stop',
+                    'restart',
+                    'status',
+                    'logs',
+                    'open',
+                    'remove',
+                ];
+                if (!a.action || !ACTIONS.includes(a.action)) {
+                    return err(
+                        msg.id,
+                        -32602,
+                        `manageSite requires \`action\`: ${ACTIONS.join(' | ')}.`,
+                    );
+                }
+                const result = await ctx.manageSite(ctx.terminalId, {
+                    action: a.action,
+                    workspaceId: a.workspaceId,
+                    name: a.name,
+                    repo: a.repo,
+                    runMode: a.runMode,
+                    image: a.image,
+                    command: a.command,
+                    port: a.port,
+                    env: a.env,
+                    kind: a.kind,
+                    genName: a.genName,
+                    upstreamHost: a.upstreamHost,
+                    enabled: a.enabled,
+                    id: a.id,
+                    tail: a.tail,
+                });
+                return ok(msg.id, {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `${manageSiteSummary(result)}\n\n${JSON.stringify(result, null, 2)}`,
                         },
                     ],
                 });

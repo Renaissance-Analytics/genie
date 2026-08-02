@@ -23,6 +23,13 @@ import {
     type ServiceKind,
     type WorkspaceServices,
 } from './hosting/services/config';
+import {
+    devSiteIdFor,
+    parseDevSites,
+    sanitizeDevSitePatch,
+    type DevSiteConfig,
+    type DevSites,
+} from './dev-server/sites-config';
 import type { AgentInboxScope, WorkspaceAgentAccess } from './agentinbox/types';
 
 /**
@@ -790,6 +797,31 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v31: per-workspace DEV SITES (the container Dev Server, Tynn #234
+            // P2). A JSON blob mapping the opaque per-site id → its definition:
+            // { [siteId]: { name, genName, repo, runMode, image?, command?,
+            //   port?, env?, kind, enabled } }.
+            //
+            // A THIRD column rather than a rename of v29's `hosted_sites`,
+            // because the two name different substrates and both are live: a
+            // hosted_sites row is served by the beta.218 host-NATIVE runtime
+            // (FrankenPHP, PHP-first), a dev_sites row by a container in the
+            // workspace sandbox (any stack). P4 retires the former; folding them
+            // together now would make that retirement a data migration instead
+            // of a deletion.
+            //
+            // NULL/absent reads as {} (nothing defined), so existing workspaces
+            // gain the column with the safe default. Resolved by
+            // getWorkspaceDevSites — never parsed here.
+            version: 31,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('dev_sites')) {
+                    db.exec(`ALTER TABLE workspaces ADD COLUMN dev_sites TEXT`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1211,6 +1243,12 @@ export interface WorkspaceRow {
      *  NULL/absent reads as {} — resolve it via {@link getWorkspaceServices},
      *  never parse here. */
     workspace_services?: string | null;
+    /** Per-workspace DEV SITES (the container Dev Server, #234 P2), JSON-encoded
+     *  ({ [siteId]: { name, genName, repo, runMode, command?, port?, … } }).
+     *  The container-substrate sibling of `hosted_sites`: those are served by the
+     *  host-native runtime, these by a container in the workspace sandbox.
+     *  NULL/absent reads as {} — resolve via {@link getWorkspaceDevSites}. */
+    dev_sites?: string | null;
 }
 
 export function listWorkspaces(): WorkspaceRow[] {
@@ -1813,6 +1851,75 @@ export function deleteWorkspaceHostedSite(id: string, siteId: string): void {
     const next = { ...current };
     delete next[siteId];
     setWorkspaceHostedSites(id, next);
+}
+
+// Dev sites (the container Dev Server, #234 P2) --------------------------
+//
+// The container-substrate sibling of hosted_sites. Same single-column JSON
+// pattern; the id is workspace-SCOPED (two workspaces can each have a `web`).
+// Parse/sanitize live in main/dev-server/sites-config.ts.
+
+/** This workspace's stored dev sites (NULL/absent ⇒ {} = none defined). */
+export function getWorkspaceDevSites(id: string): DevSites {
+    const row = getDb()
+        .prepare<[string], { dev_sites: string | null } | undefined>(
+            'SELECT dev_sites FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    return parseDevSites(row?.dev_sites ?? null);
+}
+
+/** Replace this workspace's whole dev-site map (JSON-encoded). */
+export function setWorkspaceDevSites(id: string, sites: DevSites): void {
+    getDb().prepare('UPDATE workspaces SET dev_sites = ? WHERE id = ?').run(JSON.stringify(sites), id);
+}
+
+/**
+ * Merge ONE dev site into this workspace's map, returning its id.
+ *
+ * The key is DERIVED from the (sanitized) name rather than supplied, so the
+ * stored id and the stored name can never disagree — a mismatch there would mean
+ * the manager starts a container for one site while the Testing Browser resolves
+ * another. Returns null when the patch carries no usable name and none is stored.
+ */
+export function setWorkspaceDevSite(
+    id: string,
+    patch: Partial<DevSiteConfig> & { siteId?: string },
+): string | null {
+    const current = getWorkspaceDevSites(id);
+    const clean = sanitizeDevSitePatch(patch);
+    const name = clean.name ?? (patch.siteId ? current[patch.siteId]?.name : undefined);
+    if (!name) return null;
+    const siteId = devSiteIdFor(id, name);
+    const previous = (patch.siteId ? current[patch.siteId] : undefined) ?? current[siteId] ?? {};
+    // Defaults UNDER the stored row, which is under the patch — a create gets a
+    // complete row, an update touches only what it named.
+    const combined: Partial<DevSiteConfig> = { ...previous, ...clean, name };
+    const merged: DevSiteConfig = {
+        ...combined,
+        name,
+        genName: combined.genName ?? '',
+        repo: combined.repo ?? '',
+        runMode: combined.runMode ?? 'explicit',
+        kind: combined.kind ?? 'http',
+        enabled: combined.enabled ?? false,
+    };
+    if (!merged.genName) return null;
+    const next = { ...current, [siteId]: merged };
+    // Renaming a site moves it to a new key; drop the old one so the map never
+    // holds two entries for one site.
+    if (patch.siteId && patch.siteId !== siteId) delete next[patch.siteId];
+    setWorkspaceDevSites(id, next);
+    return siteId;
+}
+
+/** Forget one dev site entirely (`manageSite remove`). */
+export function deleteWorkspaceDevSite(id: string, siteId: string): void {
+    const current = getWorkspaceDevSites(id);
+    if (!(siteId in current)) return;
+    const next = { ...current };
+    delete next[siteId];
+    setWorkspaceDevSites(id, next);
 }
 
 // Backing services (#232 P3) ---------------------------------------------

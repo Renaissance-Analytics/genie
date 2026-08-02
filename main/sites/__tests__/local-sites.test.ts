@@ -31,6 +31,7 @@ interface FakeSiteView {
 }
 
 const hostedGenSites = vi.fn((): EnabledGenSite[] => []);
+const devServerGenSites = vi.fn((): EnabledGenSite[] => []);
 const discoverSites = vi.fn(async (): Promise<FakeSiteView[]> => []);
 const listWorkspaces = vi.fn((): Array<{ id: string }> => [{ id: 'ws1' }]);
 const getWorkspaceTunnelSites = vi.fn(
@@ -38,6 +39,9 @@ const getWorkspaceTunnelSites = vi.fn(
 );
 
 vi.mock('../../hosting/manager', () => ({ hostedGenSites: () => hostedGenSites() }));
+vi.mock('../../dev-server/site-manager', () => ({
+    devServerGenSites: () => devServerGenSites(),
+}));
 vi.mock('../../mobile/hosts', () => ({ discoverSites: () => discoverSites() }));
 vi.mock('../../db', () => ({
     listWorkspaces: () => listWorkspaces(),
@@ -68,9 +72,22 @@ const HOSTED: EnabledGenSite = {
     loopback: '127.0.0.1',
 };
 
+/** A dev site the container Dev Server (#234 P2) is serving right now — the
+ *  `port` is the runtime's PUBLISHED loopback port for the container. */
+const CONTAINER: EnabledGenSite = {
+    workspaceId: 'ws1',
+    genName: 'web.acme.gen',
+    siteId: 'id-web',
+    hostname: 'web.acme.gen',
+    scheme: 'http',
+    port: 49_812,
+    loopback: '127.0.0.1',
+};
+
 beforeEach(() => {
     vi.clearAllMocks();
     hostedGenSites.mockReturnValue([]);
+    devServerGenSites.mockReturnValue([]);
     listWorkspaces.mockReturnValue([{ id: 'ws1' }]);
     getWorkspaceTunnelSites.mockReturnValue({ site: { enabled: true } });
     discoverSites.mockResolvedValue([]);
@@ -181,5 +198,42 @@ describe('listLocalEnabledGenSites', () => {
         discoverSites.mockRejectedValue(new Error('hosts file unreadable'));
         hostedGenSites.mockReturnValue([HOSTED]);
         expect(await listLocalEnabledGenSites()).toEqual([HOSTED]);
+    });
+
+    // --- the container Dev Server (#234 P2) --------------------------------
+
+    it('EMITS a container dev site, so `<name>.gen` resolves to its published port', async () => {
+        // THE P2 ROUTING SEAM. A dev server running in the workspace sandbox
+        // reaches the Testing Browser as an ordinary `EnabledGenSite` whose
+        // target is the container's published loopback port — no proxy, no new
+        // resolution path, and identical for a local and a remote viewer (the
+        // remote reads this same aggregation over `/api/sites/enabled`).
+        devServerGenSites.mockReturnValue([CONTAINER]);
+        const targets = localTargetsBySiteId(await listLocalEnabledGenSites());
+        expect(targets.get('id-web')).toEqual({
+            scheme: 'http',
+            hostname: 'web.acme.gen',
+            port: 49_812,
+            loopback: '127.0.0.1',
+        });
+    });
+
+    it('lets a RUNNING container win over a native-hosted site of the same name', async () => {
+        // Both sources are overlaid; the dev server is applied last, so during
+        // the P4 migration a workspace that has moved a site to a container gets
+        // the container, not the retired FrankenPHP port.
+        const sameName = { ...HOSTED, siteId: 'id-web', genName: 'web.acme.gen' };
+        devServerGenSites.mockReturnValue([CONTAINER]);
+        hostedGenSites.mockReturnValue([sameName]);
+        const sites = await listLocalEnabledGenSites();
+        expect(sites).toHaveLength(1);
+        expect(sites[0]?.port).toBe(49_812);
+    });
+
+    it('carries hosted and container sites side by side', async () => {
+        devServerGenSites.mockReturnValue([CONTAINER]);
+        hostedGenSites.mockReturnValue([HOSTED]);
+        const sites = await listLocalEnabledGenSites();
+        expect(sites.map((s) => s.genName).sort()).toEqual(['tynn.gen', 'web.acme.gen']);
     });
 });
