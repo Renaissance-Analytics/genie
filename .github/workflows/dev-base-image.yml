@@ -230,8 +230,18 @@ jobs:
             genie-dev-base:smoke tail -f /dev/null)"
           trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 
-          got="$(docker exec "$cid" id -u):$(docker exec "$cid" id -g)"
-          test "$got" = '4242:4243' || { echo "exec ran as $got, expected 4242:4243" >&2; exit 1; }
+          # The entrypoint renumbers `genie` (sudo usermod) BEFORE it execs `tail`,
+          # but `docker run -d` returns as soon as the container starts — a `docker
+          # exec` fired that instant can race the usermod on a slow/contended runner
+          # (passes locally, where the window is sub-millisecond; failed on CI). Poll
+          # until the aligned uid settles, then assert — never assume it is instant.
+          got=""
+          for _ in $(seq 1 40); do
+            got="$(docker exec "$cid" id -u 2>/dev/null):$(docker exec "$cid" id -g 2>/dev/null)"
+            [ "$got" = '4242:4243' ] && break
+            sleep 0.5
+          done
+          test "$got" = '4242:4243' || { echo "exec ran as $got, expected 4242:4243 after 20s" >&2; exit 1; }
           test "$(docker exec "$cid" id -un)" = genie
           # A file written from an exec must carry the aligned ownership — that
           # is the entire point of the exercise.
