@@ -2,76 +2,46 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EnabledGenSite } from '../../remote';
 
 /**
- * How HOSTED sites reach the Testing Browser (Tynn #232, P2).
+ * WHERE A `.gen` SITE COMES FROM — and, since the container Dev Server shipped
+ * (#234), where it does NOT.
  *
- * `listLocalEnabledGenSites()` has always answered one question — "which `.gen`
- * sites can this machine serve right now?" — from ONE source: the OS hosts file
- * plus a loopback probe. That source can only ever describe sites something
- * ELSE is serving (Herd, `artisan serve`, `npm run dev`), which is precisely why
- * remote preview kept breaking.
+ * `listLocalEnabledGenSites()` answers one question: "which `.gen` sites can
+ * this machine serve right now?" It used to answer it from TWO sources, and the
+ * first of them was wrong:
  *
- * P2 adds a second source: sites GENIE serves. The join is deliberately a
- * shallow overlay rather than a new resolution path, because everything
- * downstream (`localTargetsBySiteId` → the local carrier → the site shim) reads
- * the same `EnabledGenSite` rows it always did. So there are exactly two things
- * to get right, and both are tested here:
+ *   - DISCOVERY (the OS hosts file + a loopback probe) could only ever describe
+ *     a site something ELSE serves — Herd's `tynn.test`, an `artisan serve`, a
+ *     stray Vite. Genie did not start it, cannot restart it, and learns nothing
+ *     about it beyond a name and a port that answered once. That is the
+ *     "tunnel a site you are running elsewhere" model the container Dev Server
+ *     replaced, and the owner's call is blunt: `.gen` sites are NOT configured
+ *     from what is found in the hosts file.
+ *   - The DEV SERVER serves a container Genie started, whose published loopback
+ *     port it read back from the runtime.
  *
- *   1. hosted sites are EMITTED at all, and
- *   2. when a hostname is both discovered and hosted, the HOSTED target wins.
+ * So there is exactly ONE source now, and the tests below pin both halves of
+ * that: a hosts-file `.test` entry produces NOTHING, and a Dev Server site
+ * still lands as an ordinary `EnabledGenSite` that `localTargetsBySiteId` → the
+ * local carrier (local) and `/api/sites/enabled` → the remote shim (remote)
+ * both carry with no code of their own. The CARRIER is untouched; only the
+ * source is.
  */
 
-/** A discovered `SiteView` as `discoverSites` would return it. */
-interface FakeSiteView {
-    enabled: boolean;
-    genName: string;
-    siteId: string;
-    hostname: string;
-    scheme: 'http' | 'https';
-    port: number;
-}
-
 const devServerGenSites = vi.fn((): EnabledGenSite[] => []);
-const discoverSites = vi.fn(async (): Promise<FakeSiteView[]> => []);
-const listWorkspaces = vi.fn((): Array<{ id: string }> => [{ id: 'ws1' }]);
-const getWorkspaceTunnelSites = vi.fn(
-    (_workspaceId: string): Record<string, { enabled: boolean }> => ({ site: { enabled: true } }),
-);
 
 vi.mock('../../dev-server/site-manager', () => ({
     devServerGenSites: () => devServerGenSites(),
 }));
-vi.mock('../../mobile/hosts', () => ({ discoverSites: () => discoverSites() }));
-vi.mock('../../db', () => ({
-    listWorkspaces: () => listWorkspaces(),
-    getWorkspaceTunnelSites: (id: string) => getWorkspaceTunnelSites(id),
-}));
 
 // eslint-disable-next-line import/first -- `vi.mock` is hoisted above this.
-import { listLocalEnabledGenSites, localTargetsBySiteId, mergeHostedSites } from '../local-sites';
+import {
+    listLocalEnabledGenSites,
+    localTargetsBySiteId,
+    resolveEnabledSite,
+} from '../local-sites';
 
-/** A hosts-file-discovered Herd site on 443. */
-const DISCOVERED: EnabledGenSite = {
-    workspaceId: 'ws1',
-    genName: 'tynn.gen',
-    siteId: 'id-tynn',
-    hostname: 'tynn.test',
-    scheme: 'https',
-    port: 443,
-};
-
-/** The SAME site, served by Genie on a port it chose. */
-const HOSTED: EnabledGenSite = {
-    workspaceId: 'ws1',
-    genName: 'tynn.gen',
-    siteId: 'id-tynn',
-    hostname: 'tynn.test',
-    scheme: 'https',
-    port: 20_431,
-    loopback: '127.0.0.1',
-};
-
-/** A dev site the container Dev Server (#234 P2) is serving right now — the
- *  `port` is the runtime's PUBLISHED loopback port for the container. */
+/** A dev site the container Dev Server is serving right now — the `port` is the
+ *  runtime's PUBLISHED loopback port for the container. */
 const CONTAINER: EnabledGenSite = {
     workspaceId: 'ws1',
     genName: 'web.acme.gen',
@@ -85,126 +55,14 @@ const CONTAINER: EnabledGenSite = {
 beforeEach(() => {
     vi.clearAllMocks();
     devServerGenSites.mockReturnValue([]);
-    listWorkspaces.mockReturnValue([{ id: 'ws1' }]);
-    getWorkspaceTunnelSites.mockReturnValue({ site: { enabled: true } });
-    discoverSites.mockResolvedValue([]);
 });
-
-// --- the pure overlay ------------------------------------------------------
-
-describe('mergeHostedSites', () => {
-    it('leaves discovery alone when nothing is hosted', () => {
-        expect(mergeHostedSites([DISCOVERED], [])).toEqual([DISCOVERED]);
-    });
-
-    it('adds a hosted site that discovery never saw', () => {
-        // A hosted site needs no hosts-file entry at all — Genie is the server,
-        // so there is nothing for the OS to resolve.
-        const other = { ...HOSTED, siteId: 'id-fancy', hostname: 'fancy.test', genName: 'fancy.gen' };
-        expect(mergeHostedSites([DISCOVERED], [other])).toEqual([DISCOVERED, other]);
-    });
-
-    it('PREFERS the hosted target when a hostname is both discovered and hosted', () => {
-        // The one assertion the whole feature rests on: with Herd also serving
-        // tynn.test on 443, the Testing Browser must dial the port GENIE is
-        // serving, because that is the built, same-origin one.
-        const merged = mergeHostedSites([DISCOVERED], [HOSTED]);
-        expect(merged).toHaveLength(1);
-        expect(merged[0]?.port).toBe(20_431);
-        expect(localTargetsBySiteId(merged).get('id-tynn')).toEqual({
-            scheme: 'https',
-            hostname: 'tynn.test',
-            port: 20_431,
-            loopback: '127.0.0.1',
-        });
-    });
-
-    it('replaces the discovered entry even when its `.gen` name was overridden', () => {
-        // A workspace can rename a discovered site's `.gen`. Matching only on
-        // genName would then leave BOTH entries with the same siteId, and
-        // `localTargetsBySiteId` would resolve whichever happened to be last.
-        const renamed = { ...DISCOVERED, genName: 'legacy.gen' };
-        const merged = mergeHostedSites([renamed], [HOSTED]);
-        expect(merged).toEqual([HOSTED]);
-    });
-
-    it('replaces a DIFFERENT site squatting the same `.gen` name', () => {
-        // Two hostnames can be pointed at one `.gen`. The hosted one owns it —
-        // otherwise the browser navigates to a name that resolves to a target
-        // Genie is not serving.
-        const squatter = { ...DISCOVERED, siteId: 'id-other', hostname: 'other.test' };
-        expect(mergeHostedSites([squatter], [HOSTED])).toEqual([HOSTED]);
-    });
-
-    it('keeps the position of the entry it replaced', () => {
-        const first = { ...DISCOVERED, siteId: 'id-a', hostname: 'a.test', genName: 'a.gen' };
-        const last = { ...DISCOVERED, siteId: 'id-z', hostname: 'z.test', genName: 'z.gen' };
-        const merged = mergeHostedSites([first, DISCOVERED, last], [HOSTED]);
-        expect(merged.map((s) => s.genName)).toEqual(['a.gen', 'tynn.gen', 'z.gen']);
-        expect(merged[1]?.port).toBe(20_431);
-    });
-});
-
-// --- the emit --------------------------------------------------------------
 
 describe('listLocalEnabledGenSites', () => {
-    it('EMITS dev-server sites, not just discovered ones', async () => {
-        // Without this the pure overlay above is dead code: nothing would ever
-        // hand it a served row.
-        devServerGenSites.mockReturnValue([HOSTED]);
-        const sites = await listLocalEnabledGenSites();
-        expect(sites).toEqual([HOSTED]);
-    });
-
-    it('prefers the dev-server target over the discovered one, end to end', async () => {
-        discoverSites.mockResolvedValue([
-            {
-                enabled: true,
-                genName: 'tynn.gen',
-                siteId: 'id-tynn',
-                hostname: 'tynn.test',
-                scheme: 'https',
-                port: 443,
-            },
-        ]);
-        devServerGenSites.mockReturnValue([HOSTED]);
-        const targets = localTargetsBySiteId(await listLocalEnabledGenSites());
-        expect(targets.get('id-tynn')?.port).toBe(20_431);
-    });
-
-    it('still returns discovered sites when nothing is served here', async () => {
-        // The additive guarantee: a user serving nothing here sees exactly what
-        // they saw before.
-        discoverSites.mockResolvedValue([
-            {
-                enabled: true,
-                genName: 'tynn.gen',
-                siteId: 'id-tynn',
-                hostname: 'tynn.test',
-                scheme: 'https',
-                port: 443,
-            },
-        ]);
-        const sites = await listLocalEnabledGenSites();
-        expect(sites).toHaveLength(1);
-        expect(sites[0]?.port).toBe(443);
-    });
-
-    it('emits dev-server sites even when discovery throws', async () => {
-        // An unreadable hosts file must not hide sites Genie is serving itself.
-        discoverSites.mockRejectedValue(new Error('hosts file unreadable'));
-        devServerGenSites.mockReturnValue([HOSTED]);
-        expect(await listLocalEnabledGenSites()).toEqual([HOSTED]);
-    });
-
-    // --- the container Dev Server (#234 P2) --------------------------------
-
     it('EMITS a container dev site, so `<name>.gen` resolves to its published port', async () => {
-        // THE P2 ROUTING SEAM. A dev server running in the workspace sandbox
-        // reaches the Testing Browser as an ordinary `EnabledGenSite` whose
-        // target is the container's published loopback port — no proxy, no new
-        // resolution path, and identical for a local and a remote viewer (the
-        // remote reads this same aggregation over `/api/sites/enabled`).
+        // THE ROUTING SEAM. A dev server running in the workspace sandbox reaches
+        // the Testing Browser as an ordinary `EnabledGenSite` whose target is the
+        // container's published loopback port — no proxy, no second resolution
+        // path, and identical for a local and a remote viewer.
         devServerGenSites.mockReturnValue([CONTAINER]);
         const targets = localTargetsBySiteId(await listLocalEnabledGenSites());
         expect(targets.get('id-web')).toEqual({
@@ -215,4 +73,74 @@ describe('listLocalEnabledGenSites', () => {
         });
     });
 
+    it('serves NOTHING when the Dev Server is serving nothing', async () => {
+        // The retirement, stated as an assertion: a machine covered in Herd
+        // `.test` vhosts has no `.gen` sites until Genie itself serves one. If
+        // this file ever reads a hosts file again, this is what fails.
+        expect(await listLocalEnabledGenSites()).toEqual([]);
+    });
+
+    it('touches no workspace tunnel config and no hosts file to answer', async () => {
+        // A structural assertion, not a behavioural one: the module must not
+        // even IMPORT the retired discovery. An unmocked `../../db` or
+        // `../../mobile/hosts` here would throw (electron/better-sqlite3 are not
+        // loadable in this env), so the fact that the import above resolved at
+        // all is the proof — restated as an explicit expectation so a
+        // reintroduced dependency fails loudly rather than silently reappearing.
+        const fs = await import('node:fs');
+        const path = await import('node:path');
+        const source = fs.readFileSync(
+            path.resolve(process.cwd(), 'main/sites/local-sites.ts'),
+            'utf8',
+        );
+        expect(source).not.toMatch(/mobile\/hosts/);
+        expect(source).not.toMatch(/TunnelSites|tunnel_sites/);
+    });
+});
+
+/**
+ * The REMOTE half of the same seam.
+ *
+ * A remote viewer does not dial loopback itself — it addresses
+ * `/api/site/<siteId>/…` on the host, and the host's site-proxy resolves that
+ * opaque id to a loopback target. That resolver used to read the hosts file
+ * too, which meant a Dev Server site appeared in the host's `/api/sites/enabled`
+ * listing (so the remote's browser offered it) and then 404'd the moment the
+ * remote actually opened it — the listing and the resolver disagreed about what
+ * a site is.
+ *
+ * Resolving from the SAME aggregation the listing comes from is what makes that
+ * impossible rather than merely unlikely.
+ */
+describe('resolveEnabledSite', () => {
+    it('resolves a Dev Server site to its published loopback target', async () => {
+        devServerGenSites.mockReturnValue([CONTAINER]);
+        expect(await resolveEnabledSite('id-web')).toEqual({
+            workspaceId: 'ws1',
+            hostname: 'web.acme.gen',
+            scheme: 'http',
+            port: 49_812,
+            loopback: '127.0.0.1',
+        });
+    });
+
+    it('fails closed on an id nothing is serving', async () => {
+        // The SSRF floor: an id that does not resolve is a 404, and a remote can
+        // supply nothing else — never a hostname, never a port.
+        devServerGenSites.mockReturnValue([CONTAINER]);
+        expect(await resolveEnabledSite('id-not-served')).toBeNull();
+        expect(await resolveEnabledSite('')).toBeNull();
+    });
+
+    it('carries the site’s allowed WebSocket origins when it declares them', async () => {
+        // HMR / Reverb sockets are origin-checked against this; dropping the
+        // field would reject the very sockets a dev server depends on.
+        devServerGenSites.mockReturnValue([
+            { ...CONTAINER, allowedOrigins: ['web.acme.gen', 'localhost'] },
+        ]);
+        expect((await resolveEnabledSite('id-web'))?.allowedOrigins).toEqual([
+            'web.acme.gen',
+            'localhost',
+        ]);
+    });
 });

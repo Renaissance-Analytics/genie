@@ -13,7 +13,6 @@ import {
 } from './auth';
 import { audit, type AuditActor } from './audit';
 import { authorizeDrive, controlViewFor, joinControl, requestControl } from './baton';
-import type { SiteView, TunnelSiteConfig } from './hosts';
 import type { EnabledGenSite } from '../remote';
 import { isHeadless } from '../runtime-mode';
 import { isUsableGrid } from '../terminal/size-tracker';
@@ -410,36 +409,14 @@ export interface MobileDataDeps {
         readyToInstall: boolean;
     }>;
 
-    // --- serve-local-sites (Phase B) — discovery + the per-repo allowlist ---
+    // --- `.gen` dev sites ---------------------------------------------------
     /**
-     * Discover THIS host's loopback dev sites (hosts-file parse + loopback probe)
-     * merged with a workspace's stored tunnel settings — the `/api/sites` payload.
-     * `workspaceId` optional; absent ⇒ discovery defaults (all disabled, `.gen`
-     * names derived). `refresh` re-probes scheme/port. Optional: a host that
-     * predates the feature leaves it unwired and `/api/sites` returns an empty set.
-     */
-    listSites?: (
-        workspaceId?: string,
-        opts?: { refresh?: boolean },
-    ) => Promise<SiteView[]>;
-    /**
-     * Persist ONE site's tunnel config for a workspace — the §5 allowlist write.
-     * Keyed by the OPAQUE siteId (never a remote-supplied hostname/target), so a
-     * later proxy can only ever be pointed at an already-discovered site.
-     */
-    setSiteConfig?: (
-        workspaceId: string,
-        siteId: string,
-        patch: TunnelSiteConfig,
-    ) => { ok: boolean };
-    /**
-     * The host's ENABLED `.gen` dev sites aggregated across EVERY workspace's
-     * tunnel allowlist — the enabled-only snapshot the header `.gen` popover and
-     * the remote Testing Browser resolver read (served at `/api/sites/enabled`).
-     * Unlike {@link listSites} this needs NO workspaceId: it already merges each
-     * workspace's stored config, so a remote gets the same aggregated view a
-     * local window computes. Optional: a host that predates the feature leaves it
-     * unwired and `/api/sites/enabled` returns an empty set.
+     * The host's `.gen` dev sites — the containers its Dev Server is serving
+     * right now, which is the ONLY source of a `.gen` site. Read by the header
+     * `.gen` popover and by the remote Testing Browser's resolver (served at
+     * `/api/sites/enabled`), so a remote sees exactly what a local window
+     * computes from `listLocalEnabledGenSites()`. Optional: a host that predates
+     * the feature leaves it unwired and the endpoint returns an empty set.
      */
     listEnabledSites?: () => Promise<EnabledGenSite[]>;
 
@@ -837,40 +814,13 @@ export async function handleApi(
         return true;
     }
 
-    // --- serve-local-sites (Phase B) --------------------------------------
-    // GET /api/sites — the host's discovered loopback dev sites merged with a
-    // workspace's per-site tunnel settings (the §5 allowlist). Token-gated like
-    // /api/state, AND kill-switch-gated even though it's a READ: listing a local
-    // admin panel / mailcatcher / DB tool is sensitive even on GET (§5), so a
-    // locked host returns 423. `?workspaceId=` merges that workspace's settings;
-    // `?refresh=1` re-probes scheme/port.
-    if (pathname === '/api/sites' && method === 'GET') {
-        if (guardControl()) return true;
-        if (!deps.listSites) {
-            sendJson(res, 200, { sites: [] });
-            return true;
-        }
-        let workspaceId: string | undefined;
-        let refresh = false;
-        try {
-            const q = new URL(req.url ?? '', 'http://x').searchParams;
-            workspaceId = q.get('workspaceId') ?? undefined;
-            refresh = q.get('refresh') === '1';
-        } catch {
-            /* malformed query — treat as no workspace / no refresh */
-        }
-        const sites = await deps.listSites(workspaceId, { refresh });
-        sendJson(res, 200, { sites });
-        return true;
-    }
-
-    // GET /api/sites/enabled — the host's ENABLED `.gen` sites aggregated across
-    // ALL workspaces (the serve-local allowlist), the enabled-only snapshot the
-    // header `.gen` popover + the remote Testing Browser resolver read. Unlike
-    // `/api/sites` it takes NO workspaceId — it already merges each workspace's
-    // stored config — so a remote gets the same view a local window computes from
-    // `listLocalEnabledGenSites()`. Token- + kill-switch-gated like `/api/sites`;
-    // an empty set on a host that predates the feature.
+    // GET /api/sites/enabled — the host's `.gen` dev sites: the containers its
+    // Dev Server is serving. The snapshot the header `.gen` popover + the remote
+    // Testing Browser resolver read, and the same set the host site-proxy
+    // resolves an opaque siteId against — one source, so the listing and the
+    // resolver cannot disagree. Token- + kill-switch-gated even though it is a
+    // READ: naming a host's dev sites is sensitive on a locked machine (§5). An
+    // empty set on a host that predates the feature.
     if (pathname === '/api/sites/enabled' && method === 'GET') {
         if (guardControl()) return true;
         if (!deps.listEnabledSites) {
@@ -882,38 +832,6 @@ export async function handleApi(
         return true;
     }
 
-    // POST /api/sites/set — persist ONE site's tunnel config (enable / .gen name
-    // / scheme+port), keyed by the OPAQUE siteId. Kill-switch-gated + audited +
-    // SCOPE-FILTERED to served workspaces (a scoped grant can only touch its own
-    // workspaces), mirroring /api/desktop/issue-watch/set.
-    if (pathname === '/api/sites/set' && method === 'POST') {
-        if (guardControl()) return true;
-        if (!deps.setSiteConfig) {
-            sendJson(res, 500, { error: 'sites not supported on this host' });
-            return true;
-        }
-        let body: { workspaceId?: string; siteId?: string; patch?: TunnelSiteConfig };
-        try {
-            body = await readJsonBody(req);
-        } catch {
-            sendJson(res, 400, { error: 'invalid body' });
-            return true;
-        }
-        const wsId = String(body.workspaceId ?? '');
-        if (!servedWorkspaceIds(deps).has(wsId)) {
-            sendJson(res, 404, { error: 'unknown workspace' });
-            return true;
-        }
-        const siteId = String(body.siteId ?? '');
-        if (!siteId) {
-            sendJson(res, 400, { error: 'missing siteId' });
-            return true;
-        }
-        deps.setSiteConfig(wsId, siteId, body.patch ?? {});
-        audit('site.config', `${siteId} in ${wsId}`, actor);
-        sendJson(res, 200, { ok: true });
-        return true;
-    }
     if (pathname === '/api/workspaces' && method === 'GET') {
         sendJson(res, 200, { workspaces: buildState(deps, principal.id).workspaces });
         return true;

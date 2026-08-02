@@ -1724,3 +1724,110 @@ button.m-card:disabled {
         transform: rotate(360deg);
     }
 }
+
+/* Settings → Dev Server (the WORKSTATION view, #234).
+   Three blocks, and the reason each is a block rather than another `.set-row`:
+   the runtime PROBES are a per-candidate list ("docker: found, engine
+   unreachable"), the dev-base TOOLCHAINS are a grid of runtime+version pairs,
+   and each shared ENGINE carries a status line, a usage line naming the other
+   workspaces on it, and an optional log — none of which fit a label/control
+   row. */
+.ws-probes {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md);
+    background: var(--bg-2);
+}
+.ws-probe {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.ws-probe > :last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ws-toolchain {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+}
+.ws-tool {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md);
+    background: var(--bg-2);
+}
+.ws-tool > * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ws-engines {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 8px;
+}
+.ws-engine {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md);
+    background: var(--bg-2);
+}
+.ws-engine-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.ws-engine-name {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+    /* Takes the slack so the actions stay pinned right, and the image ref
+       ellipsises instead of pushing the buttons off the card. */
+    flex: 1;
+}
+.ws-engine-name > * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ws-engine-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+.ws-engine-log {
+    margin-top: 6px;
+}
+/* The stop confirmation. Small on purpose: one heading, one warning naming who
+   is affected, two buttons. */
+.ws-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px;
+}
+.ws-confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}

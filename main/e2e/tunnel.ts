@@ -329,7 +329,6 @@ export async function startTunnelE2EHarness(): Promise<void> {
             ]),
         );
         const siteProxy: SiteProxyDeps = {
-            localSitesEnabled: () => true,
             resolveSite: (siteId) => byId.get(siteId) ?? null,
         };
         const data = {

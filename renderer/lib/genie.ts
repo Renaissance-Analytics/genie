@@ -82,10 +82,6 @@ export interface WorkspaceRow {
      *  all-on + upstream-issues+prs defaults). Resolve via the dedicated
      *  `workspaces.getIssuewatchGranularity` IPC rather than parsing here. */
     issuewatch_granularity?: string | null;
-    /** Per-workspace local-site tunnel settings (serve-local-sites), JSON-encoded
-     *  ({ [siteId]: { enabled, genName, scheme, port } }) — the allowlist. Resolve
-     *  via the `sites.*` IPC rather than parsing here. */
-    tunnel_sites?: string | null;
 }
 
 export interface DetectResult {
@@ -211,37 +207,6 @@ export interface IssuewatchGranularity {
  *  (remediate + ship right away). Mirrors `IssuewatchPolicy` in main/db.ts. */
 export type IssuewatchPolicy = 'surface' | 'fix' | 'fix-and-ship';
 
-/** The scheme a discovered local site is served under on loopback. */
-export type SiteScheme = 'http' | 'https';
-
-/** A discovered local dev site merged with its tunnel settings (mirrors
- *  `SiteView` in main/mobile/hosts.ts) — one `sites.list` row. */
-export interface SiteView {
-    /** Loopback-mapped hostname from the hosts file (e.g. `tynn.test`). */
-    hostname: string;
-    /** Measured (or overridden/convention-default) scheme. */
-    scheme: SiteScheme;
-    /** Measured (or overridden/convention-default) port. */
-    port: number;
-    /** `'site'` (a real dev vhost) or `'infra'` (docker/minikube/WSL helper). */
-    kind: 'site' | 'infra';
-    /** Whether this site is tunnelled (the allowlist toggle; default OFF). */
-    enabled: boolean;
-    /** The assigned `*.gen` name (stored override, else derived from hostname). */
-    genName: string;
-    /** Opaque, stable allowlist key — pass it to `sites.set`. */
-    siteId: string;
-    companions?: Array<{
-        id: string;
-        enabled?: boolean;
-        hostname: string;
-        scheme: SiteScheme;
-        port: number;
-        loopback?: '127.0.0.1' | '::1';
-        siteId?: string;
-    }>;
-}
-
 /** One local dev site in the header `.gen` popover — opens in the Testing
  *  Browser via the loopback carrier. */
 export interface LocalGenSite {
@@ -263,29 +228,12 @@ export interface GenSitesAll {
     hosts: Array<{ connKey: string; hostname: string; sites: HostGenSite[] }>;
 }
 
-/** A per-site tunnel-config patch (mirrors `TunnelSiteConfig` in
- *  main/mobile/hosts.ts). Every field optional — send only what changed. */
-export interface TunnelSiteConfig {
-    enabled?: boolean;
-    genName?: string;
-    scheme?: SiteScheme;
-    port?: number;
-    companions?: Array<{
-        id: string;
-        enabled?: boolean;
-        hostname: string;
-        scheme: SiteScheme;
-        port: number;
-        loopback?: '127.0.0.1' | '::1';
-    }>;
-}
-
 /* --- the container DEV SERVER (#234) -------------------------------------- *
  *
- * The OPPOSITE of the `SiteView` types above. Those describe a site something
- * ELSE on the machine serves (Herd, `artisan serve`) which Genie may carry over
- * a tunnel; these describe what GENIE serves itself — a container in the
- * workspace's sandbox, published to loopback and routed at `<name>.gen`.
+ * What GENIE serves — a container in the workspace's sandbox, published to
+ * loopback and routed at `<name>.gen`. The ONLY source of a `.gen` site: the
+ * hosts-file discovery that used to carry someone else's `*.test` vhost under a
+ * `.gen` name is retired.
  *
  * These mirror `main/mcp/protocol.ts` exactly, because the Site Manager and an
  * MCP agent call the SAME main-side function (`runManageSite` /
@@ -421,6 +369,101 @@ export interface DevServiceInfo {
     /** The env keys injected into this workspace's site containers. */
     envKeys?: string[];
     error?: string;
+}
+
+/* --- the WORKSTATION view of the Dev Server ------------------------------- *
+ *
+ * A service ENGINE is shared across every workspace on the same (engine,
+ * major), its image is pulled once for the machine, and the container runtime
+ * under it is a property of the computer. None of those has a workspace to
+ * belong to, so they are read and driven at machine level — see
+ * main/dev-server/workstation.ts.                                             */
+
+/** One language runtime the dev base image provides. */
+export interface DevBaseToolchain {
+    id: string;
+    label: string;
+    version: string;
+    /** Where the version is pinned (a Dockerfile ARG, or the Debian base tag). */
+    source: string;
+    /** Package managers shipped alongside it. */
+    extras?: string[];
+}
+
+/** One shared service ENGINE on this machine. `installed` (image on disk),
+ *  `state` (a container exists / is up) and `holders` (workspaces using it right
+ *  now) are independent — every pair of them occurs, so none are merged. */
+export interface DevEngineInfo {
+    /** The CONTAINER's identity: an engine key, or `<engineKey>@<workspaceId>`
+     *  for a dedicated one. What a machine-level action names. */
+    recordKey: string;
+    engineKey: string;
+    engine: string;
+    version: string;
+    label: string;
+    summary: string;
+    /** `sql-database-role` | `redis-acl` | `namespace` | `none` — what a
+     *  workspace's boundary on this engine actually is. */
+    provision: string;
+    image: string;
+    containerName: string;
+    /** The image is on this machine. Nothing was downloaded to find out. */
+    installed: boolean;
+    /** `absent` = no container; `stopped` = one exists but is not up. */
+    state: 'running' | 'stopped' | 'absent';
+    containerId?: string;
+    dedicated: boolean;
+    ownerWorkspaceId?: string;
+    /** Workspaces holding it right now — the live reference count. */
+    holders: number;
+    /** Workspaces that have it configured at all, enabled or not. */
+    configured: number;
+    /** WHO — the workspace names. */
+    workspaces: string[];
+}
+
+/** What one container-runtime candidate reported. */
+export interface DevRuntimeProbe {
+    kind: string;
+    /** The CLI is on PATH. */
+    installed: boolean;
+    /** The CLI answered AND its engine did — only then is it usable. */
+    running: boolean;
+    version?: string;
+    /** Redacted CLI output explaining a failed probe. */
+    detail?: string;
+}
+
+/** The whole machine-level Dev Server read (`devServer.workstation`). */
+export interface DevWorkstationInfo {
+    runtime: {
+        kind: string;
+        version?: string;
+        installHint?: string;
+        /** `not-installed` vs `not-running` — they need opposite advice. */
+        reason?: string;
+        probes: DevRuntimeProbe[];
+    };
+    devBase: {
+        image: string;
+        installed: boolean;
+        toolchain: DevBaseToolchain[];
+    };
+    engines: DevEngineInfo[];
+    error?: string;
+}
+
+/** Machine-level start | stop | logs for ONE shared engine. */
+export interface DevEngineActionRequest {
+    recordKey: string;
+    action: 'start' | 'stop' | 'logs';
+    tail?: number;
+}
+
+export interface DevEngineActionResult {
+    ok: boolean;
+    error?: string;
+    logs?: string;
 }
 
 /** One engine Genie can run, as the catalog offers it. */
@@ -689,10 +732,6 @@ export interface Settings {
     /** Fixed port for the mobile server (bound on the Tailscale IP). String-
      *  encoded; default '51718'. Changing it requires restarting the server. */
     mobile_port?: string;
-    /** Serve-local-sites master switch (serve-local-sites). Opt-in: 'off'
-     *  (default) | 'on'. Distinct from mobile_enabled — exposing your dev sites
-     *  is a separate, deliberate decision. Per-repo `.gen` enables sit on top. */
-    local_sites_enabled?: 'on' | 'off';
     /** The Genie Browser — Genie's own built-in browser for `.gen` dev sites
      *  (#232). Default 'on'; 'off' means Genie never opens one, and a `.gen`
      *  site opens nowhere. Workstation-level, alongside the hosting runtime. */
@@ -1850,25 +1889,13 @@ export interface GenieApi {
         status: (workspaceId: string) => Promise<WorkspaceWatchStatus>;
     };
     /**
-     * Serve-local-sites (Phase B). HOST-SOURCED content: discovery reads the
-     * HOST's hosts file + probes the HOST's loopback, and the per-site enable set
-     * is the allowlist the HOST serves from — so in a remote window these route
-     * through the bridge to the host (remote-bridge.ts), like the IssueWatch rail.
-     *   - `list(workspaceId, {refresh})` — discovered sites merged with the
-     *     workspace's stored tunnel settings; `refresh` re-probes scheme/port.
-     *   - `set(workspaceId, siteId, patch)` — persist one site's config (enable /
-     *     `.gen` name / scheme+port), keyed by the opaque siteId.
+     * Reading + opening this machine's `.gen` dev sites. HOST-SOURCED content in
+     * a remote window: the sites belong to the machine the window represents, so
+     * these route through the bridge to the host (remote-bridge.ts), like the
+     * IssueWatch rail. There is no write here — a `.gen` site is CREATED by the
+     * Dev Server (`devServer.site`), never configured from a discovered host.
      */
     sites: {
-        list: (
-            workspaceId: string,
-            opts?: { refresh?: boolean },
-        ) => Promise<SiteView[]>;
-        set: (
-            workspaceId: string,
-            siteId: string,
-            patch: TunnelSiteConfig,
-        ) => Promise<{ ok: boolean }>;
         /** The header `.gen` popover's data, CONTEXTUAL to this window: a local
          *  window's own sites, or a host window's host sites. */
         all: () => Promise<GenSitesAll>;
@@ -1877,9 +1904,9 @@ export interface GenieApi {
         open: (genName: string) => Promise<{ ok: boolean; error?: string }>;
     };
     /**
-     * The container DEV SERVER (#234) — the sites GENIE serves, as opposed to
-     * `sites` above (what something else on the machine serves). Driven by the
-     * Workspace Site Manager and the Workstation Dev Server settings.
+     * The container DEV SERVER (#234) — what makes a `.gen` site exist at all.
+     * Driven by the Workspace Site Manager and the Workstation Dev Server
+     * settings; `sites` above only READS and OPENS what this created.
      *
      * TWO calls, mirroring the `manageSite` / `manageService` MCP tools: main
      * runs literally the same function for an agent and for this, so the human
@@ -1898,6 +1925,13 @@ export interface GenieApi {
         service: (workspaceId: string, req: ManageServiceRequest) => Promise<ManageServiceResult>;
         /** Which container runtime is driving, or why none is. Never downloads. */
         runtimeStatus: () => Promise<DevRuntimeInfo>;
+        /** The MACHINE's Dev Server: the runtime, the dev base image's
+         *  toolchains, and every shared service engine with its holders. A pure
+         *  read — opening it never pulls or starts anything. */
+        workstation: () => Promise<DevWorkstationInfo>;
+        /** Machine-level start | stop | logs for ONE shared engine. Machine-level
+         *  because the engine is: one container, many workspaces. */
+        engine: (req: DevEngineActionRequest) => Promise<DevEngineActionResult>;
         /** The repo subfolders a site can be created against. */
         repos: (workspaceId: string) => Promise<string[]>;
     };

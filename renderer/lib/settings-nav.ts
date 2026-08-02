@@ -15,7 +15,6 @@ export type SectionId =
     | 'agent-mcp'
     | 'plugins'
     | 'mobile'
-    | 'sites'
     | 'dev-server'
     | 'connections'
     | 'devices'
@@ -51,11 +50,13 @@ export const NAV_GROUPS: NavGroup[] = [
             { id: 'agent-mcp', label: 'Agent MCP', icon: 'plug' },
             { id: 'plugins', label: 'Plugins', icon: 'puzzle' },
             { id: 'mobile', label: 'Work Mode', icon: 'monitor' },
-            { id: 'sites', label: '.gen Sites', icon: 'globe' },
-            // Workstation-level Dev Server: the Genie Browser switch + the
-            // container-runtime diagnostics (#234). Per-workspace sites and
-            // services are set up in the Site Manager, not here — this is the
-            // machine's half.
+            // The MACHINE's half of the Dev Server (#234): which container
+            // runtime is driving, what the dev-base image provides, which
+            // shared service engines are installed and running — and the Genie
+            // Browser that opens a `.gen`. WHICH sites and services a given
+            // workspace uses is per-workspace and lives in its Site Manager;
+            // service ENGINES are shared across every workspace on the machine,
+            // so they are managed here and nowhere else.
             { id: 'dev-server', label: 'Dev Server', icon: 'server' },
             { id: 'connections', label: 'Connections', icon: 'link' },
             { id: 'devices', label: 'Devices', icon: 'smartphone' },

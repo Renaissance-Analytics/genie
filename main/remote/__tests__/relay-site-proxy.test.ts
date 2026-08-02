@@ -44,10 +44,8 @@ import { SitePayloadCipher } from '../site-e2e';
  */
 
 // --- test-controlled host allowlist (injected, no sqlite) ------------------
-let masterEnabled = true;
 const enabledSites = new Map<string, ResolvedSite>();
 const siteProxy: SiteProxyDeps = {
-    localSitesEnabled: () => masterEnabled,
     resolveSite: (siteId) => enabledSites.get(siteId) ?? null,
 };
 
@@ -402,7 +400,6 @@ beforeEach(async () => {
     _resetAuthForTest();
     _resetAuditForTest();
     _resetSiteProxyForTest();
-    masterEnabled = true;
     enabledSites.clear();
     lastHttpAuth = undefined;
     // The relay carrier is owner-gated OFF in production (pending Phase-F E2E);
