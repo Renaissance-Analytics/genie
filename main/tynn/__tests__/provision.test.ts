@@ -302,7 +302,9 @@ describe('provisionWorkspaceTynn — mint auth seam (genie #52)', () => {
         const r = await provisionWorkspaceTynn(dir, { auth });
 
         expect(r.status).toBe('provision');
-        expect(hostMint).toHaveBeenCalledWith('proj-host');
+        // The declaration rides the HOST source too (tynn.ai#157). This dir is a
+        // linked folder, not a `.agi` envelope, so it declares false.
+        expect(hostMint).toHaveBeenCalledWith('proj-host', { workspaceEnvelope: false });
         // .mcp.json embeds the HOST-minted literal token — never a ${…} reference.
         const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8'));
         expect(cfg.mcpServers.tynn.headers.Authorization).toBe('Bearer rpk_host.proj-host');
@@ -344,7 +346,7 @@ describe('provisionWorkspaceTynn — mint auth seam (genie #52)', () => {
         expect(r.status).toBe('provision');
         // Constructed the cookie backend and minted through it.
         expect(TynnBackend).toHaveBeenCalled();
-        expect(cookieMint).toHaveBeenCalledWith('proj-cookie');
+        expect(cookieMint).toHaveBeenCalledWith('proj-cookie', { workspaceEnvelope: false });
         const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8'));
         expect(cfg.mcpServers.tynn.headers.Authorization).toBe('Bearer rpk_cookie.proj-cookie');
     });
@@ -360,9 +362,10 @@ describe('provisionWorkspaceTynn — mint auth seam (genie #52)', () => {
         }));
         const auth = cookieProvisionAuth({ whoami, mintAgentToken } as never);
         expect(await auth.ready()).toBe(true);
-        await auth.mint('p1');
+        await auth.mint('p1', { workspaceEnvelope: true });
         expect(whoami).toHaveBeenCalled();
-        expect(mintAgentToken).toHaveBeenCalledWith('p1');
+        // Delegates BOTH the project and the envelope declaration to the backend.
+        expect(mintAgentToken).toHaveBeenCalledWith('p1', { workspaceEnvelope: true });
     });
 });
 

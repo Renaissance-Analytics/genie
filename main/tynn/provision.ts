@@ -9,6 +9,7 @@ import {
 } from '../workspace/project-json';
 import { readTynnLink, resolveTynnLinkForRow } from '../workspace/tynn-link';
 import { hasTynnLiteralToken, writeWorkspaceTynnMcp } from '../mcp/agent-config';
+import { isEnvelopeFolder } from '../workspace/envelope';
 
 /**
  * Auto-provision the Tynn MCP agent token + Agent config for a workspace.
@@ -72,8 +73,29 @@ export interface TynnProvisionAuth {
     /** Whether this source is authenticated enough to mint: a live cookie session
      *  (desktop) or a present enrolled Workstation identity (host). */
     ready(): Promise<boolean>;
-    /** Mint the project's MCP agent token. */
-    mint(projectId: string): Promise<TynnAgentTokenMint>;
+    /**
+     * Mint the project's MCP agent token, declaring whether the workspace being
+     * linked is an `.agi` envelope (see {@link provisionWorkspaceTynn}).
+     */
+    mint(projectId: string, opts: TynnMintOptions): Promise<TynnAgentTokenMint>;
+}
+
+/**
+ * What the link tells Tynn about the workspace behind it.
+ *
+ * Tynn gates IssueWatch — and the desktop's reconcile — on the project's
+ * `is_envelope` flag, and nothing in this flow ever set it: the flag flipped
+ * only when someone hand-tagged a repository `kind = envelope` in Tynn. A
+ * workspace Genie had linked, provisioned and filled with repositories stayed a
+ * plain Project forever, its feed dead with no signal on any surface
+ * (tynn.ai#157).
+ *
+ * Genie is the only party that can answer this — Tynn deliberately does not read
+ * project.json — so the mint carries the answer, exactly as the repo tag does.
+ */
+export interface TynnMintOptions {
+    /** Whether the linked directory is a Genie `.agi` envelope workspace. */
+    workspaceEnvelope: boolean;
 }
 
 /**
@@ -86,7 +108,7 @@ export function cookieProvisionAuth(
 ): TynnProvisionAuth {
     return {
         ready: async () => !!(await backend.whoami()),
-        mint: (projectId) => backend.mintAgentToken(projectId),
+        mint: (projectId, opts) => backend.mintAgentToken(projectId, opts),
     };
 }
 
@@ -139,7 +161,14 @@ export async function provisionWorkspaceTynn(
     if (decision !== 'provision') return { status: decision };
 
     try {
-        const minted = await auth.mint(link!.projectId!);
+        // DECLARE the envelope on every mint. The condition is Genie's OWN
+        // envelope detector, not a new rule: a bare `project.json` proves nothing
+        // (linkWorkspaceTynn writes one into ANY workspace it links), and
+        // over-claiming is worse than the bug it fixes — Tynn then REQUIRES a
+        // product repository_id on every new version for that project.
+        const minted = await auth.mint(link!.projectId!, {
+            workspaceEnvelope: isEnvelopeFolder(workspacePath),
+        });
         // Self-heal: when the link was recovered from the durable workspace row
         // (project.json carried no `tynn` block), write it back so project.json
         // and the row agree and the AGI gateway sees the mapping too.

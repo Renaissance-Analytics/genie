@@ -13,6 +13,7 @@ import { broadcastWorkspacesChanged } from '../ipc';
 import { childAgiCloneUrl } from './ops-provision';
 import {
     provisionWorkspaceTynn,
+    type TynnMintOptions,
     type TynnAgentTokenMint,
     type TynnProvisionAuth,
 } from './provision';
@@ -536,12 +537,15 @@ export async function reconcileAssignedWorkspaces(
  * for tests; production uses the real `provisionWorkspaceTynn`.
  */
 export function hostTynnMcpProvisioner(
-    mint: (projectId: string) => Promise<TynnAgentTokenMint>,
+    mint: (projectId: string, opts: TynnMintOptions) => Promise<TynnAgentTokenMint>,
     provision: typeof provisionWorkspaceTynn = provisionWorkspaceTynn,
 ): (input: { workspacePath: string; projectId: string }) => Promise<void> {
     const auth: TynnProvisionAuth = {
         ready: async () => true,
-        mint: (projectId) => mint(projectId),
+        // Forward the envelope declaration rather than dropping it here — what the
+        // host's minter does with it is the minter's business, and a seam that
+        // silently discards an argument is how the two paths drift.
+        mint: (projectId, opts) => mint(projectId, opts),
     };
     return async ({ workspacePath }) => {
         await provision(workspacePath, { auth, force: true });

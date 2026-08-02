@@ -14,7 +14,7 @@ import {
     useGithubCapabilities,
     CAPABILITY_LABEL,
 } from '../../lib/githubCapabilities';
-import { issueWatchGate, openCountForRepo } from '../../lib/issuewatch';
+import { feedItemByline, issueWatchGate, openCountForRepo } from '../../lib/issuewatch';
 import {
     useGitHubReconnect,
     type GitHubReconnectState,
@@ -559,6 +559,13 @@ function FeedList({ items }: { items: WatchFeedItem[] }) {
                             {it.number != null ? ` #${it.number}` : ''}
                             {it.severity ? ` · ${it.severity}` : ''}
                         </span>
+                        {/* Who raised it and how long it has been open — without
+                            these a stranger's hour-old issue and your six-month-old
+                            one read identically. Empty for an item that knows
+                            neither, so no orphan line renders. */}
+                        {feedItemByline(it) && (
+                            <span className="iw-item-byline">{feedItemByline(it)}</span>
+                        )}
                     </button>
                 </li>
             ))}

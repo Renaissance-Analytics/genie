@@ -216,11 +216,15 @@ export class TynnBackend implements Backend {
      * Genie writes into the workspace .mcp.json. Throws TynnAuthError when the
      * session is dead (caller re-signs-in) and a plain Error on 403/other.
      */
-    async mintAgentToken(projectId: string): Promise<{
+    async mintAgentToken(
+        projectId: string,
+        opts?: { workspaceEnvelope?: boolean },
+    ): Promise<{
         token: string;
         mcpUrl: string;
         scopes: string[];
         isOpsProject: boolean;
+        isEnvelope: boolean;
         agent: { id: string; name: string };
     }> {
         const data = await this.fetch<{
@@ -228,16 +232,27 @@ export class TynnBackend implements Backend {
             mcp_url: string;
             scopes: string[];
             is_ops_project: boolean;
+            is_envelope?: boolean;
             agent: { id: string; name: string };
         }>('/api/v1/projects/agent-token', {
             method: 'POST',
-            body: { project_id: projectId },
+            body: {
+                project_id: projectId,
+                // Tells Tynn this project backs a real `.agi` workspace, so it can
+                // set `is_envelope` — the flag that puts the project in
+                // IssueWatch's poll set and the desktop's reconcile (tynn.ai#157).
+                // Sticky server-side: a false never demotes an existing Workspace.
+                workspace_envelope: !!opts?.workspaceEnvelope,
+            },
         });
         return {
             token: data.token,
             mcpUrl: data.mcp_url,
             scopes: data.scopes ?? [],
             isOpsProject: !!data.is_ops_project,
+            // Absent on a Tynn that predates the declaration — treat as unknown-
+            // but-unchanged rather than asserting the workspace is not watched.
+            isEnvelope: !!data.is_envelope,
             agent: data.agent,
         };
     }

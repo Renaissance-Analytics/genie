@@ -147,6 +147,7 @@ export interface PushedIssueWatchDelta {
         number?: number | null;
         title: string;
         url: string;
+        createdAt?: string | null;
         updatedAt: string;
         author?: string | null;
         severity?: string | null;
@@ -267,6 +268,7 @@ export function applyPushedDelta(delta: PushedIssueWatchDelta): void {
                 number: it.number ?? null,
                 title: it.title,
                 url: it.url,
+                createdAt: it.createdAt ?? undefined,
                 updatedAt: it.updatedAt,
                 author: it.author ?? undefined,
                 severity: it.severity ?? undefined,

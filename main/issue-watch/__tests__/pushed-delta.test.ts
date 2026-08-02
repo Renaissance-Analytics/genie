@@ -100,6 +100,39 @@ describe('server-fed IssueWatch override (#197)', () => {
         expect(await getOpenCounts()).toEqual({ 'ws-1': { issue: 1, pr: 0, security: 2, knownToServer: true } });
     });
 
+    it('carries the author and BOTH dates Tynn sends, so a row can say who and when', async () => {
+        // The server has always sent `author`/`updatedAt` and now sends the OPENED
+        // date too; the client dropped createdAt on the floor, so no row could show
+        // how long an item had been sitting there (tynn.ai#157).
+        applyPushedDelta(
+            delta({
+                items: [
+                    {
+                        kind: 'issue' as const,
+                        key: 'o/r:issue:1',
+                        number: 1,
+                        title: 'Bug',
+                        url: 'u',
+                        createdAt: '2026-07-01T10:00:00Z',
+                        updatedAt: '2026-07-09T00:00:00Z',
+                        author: 'alice',
+                        owner: 'o',
+                        repo: 'r',
+                        source: 'own' as const,
+                        unread: true,
+                    },
+                ],
+            }),
+        );
+
+        const feed = await getWorkspaceFeed('ws-1');
+        expect(feed[0]).toMatchObject({
+            author: 'alice',
+            createdAt: '2026-07-01T10:00:00Z',
+            updatedAt: '2026-07-09T00:00:00Z',
+        });
+    });
+
     it('clearing a snapshot never re-enables local GitHub IssueWatch', async () => {
         applyPushedDelta(delta());
         expect(isServerFed('ws-1')).toBe(true);
