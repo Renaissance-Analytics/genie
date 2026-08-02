@@ -67,7 +67,7 @@ const NAME_RE = /^[A-Za-z0-9._-]+$/;
  * True when a folder is (or is becoming) a `.agi` envelope — a full envelope, or
  * a pre-init one with repos/ but no root git yet. Plain repos / folders are not.
  */
-function isEnvelopeFolder(workspacePath: string): boolean {
+export function isEnvelopeFolder(workspacePath: string): boolean {
     const det = detectFolder(workspacePath);
     return det.state === 'FULL_ENVELOPE' || det.state === 'PRE_INIT';
 }

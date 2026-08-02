@@ -147,3 +147,47 @@ export function issueWatchGate(input: IwGateInput): IwGateView {
     );
     return { view: 'feed', gatedCaps };
 }
+
+/**
+ * How long ago a GitHub timestamp was, in the largest unit that stays honest —
+ * or `''` when there is no usable date.
+ *
+ * Empty rather than a placeholder: a row that prints "unknown" or a fabricated
+ * date is worse than one that simply omits the age, and rows cached before Tynn
+ * stored the opened date genuinely have nothing to show.
+ */
+export function relativeAge(iso: string | undefined | null, now = Date.now()): string {
+    if (!iso) return '';
+    const then = new Date(iso).getTime();
+    if (!Number.isFinite(then)) return '';
+
+    const seconds = Math.max(0, Math.floor((now - then) / 1000));
+    if (seconds < 60) return 'just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+/**
+ * The "who and when" line under an Issue Watch row.
+ *
+ * The row used to show a title, a repo and a number, so an issue a stranger
+ * opened an hour ago read exactly like one you filed six months ago — the two
+ * facts that decide whether it is worth opening were the two the row omitted.
+ *
+ * Degrades honestly at both ends: a security alert has no author (GitHub reports
+ * none, so no name is invented), and an item cached before the opened date was
+ * stored falls back to when it last MOVED — labelled `updated`, never `opened`.
+ * With neither fact known the line is empty, so the row renders no orphan
+ * separator.
+ */
+export function feedItemByline(
+    item: Pick<WatchFeedItem, 'author' | 'createdAt' | 'updatedAt'>,
+    now = Date.now(),
+): string {
+    const opened = relativeAge(item.createdAt, now);
+    const age = opened || relativeAge(item.updatedAt, now);
+    const when = age ? `${opened ? 'opened' : 'updated'} ${age}` : '';
+
+    return [item.author, when].filter(Boolean).join(' · ');
+}

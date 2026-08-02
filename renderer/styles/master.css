@@ -1252,7 +1252,7 @@
 .iw-item button {
     display: grid;
     grid-template-columns: auto 1fr;
-    grid-template-areas: 'kind title' 'kind meta';
+    grid-template-areas: 'kind title' 'kind meta' 'kind byline';
     column-gap: 8px;
     width: 100%;
     text-align: left;
@@ -1321,6 +1321,14 @@
     font-size: 11px;
     color: var(--fg-4);
     font-family: var(--font-mono);
+}
+/* Who opened it and how long ago. Quieter than the mono slug above it — this is
+   context for a row you are scanning, not an identifier you are matching. */
+.iw-item-byline {
+    grid-area: byline;
+    margin-top: 1px;
+    font-size: 11px;
+    color: var(--fg-4);
 }
 
 /* Process right-click menu — tighter than the project popover. */

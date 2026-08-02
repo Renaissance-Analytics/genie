@@ -510,8 +510,10 @@ describe('hostTynnMcpProvisioner (genie #52 mint-auth glue)', () => {
         // mint() delegates to the Workstation-authed minter — the cookie whoami is
         // never consulted.
         expect(await opts?.auth?.ready()).toBe(true);
-        await opts?.auth?.mint('p1');
-        expect(hostMint).toHaveBeenCalledWith('p1');
+        await opts?.auth?.mint('p1', { workspaceEnvelope: true });
+        // The envelope declaration is FORWARDED, not dropped at the host seam
+        // (tynn.ai#157) — a seam that discards it is how the two paths drift.
+        expect(hostMint).toHaveBeenCalledWith('p1', { workspaceEnvelope: true });
     });
 });
 

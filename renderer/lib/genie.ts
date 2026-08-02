@@ -517,7 +517,12 @@ export interface WatchFeedItem {
     number: number | null;
     title: string;
     url: string;
+    /** When it was OPENED on GitHub. Undefined on rows cached before Tynn stored
+     *  it — the byline falls back to the updated date rather than saying nothing. */
+    createdAt?: string;
     updatedAt: string;
+    /** Absent on security alerts: GitHub reports no author for one, so the row
+     *  omits the name rather than inventing it. */
     author?: string;
     severity?: string;
     owner: string;
