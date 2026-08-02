@@ -916,7 +916,7 @@ const CHECK_ENV_TOOL = {
 const GUIDE_TOOL = {
     name: 'genieGuide',
     description:
-        'Return the full usage guide for the Genie MCP server (what each tool does, when to use it, and the zero-setup per-terminal contract). Call this when you want details beyond the brief in AGENTS.md.',
+        'Return the running Genie version, then the full usage guide for the Genie MCP server (what each tool does, when to use it, and the zero-setup per-terminal contract). Call this to answer "what Genie version am I on", or when you want details beyond the brief in AGENTS.md.',
     inputSchema: {
         type: 'object',
         properties: { ...TERMINAL_ID_PROP },
@@ -1850,8 +1850,16 @@ export async function handleMcpMessage(
                 });
             }
             if (params.name === 'genieGuide') {
+                // The version otherwise only reaches an agent through `initialize`'s
+                // serverInfo, which most harnesses swallow. Lead with it so asking
+                // the guide also answers "which Genie build am I on".
                 return ok(msg.id, {
-                    content: [{ type: 'text', text: GENIE_MCP_GUIDE }],
+                    content: [
+                        {
+                            type: 'text',
+                            text: `Genie version: ${ctx.serverVersion}\n\n${GENIE_MCP_GUIDE}`,
+                        },
+                    ],
                 });
             }
             if (params.name === INITIALIZE_WORKSPACE_PROMPT_NAME) {

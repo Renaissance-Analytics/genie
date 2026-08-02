@@ -365,6 +365,8 @@ If you would otherwise stop and wait for the user — **finished**, **blocked**,
 multi-project workspace, an agent that waits silently is an agent that's stuck.
 
 ## Notes
+- \`genieGuide\` opens with \`Genie version: <version>\` — the running Genie build.
+  Call it whenever you need to know which version you're on.
 - The server is reached at a fixed local URL written into this workspace's
   \`.mcp.json\`. Pass \`GENIE_TERMINAL_ID\` as \`terminalId\` for exact targeting.
 - \`initializeWorkspace\` is available through both \`tools/call\` and MCP prompts
@@ -388,4 +390,4 @@ export const GENIE_AGENTS_BRIEF = `You are running inside **Genie** — a deskto
 
 **Engineering standard — NO BANDAIDS, EVER.** Fix the ROOT CAUSE, never paper over a symptom. Don't mask a vulnerable transitive dependency with an overrides pin when the real fix is updating the dependency that pulls it; don't swallow an error, hardcode around a bug, or weaken a test to make something pass. A bandaid is just a hidden bug — it WILL resurface. The moment a Dependabot / security alert (the sec count from checkIssues / imDone) shows up and no other work is in progress, fix it properly and ship it right away.
 
-**The rule:** any time you'd otherwise stop, print, and wait — reach for the matching tool above instead. For full usage, call \`genieGuide\`.`;
+**The rule:** any time you'd otherwise stop, print, and wait — reach for the matching tool above instead. For full usage — and the running Genie version, which it reports first — call \`genieGuide\`.`;

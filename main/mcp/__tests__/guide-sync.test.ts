@@ -16,9 +16,8 @@ import { handleMcpMessage, type McpContext } from '../protocol';
  * means) fails here instead of silently shipping instructions that lie.
  */
 
-/** Read the REAL advertised agentinbox schema via tools/list. */
-async function agentInboxScopeEnum(): Promise<string[]> {
-    const ctx = {
+function makeCtx(): McpContext {
+    return {
         terminalId: 'term-1',
         serverName: 'genie',
         serverVersion: '0.0.0-test',
@@ -38,6 +37,11 @@ async function agentInboxScopeEnum(): Promise<string[]> {
         checkEnv: vi.fn(),
         isOpsProject: vi.fn().mockResolvedValue(false),
     } as unknown as McpContext;
+}
+
+/** Read the REAL advertised agentinbox schema via tools/list. */
+async function agentInboxScopeEnum(): Promise<string[]> {
+    const ctx = makeCtx();
 
     const res = await handleMcpMessage({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, ctx);
     const tools = (res?.result as { tools: Array<{ name: string; inputSchema?: unknown }> }).tools;
@@ -84,5 +88,45 @@ describe('the agent guide stays in sync with the agentinbox schema', () => {
         expect(GENIE_MCP_GUIDE).toMatch(/automatically.*session id/i);
         expect(GENIE_MCP_GUIDE).toContain('genie-agentinbox');
         expect(GENIE_MCP_GUIDE).toContain('genie-orientation');
+    });
+});
+
+/**
+ * An agent has no other way to learn which Genie build it is talking to: the
+ * version lives in `initialize`'s `serverInfo`, which most harnesses swallow.
+ * `genieGuide` is the one surface an agent can call on demand, so it has to
+ * answer "what version am I on" as well as "how do I use this".
+ */
+describe('genieGuide reports the running Genie version', () => {
+    it('leads the tool-call output with the running version, then the full guide', async () => {
+        const ctx = makeCtx();
+
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'genieGuide' } },
+            ctx,
+        );
+        const text = (res?.result as { content: Array<{ type: string; text: string }> }).content[0]
+            .text;
+
+        expect(text).toMatch(/^Genie version: 0\.0\.0-test\n/);
+        expect(text).toContain(GENIE_MCP_GUIDE);
+    });
+
+    it('advertises the version lookup in the tool description', async () => {
+        const ctx = makeCtx();
+
+        const res = await handleMcpMessage({ jsonrpc: '2.0', id: 3, method: 'tools/list' }, ctx);
+        const tools = (res?.result as { tools: Array<{ name: string; description: string }> }).tools;
+        const guide = tools.find((t) => t.name === 'genieGuide');
+        if (!guide) throw new Error('genieGuide tool not advertised');
+
+        expect(
+            guide.description,
+            'an agent picks tools by description — if it never says "version", nobody calls it to find out',
+        ).toMatch(/version/i);
+    });
+
+    it('tells agents in the guide itself that genieGuide reports the version', () => {
+        expect(GENIE_MCP_GUIDE).toMatch(/genieGuide.*version|version.*genieGuide/i);
     });
 });
