@@ -1,4 +1,10 @@
-import { ROLE_LABEL, WORKSPACE_DEV_ROLE, WORKSPACE_LABEL, devContainerNameFor } from './argv';
+import {
+    ROLE_LABEL,
+    WORKSPACE_DEV_ROLE,
+    WORKSPACE_LABEL,
+    devContainerNameFor,
+    networkNameFor,
+} from './argv';
 import { detectHostIds } from './host-ids';
 import { DEV_CONTAINER_HOLD_COMMAND, GENIE_DEV_BASE_IMAGE, WORKSPACE_MOUNT_TARGET } from './images';
 import { toMountSource } from './mount-path';
@@ -313,6 +319,26 @@ export async function teardownWorkspaceSandbox(
         } catch (e) {
             errors.push(messageOf(e));
         }
+    }
+
+    // A SHARED service engine (P3) joins this workspace's network but belongs
+    // to no workspace, so the label sweep above cannot — and must not — remove
+    // it. Detach it instead: Docker refuses to remove a network that still has
+    // a container on it, so without this the workspace would be left with an
+    // undeletable network, while the engine keeps serving everyone else.
+    try {
+        const network = networkNameFor(workspaceId);
+        for (const engine of await deps.runtime.psServices()) {
+            try {
+                await deps.runtime.networkDisconnect(network, engine.id);
+            } catch (e) {
+                errors.push(messageOf(e));
+            }
+        }
+    } catch (e) {
+        // Listing engines failing must not stop the teardown — the network
+        // remove below may well still succeed.
+        errors.push(messageOf(e));
     }
 
     try {

@@ -102,6 +102,62 @@ export type {
     DevWorkspace,
 } from './site-manager';
 
+// --- P3: services -----------------------------------------------------------
+
+export {
+    DEFAULT_VERSIONS,
+    SERVICE_ENGINES,
+    engineKeyFor,
+    engineSpecFor,
+    isServiceEngine,
+    parseEngineKey,
+    resolveEngineVersion,
+    workspaceDnsName,
+    workspaceSqlIdentifier,
+} from './services/catalog';
+export type {
+    EnginePort,
+    EngineSpec,
+    EngineVolume,
+    ProvisionStrategy,
+    ServiceEngine,
+} from './services/catalog';
+export {
+    devServiceIdFor,
+    generateServicePassword,
+    parseDevServices,
+    sanitizeDevServicePatch,
+    withServiceCredentials,
+} from './services/services-config';
+export type { DevServiceConfig, DevServices } from './services/services-config';
+export { provisionSteps, runProvisionSteps } from './services/provision';
+export type {
+    EngineAdmin,
+    ProvisionResult,
+    ProvisionStep,
+    WorkspaceSlice,
+} from './services/provision';
+export { serviceEnv } from './services/env-wiring';
+export type { ProvisionedService } from './services/env-wiring';
+export {
+    createDevServiceManager,
+    devServiceEnvFor,
+    devServiceManager,
+    engineRecordKeyFor,
+    initDevServices,
+    resetDevServicesForTests,
+} from './services/service-manager';
+export type {
+    DevServiceManager,
+    DevServiceManagerDeps,
+    DevServiceRow,
+    DevServiceState,
+    DevServiceStatus,
+    EngineAdminRequest,
+    ServiceEndpoint,
+} from './services/service-manager';
+export { SERVICE_LABEL, SERVICE_ROLE, SHARED_SERVICES_NETWORK } from './argv';
+
 export interface ResolveRuntimeOptions {
     runner?: CommandRunner;
     platform?: NodeJS.Platform | string;

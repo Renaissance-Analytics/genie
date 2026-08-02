@@ -31,6 +31,8 @@ import {
     getWorkspaceHostedSites,
     getWorkspaceServices,
     getWorkspaceDevSites,
+    getWorkspaceDevServices,
+    getOrCreateDevServiceEngine,
 } from './db';
 import { discoverSites } from './mobile/hosts';
 import { listLocalEnabledGenSites } from './sites/local-sites';
@@ -39,6 +41,11 @@ import { LOCAL_CONN_KEY, openTestingBrowser } from './testing-browser';
 import { hostingManager, initHosting } from './hosting/manager';
 import { initServices, serviceManager } from './hosting/services/manager';
 import { initDevSites, devSiteManager } from './dev-server/site-manager';
+import {
+    initDevServices,
+    devServiceManager,
+    devServiceEnvFor,
+} from './dev-server/services/service-manager';
 import { resolveContainerRuntime } from './dev-server';
 import { registerDevSiteTools } from './mcp/dev-site-tools';
 import {
@@ -1053,8 +1060,33 @@ app.whenReady().then(async () => {
     // machine with no Docker pays nothing for this line. Sites are started by
     // `manageSite` or by the reconcile below, never implicitly on boot of a
     // workspace nobody asked to serve.
+    // The container Dev Server's SERVICES (#234 P3). Created BEFORE the site
+    // manager because the latter reads this one's env when it starts a site —
+    // creating it starts nothing either way, and no engine is pulled or run
+    // until a workspace actually asks for one.
+    initDevServices({
+        resolveRuntime: () => resolveContainerRuntime(),
+        listWorkspaces: () =>
+            listWorkspaces().map((w) => ({ id: w.id, path: w.path, label: w.project_name })),
+        devServicesFor: (id) => getWorkspaceDevServices(id),
+        // Machine-scoped, minted once per engine CONTAINER: a shared engine's
+        // superuser credential cannot live in any one workspace's row.
+        engineAdmin: (req) => getOrCreateDevServiceEngine(req),
+        onChanged: () => broadcastHostingChanged(),
+    });
     initDevSites({
         resolveRuntime: () => resolveContainerRuntime(),
+        // A site gets its workspace's services as env — and asking for them
+        // ENSURES they are running first, so a dev server never comes up
+        // pointed at an engine that is not there.
+        serviceEnvFor: async (workspaceId) => {
+            const services = devServiceManager();
+            if (!services) return {};
+            for (const row of services.list(workspaceId)) {
+                if (row.enabled) await services.acquire(workspaceId, row.serviceId);
+            }
+            return devServiceEnvFor(workspaceId);
+        },
         listWorkspaces: () =>
             listWorkspaces().map((w) => ({ id: w.id, path: w.path, label: w.project_name })),
         devSitesFor: (id) => getWorkspaceDevSites(id),

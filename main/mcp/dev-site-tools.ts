@@ -69,7 +69,7 @@ export function registerDevSiteTools(d: DevSiteToolsDeps): void {
 const DETECTION_TTL_MS = 30_000;
 let cached: { at: number; kind: string; version?: string; installHint?: string } | null = null;
 
-async function runtimeInfo(): Promise<{ kind: string; version?: string; installHint?: string }> {
+export async function runtimeInfo(): Promise<{ kind: string; version?: string; installHint?: string }> {
     if (cached && Date.now() - cached.at < DETECTION_TTL_MS) {
         const { at: _at, ...info } = cached;
         return info;

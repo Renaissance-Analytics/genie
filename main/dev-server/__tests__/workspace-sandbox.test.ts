@@ -90,6 +90,14 @@ function fakeRuntime(opts: FakeOptions = {}): Fake {
             removedNetworks.push(name);
             networks.delete(name);
         },
+        async networkEnsureNamed(name) {
+            const created = !networks.has(name);
+            networks.add(name);
+            return { name, created };
+        },
+        async networkConnect() {},
+        async networkDisconnect() {},
+        async volumeRemove() {},
         async imageExists() {
             return imagePresent;
         },
@@ -110,7 +118,7 @@ function fakeRuntime(opts: FakeOptions = {}): Fake {
                 name: spec.name,
                 image: spec.image,
                 state: 'running',
-                workspaceId: spec.workspaceId,
+                ...(spec.workspaceId === null ? {} : { workspaceId: spec.workspaceId }),
             });
             return { id: `id-${spec.name}`, name: spec.name };
         },
@@ -133,6 +141,9 @@ function fakeRuntime(opts: FakeOptions = {}): Fake {
         },
         followLogs() {
             return { stop() {}, exited: Promise.resolve(0) };
+        },
+        async psServices() {
+            return [];
         },
         async ps(workspaceId) {
             boom('ps');
@@ -527,5 +538,53 @@ describe('teardownWorkspaceSandbox', () => {
 
         expect(result.errors).toHaveLength(1);
         expect(result.errors[0]).toContain('exploded');
+    });
+});
+
+// --- P3: teardown must let go of a SHARED service engine --------------------
+
+describe('teardown with a shared service engine attached', () => {
+    it('detaches every service engine before removing the workspace network', async () => {
+        // A shared engine joins each consuming workspace's network, and Docker
+        // refuses to remove a network that still has a container on it. Without
+        // this the workspace would be left with an undeletable network — and
+        // the engine, which belongs to no workspace, must survive.
+        const runtime = fakeRuntime();
+        runtime.networks.add('genie-ws-acme');
+        const disconnected: { network: string; id: string }[] = [];
+        const engine = {
+            id: 'id-genie-svc-postgres-16',
+            name: 'genie-svc-postgres-16',
+            image: 'postgres:16-alpine',
+            state: 'running' as const,
+        };
+        const withEngine: ContainerRuntime = {
+            ...runtime,
+            async psServices() {
+                return [engine];
+            },
+            async networkDisconnect(network, id) {
+                disconnected.push({ network, id });
+            },
+        };
+
+        const result = await teardownWorkspaceSandbox('acme', { runtime: withEngine });
+
+        expect(disconnected).toEqual([{ network: 'genie-ws-acme', id: engine.id }]);
+        expect(result.removedNetwork).toBe(true);
+        // The engine itself is untouched: it is not this workspace's to remove.
+        expect(runtime.removed).not.toContain(engine.id);
+    });
+
+    it('still tears down when the engine listing fails', async () => {
+        const runtime = fakeRuntime();
+        const broken: ContainerRuntime = {
+            ...runtime,
+            async psServices() {
+                throw new Error('engine listing exploded');
+            },
+        };
+        const result = await teardownWorkspaceSandbox('acme', { runtime: broken });
+        expect(result.removedNetwork).toBe(true);
     });
 });

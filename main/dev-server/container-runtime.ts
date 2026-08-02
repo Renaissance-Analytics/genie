@@ -116,11 +116,38 @@ export interface PortPublish {
     protocol?: 'tcp' | 'udp';
 }
 
-/** Everything needed to create one container. Workspace-scoped by construction. */
+/**
+ * A named docker/podman VOLUME made visible inside a container.
+ *
+ * Distinct from {@link BindMount} because the two answer different needs. A bind
+ * mount is "the user's directory, visible in the sandbox". A volume is state the
+ * ENGINE owns — a database cluster's data directory — which needs the
+ * container's own uid/gid and filesystem semantics, and which must survive the
+ * container being replaced.
+ */
+export interface VolumeMount {
+    /** The volume name. Created on first use by the runtime. */
+    name: string;
+    target: string;
+}
+
+/** Everything needed to create one container. Workspace-scoped by construction,
+ *  except for the machine-scoped shared service engines — see `workspaceId`. */
 export interface ContainerSpec {
-    /** The sandbox this belongs to. Becomes the `genie.workspace` label, which
-     *  is what every list and every teardown filters on. */
-    workspaceId: string;
+    /**
+     * The sandbox this belongs to. Becomes the `genie.workspace` label, which is
+     * what every list and every teardown filters on.
+     *
+     * `null` means MACHINE-scoped: a SHARED service engine (P3) serves many
+     * workspaces at once, so it belongs to none of them. It must not carry a
+     * workspace label, because `teardownWorkspaceSandbox` removes exactly what
+     * carries one — a shared Postgres tagged with whichever workspace started it
+     * would be destroyed when that workspace was removed, taking every other
+     * workspace's data with it. Such a container names its `network` explicitly
+     * (there is no workspace network to default to) and is found by the
+     * `genie.service` label instead.
+     */
+    workspaceId: string | null;
     /** Container name — derived, stable, and the way an existing container is
      *  recognised on the next run (see `argv.ts#devContainerNameFor`). */
     name: string;
@@ -129,6 +156,8 @@ export interface ContainerSpec {
     command?: string[];
     env?: Record<string, string>;
     mounts?: BindMount[];
+    /** Named volumes — engine-owned state that outlives the container. */
+    volumes?: VolumeMount[];
     /** ONLY these ports are reachable. An empty list is a closed container. */
     ports?: PortPublish[];
     /** Defaults to the workspace's own network — the isolation boundary. */
@@ -260,8 +289,26 @@ export interface ContainerRuntime {
 
     /** The workspace's isolated network. Idempotent. */
     networkEnsure(workspaceId: string): Promise<NetworkRef>;
+    /** A network by NAME, with arbitrary labels — the shared-services network
+     *  belongs to no workspace. Idempotent. */
+    networkEnsureNamed(name: string, labels?: Record<string, string>): Promise<NetworkRef>;
     /** Remove it. Removing one that is already gone is success. */
     networkRemove(workspaceId: string): Promise<void>;
+
+    /**
+     * Attach a container to another network.
+     *
+     * How one shared engine serves many isolated workspaces: it joins each
+     * consuming workspace's network on demand, so every workspace can reach it
+     * while none of them can reach each other. Idempotent — attaching something
+     * already attached is success.
+     */
+    networkConnect(network: string, containerId: string): Promise<void>;
+    /** Detach. Tolerant, for the same reason `stop` is. */
+    networkDisconnect(network: string, containerId: string): Promise<void>;
+
+    /** Drop a named volume. Tolerant of one that is already gone. */
+    volumeRemove(name: string): Promise<void>;
 
     /** Is the image already local? */
     imageExists(image: string): Promise<boolean>;
@@ -305,6 +352,10 @@ export interface ContainerRuntime {
     /** Containers in one workspace, or every Genie-managed container.
      *  Returns `[]` — not a throw — when the engine is unreachable. */
     ps(workspaceId?: string): Promise<ContainerSummary[]>;
+
+    /** Service ENGINE containers, by the `genie.service` label. Shared engines
+     *  have no workspace, so {@link ps} cannot see them. Same `[]` contract. */
+    psServices(engineKey?: string): Promise<ContainerSummary[]>;
 
     portMappings(id: string): Promise<PortMapping[]>;
 }

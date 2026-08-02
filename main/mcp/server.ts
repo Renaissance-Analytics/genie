@@ -24,6 +24,8 @@ import {
     type ProvisionWorkspacesResult,
     type ManageSiteRequest,
     type ManageSiteResult,
+    type ManageServiceRequest,
+    type ManageServiceResult,
     type ManageTerminalsRequest,
     type ManageTerminalsResult,
     type RunAgentRequest,
@@ -113,7 +115,13 @@ export interface ServerDeps {
     ) => Promise<ProvisionWorkspacesResult>;
     /** Serve a repo's dev server from a container + route it at `<name>.gen` (manageSite tool). */
     manageSite: (terminalId: string, req: ManageSiteRequest) => Promise<ManageSiteResult>;
-    /** Is a container runtime usable here? Gates manageSite out of tools/list. */
+    /** Give a workspace a backing service on a SHARED, reference-counted engine
+     *  (manageService tool). Optional: absent contributes no tool. */
+    manageService?: (
+        terminalId: string,
+        req: ManageServiceRequest,
+    ) => Promise<ManageServiceResult>;
+    /** Is a container runtime usable here? Gates manageSite/manageService out of tools/list. */
     devServerAvailable?: (terminalId: string) => Promise<boolean>;
     /** Spawn/drive terminals in the caller's or a governed workspace (manageTerminals tool). */
     manageTerminals: (
@@ -401,6 +409,14 @@ function isBlockingCall(msg: JsonRpcRequest): boolean {
         const action = params?.arguments?.action;
         return action === 'create' || action === 'start' || action === 'restart';
     }
+    if (name === 'manageService') {
+        // Same reason as manageSite's three: these pull a multi-hundred-megabyte
+        // engine image, wait out `initdb`, and then provision — minutes, on a
+        // first run. Without the keepalive the client times the call out and the
+        // agent reports a failure for something that is still working.
+        const action = params?.arguments?.action;
+        return action === 'add' || action === 'start' || action === 'dedicated';
+    }
     if (name === 'manageTerminals') {
         const action = params?.arguments?.action;
         return action === 'create' || action === 'write';
@@ -631,6 +647,7 @@ async function handle(
         describeWorkspace: deps.describeWorkspace,
         manageProcess: deps.manageProcess,
         manageSite: deps.manageSite,
+        manageService: deps.manageService,
         devServerAvailable: deps.devServerAvailable,
         provisionWorkspaces: deps.provisionWorkspaces,
         manageTerminals: deps.manageTerminals,

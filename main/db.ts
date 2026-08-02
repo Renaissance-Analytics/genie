@@ -30,6 +30,16 @@ import {
     type DevSiteConfig,
     type DevSites,
 } from './dev-server/sites-config';
+import {
+    devServiceIdFor,
+    generateServicePassword,
+    parseDevServices,
+    sanitizeDevServicePatch,
+    withServiceCredentials,
+    type DevServiceConfig,
+    type DevServices,
+} from './dev-server/services/services-config';
+import { engineKeyFor, resolveEngineVersion, type ServiceEngine } from './dev-server/services/catalog';
 import type { AgentInboxScope, WorkspaceAgentAccess } from './agentinbox/types';
 
 /**
@@ -822,6 +832,65 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v32: per-workspace DEV SERVICES (the container Dev Server, Tynn
+            // #234 P3). A JSON blob mapping the opaque per-service id → what
+            // this workspace wants: { [serviceId]: { engine, version, dedicated,
+            //   password, image?, port?, env?, enabled } }.
+            //
+            // A FOURTH column rather than a reuse of v30's `workspace_services`,
+            // for exactly the reason v31 gave for `dev_sites`: a v30 row
+            // describes a HOST-NATIVE Postgres fetched onto the user's machine
+            // (the beta.218 path), this one describes a workspace's slice of a
+            // SHARED container. Both are live until P4 retires the former, and
+            // folding them together now would make that retirement a data
+            // migration instead of a deletion.
+            //
+            // Holds the workspace's generated credential in the clear. Same
+            // reasoning as v30's: its purpose is to reach a `.env` and a
+            // container environment in the clear, because that is the only way
+            // the app can use it.
+            //
+            // NULL/absent reads as {} (nothing configured). Resolved by
+            // getWorkspaceDevServices — never parsed here.
+            version: 32,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('dev_services')) {
+                    db.exec(`ALTER TABLE workspaces ADD COLUMN dev_services TEXT`);
+                }
+            },
+        },
+        {
+            // v33: the SHARED service engines themselves (#234 P3).
+            //
+            // A machine-scoped table rather than a workspace column, because a
+            // shared engine IS machine-scoped: one `postgres:16` container
+            // serves every workspace pinned to Postgres 16, so its superuser
+            // credential cannot live in any one workspace's row.
+            //
+            // `key` is the container's identity: `postgres-16` for the shared
+            // engine, `postgres-16@<workspaceId>` for a workspace's opt-in
+            // dedicated one. The admin password is minted ONCE per key and never
+            // regenerated — every engine image bakes the credential into its
+            // data directory on first init and ignores the environment
+            // afterwards, so a new password would simply lock Genie out of the
+            // engine it created.
+            version: 33,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS dev_service_engines (
+                        key TEXT PRIMARY KEY,
+                        engine TEXT NOT NULL,
+                        version TEXT NOT NULL,
+                        workspace_id TEXT,
+                        admin_user TEXT NOT NULL,
+                        admin_password TEXT NOT NULL,
+                        created_at INTEGER NOT NULL
+                    )
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1249,6 +1318,14 @@ export interface WorkspaceRow {
      *  host-native runtime, these by a container in the workspace sandbox.
      *  NULL/absent reads as {} — resolve via {@link getWorkspaceDevSites}. */
     dev_sites?: string | null;
+    /** Per-workspace DEV SERVICES (the container Dev Server, #234 P3),
+     *  JSON-encoded ({ [serviceId]: { engine, version, dedicated, password, … } }).
+     *  The container-substrate sibling of `workspace_services`: those are
+     *  host-native engines fetched per workspace, these are this workspace's
+     *  slice — its database, role and credentials — of a SHARED engine
+     *  container. NULL/absent reads as {} — resolve via
+     *  {@link getWorkspaceDevServices}. */
+    dev_services?: string | null;
 }
 
 export function listWorkspaces(): WorkspaceRow[] {
@@ -1920,6 +1997,144 @@ export function deleteWorkspaceDevSite(id: string, siteId: string): void {
     const next = { ...current };
     delete next[siteId];
     setWorkspaceDevSites(id, next);
+}
+
+// Dev services (the container Dev Server, #234 P3) ------------------------
+//
+// This workspace's SLICE of a shared engine — which engine, which version,
+// shared or dedicated, and its own credential. The engine CONTAINER itself is
+// machine-scoped and lives in `dev_service_engines` below, because one postgres
+// serves many workspaces and its superuser credential belongs to none of them.
+// Parse/sanitize live in main/dev-server/services/services-config.ts.
+
+/** This workspace's stored services (NULL/absent ⇒ {} = none configured). */
+export function getWorkspaceDevServices(id: string): DevServices {
+    const row = getDb()
+        .prepare<[string], { dev_services: string | null } | undefined>(
+            'SELECT dev_services FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    return parseDevServices(row?.dev_services ?? null);
+}
+
+/** Replace this workspace's whole service map (JSON-encoded). */
+export function setWorkspaceDevServices(id: string, services: DevServices): void {
+    getDb()
+        .prepare('UPDATE workspaces SET dev_services = ? WHERE id = ?')
+        .run(JSON.stringify(services), id);
+}
+
+/**
+ * Merge ONE service into this workspace's map, returning its id.
+ *
+ * The key is DERIVED from (workspace, engine, VERSION) rather than supplied, so
+ * a workspace can hold a `postgres-15` and a `postgres-16` at once but can never
+ * accumulate two `postgres-16` entries fighting over one database name.
+ *
+ * The credential is minted HERE, on the way in, and only when absent — doing it
+ * on write rather than on read is what makes it stable, and a password
+ * regenerated on read would lock the workspace out of the database that was
+ * created with it.
+ */
+export function setWorkspaceDevService(
+    id: string,
+    patch: Partial<DevServiceConfig>,
+): string | null {
+    const clean = sanitizeDevServicePatch(patch);
+    if (!clean.engine) return null;
+    const version = clean.version ?? resolveEngineVersion(clean.engine, undefined);
+    if (!version) return null;
+    const serviceId = devServiceIdFor(id, engineKeyFor(clean.engine, version));
+    const current = getWorkspaceDevServices(id);
+    const previous = current[serviceId];
+    // Defaults under the stored row, which is under the patch — a create gets a
+    // complete row, an update touches only what it named. The password comes
+    // ONLY from the stored row (a patch can never carry one), so an update can
+    // never silently re-key a workspace out of its own database.
+    const combined = { ...previous, ...clean };
+    const merged = withServiceCredentials(
+        {
+            engine: clean.engine,
+            version,
+            dedicated: combined.dedicated ?? false,
+            enabled: combined.enabled ?? false,
+            password: previous?.password ?? '',
+            ...(combined.image ? { image: combined.image } : {}),
+            ...(combined.port ? { port: combined.port } : {}),
+            ...(combined.env ? { env: combined.env } : {}),
+        },
+        generateServicePassword,
+    );
+    setWorkspaceDevServices(id, { ...current, [serviceId]: merged });
+    return serviceId;
+}
+
+/** Forget one dev service entirely (`manageService remove`). */
+export function deleteWorkspaceDevService(id: string, serviceId: string): void {
+    const current = getWorkspaceDevServices(id);
+    if (!(serviceId in current)) return;
+    const next = { ...current };
+    delete next[serviceId];
+    setWorkspaceDevServices(id, next);
+}
+
+/**
+ * The superuser credential for one engine CONTAINER, minted once and then
+ * stable.
+ *
+ * Machine-scoped, keyed by the container's identity (`postgres-16`, or
+ * `postgres-16@<workspaceId>` for a dedicated one) — a shared engine's admin
+ * password cannot live in one workspace's row, because the container outlives
+ * any one workspace's interest in it.
+ *
+ * NEVER regenerated. Every engine image bakes its credential into the data
+ * directory on first init and ignores the environment afterwards, so handing
+ * back a fresh password would lock Genie out of the engine it created.
+ */
+export function getOrCreateDevServiceEngine(req: {
+    recordKey: string;
+    engine: ServiceEngine;
+    version: string;
+    workspaceId: string | null;
+    adminUser: string;
+    newPassword?: () => string;
+}): { user: string; password: string } {
+    const db = getDb();
+    const existing = db
+        .prepare<[string], { admin_user: string; admin_password: string } | undefined>(
+            'SELECT admin_user, admin_password FROM dev_service_engines WHERE key = ?',
+        )
+        .get(req.recordKey);
+    if (existing) return { user: existing.admin_user, password: existing.admin_password };
+
+    const password = (req.newPassword ?? generateServicePassword)();
+    db.prepare(
+        `INSERT OR IGNORE INTO dev_service_engines
+         (key, engine, version, workspace_id, admin_user, admin_password, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+        req.recordKey,
+        req.engine,
+        req.version,
+        req.workspaceId,
+        req.adminUser,
+        password,
+        Date.now(),
+    );
+    // Re-read rather than trusting the insert: two windows can reach this at
+    // once, and the loser must use the winner's credential, not its own.
+    const row = db
+        .prepare<[string], { admin_user: string; admin_password: string } | undefined>(
+            'SELECT admin_user, admin_password FROM dev_service_engines WHERE key = ?',
+        )
+        .get(req.recordKey);
+    return { user: row?.admin_user ?? req.adminUser, password: row?.admin_password ?? password };
+}
+
+/** Forget an engine record — only ever alongside removing its container AND its
+ *  volume, since the credential is baked into the data directory. */
+export function deleteDevServiceEngine(recordKey: string): void {
+    getDb().prepare('DELETE FROM dev_service_engines WHERE key = ?').run(recordKey);
 }
 
 // Backing services (#232 P3) ---------------------------------------------

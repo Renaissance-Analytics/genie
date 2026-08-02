@@ -150,6 +150,19 @@ export interface DevSiteManagerDeps {
         timeoutMs: number;
     }) => Promise<boolean>;
     readyTimeoutMs?: number;
+    /**
+     * The workspace's provisioned SERVICES, as environment (#234 P3).
+     *
+     * Called just before a site container is created, and expected to ENSURE
+     * those services are up before answering — a `DATABASE_URL` naming an
+     * engine that is not running is worse than no `DATABASE_URL` at all. The
+     * result is merged UNDER the site's own `env`, so a value the user pinned
+     * always wins.
+     *
+     * Injected rather than imported so P2's behaviour is unchanged when it is
+     * absent, and so this module still knows nothing about what a service is.
+     */
+    serviceEnvFor?: (workspaceId: string) => Promise<Record<string, string>>;
     /** Fired whenever the live set changes, so the UX and other agents follow. */
     onChanged?: () => void;
 }
@@ -326,6 +339,19 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 image = tag;
             }
 
+            // The workspace's services, brought up and turned into env. A
+            // failure here does NOT stop the site: a dev server is often
+            // exactly where a missing database is diagnosed, and refusing to
+            // start hides the error behind a second one.
+            let serviceEnv: Record<string, string> = {};
+            if (deps.serviceEnvFor) {
+                try {
+                    serviceEnv = await deps.serviceEnvFor(workspaceId);
+                } catch {
+                    serviceEnv = {};
+                }
+            }
+
             const name = siteContainerNameFor(workspaceId, config.name);
             const existing = (await runtime.ps(workspaceId)).find((c) => c.name === name);
             if (existing) {
@@ -359,7 +385,12 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 // never on the LAN, and never a fixed number two workspaces
                 // could fight over.
                 ports: [{ container: run.port, hostIp: '127.0.0.1' }],
-                ...(config.env && Object.keys(config.env).length ? { env: config.env } : {}),
+                // Services UNDER the site's own env: a value the user pinned
+                // beats the managed one.
+                ...(() => {
+                    const env = { ...serviceEnv, ...(config.env ?? {}) };
+                    return Object.keys(env).length ? { env } : {};
+                })(),
                 // A dev server spawns compilers and watchers; without a reaper
                 // their orphans accumulate as zombies.
                 init: true,

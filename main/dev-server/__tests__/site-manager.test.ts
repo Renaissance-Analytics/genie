@@ -66,6 +66,12 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; existing?: ContainerS
             return { name: `genie-ws-${workspaceId}`, created: false };
         },
         async networkRemove() {},
+        async networkEnsureNamed(name) {
+            return { name, created: false };
+        },
+        async networkConnect() {},
+        async networkDisconnect() {},
+        async volumeRemove() {},
         async imageExists() {
             return true;
         },
@@ -84,7 +90,7 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; existing?: ContainerS
                 name: spec.name,
                 image: spec.image,
                 state: 'running',
-                workspaceId: spec.workspaceId,
+                ...(spec.workspaceId === null ? {} : { workspaceId: spec.workspaceId }),
             });
             // The runtime picks an ephemeral host port at CREATE time — which is
             // exactly why a published port cannot be added to a container that
@@ -114,6 +120,9 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; existing?: ContainerS
         },
         followLogs() {
             return { stop() {}, exited: Promise.resolve(0) };
+        },
+        async psServices() {
+            return [];
         },
         async ps(workspaceId) {
             return [...containers.values()].filter((c) => !workspaceId || c.workspaceId === workspaceId);
@@ -447,5 +456,51 @@ describe('reconcile', () => {
         sites[SITE_ID] = { ...SITE, enabled: false };
         await m.reconcile();
         expect(m.genSites()).toEqual([]);
+    });
+});
+
+// --- P3: the services a site connects to ------------------------------------
+
+describe('service env injection (#234 P3)', () => {
+    it('injects the workspace’s service env into the SITE container', async () => {
+        const runtime = fakeRuntime();
+        await manager(runtime, undefined, {
+            serviceEnvFor: async () => ({ DATABASE_URL: 'postgresql://ws:pw@genie-svc-postgres-16:5432/ws' }),
+        }).start('acme', SITE_ID);
+
+        const site = runtime.ran.find((s) => s.name.includes('-site-'));
+        expect(site?.env?.DATABASE_URL).toBe('postgresql://ws:pw@genie-svc-postgres-16:5432/ws');
+    });
+
+    it('lets the site’s OWN env win — a pinned value is the user’s decision', async () => {
+        const runtime = fakeRuntime();
+        await manager(
+            runtime,
+            { [SITE_ID]: { ...SITE, env: { DATABASE_URL: 'postgresql://mine' } } },
+            { serviceEnvFor: async () => ({ DATABASE_URL: 'postgresql://managed' }) },
+        ).start('acme', SITE_ID);
+
+        const site = runtime.ran.find((s) => s.name.includes('-site-'));
+        expect(site?.env?.DATABASE_URL).toBe('postgresql://mine');
+    });
+
+    it('starts the site anyway when the services cannot be brought up', async () => {
+        // A site whose database failed to start should come up and SAY the
+        // database is missing, not refuse to run at all — the dev server is
+        // often exactly where that error is diagnosed.
+        const runtime = fakeRuntime();
+        const status = await manager(runtime, undefined, {
+            serviceEnvFor: async () => {
+                throw new Error('engine exploded');
+            },
+        }).start('acme', SITE_ID);
+        expect(status.state).toBe('running');
+    });
+
+    it('is absent by default — P2 behaviour, verbatim', async () => {
+        const runtime = fakeRuntime();
+        await manager(runtime).start('acme', SITE_ID);
+        const site = runtime.ran.find((s) => s.name.includes('-site-'));
+        expect(site?.env).toBeUndefined();
     });
 });

@@ -44,7 +44,35 @@ export const SITE_ROLE = 'site';
  *  Read back on adopt, so a restarted Genie recognises what is already up. */
 export const SITE_LABEL = 'genie.site';
 
+/** A container running a backing SERVICE engine — Postgres, Redis, … (P3). */
+export const SERVICE_ROLE = 'service';
+
+/**
+ * Which engine a `service`-role container IS — its `<engine>-<major>` key.
+ *
+ * This label, not {@link WORKSPACE_LABEL}, is how service engines are found.
+ * A SHARED engine belongs to no workspace (see {@link ContainerSpec.workspaceId}),
+ * so it carries only this one; a dedicated engine carries both.
+ */
+export const SERVICE_LABEL = 'genie.service';
+
+/**
+ * The home network of every SHARED service engine.
+ *
+ * A shared engine is additionally attached to each consuming workspace's own
+ * network, on demand — that is how one Postgres serves twenty isolated
+ * workspaces without any of them being able to see each other. It still needs a
+ * network to be CREATED on (a container is always on one), and using the first
+ * consumer's would make the engine's home depend on the order workspaces
+ * happened to start in — and would leave it homeless when that consumer
+ * released.
+ */
+export const SHARED_SERVICES_NETWORK = 'genie-services';
+
 const NAME_PREFIX = 'genie-ws-';
+
+/** Container and volume names for service engines. */
+const SERVICE_NAME_PREFIX = 'genie-svc-';
 
 // --- names -----------------------------------------------------------------
 
@@ -112,6 +140,42 @@ export function siteContainerNameFor(workspaceId: string, siteName: string): str
     return `${networkNameFor(workspaceId)}-site-${workspaceSlugFor(siteName)}`;
 }
 
+/**
+ * The container running one service ENGINE.
+ *
+ * Keyed by `<engine>-<major>` (`postgres-16`) and NOT by workspace, because that
+ * is the owner's service model in one line: a user with twenty PG16 workspaces
+ * runs ONE postgres. Two workspaces asking for Postgres 16 derive the same name,
+ * so the second one adopts the first one's container instead of starting a
+ * second copy — the same "derived, not stored" identity trick the dev container
+ * and the site container use, doing the deduplication for free.
+ *
+ * `workspaceId` is passed ONLY for an opt-in DEDICATED engine, which is a
+ * different container serving one workspace and must not collide with the shared
+ * one.
+ */
+export function serviceContainerNameFor(engineKey: string, workspaceId?: string): string {
+    const base = `${SERVICE_NAME_PREFIX}${workspaceSlugFor(engineKey)}`;
+    return workspaceId ? `${base}-${workspaceSlugFor(workspaceId)}` : base;
+}
+
+/**
+ * The named volume holding one engine's state.
+ *
+ * A named volume rather than a bind mount: a database's data directory needs
+ * the container's own uid/gid and filesystem semantics, and bind-mounting one
+ * out to a Windows or macOS host is the classic way to get a corrupt cluster.
+ * It also survives `remove` — replacing an engine container (a version bump, a
+ * changed flag) must not drop every workspace's data.
+ */
+export function serviceVolumeNameFor(
+    engineKey: string,
+    suffix: string,
+    workspaceId?: string,
+): string {
+    return `${serviceContainerNameFor(engineKey, workspaceId)}-${workspaceSlugFor(suffix)}`;
+}
+
 // --- guards ----------------------------------------------------------------
 
 /** Environment names we will put on a command line. */
@@ -150,11 +214,44 @@ export function networkLsArgv(name: string): string[] {
 }
 
 export function networkCreateArgv(name: string, workspaceId: string): string[] {
-    return ['network', 'create', '--label', `${WORKSPACE_LABEL}=${workspaceId}`, name];
+    return networkCreateNamedArgv(name, { [WORKSPACE_LABEL]: workspaceId });
+}
+
+/** Create a network by NAME with arbitrary labels — the shared-services network
+ *  belongs to no workspace, so it cannot carry a workspace label. */
+export function networkCreateNamedArgv(name: string, labels: Record<string, string>): string[] {
+    const args = ['network', 'create'];
+    for (const [key, value] of Object.entries(labels)) args.push('--label', `${key}=${value}`);
+    args.push(name);
+    assertLiteralArgv(args);
+    return args;
 }
 
 export function networkRemoveArgv(name: string): string[] {
     return ['network', 'rm', name];
+}
+
+/**
+ * Attach a RUNNING container to another network.
+ *
+ * The mechanism the shared-service model rests on: a container may be on many
+ * networks at once, so one Postgres can be reachable from each consuming
+ * workspace's isolated network while those workspaces still cannot see each
+ * other — the engine is the only node they have in common, and it enforces the
+ * rest with per-workspace databases and roles.
+ */
+export function networkConnectArgv(network: string, containerId: string): string[] {
+    return ['network', 'connect', network, containerId];
+}
+
+/** The other half of the reference count: detach when a workspace releases. */
+export function networkDisconnectArgv(network: string, containerId: string): string[] {
+    return ['network', 'disconnect', network, containerId];
+}
+
+/** Drop one engine's data volume (only ever on an explicit `remove`). */
+export function volumeRemoveArgv(name: string): string[] {
+    return ['volume', 'rm', name];
 }
 
 // --- containers ------------------------------------------------------------
@@ -179,13 +276,25 @@ export interface ArgvOptions {
 export function runArgv(spec: ContainerSpec, opts: ArgvOptions): string[] {
     const args = ['run', '-d', '--name', spec.name];
 
-    args.push('--label', `${WORKSPACE_LABEL}=${spec.workspaceId}`);
+    // A null workspace is MACHINE-scoped infrastructure (a shared service
+    // engine), and it must not carry a workspace label: `teardownWorkspaceSandbox`
+    // sweeps exactly what carries one, so a shared Postgres labelled with the
+    // first workspace that happened to use it would be destroyed when that
+    // workspace was removed — taking every other workspace's data with it.
+    if (spec.workspaceId !== null) {
+        args.push('--label', `${WORKSPACE_LABEL}=${spec.workspaceId}`);
+    }
     for (const [key, value] of Object.entries(spec.labels ?? {})) {
         if (key === WORKSPACE_LABEL) continue; // already stamped, from the id
         args.push('--label', `${key}=${value}`);
     }
 
-    args.push('--network', spec.network ?? networkNameFor(spec.workspaceId));
+    const network =
+        spec.network ?? (spec.workspaceId === null ? null : networkNameFor(spec.workspaceId));
+    if (!network) {
+        throw new Error('dev-server: a container with no workspace must name its network');
+    }
+    args.push('--network', network);
     // Podman ONLY. Docker's `--userns` takes `host` or empty, so `keep-id`
     // there is a hard CLI error rather than a no-op — the flag has to be
     // dropped here, where the runtime kind is known, and not by every caller.
@@ -210,6 +319,19 @@ export function runArgv(spec: ContainerSpec, opts: ArgvOptions): string[] {
         }
         const readOnly = mount.readOnly ? ',readonly' : '';
         args.push('--mount', `type=bind,source=${source},target=${mount.target}${readOnly}`);
+    }
+
+    for (const volume of spec.volumes ?? []) {
+        // Same grammar check as a bind mount, and for the same reason: a `,` or
+        // `=` inside either half silently becomes another `--mount` OPTION
+        // rather than part of the value.
+        if (/[,=]/.test(volume.name) || /[,=]/.test(volume.target)) {
+            throw new Error(
+                `dev-server: invalid volume mount ${volume.name} -> ${volume.target} ` +
+                    '(neither may contain a comma or an equals sign)',
+            );
+        }
+        args.push('--mount', `type=volume,source=${volume.name},target=${volume.target}`);
     }
 
     for (const port of spec.ports ?? []) {
@@ -317,11 +439,39 @@ export function portArgv(id: string): string[] {
  */
 export const PS_FORMAT = '{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}';
 
+/**
+ * Every listing passes `--no-trunc`, and it is load-bearing.
+ *
+ * `docker ps` truncates `{{.ID}}` to 12 characters while `docker run` prints
+ * all 64. Genie mixes the two constantly — one call CREATES a container and a
+ * later one ADOPTS it — so without this the same container has two different
+ * ids depending on which call handed it over. That stays invisible until two
+ * workspaces share one service engine and the second one's `containerId` fails
+ * to match the first's, which reads as "the deduplication did not work".
+ *
+ * Found by the live smoke, not by a unit test: a fake `ps` returns whatever
+ * ids it was given, so the two forms were identical everywhere except against
+ * a real daemon.
+ */
+
 /** Containers in one workspace, or every Genie-managed container. `-a` because
  *  a STOPPED dev container is exactly what `ensure` needs to find and restart. */
 export function psArgv(workspaceId?: string): string[] {
     const filter = workspaceId
         ? `label=${WORKSPACE_LABEL}=${workspaceId}`
         : `label=${WORKSPACE_LABEL}`;
-    return ['ps', '-a', '--filter', filter, '--format', PS_FORMAT];
+    return ['ps', '-a', '--no-trunc', '--filter', filter, '--format', PS_FORMAT];
+}
+
+/**
+ * Service ENGINES, by the service label rather than the workspace one.
+ *
+ * A shared engine has no workspace, so {@link psArgv} — whose whole job is to
+ * enumerate one workspace's footprint — cannot see it. This is the parallel
+ * listing that can, and it is what makes a shared engine still enumerable,
+ * adoptable after a restart, and removable.
+ */
+export function psServicesArgv(engineKey?: string): string[] {
+    const filter = engineKey ? `label=${SERVICE_LABEL}=${engineKey}` : `label=${SERVICE_LABEL}`;
+    return ['ps', '-a', '--no-trunc', '--filter', filter, '--format', PS_FORMAT];
 }

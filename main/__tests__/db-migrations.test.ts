@@ -970,3 +970,81 @@ describe('db migration v28 (per-workspace scheduled-task approval gate)', () => 
         expect(cols(db, 'workspaces').has('schedule_approval')).toBe(true);
     });
 });
+
+describe('db migrations v32 + v33 (the container Dev Server’s services, #234 P3)', () => {
+    it('adds the per-workspace dev_services column, defaulting to nothing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(cols(db, 'workspaces').has('dev_services')).toBe(true);
+
+        db.prepare(
+            `INSERT INTO workspaces
+               (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, last_opened_at, created_by_genie)
+             VALUES ('w-svc', 'tynn', 'p', 'P', 'p', 'P', 'simple', '/tmp/svc', NULL, 0)`,
+        ).run();
+        const row = db
+            .prepare<[string], { dev_services: string | null }>(
+                'SELECT dev_services FROM workspaces WHERE id = ?',
+            )
+            .get('w-svc');
+        // NULL, not '{}' — an existing workspace gains the column with the safe
+        // default (nothing configured, nothing running).
+        expect(row?.dev_services ?? null).toBeNull();
+    });
+
+    it('keeps dev_services SEPARATE from the beta.218 workspace_services column', () => {
+        // They describe different substrates and both are live until P4: a
+        // v30 row is a host-NATIVE engine fetched per workspace, a v32 row is
+        // this workspace's slice of a SHARED container.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const c = cols(db, 'workspaces');
+        expect(c.has('workspace_services')).toBe(true);
+        expect(c.has('dev_services')).toBe(true);
+    });
+
+    it('creates the machine-scoped engine table — a shared engine belongs to no workspace', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const c = cols(db, 'dev_service_engines');
+        expect([...c].sort()).toEqual(
+            ['admin_password', 'admin_user', 'created_at', 'engine', 'key', 'version', 'workspace_id'].sort(),
+        );
+        // Nullable workspace: NULL is the shared engine, a value is a
+        // workspace's opt-in dedicated one.
+        db.prepare(
+            `INSERT INTO dev_service_engines (key, engine, version, workspace_id, admin_user, admin_password, created_at)
+             VALUES ('postgres-16', 'postgres', '16', NULL, 'postgres', 'pw', 1)`,
+        ).run();
+        expect(
+            db
+                .prepare<[], { n: number }>('SELECT COUNT(*) AS n FROM dev_service_engines')
+                .get()?.n,
+        ).toBe(1);
+    });
+
+    it('keys an engine record by the CONTAINER, so a second insert cannot fork the credential', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const insert = () =>
+            db
+                .prepare(
+                    `INSERT OR IGNORE INTO dev_service_engines (key, engine, version, workspace_id, admin_user, admin_password, created_at)
+                     VALUES ('postgres-16', 'postgres', '16', NULL, 'postgres', ?, 1)`,
+                )
+                .run('pw-' + Math.random());
+        insert();
+        insert();
+        const rows = db
+            .prepare<[], { admin_password: string }>('SELECT admin_password FROM dev_service_engines')
+            .all();
+        expect(rows).toHaveLength(1);
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'workspaces').has('dev_services')).toBe(true);
+    });
+});

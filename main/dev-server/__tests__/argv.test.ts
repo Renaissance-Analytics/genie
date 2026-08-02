@@ -1,16 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import {
+    SERVICE_LABEL,
+    SHARED_SERVICES_NETWORK,
     WORKSPACE_LABEL,
     devContainerNameFor,
     execArgv,
     imageInspectArgv,
     logsArgv,
+    networkConnectArgv,
     networkCreateArgv,
+    networkCreateNamedArgv,
+    networkDisconnectArgv,
     networkLsArgv,
     networkNameFor,
     portArgv,
     psArgv,
+    psServicesArgv,
     runArgv,
+    serviceContainerNameFor,
+    serviceVolumeNameFor,
+    volumeRemoveArgv,
     workspaceSlugFor,
 } from '../argv';
 import type { ContainerSpec } from '../container-runtime';
@@ -215,6 +224,16 @@ describe('the remaining verbs', () => {
         expect(valueAfter(psArgv(), '--filter')).toBe(`label=${WORKSPACE_LABEL}`);
     });
 
+    it('asks for FULL container ids, so an adopted container compares equal to a created one', () => {
+        // `docker ps` truncates {{.ID}} to 12 characters while `docker run`
+        // prints all 64. Without --no-trunc the second workspace to adopt a
+        // shared service engine reports a DIFFERENT container id than the first
+        // one that created it — which reads as "the deduplication failed".
+        // Caught by the live smoke, not by a fake.
+        expect(psArgv()).toContain('--no-trunc');
+        expect(psServicesArgv()).toContain('--no-trunc');
+    });
+
     it('execs a literal argv', () => {
         expect(execArgv('abc', ['php', '-v'])).toEqual(['exec', 'abc', 'php', '-v']);
     });
@@ -236,5 +255,137 @@ describe('the remaining verbs', () => {
     it('asks for the port map and the image', () => {
         expect(portArgv('abc')).toEqual(['port', 'abc']);
         expect(imageInspectArgv('alpine:3.20')).toEqual(['image', 'inspect', 'alpine:3.20']);
+    });
+});
+
+// --- P3: what a SHARED service engine needs from the argv layer --------------
+
+describe('shared service engines (P3)', () => {
+    it('names an engine by (engine, major) so two workspaces on PG16 name ONE container', () => {
+        expect(serviceContainerNameFor('postgres-16')).toBe(
+            serviceContainerNameFor('postgres-16'),
+        );
+        expect(serviceContainerNameFor('postgres-16')).not.toBe(
+            serviceContainerNameFor('postgres-15'),
+        );
+        expect(serviceContainerNameFor('postgres-16')).toMatch(/^genie-svc-postgres-16$/);
+    });
+
+    it('names a DEDICATED engine per workspace, so it cannot collide with the shared one', () => {
+        const dedicated = serviceContainerNameFor('postgres-16', 'acme');
+        expect(dedicated).not.toBe(serviceContainerNameFor('postgres-16'));
+        expect(dedicated).toContain(workspaceSlugFor('acme'));
+    });
+
+    it('gives each engine its own named data volume', () => {
+        expect(serviceVolumeNameFor('postgres-16', 'data')).toBe('genie-svc-postgres-16-data');
+        expect(serviceVolumeNameFor('postgres-16', 'data', 'acme')).not.toBe(
+            serviceVolumeNameFor('postgres-16', 'data'),
+        );
+    });
+
+    it('does NOT stamp a workspace label on a machine-scoped engine', () => {
+        // The whole point: `teardownWorkspaceSandbox` sweeps `genie.workspace`.
+        // A shared engine carrying one workspace's label would be destroyed when
+        // that workspace is removed — taking every other workspace's database
+        // with it.
+        const args = runArgv(
+            {
+                workspaceId: null,
+                name: 'genie-svc-postgres-16',
+                image: 'postgres:16',
+                network: SHARED_SERVICES_NETWORK,
+                labels: { [SERVICE_LABEL]: 'postgres-16' },
+            },
+            { kind: 'docker', platform: 'linux' },
+        );
+        expect(args.join(' ')).not.toContain(WORKSPACE_LABEL);
+        expect(valuesAfter(args, '--label')).toContain(`${SERVICE_LABEL}=postgres-16`);
+        expect(valueAfter(args, '--network')).toBe(SHARED_SERVICES_NETWORK);
+    });
+
+    it('still stamps the workspace label on a DEDICATED engine', () => {
+        const args = runArgv(
+            {
+                workspaceId: 'acme',
+                name: 'genie-svc-postgres-16-acme',
+                image: 'postgres:16',
+                labels: { [SERVICE_LABEL]: 'postgres-16' },
+            },
+            { kind: 'docker', platform: 'linux' },
+        );
+        expect(valuesAfter(args, '--label')).toContain(`${WORKSPACE_LABEL}=acme`);
+    });
+
+    it('mounts a named VOLUME (not a bind) for the engine data directory', () => {
+        const args = runArgv(
+            {
+                workspaceId: null,
+                name: 'genie-svc-postgres-16',
+                image: 'postgres:16',
+                network: SHARED_SERVICES_NETWORK,
+                volumes: [{ name: 'genie-svc-postgres-16-data', target: '/var/lib/postgresql/data' }],
+            },
+            { kind: 'docker', platform: 'linux' },
+        );
+        expect(valuesAfter(args, '--mount')).toContain(
+            'type=volume,source=genie-svc-postgres-16-data,target=/var/lib/postgresql/data',
+        );
+    });
+
+    it('refuses a volume name or target that would break the --mount grammar', () => {
+        const bad = (volume: { name: string; target: string }) =>
+            runArgv(
+                {
+                    workspaceId: null,
+                    name: 'svc',
+                    image: 'postgres:16',
+                    network: SHARED_SERVICES_NETWORK,
+                    volumes: [volume],
+                },
+                { kind: 'docker', platform: 'linux' },
+            );
+        expect(() => bad({ name: 'a,b', target: '/data' })).toThrow();
+        expect(() => bad({ name: 'ok', target: '/da=ta' })).toThrow();
+    });
+
+    it('creates a named network with arbitrary labels (the shared-services network)', () => {
+        const args = networkCreateNamedArgv(SHARED_SERVICES_NETWORK, {
+            [SERVICE_LABEL]: 'shared',
+        });
+        expect(args.slice(0, 2)).toEqual(['network', 'create']);
+        expect(valuesAfter(args, '--label')).toEqual([`${SERVICE_LABEL}=shared`]);
+        expect(args.at(-1)).toBe(SHARED_SERVICES_NETWORK);
+    });
+
+    it('attaches and detaches a running container from a workspace network', () => {
+        expect(networkConnectArgv('genie-ws-acme', 'abc')).toEqual([
+            'network',
+            'connect',
+            'genie-ws-acme',
+            'abc',
+        ]);
+        expect(networkDisconnectArgv('genie-ws-acme', 'abc')).toEqual([
+            'network',
+            'disconnect',
+            'genie-ws-acme',
+            'abc',
+        ]);
+    });
+
+    it('lists engines by the SERVICE label, not the workspace one', () => {
+        expect(valueAfter(psServicesArgv(), '--filter')).toBe(`label=${SERVICE_LABEL}`);
+        expect(valueAfter(psServicesArgv('postgres-16'), '--filter')).toBe(
+            `label=${SERVICE_LABEL}=postgres-16`,
+        );
+        expect(psServicesArgv()).toContain('-a');
+    });
+
+    it('removes a data volume by name', () => {
+        expect(volumeRemoveArgv('genie-svc-postgres-16-data')).toEqual([
+            'volume',
+            'rm',
+            'genie-svc-postgres-16-data',
+        ]);
     });
 });

@@ -291,6 +291,19 @@ export interface McpContext {
      */
     manageSite: (terminalId: string, req: ManageSiteRequest) => Promise<ManageSiteResult>;
     /**
+     * Give the caller's workspace a backing service — Postgres, Redis, MySQL,
+     * Meilisearch, MinIO, Mailpit, or any image (the manageService tool, #234
+     * P3): catalog / list / add / start / stop / status / logs / remove /
+     * connection / dedicated. Engines are SHARED per (engine, major version)
+     * with a per-workspace database + role + credentials, reference-counted.
+     * Does the container-runtime + db I/O (kept out of this pure module).
+     * Optional: absent contributes no tool.
+     */
+    manageService?: (
+        terminalId: string,
+        req: ManageServiceRequest,
+    ) => Promise<ManageServiceResult>;
+    /**
      * Is the container Dev Server usable on this machine at all?
      *
      * Gates `manageSite` OUT of `tools/list` when no Docker/Podman is present —
@@ -621,6 +634,126 @@ export interface ManageSiteResult {
     applied?: DevSiteRunOption;
     /** logs: the container log tail. */
     logs?: string;
+    /** Which container runtime is driving, or why none is. */
+    runtime?: { kind: string; version?: string; installHint?: string };
+}
+
+// --- manageService (the Dev Server's backing services, #234 P3) --------------
+
+/**
+ * One reachable surface of a service, from BOTH sides of the boundary.
+ *
+ * The distinction is the thing an agent most often gets wrong. `host`/`port`
+ * are how a container ON THE WORKSPACE NETWORK dials the engine — its container
+ * name, on its real port. `hostPort`/`localAddress` are how THIS MACHINE dials
+ * it — loopback, on the published port. A connection string built from the
+ * second and handed to a container fails every time.
+ */
+export interface DevServiceEndpoint {
+    /** `postgres`, `s3`, `console`, `smtp`, … */
+    name: string;
+    kind: 'http' | 'tcp';
+    /** From inside the workspace: the engine's container name. */
+    host: string;
+    /** From inside the workspace: the port the engine really listens on. */
+    port: number;
+    /** From this machine: the published loopback port. */
+    hostPort?: number;
+    /** From this machine, ready to paste. */
+    localAddress?: string;
+}
+
+/** One service as the `manageService` tool reports it. */
+export interface DevServiceInfo {
+    /** The opaque id every non-add action takes back. */
+    id: string;
+    engine: string;
+    version: string;
+    /** `<engine>-<version>` — the unit engines are SHARED by. */
+    engineKey: string;
+    /** True when this workspace opted out of sharing and runs its own. */
+    dedicated: boolean;
+    enabled: boolean;
+    /** running | stopped | failed */
+    state: string;
+    /** Whether the engine answered its own readiness check. */
+    ready?: boolean;
+    /** How many workspaces currently hold this engine (1 when dedicated). */
+    holders?: number;
+    endpoints?: DevServiceEndpoint[];
+    /** The per-workspace names carved out of the engine: the database / role /
+     *  ACL user / index prefix, and the DNS form used for an S3 bucket. */
+    namespace?: { identifier: string; dnsName: string };
+    /** The env keys injected into this workspace's site containers. */
+    envKeys?: string[];
+    error?: string;
+}
+
+/** One engine the catalog offers. */
+export interface DevServiceCatalogEntry {
+    engine: string;
+    label: string;
+    summary: string;
+    versions: string[];
+    defaultVersion: string;
+    /** False for the generic escape hatch, which is always dedicated. */
+    shared: boolean;
+    /** sql-database-role | redis-acl | namespace | none — how a workspace's
+     *  slice is carved out, and therefore how strong the isolation is. */
+    provision: string;
+}
+
+export interface ManageServiceRequest {
+    action:
+        | 'catalog'
+        | 'list'
+        | 'add'
+        | 'start'
+        | 'stop'
+        | 'status'
+        | 'logs'
+        | 'remove'
+        | 'connection'
+        | 'dedicated';
+    /** Target workspace. Omit for your own; an Ops agent may pass a governed one. */
+    workspaceId?: string;
+    /** add: which engine (see the `catalog` action). */
+    engine?: string;
+    /** add: the engine version. Omit for the catalog default. */
+    version?: string;
+    /** add / dedicated: run this workspace's OWN container instead of sharing. */
+    dedicated?: boolean;
+    /** add, `custom` engine only: the image to run. */
+    image?: string;
+    /** add, `custom` engine only: the port it listens on inside the container. */
+    port?: number;
+    /** add, `custom` engine only: extra environment for the container. */
+    env?: Record<string, string>;
+    /** add: leave it defined but not started. Default true (start it). */
+    enabled?: boolean;
+    /** remove: also delete the engine's data volume. Only honoured when no
+     *  other workspace is using it. */
+    purge?: boolean;
+    /** Every action except catalog/list/add: the service `id` from a list. */
+    id?: string;
+    /** logs: how many lines. */
+    tail?: number;
+}
+
+export interface ManageServiceResult {
+    ok: boolean;
+    /** Set when ok is false (no runtime, bad args, unknown id, …). */
+    error?: string;
+    /** The workspace's services after the action (always returned on ok). */
+    services: DevServiceInfo[];
+    /** The service the action targeted/created. */
+    affectedId?: string;
+    /** catalog: every engine on offer. */
+    catalog?: DevServiceCatalogEntry[];
+    /** logs: the engine's log tail. */
+    logs?: string;
+    /** connection: the env this workspace's site containers are given. */
+    env?: Record<string, string>;
     /** Which container runtime is driving, or why none is. */
     runtime?: { kind: string; version?: string; installHint?: string };
 }
@@ -1279,6 +1412,89 @@ const MANAGE_SITE_TOOL = {
     },
 };
 
+const MANAGE_SERVICE_TOOL = {
+    name: 'manageService',
+    description:
+        "Give this workspace a backing SERVICE — Postgres, MySQL, Redis, Meilisearch, MinIO (S3), Mailpit, or any image — and get back how to connect to it. THE MODEL, because it changes what you should expect: an engine is SHARED per (engine, major version) across every workspace that asks for it, and each workspace gets its OWN database + role + credentials on it. Ten workspaces on Postgres 16 run ONE postgres container, not ten; a workspace's role cannot reach another workspace's database. The engine starts when the first workspace acquires it and stops when the last one releases it. A workspace that genuinely needs hard isolation (a custom config, an extension, destructive testing) flips `dedicated` and gets its own container — note that shared and dedicated have SEPARATE data volumes, so flipping does not move data. Actions: `catalog` (every engine on offer, its versions, and how strongly each isolates); `list` (this workspace's services + live state); `add` (`engine` plus optional `version` — defines it, starts the engine, creates this workspace's database/role/credentials, and attaches the engine to this workspace's network); `start` / `stop` / `status` (by `id` from a prior list); `logs` (the engine's log tail); `connection` (the connection surface + the exact env keys injected into this workspace's sites); `dedicated` (flip one service between shared and its own container); `remove` (release it, and with `purge` drop the engine's data volume — refused while another workspace still holds it). READ THE RESULT: `endpoints` carries TWO surfaces and they are not interchangeable — `host`+`port` is how a CONTAINER on this workspace's network dials the engine (its container name, its real port), `localAddress` is how a program on THIS MACHINE dials it (loopback, published port). A connection string built from the second and used inside a container fails every time. `envKeys` are already injected into this workspace's dev sites (`manageSite`), so an app served there needs no `.env` edit. Meilisearch, MinIO and Mailpit are NAMESPACE-isolated, not credential-isolated: workspaces share the master key and are separated by index prefix / bucket / inbox. `custom` takes `image` + `port` + `env` and is always dedicated. Requires Docker or Podman; when neither is usable the result carries the install hint. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            ...TERMINAL_ID_PROP,
+            action: {
+                type: 'string',
+                enum: [
+                    'catalog',
+                    'list',
+                    'add',
+                    'start',
+                    'stop',
+                    'status',
+                    'logs',
+                    'remove',
+                    'connection',
+                    'dedicated',
+                ],
+                description: 'What to do.',
+            },
+            workspaceId: {
+                type: 'string',
+                description:
+                    'The workspace to act in. Omit for YOUR OWN. An Ops agent may pass a workspace it governs.',
+            },
+            engine: {
+                type: 'string',
+                enum: ['postgres', 'mysql', 'redis', 'meilisearch', 'minio', 'mailpit', 'custom'],
+                description: 'add: which engine. Run `catalog` first if unsure.',
+            },
+            version: {
+                type: 'string',
+                description:
+                    'add (optional): the engine version, e.g. "16". Omit for the catalog default. This is part of the SHARING key — workspaces on different versions get different containers.',
+            },
+            dedicated: {
+                type: 'boolean',
+                description:
+                    "add / dedicated: run this workspace's OWN container instead of sharing the engine. Separate data volume — flipping does not move existing data.",
+            },
+            image: {
+                type: 'string',
+                description: 'add, `custom` engine only: the image to run.',
+            },
+            port: {
+                type: 'number',
+                description:
+                    'add, `custom` engine only: the port it listens on INSIDE the container.',
+            },
+            env: {
+                type: 'object',
+                additionalProperties: { type: 'string' },
+                description: 'add, `custom` engine only: environment for the container.',
+            },
+            enabled: {
+                type: 'boolean',
+                description:
+                    'add (optional): default true — define AND start it. Pass false to define it without starting.',
+            },
+            purge: {
+                type: 'boolean',
+                description:
+                    "remove (optional): also delete the engine's data volume. Ignored while another workspace still holds the engine.",
+            },
+            id: {
+                type: 'string',
+                description:
+                    'Every action except catalog/list/add: the target service `id`, passed back verbatim from a `list` result.',
+            },
+            tail: {
+                type: 'number',
+                description: 'logs (optional): how many lines of the engine log to return.',
+            },
+        },
+        required: ['action'],
+        additionalProperties: false,
+    },
+};
+
 const TARGET_WORKSPACE_PROP = {
     workspaceId: {
         type: 'string',
@@ -1792,6 +2008,61 @@ export function manageSiteSummary(result: ManageSiteResult): string {
 }
 
 /**
+ * PURE. The one-line headline above a `manageService` result.
+ *
+ * It leads with the two-sided connection surface, because that is the thing an
+ * agent gets wrong: the engine's CONTAINER NAME is how the workspace's own
+ * containers reach it, and LOOPBACK is how this machine does. Giving only one
+ * of them produces a connection string that works in exactly one of the two
+ * places somebody will paste it.
+ *
+ * It also names the holder count, because "three workspaces share this engine"
+ * is the sentence that explains why stopping it is not a local decision.
+ */
+export function manageServiceSummary(result: ManageServiceResult): string {
+    if (!result.ok) {
+        const hint = result.runtime?.installHint;
+        return `manageService failed: ${result.error ?? 'unknown error'}${hint ? ` ${hint}` : ''}`;
+    }
+    if (result.catalog) {
+        return `${result.catalog.length} engines available: ${result.catalog
+            .map((e) => `${e.engine} (${e.versions.join(', ')})`)
+            .join('; ')}.`;
+    }
+
+    const target = result.affectedId
+        ? result.services.find((s) => s.id === result.affectedId)
+        : undefined;
+    if (target) {
+        const name = `${target.engine} ${target.version}`;
+        if (target.state === 'failed') {
+            return `${name} could not start: ${target.error ?? 'unknown error'}`;
+        }
+        if (target.state !== 'running') return `${name} is ${target.state}.`;
+        if (target.ready === false) {
+            return `${name}'s container is up but it is NOT ready yet — it may still be initialising. Check \`logs\`, then \`status\` again before connecting.`;
+        }
+        const primary = target.endpoints?.[0];
+        const shared =
+            target.dedicated || !target.holders || target.holders < 2
+                ? ''
+                : ` Shared by ${target.holders} workspaces.`;
+        if (!primary) return `${name} is running.${shared}`;
+        return (
+            `${name} is ready — from this workspace's containers: ${primary.host}:${primary.port}` +
+            (primary.localAddress ? `; from this machine: ${primary.localAddress}` : '') +
+            (target.envKeys?.length ? `. Injected as ${target.envKeys.join(', ')}` : '') +
+            `.${shared}`
+        );
+    }
+
+    const running = result.services.filter((s) => s.state === 'running').length;
+    return `${result.services.length} service${
+        result.services.length === 1 ? '' : 's'
+    } in this workspace, ${running} running.`;
+}
+
+/**
  * The concise AgentInbox nudge folded into an `imDone` response (Track A). Turns
  * an unread summary into e.g. `📬 2 unread AgentInbox message(s) from claude·general,
  * codex — call agentinbox(action:"receive") before you stop.` Returns null when nothing is
@@ -2039,6 +2310,7 @@ export async function handleMcpMessage(
                     MANAGE_PROCESS_TOOL,
                     ...(isOps ? [PROVISION_WORKSPACES_TOOL] : []),
                     ...(hasDevServer ? [MANAGE_SITE_TOOL] : []),
+                    ...(hasDevServer && ctx.manageService ? [MANAGE_SERVICE_TOOL] : []),
                     MANAGE_TERMINALS_TOOL,
                     RUN_AGENT_TOOL,
                     MANAGE_WORKSPACES_TOOL,
@@ -2226,6 +2498,57 @@ export async function handleMcpMessage(
                         {
                             type: 'text',
                             text: `${manageSiteSummary(result)}\n\n${JSON.stringify(result, null, 2)}`,
+                        },
+                    ],
+                });
+            }
+            if (params.name === 'manageService') {
+                const a = (params.arguments ?? {}) as Partial<ManageServiceRequest>;
+                const ACTIONS: ReadonlyArray<ManageServiceRequest['action']> = [
+                    'catalog',
+                    'list',
+                    'add',
+                    'start',
+                    'stop',
+                    'status',
+                    'logs',
+                    'remove',
+                    'connection',
+                    'dedicated',
+                ];
+                if (!a.action || !ACTIONS.includes(a.action)) {
+                    return err(
+                        msg.id,
+                        -32602,
+                        `manageService requires \`action\`: ${ACTIONS.join(' | ')}.`,
+                    );
+                }
+                if (!ctx.manageService) {
+                    return err(
+                        msg.id,
+                        -32601,
+                        'The Genie Dev Server is not running in this process, so services cannot be managed here.',
+                    );
+                }
+                const result = await ctx.manageService(ctx.terminalId, {
+                    action: a.action,
+                    workspaceId: a.workspaceId,
+                    engine: a.engine,
+                    version: a.version,
+                    dedicated: a.dedicated,
+                    image: a.image,
+                    port: a.port,
+                    env: a.env,
+                    enabled: a.enabled,
+                    purge: a.purge,
+                    id: a.id,
+                    tail: a.tail,
+                });
+                return ok(msg.id, {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `${manageServiceSummary(result)}\n\n${JSON.stringify(result, null, 2)}`,
                         },
                     ],
                 });

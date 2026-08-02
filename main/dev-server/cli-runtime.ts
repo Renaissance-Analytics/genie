@@ -1,19 +1,24 @@
 import {
+    WORKSPACE_LABEL,
     buildArgv,
     execArgv,
     imageInspectArgv,
     logsArgv,
-    networkCreateArgv,
+    networkConnectArgv,
+    networkCreateNamedArgv,
+    networkDisconnectArgv,
     networkLsArgv,
     networkNameFor,
     networkRemoveArgv,
     portArgv,
     psArgv,
+    psServicesArgv,
     pullArgv,
     removeArgv,
     runArgv,
     startArgv,
     stopArgv,
+    volumeRemoveArgv,
 } from './argv';
 import { installHintFor, notRunningHintFor, probeRuntime } from './runtime-detect';
 import { defaultCommandRunner } from './seams';
@@ -79,6 +84,12 @@ const ALREADY_GONE = /no such |not found|is not running|no container|removal .* 
 
 /** A create that lost a race with another `ensure`. */
 const ALREADY_EXISTS = /already exists/i;
+
+/** A second `network connect` for a workspace that already holds the engine. */
+const ALREADY_CONNECTED = /already exists in network|endpoint with name .* already/i;
+
+/** A detach for a workspace that had already released (or never held) it. */
+const NOT_CONNECTED = /is not connected to( the)? network|not connected to network/i;
 
 /** How much of a chatty build/pull log we keep for an error message. */
 const OUTPUT_TAIL_LIMIT = 8_000;
@@ -156,6 +167,31 @@ export function createCliRuntime(
         };
     };
 
+    /**
+     * Idempotent network creation, by name.
+     *
+     * `--filter name=` is a SUBSTRING match, so asking about `genie-ws-a` also
+     * returns `genie-ws-abc` — the returned names are therefore compared
+     * exactly, or workspace `a` would adopt workspace `abc`'s network.
+     */
+    const ensureNetwork = async (
+        name: string,
+        labels: Record<string, string>,
+    ): Promise<NetworkRef> => {
+        const listed = await run(networkLsArgv(name));
+        if (ok(listed) && splitLines(listed.stdout).includes(name)) {
+            return { name, created: false };
+        }
+        const created = await run(networkCreateNamedArgv(name, labels));
+        if (!ok(created)) {
+            // Two windows opening the same workspace at once both see "no
+            // network" and both create; the loser is not an error.
+            if (ALREADY_EXISTS.test(detailOf(created))) return { name, created: false };
+            fail('network create', created);
+        }
+        return { name, created: true };
+    };
+
     return {
         kind,
 
@@ -179,23 +215,38 @@ export function createCliRuntime(
         },
 
         async networkEnsure(workspaceId: string): Promise<NetworkRef> {
-            const name = networkNameFor(workspaceId);
-            const listed = await run(networkLsArgv(name));
-            if (ok(listed) && splitLines(listed.stdout).includes(name)) {
-                return { name, created: false };
-            }
-            const created = await run(networkCreateArgv(name, workspaceId));
-            if (!ok(created)) {
-                // Two windows opening the same workspace at once both see "no
-                // network" and both create; the loser is not an error.
-                if (ALREADY_EXISTS.test(detailOf(created))) return { name, created: false };
-                fail('network create', created);
-            }
-            return { name, created: true };
+            return ensureNetwork(networkNameFor(workspaceId), {
+                [WORKSPACE_LABEL]: workspaceId,
+            });
+        },
+
+        networkEnsureNamed(name: string, labels: Record<string, string> = {}): Promise<NetworkRef> {
+            return ensureNetwork(name, labels);
         },
 
         async networkRemove(workspaceId: string): Promise<void> {
             await runTolerant('network rm', networkRemoveArgv(networkNameFor(workspaceId)));
+        },
+
+        async networkConnect(network: string, containerId: string): Promise<void> {
+            const result = await run(networkConnectArgv(network, containerId));
+            // A shared engine is attached once per consuming workspace, and the
+            // refcount is rebuilt on every boot — so "already attached" is the
+            // ordinary second call, not a failure.
+            if (ok(result) || ALREADY_CONNECTED.test(detailOf(result))) return;
+            fail('network connect', result);
+        },
+
+        async networkDisconnect(network: string, containerId: string): Promise<void> {
+            const result = await run(networkDisconnectArgv(network, containerId));
+            if (ok(result) || ALREADY_GONE.test(detailOf(result)) || NOT_CONNECTED.test(detailOf(result))) {
+                return;
+            }
+            fail('network disconnect', result);
+        },
+
+        async volumeRemove(name: string): Promise<void> {
+            await runTolerant('volume rm', volumeRemoveArgv(name));
         },
 
         async imageExists(image: string): Promise<boolean> {
@@ -224,10 +275,10 @@ export function createCliRuntime(
         },
 
         async runContainer(spec: ContainerSpec): Promise<ContainerRef> {
-            const args = runArgv(
-                { ...spec, network: spec.network ?? networkNameFor(spec.workspaceId) },
-                { kind, platform },
-            );
+            // The network default lives in `runArgv` — a machine-scoped engine
+            // has no workspace network to fall back to, and there is exactly one
+            // right place for that rule.
+            const args = runArgv(spec, { kind, platform });
             const result = await run(args);
             if (!ok(result)) fail('run', result);
             // The id is the last line: a first run may print pull progress above it.
@@ -271,6 +322,14 @@ export function createCliRuntime(
             const result = await run(psArgv(workspaceId));
             if (!ok(result)) return [];
             return parsePs(result.stdout, workspaceId);
+        },
+
+        async psServices(engineKey?: string): Promise<ContainerSummary[]> {
+            const result = await run(psServicesArgv(engineKey));
+            if (!ok(result)) return [];
+            // No workspaceId: a shared engine has none, and a dedicated one's is
+            // read from its own record rather than inferred from the filter.
+            return parsePs(result.stdout);
         },
 
         async portMappings(id: string): Promise<PortMapping[]> {
