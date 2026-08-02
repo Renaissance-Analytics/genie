@@ -53,6 +53,29 @@ export function pickReusePanel(
     return (focused ?? candidates[0]).id;
 }
 
+/**
+ * How a NEW editor panel for an open-file request must be created: the spec's
+ * `workspace_id` + whether it is a System panel.
+ *
+ * A panel may only be ATTACHED to a workspace when it roots exactly at that
+ * workspace's own path. An attached panel resolves its tabs against the
+ * WORKSPACE root (`CodePanel`: `workspace?.path ?? spec.cwd` — the row WINS over
+ * the spec's cwd), so attaching a panel rooted anywhere else silently re-reads
+ * `<file dir>/<tab>` as `<workspace>/<tab>`: that is exactly how a request for
+ * `.ai/plans/x.md` surfaced as `ENOENT … <workspace>/x.md`. Anything else opens
+ * as a System panel (unattached + `meta.system`), which roots at its OWN cwd and
+ * reads full-FS. Pure → unit-testable.
+ */
+export function newPanelAttachment(
+    target: { workspaceId: string; root: string },
+    workspacePath: string | null | undefined,
+): { workspaceId: string | null; system: boolean } {
+    if (target.workspaceId !== SYSTEM_WORKSPACE_ID && workspacePath === target.root) {
+        return { workspaceId: target.workspaceId, system: false };
+    }
+    return { workspaceId: null, system: true };
+}
+
 // --- "open this file in panel <id>" bus ------------------------------------
 // A CodePanel seeds its tabs from spec.meta only on mount, so reusing a LIVE
 // panel needs a side channel. Each mounted CodePanel subscribes by its spec id;

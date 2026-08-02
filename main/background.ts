@@ -1300,6 +1300,7 @@ app.whenReady().then(async () => {
     registerOpenFile({
         workspaceIdOfTerminal,
         getWorkspaceRoot: (wsId) => getWorkspace(wsId)?.path ?? null,
+        listWorkspaces: () => listWorkspaces().map((w) => ({ id: w.id, path: w.path })),
         homeDir: () => os.homedir(),
         sendOpenFile: (payload) => {
             // Surface the master window so the file is actually visible, then push

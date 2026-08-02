@@ -41,7 +41,7 @@ import {
     type WorkspaceViewState,
 } from '../lib/view-state';
 import { planCommitStep, shouldDriveRestart } from '../lib/updater-flow';
-import { pickReusePanel, emitOpenInPanel } from '../lib/editor-open';
+import { pickReusePanel, emitOpenInPanel, newPanelAttachment } from '../lib/editor-open';
 import {
     workstationConnectState,
     connectableWorkstationIds,
@@ -1366,29 +1366,33 @@ function MasterInner() {
                 return;
             }
             // No open editor panel for this workspace → create one seeded with the
-            // file (its mount-seed opens the tab), select + surface it. For the
-            // System workspace the spec is unattached (workspace_id null + system)
-            // and roots at the file's directory (its cwd), so absolute/system
-            // paths resolve under the panel root.
+            // file (its mount-seed opens the tab), select + surface it. The panel
+            // is ATTACHED to the workspace only when it roots at that workspace's
+            // own path — an attached panel resolves its tabs against the WORKSPACE
+            // root, so a panel rooted elsewhere (the System workspace, or a file
+            // no workspace owns) must be unattached + system, rooting at the
+            // file's directory (its cwd) so its tab resolves under the panel root.
             void (async () => {
                 try {
                     const wsRow = workspacesByIdRef.current.get(workspaceId);
-                    const base = (wsRow?.project_name ?? 'system')
+                    const attach = newPanelAttachment({ workspaceId, root }, wsRow?.path);
+                    const panelWorkspaceId = attach.workspaceId ?? SYSTEM_WORKSPACE_ID;
+                    const base = (attach.system ? 'system' : wsRow?.project_name ?? 'system')
                         .toLowerCase()
                         .replace(/\s+/g, '-');
                     const existingCode = specsRef.current.filter(
-                        (s) => specWorkspaceId(s) === workspaceId && s.type === 'code',
+                        (s) => specWorkspaceId(s) === panelWorkspaceId && s.type === 'code',
                     ).length;
                     const label =
                         existingCode === 0 ? `${base}-files` : `${base}-files-${existingCode + 1}`;
                     const created = await api().terminalSpec.create({
                         id: ulid(),
-                        workspace_id: system ? null : workspaceId,
+                        workspace_id: attach.workspaceId,
                         label,
                         cwd: root,
                         type: 'code',
                         meta: {
-                            ...(system ? { system: true } : {}),
+                            ...(attach.system ? { system: true } : {}),
                             open_files: [relPath],
                             active_file: relPath,
                             file_path: relPath,
@@ -1399,8 +1403,8 @@ function MasterInner() {
                     });
                     setSpecs((prev) => [...prev, created]);
                     setSelected((prev) => new Set(prev).add(created.id));
-                    if (system) setSystemRevealed(true);
-                    activateWorkspaceRef.current(workspaceId);
+                    if (attach.system) setSystemRevealed(true);
+                    activateWorkspaceRef.current(panelWorkspaceId);
                     void api().editor.openFileResult(requestId, { reused: false, opened: true });
                 } catch {
                     void api().editor.openFileResult(requestId, { reused: false, opened: false });

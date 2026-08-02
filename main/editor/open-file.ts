@@ -16,6 +16,15 @@ import type { OpenFileRequest, OpenFileResult } from '../mcp/protocol';
 
 /** Where the editor panel should root + the tab path relative to that root. */
 export interface OpenFilePlan {
+    /**
+     * The workspace the panel belongs to — the CALLER's when the file is inside
+     * it, ANOTHER registered workspace when the file lives there, else the
+     * System workspace. The panel's root is ALWAYS this workspace's own path (or
+     * the file's directory for System), because an attached panel resolves its
+     * tabs against the WORKSPACE root: attaching a panel rooted anywhere else
+     * silently re-resolves `<file dir>/<tab>` as `<workspace>/<tab>`.
+     */
+    workspaceId: string;
     /** Absolute file path. */
     abs: string;
     /** Directory the editor panel roots at (its tabs are relative to this). */
@@ -24,23 +33,48 @@ export interface OpenFilePlan {
     relPath: string;
 }
 
+/** A registered workspace, for locating which one owns a resolved file. */
+export interface WorkspaceRootRef {
+    id: string;
+    path: string;
+}
+
+/**
+ * `abs` as a forward-slashed path RELATIVE to `root`, or null when it isn't
+ * inside `root`. Case-insensitive on Windows, case-sensitive elsewhere — that's
+ * `path.relative`'s own platform rule, which is the one the filesystem uses.
+ */
+function relWithin(root: string, abs: string): string | null {
+    const rel = path.relative(root, abs);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+    return rel.split(path.sep).join('/');
+}
+
 /**
  * Plan how to open `inputPath` for `workspaceId`. PURE (no fs) → unit-testable.
  *
  *   - A relative path resolves against the workspace root (real workspace) or the
- *     home dir (System).
- *   - When the resolved file is UNDER a real workspace root, the panel roots at
- *     the WORKSPACE root (relative tab) — so the workspace's editor reuses across
- *     all its files.
- *   - Otherwise (the System workspace, or a file outside the workspace) the panel
- *     roots at the FILE'S directory (basename tab) — which keeps the Code view's
- *     workspace-root path-guard satisfied for arbitrary absolute/system paths.
+ *     home dir (System) — keeping its FULL relative path, subdirectories and all.
+ *   - Inside the caller's own workspace ⇒ the panel roots at the WORKSPACE root
+ *     (relative tab) — so the workspace's editor reuses across all its files.
+ *   - Inside a DIFFERENT registered workspace ⇒ the panel opens in THAT
+ *     workspace (a file belongs to the workspace that owns it, and only there
+ *     does its relative tab path resolve).
+ *   - Otherwise (a System caller, or a file no workspace owns) ⇒ a SYSTEM panel
+ *     rooted at the FILE'S directory (basename tab), which reads unconfined.
+ *
+ * The invariant that matters: a non-System `workspaceId` ALWAYS comes with
+ * `root` = that workspace's path. The renderer attaches a new panel to the
+ * workspace and CodePanel then resolves tabs against the workspace path, so any
+ * other root would drop the tab's directories (genie: an agent asked for
+ * `.ai/plans/x.md` and the editor read `<workspace>/x.md`).
  */
 export function planOpenFile(
     workspaceId: string,
     workspaceRoot: string | null,
     homeDir: string,
     inputPath: string,
+    workspaces: ReadonlyArray<WorkspaceRootRef> = [],
 ): { plan: OpenFilePlan } | { error: string } {
     const raw = (inputPath ?? '').trim();
     if (!raw) return { error: 'No file path given.' };
@@ -49,19 +83,35 @@ export function planOpenFile(
     const base = isSystem ? homeDir : workspaceRoot ?? homeDir;
     const abs = path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(base, raw);
 
-    let root: string;
     if (!isSystem && workspaceRoot) {
-        const rel = path.relative(workspaceRoot, abs);
-        // Under the workspace root ⇒ root at the workspace (relative tab, broad
-        // reuse). A `..`/absolute rel means it escaped → root at the file's dir.
-        root = rel && !rel.startsWith('..') && !path.isAbsolute(rel)
-            ? workspaceRoot
-            : path.dirname(abs);
-    } else {
-        root = path.dirname(abs);
+        const rel = relWithin(workspaceRoot, abs);
+        if (rel) return { plan: { workspaceId, abs, root: workspaceRoot, relPath: rel } };
+
+        // It escaped the caller's workspace — but another registered workspace
+        // may OWN it (an agent surfacing a file it wrote in a sibling
+        // workspace). Open it there; the DEEPEST match wins when they nest.
+        let best: { id: string; root: string; rel: string } | null = null;
+        for (const ws of workspaces) {
+            if (!ws?.path || ws.id === workspaceId) continue;
+            const r = relWithin(ws.path, abs);
+            if (!r) continue;
+            if (!best || ws.path.length > best.root.length) {
+                best = { id: ws.id, root: ws.path, rel: r };
+            }
+        }
+        if (best) {
+            return { plan: { workspaceId: best.id, abs, root: best.root, relPath: best.rel } };
+        }
     }
-    const relPath = path.relative(root, abs).split(path.sep).join('/');
-    return { plan: { abs, root, relPath } };
+
+    return {
+        plan: {
+            workspaceId: SYSTEM_WORKSPACE_ID,
+            abs,
+            root: path.dirname(abs),
+            relPath: path.basename(abs),
+        },
+    };
 }
 
 // --- renderer round-trip -----------------------------------------------------
@@ -79,6 +129,10 @@ export interface OpenFileDeps {
     workspaceIdOfTerminal: (terminalId: string) => string | null;
     /** A real workspace's root path, or null when missing. (Not called for System.) */
     getWorkspaceRoot: (workspaceId: string) => string | null;
+    /** Every registered workspace + its root — so a file that lives in ANOTHER
+     *  workspace opens in that workspace's editor instead of being force-fit
+     *  into the caller's (where its relative tab path cannot resolve). */
+    listWorkspaces: () => WorkspaceRootRef[];
     /** The user's home dir (System root + relative-path base). */
     homeDir: () => string;
     /** Surface the master Floor and push it the open-file request. The Floor
@@ -132,14 +186,31 @@ export async function openFileForUserForMcp(
         return { ok: false, error: `Workspace ${workspaceId} not found.` };
     }
 
-    const planned = planOpenFile(workspaceId, workspaceRoot, deps.homeDir(), req.path);
+    const planned = planOpenFile(
+        workspaceId,
+        workspaceRoot,
+        deps.homeDir(),
+        req.path,
+        deps.listWorkspaces(),
+    );
     if ('error' in planned) return { ok: false, error: planned.error };
-    const { abs, root, relPath } = planned.plan;
+    const { abs, root, relPath, workspaceId: targetWorkspaceId } = planned.plan;
 
     try {
         if (!fs.statSync(abs).isFile()) return { ok: false, error: `Not a file: ${abs}` };
     } catch {
-        return { ok: false, error: `File not found: ${abs}` };
+        // Name the FULLY resolved path — and, for a relative path, what it was
+        // resolved against, since that is the mistake worth seeing (the agent
+        // meant a file in another directory or another workspace entirely).
+        const relativeInput = !path.isAbsolute(req.path.trim());
+        const resolvedAgainst =
+            workspaceId === SYSTEM_WORKSPACE_ID ? deps.homeDir() : workspaceRoot ?? deps.homeDir();
+        return {
+            ok: false,
+            error: relativeInput
+                ? `File not found: ${abs} — "${req.path}" resolved against ${resolvedAgainst}. Pass an absolute path if the file lives elsewhere.`
+                : `File not found: ${abs}`,
+        };
     }
 
     const reply = await new Promise<RendererReply>((resolve) => {
@@ -152,7 +223,7 @@ export async function openFileForUserForMcp(
         pending.set(requestId, { resolve, timer });
         deps!.sendOpenFile({
             requestId,
-            workspaceId,
+            workspaceId: targetWorkspaceId,
             root,
             relPath,
             ...(typeof req.line === 'number' ? { line: req.line } : {}),
@@ -162,7 +233,7 @@ export async function openFileForUserForMcp(
     return {
         ok: true,
         file: abs,
-        workspaceId,
+        workspaceId: targetWorkspaceId,
         // On a reply: trust it. On timeout (reply null): the file was still
         // dispatched to the Floor — report opened-new as the best-effort default.
         reused: reply?.reused ?? false,

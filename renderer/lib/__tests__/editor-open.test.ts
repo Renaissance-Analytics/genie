@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pickReusePanel, resolveCursorLine } from '../editor-open';
+import { newPanelAttachment, pickReusePanel, resolveCursorLine } from '../editor-open';
 import type { TerminalSpec, WorkspaceRow } from '../genie';
 
 /** Minimal spec/row factories — only the fields pickReusePanel reads. */
@@ -84,6 +84,53 @@ describe('pickReusePanel', () => {
         expect(
             pickReusePanel(specs, { workspaceId: 'ws1', root: '/ws1' }, null, new Set(['t1']), wsById),
         ).toBeNull();
+    });
+
+    it('reuses the workspace panel for a file in a SUBDIRECTORY', () => {
+        // A subdirectory file still roots at the workspace, so the workspace's
+        // open editor is the one to reuse — the panel just gains a tab.
+        const specs = [spec({ id: 'c1', type: 'code', workspace_id: 'ws1', cwd: '/ws1' })];
+        expect(
+            pickReusePanel(
+                specs,
+                { workspaceId: 'ws1', root: '/ws1' },
+                null,
+                new Set(['c1']),
+                wsById,
+            ),
+        ).toBe('c1');
+    });
+});
+
+describe('newPanelAttachment', () => {
+    it('attaches to the workspace when the panel roots at the workspace path', () => {
+        expect(newPanelAttachment({ workspaceId: 'ws1', root: '/ws1' }, '/ws1')).toEqual({
+            workspaceId: 'ws1',
+            system: false,
+        });
+    });
+
+    it('never attaches a panel rooted somewhere OTHER than the workspace path', () => {
+        // The field bug: an attached panel resolves its tabs against the
+        // WORKSPACE root (CodePanel: `workspace?.path ?? spec.cwd`), so a panel
+        // rooted at `/elsewhere/notes` with a `todo.md` tab read `/ws1/todo.md`.
+        expect(newPanelAttachment({ workspaceId: 'ws1', root: '/elsewhere/notes' }, '/ws1')).toEqual(
+            { workspaceId: null, system: true },
+        );
+    });
+
+    it('opens a System target as an unattached System panel', () => {
+        expect(newPanelAttachment({ workspaceId: '__system__', root: '/var/log' }, null)).toEqual({
+            workspaceId: null,
+            system: true,
+        });
+    });
+
+    it('falls back to a System panel when the workspace row is unknown', () => {
+        expect(newPanelAttachment({ workspaceId: 'ws9', root: '/ws9' }, undefined)).toEqual({
+            workspaceId: null,
+            system: true,
+        });
     });
 });
 
