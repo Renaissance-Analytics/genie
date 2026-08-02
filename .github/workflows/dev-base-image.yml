@@ -1,0 +1,351 @@
+name: Dev base image
+
+# Builds and publishes `ghcr.io/renaissance-analytics/genie-dev-base` — the ONE
+# multi-language workspace dev image the Genie dev server runs every workspace
+# in. Source: `main/dev-server/dev-base/`. Sole consumer of the published tag:
+# `GENIE_DEV_BASE_IMAGE` in `main/dev-server/images.ts`.
+#
+# ## Why this is not on the CI path
+#
+# Deliberately NOT triggered by pushes to a branch or by pull requests. This is
+# a multi-gigabyte image that compiles nothing of Genie's own and changes maybe
+# twice a year; running it per-commit would burn hours of runner time and
+# republish an identical image. It runs when someone decides to publish:
+#
+#   * push a `dev-base-v*` tag  → builds AND publishes
+#   * workflow_dispatch         → builds only, unless `publish` is ticked
+#
+# ## Publishing (the owner's call)
+#
+#   git tag dev-base-v1.0.0 && git push origin dev-base-v1.0.0
+#
+# That publishes two tags: the exact version (`:1.0.0`, immutable) and the
+# MAJOR (`:1`, moving) — `:1` is what `images.ts` pins, so a `dev-base-v1.x.y`
+# tag is how a security rebuild reaches existing workspaces, and a
+# `dev-base-v2.0.0` tag leaves `:1` alone for a breaking toolchain change.
+#
+# ## Package visibility
+#
+# The repo is public but the licence is proprietary; a GHCR package's visibility
+# is an OWNER SETTING, not something a workflow can assert. A brand-new package
+# is created PRIVATE and stays private until someone changes it at
+# github.com/orgs/Renaissance-Analytics/packages → genie-dev-base → Package
+# settings. Until it is public, `docker pull` on a user's desktop needs a
+# GHCR login — which is why the desktop's `image-missing` message tells the user
+# the exact pull command rather than pulling silently.
+#
+# The `org.opencontainers.image.source` label in the Dockerfile is what links
+# the package to this repository in the GHCR UI.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Push to GHCR (leave unticked to only prove the build)'
+        type: boolean
+        default: false
+      version:
+        description: 'Version to publish as, e.g. 1.0.0 (required when publishing)'
+        type: string
+        default: ''
+  push:
+    tags:
+      - 'dev-base-v*'
+
+# Least-privilege by default: the only job that needs more is the one that
+# writes to GHCR, and it asks for `packages: write` and nothing else. No
+# contents:write, no id-token, no PR scopes.
+permissions:
+  contents: read
+
+env:
+  # GHCR requires an all-lowercase name. Must stay byte-identical to
+  # GENIE_DEV_BASE_IMAGE in main/dev-server/images.ts.
+  IMAGE: ghcr.io/renaissance-analytics/genie-dev-base
+  CONTEXT: main/dev-server/dev-base
+
+concurrency:
+  # One publish at a time. Two runs racing to move `:1` would leave it pointing
+  # at whichever manifest landed last, which is not necessarily the newer build.
+  group: dev-base-image
+  cancel-in-progress: false
+
+jobs:
+  # --- what are we building, and are we publishing it? ----------------------
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.resolve.outputs.publish }}
+      version: ${{ steps.resolve.outputs.version }}
+      major: ${{ steps.resolve.outputs.major }}
+    steps:
+      - name: Resolve version and publish decision
+        id: resolve
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/dev-base-v') }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [ "$IS_TAG" = 'true' ]; then
+            publish=true
+            version="${REF_NAME#dev-base-v}"
+          else
+            publish="${INPUT_PUBLISH:-false}"
+            version="${INPUT_VERSION:-}"
+          fi
+
+          if [ "$publish" = 'true' ]; then
+            # Fail here rather than after a 40-minute build — a publish with no
+            # version has nothing to tag and nothing to move `:1` to.
+            if [ -z "$version" ]; then
+              echo "::error::Publishing needs a version. Push a dev-base-v* tag, or supply the 'version' input." >&2
+              exit 1
+            fi
+            if ! printf '%s' "$version" | grep -Eq '^[0-9]+(\.[0-9]+)*$'; then
+              echo "::error::Version '$version' is not dotted-numeric (e.g. 1.0.0)." >&2
+              exit 1
+            fi
+          fi
+
+          major="${version%%.*}"
+
+          {
+            echo "publish=$publish"
+            echo "version=$version"
+            echo "major=$major"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Dev base image"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| publish | \`$publish\` |"
+            echo "| version | \`${version:-–}\` |"
+            if [ "$publish" = 'true' ]; then
+              echo "| tags | \`${IMAGE}:${major}\`, \`${IMAGE}:${version}\` |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # --- one native runner per architecture -----------------------------------
+  #
+  # amd64 and arm64 are built on runners of their OWN architecture and pushed
+  # BY DIGEST, then stitched into one manifest list by the `manifest` job.
+  #
+  # The obvious alternative — one job, buildx + QEMU, `platforms:
+  # linux/amd64,linux/arm64` — is what you reach for when there is no arm64
+  # runner. There is: GitHub's `ubuntu-24.04-arm` is free for public
+  # repositories. It matters more than usual here because this image RUNS
+  # compilers during the build (rustup's toolchain unpack, node-gyp's
+  # prerequisites, PHP extension builds), and those are exactly the workloads
+  # QEMU makes 10-20x slower — an emulated arm64 leg is an hours-long build with
+  # a real chance of tripping qemu's own bugs.
+  #
+  # If arm64 runners are ever unavailable, the fallback is a single job with
+  # `docker/setup-qemu-action@v3` and both platforms in one `platforms:` list;
+  # then the `manifest` job below is deleted, not adapted.
+  build:
+    needs: meta
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux/amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Built into the local daemon FIRST, and only pushed once it has been run.
+      # A green `docker build` proves the layers assembled; it proves nothing
+      # about the last three lines of the Dockerfile, which are the ones that
+      # decide who the container is and what is on its PATH.
+      - name: Build ${{ matrix.platform }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.CONTEXT }}
+          file: ${{ env.CONTEXT }}/Dockerfile
+          platforms: ${{ matrix.platform }}
+          tags: genie-dev-base:smoke
+          load: true
+          push: false
+          provenance: false
+
+      - name: Smoke-test the image
+        # Each leg runs on a runner of its own architecture, so the image it
+        # just built is directly runnable. Asserts what a workspace depends on:
+        # the container is `genie`, not root, and every toolchain resolves on
+        # that user's PATH.
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint /bin/bash genie-dev-base:smoke -c '
+            set -euo pipefail
+            test "$(id -un)" = genie
+            test "$(pwd)" = /workspace
+            node --version
+            npm --version
+            pnpm --version
+            php --version
+            composer --version
+            python3 --version
+            uv --version
+            go version
+            cargo --version
+            rustc --version
+            git --version
+          '
+          # A LOGIN shell too. Debian's /etc/profile hard-assigns PATH, which
+          # would otherwise wipe every toolchain the image put there — the
+          # /etc/profile.d drop-in exists to survive that, and this is what
+          # proves it still does.
+          docker run --rm --entrypoint /bin/bash genie-dev-base:smoke -lc '
+            set -euo pipefail
+            go version
+            cargo --version
+            pnpm --version
+          '
+
+      - name: Smoke-test uid alignment
+        # The one behaviour nothing else covers: HOST_UID/HOST_GID renumber the
+        # `genie` user, and — the load-bearing half — a later `exec` into the
+        # running container lands on the NEW uid, because the runtime resolves
+        # `USER genie` against the container's own rewritten /etc/passwd.
+        run: |
+          set -euo pipefail
+          cid="$(docker run -d --rm --init \
+            --env HOST_UID=4242 --env HOST_GID=4243 \
+            genie-dev-base:smoke tail -f /dev/null)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+
+          got="$(docker exec "$cid" id -u):$(docker exec "$cid" id -g)"
+          test "$got" = '4242:4243' || { echo "exec ran as $got, expected 4242:4243" >&2; exit 1; }
+          test "$(docker exec "$cid" id -un)" = genie
+          # A file written from an exec must carry the aligned ownership — that
+          # is the entire point of the exercise.
+          docker exec "$cid" sh -c 'touch /tmp/probe'
+          test "$(docker exec "$cid" stat -c '%u:%g' /tmp/probe)" = '4242:4243'
+
+      - name: Log in to GHCR
+        if: needs.meta.outputs.publish == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # The default token; `packages: write` above is the only scope it
+          # carries beyond read. No PAT, nothing to rotate.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Fully cached against the build above — this step pushes, it does not
+      # rebuild. push-by-digest means each leg publishes an untagged,
+      # single-platform image and reports its digest; nothing is tagged until
+      # `manifest` decides what the pair is called, so a half-published pair can
+      # never be what `:1` points at.
+      - name: Push ${{ matrix.platform }} by digest
+        id: build
+        if: needs.meta.outputs.publish == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.CONTEXT }}
+          file: ${{ env.CONTEXT }}/Dockerfile
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          # Attestations off: they add manifests that `imagetools create` would
+          # have to be taught about, and signed provenance is a follow-up worth
+          # doing properly rather than a flag flipped here.
+          provenance: false
+          sbom: false
+
+      - name: Export digest
+        if: needs.meta.outputs.publish == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - name: Upload digest
+        if: needs.meta.outputs.publish == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ strategy.job-index }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # --- one manifest list over both architectures ----------------------------
+  manifest:
+    needs: [meta, build]
+    if: needs.meta.outputs.publish == 'true'
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v7
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push the manifest list
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          MAJOR: ${{ needs.meta.outputs.major }}
+        run: |
+          set -euo pipefail
+          # Both legs, or nothing. A manifest list with one architecture in it
+          # would silently strand every Apple Silicon or arm64 cloud host.
+          count="$(find /tmp/digests -type f | wc -l)"
+          if [ "$count" -ne 2 ]; then
+            echo "::error::Expected 2 per-architecture digests, found $count." >&2
+            exit 1
+          fi
+          # The find output is deliberately word-split — one `${IMAGE}@sha256:…`
+          # source argument per architecture, which is what imagetools stitches.
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${VERSION}" \
+            --tag "${IMAGE}:${MAJOR}" \
+            $(find /tmp/digests -type f -printf "${IMAGE}@sha256:%f ")
+
+      - name: Show what was published
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          MAJOR: ${{ needs.meta.outputs.major }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}"
+          {
+            echo "### Published"
+            echo ""
+            echo '```'
+            echo "${IMAGE}:${VERSION}"
+            echo "${IMAGE}:${MAJOR}"
+            echo '```'
+            echo ""
+            echo "\`GENIE_DEV_BASE_IMAGE\` in \`main/dev-server/images.ts\` pins \`:${MAJOR}\`."
+          } >> "$GITHUB_STEP_SUMMARY"

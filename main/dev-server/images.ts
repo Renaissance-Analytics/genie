@@ -11,30 +11,31 @@
  * choosing a "primary" stack per workspace, which is exactly the PHP-first
  * mistake beta.218 made. One image is bigger to pull once and simpler forever.
  *
- * ## NOT BUILT IN P1 — the P2 hand-off
+ * ## Where the image comes from
  *
- * P1 deliberately only REFERENCES this image; nothing here builds, publishes or
- * pulls it. The point of P1 is the runtime + sandbox lifecycle, and that is
- * provable with any base image (the tests use `alpine`, and
- * `ensureWorkspaceSandbox` takes an `image` override for exactly this reason).
+ * `dev-base/` — the Dockerfile, the entrypoint, and the reasoning. Debian trixie
+ * with Node, PHP, Python, Go and Rust, and a non-root `genie` user that
+ * renumbers itself to `HOST_UID`/`HOST_GID` so bind-mounted files come out owned
+ * by the person who owns the workspace. Built and published multi-arch (amd64 +
+ * arm64) to GHCR by `.github/workflows/dev-base-image.yml`, and only ever on a
+ * `dev-base-v*` tag — a multi-gigabyte image is not something CI republishes on
+ * every commit.
  *
- * What P2 has to decide and build:
+ * The constant below is the SINGLE consumer of that name anywhere in the
+ * codebase. A same-major republish (`:1` moving) needs no change here at all;
+ * only adopting a new major is an edit, and it is this line.
  *
- *   1. **Contents.** Node LTS + pnpm/npm, PHP + Composer, Python + uv, Go, Rust,
- *      plus git and a non-root `genie` user whose uid/gid can be matched to the
- *      host's so bind-mounted files are not written as root on Linux.
- *   2. **Where it is built.** A `Dockerfile` in this repo, built and pushed by CI
- *      on tag, multi-arch (amd64 + arm64 — Apple Silicon and the cloud fleet are
- *      both real).
- *   3. **Where it is published.** GHCR under the repo's own org, so the desktop
- *      and Genie Cloud pull the identical digest. The tag is PINNED (`:1`, not
- *      `:latest`) because a workspace's toolchain must not change under it on a
- *      restart.
- *   4. **How it arrives.** A `pullImage` on {@link ContainerRuntime} plus a
+ * ## Still open
+ *
+ *   1. **How it arrives.** A `pullImage` on {@link ContainerRuntime} plus a
  *      first-run progress surface. P1 reports {@link SandboxFailureReason}
  *      `image-missing` with the exact `docker pull` to run instead of pulling
  *      silently — a multi-GB download must be something the user agreed to.
- *   5. **Escape hatch.** A workspace that needs something else sets its own
+ *   2. **Passing the host's uid.** Nothing sets `HOST_UID`/`HOST_GID` yet;
+ *      `ContainerSpec.env` is where they go. Rootless Podman needs a different
+ *      answer (`--userns=keep-id`, a spec field that does not exist), so the two
+ *      runtimes do NOT share one fix — see `dev-base/README.md`.
+ *   3. **Escape hatch.** A workspace that needs something else sets its own
  *      image; the layered site resolution in P2 (Dockerfile / devcontainer /
  *      detected / explicit) is where that surfaces.
  */
