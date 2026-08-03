@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
+import { OVERLAY_ROOT_CLASS } from '../overlay-root';
 
 /**
  * genie #66 part 1 — Fancy's PORTALED overlays must paint above Genie's chrome.
@@ -22,6 +23,10 @@ const CSS = fs.readFileSync(
     path.resolve(__dirname, '../../styles/master.css'),
     'utf8',
 );
+const GLOBALS = fs.readFileSync(
+    path.resolve(__dirname, '../../styles/globals.css'),
+    'utf8',
+);
 
 /** The `z-index` declared in the first rule block for `selector`. */
 function zIndexOf(css: string, selector: string): number | null {
@@ -36,6 +41,48 @@ function zIndexOf(css: string, selector: string): number | null {
 function tokenValue(css: string, name: string): number | null {
     const m = new RegExp(`${name}:\\s*([0-9]+)\\s*;`).exec(css);
     return m ? Number(m[1]) : null;
+}
+
+/**
+ * Every top-level rule in a sheet, as `{ selector, body }`. Only rules whose
+ * selector starts at column 0 are matched, which skips the indented innards of
+ * `@media` / `@keyframes` / `@supports` — Genie's sheets nest nothing else.
+ */
+function rules(css: string): { selector: string; body: string }[] {
+    const out: { selector: string; body: string }[] = [];
+    // Comments first: a `/* … */` block at column 0 otherwise reads as the
+    // start of a selector and swallows the rule it documents.
+    const src = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const re = /^([^@\s}][^{}]*)\{([^{}]*)\}/gm;
+    for (let m = re.exec(src); m; m = re.exec(src)) {
+        out.push({ selector: m[1].trim(), body: m[2] });
+    }
+    return out;
+}
+
+/** Custom properties DECLARED by every rule whose selector matches `pick`. */
+function declaredBy(css: string, pick: (selector: string) => boolean): Set<string> {
+    const names = new Set<string>();
+    for (const r of rules(css)) {
+        if (!pick(r.selector)) continue;
+        for (const m of r.body.matchAll(/(--[a-z0-9-]+)\s*:/gi)) names.add(m[1]);
+    }
+    return names;
+}
+
+/**
+ * Custom properties CONSUMED without a fallback by every rule whose selector
+ * matches `pick`. `var(--x, 12px)` is excluded on purpose: a fallback is a
+ * self-contained declaration that cannot go blank when the token is out of
+ * scope, so it is not a scope dependency.
+ */
+function consumedBy(css: string, pick: (selector: string) => boolean): Set<string> {
+    const names = new Set<string>();
+    for (const r of rules(css)) {
+        if (!pick(r.selector)) continue;
+        for (const m of r.body.matchAll(/var\(\s*(--[a-z0-9-]+)\s*\)/gi)) names.add(m[1]);
+    }
+    return names;
 }
 
 describe('Fancy portal overlay layer (genie #66)', () => {
@@ -123,5 +170,80 @@ describe('File-picker layer (genie #86)', () => {
         expect(CSS.indexOf('.file-picker-scrim {')).toBeGreaterThan(CSS.indexOf('.ctx-scrim {'));
         // #66's invariant still holds for the shared scrim.
         expect(tokenValue(CSS, '--z-fancy-overlay')!).toBeGreaterThan(zIndexOf(CSS, '.ctx-scrim')!);
+    });
+});
+
+/**
+ * genie #114 — the OTHER half of "renders behind the modal", and the half #86
+ * never touched: what the picker paints, not where it sits.
+ *
+ * `.file-picker-modal` draws its surface with `background: var(--shell)` and
+ * `box-shadow: var(--shadow-xl)`. Both tokens are declared on `.gwrap` — the
+ * MASTER PAGE's wrapper — while the picker is mounted by `_app.tsx` as a
+ * sibling of the page, outside that wrapper entirely. Out of scope, `var()`
+ * resolves to nothing, the declarations go invalid-at-computed-value-time, and
+ * the longhands fall back to their initial values: `transparent` and `none`.
+ *
+ * So the picker was a see-through rectangle over the Add-workspace modal. It
+ * was on top (#86 saw to that) and clickable, and it still READ as being
+ * behind, because the modal showed straight through it.
+ *
+ * The guard is the general one rather than "`--shell` must be global": every
+ * custom property the picker's own rules consume has to be declared in a scope
+ * the picker actually inherits from. That catches the next token someone
+ * reaches for as well as this one — which is the bit that kept recurring.
+ */
+describe('Overlay token scope (genie #114)', () => {
+    /** The rules FilePickerModal's markup actually lands on. */
+    const isPickerRule = (sel: string) =>
+        sel.includes('.file-picker') ||
+        sel.includes('.ctx-scrim') ||
+        sel.includes('.agent-form-btn');
+
+    /**
+     * Scopes the picker inherits from, once it is portaled into the overlay
+     * host: `<html class="dark">` → `<body>` → the host. So `:root` / `.dark`
+     * in globals.css, plus whatever the host's own class declares.
+     */
+    const inScope = new Set([
+        ...declaredBy(GLOBALS, (sel) => sel === ':root' || sel === '.dark'),
+        ...declaredBy(CSS, (sel) => sel === ':root'),
+        ...declaredBy(CSS, (sel) =>
+            sel.split(',').some((s) => s.trim() === `.${OVERLAY_ROOT_CLASS}`),
+        ),
+    ]);
+
+    it('declares every token the picker paints itself with in a scope it inherits', () => {
+        const missing = [...consumedBy(CSS, isPickerRule)].filter((t) => !inScope.has(t));
+        expect(
+            missing,
+            `the picker consumes ${missing.join(', ')} but nothing in its ancestor chain ` +
+                `declares them — those properties compute to their initial value ` +
+                `(background: transparent, box-shadow: none), which is what made the ` +
+                `panel see-through over the modal that launched it`,
+        ).toEqual([]);
+    });
+
+    it('gives the overlay host the SAME surface tokens as the in-page chrome', () => {
+        // Sharing one declaration is the point: a token added for `.gwrap`
+        // later must reach portaled overlays too, or this bug returns for
+        // whichever surface reaches for it first.
+        const gwrap = declaredBy(CSS, (sel) =>
+            sel.split(',').some((s) => s.trim() === '.gwrap'),
+        );
+        const host = declaredBy(CSS, (sel) =>
+            sel.split(',').some((s) => s.trim() === `.${OVERLAY_ROOT_CLASS}`),
+        );
+        expect(gwrap.size, '.gwrap should declare Genie surface tokens').toBeGreaterThan(0);
+        expect([...gwrap].filter((t) => !host.has(t))).toEqual([]);
+    });
+
+    it('adds a layer, not a box — the host must not disturb page flow', () => {
+        const host = rules(CSS).find(
+            (r) => r.selector.split(',').some((s) => s.trim() === `.${OVERLAY_ROOT_CLASS}`)
+                && /display\s*:/.test(r.body),
+        );
+        expect(host, `.${OVERLAY_ROOT_CLASS} should set a display`).toBeTruthy();
+        expect(host!.body).toContain('display: contents');
     });
 });

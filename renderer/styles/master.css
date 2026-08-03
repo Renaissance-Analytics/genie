@@ -46,6 +46,21 @@
     z-index: var(--z-fancy-overlay);
 }
 
+/* --- Genie's own top layer (genie #114) --------------------------------------
+   `--z-picker` only outranks the Fancy layer while every ancestor of the thing
+   carrying it is stacking-context-free — one `transform`/`filter`/`contain` on
+   an ancestor traps the subtree and the number quietly stops meaning anything.
+   So Genie's always-on-top overlays don't render in place: they portal into
+   this host, which `ensureOverlayRoot` keeps as a direct child of `<body>`
+   (renderer/lib/overlay-root.ts). Answerable to the root stacking context,
+   nothing else, whatever page or modal opened them.
+   `display: contents` because it must add a LAYER, never a box — the same
+   trick react-fancy's own portal wrapper uses. It also carries Genie's surface
+   tokens; see the shared declaration further down. */
+.genie-overlay-root {
+    display: contents;
+}
+
 .gwrap {
     width: 100%;
     min-height: 100vh;
@@ -73,7 +88,19 @@
     50% { opacity: 1; transform: scale(1.12); }
 }
 
-.gwrap {
+/* Genie's surface tokens.
+   `.gwrap` is the master page's wrapper, so for a long time this WAS the app
+   and scoping the tokens here was invisible. It stopped being invisible the
+   moment something rendered outside it: `#genie-overlay-root` is a body child
+   (see renderer/lib/overlay-root.ts), and a picker portaled into it resolved
+   `var(--shell)` to nothing — `background` went invalid-at-computed-value-time
+   and fell back to `transparent`, so the Add-workspace modal showed straight
+   through the panel and it read as being BEHIND the modal (genie #114).
+   One declaration for both scopes, not two: a token added for the in-page
+   chrome must reach portaled overlays or the bug returns for whatever reaches
+   for it next. `renderer/lib/__tests__/overlay-layers.test.ts` pins that. */
+.gwrap,
+.genie-overlay-root {
     --term-bg: #0b0b0f;
     --term-head: #101015;
     --term-fg: #d4d4d8;
