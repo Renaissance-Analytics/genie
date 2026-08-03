@@ -1955,7 +1955,9 @@ app.whenReady().then(async () => {
  * `GENIE_E2E_PAGE` (default `e2e-issuewatch`), which mounts a real flyout open
  * against the scriptable mock (main/e2e/mock.ts). Each spec picks its page:
  *   - `e2e-issuewatch` → IssueWatchFlyout (device-flow reconnect),
- *   - `e2e-ghcaps`     → GithubCapabilitiesFlyout (per-install resolve flow).
+ *   - `e2e-ghcaps`     → GithubCapabilitiesFlyout (per-install resolve flow),
+ *   - `e2e-hosting`    → the Hosting Manager: the workstation settings section
+ *     plus the per-workspace panel, against the fixture in main/e2e/hosting.ts.
  * Plain BrowserWindow, shown immediately so Playwright can attach to its first
  * window.
  */
@@ -1968,6 +1970,7 @@ function showE2EWindow(): void {
         'e2e-issuewatch',
         'e2e-agent-access',
         'e2e-picker-layer',
+        'e2e-hosting',
     ] as const;
     const page = (ALLOWED as readonly string[]).includes(requested)
         ? requested

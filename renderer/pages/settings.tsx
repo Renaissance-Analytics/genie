@@ -3414,8 +3414,11 @@ function RemoteHostCard() {
  *
  * All the judgements render from pure functions in `lib/workstation-dev-server.ts`
  * (the renderer test env has no DOM); this is the wiring.
+ *
+ * Exported for the `e2e-hosting` harness page, which mounts THIS component
+ * (never a stand-in) so the E2E spec drives the shipped surface.
  */
-function DevServerSection({
+export function DevServerSection({
     genieBrowserEnabled,
     onGenieBrowserChange,
 }: {

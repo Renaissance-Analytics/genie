@@ -1,0 +1,328 @@
+import { test, expect, type ElectronApplication, type Page } from '@playwright/test';
+import {
+    hostingRuntimeUnavailable,
+    launchGenieE2E,
+    readHostingState,
+    resetHosting,
+} from './helpers/launch';
+
+/**
+ * E2E for the HOSTING MANAGER (genie #234) — both surfaces, in the running app.
+ *
+ * ## What this covers that nothing else can
+ *
+ * The judgements are already unit-tested as pure functions
+ * (`renderer/lib/workstation-dev-server.ts`, `renderer/lib/dev-server.ts`) and
+ * the container layer is proven against a REAL runtime separately. Neither
+ * touches the thing in between: a mounted React tree wired to live IPC. Every
+ * assertion below is about that seam —
+ *
+ *   - the machine's report reaching the page at all (a `dev:workstation` that
+ *     resolves into a component that never re-renders looks like "no Docker"),
+ *   - a tab switch actually SWAPPING the list rather than stacking three,
+ *   - a destructive stop WAITING for its confirmation — asserted on the call
+ *     log, because a dialog that fires anyway looks identical on screen,
+ *   - the page repainting from the `dev-server:changed` PUSH, not just at mount,
+ *   - the add-a-site picker keeping the port in step with the chosen option,
+ *   - the panel's reframed copy: production parity, never "dev server".
+ *
+ * ## Why it is deterministic without Docker
+ *
+ * The CI runners have no container runtime (the macOS one cannot have one), so
+ * waiting on a real container would make this either skipped everywhere or a
+ * flake generator. `main/e2e/hosting.ts` — active ONLY under
+ * `GENIE_E2E_HOSTING=1`, i.e. only for this spec's launch — answers the six
+ * `dev:*` channels from an in-memory fixture shaped exactly like what
+ * `workstationDevServerInfo` / `runManageSite` / `runManageService` return. The
+ * components, the pure judgements and the push wiring are all REAL; only the
+ * containers are not. BOTH runtime states are fixture values, so "Docker is
+ * running" and "Docker is installed but stopped" are equally deterministic on a
+ * runner that has neither.
+ *
+ * Each test resets that fixture and reloads the harness, so a test that stops an
+ * engine cannot hand the next one a different machine.
+ */
+
+let app: ElectronApplication;
+let page: Page;
+
+/** The open modal — the per-workspace Hosting panel, or the stop confirmation.
+ *  Never both at once, and each test says which one it opened. */
+const MODAL = '[data-react-fancy-modal]';
+/** The engine rows of whichever machine-level group tab is showing. */
+const ENGINES = '.ws-engines';
+
+test.beforeAll(async () => {
+    ({ app, page } = await launchGenieE2E('hosting'));
+});
+
+test.afterAll(async () => {
+    await app?.close();
+});
+
+test.beforeEach(async () => {
+    await resetHosting(app);
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    // The section paints 'Checking…' until `dev:workstation` answers; every
+    // test starts from the settled read.
+    await expect(page.locator('.set-row', { hasText: 'Docker or Podman' })).toContainText(
+        'Docker 27.1.1',
+    );
+});
+
+/** Open the per-workspace Hosting panel and wait for its first read. */
+async function openPanel(p: Page) {
+    await p.getByTestId('open-hosting-panel').click();
+    const modal = p.locator(MODAL);
+    await expect(modal).toBeVisible();
+    return modal;
+}
+
+// --- the workstation page ---------------------------------------------------
+
+test('the workstation page reports what THIS machine can build and serve', async () => {
+    // The runtime verdict, and every candidate behind it. "docker: found,
+    // engine unreachable" is the line that ends a support thread — a page that
+    // prints only the verdict cannot tell "install it" from "start it".
+    const probes = page.locator('.ws-probes');
+    await expect(probes).toContainText('Docker 27.1.1 — running');
+    await expect(probes).toContainText('Podman — not installed');
+
+    // The base image + the toolchain it brings. These are read from a constant
+    // mirrored off the image's Dockerfile precisely so rendering this page
+    // never pulls gigabytes — so their ABSENCE here is a real regression.
+    const devImage = page.locator('.set-row', { hasText: 'genie-dev-base' });
+    await expect(devImage).toContainText('ghcr.io/wishborn/genie-dev-base:1');
+    await expect(devImage).toContainText('Downloaded');
+    const toolchain = page.locator('.ws-toolchain');
+    await expect(toolchain).toContainText('Node 22.11.0');
+    await expect(toolchain).toContainText('npm 10 · pnpm 9');
+    await expect(toolchain).toContainText('PHP 8.3');
+    await expect(toolchain).toContainText('Python 3.12');
+
+    // The shared-services inventory, GROUPED. The counts are the assertion: a
+    // flat list of a dozen catalog rows buries the one that is running.
+    await expect(page.getByRole('tab', { name: 'Running (1)' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'On this machine (1)' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Available (1)' })).toBeVisible();
+
+    // And WHO is on the running one — the sentence that makes a machine-level
+    // stop honest.
+    await expect(page.locator(ENGINES)).toContainText(
+        'Shared with 3 workspaces: Tynn, Guardian and Hosting E2E.',
+    );
+});
+
+test('switching engine groups SWAPS the list — the three are not one long page', async () => {
+    const engines = page.locator(ENGINES);
+    await expect(engines.getByText('Postgres 16', { exact: true })).toBeVisible();
+
+    await page.getByRole('tab', { name: 'On this machine (1)' }).click();
+    await expect(page.getByRole('tab', { name: 'On this machine (1)' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+    );
+    // The state assertion: the previous group's row is GONE, not merely scrolled
+    // past. A panel that renders all three at once passes every "is the text
+    // there" check and ships a broken page.
+    await expect(engines.getByText('Postgres 16', { exact: true })).toHaveCount(0);
+    await expect(engines.getByText('Redis 7', { exact: true })).toBeVisible();
+    // Pulled once, never started — the state nothing else in Genie reports, and
+    // usually the answer to "what is taking up my disk".
+    await expect(engines).toContainText('Its container exists but is stopped');
+
+    await page.getByRole('tab', { name: 'Available (1)' }).click();
+    await expect(engines.getByText('Redis 7', { exact: true })).toHaveCount(0);
+    await expect(engines.getByText('MySQL 8', { exact: true })).toBeVisible();
+    await expect(engines).toContainText('Not on this machine.');
+    // Nothing uses it, so there is nothing to start: a Start that would fail
+    // every time is worse than no Start.
+    await expect(engines.getByRole('button', { name: 'Start', exact: true })).toHaveCount(0);
+});
+
+test('stopping a SHARED engine asks first, names who it takes down, and does NOT fire on cancel', async () => {
+    const row = page.locator('.ws-engine', { hasText: 'Postgres 16' });
+    await row.getByRole('button', { name: 'Stop', exact: true }).click();
+
+    const confirm = page.locator(MODAL);
+    await expect(confirm).toBeVisible();
+    await expect(confirm.getByRole('heading', { name: 'Stop Postgres 16?' })).toBeVisible();
+    // Not "are you sure" — the count AND the names, because the hazard is
+    // stopping "your" database and taking three other projects offline.
+    await expect(confirm).toContainText(
+        '3 workspaces (Tynn, Guardian and Hosting E2E) are using this engine right now.',
+    );
+    await expect(confirm).toContainText('Stopping it here stops it for all of them');
+
+    // THE assertion the DOM cannot make: nothing has been stopped yet. A confirm
+    // that renders and fires anyway looks exactly like one that waits.
+    expect((await readHostingState(app))?.calls.engine).toEqual([]);
+
+    await confirm.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.locator(MODAL)).toHaveCount(0);
+    expect(
+        (await readHostingState(app))?.calls.engine,
+        'cancelling a confirmed stop must not stop the engine',
+    ).toEqual([]);
+    // Still running for everyone.
+    await expect(page.getByRole('tab', { name: 'Running (1)' })).toBeVisible();
+
+    // Confirming DOES fire it — and the page re-reads, so the row leaves the
+    // running group and joins the installed one. Both halves matter: an action
+    // that fires but never repaints is the bug this surface is most likely to
+    // grow.
+    await row.getByRole('button', { name: 'Stop', exact: true }).click();
+    await page.locator(MODAL).getByRole('button', { name: 'Stop it for everyone' }).click();
+    await expect(page.getByRole('tab', { name: 'Running (0)' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'On this machine (2)' })).toBeVisible();
+    expect((await readHostingState(app))?.calls.engine).toEqual(['stop:postgres-16']);
+});
+
+test('losing the container runtime repaints the page from the PUSH — guided, not broken', async () => {
+    const row = page.locator('.ws-engine', { hasText: 'Postgres 16' });
+    await expect(row.getByRole('button', { name: 'Stop', exact: true })).toBeVisible();
+
+    // Docker Desktop quits. Main fires the REAL `dev-server:changed` broadcast;
+    // NOTHING here reloads the page. If the surface only reads at mount it stays
+    // frozen on a machine state that no longer exists — invisible in a
+    // screenshot, fatal in use.
+    await hostingRuntimeUnavailable(app);
+
+    // INSTALLED-but-stopped, not "no runtime": they need opposite advice, and
+    // telling someone to install what they already have is the failure that
+    // split exists to prevent.
+    await expect(page.locator('.set-row', { hasText: 'Docker or Podman' })).toContainText(
+        'A container runtime is installed but not running',
+    );
+    await expect(page.locator('.ws-probes')).toContainText('installed, engine not running');
+    // Guided: the next step is spelled out rather than left as a dead end.
+    await expect(
+        page.locator('.set-note', { hasText: 'start Docker Desktop' }),
+    ).toBeVisible();
+
+    // Actions that cannot work are withdrawn rather than left to fail.
+    await expect(row.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0);
+    await expect(row.getByRole('button', { name: 'Log', exact: true })).toHaveCount(0);
+});
+
+// --- the per-workspace Hosting panel ----------------------------------------
+
+test('the workspace Hosting panel leads with PRODUCTION parity, never "dev server"', async () => {
+    const modal = await openPanel(page);
+
+    await expect(modal.getByRole('heading', { name: 'Hosting — Hosting E2E' })).toBeVisible();
+    await expect(modal).toContainText(
+        'Every site is built and then served the way it runs in production.',
+    );
+    await expect(modal).toContainText('BUILT and then served the way it runs in production');
+
+    // The reframe, asserted as an ABSENCE: this panel used to be the "dev
+    // server". A site here is built and served the way it runs in production,
+    // and copy that still says otherwise sets the wrong expectation about what
+    // the container is.
+    const panelText = await modal.innerText();
+    expect(panelText, 'the Hosting panel must not still call itself a dev server').not.toMatch(
+        /dev server/i,
+    );
+
+    // The runtime banner, from the same live probe the workstation page reads.
+    await expect(modal).toContainText('Running containers with Docker 27.1.1.');
+
+    // Nothing hosted yet — the first thing a real user meets, and it points at
+    // the next step rather than showing an empty box.
+    await expect(modal).toContainText('Nothing hosted here yet.');
+    await expect(modal.getByRole('button', { name: 'Add a site…' })).toBeVisible();
+});
+
+test('add-a-site: the option picker moves the port with the choice, and says what it guessed', async () => {
+    const modal = await openPanel(page);
+    await modal.getByRole('button', { name: 'Add a site…' }).click();
+
+    const name = modal.getByLabel('Name for the new site');
+    const port = modal.getByLabel('The port the server listens on inside the container');
+    await expect(name).toBeVisible();
+    // Gated until it is named — a site with no name has no address to be
+    // reached at.
+    await expect(modal.getByRole('button', { name: 'Add & start' })).toBeDisabled();
+    await name.fill('web');
+    await expect(modal.getByRole('button', { name: 'Add & start' })).toBeEnabled();
+
+    // Read the repo. Until this runs there is nothing to choose between.
+    await modal.getByRole('button', { name: 'See how this repo could run' }).click();
+
+    const runAs = modal.locator('label.site-field', { hasText: 'Run it as' }).locator('select');
+    await expect(runAs).toBeVisible();
+    // Each option NAMES what it runs and WHICH repo file said so — "Node" alone
+    // does not let anyone judge whether the guess is right.
+    await expect(runAs.locator('option')).toHaveText([
+        'Node — Dockerfile',
+        'PHP — composer.json',
+    ]);
+    // The detected option's port is adopted, so the common path needs no typing.
+    await expect(port).toHaveValue('8000');
+    // A confident option makes no claims it cannot back.
+    await expect(modal.getByText('Check this before starting:')).toHaveCount(0);
+
+    // THE state assertion: change the choice and the port must follow it. When
+    // it does not, the site publishes the previous option's port, gets a
+    // connection refused, and reads as a Genie bug rather than a stale field.
+    await runAs.selectOption({ index: 1 });
+    await expect(port).toHaveValue('3000');
+    await expect(modal).toContainText(
+        'A Laravel app — served by FrankenPHP the way it runs in production.',
+    );
+    // And what was INFERRED is said out loud — an option whose port was
+    // defaulted rather than read looks exactly like a working site until it
+    // refuses the connection.
+    await expect(modal).toContainText(
+        'Check this before starting: the port was defaulted rather than read from the repo.',
+    );
+
+    // Nothing was created by looking: the flow stays a read until it is
+    // committed. `create` is what pulls an image and builds.
+    expect((await readHostingState(app))?.calls.site).not.toContain('create');
+});
+
+test('the Services view shows what this workspace uses, and what a stop would really do', async () => {
+    const modal = await openPanel(page);
+    await expect(modal).toContainText('Nothing hosted here yet.');
+
+    await modal.getByRole('tab', { name: 'Services (1)' }).click();
+
+    // The Sites view is gone, not merely below — the same swap assertion as the
+    // engine groups, on the panel's own tabs.
+    await expect(modal.getByText('Nothing hosted here yet.')).toHaveCount(0);
+
+    await expect(modal).toContainText('Postgres 16');
+    await expect(modal).toContainText('Running.');
+    // `stop` here is a RELEASE, and the panel has to say so: a user who thinks
+    // they stopped a database and finds it still up was misled by the button.
+    await expect(modal).toContainText(
+        "Shared with 3 workspaces. Stopping only releases THIS workspace's hold",
+    );
+    // Named honestly rather than flattened to "isolated" — this engine gives a
+    // server-enforced database + role; the namespace engines do not.
+    await expect(modal).toContainText(
+        'This workspace gets its own database and role on the shared engine',
+    );
+    // BOTH sides of the boundary in one field: the container-network address a
+    // sibling container dials, AND the loopback one psql needs. A connection
+    // string built from the wrong one fails every time.
+    await expect(
+        modal.locator('label.site-field', { hasText: 'postgres' }).locator('input'),
+    ).toHaveValue(/genie-postgres-16:5432.*127\.0\.0\.1:55432/);
+    await expect(modal).toContainText('Injects DATABASE_URL, PGHOST, PGDATABASE');
+
+    // What this workspace does NOT use yet is offered from the same `catalog`
+    // call, so the picker needs no second round trip.
+    await expect(modal.getByRole('button', { name: 'Redis' })).toBeVisible();
+    await expect(modal.getByRole('button', { name: 'Mailpit' })).toBeVisible();
+
+    // Closing the panel leaves the workstation page standing behind it. (The
+    // panel has no close button of its own — Escape and the backdrop are the
+    // only dismissals it offers.)
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('panel-closed')).toBeVisible();
+    await expect(page.locator('.set-row', { hasText: 'Docker or Podman' })).toBeVisible();
+});
