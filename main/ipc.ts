@@ -1407,7 +1407,7 @@ function broadcast(channel: string, payload: unknown): void {
  * The Genie Browser master switch (#232), as a refusal or `null`.
  *
  * Genie's own browser is what makes a `.gen` site openable at all, so it gets a
- * workstation-level switch on the Dev Server settings page — some owners want the
+ * workstation-level switch on the Hosting Manager settings page — some owners want the
  * embedded browser off entirely. Default ON: this only ever refuses when the
  * user has explicitly turned it off, and it refuses with a REASON, so the click
  * doesn't read as Genie being broken.
@@ -1416,7 +1416,7 @@ function genieBrowserDisabled(): { ok: false; error: string } | null {
     if (getAllSettings().genie_browser_enabled === 'off') {
         return {
             ok: false,
-            error: 'The Genie Browser is turned off — enable it in Settings → Dev Server.',
+            error: 'The Genie Browser is turned off — enable it in Settings → Hosting Manager.',
         };
     }
     return null;

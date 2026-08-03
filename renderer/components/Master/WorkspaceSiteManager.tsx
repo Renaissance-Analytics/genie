@@ -216,11 +216,13 @@ export default function WorkspaceSiteManager({
 
     return (
         <Modal open onClose={onClose} size="xl">
+            <Modal.Header>
+                <Heading as="h2" size="sm">
+                    Hosting — {workspace.project_name}
+                </Heading>
+            </Modal.Header>
             <div className="ws-settings site-manager">
                 <div className="ws-settings-head">
-                    <Heading as="h2" size="sm">
-                        Hosting — {workspace.project_name}
-                    </Heading>
                     <Text size="xs" className="text-zinc-500">
                         The sites this workspace hosts and the services behind them, each in a
                         container sandboxed to this workspace. Every site is built and then
