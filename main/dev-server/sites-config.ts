@@ -1,18 +1,19 @@
 import { createHash } from 'node:crypto';
 import { isDevFramework } from './host-allowlist';
 import type { DevFramework } from './host-allowlist';
-import type { DevSiteRunMode } from './site-def';
+import type { BuildStep, HostingRunMode, HostingStack, ProductionServer } from './serve-recipe';
+import type { BrowserProtocol, ExposedSurface } from './exposure';
 
 /**
- * PURE. The persisted per-workspace DEV SITE model (Tynn #234, P2 item 2).
+ * PURE. The persisted per-workspace HOSTED SITE model.
  *
- * The sibling of `hosting/sites-config.ts`, and deliberately a SEPARATE column
- * rather than more fields on `hosted_sites`, because the two describe different
- * substrates. A `hosted_sites` row is "Genie serves this document root with its
- * own native runtime" (the beta.218 path, PHP-first, host-native). A dev-site row
- * is "a container runs this command in the workspace sandbox and Genie routes its
- * published port". P4 retires the first; until then a workspace can hold both,
- * and mixing them into one blob would make that retirement a data migration.
+ * A hosted site is **a built artifact plus the production server that serves
+ * it**, running in the workspace's container sandbox and reachable at
+ * `https://<name>.gen`. So the stored shape is not "a command and a port" — it
+ * is a {@link DevSiteConfig.build} list, a {@link DevSiteConfig.serve} argv, the
+ * port that server listens on, and the browser-facing surfaces the site
+ * {@link DevSiteConfig.exposed}. `serve-recipe.ts` is where those come from and
+ * `site-build.ts` is what runs the first of them.
  *
  * ## Why the id is workspace-scoped
  *
@@ -29,10 +30,16 @@ import type { DevSiteRunMode } from './site-def';
  * Everything here reaches a container CLI as literal argv (`argv.ts` spawns with
  * `shell: false`), so this is not escaping — it is keeping the ARGUMENT GRAMMAR
  * intact. What is refused: a name that is not a DNS label (it becomes part of an
- * origin the browser trusts), a `command` that is not an array of strings (a
- * shell string would be passed as ONE argument and silently never run), a NUL
- * byte (unpassable to a process at all), and an env NAME that is not a variable
- * name (`--env` takes `NAME=value`, so a `=` in the name changes what is set).
+ * origin the browser trusts), a `serve`/`build` command that is not an array of
+ * strings (a shell string would be passed as ONE argument and silently never
+ * run), a NUL byte (unpassable to a process at all), and an env NAME that is not
+ * a variable name (`--env` takes `NAME=value`, so a `=` in the name changes what
+ * is set).
+ *
+ * An {@link ExposedSurface} gets one more check than the rest, because it is the
+ * only field that opens a port: it must carry a `reason` naming what the BROWSER
+ * needs it for. See `exposure.ts` — the boundary is only real if something
+ * enforces it, and this is the persistence half of that.
  */
 
 // --- the model -------------------------------------------------------------
@@ -44,35 +51,58 @@ export interface DevSiteConfig {
     genName: string;
     /** A repo subfolder (`repos/<repo>`), or '' for the workspace root. */
     repo: string;
-    runMode: DevSiteRunMode;
-    /** The image to run. Absent = the workspace dev image. */
+    runMode: HostingRunMode;
+    /** What is being hosted, when detection could tell (`php`, `static`, `go`). */
+    stack?: HostingStack;
+    /** Which production server holds the port (`frankenphp`, `gunicorn`, …). */
+    server?: ProductionServer;
+    /**
+     * The image the SERVER runs in. Absent = the workspace dev image.
+     *
+     * Routinely NOT the image the build ran in — a PHP site builds with Composer
+     * in the sandbox and serves from FrankenPHP; a front end builds with npm and
+     * serves from nginx. That split is the production model, not an accident.
+     */
     image?: string;
-    /** Literal argv run inside the container. */
-    command?: string[];
-    /** The port the server listens on INSIDE the container. */
+    /**
+     * The PRODUCTION BUILD, in order. Run in the workspace sandbox before the
+     * server starts (see `site-build.ts`). Empty for a site whose image builds
+     * itself.
+     */
+    build?: BuildStep[];
+    /** The production server's literal argv, run inside the site's container. */
+    serve?: string[];
+    /** The port the production server listens on INSIDE the container. */
     port?: number;
+    /**
+     * Extra BROWSER-FACING surfaces — a websocket, a gRPC endpoint.
+     *
+     * Only what the browser itself connects to. A database, a cache or an
+     * internal API the server calls is reached on the workspace network through
+     * the injected environment and never appears here. See `exposure.ts`.
+     */
+    exposed?: ExposedSurface[];
     env?: Record<string, string>;
     /** `http` is routable at `<genName>`; `tcp` is published and listed only. */
     kind: 'http' | 'tcp';
     /**
      * Which framework this site runs, when detection could tell.
      *
-     * Stored rather than re-derived because the argv usually cannot say it:
-     * `npm run dev -- --host 0.0.0.0` contains no token spelling "vite", and
-     * Vite is exactly the framework that rejects the `.gen` Host header. This
-     * is what `host-allowlist.ts` uses to keep the real Host working instead of
-     * falling back to {@link upstreamHost}.
+     * Stored rather than re-derived because the serve argv usually cannot say
+     * it: `npm run start` contains no token spelling "next", and a bare gunicorn
+     * invocation does not say "Django" — which is the framework whose
+     * `ALLOWED_HOSTS` will reject the `.gen` name. See `host-allowlist.ts`.
      */
     framework?: DevFramework;
     /**
-     * The `Host` header sent upstream. Defaults to {@link genName}, so the dev
-     * server sees the same origin the browser does and its absolute URLs,
-     * cookies and CSRF origin checks line up.
+     * The `Host` header sent upstream. Defaults to {@link genName}, so the app
+     * sees the same origin the browser does and its absolute URLs, cookies and
+     * CSRF origin checks line up.
      *
-     * Overridable because several frameworks check the Host against an allowlist
-     * they cannot know about — Vite's `server.allowedHosts`, Django's
-     * `ALLOWED_HOSTS`, Rails' `hosts`. Setting `localhost` here is the one-field
-     * escape from a "Blocked request" page.
+     * Overridable because some frameworks check the Host against an allowlist
+     * they cannot know about — Django's `ALLOWED_HOSTS` is the one that still
+     * applies in production. Setting `localhost` here is the one-field escape
+     * from a "Bad Request (400)" page.
      */
     upstreamHost?: string;
     /** Strict opt-in: nothing runs until this is true. */
@@ -92,13 +122,35 @@ const IMAGE_REF = /^[a-zA-Z0-9][a-zA-Z0-9._\-/:@]{0,254}$/;
 /** Environment names we will put on a command line. */
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-const RUN_MODES: readonly DevSiteRunMode[] = [
+const RUN_MODES: readonly HostingRunMode[] = [
     'dockerfile',
     'devcontainer',
     'compose',
-    'detected',
+    'recipe',
     'explicit',
 ];
+
+const STACKS: readonly HostingStack[] = ['php', 'node', 'static', 'python', 'go', 'rust'];
+
+const SERVERS: readonly ProductionServer[] = [
+    'frankenphp',
+    'node',
+    'nginx',
+    'gunicorn',
+    'uvicorn',
+    'binary',
+];
+
+const PROTOCOLS: readonly BrowserProtocol[] = ['http', 'ws', 'grpc', 'tcp'];
+
+/** A literal argv: every token a string, none carrying a NUL. A whole-command
+ *  STRING is rejected rather than split — splitting needs shell quoting rules,
+ *  and passing it as one argument fails in a way nobody can read. */
+function cleanArgv(value: unknown): string[] | null {
+    if (!Array.isArray(value) || value.length === 0) return null;
+    if (!value.every((t) => typeof t === 'string' && !t.includes('\0'))) return null;
+    return [...(value as string[])];
+}
 
 // --- identity ---------------------------------------------------------------
 
@@ -181,14 +233,47 @@ export function sanitizeDevSitePatch(
         if (image && IMAGE_REF.test(image)) out.image = image;
     }
 
-    if (Array.isArray(patch.command)) {
-        // Every token must be a string with no NUL. A whole-command STRING is
-        // rejected rather than split: splitting it would need shell quoting
-        // rules, and passing it as one argument fails in a way nobody can read.
-        const command = patch.command;
-        if (command.every((t) => typeof t === 'string' && !t.includes('\0'))) {
-            if (command.length) out.command = [...command];
+    if (patch.stack && STACKS.includes(patch.stack)) out.stack = patch.stack;
+    if (patch.server && SERVERS.includes(patch.server)) out.server = patch.server;
+
+    const serve = cleanArgv(patch.serve);
+    if (serve) out.serve = serve;
+
+    if (Array.isArray(patch.build)) {
+        const build: BuildStep[] = [];
+        for (const step of patch.build) {
+            if (!step || typeof step !== 'object') continue;
+            const command = cleanArgv((step as BuildStep).command);
+            if (!command) continue;
+            const label = String((step as BuildStep).label ?? '').trim().slice(0, 120);
+            build.push({
+                // A step with no label still runs; showing the argv beats
+                // showing an empty progress line.
+                label: label || command.join(' '),
+                command,
+                ...((step as BuildStep).optional ? { optional: true } : {}),
+            });
         }
+        out.build = build;
+    }
+
+    if (Array.isArray(patch.exposed)) {
+        const exposed: ExposedSurface[] = [];
+        for (const surface of patch.exposed) {
+            if (!surface || typeof surface !== 'object') continue;
+            const s = surface as ExposedSurface;
+            const name = String(s.name ?? '').trim().toLowerCase();
+            const reason = String(s.reason ?? '').trim();
+            if (!DNS_LABEL.test(name)) continue;
+            // The boundary, enforced at the point of STORAGE as well as at the
+            // point of use: a surface that cannot say what the browser needs it
+            // for is not persisted, so it cannot be quietly re-applied later.
+            if (!reason) continue;
+            if (!PROTOCOLS.includes(s.protocol)) continue;
+            if (!Number.isInteger(s.port) || s.port < 1 || s.port > 65535) continue;
+            exposed.push({ name, port: s.port, protocol: s.protocol, reason: reason.slice(0, 400) });
+        }
+        out.exposed = exposed;
     }
 
     if (typeof patch.port === 'number' && Number.isInteger(patch.port)) {

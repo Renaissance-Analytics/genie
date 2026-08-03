@@ -89,8 +89,40 @@ so it doesn't depend on the later native-module-touching startup (terminal
 backend, MCP/control servers) completing. The flyout only needs IPC + the
 renderer, both ready at that point.
 
+### The Hosting Manager harness (`GENIE_E2E_HOSTING=1`)
+
+`main/e2e/hosting.ts` does for the container Dev Server what the mock above does
+for GitHub, and is scoped to its OWN flag — `launchGenieE2E('hosting')` sets it,
+nothing else does, so no other spec ever runs against a faked hosting backend.
+
+It overrides the six `dev:*` channels (`dev:workstation`, `dev:runtime-status`,
+`dev:site`, `dev:service`, `dev:repos`, `dev:engine`) with an in-memory fixture
+shaped exactly like what `workstationDevServerInfo` / `runManageSite` /
+`runManageService` return. That is what makes the hosting spec deterministic on
+CI runners with **no container runtime** (the macOS one cannot have one): both
+"Docker is running" and "Docker is installed but stopped" are fixture values.
+The components, the pure judgements and the `dev-server:changed` push are all
+real; only the containers are not — the container function itself is proven
+separately against a live runtime.
+
+The spec scripts it through `globalThis.__GENIE_E2E_HOSTING__`
+(`readHostingState` / `resetHosting` / `hostingRuntimeUnavailable` in
+`helpers/launch.ts`): read the call log, reset between tests, and take the
+runtime away mid-session with a REAL broadcast so the page has to repaint from
+the push rather than from a reload.
+
 ## Tests
 
+- `hosting-manager.spec.ts` — the Hosting Manager, both surfaces: the
+  workstation settings page (runtime probes, dev-base toolchain, the grouped
+  shared-engine inventory) and the per-workspace Hosting panel
+  (`WorkspaceSiteManager`). The assertions are the ones only a running UI can
+  make — an engine-group tab switch SWAPPING the list, a shared-engine stop
+  waiting for its confirmation (asserted on the main-side call log, since a
+  dialog that fires anyway looks identical on screen), the page repainting from
+  the `dev-server:changed` push when the runtime goes away, the add-a-site
+  picker moving the port with the chosen option, and the panel's reframed copy
+  (production parity, never "dev server").
 - `issuewatch-reconnect.spec.ts` — the device-flow reconnect regression:
   dead-session banner + precise 401 line render → click Reconnect → the device
   user code **stays visible across ≥2 `github:status` polls** while the flow is

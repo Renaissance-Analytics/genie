@@ -25,8 +25,6 @@ import {
     getWorkspaceIssuewatchHandlers,
     setWorkspaceIssuewatchHandlers,
     listWorkspaceIssuewatchAgents,
-    getWorkspaceTunnelSites,
-    setWorkspaceTunnelSite,
     setSettings,
     touchWorkspace,
     updateWorkspace,
@@ -58,7 +56,6 @@ import {
     repairWorkspaceDocs,
 } from './workspace/create-agi';
 import { analyseFolder } from './workspace/analyse';
-import { discoverSites, type TunnelSiteConfig } from './mobile/hosts';
 import { validateSimpleWorkspace } from './workspace/create-simple';
 import { openWorkspace } from './workspace/open';
 import { cloneRepo } from './workspace/clone';
@@ -159,6 +156,8 @@ import { listLocalEnabledGenSites } from './sites/local-sites';
 import { runManageSite, runtimeInfo } from './mcp/dev-site-tools';
 import { runManageService } from './mcp/dev-service-tools';
 import { devLifecycle } from './dev-server/lifecycle';
+import { workstationDevServerInfo, workstationEngineAction } from './dev-server/workstation';
+import type { EngineActionRequest } from './dev-server/services/service-manager';
 import type { ManageServiceRequest, ManageSiteRequest } from './mcp/protocol';
 import { remoteGenUrl } from './sites/gen-url';
 import {
@@ -490,31 +489,10 @@ export function registerIpcHandlers(): void {
         },
     );
 
-    // --- serve-local-sites (Phase B): discovery + the per-repo `.gen` allowlist.
-    // `sites:list` discovers THIS host's loopback dev sites (hosts-file parse +
-    // loopback probe) merged with the workspace's stored tunnel settings; the
-    // per-workspace map is the allowlist. `sites:set` persists ONE site's config
-    // keyed by the opaque siteId. Same discovery a remote reaches over /api/sites.
-    ipcMain.handle(
-        'sites:list',
-        (_e, workspaceId?: string, opts?: { refresh?: boolean }) => {
-            const settings = workspaceId ? getWorkspaceTunnelSites(workspaceId) : {};
-            return discoverSites(settings, opts);
-        },
-    );
-    ipcMain.handle(
-        'sites:set',
-        (_e, workspaceId: string, siteId: string, patch: TunnelSiteConfig) => {
-            setWorkspaceTunnelSite(workspaceId, siteId, patch);
-            return { ok: true };
-        },
-    );
-
     // --- the container DEV SERVER (#234) -----------------------------------
-    // The sibling of `sites:*` above, and its opposite: those carry what
-    // something ELSE on this machine serves, these are the dev servers GENIE
-    // runs — a container in the workspace's sandbox, published to loopback and
-    // routed at `<name>.gen`.
+    // The dev servers GENIE runs — a container in the workspace's sandbox,
+    // published to loopback and routed at `<name>.gen`. Since the hosts-file
+    // source was retired this is the ONLY thing that makes a `.gen` site exist.
     //
     // TWO channels, not twenty, and each is the MCP tool with the agent's
     // authorization swapped for the window's own workspace. The discovery made
@@ -538,6 +516,18 @@ export function registerIpcHandlers(): void {
     // Which runtime is driving, or why none is. A pure probe — the Workstation
     // settings page must never start a download by being looked at.
     ipcMain.handle('dev:runtime-status', () => runtimeInfo());
+    // The MACHINE's Dev Server: the container runtime, what the dev base image
+    // provides, and every shared service ENGINE — installed, running, and who
+    // holds it. Machine-level because a service engine is: one container serves
+    // every workspace on the same (engine, major), so no workspace can answer
+    // for it. Also a pure read; nothing here pulls or starts anything.
+    ipcMain.handle('dev:workstation', () => workstationDevServerInfo());
+    // … and the one WRITE that belongs at this level: start / stop / logs for a
+    // shared engine. Routed through the service manager so the reference count
+    // follows the container rather than being quietly invalidated behind it.
+    ipcMain.handle('dev:engine', (_e, req: EngineActionRequest) =>
+        workstationEngineAction(req ?? { recordKey: '', action: 'logs' }),
+    );
     // The repos a site can be created against, so the picker offers them rather
     // than asking a user to type a subfolder name that has to match exactly.
     ipcMain.handle('dev:repos', (_e, workspaceId: string) => {
@@ -552,10 +542,11 @@ export function registerIpcHandlers(): void {
 
 
     // `sites:all` — the header `.gen` popover's data, CONTEXTUAL to the window it
-    // was asked from: a LOCAL Genie window lists THIS machine's enabled `.gen`
-    // sites; a HOST window (driving a remote Genie) lists THAT host's enabled
-    // sites. Never a mix — the globe always shows the sites of the machine the
-    // window represents. Enabled-only, never the raw hosts file.
+    // was asked from: a LOCAL Genie window lists THIS machine's `.gen` sites; a
+    // HOST window (driving a remote Genie) lists THAT host's. Never a mix — the
+    // globe always shows the sites of the machine the window represents. Only
+    // sites a Dev Server is actually SERVING appear, so the globe can never
+    // offer a name that resolves nowhere.
     ipcMain.handle('sites:all', async (e) => {
         const connKey = connKeyForWindow(e.sender.id);
         try {
@@ -1416,7 +1407,7 @@ function broadcast(channel: string, payload: unknown): void {
  * The Genie Browser master switch (#232), as a refusal or `null`.
  *
  * Genie's own browser is what makes a `.gen` site openable at all, so it gets a
- * workstation-level switch on the hosting settings page — some owners want the
+ * workstation-level switch on the Hosting Manager settings page — some owners want the
  * embedded browser off entirely. Default ON: this only ever refuses when the
  * user has explicitly turned it off, and it refuses with a REASON, so the click
  * doesn't read as Genie being broken.
@@ -1425,7 +1416,7 @@ function genieBrowserDisabled(): { ok: false; error: string } | null {
     if (getAllSettings().genie_browser_enabled === 'off') {
         return {
             ok: false,
-            error: 'The Genie Browser is turned off — enable it in Settings → Dev Server.',
+            error: 'The Genie Browser is turned off — enable it in Settings → Hosting Manager.',
         };
     }
     return null;

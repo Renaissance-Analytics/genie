@@ -56,10 +56,9 @@ describe('remote (restricted) Settings', () => {
             'general',
             'workspaces',
             'mobile',
-            'sites',
-            // The Dev Server configures THIS machine's container runtime and
-            // its own browser — a driving window would be editing the wrong
-            // machine.
+            // The Dev Server configures THIS machine's container runtime, its
+            // shared service engines and its own browser — a driving window
+            // would be editing the wrong machine.
             'dev-server',
             'connections',
             'devices',

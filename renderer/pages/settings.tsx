@@ -8,10 +8,16 @@ import React, {
 } from 'react';
 import {
     Action,
+    Badge,
+    Callout,
+    CodeView,
+    Heading,
     Icon,
     Input,
+    Modal,
     Select,
     Switch,
+    Tabs,
     Text,
 } from '@particle-academy/react-fancy';
 import {
@@ -30,13 +36,20 @@ import {
     type MarketplaceView,
     type OfficialPluginsResult,
     type PluginDeveloperModeState,
-    type SiteView,
-    type SiteScheme,
-    type DevRuntimeInfo,
-    type TunnelSiteConfig,
+    type DevEngineInfo,
+    type DevWorkstationInfo,
     type WorkspaceRow,
 } from '../lib/genie';
-import { runtimeSummary } from '../lib/dev-server';
+import { isolationNote } from '../lib/dev-server';
+import {
+    engineActionAvailability,
+    engineGroups,
+    engineStatusLabel,
+    engineStatusTone,
+    engineUsageNote,
+    runtimeDiagnostics,
+    stopEngineWarning,
+} from '../lib/workstation-dev-server';
 import {
     NAV_GROUPS,
     filterNavGroups,
@@ -254,8 +267,8 @@ export default function SettingsPage() {
                     label="Keep terminals running after quit"
                     desc={s.detached_terminals === 'off'
                         ? 'Off — quitting or updating Genie will close every terminal and agent. Turn this on to preserve them and reattach on next launch.'
-                        : 'On by default. Runs terminals in a detached background process so dev servers, shells, and the agents running in them survive a full quit of Genie and reattach on next launch. Falls back to in-process terminals if the background process can’t start.'}
-                    keywords="detached terminals keep running quit background survive reattach dev server"
+                        : 'On by default. Runs terminals in a detached background process so long-running commands, shells, and the agents running in them survive a full quit of Genie and reattach on next launch. Falls back to in-process terminals if the background process can’t start.'}
+                    keywords="detached terminals keep running quit background survive reattach"
                 >
                     <Switch
                         checked={s.detached_terminals === 'on'}
@@ -615,25 +628,14 @@ export default function SettingsPage() {
                 })}
                 port={s.mobile_port ?? '51718'}
                 onPortChange={(v) => patch({ mobile_port: v })}
-                localSitesEnabled={s.local_sites_enabled === 'on'}
-                onLocalSitesChange={(on) =>
-                    patch({ local_sites_enabled: on ? 'on' : 'off' })
-                }
                 persistSettings={save}
             />
             <RemoteHostCard />
 
                             </SearchGroup>
                         )}
-                        {show('sites') && (
-                            <SearchGroup label=".gen Sites" searching={searching}>
-
-            <SitesSection activeWorkspace={s.active_workspace} />
-
-                            </SearchGroup>
-                        )}
                         {show('dev-server') && (
-                            <SearchGroup label="Dev Server" searching={searching}>
+                            <SearchGroup label="Hosting Manager" searching={searching}>
 
             <DevServerSection
                 genieBrowserEnabled={s.genie_browser_enabled !== 'off'}
@@ -3326,7 +3328,7 @@ function RemoteHostCard() {
                                         size="sm"
                                         color="green"
                                         icon="globe"
-                                        title="Open the Testing Browser to view this host's local dev sites (*.gen) with a valid https lock"
+                                        title="Open the Testing Browser to view this host's hosted sites (*.gen) with a valid https lock"
                                         onClick={() =>
                                             void api().testingBrowser.open(
                                                 connKeys[key],
@@ -3386,33 +3388,64 @@ function RemoteHostCard() {
 }
 
 /**
- * Settings → Dev Server (Tynn #234) — the WORKSTATION half of the container
- * Dev Server.
+ * Settings → Hosting Manager — the WORKSTATION view: what this MACHINE can
+ * build and serve, and what it is serving.
  *
- * The split is deliberate (owner decision, 2026-08-01): WHICH sites a workspace
- * serves is per-workspace and lives in its Site Manager; whether this MACHINE
- * has a container runtime to run them and a browser to view them in is
- * workstation-level and lives here, with the diagnostics.
+ * ## Why a machine-level page
  *
- * The diagnostics answer the two questions a dead preview raises — is there a
- * runtime, and is the browser on — so the answer is one page rather than a
- * support conversation. Everything here is a READ: opening this page must never
- * pull an image or start a container as a side effect of being looked at.
+ * Everything else in the Hosting Manager is scoped to a workspace, because a
+ * site is: one container, one project, gone when the project is. Three things
+ * are not. The container RUNTIME is a property of the computer. The base IMAGE
+ * is pulled once and mounted into every workspace. And a service ENGINE is
+ * SHARED — one `postgres:16` serves every workspace pinned to Postgres 16, with
+ * a reference-counted lifecycle across all of them. None of those has a
+ * workspace to belong to, and a workspace panel answering for them is how a
+ * user stops "their" database and takes five other projects down with it.
+ *
+ * So the split is: WHICH sites a project HOSTS and which services it uses
+ * lives in its Site Manager; WHAT exists on this machine, and the shared
+ * engines' start/stop, live here.
+ *
+ * ## Everything is a READ until you press something
+ *
+ * Opening this page never pulls an image, builds anything or starts a
+ * container. A settings page that downloads several gigabytes because someone
+ * looked at it is the failure this rule exists to prevent.
+ *
+ * All the judgements render from pure functions in `lib/workstation-dev-server.ts`
+ * (the renderer test env has no DOM); this is the wiring.
+ *
+ * Exported for the `e2e-hosting` harness page, which mounts THIS component
+ * (never a stand-in) so the E2E spec drives the shipped surface.
  */
-function DevServerSection({
+export function DevServerSection({
     genieBrowserEnabled,
     onGenieBrowserChange,
 }: {
     genieBrowserEnabled: boolean;
     onGenieBrowserChange: (on: boolean) => void;
 }) {
-    const [runtime, setRuntime] = useState<DevRuntimeInfo | null>(null);
+    const [info, setInfo] = useState<DevWorkstationInfo | null>(null);
+    const [engineTab, setEngineTab] = useState('active');
+    /** The row with an action in flight — disables just that row. */
+    const [busy, setBusy] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    /** The one engine whose log is open, and its tail. */
+    const [logs, setLogs] = useState<{ recordKey: string; text: string } | null>(null);
+    /** A stop that would hit other workspaces, held until it is confirmed. */
+    const [confirmStop, setConfirmStop] = useState<DevEngineInfo | null>(null);
 
     const refresh = useCallback(() => {
         void api()
-            .devServer.runtimeStatus()
-            .then(setRuntime)
-            .catch(() => setRuntime({ kind: 'none' }));
+            .devServer.workstation()
+            .then(setInfo)
+            .catch(() =>
+                setInfo({
+                    runtime: { kind: 'none', probes: [] },
+                    devBase: { image: '', installed: false, toolchain: [] },
+                    engines: [],
+                }),
+            );
     }, []);
 
     useEffect(() => {
@@ -3422,481 +3455,409 @@ function DevServerSection({
         return api().on.devServerChanged(refresh);
     }, [refresh]);
 
-    const summary = runtimeSummary(runtime);
+    const runtime = info ? runtimeDiagnostics(info) : null;
+    const groups = engineGroups(info?.engines ?? []);
+
+    const act = async (engine: DevEngineInfo, action: 'start' | 'stop' | 'logs') => {
+        setBusy(engine.recordKey);
+        setError(null);
+        try {
+            const res = await api().devServer.engine({
+                recordKey: engine.recordKey,
+                action,
+                ...(action === 'logs' ? { tail: 200 } : {}),
+            });
+            if (!res.ok && res.error) setError(res.error);
+            if (action === 'logs' && res.ok) {
+                setLogs({ recordKey: engine.recordKey, text: res.logs ?? '' });
+            }
+            refresh();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    /** A stop is the one action that can hurt someone else, so it asks first —
+     *  but only when there IS someone else. Confirming a harmless stop trains
+     *  people to click through the one that matters. */
+    const stop = (engine: DevEngineInfo) => {
+        if (stopEngineWarning(engine)) setConfirmStop(engine);
+        else void act(engine, 'stop');
+    };
+
+    const toggleLog = (engine: DevEngineInfo) => {
+        if (logs?.recordKey === engine.recordKey) setLogs(null);
+        else void act(engine, 'logs');
+    };
 
     return (
         <>
             <SetSection
-                title="Genie Browser"
-                desc="Genie's own browser — how a .gen dev site is opened, locally or over a remote connection"
-            >
-                <SettingRow
-                    label="Enable the Genie Browser"
-                    desc="On by default. It renders this machine's dev-server and tunnelled sites with a valid https lock and device presets. Turning it off means a .gen site opens nowhere."
-                    keywords="genie browser testing browser gen sites preview enable"
-                >
-                    <Switch
-                        checked={genieBrowserEnabled}
-                        onCheckedChange={onGenieBrowserChange}
-                    />
-                </SettingRow>
-            </SetSection>
-
-            <SetSection
                 title="Container runtime"
-                desc="What Genie runs a workspace's dev servers and services in — one container per site, sandboxed to its workspace"
+                desc="What Genie builds and serves a workspace's sites in — one container per site, sandboxed to its workspace, backed by the shared services below"
             >
                 <SettingRow
                     label="Docker or Podman"
-                    desc={summary.label}
-                    keywords="docker podman container runtime dev server engine install"
+                    desc={runtime?.headline ?? 'Checking…'}
+                    keywords="docker podman container runtime hosting manager engine install"
                 >
-                    <span className={`site-dot site-${summary.tone}`} aria-hidden="true" />
+                    <span
+                        className={`site-dot site-${runtime?.usable ? 'running' : 'idle'}`}
+                        aria-hidden="true"
+                    />
                 </SettingRow>
 
-                {summary.guidance ? (
+                {/* Each candidate, not just the verdict. "docker: found, engine
+                    unreachable" is the line that ends a support thread — and it
+                    is the difference between "install Docker" and "start it". */}
+                {!!runtime?.probes.length && (
+                    <div className="ws-probes">
+                        {runtime.probes.map((probe) => (
+                            <div className="ws-probe" key={probe.kind}>
+                                <span
+                                    className={`site-dot site-${probe.tone}`}
+                                    aria-hidden="true"
+                                />
+                                <Text size="xs">{probe.label}</Text>
+                                {probe.detail && (
+                                    <Text size="xs" className="text-zinc-500">
+                                        {probe.detail}
+                                    </Text>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                {runtime?.guidance ? (
                     <div className="set-note">
-                        {summary.guidance} Genie re-detects on every action, so once one is
+                        {runtime.guidance} Genie re-detects on every action, so once one is
                         installed there is nothing to restart — and it never downloads anything
                         because you opened this page.
                     </div>
                 ) : (
                     <div className="set-note">
                         Each workspace gets its own isolated container network and a dev
-                        container with the workspace mounted in. Set a workspace&apos;s sites
-                        and services up in its Site Manager — its server icon in the sidebar,
-                        or right-click the workspace.
+                        container with the workspace mounted in. Set a workspace&apos;s sites up
+                        in its Site Manager — its server icon in the sidebar, or right-click the
+                        workspace.
                     </div>
                 )}
             </SetSection>
+
+            <SetSection
+                title="Workspace dev image"
+                desc="The one image every workspace's containers are built on, and the language runtimes it brings"
+            >
+                <SettingRow
+                    label={info?.devBase.image || 'Dev base image'}
+                    desc={
+                        info?.devBase.installed
+                            ? 'On this machine — a workspace starts without downloading anything.'
+                            : 'Not downloaded yet. Genie fetches it the first time a workspace serves a site, and asks before it does.'
+                    }
+                    keywords="dev base image node php python go rust toolchain runtime versions"
+                >
+                    <Badge color={info?.devBase.installed ? 'emerald' : 'zinc'}>
+                        {info?.devBase.installed ? 'Downloaded' : 'Not downloaded'}
+                    </Badge>
+                </SettingRow>
+
+                {/* The versions are a CONSTANT mirrored from the image's
+                    Dockerfile (a drift test keeps them honest), because asking
+                    the image itself would mean pulling gigabytes to render a
+                    settings page. */}
+                {!!info?.devBase.toolchain.length && (
+                    <div className="ws-toolchain">
+                        {info.devBase.toolchain.map((tool) => (
+                            <div className="ws-tool" key={tool.id}>
+                                <Text size="sm" style={{ fontWeight: 600 }}>
+                                    {tool.label} {tool.version}
+                                </Text>
+                                {tool.extras?.length ? (
+                                    <Text size="xs" className="text-zinc-500">
+                                        {tool.extras.join(' · ')}
+                                    </Text>
+                                ) : null}
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </SetSection>
+
+            <SetSection
+                title="Service engines"
+                desc="Postgres, Redis and friends — ONE container per engine and major version, shared by every workspace on this machine"
+            >
+                {error && <div className="set-note bad">{error}</div>}
+
+                {/* Grouped, not flat: a dozen catalog rows would bury the two
+                    that are actually running, which are the only ones anyone
+                    opens this page for. */}
+                <Tabs activeTab={engineTab} onTabChange={setEngineTab}>
+                    <Tabs.List>
+                        <Tabs.Tab value="active">Running ({groups.active.length})</Tabs.Tab>
+                        <Tabs.Tab value="installed">
+                            On this machine ({groups.installed.length})
+                        </Tabs.Tab>
+                        <Tabs.Tab value="available">
+                            Available ({groups.available.length})
+                        </Tabs.Tab>
+                    </Tabs.List>
+                    <Tabs.Panels>
+                        <Tabs.Panel value="active">
+                            <EngineList
+                                engines={groups.active}
+                                empty="Nothing is running. A workspace starts its engines when you start a site that needs one."
+                                hasRuntime={!!runtime?.usable}
+                                busy={busy}
+                                logs={logs}
+                                onStart={(e) => void act(e, 'start')}
+                                onStop={stop}
+                                onToggleLog={toggleLog}
+                            />
+                        </Tabs.Panel>
+                        <Tabs.Panel value="installed">
+                            <EngineList
+                                engines={groups.installed}
+                                empty="No engine images on this machine yet."
+                                hasRuntime={!!runtime?.usable}
+                                busy={busy}
+                                logs={logs}
+                                onStart={(e) => void act(e, 'start')}
+                                onStop={stop}
+                                onToggleLog={toggleLog}
+                            />
+                        </Tabs.Panel>
+                        <Tabs.Panel value="available">
+                            <EngineList
+                                engines={groups.available}
+                                empty="Every engine Genie knows about is already here."
+                                hasRuntime={!!runtime?.usable}
+                                busy={busy}
+                                logs={logs}
+                                onStart={(e) => void act(e, 'start')}
+                                onStop={stop}
+                                onToggleLog={toggleLog}
+                            />
+                        </Tabs.Panel>
+                    </Tabs.Panels>
+                </Tabs>
+
+                <div className="set-note">
+                    A workspace gets its own database, role and credentials on the shared engine
+                    — add one from that workspace&apos;s Site Manager. Engines are managed here
+                    because they are shared: stopping one here stops it for every workspace
+                    using it.
+                </div>
+            </SetSection>
+
+            <SetSection
+                title="Genie Browser"
+                desc="Genie's own browser — how a hosted .gen site is opened, locally or over a remote connection"
+            >
+                <SettingRow
+                    label="Enable the Genie Browser"
+                    desc="On by default. It renders this machine's hosted sites with a valid https lock and device presets. Turning it off means a .gen site opens nowhere."
+                    keywords="genie browser testing browser gen sites preview enable"
+                >
+                    <Switch checked={genieBrowserEnabled} onCheckedChange={onGenieBrowserChange} />
+                </SettingRow>
+            </SetSection>
+
+            {confirmStop && (
+                <Modal open onClose={() => setConfirmStop(null)} size="sm">
+                    <div className="ws-confirm">
+                        <Heading as="h3" size="xs">
+                            Stop {confirmStop.label} {confirmStop.version}?
+                        </Heading>
+                        <Callout color="amber" icon={<Icon name="triangle-alert" size="sm" />}>
+                            {stopEngineWarning(confirmStop)}
+                        </Callout>
+                        <Text size="xs" className="text-zinc-500">
+                            Nothing is deleted — the data volume stays, and the engine starts
+                            again the next time a workspace asks for it.
+                        </Text>
+                        <div className="ws-confirm-actions">
+                            <Action variant="ghost" onClick={() => setConfirmStop(null)}>
+                                Cancel
+                            </Action>
+                            <Action
+                                color="rose"
+                                icon="square"
+                                onClick={() => {
+                                    const engine = confirmStop;
+                                    setConfirmStop(null);
+                                    void act(engine, 'stop');
+                                }}
+                            >
+                                Stop it for everyone
+                            </Action>
+                        </div>
+                    </div>
+                </Modal>
+            )}
         </>
     );
 }
 
-/**
- * Settings → .gen Sites (serve-local-sites). The per-site `.gen` tunnel
- * allowlist — the entry point moved here from the per-workspace Workspace
- * Settings modal so it's a first-class Genie Settings page. The tunnel config
- * is stored PER WORKSPACE (a site is served if ANY workspace enables it), so
- * this page carries a small workspace selector — defaulting to the active
- * workspace — and edits that workspace's allowlist via the same `sites.*` IPC.
- *
- * The global master switch (`local_sites_enabled`) still lives in Work Mode;
- * this is the second, per-site opt-in on top of it. HOST-SOURCED in a remote
- * window (the `sites.*` calls route to the host via remote-bridge.ts).
- */
-function SitesSection({ activeWorkspace }: { activeWorkspace?: string }) {
-    const [workspaces, setWorkspaces] = useState<WorkspaceRow[] | null>(null);
-    const [wsId, setWsId] = useState<string>('');
-
-    useEffect(() => {
-        void (async () => {
-            const list = await api()
-                .workspaces.list()
-                .catch(() => [] as WorkspaceRow[]);
-            setWorkspaces(list);
-            // Default to the active (last-focused) workspace when it's a real,
-            // still-open workspace; otherwise the first one in the list.
-            setWsId((cur) => {
-                if (cur && list.some((w) => w.id === cur)) return cur;
-                if (activeWorkspace && list.some((w) => w.id === activeWorkspace)) {
-                    return activeWorkspace;
-                }
-                return list[0]?.id ?? '';
-            });
-        })();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
+/** One group of engines, or the sentence that says why it is empty. */
+function EngineList({
+    engines,
+    empty,
+    hasRuntime,
+    busy,
+    logs,
+    onStart,
+    onStop,
+    onToggleLog,
+}: {
+    engines: DevEngineInfo[];
+    empty: string;
+    hasRuntime: boolean;
+    busy: string | null;
+    logs: { recordKey: string; text: string } | null;
+    onStart: (engine: DevEngineInfo) => void;
+    onStop: (engine: DevEngineInfo) => void;
+    onToggleLog: (engine: DevEngineInfo) => void;
+}) {
+    if (engines.length === 0) {
+        return (
+            <Text size="xs" className="text-zinc-500" style={{ padding: '8px 0' }}>
+                {empty}
+            </Text>
+        );
+    }
     return (
-        <SetSection
-            title=".gen Sites"
-            desc="Choose which of this machine's loopback dev sites (e.g. tynn.test) are served to a remote Genie as *.gen"
-        >
-            <SettingRow
-                label="Workspace"
-                desc="Local-site tunnel settings are stored per workspace. Pick the one to configure; a site is served if any workspace enables it."
-                keywords="workspace sites gen tunnel serve local dev select"
-                grow
-            >
-                <Select
-                    value={wsId}
-                    onValueChange={setWsId}
-                    list={(workspaces ?? []).map((w) => ({
-                        value: w.id,
-                        label: w.project_name,
-                    }))}
+        <div className="ws-engines">
+            {engines.map((engine) => (
+                <EngineRow
+                    key={engine.recordKey}
+                    engine={engine}
+                    hasRuntime={hasRuntime}
+                    busy={busy === engine.recordKey}
+                    log={logs?.recordKey === engine.recordKey ? logs.text : null}
+                    onStart={onStart}
+                    onStop={onStop}
+                    onToggleLog={onToggleLog}
                 />
-            </SettingRow>
-
-            {workspaces !== null && workspaces.length === 0 ? (
-                <div className="set-row">
-                    <div className="set-row-main">
-                        <span className="set-row-desc">
-                            No workspaces yet — open a project to configure its .gen sites.
-                        </span>
-                    </div>
-                </div>
-            ) : wsId ? (
-                <LocalSitesList key={wsId} workspaceId={wsId} />
-            ) : null}
-        </SetSection>
+            ))}
+        </div>
     );
 }
 
 /**
- * The per-workspace `.gen` allowlist body: discovers this host's loopback dev
- * sites (hosts-file parse + loopback probe) and lists them with an enable
- * toggle, an editable `.gen` name, and a scheme/port override. Nothing is
- * tunnelled until a site is enabled (infra names default off). Moved verbatim
- * from the Workspace Settings modal's LocalSitesPanel; the `sites.*` IPC is
- * unchanged and remains HOST-SOURCED in a remote window.
+ * ONE engine on this machine.
+ *
+ * Three independent facts, deliberately not collapsed into a single status:
+ * whether the image is here, whether a container is up, and who is holding it.
+ * Every pair of those occurs in practice — an image pulled once and never
+ * started is several gigabytes nothing else in Genie reports, and an engine up
+ * with zero holders is what a reboot leaves behind, because engines carry
+ * `restart: unless-stopped`.
  */
-function LocalSitesList({ workspaceId }: { workspaceId: string }) {
-    const [sites, setSites] = useState<SiteView[] | null>(null);
-    const [busy, setBusy] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-
-    const load = async (refresh = false) => {
-        setBusy(true);
-        setError(null);
-        try {
-            setSites(await api().sites.list(workspaceId, { refresh }));
-        } catch {
-            setSites([]);
-            setError('Could not read the hosts file on this machine.');
-        } finally {
-            setBusy(false);
-        }
-    };
-
-    useEffect(() => {
-        void load();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [workspaceId]);
-
-    // Persist ONE field of ONE site optimistically, reverting on failure. The
-    // siteId is the opaque allowlist key — the host resolves it to a hostname,
-    // never trusting a caller-supplied target.
-    const patchSite = async (
-        siteId: string,
-        patch: TunnelSiteConfig,
-    ) => {
-        const prev = sites;
-        setSites((cur) =>
-            (cur ?? []).map((s) => (s.siteId === siteId ? { ...s, ...patch } : s)),
-        );
-        try {
-            await api().sites.set(workspaceId, siteId, patch);
-        } catch {
-            setSites(prev); // revert
-        }
-    };
-
+function EngineRow({
+    engine,
+    hasRuntime,
+    busy,
+    log,
+    onStart,
+    onStop,
+    onToggleLog,
+}: {
+    engine: DevEngineInfo;
+    hasRuntime: boolean;
+    busy: boolean;
+    log: string | null;
+    onStart: (engine: DevEngineInfo) => void;
+    onStop: (engine: DevEngineInfo) => void;
+    onToggleLog: (engine: DevEngineInfo) => void;
+}) {
+    const actions = engineActionAvailability(engine, hasRuntime);
+    const usage = engineUsageNote(engine);
     return (
-        <>
-            <div className="set-row">
-                <div className="set-row-main">
-                    <span className="set-row-label">Discovered sites</span>
-                    <span className="set-row-desc">
-                        Nothing is tunnelled until you enable a site (infra helpers
-                        default off).
-                    </span>
+        <div className="ws-engine">
+            <div className="ws-engine-head">
+                <span className={`site-dot site-${engineStatusTone(engine)}`} aria-hidden="true" />
+                <div className="ws-engine-name">
+                    <Text size="sm" style={{ fontWeight: 600 }}>
+                        {engine.label}
+                        {engine.engine === 'custom' ? '' : ` ${engine.version}`}
+                    </Text>
+                    <Text size="xs" className="text-zinc-500">
+                        {engine.image}
+                    </Text>
                 </div>
-                <div className="set-row-control">
-                    <Action
-                        size="sm"
-                        variant="ghost"
-                        icon="refresh-cw"
-                        disabled={busy}
-                        onClick={() => void load(true)}
-                    >
-                        {busy ? 'Scanning…' : 'Rescan'}
-                    </Action>
+                {engine.dedicated && <Badge color="violet">Dedicated</Badge>}
+                {engine.installed && engine.state !== 'running' && (
+                    <Badge color="zinc">Downloaded</Badge>
+                )}
+                <div className="ws-engine-actions">
+                    {actions.canStart && (
+                        <Action
+                            size="sm"
+                            variant="ghost"
+                            icon="play"
+                            disabled={busy}
+                            onClick={() => onStart(engine)}
+                        >
+                            Start
+                        </Action>
+                    )}
+                    {actions.canStop && (
+                        <Action
+                            size="sm"
+                            variant="ghost"
+                            icon="square"
+                            disabled={busy}
+                            onClick={() => onStop(engine)}
+                        >
+                            Stop
+                        </Action>
+                    )}
+                    {actions.canLogs && (
+                        <Action
+                            size="sm"
+                            variant="ghost"
+                            icon="scroll-text"
+                            disabled={busy}
+                            onClick={() => onToggleLog(engine)}
+                        >
+                            {log === null ? 'Log' : 'Hide log'}
+                        </Action>
+                    )}
                 </div>
             </div>
 
-            {sites === null ? (
-                <Text size="xs" className="text-zinc-500" style={{ paddingTop: 4 }}>
-                    Scanning the hosts file…
+            <Text size="xs" className="text-zinc-500">
+                {engineStatusLabel(engine)}
+            </Text>
+            {usage && (
+                <Text size="xs" className="text-zinc-500">
+                    {usage}
                 </Text>
-            ) : sites.length === 0 ? (
-                <Text size="xs" className="text-zinc-500" style={{ paddingTop: 4 }}>
-                    No loopback dev sites found in this machine&apos;s hosts file.
-                </Text>
-            ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {sites.map((s) => (
-                        <div
-                            key={s.siteId}
-                            style={{
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: 6,
-                                padding: 8,
-                                borderRadius: 8,
-                                background: 'var(--bg-2)',
-                                border: '1px solid var(--border-1)',
-                                opacity: s.enabled ? 1 : 0.85,
-                            }}
-                        >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                <input
-                                    type="checkbox"
-                                    checked={s.enabled}
-                                    onChange={(e) =>
-                                        void patchSite(s.siteId, { enabled: e.target.checked })
-                                    }
-                                    aria-label={`Tunnel ${s.hostname}`}
-                                />
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                    <Text size="sm" style={{ fontWeight: 600 }}>
-                                        {s.hostname}
-                                        {s.kind === 'infra' && (
-                                            <span
-                                                style={{
-                                                    marginLeft: 6,
-                                                    fontSize: 10,
-                                                    fontWeight: 600,
-                                                    color: 'var(--amber-600)',
-                                                }}
-                                            >
-                                                infra
-                                            </span>
-                                        )}
-                                    </Text>
-                                    <Text size="xs" className="text-zinc-500">
-                                        {s.scheme}://127.0.0.1:{s.port}
-                                    </Text>
-                                </div>
-                            </div>
-                            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                    <Input
-                                        value={s.genName}
-                                        onValueChange={(v: string) =>
-                                            setSites((cur) =>
-                                                (cur ?? []).map((x) =>
-                                                    x.siteId === s.siteId ? { ...x, genName: v } : x,
-                                                ),
-                                            )
-                                        }
-                                        onBlur={() =>
-                                            void patchSite(s.siteId, { genName: s.genName })
-                                        }
-                                        placeholder="tynn.gen"
-                                        aria-label={`Tunnel name for ${s.hostname}`}
-                                    />
-                                </div>
-                                <div style={{ width: 108 }}>
-                                    <Select
-                                        value={s.scheme}
-                                        onValueChange={(v) =>
-                                            void patchSite(s.siteId, { scheme: v as SiteScheme })
-                                        }
-                                        list={[
-                                            { value: 'https', label: 'https' },
-                                            { value: 'http', label: 'http' },
-                                        ]}
-                                    />
-                                </div>
-                                <div style={{ width: 92 }}>
-                                    <Input
-                                        type="number"
-                                        min={1}
-                                        max={65535}
-                                        value={String(s.port)}
-                                        onValueChange={(v: string) => {
-                                            const n = parseInt(v, 10);
-                                            if (Number.isFinite(n)) {
-                                                setSites((cur) =>
-                                                    (cur ?? []).map((x) =>
-                                                        x.siteId === s.siteId
-                                                            ? { ...x, port: n }
-                                                            : x,
-                                                    ),
-                                                );
-                                            }
-                                        }}
-                                        onBlur={() => void patchSite(s.siteId, { port: s.port })}
-                                        placeholder="443"
-                                        aria-label={`Port for ${s.hostname}`}
-                                    />
-                                </div>
-                            </div>
-                            {s.enabled && (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                    <div
-                                        style={{
-                                            display: 'flex',
-                                            justifyContent: 'space-between',
-                                            alignItems: 'center',
-                                        }}
-                                    >
-                                        <Text size="xs" className="text-zinc-500">
-                                            Companion domain → loopback port
-                                        </Text>
-                                        <Action
-                                            size="sm"
-                                            variant="ghost"
-                                            icon="plus"
-                                            onClick={() => {
-                                                const companions = [
-                                                    ...(s.companions ?? []),
-                                                    {
-                                                        id: `endpoint${(s.companions?.length ?? 0) + 1}`,
-                                                        enabled: true,
-                                                        hostname: `dev.${s.hostname}`,
-                                                        scheme: 'http' as SiteScheme,
-                                                        port: 5173,
-                                                        siteId: '',
-                                                    },
-                                                ];
-                                                void patchSite(s.siteId, { companions });
-                                            }}
-                                        >
-                                            Add mapping
-                                        </Action>
-                                    </div>
-                                    {(s.companions ?? []).map((endpoint, index) => (
-                                        <div
-                                            key={`${endpoint.id}-${index}`}
-                                            style={{
-                                                display: 'grid',
-                                                gridTemplateColumns: '1fr 108px 92px 96px auto',
-                                                gap: 6,
-                                                alignItems: 'center',
-                                            }}
-                                        >
-                                            <Input
-                                                value={endpoint.hostname}
-                                                onValueChange={(hostname: string) =>
-                                                    setSites((cur) =>
-                                                        (cur ?? []).map((site) =>
-                                                            site.siteId !== s.siteId
-                                                                ? site
-                                                                : {
-                                                                      ...site,
-                                                                      companions: (
-                                                                          site.companions ?? []
-                                                                      ).map((c, i) =>
-                                                                          i === index
-                                                                              ? { ...c, hostname }
-                                                                              : c,
-                                                                      ),
-                                                                  },
-                                                        ),
-                                                    )
-                                                }
-                                                onBlur={() =>
-                                                    void patchSite(s.siteId, {
-                                                        companions: s.companions,
-                                                    })
-                                                }
-                                                placeholder="vite.app.test"
-                                                aria-label={`Companion domain ${index + 1}`}
-                                            />
-                                            <Select
-                                                value={endpoint.scheme}
-                                                onValueChange={(scheme) => {
-                                                    const companions = (s.companions ?? []).map(
-                                                        (c, i) =>
-                                                            i === index
-                                                                ? {
-                                                                      ...c,
-                                                                      scheme: scheme as SiteScheme,
-                                                                  }
-                                                                : c,
-                                                    );
-                                                    void patchSite(s.siteId, { companions });
-                                                }}
-                                                list={[
-                                                    { value: 'https', label: 'https' },
-                                                    { value: 'http', label: 'http' },
-                                                ]}
-                                            />
-                                            <Input
-                                                type="number"
-                                                min={1}
-                                                max={65535}
-                                                value={String(endpoint.port)}
-                                                onValueChange={(value: string) => {
-                                                    const port = Number.parseInt(value, 10);
-                                                    if (!Number.isFinite(port)) return;
-                                                    setSites((cur) =>
-                                                        (cur ?? []).map((site) =>
-                                                            site.siteId !== s.siteId
-                                                                ? site
-                                                                : {
-                                                                      ...site,
-                                                                      companions: (
-                                                                          site.companions ?? []
-                                                                      ).map((c, i) =>
-                                                                          i === index
-                                                                              ? { ...c, port }
-                                                                              : c,
-                                                                      ),
-                                                                  },
-                                                        ),
-                                                    );
-                                                }}
-                                                onBlur={() =>
-                                                    void patchSite(s.siteId, {
-                                                        companions: s.companions,
-                                                    })
-                                                }
-                                                aria-label={`Companion port ${index + 1}`}
-                                            />
-                                            <Select
-                                                value={endpoint.loopback ?? '127.0.0.1'}
-                                                onValueChange={(loopback) => {
-                                                    const companions = (s.companions ?? []).map(
-                                                        (c, i) =>
-                                                            i === index
-                                                                ? {
-                                                                      ...c,
-                                                                      loopback: loopback as
-                                                                          | '127.0.0.1'
-                                                                          | '::1',
-                                                                  }
-                                                                : c,
-                                                    );
-                                                    void patchSite(s.siteId, { companions });
-                                                }}
-                                                list={[
-                                                    { value: '127.0.0.1', label: 'IPv4' },
-                                                    { value: '::1', label: 'IPv6' },
-                                                ]}
-                                            />
-                                            <Action
-                                                size="sm"
-                                                variant="ghost"
-                                                icon="x"
-                                                onClick={() =>
-                                                    void patchSite(s.siteId, {
-                                                        companions: (s.companions ?? []).filter(
-                                                            (_, i) => i !== index,
-                                                        ),
-                                                    })
-                                                }
-                                            >
-                                                Remove
-                                            </Action>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    ))}
+            )}
+            {/* Names what a workspace's boundary on this engine ACTUALLY is.
+                Postgres gives a server-enforced database + role; the namespace
+                engines share a master key and are separated by a prefix.
+                Rendering both as "isolated" would claim a wall that is not there. */}
+            <Text size="xs" className="text-zinc-500">
+                {isolationNote(engine.provision)}
+            </Text>
+
+            {log !== null && (
+                <div className="ws-engine-log">
+                    <CodeView
+                        value={log || 'Nothing logged yet.'}
+                        readOnly
+                        minHeight={0}
+                        maxHeight={240}
+                    />
                 </div>
             )}
-
-            {error && (
-                <Text size="xs" style={{ color: 'var(--rose-500)', marginTop: 4 }}>
-                    {error}
-                </Text>
-            )}
-        </>
+        </div>
     );
 }
 
@@ -3922,8 +3883,6 @@ function MobileSection({
     onNetworkAccessChange,
     port,
     onPortChange,
-    localSitesEnabled,
-    onLocalSitesChange,
     persistSettings,
 }: {
     enabled: boolean;
@@ -3934,8 +3893,6 @@ function MobileSection({
     onNetworkAccessChange: (network: 'local' | 'lan' | 'tailscale' | 'tynn', on: boolean) => void;
     port: string;
     onPortChange: (v: string) => void;
-    localSitesEnabled: boolean;
-    onLocalSitesChange: (on: boolean) => void;
     persistSettings: () => Promise<void>;
 }) {
     const [status, setStatus] = useState<MobileStatus | null>(null);
@@ -4157,21 +4114,6 @@ function MobileSection({
                         </label>
                     ))}
                 </div>
-            </SettingRow>
-
-            <SettingRow
-                label="Serve local dev sites"
-                keywords="local sites serve tunnel gen herd valet loopback dev site work mode"
-                desc="Off by default. Lets this host expose its loopback dev sites (e.g. tynn.test, served by Herd/Valet) to a remote Genie as *.gen. A separate opt-in from mobile remote control — and each site is still individually enabled on the .gen Sites page before anything is tunnelled."
-            >
-                <Switch
-                    checked={localSitesEnabled}
-                    disabled={busy}
-                    onCheckedChange={(on: boolean) => {
-                        onLocalSitesChange(on);
-                        void persistSettings();
-                    }}
-                />
             </SettingRow>
 
             {status?.tailnetNotDetected && (

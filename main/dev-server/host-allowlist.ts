@@ -1,22 +1,35 @@
 /**
- * PURE. The HOST-HEADER allowlist (Tynn #234 P4 item E) — the sharp edge P2 and
- * P3 left behind.
+ * PURE. The HOST-HEADER allowlist — the sharp edge the `.gen` routing leaves.
  *
- * A dev site is served at `https://web.acme.gen`, so the carrier sends
- * `Host: web.acme.gen` upstream. Several frameworks check that header against a
+ * A hosted site is served at `https://web.acme.gen`, so the carrier sends
+ * `Host: web.acme.gen` upstream. Some frameworks check that header against a
  * list they cannot possibly know about and answer a "Blocked request" page.
  * Everything Genie measures says the site is healthy — the container is up, the
  * port is bound, the readiness probe got an HTTP response — and the user sees a
- * wall of text about `server.allowedHosts`. It is the single worst failure mode
- * the routing design has, because nothing in it looks like a failure.
+ * wall of text. It is the single worst failure mode the routing design has,
+ * because nothing in it looks like a failure.
+ *
+ * ## Production serving changes the answer, and mostly for the better
+ *
+ * Most host allowlists are DEV-SERVER features. Vite's `server.allowedHosts`,
+ * Next's `allowedDevOrigins` and Django's DEBUG-mode default all exist to
+ * protect a development server on a laptop — and the Hosting Manager runs none
+ * of those, because it builds the app and runs the production server instead. A
+ * built front end is nginx over static files; a Next app is `next start`; a
+ * Laravel app is FrankenPHP.
+ *
+ * The one that SURVIVES the switch is Django's, and it gets stricter rather than
+ * looser: `ALLOWED_HOSTS` is enforced by a middleware, not by `runserver`, and
+ * with `DEBUG=False` it has no permissive default at all. So Django is still
+ * `documented`, and everything else is now genuinely not blocked.
  *
  * ## Why not just rewrite the Host
  *
- * P2 shipped `upstreamHost`, which sends `Host: localhost` instead. It works,
- * and it costs the app its real origin: absolute URLs, cookie domains, CSRF
- * origin checks and signed routes all start pointing at `localhost` while the
- * browser is at `.gen`. That is a fine escape hatch and a bad default. So the
- * approach here is to keep the real Host and make the FRAMEWORK accept it.
+ * `upstreamHost` sends `Host: localhost` instead. It works, and it costs the app
+ * its real origin: absolute URLs, cookie domains, CSRF origin checks and signed
+ * routes all start pointing at `localhost` while the browser is at `.gen`. That
+ * is a fine escape hatch and a bad default. So the approach here is to keep the
+ * real Host and make the FRAMEWORK accept it.
  *
  * ## The `status` field is the honest part
  *
@@ -33,16 +46,16 @@
  *
  * | Framework | Status | Why |
  * |---|---|---|
- * | **Vite** | `solved` | Vite reads `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` and appends it to `server.allowedHosts` — the escape hatch it added for hosting providers when `allowedHosts` became a default-deny in 5.4.12 / 6.0.9. Verified in vite 7.3.6's `config.js`. It appends only when `allowedHosts` is an ARRAY, which is the default (`[]`); a project that set `allowedHosts: true` already allows everything. |
- * | **Laravel** (`artisan serve`) | `not-needed` | The PHP built-in server has no Host allowlist, and Laravel's `TrustHosts` middleware is opt-in and off in a fresh app. Nothing is blocked — but `APP_URL` is injected, because otherwise `asset()`, `url()` and signed routes are built from `127.0.0.1` while the browser is at `.gen`, which breaks assets and signature validation. |
- * | **Django** (`manage.py runserver`) | `documented` | `ALLOWED_HOSTS` is a settings value; Django reads NO environment variable for it. With `DEBUG=True` it permits only `localhost`, `127.0.0.1` and `[::1]`. `DJANGO_ALLOWED_HOSTS` is injected because it is the near-universal convention (cookiecutter-django, Django's own Docker guide) — but a settings.py that does not read it is unaffected, so this cannot be called solved. |
- * | **Next.js** | `documented` | `allowedDevOrigins` (15.2+) is `next.config` only, and there is no environment override. The dev server warns rather than blocking in most versions, so this is usually cosmetic. |
- * | uvicorn / FastAPI, PHP built-in, Go, Rust | `not-needed` | None check the Host header by default. Starlette's `TrustedHostMiddleware` is opt-in. |
+ * | **Django** (gunicorn) | `documented` | `ALLOWED_HOSTS` is a settings value enforced by `CommonMiddleware`, and Django reads NO environment variable for it. Under `DEBUG=False` — which is what a production serve implies — an unlisted host is a hard 400. `DJANGO_ALLOWED_HOSTS` is injected because it is the near-universal convention (cookiecutter-django, Django's own Docker guide), but a settings.py that does not read it is unaffected, so this cannot be called solved. |
+ * | **Laravel** (FrankenPHP) | `not-needed` | Laravel's `TrustHosts` middleware is opt-in and off in a fresh app, and FrankenPHP checks nothing. Nothing is blocked — but `APP_URL` is injected, because otherwise `asset()`, `url()` and signed routes are built from the wrong origin while the browser is at `.gen`, which breaks assets and signature validation. |
+ * | **Next.js** (`next start`) | `not-needed` | `allowedDevOrigins` is a DEV-server setting; the production server does not check the Host. This was `documented` while Genie ran `next dev`, and building the app is what removed it. |
+ * | **Vite** | `solved` | Only reachable now for an `explicit` site someone pointed at a dev server themselves — a recipe-built front end is nginx over `dist/`. Kept because that escape hatch still exists: Vite reads `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` and appends it to `server.allowedHosts` when that is an array (the default). |
+ * | nginx, uvicorn/FastAPI, Go, Rust | `not-needed` | None check the Host header by default. Starlette's `TrustedHostMiddleware` is opt-in. |
  *
- * Rails is deliberately absent: Genie does not detect it yet (`site-def.ts` has
- * no Ruby detector), and `config.hosts` would need an initializer edit rather
- * than an env var. Adding it here without detection would be a claim about a
- * stack Genie cannot run.
+ * Rails is deliberately absent: Genie does not detect it yet (`serve-recipe.ts`
+ * has no Ruby detector), and `config.hosts` would need an initializer edit
+ * rather than an env var. Adding it here without detection would be a claim
+ * about a stack Genie cannot host.
  */
 
 /** A framework that has an opinion about the Host header, or `none`. */
@@ -158,17 +171,19 @@ export function planHostAllowlist(input: HostAllowlistInput): HostAllowlistPlan 
                 // The convention, not a Django feature. See the header table.
                 env: { DJANGO_ALLOWED_HOSTS: host },
                 status: 'documented',
-                note: `Django checks ALLOWED_HOSTS, and reads no environment variable for it — with DEBUG=True it permits only localhost. Genie sets DJANGO_ALLOWED_HOSTS=${host}, which works if your settings.py reads it (the cookiecutter/Docker convention); otherwise add "${host}" to ALLOWED_HOSTS yourself.`,
+                note: `Django checks ALLOWED_HOSTS in a middleware, and reads no environment variable for it. Served in production (DEBUG=False) an unlisted host is a hard 400. Genie sets DJANGO_ALLOWED_HOSTS=${host}, which works if your settings.py reads it (the cookiecutter/Docker convention); otherwise add "${host}" to ALLOWED_HOSTS yourself.`,
                 upstreamHostFallback: 'localhost',
             };
 
         case 'next':
             return {
                 framework,
+                // `allowedDevOrigins` is a DEV-server setting. Genie builds the
+                // app and runs `next start`, which checks nothing — so the
+                // warning this used to carry would now be untrue.
                 env: {},
-                status: 'documented',
-                note: `Next reads allowedDevOrigins from next.config only, with no environment override — add "${host}" there if the dev server complains about the cross-origin request.`,
-                upstreamHostFallback: 'localhost',
+                status: 'not-needed',
+                note: `Next is BUILT and served by \`next start\`, which does not check the Host header — allowedDevOrigins is a dev-server setting and does not apply here.`,
             };
 
         default:

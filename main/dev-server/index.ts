@@ -64,16 +64,36 @@ export type {
     ImageResult,
 } from './container-runtime';
 
-// --- P2: sites --------------------------------------------------------------
+// --- sites: the production build + serve recipe ------------------------------
 
-export { DEFAULT_STACK_PORTS, detectRunOptions, recommendedOption, resolveSiteRun } from './site-def';
+export {
+    DEFAULT_STACK_PORTS,
+    FRANKENPHP_IMAGE,
+    GENIE_BUILD_DIR,
+    NGINX_IMAGE,
+    detectHostingOptions,
+    recommendedOption,
+    resolveHostedRun,
+} from './serve-recipe';
 export type {
-    DevSiteOption,
-    DevSiteRunMode,
-    DevStack,
+    BuildStep,
+    HostingOption,
+    HostingRunMode,
+    HostingStack,
+    ProductionServer,
     RepoFacts,
     ResolvedRun,
-} from './site-def';
+} from './serve-recipe';
+export { BUILD_STEP_TIMEOUT_MS, runSiteBuild } from './site-build';
+export type { SiteBuildDeps, SiteBuildResult, SiteBuildStepResult } from './site-build';
+export { STABLE_PORT_RANGE, planExposure, stablePortFor } from './exposure';
+export type {
+    BrowserProtocol,
+    ExposedSurface,
+    ExposureForward,
+    ExposurePlan,
+    ExposureRoute,
+} from './exposure';
 export { describeRepoRun, readRepoFacts } from './repo-facts';
 export {
     defaultGenNameFor,
@@ -100,6 +120,7 @@ export type {
     DevSiteState,
     DevSiteStatus,
     DevWorkspace,
+    ExposedRoute,
 } from './site-manager';
 
 // --- P3: services -----------------------------------------------------------

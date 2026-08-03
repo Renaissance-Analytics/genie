@@ -2,12 +2,6 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import {
-    parseTunnelSites,
-    sanitizeTunnelPatch,
-    type TunnelSites,
-    type TunnelSiteConfig,
-} from './mobile/hosts';
-import {
     devSiteIdFor,
     parseDevSites,
     sanitizeDevSitePatch,
@@ -452,16 +446,22 @@ export function runMigrations(d: Database.Database): void {
             },
         },
         {
-            // v19: per-workspace LOCAL-SITE TUNNEL settings (serve-local-sites
-            // Phase B). A JSON blob mapping an opaque per-site id → its tunnel
-            // config: { [siteId]: { enabled, genName, scheme, port } }. This IS
-            // the §5 allowlist — nothing is tunnelled until a site's `enabled` is
-            // set true; discovery + probing (the hosts-file scheme/port) supply
-            // the rest. NULL/absent reads as {} (nothing enabled), so existing
-            // workspaces gain the column with the safe default. Stored as TEXT
-            // JSON (one structured setting), resolved by getWorkspaceTunnelSites —
-            // never parsed here. Mirrors the issuewatch_granularity pattern.
-            // Idempotent ADD COLUMN.
+            // v19: per-workspace LOCAL-SITE TUNNEL settings — RETIRED.
+            //
+            // This column held the hosts-file `.gen` allowlist: which of the
+            // machine's loopback `*.test` vhosts (Herd, Valet, a stray `npm run
+            // dev`) were tunnelled under a derived `.gen` name. The container Dev
+            // Server (#234) replaced that source outright — a `.gen` site is a
+            // container Genie started, never something found in a hosts file — so
+            // NOTHING reads or writes `tunnel_sites` any more.
+            //
+            // The migration STAYS, and so does the column. Migrations are an
+            // append-only chain replayed from v1 on every existing database:
+            // removing this step would renumber nothing but would leave older
+            // installs having applied a v19 that no longer exists, and dropping
+            // the column would destroy a user's stored config to reclaim a few
+            // bytes of a value nobody reads. An orphaned column is the cheap,
+            // reversible option; deleting data is not.
             version: 19,
             runner: (db) => {
                 const cols = workspaceColumns(db);
@@ -746,13 +746,11 @@ export function runMigrations(d: Database.Database): void {
             // Tynn #232 P2). A JSON blob mapping the opaque per-site id → its
             // hosting config: { [siteId]: { enabled, hostname, kind, docroot } }.
             //
-            // Deliberately a SIBLING of `tunnel_sites` (v19) rather than more
-            // fields on it, because the two express opposite things: a
-            // tunnel_sites row says "something else on this machine already
-            // serves this site — carry it", while a hosted_sites row says
-            // "Genie serves this site itself, from this document root". A
-            // workspace can legitimately have both for one hostname, and the
-            // hosted one wins (see main/sites/local-sites.ts).
+            // Deliberately a SIBLING of the (now retired) `tunnel_sites` (v19)
+            // rather than more fields on it, because the two expressed opposite
+            // things: a tunnel_sites row said "something else on this machine
+            // already serves this site — carry it", while a hosted_sites row
+            // says "Genie serves this site itself".
             //
             // NULL/absent reads as {} (nothing hosted), so existing workspaces
             // gain the column with the safe default. Resolved by
@@ -1042,17 +1040,10 @@ export interface Settings {
      *  encoded; default '51718' (obscure, beside the MCP port). Same Integer/
      *  range guard as mcp_port. Changing it requires restarting the server. */
     mobile_port?: string;
-    /** Serve-local-sites master switch (serve-local-sites Phase B). Opt-in:
-     *  'off' (default) discovers/serves nothing; 'on' allows the host to expose
-     *  its loopback dev sites over Work Mode. DISTINCT from mobile_enabled /
-     *  Work-Mode host enable — exposing your dev environment is a separate,
-     *  deliberate decision. Per-repo `.gen` enables (tunnel_sites) are the
-     *  second opt-in on top of this. */
-    local_sites_enabled?: 'on' | 'off';
-    /** The Genie Browser — Genie's own built-in browser for `.gen` dev sites
-     *  (#232). Default 'on': it is how a hosted or tunnelled site is opened at
-     *  all, so it is enabled unless the owner deliberately turns it off. Lives
-     *  with the hosting runtime on the workstation Hosting settings page. */
+    /** The Genie Browser — Genie's own built-in browser for `.gen` dev sites.
+     *  Default 'on': it is how a dev site is opened at all, so it is enabled
+     *  unless the owner deliberately turns it off. Lives with the container
+     *  runtime on the workstation Dev Server settings page. */
     genie_browser_enabled?: 'on' | 'off';
     /** Keep the Genie endpoint synced into a workspace's Claude `.mcp.json`.
      *  Default 'on'; 'off' means Genie never touches that file (manual edits
@@ -1206,8 +1197,6 @@ export function getAllSettings(): Settings {
         ftq_dnd_message: out['ftq_dnd_message'] ?? '',
         ftq_dnd_sound: (out['ftq_dnd_sound'] as 'on' | 'off') ?? 'off',
         mobile_port: out['mobile_port'] ?? '51718',
-        local_sites_enabled:
-            (out['local_sites_enabled'] as 'on' | 'off') ?? 'off',
         genie_browser_enabled:
             (out['genie_browser_enabled'] as 'on' | 'off') ?? 'on',
         mcp_sync_claude: (out['mcp_sync_claude'] as 'on' | 'off') ?? 'on',
@@ -1314,16 +1303,10 @@ export interface WorkspaceRow {
      *  about). NULL/absent reads as the all-on + upstream-issues+prs defaults —
      *  resolve it via {@link getWorkspaceIssuewatchGranularity}, never parse here. */
     issuewatch_granularity?: string | null;
-    /** Per-workspace LOCAL-SITE tunnel settings (serve-local-sites Phase B),
-     *  JSON-encoded ({ [siteId]: { enabled, genName, scheme, port } }). This IS
-     *  the §5 allowlist. NULL/absent reads as {} (nothing enabled) — resolve it
-     *  via {@link getWorkspaceTunnelSites}, never parse here. */
-    tunnel_sites?: string | null;
     /** Per-workspace DEV SITES (the container Dev Server, #234 P2), JSON-encoded
      *  ({ [siteId]: { name, genName, repo, runMode, command?, port?, … } }).
-     *  The sibling of `tunnel_sites` and its opposite: those carry what
-     *  something else on this machine serves, these are what GENIE serves, from
-     *  a container in the workspace sandbox.
+     *  The ONLY source of a `.gen` site: what GENIE serves, from a container in
+     *  the workspace sandbox.
      *  NULL/absent reads as {} — resolve via {@link getWorkspaceDevSites}. */
     dev_sites?: string | null;
     /** Per-workspace DEV SERVICES (the container Dev Server, #234 P3),
@@ -1837,49 +1820,10 @@ export function listWorkspaceIssuewatchAgents(
         }));
 }
 
-// Local-site tunnel settings (serve-local-sites Phase B) ----------------
-//
-// The §5 per-repo ALLOWLIST, stored per-workspace as a JSON blob keyed by the
-// opaque siteId (mirrors the issuewatch_granularity single-column pattern).
-// Nothing is tunnelled until a site's `enabled` is set true. Re-exported types
-// live in main/mobile/hosts.ts (the feature module); the parse/sanitize helpers
-// are pure so a corrupt blob or hostile patch can't poison the store.
-
-/** This workspace's stored per-site tunnel settings (NULL/absent ⇒ {} = nothing
- *  enabled). Keyed by the opaque siteId (see main/mobile/hosts.ts). */
-export function getWorkspaceTunnelSites(id: string): TunnelSites {
-    const row = getDb()
-        .prepare<[string], { tunnel_sites: string | null } | undefined>(
-            'SELECT tunnel_sites FROM workspaces WHERE id = ?',
-        )
-        .get(id);
-    return parseTunnelSites(row?.tunnel_sites ?? null);
-}
-
-/** Replace this workspace's whole tunnel-settings map (JSON-encoded). */
-export function setWorkspaceTunnelSites(id: string, sites: TunnelSites): void {
-    getDb()
-        .prepare('UPDATE workspaces SET tunnel_sites = ? WHERE id = ?')
-        .run(JSON.stringify(sites), id);
-}
-
-/** Merge ONE site's tunnel config into this workspace's map (the write behind
- *  the workspace-settings toggles). The patch is sanitized before it lands. */
-export function setWorkspaceTunnelSite(
-    id: string,
-    siteId: string,
-    patch: TunnelSiteConfig,
-): void {
-    const current = getWorkspaceTunnelSites(id);
-    const merged = { ...(current[siteId] ?? {}), ...sanitizeTunnelPatch(patch) };
-    setWorkspaceTunnelSites(id, { ...current, [siteId]: merged });
-}
-
 // Dev sites (the container Dev Server, #234 P2) --------------------------
 //
-// The sibling of tunnel_sites and its opposite: those carry what something else
-// serves, these are what GENIE serves. Same single-column JSON pattern; the id
-// is workspace-SCOPED (two workspaces can each have a `web`).
+// The ONE source of a `.gen` site: what GENIE serves. Single-column JSON; the
+// id is workspace-SCOPED (two workspaces can each have a `web`).
 // Parse/sanitize live in main/dev-server/sites-config.ts.
 
 /** This workspace's stored dev sites (NULL/absent ⇒ {} = none defined). */

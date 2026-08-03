@@ -16,9 +16,11 @@ import { devServiceManager } from '../dev-server/services/service-manager';
 import { runtimeInfo } from './dev-site-tools';
 import { resolveAgentTarget } from './host-tools';
 import type { DevServiceRow } from '../dev-server/services/service-manager';
+import type { EngineInventoryRow } from '../dev-server/services/inventory';
 import type { DevServiceConfig } from '../dev-server/services/services-config';
 import type {
     DevServiceCatalogEntry,
+    DevServiceEngineInfo,
     DevServiceInfo,
     ManageServiceRequest,
     ManageServiceResult,
@@ -75,6 +77,29 @@ function toInfo(row: DevServiceRow): DevServiceInfo {
     };
 }
 
+/** One MACHINE-level engine row, as `inventory` reports it. Passed through
+ *  whole: the three independent facts (`installed`, `state`, `holders`) and the
+ *  workspace NAMES are the entire point — see `services/inventory.ts`. */
+function toEngineInfo(row: EngineInventoryRow): DevServiceEngineInfo {
+    return {
+        recordKey: row.recordKey,
+        engineKey: row.engineKey,
+        engine: row.engine,
+        version: row.version,
+        label: row.label,
+        image: row.image,
+        containerName: row.containerName,
+        installed: row.installed,
+        state: row.state,
+        ...(row.containerId ? { containerId: row.containerId } : {}),
+        dedicated: row.dedicated,
+        ...(row.ownerWorkspaceId ? { ownerWorkspaceId: row.ownerWorkspaceId } : {}),
+        holders: row.holders,
+        configured: row.configured,
+        workspaces: row.workspaces,
+    };
+}
+
 function catalogEntries(): DevServiceCatalogEntry[] {
     return SERVICE_ENGINES.map((engine) => {
         const spec = engineSpecFor(engine);
@@ -103,11 +128,14 @@ export async function manageServiceForMcp(
     terminalId: string,
     req: ManageServiceRequest,
 ): Promise<ManageServiceResult> {
-    // The catalog is answerable with no workspace, no runtime and no manager —
-    // it is how an agent finds out what it could ask for, and refusing it
-    // because Docker is not running would be a dead end.
+    // `catalog` and `inventory` are answerable with no workspace — one says what
+    // could be run here and the other says what IS running on the machine, and
+    // neither is a property of a workspace. Refusing them because the caller's
+    // terminal could not be resolved would be a dead end.
     const { decision, ws } = await resolveAgentTarget(terminalId, req.workspaceId);
-    if (req.action === 'catalog') return runManageService(ws ?? null, req);
+    if (req.action === 'catalog' || req.action === 'inventory') {
+        return runManageService(ws ?? null, req);
+    }
     if (!decision.allowed || !ws) {
         return { ok: false, error: decision.reason, services: [], runtime: await runtimeInfo() };
     }
@@ -142,12 +170,40 @@ export async function runManageService(
         };
     }
 
+    // MACHINE-level, like `catalog`: a shared engine belongs to no workspace, so
+    // requiring one to ask about it would be asking the wrong question. This is
+    // the read a human has had as a settings page since the workstation Services
+    // page shipped; without it an agent can stop an engine five other workspaces
+    // are using and report success.
+    if (req.action === 'inventory') {
+        const manager = devServiceManager();
+        if (!manager) {
+            return bare(
+                'The Genie Hosting Manager is not running in this process, so the workstation inventory cannot be read here.',
+            );
+        }
+        try {
+            return {
+                ok: true,
+                services: ws ? manager.list(ws.id).map(toInfo) : [],
+                engines: (await manager.inventory()).map(toEngineInfo),
+                runtime,
+            };
+        } catch (e) {
+            return bare(
+                `The workstation inventory could not be read: ${
+                    e instanceof Error ? e.message : String(e)
+                }`,
+            );
+        }
+    }
+
     if (!ws) return bare('This action needs a workspace.');
 
     const manager = devServiceManager();
     if (!manager) {
         return bare(
-            'The Genie Dev Server is not running in this process, so services cannot be managed here.',
+            'The Genie Hosting Manager is not running in this process, so services cannot be managed here.',
         );
     }
 

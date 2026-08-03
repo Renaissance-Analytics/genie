@@ -640,22 +640,19 @@ const api = {
             }>,
     },
 
-    // Serve-local-sites (Phase B): discovery + the per-repo `.gen` allowlist.
+    // Reading + opening this machine's `.gen` dev sites. A site is CREATED by
+    // the Dev Server (`devServer` below) — there is nothing to configure here.
     sites: {
-        list: (workspaceId: string, opts?: { refresh?: boolean }) =>
-            ipcRenderer.invoke('sites:list', workspaceId, opts),
-        set: (workspaceId: string, siteId: string, patch: unknown) =>
-            ipcRenderer.invoke('sites:set', workspaceId, siteId, patch),
         // The header `.gen` popover — contextual to THIS window (local sites in a
         // local window, the host's sites in a host window).
         all: () => ipcRenderer.invoke('sites:all'),
         open: (genName: string) => ipcRenderer.invoke('sites:open', genName),
     },
 
-    // The container DEV SERVER (#234). The sibling of `sites` above, and the
-    // opposite of it: `sites` carries what something ELSE on this machine
-    // serves, this is what GENIE serves — a container in the workspace's
-    // sandbox, published to loopback and routed at `<name>.gen`.
+    // The container DEV SERVER (#234) — what GENIE serves, and the only thing
+    // that makes a `.gen` site exist: a container in the workspace's sandbox,
+    // published to loopback and routed at `<name>.gen`. `sites` above reads and
+    // opens what this creates.
     //
     // TWO calls, mirroring the `manageSite` / `manageService` MCP tools
     // one-for-one, because main runs literally the same function for both. The
@@ -673,6 +670,13 @@ const api = {
         /** Which container runtime is driving, or why none is. A pure probe —
          *  looking at the settings page never starts a download. */
         runtimeStatus: () => ipcRenderer.invoke('dev:runtime-status'),
+        /** The MACHINE's Dev Server: which runtime is driving, what the dev base
+         *  image provides, and every shared service engine with its holders.
+         *  Machine-level because an engine is shared across every workspace on
+         *  the same (engine, major). A pure read — never pulls or starts. */
+        workstation: () => ipcRenderer.invoke('dev:workstation'),
+        /** Machine-level start | stop | logs for ONE shared engine. */
+        engine: (req: unknown) => ipcRenderer.invoke('dev:engine', req),
         /** The repo subfolders a site can be created against. */
         repos: (workspaceId: string) => ipcRenderer.invoke('dev:repos', workspaceId),
     },

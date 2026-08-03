@@ -31,7 +31,7 @@ import type { MobileDataDeps } from '../api';
  *       `Host: tynn.test` (the Host-rewrite crux) with NO leaked Authorization;
  *   (b) an https site is TLS-terminated on loopback with SNI = the hostname;
  *   (c) `isLocked()` returns 423 even on GET; unauthed returns 401;
- *   (d) an unknown/disabled siteId is refused; the master switch off is refused;
+ *   (d) a siteId nothing is serving is refused;
  *   (e) an SSRF attempt (a raw host:port as the siteId) never reaches an
  *       un-allowlisted loopback service;
  *   (f) a WebSocket upgrade is proxied end-to-end (Host rewritten, echoed back);
@@ -94,12 +94,10 @@ xGjX3WqZONEmsY83ZYhZwA==
 
 const HOSTNAME = 'tynn.test';
 
-// --- test-controlled proxy state (the injected allowlist) ------------------
-let masterEnabled = true;
+// --- test-controlled proxy state (the injected served set) -----------------
 const enabledSites = new Map<string, ResolvedSite>();
 
 const siteProxy: SiteProxyDeps = {
-    localSitesEnabled: () => masterEnabled,
     resolveSite: (siteId) => enabledSites.get(siteId) ?? null,
 };
 
@@ -307,7 +305,6 @@ beforeEach(async () => {
     _resetAuthForTest();
     _resetAuditForTest();
     _resetSiteProxyForTest();
-    masterEnabled = true;
     enabledSites.clear();
     lastHttpAuth = undefined;
     lastSni = undefined;
@@ -368,14 +365,16 @@ describe('site-proxy (Phase C, over the wire)', () => {
         setLocked(false);
     });
 
-    it('(d) refuses an unknown/disabled siteId (404) and the master switch off (403)', async () => {
+    it('(d) refuses a siteId nothing is serving (404)', async () => {
+        // The only opt-in there is: a site resolves because a container is
+        // serving it. There is no separate master switch to be off.
         const port = await start();
         const token = await pair(port);
         const unknown = await rawReq(port, 'GET', '/api/site/nope/', { token });
         expect(unknown.status).toBe(404);
-        masterEnabled = false; // local_sites_enabled off
-        const masterOff = await rawReq(port, 'GET', '/api/site/sitehttp/', { token });
-        expect(masterOff.status).toBe(403);
+        enabledSites.delete('sitehttp');
+        const stopped = await rawReq(port, 'GET', '/api/site/sitehttp/', { token });
+        expect(stopped.status).toBe(404);
     });
 
     it('(e) refuses an SSRF attempt and never reaches an un-allowlisted loopback service', async () => {

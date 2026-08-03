@@ -14,7 +14,7 @@ import type {
  *
  * ## `running` is not `ready`
  *
- * `state: 'running'` says the CONTAINER is up. `ready` says the dev server
+ * `state: 'running'` says the CONTAINER is up. `ready` says the production server
  * inside it accepted a request. They are different events and the gap between
  * them is seconds to minutes (an `npm install`, a Vite cold start, a Django
  * migration). A panel that collapses them offers "Open in Genie Browser" on a
@@ -39,7 +39,7 @@ import type {
 
 export type DevTone = 'running' | 'starting' | 'failed' | 'idle';
 
-/** Whether the Dev Server can be driven from THIS window at all. */
+/** Whether the Hosting Manager can be driven from THIS window at all. */
 export type DevAvailability = 'ready' | 'remote';
 
 // --- sites ------------------------------------------------------------------
@@ -115,7 +115,7 @@ export function railSitesTitle(sites: DevSiteInfo[], workspaceId: string): strin
     const mine = minesites(sites, workspaceId);
     const running = mine.filter((s) => s.state === 'running').length;
     const failed = mine.filter((s) => s.state === 'failed').length;
-    const parts = [`${mine.length} dev site${mine.length === 1 ? '' : 's'}`];
+    const parts = [`${mine.length} hosted site${mine.length === 1 ? '' : 's'}`];
     if (running) parts.push(`${running} running`);
     if (failed) parts.push(`${failed} failed`);
     return `${parts.join(' · ')} — click to open the Site Manager`;
@@ -231,7 +231,7 @@ export function runtimeSummary(info: DevRuntimeInfo | null): RuntimeSummary {
             tone: 'idle',
             guidance:
                 info?.installHint ??
-                'Install Docker Desktop (or Podman) to run dev servers and services in containers.',
+                'Install Docker Desktop (or Podman) to build and serve sites, and to run their services, in containers.',
         };
     }
     const name = RUNTIME_LABELS[info.kind] ?? info.kind;
@@ -242,11 +242,11 @@ export function runtimeSummary(info: DevRuntimeInfo | null): RuntimeSummary {
     };
 }
 
-/** Why this window cannot drive the Dev Server, when it cannot. */
+/** Why this window cannot drive the Hosting Manager, when it cannot. */
 export function devServerGuidance(availability: DevAvailability): string | null {
     if (availability !== 'remote') return null;
     return (
-        'Dev servers and services run on the machine itself. This window is driving another ' +
+        'Hosting runs on the machine itself. This window is driving another ' +
         'Genie, so open the Site Manager on that machine to manage them.'
     );
 }

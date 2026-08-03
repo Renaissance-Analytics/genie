@@ -14,12 +14,14 @@ import {
     workspaceSqlIdentifier,
 } from './catalog';
 import { serviceEnv } from './env-wiring';
+import { buildEngineInventory, inventoryImages } from './inventory';
 import { provisionSteps, runProvisionSteps } from './provision';
 import type { EngineSpec, ServiceEngine } from './catalog';
+import type { EngineInventoryRow } from './inventory';
 import type { ProvisionedService } from './env-wiring';
 import type { EngineAdmin, WorkspaceSlice } from './provision';
 import type { DevServiceConfig, DevServices } from './services-config';
-import type { ContainerRuntime, RuntimeDetection } from '../container-runtime';
+import type { ContainerRuntime, ContainerState, RuntimeDetection } from '../container-runtime';
 import type { DevWorkspace } from '../site-manager';
 import type { ImagePullConsent } from '../workspace-sandbox';
 
@@ -193,6 +195,39 @@ export interface DevServiceManager {
     /** Acquire every enabled service; release everything that no longer is. */
     reconcile(): Promise<void>;
     releaseAll(): Promise<void>;
+
+    /**
+     * THE MACHINE's engines: what is installed, what is up, and who holds it.
+     *
+     * Lives here rather than beside the manager because the reference count
+     * does: `holders` is in this closure, and an inventory built from anywhere
+     * else could only guess at it. Never throws and never pulls — an absent
+     * runtime yields the catalog with everything `absent`, which is the honest
+     * answer on a machine that has no Docker yet.
+     */
+    inventory(): Promise<EngineInventoryRow[]>;
+
+    /**
+     * Drive ONE engine container at machine level.
+     *
+     * The counterpart of {@link acquire}/{@link release}, which are a
+     * workspace's hold. This is the machine saying "that container, off" — and
+     * because it is the manager doing it, the reference count follows.
+     */
+    engineAction(req: EngineActionRequest): Promise<EngineActionResult>;
+}
+
+export interface EngineActionRequest {
+    /** The CONTAINER: an engine key, or `<engineKey>@<workspaceId>`. */
+    recordKey: string;
+    action: 'start' | 'stop' | 'logs';
+    tail?: number;
+}
+
+export interface EngineActionResult {
+    ok: boolean;
+    error?: string;
+    logs?: string;
 }
 
 // --- implementation ---------------------------------------------------------
@@ -798,7 +833,138 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 await release(entry.workspaceId, serviceId);
             }
         },
+
+        async inventory() {
+            const configs = deps.listWorkspaces().map((w) => ({
+                workspaceId: w.id,
+                workspaceLabel: w.label || w.id,
+                services: deps.devServicesFor(w.id),
+            }));
+            const { runtime } = await deps.resolveRuntime();
+
+            // No runtime is the ORDINARY first-run state, not a failure: the
+            // catalog is still the true answer to "what could this machine run",
+            // and it is the answer someone with no Docker most needs.
+            const containers = new Map<string, { id: string; state: ContainerState }>();
+            const images = new Set<string>();
+            if (runtime) {
+                for (const c of await runtime.psServices().catch(() => [])) {
+                    containers.set(c.name, { id: c.id, state: c.state });
+                }
+                // Probed, never pulled. `imageExists` is a local lookup; opening a
+                // page must not be able to start a multi-gigabyte download.
+                await Promise.all(
+                    inventoryImages(configs).map(async (image) => {
+                        if (await runtime.imageExists(image).catch(() => false)) {
+                            images.add(image);
+                        }
+                    }),
+                );
+            }
+
+            return buildEngineInventory({ configs, images, containers, holders });
+        },
+
+        async engineAction({ recordKey, action, tail }) {
+            const { runtime, detection } = await deps.resolveRuntime();
+            if (!runtime) {
+                return {
+                    ok: false,
+                    error:
+                        detection.installHint ??
+                        'No container runtime (Docker or Podman) is available on this machine.',
+                };
+            }
+
+            /** Which workspaces have this exact CONTAINER configured. */
+            const consumers: Array<{ workspaceId: string; serviceId: string }> = [];
+            for (const workspace of deps.listWorkspaces()) {
+                for (const [serviceId, config] of Object.entries(
+                    deps.devServicesFor(workspace.id),
+                )) {
+                    const dedicated =
+                        config.dedicated || Boolean(engineSpecFor(config.engine).alwaysDedicated);
+                    const key = engineRecordKeyFor(
+                        engineKeyFor(config.engine, config.version),
+                        dedicated ? workspace.id : null,
+                    );
+                    if (key === recordKey) consumers.push({ workspaceId: workspace.id, serviceId });
+                }
+            }
+
+            if (action === 'start') {
+                // Re-ACQUIRE rather than `docker start`. Provisioning has to run
+                // again — a Redis ACL user lives in memory and is gone after a
+                // restart — and the workspaces have to be reattached to the
+                // engine's network. A bare start would bring up a container none
+                // of its consumers could authenticate against.
+                if (consumers.length === 0) {
+                    return {
+                        ok: false,
+                        error:
+                            'No workspace uses this engine, so there is nothing to start. Add it ' +
+                            "from a workspace's Site Manager (or ask an agent to) and it will start there.",
+                    };
+                }
+                const failures: string[] = [];
+                for (const { workspaceId, serviceId } of consumers) {
+                    const status = await acquire(workspaceId, serviceId);
+                    if (status.state === 'failed') failures.push(status.error ?? 'failed to start');
+                }
+                return failures.length
+                    ? { ok: false, error: failures[0]! }
+                    : { ok: true };
+            }
+
+            const containerId = await findEngineContainer(runtime, recordKey);
+            if (!containerId) {
+                return {
+                    ok: false,
+                    error: `No container for ${recordKey} on this machine, so there is nothing to ${action}.`,
+                };
+            }
+
+            if (action === 'logs') {
+                try {
+                    return {
+                        ok: true,
+                        logs: await runtime.logs(containerId, ...(tail ? [{ tail }] : [])),
+                    };
+                } catch (e) {
+                    return { ok: false, error: `Could not read the engine log: ${messageOf(e)}` };
+                }
+            }
+
+            // STOP. Blunt on purpose, and the bookkeeping is the point: the
+            // container is down, so nobody holds it. Leaving the holds in place
+            // would have the next release "stop" an already-stopped engine while
+            // every consumer still reported itself as connected.
+            try {
+                await runtime.stop(containerId);
+            } catch (e) {
+                return { ok: false, error: messageOf(e) };
+            }
+            holders.delete(recordKey);
+            for (const [serviceId, entry] of [...live.entries()]) {
+                if (entry.recordKey === recordKey) live.delete(serviceId);
+            }
+            changed();
+            return { ok: true };
+        },
     };
+
+    /** The engine container behind a recordKey, by its derived name. */
+    async function findEngineContainer(
+        runtime: ContainerRuntime,
+        recordKey: string,
+    ): Promise<string | null> {
+        const [engineKey, ownerId] = recordKey.split('@');
+        const name = serviceContainerNameFor(engineKey!, ownerId);
+        const found = (await runtime.psServices(engineKey).catch(() => [])).find(
+            (c) => c.name === name,
+        );
+        return found?.id ?? null;
+    }
 }
 
 // --- the process-wide instance ----------------------------------------------

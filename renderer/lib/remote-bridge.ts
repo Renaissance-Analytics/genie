@@ -11,7 +11,6 @@ import type {
     WatchRepoView,
     WatchFeedItem,
     WorkspaceWatchStatus,
-    SiteView,
     AgentType,
     AgentInboxAgentInfo,
     AgentInboxChannelInfo,
@@ -106,25 +105,12 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             })) as { ok: boolean },
     };
 
-    // Serve-local-sites (Phase B). Discovery reads the HOST's hosts file + probes
-    // the HOST's loopback, and the per-site enable set is the allowlist the HOST
-    // serves from — so this is HOST-SOURCED: a remote window resolves `.gen`
-    // config against the host over /api/sites (read) + /api/sites/set (write),
-    // exactly like the IssueWatch rail. The bearer token stays in main.
+    // A `.gen` site belongs to the machine this window DRIVES — it is a
+    // container the HOST's Dev Server is serving — so the listing is
+    // HOST-SOURCED, exactly like the IssueWatch rail. The bearer token stays in
+    // main. There is no write here: creating a site is `devServer.site`, which
+    // is local-only until the host grows `/api/dev-server/*` (P5).
     const sites: GenieApi['sites'] = {
-        list: async (workspaceId, opts) =>
-            (
-                (await req(
-                    `/api/sites?workspaceId=${encodeURIComponent(workspaceId)}${
-                        opts?.refresh ? '&refresh=1' : ''
-                    }`,
-                )) as { sites: SiteView[] }
-            ).sites,
-        set: async (workspaceId, siteId, patch) =>
-            (await req('/api/sites/set', {
-                method: 'POST',
-                json: { workspaceId, siteId, patch },
-            })) as { ok: boolean },
         // The header `.gen` popover is HOST-SOURCED when remote — the enabled sites
         // belong to the machine THIS window drives, exactly like files / processes /
         // IssueWatch. Fetch the host's aggregated enabled-`.gen` snapshot over the
@@ -173,15 +159,28 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
     const devServer: GenieApi['devServer'] = {
         site: async () => ({
             ok: false,
-            error: 'The Dev Server is managed on the machine itself.',
+            error: 'Hosting is managed on the machine itself.',
             sites: [],
         }),
         service: async () => ({
             ok: false,
-            error: 'The Dev Server is managed on the machine itself.',
+            error: 'Hosting is managed on the machine itself.',
             services: [],
         }),
         runtimeStatus: async () => ({ kind: 'none' }),
+        // The machine-level read is inert here for the same reason: it would
+        // describe the CLIENT's Docker, its images and its engines, under a
+        // window that is driving somebody else's machine. An empty catalog with
+        // no runtime is the one answer that cannot mislead.
+        workstation: async () => ({
+            runtime: { kind: 'none', probes: [] },
+            devBase: { image: '', installed: false, toolchain: [] },
+            engines: [],
+        }),
+        engine: async () => ({
+            ok: false,
+            error: 'Service engines are managed on the machine itself.',
+        }),
         repos: async () => [],
     };
 

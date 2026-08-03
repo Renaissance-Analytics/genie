@@ -471,3 +471,121 @@ describe('remove', () => {
         expect(runtime.removedVolumes).toEqual([]);
     });
 });
+
+/**
+ * The MACHINE-level surface (the workstation Dev Server page).
+ *
+ * Because engines are SHARED, their inventory and their start/stop belong to
+ * the machine, not to any one workspace — and they have to be driven by the
+ * manager that owns the reference count, not beside it. A second code path
+ * stopping a container the manager still believes is held would leave every
+ * holder pointing at something that is gone, and the next release would then
+ * "stop" an already-dead container while the workspaces that were using it
+ * silently fail to connect.
+ */
+describe('the machine-level view', () => {
+    it('reports the live reference count, per engine container', async () => {
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(
+            deps(runtime, { a: pgFor('svc-a'), b: pgFor('svc-b') }),
+        );
+        await manager.acquire('a', 'svc-a');
+        await manager.acquire('b', 'svc-b');
+
+        const rows = await manager.inventory();
+        const pg16 = rows.find((r) => r.recordKey === 'postgres-16');
+        expect(pg16).toMatchObject({ state: 'running', holders: 2, configured: 2 });
+        expect(pg16?.workspaces).toEqual(['a', 'b']);
+    });
+
+    it('answers with the catalog even when no runtime is available', async () => {
+        // Most machines have no Docker the first time this page is opened. "What
+        // could I run here" is exactly the question that state has to answer, so
+        // an absent runtime is an empty container list — never a throw.
+        const manager = createDevServiceManager(
+            deps(fakeRuntime(), {}, {
+                resolveRuntime: async () => ({
+                    runtime: null,
+                    detection: { kind: 'none', reason: 'not-installed', probes: [] },
+                }),
+            }),
+        );
+        const rows = await manager.inventory();
+        expect(rows.length).toBeGreaterThan(0);
+        expect(rows.every((r) => r.state === 'absent' && !r.installed)).toBe(true);
+    });
+
+    it('STOPS a shared engine and drops every hold on it, so the count stays honest', async () => {
+        // A machine-level stop is a deliberately blunt instrument: the container
+        // is down, so nobody is holding anything, and saying otherwise would
+        // make the NEXT release stop an engine that is already stopped while
+        // reporting workspaces as connected to it.
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(
+            deps(runtime, { a: pgFor('svc-a'), b: pgFor('svc-b') }),
+        );
+        await manager.acquire('a', 'svc-a');
+        await manager.acquire('b', 'svc-b');
+
+        const res = await manager.engineAction({ recordKey: 'postgres-16', action: 'stop' });
+        expect(res.ok).toBe(true);
+        expect(runtime.stopped.length).toBe(1);
+
+        const rows = await manager.inventory();
+        expect(rows.find((r) => r.recordKey === 'postgres-16')).toMatchObject({
+            state: 'stopped',
+            holders: 0,
+        });
+        // And the workspaces now report the service as not running, rather than
+        // claiming a connection to a container that is down.
+        expect(manager.list('a')[0]?.state).not.toBe('running');
+    });
+
+    it('STARTS a stopped engine by re-acquiring it for the workspaces that use it', async () => {
+        // Not a bare `docker start`: a Redis ACL user lives in memory and is
+        // gone after a restart, so a machine-level start has to go back through
+        // provisioning or the workspaces come back to an engine that refuses
+        // their credentials.
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }));
+        await manager.acquire('a', 'svc-a');
+        await manager.engineAction({ recordKey: 'postgres-16', action: 'stop' });
+
+        const res = await manager.engineAction({ recordKey: 'postgres-16', action: 'start' });
+        expect(res.ok).toBe(true);
+        expect(manager.list('a')[0]?.state).toBe('running');
+        expect(
+            (await manager.inventory()).find((r) => r.recordKey === 'postgres-16'),
+        ).toMatchObject({ state: 'running', holders: 1 });
+    });
+
+    it('refuses to start an engine no workspace uses, and says why', async () => {
+        // There is nothing to start: an engine with no consumer has no
+        // credentials to provision and nothing to serve. An error that names the
+        // remedy beats a button that appears to do nothing.
+        const manager = createDevServiceManager(deps(fakeRuntime(), {}));
+        const res = await manager.engineAction({ recordKey: 'postgres-16', action: 'start' });
+        expect(res.ok).toBe(false);
+        expect(res.error).toMatch(/no workspace/i);
+    });
+
+    it('tails the engine log for a machine-level row', async () => {
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }));
+        await manager.acquire('a', 'svc-a');
+        const res = await manager.engineAction({
+            recordKey: 'postgres-16',
+            action: 'logs',
+            tail: 20,
+        });
+        expect(res.ok).toBe(true);
+        expect(res.logs).toContain('ready to accept connections');
+    });
+
+    it('reports a missing container as a failure rather than pretending to act', async () => {
+        const manager = createDevServiceManager(deps(fakeRuntime(), {}));
+        const res = await manager.engineAction({ recordKey: 'postgres-16', action: 'stop' });
+        expect(res.ok).toBe(false);
+        expect(res.error).toBeTruthy();
+    });
+});

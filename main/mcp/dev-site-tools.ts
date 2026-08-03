@@ -12,7 +12,7 @@ import { detectFolder } from '../workspace/detect';
 import { resolveAgentTarget } from './host-tools';
 import { planHostAllowlist } from '../dev-server/host-allowlist';
 import type { DevFramework } from '../dev-server/host-allowlist';
-import type { DevSiteOption } from '../dev-server/site-def';
+import type { BuildStep, HostingOption } from '../dev-server/serve-recipe';
 import type { DevSiteRow } from '../dev-server/site-manager';
 import type { DevSiteConfig } from '../dev-server/sites-config';
 import type {
@@ -23,8 +23,8 @@ import type {
 } from './protocol';
 
 /**
- * The HOST side of the `manageSite` MCP tool (Tynn #234, P2 item 5) — the
- * agent-first administration surface for the container Dev Server.
+ * The HOST side of the `manageSite` MCP tool — the agent-first administration
+ * surface for the Hosting Manager.
  *
  * The discovery's decision was that agents drive this and the human UX is the
  * secondary viewer, so this file is the primary path, not a convenience wrapper
@@ -34,12 +34,12 @@ import type {
  *
  * ## Two behaviours worth naming
  *
- * **`create` finishes the job.** An agent asked to "serve the frontend" should
- * not have to make four calls. `create` with just a `name` detects how the repo
- * runs, takes the recommended option, stores it, and starts it — reporting which
- * option it applied and what else was on offer. When nothing can be recommended
- * it FAILS with the options attached, so the next call is obvious rather than a
- * guess.
+ * **`create` finishes the job.** An agent asked to "host the frontend" should
+ * not have to make four calls. `create` with just a `name` detects the repo's
+ * stack, takes the recommended production BUILD + SERVE recipe, stores it,
+ * builds it and starts the production server — reporting which recipe it applied
+ * and what else was on offer. When nothing can be recommended it FAILS with the
+ * options attached, so the next call is obvious rather than a guess.
  *
  * **The runtime's absence is data, not an exception.** Every result carries
  * `runtime`, so an agent that gets `ok: false` on a machine with no Docker reads
@@ -104,8 +104,8 @@ export async function runtimeInfo(): Promise<{ kind: string; version?: string; i
 }
 
 /**
- * Is the container Dev Server usable here? Gates `manageSite` out of
- * `tools/list`. Fail CLOSED — see `McpContext.devServerAvailable`.
+ * Is the Hosting Manager usable here? Gates `manageSite` out of `tools/list`.
+ * Fail CLOSED — see `McpContext.devServerAvailable`.
  */
 export async function devServerAvailableForMcp(): Promise<boolean> {
     try {
@@ -137,23 +137,44 @@ function toInfo(row: DevSiteRow): DevSiteInfo {
         ...(row.hostPort ? { hostPort: row.hostPort } : {}),
         ...(row.origin ? { origin: row.origin } : {}),
         ...(row.localOrigin ? { localOrigin: row.localOrigin } : {}),
-        ...(row.command ? { command: row.command } : {}),
+        ...(row.stack ? { stack: row.stack } : {}),
+        ...(row.server ? { server: row.server } : {}),
+        ...(row.build?.length ? { build: row.build } : {}),
+        ...(row.serve ? { serve: row.serve } : {}),
         ...(row.image ? { image: row.image } : {}),
+        ...(row.buildLog ? { buildLog: row.buildLog } : {}),
+        ...(row.exposed?.length ? { exposed: row.exposed } : {}),
         ...(row.error ? { error: row.error } : {}),
     };
 }
 
-function toOption(option: DevSiteOption): DevSiteRunOption {
+function toOption(option: HostingOption): DevSiteRunOption {
     return {
         runMode: option.runMode,
         ...(option.stack ? { stack: option.stack } : {}),
+        ...(option.server ? { server: option.server } : {}),
         source: option.source,
         reason: option.reason,
-        ...(option.command ? { command: option.command } : {}),
+        ...(option.build.length ? { build: option.build } : {}),
+        ...(option.serve ? { serve: option.serve } : {}),
+        ...(option.image ? { image: option.image } : {}),
         ...(option.port ? { port: option.port } : {}),
         confident: option.confident,
         ...(option.needs ? { needs: option.needs } : {}),
     };
+}
+
+/** Normalize a caller-supplied build list — a step with no label still runs. */
+function toBuildSteps(
+    steps: NonNullable<ManageSiteRequest['build']>,
+): BuildStep[] {
+    return steps
+        .filter((step) => Array.isArray(step?.command) && step.command.length > 0)
+        .map((step) => ({
+            label: step.label?.trim() || step.command.join(' '),
+            command: step.command,
+            ...(step.optional ? { optional: true } : {}),
+        }));
 }
 
 // --- the tool ---------------------------------------------------------------
@@ -194,7 +215,7 @@ export async function runManageSite(
     const manager = devSiteManager();
     if (!manager) {
         return bare(
-            'The Genie Dev Server is not running in this process, so sites cannot be managed here.',
+            'The Genie Hosting Manager is not running in this process, so sites cannot be managed here.',
         );
     }
 
@@ -254,39 +275,54 @@ export async function runManageSite(
                 const repo = resolveRepoDir(req.repo);
                 if ('error' in repo) return fail(repo.error);
 
-                let command = req.command;
+                let serve = req.serve;
+                let build = req.build ? toBuildSteps(req.build) : undefined;
+                let image = req.image;
+                let env = req.env;
                 let port = req.port;
                 let runMode = req.runMode;
-                let applied: DevSiteOption | undefined;
-                let options: DevSiteOption[] | undefined;
+                let applied: HostingOption | undefined;
+                let options: HostingOption[] | undefined;
                 let framework: DevFramework | undefined;
+                let stack: HostingOption['stack'] | undefined;
+                let server: HostingOption['server'] | undefined;
 
                 // Nothing explicit supplied → read the repo and take the
-                // recommendation, so "serve the frontend" is ONE call.
-                if (!command && !req.image) {
+                // recommended PRODUCTION recipe, so "host the frontend" is ONE
+                // call that builds and serves.
+                if (!serve && !req.image) {
                     const described = describeRepoRun(repo.dir, port ? { port } : {});
                     options = described.options;
                     applied = runMode
                         ? described.options.find((o) => o.runMode === runMode)
                         : (described.recommended ?? undefined);
-                    if (!applied || (!applied.command && applied.runMode !== 'dockerfile')) {
+                    if (!applied || (!applied.serve && applied.runMode !== 'dockerfile')) {
                         return fail(
-                            `Nothing in ${req.repo || 'this workspace'} says how it runs. Supply \`command\` (literal argv) and \`port\`, or pick one of the options below.`,
+                            `Nothing in ${req.repo || 'this workspace'} says how it is built and served in production. Supply \`serve\` (literal argv) and \`port\` — plus \`build\` steps if it has to be built — or pick one of the options below.`,
                             { options: described.options.map(toOption) },
                         );
                     }
-                    command = applied.command;
+                    serve = applied.serve;
+                    build = build ?? applied.build;
+                    // The recipe's image is load-bearing, not a preference: a
+                    // PHP site serves from FrankenPHP and a built front end from
+                    // nginx, and neither is the workspace dev image.
+                    image = image ?? applied.image;
+                    // UNDER the caller's env — a value they pinned always wins.
+                    env = { ...(applied.env ?? {}), ...(env ?? {}) };
                     port = port ?? applied.port;
                     runMode = applied.runMode as ManageSiteRequest['runMode'];
-                    // The ONLY moment this is knowable: `npm run dev` does not
-                    // say whether it runs Vite, and Vite is what will reject the
-                    // `.gen` Host header. See `host-allowlist.ts`.
+                    stack = applied.stack;
+                    server = applied.server;
+                    // The ONLY moment this is knowable: `gunicorn mysite.wsgi`
+                    // contains no token spelling "django", and Django is the one
+                    // framework whose host allowlist still bites in production.
                     framework = applied.framework;
                 }
 
                 if (!port) {
                     return fail(
-                        'create requires `port` — the port the server listens on INSIDE the container. Without it there is nothing to publish.',
+                        'create requires `port` — the port the production server listens on INSIDE the container. Without it there is nothing to publish.',
                         options ? { options: options.map(toOption) } : {},
                     );
                 }
@@ -296,20 +332,27 @@ export async function runManageSite(
                     genName: req.genName ?? defaultGenNameFor(slugLabel(ws.project_name), name),
                     repo: req.repo ?? '',
                     runMode: runMode ?? 'explicit',
-                    ...(req.image ? { image: req.image } : {}),
-                    ...(command ? { command } : {}),
+                    ...(stack ? { stack } : {}),
+                    ...(server ? { server } : {}),
+                    ...(image ? { image } : {}),
+                    ...(build?.length ? { build } : {}),
+                    ...(serve ? { serve } : {}),
                     port,
-                    ...(req.env ? { env: req.env } : {}),
+                    ...(req.exposed
+                        ? { exposed: req.exposed as never }
+                        : {}),
+                    ...(env && Object.keys(env).length ? { env } : {}),
                     kind: req.kind ?? 'http',
                     ...(framework ? { framework } : {}),
                     ...(req.upstreamHost ? { upstreamHost: req.upstreamHost } : {}),
-                    // Defined AND started unless the caller says otherwise: a
-                    // site nobody asked to keep off is one they want serving.
+                    // Defined, BUILT and served unless the caller says
+                    // otherwise: a site nobody asked to keep off is one they
+                    // want hosted.
                     enabled: req.enabled !== false,
                 });
                 if (!siteId) {
                     return fail(
-                        `Could not define a site called "${name}". A name must be a DNS label — letters, digits and hyphens only — and a \`genName\`, if you pass one, must end in \`.gen\`.`,
+                        `Could not define a site called "${name}". A name must be a DNS label — letters, digits and hyphens only — and a \`genName\`, if you pass one, must end in \`.gen\`. An \`exposed\` surface must carry a \`reason\` naming what the BROWSER needs it for.`,
                         options ? { options: options.map(toOption) } : {},
                     );
                 }
@@ -331,7 +374,7 @@ export async function runManageSite(
                 const plan = planHostAllowlist({
                     genName: getWorkspaceDevSites(ws.id)[siteId]?.genName ?? '',
                     ...(framework ? { framework } : {}),
-                    ...(command ? { command } : {}),
+                    ...(serve ? { command: serve } : {}),
                     ...(req.upstreamHost ? { upstreamHost: req.upstreamHost } : {}),
                 });
                 return {

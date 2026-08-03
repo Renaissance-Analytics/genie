@@ -39,16 +39,24 @@ export const E2E_USERDATA = path.join(os.tmpdir(), 'genie-e2e-profile');
  * Which harness window to open. `issuewatch` mounts the IssueWatchFlyout (the
  * default — back-compat with the existing spec); `ghcaps` mounts the
  * GithubCapabilitiesFlyout (per-install resolve flow); `picker-layer` mounts the
- * real AddWorkspaceModal so the file picker can be opened from inside it. Maps to
- * `GENIE_E2E_PAGE`, which `showE2EWindow` (background.ts) reads to pick the route.
+ * real AddWorkspaceModal so the file picker can be opened from inside it;
+ * `hosting` mounts the real Hosting Manager settings section + the real
+ * per-workspace Hosting panel. Maps to `GENIE_E2E_PAGE`, which `showE2EWindow`
+ * (background.ts) reads to pick the route.
  */
-export type E2EHarnessPage = 'issuewatch' | 'ghcaps' | 'agent-access' | 'picker-layer';
+export type E2EHarnessPage =
+    | 'issuewatch'
+    | 'ghcaps'
+    | 'agent-access'
+    | 'picker-layer'
+    | 'hosting';
 
 const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
     issuewatch: 'e2e-issuewatch',
     ghcaps: 'e2e-ghcaps',
     'agent-access': 'e2e-agent-access',
     'picker-layer': 'e2e-picker-layer',
+    hosting: 'e2e-hosting',
 };
 
 export async function launchGenieE2E(
@@ -64,12 +72,64 @@ export async function launchGenieE2E(
             NODE_ENV: 'production',
             GENIE_E2E: '1',
             GENIE_E2E_PAGE: HARNESS_ROUTE[harness],
+            // Containers are mocked ONLY for the hosting harness — every other
+            // spec keeps the real `dev:*` handlers (main/e2e/hosting.ts).
+            GENIE_E2E_HOSTING: harness === 'hosting' ? '1' : '',
         },
     });
     // The harness window is opened on app.whenReady(); wait for it.
     const page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
     return { app, page };
+}
+
+/**
+ * The Hosting Manager fixture's handle in MAIN (`main/e2e/hosting.ts`).
+ *
+ * `calls` is the half the DOM cannot show: a confirm dialog that fires the stop
+ * anyway looks identical on screen to one that waits for the confirmation, and
+ * only the call log tells them apart.
+ */
+export async function readHostingState(app: ElectronApplication): Promise<{
+    calls: { workstation: number; engine: string[]; site: string[]; service: string[] };
+    runtimeKind: string;
+    siteNames: string[];
+} | null> {
+    return app.evaluate(() => {
+        const h = (globalThis as Record<string, any>).__GENIE_E2E_HOSTING__;
+        if (!h) return null;
+        return {
+            calls: {
+                workstation: h.state.calls.workstation,
+                engine: [...h.state.calls.engine],
+                site: [...h.state.calls.site],
+                service: [...h.state.calls.service],
+            },
+            runtimeKind: h.state.workstation.runtime.kind,
+            siteNames: h.state.sites.map((s: { name: string }) => s.name),
+        };
+    });
+}
+
+/** Restore the hosting fixture to its defaults — every test starts from the
+ *  same machine, whatever the one before it started or stopped. */
+export async function resetHosting(app: ElectronApplication): Promise<void> {
+    await app.evaluate(() => {
+        (globalThis as Record<string, any>).__GENIE_E2E_HOSTING__?.reset();
+    });
+}
+
+/**
+ * Take the container runtime away mid-session and PUSH the change, without a
+ * reload. Proves the surfaces repaint from `dev-server:changed` rather than
+ * only at mount — a frozen page is invisible in a screenshot and fatal in use.
+ */
+export async function hostingRuntimeUnavailable(app: ElectronApplication): Promise<void> {
+    await app.evaluate(() => {
+        const h = (globalThis as Record<string, any>).__GENIE_E2E_HOSTING__;
+        h.runtimeUnavailable();
+        h.notifyChanged();
+    });
 }
 
 /**

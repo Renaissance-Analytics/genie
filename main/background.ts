@@ -27,14 +27,11 @@ import {
     workspaceProcessApproval,
     workspaceTerminalApproval,
     removeWorkspace,
-    getWorkspaceTunnelSites,
-    setWorkspaceTunnelSite,
     getWorkspaceDevSites,
     getWorkspaceDevServices,
     getOrCreateDevServiceEngine,
 } from './db';
-import { discoverSites } from './mobile/hosts';
-import { listLocalEnabledGenSites } from './sites/local-sites';
+import { listLocalEnabledGenSites, resolveEnabledSite } from './sites/local-sites';
 import { remoteGenUrl } from './sites/gen-url';
 import { LOCAL_CONN_KEY, openTestingBrowser } from './testing-browser';
 import { initDevSites, devSiteManager } from './dev-server/site-manager';
@@ -1616,52 +1613,14 @@ app.whenReady().then(async () => {
             if (result.cancelled) return false; // dismissed = deny
             return (result.answers[0]?.selected ?? []).includes('Pair');
         },
-        // Serve-local-sites (Phase C): the host reverse proxy's settings/allowlist
-        // accessors. `localSitesEnabled` finally HOST-ENFORCES the master switch
-        // Phase B only stored; `resolveSite` maps an opaque siteId → its loopback
-        // target STRICTLY from the discovered + per-site-`enabled` + served set
-        // (the SSRF/open-proxy guard — the remote can never supply a raw target).
+        // The host reverse proxy's resolver: an opaque siteId → the loopback
+        // target of a site this machine is SERVING — the SAME aggregation the
+        // host publishes at `/api/sites/enabled`, so the listing a remote reads
+        // and the target it then gets can never disagree. That single source is
+        // also the SSRF/open-proxy guard: a remote supplies nothing but the id,
+        // and an id nothing serves resolves to null.
         siteProxy: {
-            localSitesEnabled: () =>
-                (getAllSettings() as Record<string, string>)['local_sites_enabled'] === 'on',
-            resolveSite: async (siteId) => {
-                // Scope to THIS host's served workspaces (like /api/sites/set): a
-                // site is servable if ANY served workspace enabled it. discoverSites
-                // caches probes, so repeated resolves only re-parse the hosts file.
-                for (const ws of listWorkspaces()) {
-                    const views = await discoverSites(getWorkspaceTunnelSites(ws.id));
-                    const hit = views.find((v) => v.siteId === siteId && v.enabled);
-                    if (hit) {
-                        return {
-                            workspaceId: ws.id,
-                            hostname: hit.hostname,
-                            scheme: hit.scheme,
-                            port: hit.port,
-                        };
-                    }
-                    for (const owner of views.filter((v) => v.enabled)) {
-                        const endpoint = owner.companions?.find((c) => c.siteId === siteId);
-                        if (endpoint) {
-                            return {
-                                workspaceId: ws.id,
-                                hostname: endpoint.hostname,
-                                scheme: endpoint.scheme,
-                                port: endpoint.port,
-                                loopback: endpoint.loopback,
-                                // Include the owner's `.gen` name: the browser
-                                // sits on the `.gen` origin, so a `.test`-only
-                                // allowlist rejects its websocket (genie#29).
-                                allowedOrigins: [
-                                    owner.hostname,
-                                    owner.genName,
-                                    endpoint.hostname,
-                                ].filter(Boolean),
-                            };
-                        }
-                    }
-                }
-                return null;
-            },
+            resolveSite: (siteId) => resolveEnabledSite(siteId),
         },
         data: {
             listWorkspaces: () =>
@@ -1746,23 +1705,11 @@ app.whenReady().then(async () => {
             updateStatus: () => mobileUpdateStatus(),
             installUpdate: () => mobileInstallUpdate(),
             checkUpdate: () => mobileCheckUpdate(),
-            // Serve-local-sites (Phase B): the host's discovered loopback dev
-            // sites merged with a workspace's per-site tunnel settings (the §5
-            // allowlist). Same discovery the local IPC (`sites:list`) uses — this
-            // exposes it to a remote/programmatic caller over /api/sites.
-            listSites: (workspaceId, opts) => {
-                const settings = workspaceId ? getWorkspaceTunnelSites(workspaceId) : {};
-                return discoverSites(settings, opts);
-            },
-            setSiteConfig: (workspaceId, siteId, patch) => {
-                setWorkspaceTunnelSite(workspaceId, siteId, patch);
-                return { ok: true };
-            },
-            // The host's ENABLED `.gen` sites aggregated across EVERY workspace's
-            // allowlist — the enabled-only snapshot a remote reads over
-            // /api/sites/enabled for its header `.gen` popover + Testing Browser
-            // resolver. Same source the local IPC (`sites:all`) uses, so a remote
-            // window sees exactly what a local one computes.
+            // The host's `.gen` dev sites — the containers its Dev Server is
+            // serving — read by a remote over /api/sites/enabled for its header
+            // `.gen` popover + Testing Browser resolver. The same source the
+            // local IPC (`sites:all`) and the site-proxy resolver use, so a
+            // remote window sees exactly what a local one computes.
             listEnabledSites: () => listLocalEnabledGenSites(),
         },
     }).catch((e) => console.error('[mobile] failed to start', e));
@@ -2008,7 +1955,9 @@ app.whenReady().then(async () => {
  * `GENIE_E2E_PAGE` (default `e2e-issuewatch`), which mounts a real flyout open
  * against the scriptable mock (main/e2e/mock.ts). Each spec picks its page:
  *   - `e2e-issuewatch` → IssueWatchFlyout (device-flow reconnect),
- *   - `e2e-ghcaps`     → GithubCapabilitiesFlyout (per-install resolve flow).
+ *   - `e2e-ghcaps`     → GithubCapabilitiesFlyout (per-install resolve flow),
+ *   - `e2e-hosting`    → the Hosting Manager: the workstation settings section
+ *     plus the per-workspace panel, against the fixture in main/e2e/hosting.ts.
  * Plain BrowserWindow, shown immediately so Playwright can attach to its first
  * window.
  */
@@ -2021,6 +1970,7 @@ function showE2EWindow(): void {
         'e2e-issuewatch',
         'e2e-agent-access',
         'e2e-picker-layer',
+        'e2e-hosting',
     ] as const;
     const page = (ALLOWED as readonly string[]).includes(requested)
         ? requested

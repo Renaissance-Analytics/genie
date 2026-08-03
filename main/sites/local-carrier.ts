@@ -6,7 +6,7 @@ import {
     parseSiteProxyUrl,
     stripTokenParam,
 } from '../mobile/site-proxy';
-import type { SiteScheme } from '../mobile/hosts';
+import type { SiteScheme } from './gen-url';
 import type {
     SiteCarrier,
     SiteForwardCall,

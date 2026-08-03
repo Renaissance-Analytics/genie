@@ -10,16 +10,42 @@ import {
 import { GENIE_DEV_BASE_IMAGE, WORKSPACE_MOUNT_TARGET } from './images';
 import { DEFAULT_READY_TIMEOUT_MS, waitForHttp, waitForPort } from './port-probe';
 import { planHostAllowlist } from './host-allowlist';
-import { resolveSiteRun } from './site-def';
+import { planExposure } from './exposure';
+import { resolveHostedRun } from './serve-recipe';
+import { runSiteBuild } from './site-build';
 import { ensureWorkspaceSandbox } from './workspace-sandbox';
 import type { ContainerRuntime, RuntimeDetection } from './container-runtime';
+import type { ExposurePlan } from './exposure';
 import type { HostIds } from './host-ids';
 import type { DevSiteConfig, DevSites } from './sites-config';
 import type { ImagePullConsent } from './workspace-sandbox';
 
 /**
- * The DEV SITE MANAGER (Tynn #234, P2 items 3 + 4) — "this workspace defines a
- * site" becomes "a container is serving it, and the Genie Browser routes there".
+ * The HOSTED SITE MANAGER — "this workspace defines a site" becomes "it is
+ * BUILT, a production server is serving the result, and the Genie Browser routes
+ * there".
+ *
+ * ## Build, then serve — and they happen in different containers
+ *
+ * Starting a site is two stages, not one. First the production BUILD runs by
+ * `exec`ing into the workspace's long-lived sandbox container, which is the one
+ * with the toolchain (`site-build.ts`). Then the site's OWN container starts,
+ * running the production server — very often from a different image entirely,
+ * because FrankenPHP and nginx serve builds and cannot produce them. The two
+ * share the workspace bind mount, which is what carries the artifact across.
+ *
+ * A required build step that fails means the site does NOT start. That rule is
+ * the difference between a preview you can trust and one that silently serves
+ * the last successful build while every health signal reads green.
+ *
+ * ## What is published is what the BROWSER needs
+ *
+ * `exposure.ts` decides, and nothing else may add a port. The app's HTTP surface
+ * is published to loopback on an ephemeral port and routed at `<name>.gen`;
+ * declared browser-facing surfaces get their own subdomain, and a raw one gets a
+ * STABLE port so a client configured with a number keeps working. Backing
+ * services are never here — they are reached on the workspace network through
+ * the injected environment.
  *
  * ## The whole phase, in one object
  *
@@ -76,7 +102,22 @@ export interface DevSiteStatus {
     origin?: string;
     /** The direct loopback origin — what a local browser or curl can hit. */
     localOrigin?: string;
+    /** The production build's log, when this start ran one. Kept on SUCCESS too:
+     *  a green build that installed the wrong thing is worth reading. */
+    buildLog?: string;
+    /** Browser-facing surfaces beyond the app's HTTP, as they ended up. */
+    exposed?: ExposedRoute[];
     error?: string;
+}
+
+/** One extra browser-facing surface, resolved to what a client can dial. */
+export interface ExposedRoute {
+    name: string;
+    protocol: string;
+    /** The `.gen` subdomain, for the HTTP-carried protocols. */
+    genName: string;
+    /** Set for a raw surface (gRPC/TCP): the stable loopback port to dial. */
+    hostPort?: number;
 }
 
 /** One configured site plus whatever is currently true about it. */
@@ -85,7 +126,10 @@ export interface DevSiteRow extends DevSiteStatus {
     runMode: DevSiteConfig['runMode'];
     kind: DevSiteConfig['kind'];
     enabled: boolean;
-    command?: string[];
+    stack?: DevSiteConfig['stack'];
+    server?: DevSiteConfig['server'];
+    build?: DevSiteConfig['build'];
+    serve?: string[];
     port?: number;
     image?: string;
 }
@@ -204,6 +248,12 @@ interface Live {
     containerId: string;
     hostPort: number;
     ready: boolean;
+    /** The `.gen` rows this site contributes — its own, plus any HTTP-carried
+     *  surface. Resolved to published ports at start, so `genSites()` stays
+     *  synchronous for the browser's resolver map. */
+    routes: DevGenSite[];
+    /** The extra browser-facing surfaces, as a caller reads them. */
+    exposed: ExposedRoute[];
 }
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -297,7 +347,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
 
         // Resolve BEFORE creating anything: a site with no port would otherwise
         // leave a sandbox and a half-built container behind for nothing.
-        const run = resolveSiteRun(config, { devImage, workdir: mountTarget });
+        const run = resolveHostedRun(config, { devImage, workdir: mountTarget });
         if (!run.ok) return failed(workspaceId, siteId, config, run.error);
 
         try {
@@ -355,9 +405,14 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             }
 
             // The workspace's services, brought up and turned into env. A
-            // failure here does NOT stop the site: a dev server is often
-            // exactly where a missing database is diagnosed, and refusing to
-            // start hides the error behind a second one.
+            // failure here does NOT stop the site: hosting is often exactly
+            // where a missing database is diagnosed, and refusing to start
+            // hides the error behind a second one.
+            //
+            // These are WORKSTATION-hosted shared engines, reached on the
+            // workspace's own network at the engine's container name. Backend
+            // traffic: nothing here is published, and nothing here gets a
+            // browser-facing name. See `exposure.ts`.
             let serviceEnv: Record<string, string> = {};
             if (deps.serviceEnvFor) {
                 try {
@@ -366,6 +421,57 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                     serviceEnv = {};
                 }
             }
+
+            // The environment BOTH stages get. Layered, and the ORDER is the
+            // contract: the allow-host plan is the weakest (it is Genie's guess
+            // at making a framework accept the `.gen` Host), the recipe's own
+            // needs come next, then the services, and the site's OWN env
+            // overrides everything — a value the user pinned always wins.
+            const env: Record<string, string> = {
+                ...planHostAllowlist({
+                    genName: config.genName,
+                    ...(config.framework ? { framework: config.framework } : {}),
+                    ...(config.serve ? { command: config.serve } : {}),
+                    ...(config.upstreamHost ? { upstreamHost: config.upstreamHost } : {}),
+                }).env,
+                ...serviceEnv,
+                ...(config.env ?? {}),
+            };
+
+            // --- BUILD, then serve ------------------------------------------
+            //
+            // In the SANDBOX container, because that is the one with the
+            // toolchain: the site's own image may be FrankenPHP or nginx, which
+            // serve a build and cannot make one. A required step that fails
+            // stops the site — starting anyway would serve the previous build
+            // while every health signal read green.
+            let buildLog: string | undefined;
+            if (run.build.length) {
+                const built = await runSiteBuild(run.build, {
+                    exec: (id, argv, execOpts) => runtime.exec(id, argv, execOpts),
+                    containerId: sandbox.container.id,
+                    workdir: run.workdir,
+                    env,
+                    ...(deps.onImagePullProgress
+                        ? { onProgress: deps.onImagePullProgress }
+                        : {}),
+                });
+                buildLog = built.log;
+                if (!built.ok) {
+                    return {
+                        ...failed(workspaceId, siteId, config, built.error ?? 'The build failed.'),
+                        buildLog,
+                    };
+                }
+            }
+
+            const exposure = planExposure({
+                siteId,
+                genName: config.genName,
+                port: run.port,
+                kind: config.kind,
+                ...(config.exposed ? { exposed: config.exposed } : {}),
+            });
 
             const name = siteContainerNameFor(workspaceId, config.name);
             const existing = (await runtime.ps(workspaceId)).find((c) => c.name === name);
@@ -387,7 +493,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 workspaceId,
                 name,
                 image,
-                ...(run.command ? { command: run.command } : {}),
+                ...(run.serve ? { command: run.serve } : {}),
                 network: sandbox.network,
                 labels: {
                     [WORKSPACE_LABEL]: workspaceId,
@@ -396,40 +502,46 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 },
                 mounts: [{ source: workspace.path, target: mountTarget }],
                 workdir: run.workdir,
-                // Loopback + ephemeral: the ONLY port this container exposes,
-                // never on the LAN, and never a fixed number two workspaces
-                // could fight over.
-                ports: [{ container: run.port, hostIp: '127.0.0.1' }],
-                // Layered, and the ORDER is the contract. The allow-host plan
-                // is the weakest — it is Genie's guess at making a framework
-                // accept the `.gen` Host — so services override it and the
-                // site's OWN env overrides everything. A value the user pinned
-                // always wins.
-                ...(() => {
-                    const env = {
-                        ...planHostAllowlist({
-                            genName: config.genName,
-                            ...(config.framework ? { framework: config.framework } : {}),
-                            ...(config.command ? { command: config.command } : {}),
-                            ...(config.upstreamHost ? { upstreamHost: config.upstreamHost } : {}),
-                        }).env,
-                        ...serviceEnv,
-                        ...(config.env ?? {}),
-                    };
-                    return Object.keys(env).length ? { env } : {};
-                })(),
-                // A dev server spawns compilers and watchers; without a reaper
-                // their orphans accumulate as zombies.
+                // EXACTLY what the browser needs, and nothing else. The plan is
+                // the only thing that may open a port on this container — see
+                // `exposure.ts`.
+                ports: exposure.publish,
+                ...(Object.keys(env).length ? { env } : {}),
+                // A production server still spawns workers (gunicorn, php-fpm,
+                // nginx); without a reaper their orphans accumulate as zombies.
                 init: true,
             });
 
-            return await recordLive(runtime, workspaceId, siteId, config, container.id);
+            const status = await recordLive(
+                runtime,
+                workspaceId,
+                siteId,
+                config,
+                container.id,
+                readyTimeoutMs,
+                exposure,
+            );
+            return {
+                ...status,
+                ...(buildLog ? { buildLog } : {}),
+                // Refusals are reported, not silently dropped: a caller that
+                // asked to expose a database needs to be told why it did not
+                // happen, on the call where they asked.
+                ...(exposure.rejected.length
+                    ? {
+                          error: exposure.rejected
+                              .map((r) => r.error)
+                              .concat(status.error ? [status.error] : [])
+                              .join(' '),
+                      }
+                    : {}),
+            };
         } catch (e) {
             return failed(workspaceId, siteId, config, messageOf(e));
         }
     }
 
-    /** Read the published port back, probe it, and remember the site as live. */
+    /** Read the published ports back, probe the app's, and remember it as live. */
     async function recordLive(
         runtime: ContainerRuntime,
         workspaceId: string,
@@ -437,12 +549,20 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         config: DevSiteConfig,
         containerId: string,
         probeTimeoutMs: number = readyTimeoutMs,
+        exposure: ExposurePlan = planExposure({
+            siteId,
+            genName: config.genName,
+            port: config.port ?? 0,
+            kind: config.kind,
+            ...(config.exposed ? { exposed: config.exposed } : {}),
+        }),
     ): Promise<DevSiteStatus> {
         const mappings = await runtime.portMappings(containerId);
-        const mapping =
-            mappings.find((m) => m.container === config.port && m.protocol === 'tcp') ??
-            mappings.find((m) => m.protocol === 'tcp');
-        if (!mapping) {
+        const hostPortFor = (containerPort: number): number | undefined =>
+            mappings.find((m) => m.container === containerPort && m.protocol === 'tcp')?.hostPort;
+
+        const hostPort = hostPortFor(config.port ?? 0) ?? mappings.find((m) => m.protocol === 'tcp')?.hostPort;
+        if (!hostPort) {
             return failed(
                 workspaceId,
                 siteId,
@@ -450,8 +570,47 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 `The container for "${config.name}" started but published no port, so nothing can reach it.`,
             );
         }
+
+        // The plan named container ports; the runtime just told us what it
+        // published them as. A route whose port did not come back is DROPPED
+        // rather than advertised — a `.gen` name resolving to a closed port is
+        // worse than one that resolves nowhere.
+        const routes: DevGenSite[] = [];
+        const exposed: ExposedRoute[] = [];
+        for (const route of exposure.routes) {
+            const port = hostPortFor(route.containerPort) ?? hostPort;
+            routes.push({
+                workspaceId,
+                genName: route.genName,
+                // Sub-surfaces get their own resolver key, or the second one
+                // would displace the first in the carrier's first-wins merge.
+                siteId: route.genName === config.genName ? siteId : `${siteId}:${route.genName}`,
+                hostname: route.genName === config.genName
+                    ? config.upstreamHost ?? config.genName
+                    : route.genName,
+                scheme: 'http',
+                port,
+                loopback: '127.0.0.1',
+            });
+            if (route.genName !== config.genName) {
+                exposed.push({
+                    name: route.genName.split('.')[0] ?? route.genName,
+                    protocol: route.protocol,
+                    genName: route.genName,
+                });
+            }
+        }
+        for (const forward of exposure.forwards) {
+            exposed.push({
+                name: forward.genName.split('.')[0] ?? forward.genName,
+                protocol: forward.protocol,
+                genName: forward.genName,
+                hostPort: hostPortFor(forward.containerPort) ?? forward.hostPort,
+            });
+        }
+
         const ready = await probe({
-            port: mapping.hostPort,
+            port: hostPort,
             kind: config.kind,
             hostHeader: config.upstreamHost ?? config.genName,
             timeoutMs: probeTimeoutMs,
@@ -461,8 +620,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             siteId,
             config,
             containerId,
-            hostPort: mapping.hostPort,
+            hostPort,
             ready,
+            routes,
+            exposed,
         });
         changed();
         return statusOf(workspaceId, siteId, config, live.get(siteId)!);
@@ -487,6 +648,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             // published and listed, but the browser has nothing to open.
             ...(config.kind === 'http' ? { origin: `https://${config.genName}` } : {}),
             localOrigin: `http://127.0.0.1:${entry.hostPort}`,
+            ...(entry.exposed.length ? { exposed: entry.exposed } : {}),
         };
     }
 
@@ -586,7 +748,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                         runMode: config.runMode,
                         kind: config.kind,
                         enabled: config.enabled,
-                        ...(config.command ? { command: config.command } : {}),
+                        ...(config.stack ? { stack: config.stack } : {}),
+                        ...(config.server ? { server: config.server } : {}),
+                        ...(config.build?.length ? { build: config.build } : {}),
+                        ...(config.serve ? { serve: config.serve } : {}),
                         ...(config.port ? { port: config.port } : {}),
                         ...(config.image ? { image: config.image } : {}),
                     });
@@ -629,22 +794,11 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         genSites() {
             const rows: DevGenSite[] = [];
             for (const entry of live.values()) {
-                // ONLY http surfaces, and only running ones: a hosted row
-                // DISPLACES a discovered one in the overlay, so advertising a
-                // dead target would replace a working site with a closed port.
-                if (entry.config.kind !== 'http') continue;
-                rows.push({
-                    workspaceId: entry.workspaceId,
-                    genName: entry.config.genName,
-                    siteId: entry.siteId,
-                    // What upstream is told it is. Defaults to the browser-facing
-                    // name so origins line up; overridable for a framework with a
-                    // Host allowlist. See `sites-config.ts`.
-                    hostname: entry.config.upstreamHost ?? entry.config.genName,
-                    scheme: 'http',
-                    port: entry.hostPort,
-                    loopback: '127.0.0.1',
-                });
+                // Only RUNNING sites: a hosted row DISPLACES a discovered one in
+                // the overlay, so advertising a dead target would replace a
+                // working site with a closed port. A `tcp` site contributes no
+                // routes at all, which `exposure.ts` has already decided.
+                rows.push(...entry.routes);
             }
             return rows;
         },

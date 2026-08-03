@@ -1,7 +1,21 @@
 import { expect, test } from '@playwright/test';
 import { launchGenieTunnelE2E, readTunnelProbe } from './helpers/launch';
 
-test('Testing Browser preserves a dev site origin across the tunnel', async () => {
+/**
+ * Still current after the hosts-file `.gen` source was retired (#234).
+ *
+ * What went away was where a `.gen` row COMES FROM — the OS hosts file, parsed
+ * for `*.test` vhosts — not what a row IS or who carries it. A row is now a
+ * container the Dev Server started, and the fixture below builds exactly that
+ * shape (`EnabledGenSite`) by hand: a loopback port plus an `upstreamHost`, the
+ * Host header Genie sends the container. `app.test` is that header here, which
+ * is the live host-allowlist escape hatch (`upstreamHostFallback`, see
+ * main/dev-server/host-allowlist.ts) and no longer an OS-resolvable name — so
+ * leaking it to the browser now strands EVERY client, not just a remote one.
+ * The carrier, the session CA and the site shim under test are untouched by the
+ * retirement, which is why this spec is corrected rather than replaced.
+ */
+test('Testing Browser preserves a hosted site origin across the tunnel', async () => {
     // The harness converges for up to 40s (READY_DEADLINE_MS) before publishing
     // whatever it has, so the poll must out-wait it and the test must out-wait
     // the poll — otherwise a genuine failure surfaces as a timeout instead of a
@@ -39,10 +53,10 @@ test('Testing Browser preserves a dev site origin across the tunnel', async () =
         }
 
         expect(probe).toMatchObject({
-            // The browser must sit on the `.gen` origin even though the harness
-            // opened the real `app.test` name — the alias resolves TO `.gen`.
-            // A `.test` origin only resolves on the HOST, so it strands every
-            // remote client (genie#29).
+            // The browser must sit on the `.gen` origin even though the site's
+            // upstream is dialled with `Host: app.test`. `.gen` is the only
+            // name anything resolves; a `.test` origin reaching the page
+            // strands the client entirely (genie#29).
             origin: 'https://app.gen',
             absoluteScript: true,
             absoluteStyle: true,

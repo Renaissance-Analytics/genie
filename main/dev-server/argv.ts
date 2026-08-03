@@ -370,9 +370,32 @@ export function removeArgv(id: string): string[] {
     return ['rm', '-f', id];
 }
 
-export function execArgv(id: string, argv: string[]): string[] {
+/**
+ * Run a literal argv inside a container.
+ *
+ * `workdir` and `env` are what let the PRODUCTION BUILD run here at all. A build
+ * step has to execute in the repo it is building (`composer install` in the
+ * wrong directory succeeds and installs nothing) and often needs the same
+ * environment the server will get (a build that reads `DATABASE_URL`). Both
+ * flags are spelled identically by docker and podman.
+ */
+export function execArgv(
+    id: string,
+    argv: string[],
+    opts: { workdir?: string; env?: Record<string, string> } = {},
+): string[] {
     if (!argv.length) throw new Error('dev-server: exec needs a command');
-    const args = ['exec', id, ...argv];
+    const args = ['exec'];
+    if (opts.workdir) args.push('--workdir', opts.workdir);
+    for (const [name, value] of Object.entries(opts.env ?? {})) {
+        if (!ENV_NAME.test(name)) {
+            throw new Error(`dev-server: refusing env name ${JSON.stringify(name)}`);
+        }
+        args.push('--env', `${name}=${value}`);
+    }
+    // Id last before the command, command after it — everything before the id is
+    // a flag, and anything after it belongs to the container.
+    args.push(id, ...argv);
     assertLiteralArgv(args);
     return args;
 }

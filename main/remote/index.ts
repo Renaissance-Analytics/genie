@@ -26,7 +26,7 @@ import {
 import { RelayMemberClient } from './relay-client';
 import type { PopKeypair } from './relay-pop';
 import { createTailnetSiteCarrier, createRelaySiteCarrier, type SiteCarrier } from './site-carrier';
-import type { SiteScheme } from '../mobile/hosts';
+import type { SiteScheme } from '../sites/gen-url';
 
 /**
  * Work Mode — remote desktop (the local-main proxy).

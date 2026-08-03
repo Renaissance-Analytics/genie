@@ -4,12 +4,12 @@ import type { Duplex } from 'node:stream';
 import { audit } from './audit';
 import { isLocked } from './baton';
 import { sessionFromAuthHeader, validateSession } from './auth';
-import type { SiteScheme } from './hosts';
+import type { SiteScheme } from '../sites/gen-url';
 
 /**
- * HOST-side reverse proxy for serve-local-sites (Phase C, design §2 + §3(a)).
+ * HOST-side reverse proxy for `.gen` dev sites (design §2 + §3(a)).
  *
- * A name-based reverse proxy that, for an ALLOWLISTED discovered site, opens a
+ * A name-based reverse proxy that, for a site this machine is SERVING, opens a
  * connection to `127.0.0.1:<port>` (terminating the site's local TLS on
  * loopback) and STREAMS the response back over today's tailnet listener
  * (`server.ts`). It re-serves a TLS `*.test` vhost as plain http to the remote,
@@ -25,15 +25,15 @@ import type { SiteScheme } from './hosts';
  *   - **Kill-switch on ALL methods** — while `isLocked()` we return 423 for
  *     EVERY method incl. GET (a local admin panel / mailcatcher / phpMyAdmin is
  *     sensitive even on a read).
- *   - **Both opt-ins at serve time** — the global `local_sites_enabled` master
- *     switch (finally host-enforced HERE — Phase B only stored it) AND the
- *     per-site `enabled` allowlist entry, resolved via the injected deps. Master
- *     off ⇒ 403; unknown/disabled/out-of-scope site ⇒ 404.
+ *   - **The site must be one Genie is SERVING** — resolution goes to the same
+ *     set the host publishes at `/api/sites/enabled`, i.e. the containers the
+ *     Dev Server started. There is no separate master switch: a site exists here
+ *     only because someone created it and started it, which IS the opt-in.
+ *     Unknown / stopped / out-of-scope site ⇒ 404.
  *   - **SSRF / open-proxy guard** — the remote selects a site ONLY by its opaque
- *     `siteId`; the target is resolved STRICTLY from the discovered + enabled +
- *     served set (`deps.resolveSite`). The remote can NEVER supply a raw
- *     `Host`/target, and we dial `127.0.0.1` ONLY — never the discovered IP
- *     literally or any remote-supplied address.
+ *     `siteId`; the target is resolved STRICTLY from the served set
+ *     (`deps.resolveSite`). The remote can NEVER supply a raw `Host`/target, and
+ *     we dial `127.0.0.1` ONLY — never any remote-supplied address.
  *   - **Audit** — `site.open` on the first request per site, actor =
  *     `token.slice(0,8)`, mirroring the other `audit()` calls.
  *   - **DNS-rebinding** — the WS upgrade inherits `server.ts`'s `originAllowed`
@@ -50,8 +50,8 @@ import type { SiteScheme } from './hosts';
 
 // --- constants -------------------------------------------------------------
 
-/** We dial loopback ONLY — never the discovered IP literally, never a
- *  remote-supplied address. This is the hard floor of the SSRF guard. */
+/** We dial loopback ONLY — never a remote-supplied address. This is the hard
+ *  floor of the SSRF guard. */
 const LOOPBACK = '127.0.0.1';
 
 /** The proxy URL prefix a site is addressed under: `/api/site/<siteId>/<path…>`. */
@@ -104,7 +104,7 @@ const HOP_BY_HOP = new Set([
 
 /**
  * The loopback target an opaque `siteId` resolves to — produced STRICTLY from
- * the discovered + per-site-enabled + served-workspace set by
+ * the set of sites this machine is serving, by
  * {@link SiteProxyDeps.resolveSite}. Never assembled from remote input.
  */
 export interface ResolvedSite {
@@ -129,16 +129,11 @@ export interface ResolvedSite {
  */
 export interface SiteProxyDeps {
     /**
-     * The global master switch (Settings → `local_sites_enabled`). Enforced at
-     * serve time HERE (Phase B only stored it). Off ⇒ nothing is served.
-     */
-    localSitesEnabled: () => boolean;
-    /**
-     * Resolve an opaque `siteId` to its loopback target, STRICTLY from the
-     * discovered + per-site-`enabled` + served-workspace set. Returns null for
-     * an unknown / disabled / infra-default-off / out-of-scope id — which is
-     * also what makes an SSRF attempt (a raw host/target dressed as a `siteId`)
-     * fail closed: it simply doesn't resolve. Never dials, never trusts input.
+     * Resolve an opaque `siteId` to its loopback target, STRICTLY from the set
+     * of sites this machine is actually SERVING. Returns null for an unknown /
+     * stopped / out-of-scope id — which is also what makes an SSRF attempt (a
+     * raw host/target dressed as a `siteId`) fail closed: it simply doesn't
+     * resolve. Never dials, never trusts input.
      */
     resolveSite: (siteId: string) => Promise<ResolvedSite | null> | ResolvedSite | null;
 }
@@ -369,8 +364,8 @@ export function _resetSiteProxyForTest(): void {
 /**
  * Handle one `/api/site/<siteId>/<path…>` HTTP request. Returns true once it has
  * taken over the response (so the server's static fallthrough is skipped). Runs
- * the full gate — token → kill-switch → master opt-in → allowlist resolve — then
- * streams the loopback upstream back to the remote.
+ * the full gate — token → kill-switch → resolve — then streams the loopback
+ * upstream back to the remote.
  */
 export async function handleSiteProxy(
     req: http.IncomingMessage,
@@ -398,19 +393,14 @@ export async function handleSiteProxy(
         sendError(res, 423, 'locked — remote control is disabled on the desktop');
         return true;
     }
-    // 3. Master opt-in (host-enforced here for the first time).
-    if (!deps.localSitesEnabled()) {
-        sendError(res, 403, 'local sites are disabled');
-        return true;
-    }
-    // 4. Allowlist resolve — the opaque siteId is the ONLY selector; anything
-    //    unknown / disabled / out-of-scope (or an SSRF attempt) is null → 404.
+    // 3. Resolve — the opaque siteId is the ONLY selector; anything unknown /
+    //    stopped / out-of-scope (or an SSRF attempt) is null → 404.
     const site = await deps.resolveSite(parsed.siteId);
     if (!site) {
         sendError(res, 404, 'unknown or disabled site');
         return true;
     }
-    // 5. Audit the first hit per site.
+    // 4. Audit the first hit per site.
     recordOpen(parsed.siteId, site.hostname, session.token);
 
     // Phase D: the remote shim serves the site under its real `https://<name>.gen`
@@ -482,7 +472,7 @@ function proxyHttp(
 /**
  * Handle a `/api/site/<siteId>/…` WS `upgrade` (HMR / Vite / Reverb / Echo).
  * Mirrors `/ws/term`: DNS-rebinding (origin) + token gate + kill-switch +
- * allowlist BEFORE accepting, then rewrites Host, dials loopback (TLS-terminated
+ * resolve BEFORE accepting, then rewrites Host, dials loopback (TLS-terminated
  * with SNI for an https site), and pipes both directions.
  */
 export async function handleSiteProxyUpgrade(
@@ -511,10 +501,6 @@ export async function handleSiteProxyUpgrade(
     }
     if (isLocked()) {
         rejectSocket(socket, 423);
-        return true;
-    }
-    if (!deps.localSitesEnabled()) {
-        rejectSocket(socket, 403);
         return true;
     }
     const site = await deps.resolveSite(parsed.siteId);

@@ -1193,12 +1193,12 @@ export default function Chooser({
                                     >
                                         <IconCpu size={13} />
                                     </span>
-                                    {/* Genie runs DEV SERVERS for this workspace
-                                        (#234). Shown only when at least one is
-                                        enabled — an absent icon means "this
-                                        workspace serves nothing", which is the
-                                        common case and must stay silent. Opens
-                                        the Site Manager. */}
+                                    {/* Genie HOSTS sites for this workspace.
+                                        Shown only when at least one is enabled
+                                        — an absent icon means "this workspace
+                                        hosts nothing", which is the common case
+                                        and must stay silent. Opens the Site
+                                        Manager. */}
                                     {(() => {
                                         const mine = devSites[ws.id] ?? [];
                                         const tone = railSitesTone(mine, ws.id);

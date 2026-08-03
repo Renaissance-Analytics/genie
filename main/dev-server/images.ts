@@ -56,6 +56,65 @@ export const GENIE_DEV_BASE_IMAGE = 'ghcr.io/renaissance-analytics/genie-dev-bas
 export const WORKSPACE_MOUNT_TARGET = '/workspace';
 
 /**
+ * One language runtime the dev base image provides.
+ *
+ * Exists so the workstation Dev Server page can answer "can I run this repo in
+ * a Genie sandbox" without starting a container to ask — which, on a machine
+ * that has not pulled the image, would mean a multi-gigabyte download to render
+ * a settings page.
+ */
+export interface DevBaseToolchain {
+    id: 'node' | 'php' | 'python' | 'go' | 'rust';
+    label: string;
+    version: string;
+    /** Where the version is PINNED — a Dockerfile build arg, or the Debian base
+     *  tag for the two that come from apt. Named so the drift test can check
+     *  it, and so a human reading the page knows what would move it. */
+    source: string;
+    /** Package managers and tools that ship with the runtime. A Node without
+     *  pnpm is a different answer to the same question. */
+    extras?: string[];
+}
+
+/**
+ * The toolchains baked into {@link GENIE_DEV_BASE_IMAGE}.
+ *
+ * MIRRORS `dev-base/Dockerfile`, and `__tests__/dev-base-toolchain.test.ts`
+ * reads that Dockerfile and fails if the two drift — so a bump lands here on
+ * the same commit rather than leaving the UI confidently naming a Go that is
+ * not in the image.
+ *
+ * PHP and Python carry the Debian tag instead of a build arg because they come
+ * from apt: `debian:trixie-slim` IS their pin, and bumping the base is what
+ * bumps them.
+ */
+export const DEV_BASE_TOOLCHAIN: readonly DevBaseToolchain[] = [
+    {
+        id: 'node',
+        label: 'Node',
+        version: '24',
+        source: 'ARG NODE_MAJOR',
+        extras: ['npm', 'pnpm 11.18.0', 'yarn 1.22.22'],
+    },
+    {
+        id: 'php',
+        label: 'PHP',
+        version: '8.4',
+        source: 'debian:trixie-slim',
+        extras: ['Composer 2'],
+    },
+    {
+        id: 'python',
+        label: 'Python',
+        version: '3.13',
+        source: 'debian:trixie-slim',
+        extras: ['pip', 'pipx', 'uv 0.12.1'],
+    },
+    { id: 'go', label: 'Go', version: '1.26.5', source: 'ARG GO_VERSION' },
+    { id: 'rust', label: 'Rust', version: '1.97.1', source: 'ARG RUST_VERSION', extras: ['cargo'] },
+];
+
+/**
  * What the dev container runs so that it STAYS running.
  *
  * A container exits the moment its main process does, and a sandbox that dies as
