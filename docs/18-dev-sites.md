@@ -1,52 +1,85 @@
-# .gen dev sites & the Testing Browser
+# Hosting sites at `.gen` (the Hosting Manager)
 
-When you're driving a **host** remotely — another machine or a
-**[Genie Cloud Workstation](17-hosts-and-workstations.md)** — the dev sites
-running on *that* machine's loopback (e.g. `tynn.test`, served by Herd or Valet)
-aren't reachable from your browser. Genie bridges them: it serves a host's chosen
-loopback sites to a remote Genie as **`*.gen`** URLs, viewable in a built-in
-**Testing Browser**.
+Genie can **build a repo and run it the way it runs in production**, then serve
+it at a stable **`https://<name>.gen`** URL — viewable in Genie's built-in
+**Genie Browser**, whether you're on this machine or driving a
+**[host](17-hosts-and-workstations.md)** remotely. This is the **Hosting
+Manager**. It does *not* proxy an existing dev server (Herd/Valet, `npm run
+dev`); it builds the project and serves the built artifact with a real
+production server, each site in its own container sandboxed to its workspace.
 
-## Enabling a site (on the host)
+## What a hosted site is
 
-Nothing is exposed until you opt in — twice, deliberately:
+For each site the Hosting Manager runs the **production build + serve** for the
+detected stack, inside the workspace's container:
 
-1. **Turn on the feature.** In **Settings → Serve local dev sites** (off by
-   default), allow this host to expose its loopback dev sites as `*.gen`. This is
-   a separate opt-in from remote control.
-2. **Enable each site.** In **Settings → .gen Sites**, pick a workspace, then
-   from the machine's discovered loopback sites (parsed from its hosts file)
-   **enable** the ones you want served. For each, set its `.gen` **name** (e.g.
-   `tynn.gen`), **scheme** (http/https), and an optional **port** override.
+- **PHP / Laravel** → `composer install --no-dev`, served by **FrankenPHP** over
+  `public/`.
+- **Next.js** → `npm run build`, then `next start` (Nuxt → the built Nitro
+  server).
+- **A built front end** (Vite / CRA) → **nginx** over `dist/`, with no
+  JavaScript process at all.
+- **Django** → a virtualenv + `collectstatic`, served by **gunicorn**;
+  **FastAPI / Flask** → **uvicorn**.
+- **Go** → `go build` and run the binary; **Rust** → `cargo build --release`
+  and run it.
 
-A site is served if **any** workspace enables it. See
-**[Settings → Serve local dev sites (.gen)](08-settings.md)**.
+A repo's own **Dockerfile** always wins over a detected recipe. A failed build
+is the usual reason a site doesn't come up — the site is deliberately **not**
+started on a failed build, and the build log is kept with the site so you can
+see why.
 
-## The .gen sites picker
+## Managing sites — the Site Manager
 
-The title bar's **".gen sites"** button (**"Browse your .gen dev sites — local and
-from connected hosts"**) shows a **DEV SITES** popover listing the enabled sites
-of the machine this window represents — the local machine in a local window, the
-host in a remote window (never mixed). Click a site to open it (**"Open ‹name›
-in the Genie browser"**). If there are none, it reads *"No enabled `.gen` sites.
-Enable a dev site in a workspace's Serve local sites settings."*
+Each workspace has a **Site Manager** (its server icon in the sidebar, or
+right-click the workspace) with two tabs:
 
-## The Testing Browser
+- **Sites** — what this workspace hosts. Point it at a repo and it detects the
+  build + production server + port; you can also set them explicitly. Each site
+  shows both origins (the routable `<name>.gen` and a direct loopback origin for
+  `curl`), a `running`/`ready` status, start / stop / restart, the build + server
+  log, and **Open in the Genie Browser**.
+- **Services** — the backing engines those sites connect to: **Postgres, MySQL,
+  Redis, Meilisearch, MinIO (S3), Mailpit**, or a custom image. Each engine is
+  **shared** across the workstation per *(engine, major version)* — one
+  `postgres:16` backs every workspace that asks for Postgres 16 — and each
+  workspace gets its own database, role and credentials on it. The connection
+  env (`DATABASE_URL`, …) is injected into the workspace's sites automatically,
+  at runtime and during their build.
 
-`.gen` sites open in Genie's built-in **Testing Browser** — a real browser with
+Agents manage exactly the same thing over MCP via the `manageSite` and
+`manageService` tools — the panel and the tools drive one shared implementation,
+so neither can drift from the other. See
+**[Agents & the Genie MCP](12-agents-and-mcp.md)**.
+
+Machine-wide pieces — the container runtime, the base image, and the shared
+service engines' start/stop — live in **[Settings → Hosting
+Manager](08-settings.md)**, because they belong to the computer, not to any one
+workspace. The Hosting Manager needs **Docker or Podman**; until one is present
+Genie shows the install hint instead of controls that can't work.
+
+## What is (and isn't) reachable
+
+Inside a hosted container, `localhost` **is** the workspace, so the app reaches
+its own processes and its services normally. **Backends are never exposed** — a
+database or cache has no `.gen` name; it's reached over the workspace network
+through the injected env. Only **browser-facing** surfaces are published: the
+site at `<name>.gen`, plus any extra surface you deliberately add with a reason
+the browser needs it. Every server binds `0.0.0.0` inside the container.
+
+## The Genie Browser
+
+`.gen` sites open in Genie's built-in **Genie Browser** — a real browser with
 full chrome, not just an iframe:
 
 - **Back / forward / reload** buttons and a **URL bar** (with a lock icon for the
   HTTPS connection).
 - A **tab strip** — open several `.gen` sites at once, each in its own tab.
 - **Device presets** to preview at different viewport sizes.
-- **Quick-nav** buttons for the enabled `.gen` sites, and a **⟳ sites** refresh
-  to re-pull them from the host.
+- **Quick-nav** buttons for the hosted `.gen` sites.
 
-A **GENIE TESTING BROWSER** badge and a *"tunneling ‹host› · \*.gen served only
-inside this session"* status line mark it as a scoped, per-session surface. Each
-session terminates HTTPS with its own generated CA, so `.gen` names resolve only
-inside that Testing Browser — nothing is exposed to the wider network.
-
-> The `.gen` proxy serves exactly **one origin** per site, so a page's assets,
-> scripts, and API calls must be same-origin (relative URLs) to load through it.
+Each session terminates HTTPS with its own generated CA, so `.gen` names resolve
+only inside that browser — nothing is exposed to the wider network. The Genie
+Browser is on by default and can be toggled in
+**[Settings → Hosting Manager](08-settings.md)**; turning it off means a `.gen`
+site opens nowhere.

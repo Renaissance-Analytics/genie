@@ -130,3 +130,70 @@ describe('genieGuide reports the running Genie version', () => {
         expect(GENIE_MCP_GUIDE).toMatch(/genieGuide.*version|version.*genieGuide/i);
     });
 });
+
+/**
+ * The guide must NAME every tool the server actually advertises, and must
+ * describe the HOSTING MANAGER (`manageSite` / `manageService`) rather than the
+ * retired dev-site proxy it replaced. Agents pick tools from the guide's prose:
+ * a shipped tool the guide never mentions is one they never reach for, and a
+ * retired model the guide still teaches is one they WRONGLY reach for — this
+ * exact drift had agents standing an app up as a raw `manageProcess` process
+ * instead of hosting it with `manageSite`.
+ */
+function ctxWithHosting(): McpContext {
+    return {
+        ...makeCtx(),
+        devServerAvailable: vi.fn().mockResolvedValue(true),
+        manageSite: vi.fn(),
+        manageService: vi.fn(),
+    } as unknown as McpContext;
+}
+
+async function advertisedToolNames(ctx: McpContext): Promise<string[]> {
+    const res = await handleMcpMessage({ jsonrpc: '2.0', id: 9, method: 'tools/list' }, ctx);
+    const tools = (res?.result as { tools: Array<{ name: string }> }).tools;
+    return tools.map((t) => t.name);
+}
+
+describe('the guide names every tool the protocol advertises', () => {
+    it('documents each core tool that tools/list returns', async () => {
+        const names = await advertisedToolNames(ctxWithHosting());
+        // The Hosting Manager tools appear once a container runtime is present.
+        expect(names).toContain('manageSite');
+        expect(names).toContain('manageService');
+        for (const name of names) {
+            expect(
+                GENIE_MCP_GUIDE,
+                `the guide never names \`${name}\` — an agent cannot reach for a tool the protocol never mentions`,
+            ).toContain(name);
+        }
+    });
+});
+
+describe('the guide describes the Hosting Manager, not the retired dev-site proxy', () => {
+    it('names the Hosting Manager tools and the production build+serve model', () => {
+        expect(GENIE_MCP_GUIDE).toContain('manageSite');
+        expect(GENIE_MCP_GUIDE).toContain('manageService');
+        expect(GENIE_MCP_GUIDE).toMatch(/Hosting Manager/);
+        // The production servers are the whole point — it is NOT a dev-server
+        // launcher, so the recipe names must be in the prose.
+        expect(GENIE_MCP_GUIDE).toContain('FrankenPHP');
+        expect(GENIE_MCP_GUIDE).toMatch(/production/i);
+    });
+
+    it('does not steer agents to the retired loopback dev-site model', () => {
+        // The old "## Local dev sites over .gen" section framed `.gen` as a proxy
+        // over a HOST's EXISTING loopback dev server — DEV-only, relative-URL-only.
+        // That model is retired; the guide must not teach it.
+        expect(GENIE_MCP_GUIDE).not.toMatch(/DEV-only/);
+        expect(GENIE_MCP_GUIDE).not.toMatch(/serve a HOST's local dev site/i);
+    });
+});
+
+describe('the guide documents manageProcess scheduled tasks (cron)', () => {
+    it('tells agents manageProcess also runs scheduled/cron tasks', () => {
+        // `manageProcess` grew a `schedule` (cron) shape; the guide described only
+        // long-running processes, so agents never learned the scheduler exists.
+        expect(GENIE_MCP_GUIDE).toMatch(/schedule|cron/i);
+    });
+});

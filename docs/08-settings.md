@@ -99,15 +99,32 @@ OS's native mechanism:
 > Dev builds can't register a stable autostart path — install the packaged
 > release to use this.
 
-## Serve local dev sites (.gen)
+## Hosting Manager
 
-- **Serve local dev sites** — a master toggle (off by default). Lets this host
-  expose its loopback dev sites (e.g. `tynn.test`, served by Herd/Valet) to a
-  remote Genie as `*.gen`. A separate opt-in from remote control.
-- **.gen Sites** — per workspace, choose which of this machine's loopback dev
-  sites are served, each with a `.gen` name and scheme/port. Nothing is
-  tunnelled until you enable a site here. See
-  **[.gen dev sites & the Testing Browser](18-dev-sites.md)**.
+This is the **machine-level** view of the Hosting Manager — the pieces that
+belong to the computer rather than to any one workspace. WHICH sites a workspace
+hosts, and which services it uses, live in that workspace's **Site Manager** (its
+server icon in the sidebar, or right-click the workspace). Opening this page is a
+read — it never pulls an image, builds, or starts a container.
+
+- **Container runtime** — whether **Docker or Podman** is usable here. This is
+  what Genie builds and serves a workspace's sites in; without a runtime the
+  Hosting Manager shows the install hint. Genie re-detects on every action, so
+  installing one needs no restart.
+- **Workspace dev image** — the single base image every workspace's containers
+  are built on, and the language runtimes it brings (Node, PHP, Python, Go,
+  Rust, …). Genie fetches it the first time a workspace serves a site, and asks
+  first.
+- **Service engines** — Postgres, Redis, and friends. **One container per engine
+  and major version, shared by every workspace on this machine**, so they're
+  managed here: stopping one stops it for every workspace using it. Grouped into
+  Running / On this machine / Available, each with start / stop and a log.
+- **Genie Browser** — Genie's own browser for opening a hosted `.gen` site,
+  locally or over a remote connection. On by default; turning it off means a
+  `.gen` site opens nowhere.
+
+See **[Hosting sites at `.gen` (the Hosting Manager)](18-dev-sites.md)** for the
+full picture.
 
 ## Integrations & more
 
