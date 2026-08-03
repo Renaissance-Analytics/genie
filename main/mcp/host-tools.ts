@@ -32,8 +32,14 @@ import { registerAgentInboxSession } from '../agentinbox/session-registration';
 import {
     normalizePurpose,
     type AgentInboxAgentType,
+    type AgentInboxAttachment,
     type AgentInboxScope,
 } from '../agentinbox/types';
+import {
+    attachmentStoreRoot,
+    collectAttachmentsForSend,
+    saveAttachmentToWorkspace,
+} from '../agentinbox/attachments';
 import {
     broadcastTerminalSpecsChanged,
     killTerminalById,
@@ -1809,12 +1815,41 @@ export async function agentInboxForMcp(
                 if (!req.to && !req.channel) {
                     return { ok: false, error: 'send needs `to` (an agent) or `channel`.' };
                 }
+                // Attachments are read + stored BEFORE the message is created, so
+                // a message never claims files that aren't in the store. The read
+                // is confined to the SENDER's own workspace, and a single bad path
+                // fails the whole send rather than silently shipping a subset.
+                //
+                // A send the broker then REFUSES (unreachable peer, closed
+                // workspace) leaves the stored bytes behind. That is deliberate:
+                // pre-checking reachability here would mean a second copy of the
+                // broker's two-tier gate that could drift from the real one — the
+                // very staleness `send` re-checks for. The store is
+                // content-addressed (a repeat costs nothing) and reclaiming
+                // unreferenced blobs is a sweep, not a send-path concern.
+                let attachments: AgentInboxAttachment[] = [];
+                if (req.attachments?.length) {
+                    try {
+                        attachments = await collectAttachmentsForSend({
+                            workspaceRoot: ws.path,
+                            paths: req.attachments,
+                            storeRoot: attachmentStoreRoot(),
+                            newId: () => crypto.randomUUID(),
+                        });
+                    } catch (e) {
+                        return {
+                            ok: false,
+                            error: `Nothing was sent — ${e instanceof Error ? e.message : String(e)}`,
+                        };
+                    }
+                }
                 const r = agentInboxBroker.send({
                     fromAgentId: agentId,
                     toAgentId: req.to,
                     channelArg: req.channel,
                     text: req.text,
                     interrupt: req.interrupt,
+                    attachments,
                 });
                 // A channel send auto-joins the room — make that membership durable
                 // so it isn't silently lost on the next restart (genie #65).
@@ -1827,6 +1862,7 @@ export async function agentInboxForMcp(
                     ? {
                           ok: true,
                           delivered: r.delivered,
+                          ...(attachments.length ? { attachments } : {}),
                           ...(r.channel ? { channel: r.channel, rejoined: r.rejoined === true } : {}),
                       }
                     : {
@@ -1850,6 +1886,38 @@ export async function agentInboxForMcp(
                 // ACK cursor passed the message (issue #9) — so a sender can tell
                 // 'queued' from 'seen' and decide whether to escalate to a nudge.
                 return { ok: true, receipts: agentInboxBroker.receipts(agentId, req.limit) };
+            }
+            case 'saveAttachment': {
+                // Write a received file into the CALLER's own workspace. Two gates,
+                // both fail-closed: the broker only resolves an attachment for an
+                // agent the MESSAGE reached (an id is a handle, not a capability),
+                // and the write itself is confined to `ws.path`.
+                const attachmentId = String(req.attachmentId ?? '').trim();
+                if (!attachmentId) {
+                    return { ok: false, error: 'saveAttachment needs an `attachmentId`.' };
+                }
+                const att = agentInboxBroker.attachmentFor(agentId, attachmentId);
+                if (!att) {
+                    // Deliberately ONE message for "no such attachment" and "not
+                    // yours": distinguishing them would let an agent probe for
+                    // attachments in conversations it was never part of.
+                    return {
+                        ok: false,
+                        error: 'No such attachment, or it was not sent to you. Attachment ids come from a message you received via `receive`.',
+                    };
+                }
+                try {
+                    const saved = await saveAttachmentToWorkspace({
+                        workspaceRoot: ws.path,
+                        storeRoot: attachmentStoreRoot(),
+                        attachment: att,
+                        destPath: req.path,
+                        overwrite: req.overwrite,
+                    });
+                    return { ok: true, savedPath: saved.relPath, savedBytes: saved.bytes };
+                } catch (e) {
+                    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
             }
             case 'registerSession': {
                 const registered = registerAgentInboxSession(spec.id, req.sessionId ?? '', {

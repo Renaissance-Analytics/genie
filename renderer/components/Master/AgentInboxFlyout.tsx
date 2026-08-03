@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Action, Modal, Popover, Tabs, Text } from '@particle-academy/react-fancy';
+import { Action, Badge, Modal, Popover, Tabs, Text } from '@particle-academy/react-fancy';
 import {
     IconCheckCheck,
     IconClock,
+    IconDownload,
     IconLock,
     IconMore,
+    IconPaperclip,
     IconRefresh,
     IconReply,
     IconSearch,
@@ -17,11 +19,17 @@ import {
     currentConnKey,
     hasGenieBridge,
     type AgentInboxAgentInfo,
+    type AgentInboxAttachment,
     type AgentInboxChannelInfo,
     type AgentInboxDmThreadInfo,
     type AgentInboxEscalationEvent,
     type AgentInboxMessage,
 } from '../../lib/genie';
+import {
+    attachmentChipLabel,
+    composerAttachmentSummary,
+    suggestedSaveName,
+} from '../../lib/agentinbox-attachments';
 import {
     forgetSeen,
     headcountOf,
@@ -88,6 +96,32 @@ type PendingWipe =
     | { kind: 'dm'; pairKey: string; label: string }
     // A multi-select mass delete (genie #66) — one host call for the whole set.
     | { kind: 'batch'; tokens: string[]; channels: number; threads: number };
+
+/** A file staged on the composer, already read to base64 by the file input. */
+interface StagedFile {
+    filename: string;
+    bytes: number;
+    base64: string;
+}
+
+/**
+ * Cap on what the panel will stage, mirroring the host's per-file ceiling. The
+ * host is the authority (it refuses oversize on post), but catching it here
+ * means the human learns BEFORE typing a message that the file won't go.
+ */
+const MAX_STAGED_BYTES = 25 * 1024 * 1024;
+
+/** Read a picked File to base64 without a data-URL prefix. */
+async function readFileAsBase64(file: File): Promise<string> {
+    const buf = await file.arrayBuffer();
+    let binary = '';
+    const view = new Uint8Array(buf);
+    // Chunked so a multi-megabyte file can't blow the argument limit on apply().
+    for (let i = 0; i < view.length; i += 8192) {
+        binary += String.fromCharCode(...view.subarray(i, i + 8192));
+    }
+    return btoa(binary);
+}
 
 /** Last traffic seen on a row — drives its preview, relative time and unread. */
 interface RowActivity {
@@ -327,6 +361,15 @@ export default function AgentInboxFlyout({
     // `on.agentInboxEscalation`; each is a "waiting on <agent>" oversight alert.
     const [escalations, setEscalations] = useState<Map<string, AgentInboxEscalationEvent>>(new Map());
     const streamEndRef = useRef<HTMLDivElement>(null);
+    // Files staged on the composer, already read into base64 by the browser's own
+    // file input. The BYTES ride the post rather than a host path, so a remote
+    // human attaches from THEIR machine and the panel needs no fs access.
+    const [staged, setStaged] = useState<StagedFile[]>([]);
+    const [attachError, setAttachError] = useState<string | null>(null);
+    // Attachment id currently downloading — the chip shows it is working, since
+    // the bytes come over the bridge on a host window.
+    const [downloading, setDownloading] = useState<string | null>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     const byId = useMemo(() => new Map(agents.map((a) => [a.agentId, a])), [agents]);
 
@@ -489,6 +532,10 @@ export default function AgentInboxFlyout({
         }
         setMenuOpen(false);
         setExpanded(new Set());
+        // Staged files belong to the thread they were staged in — switching
+        // conversations must not carry them into someone else's message.
+        setStaged([]);
+        setAttachError(null);
         void loadHistory(sel);
     }, [open, sel, loadHistory]);
 
@@ -519,19 +566,89 @@ export default function AgentInboxFlyout({
         if (!text || !sel || sel.kind === 'dmPair' || posting) return;
         setPosting(true);
         try {
+            const attachments = staged.map((f) => ({ filename: f.filename, base64: f.base64 }));
+            const target =
+                sel.kind === 'channel' ? { channelKey: sel.key } : { toAgentId: sel.agentId };
             const res = await api()
-                .agentInbox.post(
-                    sel.kind === 'channel'
-                        ? { channelKey: sel.key, text }
-                        : { toAgentId: sel.agentId, text },
-                )
-                .catch(() => ({ ok: false }) as { ok: boolean });
+                .agentInbox.post({ ...target, text, ...(attachments.length ? { attachments } : {}) })
+                .catch(() => ({ ok: false, error: 'Could not reach the host.' }));
             if (res.ok) {
                 setDraft('');
+                setStaged([]);
+                setAttachError(null);
                 await loadHistory(sel);
+            } else {
+                // The post is all-or-nothing on the host, so the draft and the
+                // staged files are deliberately KEPT — the human fixes the
+                // problem and sends the same message rather than retyping it.
+                setAttachError(res.error ?? 'The message could not be sent.');
             }
         } finally {
             setPosting(false);
+        }
+    };
+
+    /** Stage the files the human just picked (the browser reads them locally). */
+    const onPickFiles = async (list: FileList | null) => {
+        if (!list || list.length === 0) return;
+        const next: StagedFile[] = [];
+        for (const file of Array.from(list)) {
+            if (file.size > MAX_STAGED_BYTES) {
+                setAttachError(`"${file.name}" is too large to attach.`);
+                continue;
+            }
+            if (file.size === 0) {
+                setAttachError(`"${file.name}" is empty.`);
+                continue;
+            }
+            try {
+                next.push({
+                    filename: file.name,
+                    bytes: file.size,
+                    base64: await readFileAsBase64(file),
+                });
+            } catch {
+                setAttachError(`"${file.name}" could not be read.`);
+            }
+        }
+        if (next.length > 0) {
+            setAttachError(null);
+            setStaged((prev) => [...prev, ...next]);
+        }
+    };
+
+    /**
+     * Download an attachment. The BYTES come from the host's store and are saved
+     * on THIS machine — so on a remote window the human gets the file locally,
+     * which is where they wanted it, and no host path is ever involved.
+     */
+    const download = async (att: AgentInboxAttachment) => {
+        if (downloading) return;
+        setDownloading(att.id);
+        try {
+            const res = await api()
+                .agentInbox.attachmentBytes(att.id)
+                .catch(() => ({ ok: false, error: 'Could not reach the host.' }) as
+                    Awaited<ReturnType<ReturnType<typeof api>['agentInbox']['attachmentBytes']>>);
+            if (!res.ok || !res.base64) {
+                setAttachError(res.error ?? 'That attachment could not be downloaded.');
+                return;
+            }
+            const bin = atob(res.base64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            const url = URL.createObjectURL(
+                new Blob([bytes], { type: res.mime || 'application/octet-stream' }),
+            );
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = suggestedSaveName(res.filename ?? att.filename);
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        } finally {
+            setDownloading(null);
         }
     };
 
@@ -1351,6 +1468,34 @@ export default function AgentInboxFlyout({
                                                                 Show more
                                                             </button>
                                                         )}
+                                                        {(m.attachments?.length ?? 0) > 0 && (
+                                                            <div className="agentinbox-attachments">
+                                                                {m.attachments!.map((att) => (
+                                                                    <button
+                                                                        key={att.id}
+                                                                        type="button"
+                                                                        className="agentinbox-attachment"
+                                                                        onClick={() => void download(att)}
+                                                                        disabled={downloading === att.id}
+                                                                        title={`Download ${att.filename}`}
+                                                                    >
+                                                                        <Badge
+                                                                            variant="soft"
+                                                                            size="sm"
+                                                                            color="slate"
+                                                                        >
+                                                                            <IconPaperclip size={11} />
+                                                                            {attachmentChipLabel(att)}
+                                                                            {downloading === att.id ? (
+                                                                                <IconClock size={11} />
+                                                                            ) : (
+                                                                                <IconDownload size={11} />
+                                                                            )}
+                                                                        </Badge>
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        )}
                                                         {tags.length > 0 && (
                                                             <div className="agentinbox-tags">
                                                                 {tags.map((t) => (
@@ -1371,6 +1516,18 @@ export default function AgentInboxFlyout({
                                         <div ref={streamEndRef} />
                                     </div>
 
+                                    {/* Attachment trouble is reported ABOVE the footer, so a
+                                        failed DOWNLOAD is still visible on a read-only
+                                        agent↔agent thread — where there is no composer to
+                                        carry the notice. */}
+                                    {attachError && (
+                                        <div className="agentinbox-staged">
+                                            <Text size="xs" className="agentinbox-staged-err">
+                                                {attachError}
+                                            </Text>
+                                        </div>
+                                    )}
+
                                     {sel.kind === 'dmPair' ? (
                                         <div className="agentinbox-foot">
                                             <span className="agentinbox-readonly">
@@ -1390,28 +1547,83 @@ export default function AgentInboxFlyout({
                                             </button>
                                         </div>
                                     ) : (
-                                        <div className="agentinbox-composer">
-                                            <textarea
-                                                className="input agentinbox-input"
-                                                value={draft}
-                                                onChange={(e) => setDraft(e.target.value)}
-                                                onKeyDown={(e) => {
-                                                    if (e.key === 'Enter' && !e.shiftKey) {
-                                                        e.preventDefault();
-                                                        void post();
-                                                    }
-                                                }}
-                                                placeholder={`Message ${sel.title} as you…`}
-                                                rows={2}
-                                            />
-                                            <button
-                                                type="button"
-                                                className="agentinbox-primary"
-                                                onClick={() => void post()}
-                                                disabled={!draft.trim() || posting}
-                                            >
-                                                {posting ? 'Sending…' : 'Send'}
-                                            </button>
+                                        <div className="agentinbox-composer-wrap">
+                                            {staged.length > 0 && (
+                                                <div className="agentinbox-staged">
+                                                    {staged.map((f, i) => (
+                                                        <Badge
+                                                            key={`${f.filename}-${i}`}
+                                                            variant="soft"
+                                                            size="sm"
+                                                            color="slate"
+                                                        >
+                                                            <IconPaperclip size={11} />
+                                                            {attachmentChipLabel(f)}
+                                                            <button
+                                                                type="button"
+                                                                className="agentinbox-staged-x"
+                                                                title={`Remove ${f.filename}`}
+                                                                onClick={() =>
+                                                                    setStaged((prev) =>
+                                                                        prev.filter((_, j) => j !== i),
+                                                                    )
+                                                                }
+                                                            >
+                                                                <IconX size={10} />
+                                                            </button>
+                                                        </Badge>
+                                                    ))}
+                                                    <Text size="xs" className="agentinbox-staged-sum">
+                                                        {composerAttachmentSummary(staged)}
+                                                    </Text>
+                                                </div>
+                                            )}
+                                            <div className="agentinbox-composer">
+                                                <textarea
+                                                    className="input agentinbox-input"
+                                                    value={draft}
+                                                    onChange={(e) => setDraft(e.target.value)}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter' && !e.shiftKey) {
+                                                            e.preventDefault();
+                                                            void post();
+                                                        }
+                                                    }}
+                                                    placeholder={`Message ${sel.title} as you…`}
+                                                    rows={2}
+                                                />
+                                                {/* The browser's own picker: the bytes are read HERE,
+                                                    so a remote window attaches from the human's machine
+                                                    and the panel needs no filesystem access. */}
+                                                <input
+                                                    ref={fileInputRef}
+                                                    type="file"
+                                                    multiple
+                                                    className="agentinbox-file-input"
+                                                    onChange={(e) => {
+                                                        void onPickFiles(e.target.files);
+                                                        e.target.value = '';
+                                                    }}
+                                                />
+                                                <Action
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    onClick={() => fileInputRef.current?.click()}
+                                                    disabled={posting}
+                                                    title="Attach files"
+                                                    aria-label="Attach files"
+                                                >
+                                                    <IconPaperclip size={14} />
+                                                </Action>
+                                                <button
+                                                    type="button"
+                                                    className="agentinbox-primary"
+                                                    onClick={() => void post()}
+                                                    disabled={!draft.trim() || posting}
+                                                >
+                                                    {posting ? 'Sending…' : 'Send'}
+                                                </button>
+                                            </div>
                                         </div>
                                     )}
                                 </>

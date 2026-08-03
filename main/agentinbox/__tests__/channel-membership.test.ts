@@ -208,6 +208,8 @@ describe('genie #65 — channel membership survives re-registration', () => {
             sentDmReceipts: () => [],
             clearChannel: () => 0,
             deleteDmThread: () => 0,
+            getMessage: (id) => rows.find((m) => m.id === id) ?? null,
+            getAttachment: () => null,
         };
 
         const specs = new SpecStore();

@@ -576,6 +576,22 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 ok: boolean;
                 error?: string;
             },
+        // Attachment BYTES come from the HOST's store (that is where messages and
+        // their blobs live) and land on the CLIENT, which then saves the file —
+        // the mirror of the client-side read behind an external file drop, and the
+        // reason a remote human gets the download on their own machine.
+        attachmentBytes: async (attachmentId) =>
+            (await req('/api/desktop/agentinbox/attachment', {
+                method: 'POST',
+                json: { attachmentId },
+            })) as {
+                ok: boolean;
+                error?: string;
+                filename?: string;
+                mime?: string;
+                bytes?: number;
+                base64?: string;
+            },
         updateChannel: async (specId, patch) =>
             (await req('/api/desktop/agentinbox/update-channel', {
                 method: 'POST',

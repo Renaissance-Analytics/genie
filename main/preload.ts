@@ -949,9 +949,20 @@ const api = {
             limit?: number;
             before?: number;
         }) => ipcRenderer.invoke('agentinbox:history', opts),
-        /** Post as the human — to a channel (`channelKey`) or an agent (`toAgentId`). */
-        post: (input: { channelKey?: string; toAgentId?: string; text: string }) =>
-            ipcRenderer.invoke('agentinbox:post', input),
+        /** Post as the human — to a channel (`channelKey`) or an agent (`toAgentId`),
+         *  optionally with files. Attachment BYTES ride the call (base64, straight
+         *  from the browser file input), so a remote window attaches from the
+         *  human's OWN machine and the panel needs no filesystem access. */
+        post: (input: {
+            channelKey?: string;
+            toAgentId?: string;
+            text: string;
+            attachments?: Array<{ filename: string; base64: string }>;
+        }) => ipcRenderer.invoke('agentinbox:post', input),
+        /** An attachment's bytes, for the panel to save client-side. Reads Genie's
+         *  own blob store — no filesystem egress. */
+        attachmentBytes: (attachmentId: string) =>
+            ipcRenderer.invoke('agentinbox:attachment-bytes', attachmentId),
         /** AGENT-LAG — messages this workstation's agents haven't received/ACKed.
          *  The header badge's seed; `on.agentInboxLag` keeps it live. */
         lag: () => ipcRenderer.invoke('agentinbox:lag'),

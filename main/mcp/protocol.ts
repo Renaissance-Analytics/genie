@@ -20,6 +20,7 @@ import type {
 import type {
     AgentInboxScope,
     AgentInboxAgentInfo,
+    AgentInboxAttachment,
     AgentInboxChannelInfo,
     AgentInboxMessage,
 } from '../agentinbox/types';
@@ -1014,6 +1015,7 @@ export interface AgentInboxRequest {
         | 'send'
         | 'receive'
         | 'receipts'
+        | 'saveAttachment'
         | 'registerSession'
         | 'setAccessibility'
         | 'join'
@@ -1045,6 +1047,17 @@ export interface AgentInboxRequest {
     sessionId?: string;
     /** receipts (optional): how many recent sent DMs to report (default 20, cap 100). */
     limit?: number;
+    /** send (optional): files to attach — paths inside the SENDER's workspace.
+     *  Each is read (workspace-confined, size-capped) and its BYTES stored, so
+     *  the recipient never needs access to the sender's disk. */
+    attachments?: string[];
+    /** saveAttachment: the attachment id from a received message. */
+    attachmentId?: string;
+    /** saveAttachment (optional): where to write it, inside the CALLER's
+     *  workspace. A folder (or a trailing slash) means "land in here". */
+    path?: string;
+    /** saveAttachment (optional): replace an existing file at that path. */
+    overwrite?: boolean;
 }
 
 /** One sent-DM read-receipt (AgentInbox `receipts`): the message + whether SEEN. */
@@ -1082,6 +1095,13 @@ export interface AgentInboxResult {
     rejoined?: boolean;
     /** receipts: the caller's recent sent DMs, each with a `seen` flag. */
     receipts?: AgentInboxReceipt[];
+    /** send: the files that were stored and attached (echoed back so the sender
+     *  can confirm what actually rode the message). */
+    attachments?: AgentInboxAttachment[];
+    /** saveAttachment: where the file landed, relative to the caller's workspace. */
+    savedPath?: string;
+    /** saveAttachment: how many bytes were written. */
+    savedBytes?: number;
 }
 
 // --- knowledge ---------------------------------------------------------------
@@ -1793,7 +1813,7 @@ const MANAGE_WORKSPACES_TOOL = {
 const AGENTINBOX_TOOL = {
     name: 'agentinbox',
     description:
-        "Coordinate with OTHER AI agents running in this Genie instance — AgentInbox, a LOCAL inter-agent messaging network. Discover peer agents (in your workspace, or across the workstation when they allow it), DM them 1:1, and broadcast on shared CHANNELS. Delivery is PULL-based — you FETCH messages; they're never injected mid-turn (which would corrupt it). To await a reply, make ONE blocking `receive` with `wait:true` rather than polling in a loop — it returns the moment a message lands. Actions (`action`): `list` (discovery — returns YOUR agent info `self`, the peers you can reach `agents`, and your `channels`); `send` (message a peer with `to` = their agentId, OR broadcast with `channel` = a purpose like `frontend` (your workspace's room) or `slug:purpose` (another workspace's) — needs `text`; optional `interrupt:true` also glows a DM target's terminal so they notice); `receive` (fetch NEW messages — pass a `cursor` from a prior receive to page forward; set `wait:true` to LONG-POLL until a message arrives (optional `timeoutMs`), so you can block waiting for a peer's reply); `receipts` (read-receipts for the DMs YOU sent — each with a `seen` flag that's true once the recipient has received it, so you can tell 'queued' from 'seen' and decide whether to escalate; optional `limit`, default 20); `setAccessibility` (`scope` — who may DM you: `self` your workspace only (default) / `specific` + `workspaces` a chosen set / `all` the whole workstation / `none` nobody, but you STAY LISTED to peers as unreachable so they can find you and ask / `hidden` nobody, and you're omitted from discovery entirely; optional `purpose` renames your channel); `join`/`leave` (`channel`) to opt in/out of a channel. Your identity, accessibility AND channel memberships are remembered across restarts — a channel you joined stays joined until you `leave` it. A channel `send` that reaches NOBODY comes back `ok:false` with `delivered:0` (the text is still kept in the channel history for the human): treat that as NOT REPORTED — check `list` for who's in the room, or DM someone with `to`. Local-only — no relay, no cross-host.",
+        "Coordinate with OTHER AI agents running in this Genie instance — AgentInbox, a LOCAL inter-agent messaging network. Discover peer agents (in your workspace, or across the workstation when they allow it), DM them 1:1, broadcast on shared CHANNELS, and ATTACH FILES to a message. Delivery is PULL-based — you FETCH messages; they're never injected mid-turn (which would corrupt it). To await a reply, make ONE blocking `receive` with `wait:true` rather than polling in a loop — it returns the moment a message lands. Actions (`action`): `list` (discovery — returns YOUR agent info `self`, the peers you can reach `agents`, and your `channels`); `send` (message a peer with `to` = their agentId, OR broadcast with `channel` = a purpose like `frontend` (your workspace's room) or `slug:purpose` (another workspace's) — needs `text`; optional `interrupt:true` also glows a DM target's terminal so they notice; optional `attachments` = paths in YOUR workspace to send as files); `receive` (fetch NEW messages — pass a `cursor` from a prior receive to page forward; set `wait:true` to LONG-POLL until a message arrives (optional `timeoutMs`), so you can block waiting for a peer's reply; each message carries `attachments` metadata when files rode it); `saveAttachment` (write a received file into YOUR workspace — `attachmentId` from the message, optional `path` and `overwrite`); `receipts` (read-receipts for the DMs YOU sent — each with a `seen` flag that's true once the recipient has received it, so you can tell 'queued' from 'seen' and decide whether to escalate; optional `limit`, default 20); `setAccessibility` (`scope` — who may DM you: `self` your workspace only (default) / `specific` + `workspaces` a chosen set / `all` the whole workstation / `none` nobody, but you STAY LISTED to peers as unreachable so they can find you and ask / `hidden` nobody, and you're omitted from discovery entirely; optional `purpose` renames your channel); `join`/`leave` (`channel`) to opt in/out of a channel. Attachments are BYTE COPIES stored by Genie, not path references — the recipient may be in a different workspace and never sees your disk. You can only attach files inside your OWN workspace and only save into YOUR OWN; files are size-capped and natively-executable types (.exe/.msi/.bat/…) are refused at both ends. Your identity, accessibility AND channel memberships are remembered across restarts — a channel you joined stays joined until you `leave` it. A channel `send` that reaches NOBODY comes back `ok:false` with `delivered:0` (the text is still kept in the channel history for the human): treat that as NOT REPORTED — check `list` for who's in the room, or DM someone with `to`. Local-only — no relay, no cross-host.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -1805,6 +1825,7 @@ const AGENTINBOX_TOOL = {
                     'send',
                     'receive',
                     'receipts',
+                    'saveAttachment',
                     'registerSession',
                     'setAccessibility',
                     'join',
@@ -1815,6 +1836,27 @@ const AGENTINBOX_TOOL = {
             to: {
                 type: 'string',
                 description: 'send: the recipient agent id (DM). Mutually exclusive with `channel`.',
+            },
+            attachments: {
+                type: 'array',
+                items: { type: 'string' },
+                description:
+                    "send (optional): files to attach — paths inside YOUR OWN workspace (relative, or absolute within it). Genie reads each one and stores its BYTES, so the recipient gets a real copy even though it can't see your disk. Size-capped; natively-executable types (.exe/.msi/.bat/…) are refused. One bad path fails the whole send.",
+            },
+            attachmentId: {
+                type: 'string',
+                description:
+                    "saveAttachment: the `id` of an attachment from a message you received (or sent). Only someone the message reached can fetch its bytes — the id alone isn't access.",
+            },
+            path: {
+                type: 'string',
+                description:
+                    'saveAttachment (optional): where to write it, inside YOUR OWN workspace. A folder (or a trailing slash) means "land in here" under the original filename; omit it entirely to save at the workspace root. Escapes (`..`, another workspace, a system path) are refused.',
+            },
+            overwrite: {
+                type: 'boolean',
+                description:
+                    'saveAttachment (optional): replace an existing file at that path. Default false — a save that would clobber a file fails instead.',
             },
             limit: {
                 type: 'number',
@@ -2900,6 +2942,7 @@ export async function handleMcpMessage(
                     action !== 'send' &&
                     action !== 'receive' &&
                     action !== 'receipts' &&
+                    action !== 'saveAttachment' &&
                     action !== 'registerSession' &&
                     action !== 'setAccessibility' &&
                     action !== 'join' &&
@@ -2908,7 +2951,7 @@ export async function handleMcpMessage(
                     return err(
                         msg.id,
                         -32602,
-                        'agentinbox requires `action`: list | send | receive | receipts | registerSession | setAccessibility | join | leave.',
+                        'agentinbox requires `action`: list | send | receive | receipts | saveAttachment | registerSession | setAccessibility | join | leave.',
                     );
                 }
                 const result = await ctx.agentInbox(ctx.terminalId, {
@@ -2926,6 +2969,10 @@ export async function handleMcpMessage(
                     sessionId: a.sessionId,
                     wakeOnDm: a.wakeOnDm,
                     limit: a.limit,
+                    attachments: a.attachments,
+                    attachmentId: a.attachmentId,
+                    path: a.path,
+                    overwrite: a.overwrite,
                 });
                 let summary: string;
                 if (!result.ok) {
@@ -2942,16 +2989,31 @@ export async function handleMcpMessage(
                         (blocked > 0 ? `, ${blocked} visible but unavailable` : '') +
                         `, ${result.channels?.length ?? 0} channel(s).`;
                 } else if (action === 'receive') {
-                    summary = `${result.messages?.length ?? 0} new message(s).`;
+                    // Attachments are easy to miss inside a JSON blob, and a file
+                    // an agent never notices is a file that was never sent — so
+                    // the one-line summary says outright that one arrived.
+                    const files = (result.messages ?? []).reduce(
+                        (n, m) => n + (m.attachments?.length ?? 0),
+                        0,
+                    );
+                    summary =
+                        `${result.messages?.length ?? 0} new message(s).` +
+                        (files > 0
+                            ? ` ${files} file(s) attached — use saveAttachment with an attachment id to write one into your workspace.`
+                            : '');
                 } else if (action === 'send') {
                     // A lapsed membership is worth saying out loud even on a
                     // SUCCESSFUL send: it means the sender was out of the room for
                     // a while, so anything it "reported" in between went nowhere.
+                    const files = result.attachments?.length ?? 0;
                     summary =
                         `Sent — delivered to ${result.delivered ?? 0} recipient(s).` +
+                        (files > 0 ? ` ${files} file(s) attached.` : '') +
                         (result.rejoined
                             ? ` (You were no longer in ${result.channel} — rejoined.)`
                             : '');
+                } else if (action === 'saveAttachment') {
+                    summary = `Saved to ${result.savedPath} (${result.savedBytes ?? 0} bytes).`;
                 } else if (action === 'receipts') {
                     const rs = result.receipts ?? [];
                     summary = `${rs.length} sent DM(s); ${rs.filter((r) => r.seen).length} seen.`;

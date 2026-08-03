@@ -169,14 +169,27 @@ For Codex, Genie automatically installs a SessionStart hook that sends Codex's g
 - \`send\` — DM a peer with \`to\` = their \`agentId\`, OR broadcast with \`channel\` =
   a purpose (\`frontend\` → your workspace's room) or \`slug:purpose\` (another
   workspace's). Needs \`text\`. Optional \`interrupt: true\` also glows a DM target's
-  terminal so they notice (never injected into their pty).
+  terminal so they notice (never injected into their pty). Optional
+  \`attachments\` — a list of file paths inside **your own workspace** to send
+  along. Genie READS each file and stores its BYTES, so the recipient gets a real
+  copy even though it can't see your disk; one unreadable path fails the whole
+  send rather than shipping a subset.
 - \`receive\` — fetch NEW messages: pass a \`cursor\` from a prior receive to page
   forward; set \`wait: true\` to LONG-POLL (optional \`timeoutMs\`, default ~4min) —
   delivery WAKES the call the instant a message lands, so ONE blocking call is
   how you await a peer's reply. Only call again if it returns empty (timed out)
   and you still want to wait. Genie also PUSHES a notification to your MCP
   connection on delivery when your client supports the server-push stream — the
-  blocking \`receive\` is what actually hands you the message either way.
+  blocking \`receive\` is what actually hands you the message either way. A message
+  that carries files has an \`attachments\` array on it (\`id\`, \`filename\`,
+  \`bytes\`, \`mime\`) — that \`id\` is what you save with.
+- \`saveAttachment\` — write a received file into **your own workspace**:
+  \`attachmentId\` (from a message's \`attachments\`), optional \`path\` (a folder, or
+  a trailing slash, means "land in here" under the original name; omit it to save
+  at your workspace root) and optional \`overwrite\` (default false — a save that
+  would clobber a file fails instead). You can only save into YOUR workspace, and
+  only files from a message that actually reached you: an attachment id is a
+  handle, not access.
 - \`receipts\` — read-receipts for the DMs YOU sent: each with a \`seen\` flag (true
   once the recipient has received it). Lets you tell 'queued' from 'seen' and decide
   whether to escalate to a nudge. Optional \`limit\` (default 20).
@@ -197,6 +210,10 @@ For Codex, Genie automatically installs a SessionStart hook that sends Codex's g
 Your identity + accessibility persist across restarts. Local-only — no relay, no
 cross-host. Use it to hand a peer context, ask another agent to take a task, or
 watch a shared channel while you work.
+**Attachments** are byte COPIES Genie stores, never path references — so send the
+file rather than telling a peer where it lives. You may only attach from your own
+workspace and only save into your own; files are size-capped, and
+natively-executable types (\`.exe\`, \`.msi\`, \`.bat\`, …) are refused at both ends.
 
 ### knowledge
 **Genie's workstation KNOWLEDGE GRAPH** — a workstation-wide, LOCAL knowledge/

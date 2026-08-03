@@ -139,6 +139,50 @@ export interface AgentInboxChannelInfo {
     memberCount: number;
 }
 
+/**
+ * One FILE riding a message. Metadata only: the bytes live in the
+ * content-addressed store (see `attachments.ts`), because the recipient is often
+ * an agent in another workspace that can't read the sender's disk — and by the
+ * time it drains its inbox the sender's file may be gone.
+ *
+ * `sha256` is the store address (and the dedup key: the same file passed around
+ * a channel is stored once); `id` is what an agent hands to `saveAttachment`.
+ */
+export interface AgentInboxAttachment {
+    /** Stable per-message-attachment id — the handle for `saveAttachment`. */
+    id: string;
+    /** Base name as sent. NEVER a path — the sender can't steer a recipient's write. */
+    filename: string;
+    bytes: number;
+    /** Best-effort content type, for display. A hint, never a gate. */
+    mime: string;
+    /** sha256 of the bytes — the blob store's address. */
+    sha256: string;
+}
+
+/**
+ * May `agentId` pull an attachment off `msg`? An attachment id is a handle, NOT
+ * a capability: reaching the bytes requires having been party to the message.
+ *
+ * The sender always qualifies (including a channel poster that has since left —
+ * it sent the file, it may fetch it back). A DM's recipient qualifies. A channel
+ * message qualifies anyone currently in that room, which is the same membership
+ * test delivery itself uses, so access tracks the room rather than a frozen
+ * roster. The human panel owns the workstation and sees everything, exactly as
+ * it does for the directory and the DM threads.
+ */
+export function canAccessMessageAttachment(input: {
+    msg: Pick<AgentInboxMessage, 'kind' | 'from' | 'to' | 'channel'>;
+    agentId: string;
+    channelKeys: string[];
+}): boolean {
+    const { msg, agentId } = input;
+    if (agentId === AGENTINBOX_HUMAN) return true;
+    if (msg.from === agentId) return true;
+    if (msg.kind === 'dm') return msg.to === agentId;
+    return !!msg.channel && input.channelKeys.includes(msg.channel);
+}
+
 /** A delivered message — the full record kept in the per-channel / per-DM log and
  *  handed to an agent's `receive`. */
 export interface AgentInboxMessage {
@@ -160,6 +204,9 @@ export interface AgentInboxMessage {
     ts: number;
     /** DM only: an urgent nudge was requested (glows the recipient's terminal). */
     interrupt?: boolean;
+    /** Files riding this message. ABSENT (not `[]`) when there are none, so a
+     *  plain message is byte-identical to what it was before attachments. */
+    attachments?: AgentInboxAttachment[];
 }
 
 /** The `agentInbox:message` push preview (never the full text stream). */

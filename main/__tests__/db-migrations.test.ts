@@ -996,7 +996,12 @@ describe('db migration v34 (retiring the beta.218 native hosting columns, #234 P
         db.exec('CREATE TABLE schema_version (version INTEGER PRIMARY KEY)');
         const upTo33 = () => {
             runMigrations(db);
-            db.exec('DELETE FROM schema_version WHERE version = 34');
+            // Rewind to v33. The runner resumes from the HIGHEST recorded
+            // version, so every row above 33 has to go — dropping only the v34
+            // row would leave a later migration's version as the max and v34
+            // would never re-run (which is exactly how this stopped testing
+            // anything the first time a v35 landed).
+            db.exec('DELETE FROM schema_version WHERE version >= 34');
             db.exec('ALTER TABLE workspaces ADD COLUMN hosted_sites TEXT');
             db.exec('ALTER TABLE workspaces ADD COLUMN workspace_services TEXT');
         };
@@ -1015,6 +1020,58 @@ describe('db migration v34 (retiring the beta.218 native hosting columns, #234 P
         runMigrations(db);
         expect(() => runMigrations(db)).not.toThrow();
         expect(cols(db, 'workspaces').has('hosted_sites')).toBe(false);
+    });
+});
+
+describe('db migration v35 (AgentInbox file attachments)', () => {
+    it('adds the attachment METADATA table — the bytes deliberately live outside the db', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const c = cols(db, 'agentinbox_attachments');
+        expect([...c].sort()).toEqual(
+            ['bytes', 'created_at', 'filename', 'id', 'message_id', 'mime', 'sha256'].sort(),
+        );
+        // No blob column: a 25 MB payload in a WAL-journalled database that every
+        // spec, message and cursor write goes through would tax every one of them.
+        expect(c.has('data')).toBe(false);
+        expect(c.has('blob')).toBe(false);
+    });
+
+    it('CASCADES with the message, so wiping a conversation takes its attachments', () => {
+        const db = new Database(':memory:');
+        db.pragma('foreign_keys = ON');
+        runMigrations(db);
+
+        db.prepare(
+            `INSERT INTO whisper_messages (id, seq, kind, from_id, from_label, to_id, channel_key, text, ts, interrupt)
+             VALUES ('m1', 1, 'dm', 'a', 'A', 'b', NULL, 'hi', 1, 0)`,
+        ).run();
+        db.prepare(
+            `INSERT INTO agentinbox_attachments (id, message_id, filename, bytes, mime, sha256, created_at)
+             VALUES ('f1', 'm1', 'a.md', 4, 'text/markdown', 'aa', 1)`,
+        ).run();
+
+        db.prepare("DELETE FROM whisper_messages WHERE id = 'm1'").run();
+
+        const left = db
+            .prepare<[], { n: number }>('SELECT COUNT(*) AS n FROM agentinbox_attachments')
+            .get();
+        expect(left?.n).toBe(0);
+    });
+
+    it('applies to an EXISTING database, not just a fresh one', () => {
+        const db = new Database(':memory:');
+        db.exec('CREATE TABLE schema_version (version INTEGER PRIMARY KEY)');
+        runMigrations(db);
+        db.exec('DELETE FROM schema_version WHERE version >= 35');
+        db.exec('DROP TABLE agentinbox_attachments');
+        // PRAGMA table_info on a missing table reports no columns — that empty
+        // set is the proof the table really is gone before the re-run.
+        expect(cols(db, 'agentinbox_attachments').size).toBe(0);
+
+        runMigrations(db);
+
+        expect(cols(db, 'agentinbox_attachments').has('sha256')).toBe(true);
     });
 });
 

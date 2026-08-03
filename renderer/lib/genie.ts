@@ -1353,6 +1353,18 @@ export interface AgentInboxDmThreadInfo {
     count: number;
 }
 
+/** One FILE riding an AgentInbox message. Metadata only — the bytes live in the
+ *  host's content-addressed store and are fetched on demand for a download. */
+export interface AgentInboxAttachment {
+    /** The handle used to fetch the bytes (`agentInbox.attachmentBytes`). */
+    id: string;
+    /** Base name as sent — never a path. */
+    filename: string;
+    bytes: number;
+    mime: string;
+    sha256: string;
+}
+
 /** One AgentInbox message (channel broadcast or 1:1 DM). */
 export interface AgentInboxMessage {
     seq: number;
@@ -1367,6 +1379,8 @@ export interface AgentInboxMessage {
     to?: string;
     text: string;
     ts: number;
+    /** Files sent with this message. Absent when there are none. */
+    attachments?: AgentInboxAttachment[];
 }
 
 /** Live presence event: a full agent snapshot, or a terse offline/left tick. */
@@ -2641,12 +2655,28 @@ export interface GenieApi {
             limit?: number;
             before?: number;
         }) => Promise<{ messages: AgentInboxMessage[] }>;
-        /** Post as the human — to a channel (`channelKey`) or an agent (`toAgentId`). */
+        /** Post as the human — to a channel (`channelKey`) or an agent (`toAgentId`),
+         *  optionally with FILES. Attachment bytes ride the call (base64, straight
+         *  from the browser file input) rather than as a host path: the panel needs
+         *  no filesystem access, and on a remote window the human attaches from
+         *  their OWN machine. All-or-nothing — a refused file sends nothing. */
         post: (input: {
             channelKey?: string;
             toAgentId?: string;
             text: string;
+            attachments?: Array<{ filename: string; base64: string }>;
         }) => Promise<{ ok: boolean; error?: string }>;
+        /** An attachment's BYTES, so the panel can save it client-side (a remote
+         *  human gets the file on their machine, not the host's). Reads Genie's own
+         *  content-addressed store — no filesystem egress. */
+        attachmentBytes: (attachmentId: string) => Promise<{
+            ok: boolean;
+            error?: string;
+            filename?: string;
+            mime?: string;
+            bytes?: number;
+            base64?: string;
+        }>;
         /** AGENT-LAG (genie #64) — how many messages this workstation's AGENTS
          *  have not received/ACKed. The header badge's signal: it answers "are my
          *  agents keeping up?", NOT "what haven't I read?" (that is client-side,

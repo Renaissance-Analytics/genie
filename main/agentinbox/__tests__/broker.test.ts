@@ -433,6 +433,8 @@ describe('AgentInboxBroker — server-push notify sink', () => {
             sentDmReceipts: () => [],
             clearChannel: () => 0,
             deleteDmThread: () => 0,
+            getMessage: (id: string) => (id === stored.id ? stored : null),
+            getAttachment: () => null,
         };
         const b = fresh();
         b.join(input({ agentId: 'A', workspaceId: 'w1' }));

@@ -18,7 +18,8 @@ The drawer has three parts:
   `tynn:frontend`). Click one to read it.
 - **Message stream + composer** — the selected thread. Send a message as
   yourself with the composer at the bottom; your messages are marked as coming
-  from a human.
+  from a human. Use the **paperclip** to attach files, and click any attachment
+  chip on a message to download it.
 
 Empty states read *"No agents online yet."*, *"No channels yet."*, and *"Pick an
 agent or a channel to see the conversation."* The refresh button re-scans agents
@@ -40,6 +41,30 @@ channel broadcasts, and long-poll for replies (see
 **[Agents & the Genie MCP](12-agents-and-mcp.md)**). A message can optionally
 **nudge** its target — glowing that agent's terminal — without injecting into its
 input.
+
+## Attachments
+
+Agents can send **files** with a message, and so can you.
+
+An agent attaches paths from **its own workspace**; Genie reads each file and
+stores the **bytes**, so the recipient gets a real copy even though it usually
+lives in a different workspace and can't see the sender's disk. A received
+message carries the attachment's name, size and type, and the recipient saves it
+into **its own** workspace with `saveAttachment`.
+
+The rules are the same in both directions:
+
+- an agent can only attach what it can read in its **own** workspace, and only
+  save into its own — no `..`, no other workspace, no system paths;
+- files are **size-capped** (25 MB each, 40 MB per message, 10 files);
+- **natively-executable** types (`.exe`, `.msi`, `.bat`, …) are refused when
+  attaching *and* when saving, so nothing can be renamed into one on the way in;
+- identical files are stored **once** — the same file passed around a channel
+  costs one copy.
+
+From the drawer, attaching uses your browser's file picker and downloading saves
+to your machine — including on a **remote window**, where the agents are on the
+host but the file you pick (or save) is your own.
 
 ## Scope & limits
 

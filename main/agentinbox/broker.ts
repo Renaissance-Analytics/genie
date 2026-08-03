@@ -1,9 +1,11 @@
 import crypto from 'crypto';
 import {
+    canAccessMessageAttachment,
     normalizePurpose,
     previewText,
     AGENTINBOX_HUMAN,
     type AgentInboxAgentInfo,
+    type AgentInboxAttachment,
     type AgentInboxBrokerEvent,
     type AgentInboxChannelInfo,
     type AgentInboxDmThreadInfo,
@@ -14,7 +16,7 @@ import {
     type AgentInboxNotifyTarget,
     type WorkspaceAccessPolicy,
 } from './types';
-import { noopAgentInboxStore, type AgentInboxStore } from './store';
+import { noopAgentInboxStore, type AgentInboxStore, type StoredAttachment } from './store';
 import { shouldWakeAgent, wakeNudgeText } from './wake';
 
 /**
@@ -935,6 +937,9 @@ export class AgentInboxBroker {
         channelArg?: string;
         text: string;
         interrupt?: boolean;
+        /** Files riding the message. The CALLER has already read + stored the
+         *  bytes (the broker owns no fs — see the class doc); this is metadata. */
+        attachments?: AgentInboxAttachment[];
     }): AgentInboxSendResult {
         const text = String(input.text ?? '');
         if (!text.trim()) return { ok: false, error: 'A message needs non-empty text.' };
@@ -956,12 +961,16 @@ export class AgentInboxBroker {
             return { ok: false, error: 'Send to a channel OR an agent, not both.' };
         }
 
+        const attachments = input.attachments ?? [];
         const base = {
             seq: 0, // assigned below
             id: crypto.randomUUID(),
             from,
             fromLabel,
             ts: Date.now(),
+            // Absent rather than `[]` when nothing is attached, so a plain
+            // message stays exactly the shape it has always been on the wire.
+            ...(attachments.length ? { attachments } : {}),
         };
 
         // --- DM ---
@@ -1148,6 +1157,31 @@ export class AgentInboxBroker {
             }
             agent.waiter = { resolve: finish, cursor, timer };
         });
+    }
+
+    // --- attachments -------------------------------------------------------
+
+    /**
+     * Resolve an attachment FOR a caller — the authorization gate behind
+     * `saveAttachment`. Null when the id is unknown, its message is gone (the
+     * human wiped that conversation), or the caller was never party to it.
+     *
+     * An attachment id is a HANDLE, not a capability: possession of the id is
+     * not permission to fetch the bytes. Channel access is judged against LIVE
+     * membership — the same set delivery uses — so leaving a room ends access to
+     * what was posted in it, exactly as it ends delivery.
+     *
+     * The lookup goes through the STORE rather than the broker's own logs
+     * because those are capped: an attachment must stay fetchable for as long as
+     * the message exists, not just while it sits in the last 500.
+     */
+    attachmentFor(agentId: string, attachmentId: string): StoredAttachment | null {
+        const att = this.store.getAttachment(String(attachmentId ?? ''));
+        if (!att) return null;
+        const msg = this.store.getMessage(att.messageId);
+        if (!msg) return null;
+        const channelKeys = this.channelsForAgent(agentId).map((c) => c.key);
+        return canAccessMessageAttachment({ msg, agentId, channelKeys }) ? att : null;
     }
 
     /**
