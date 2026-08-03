@@ -8,7 +8,13 @@ import {
     parseDevSites,
     sanitizeDevSitePatch,
 } from '../sites-config';
-import { SITE_LABEL, siteContainerNameFor } from '../argv';
+import {
+    SITE_LABEL,
+    siteBuildContainerNameFor,
+    siteBuildVolumeNameFor,
+    siteContainerNameFor,
+} from '../argv';
+import { BUILD_SOURCE_MOUNT } from '../isolated-build';
 import { FRANKENPHP_IMAGE } from '../serve-recipe';
 import type { DevSiteConfig, DevSites } from '../sites-config';
 import type {
@@ -45,6 +51,10 @@ interface Fake extends ContainerRuntime {
     readonly ran: ContainerSpec[];
     readonly built: ImageBuildSpec[];
     readonly removed: string[];
+    /** Volume names passed to `volumeRemove`, in order. */
+    readonly removedVolumes: string[];
+    /** Every `exec` the manager issued — the copy AND the build steps. */
+    readonly execs: Array<{ id: string; argv: string[]; env?: Record<string, string> }>;
     readonly containers: Map<string, ContainerSummary>;
     /** What `portMappings` answers, per container id. */
     readonly ports: Map<string, PortMapping[]>;
@@ -54,6 +64,8 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; existing?: ContainerS
     const ran: ContainerSpec[] = [];
     const built: ImageBuildSpec[] = [];
     const removed: string[] = [];
+    const removedVolumes: string[] = [];
+    const execs: Array<{ id: string; argv: string[]; env?: Record<string, string> }> = [];
     const containers = new Map<string, ContainerSummary>(
         (opts.existing ?? []).map((c) => [c.name, c]),
     );
@@ -64,6 +76,8 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; existing?: ContainerS
         ran,
         built,
         removed,
+        removedVolumes,
+        execs,
         containers,
         ports,
         async detect() {
@@ -78,7 +92,9 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; existing?: ContainerS
         },
         async networkConnect() {},
         async networkDisconnect() {},
-        async volumeRemove() {},
+        async volumeRemove(name) {
+            removedVolumes.push(name);
+        },
         async imageExists() {
             return true;
         },
@@ -119,7 +135,8 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; existing?: ContainerS
             removed.push(id);
             for (const [name, c] of containers) if (c.id === id) containers.delete(name);
         },
-        async exec() {
+        async exec(id, argv, opts) {
+            execs.push({ id, argv, ...(opts?.env ? { env: opts.env } : {}) });
             return { code: 0, stdout: '', stderr: '' };
         },
         async logs() {
@@ -290,9 +307,13 @@ describe('start', () => {
         expect(site?.network).toBe('genie-ws-acme');
         expect(site?.workspaceId).toBe('acme');
         expect(site?.labels?.[SITE_LABEL]).toBe(SITE_ID);
-        // The workspace directory, mounted at the same place the sandbox uses,
-        // with the command running in the repo's subfolder.
-        expect(site?.mounts).toEqual([{ source: '/work/acme', target: '/workspace' }]);
+        // The site is BUILT, so it serves from the container-owned build COPY
+        // (a named volume), NOT the developer's working tree (genie #119). The
+        // host path is never bind-mounted into the serving container.
+        expect(site?.volumes).toEqual([
+            { name: siteBuildVolumeNameFor('acme', 'web'), target: '/workspace' },
+        ]);
+        expect(site?.mounts).toBeUndefined();
         expect(site?.workdir).toBe('/workspace/repos/app');
         // The PRODUCTION server, and only it — the build ran separately, in the
         // sandbox container, before this one was created.
@@ -337,7 +358,9 @@ describe('start', () => {
             ],
         });
         await manager(runtime).start('acme', SITE_ID);
-        expect(runtime.removed).toEqual(['id-old']);
+        // The stopped leftover was removed (replaced, not restarted). `removed`
+        // also carries the ephemeral build container, so assert containment.
+        expect(runtime.removed).toContain('id-old');
         expect(runtime.ran.filter((s) => s.name.includes('-site-'))).toHaveLength(1);
     });
 
@@ -394,6 +417,113 @@ describe('start', () => {
         const status = await manager(fakeRuntime()).start('acme', 'nope');
         expect(status.state).toBe('failed');
         expect(status.error).toMatch(/not configured/i);
+    });
+});
+
+// --- THE ISOLATED BUILD (genie #119, Blocker 4) -----------------------------
+//
+// The build used to `exec` into the workspace dev container over the developer's
+// bind-mounted working tree, so `composer install --no-dev` / `rm -rf` /
+// `npm run build` MUTATED the live checkout (deleting dev deps, rewriting
+// public/) and — as a foreign uid over host-owned files — hit git
+// dubious-ownership + EPERM-on-overwrite. The fix builds in a container-owned
+// COPY: the host tree is only ever read, and the artifact is served from a named
+// volume, not the working directory.
+
+describe('isolated build', () => {
+    it('builds in a container-owned copy — the host tree is only a READ-ONLY source', async () => {
+        const runtime = fakeRuntime();
+        await manager(runtime).start('acme', SITE_ID);
+
+        const build = runtime.ran.find((s) => s.name === siteBuildContainerNameFor('acme', 'web'));
+        expect(build).toBeTruthy();
+        // The toolchain (dev) image, not the site's serve image.
+        expect(build?.image).toBe('genie-dev-base:1');
+        // The repo is bind-mounted READ-ONLY as the copy SOURCE — readable, but
+        // the working tree can never be written.
+        expect(build?.mounts).toEqual([
+            {
+                source: path.join('/work/acme', 'repos', 'app'),
+                target: BUILD_SOURCE_MOUNT,
+                readOnly: true,
+            },
+        ]);
+        // The build writes into the container-owned volume, mounted where the
+        // working tree used to be.
+        expect(build?.volumes).toEqual([
+            { name: siteBuildVolumeNameFor('acme', 'web'), target: '/workspace' },
+        ]);
+        // No host bind mount on the build container at all.
+        expect(build?.mounts?.some((m) => m.source === '/work/acme')).toBeFalsy();
+        // It is ephemeral: torn down once the artifact is in the volume.
+        expect(runtime.removed).toContain(`id-${siteBuildContainerNameFor('acme', 'web')}`);
+    });
+
+    it('runs the copy AND every build step in the isolated container, never the sandbox', async () => {
+        const runtime = fakeRuntime();
+        await manager(runtime).start('acme', SITE_ID);
+
+        const buildId = `id-${siteBuildContainerNameFor('acme', 'web')}`;
+        // The copy that seeds the volume…
+        const copy = runtime.execs.find(
+            (e) => e.argv[0] === 'sh' && e.argv.join(' ').includes('cp -a'),
+        );
+        expect(copy?.id).toBe(buildId);
+        // …and the build step itself…
+        const goStep = runtime.execs.find((e) => e.argv[0] === 'go');
+        expect(goStep?.id).toBe(buildId);
+        // …both run in the isolated build container. NOTHING execs against the
+        // workspace sandbox (whose bind mount is the user's live tree).
+        expect(runtime.execs.length).toBeGreaterThan(0);
+        expect(runtime.execs.every((e) => e.id === buildId)).toBe(true);
+    });
+
+    it('serves from the build-copy volume, not a host bind mount', async () => {
+        const runtime = fakeRuntime();
+        await manager(runtime).start('acme', SITE_ID);
+
+        const site = runtime.ran.find((s) => s.name === siteContainerNameFor('acme', 'web'));
+        expect(site?.mounts).toBeUndefined();
+        expect(site?.volumes).toEqual([
+            { name: siteBuildVolumeNameFor('acme', 'web'), target: '/workspace' },
+        ]);
+    });
+
+    it('makes a FRESH copy each build — the stale volume is dropped first', async () => {
+        const runtime = fakeRuntime();
+        await manager(runtime).start('acme', SITE_ID);
+        expect(runtime.removedVolumes).toContain(siteBuildVolumeNameFor('acme', 'web'));
+    });
+
+    it('a build FAILURE tears down the build container and drops the useless copy', async () => {
+        const runtime = fakeRuntime();
+        // The copy succeeds; the build STEP fails.
+        runtime.exec = async (_id, argv) =>
+            argv[0] === 'sh'
+                ? { code: 0, stdout: '', stderr: '' }
+                : { code: 1, stdout: '', stderr: 'compile error' };
+        const status = await manager(runtime).start('acme', SITE_ID);
+
+        expect(status.state).toBe('failed');
+        expect(status.buildLog).toBeTruthy();
+        expect(runtime.removed).toContain(`id-${siteBuildContainerNameFor('acme', 'web')}`);
+        expect(runtime.removedVolumes).toContain(siteBuildVolumeNameFor('acme', 'web'));
+        // The serving container is never created when the build fails.
+        expect(runtime.ran.some((s) => s.name.includes('-site-'))).toBe(false);
+    });
+
+    it('a site with NO build steps serves the workspace directly — unchanged', async () => {
+        // No build = no mutation, so there is nothing to isolate: it mounts the
+        // workspace exactly as before, and no build container/volume is made.
+        const runtime = fakeRuntime();
+        const sites: DevSites = { [SITE_ID]: { ...SITE, build: [] } };
+        await manager(runtime, sites).start('acme', SITE_ID);
+
+        const site = runtime.ran.find((s) => s.name.includes('-site-'));
+        expect(site?.mounts).toEqual([{ source: '/work/acme', target: '/workspace' }]);
+        expect(site?.volumes).toBeUndefined();
+        expect(runtime.ran.some((s) => s.name.includes('-build-'))).toBe(false);
+        expect(runtime.removedVolumes).toHaveLength(0);
     });
 });
 
@@ -462,7 +592,10 @@ describe('stop / list / logs', () => {
         await m.start('acme', SITE_ID);
         await m.stop(SITE_ID);
 
-        expect(runtime.removed).toEqual([`id-${siteContainerNameFor('acme', 'web')}`]);
+        expect(runtime.removed).toContain(`id-${siteContainerNameFor('acme', 'web')}`);
+        // The isolated build copy is dropped on stop — a fresh one is made on the
+        // next start (production parity), and this is what keeps it from leaking.
+        expect(runtime.removedVolumes).toContain(siteBuildVolumeNameFor('acme', 'web'));
         expect(m.genSites()).toEqual([]);
         expect(m.list('acme')[0]?.state).toBe('stopped');
     });
@@ -556,7 +689,7 @@ describe('reconfigure', () => {
         const sites: DevSites = { [SITE_ID]: { ...SITE } };
         const m = manager(runtime, sites);
         await m.start('acme', SITE_ID);
-        const ranBefore = runtime.ran.length;
+        const siteRunsBefore = runtime.ran.filter((s) => s.name.includes('-site-')).length;
 
         sites[SITE_ID] = { ...SITE, port: 9000 };
         const status = await m.reconfigure('acme', SITE_ID, {
@@ -567,9 +700,10 @@ describe('reconfigure', () => {
         expect(status.state).toBe('running');
         // The old container was torn down and a fresh one started (a published
         // port is fixed at create time, so a port change can only take effect
-        // on a new container).
+        // on a new container). Count SITE containers — a restart also spins up
+        // and tears down an ephemeral build container.
         expect(runtime.removed.length).toBeGreaterThan(0);
-        expect(runtime.ran.length).toBe(ranBefore + 1);
+        expect(runtime.ran.filter((s) => s.name.includes('-site-')).length).toBe(siteRunsBefore + 1);
         expect(runtime.ran.at(-1)?.ports).toEqual([{ container: 9000, hostIp: '127.0.0.1' }]);
     });
 
@@ -694,11 +828,13 @@ describe('startup progress', () => {
 // --- production build auth (genie #119) -------------------------------------
 
 describe('production build auth', () => {
-    /** Capture the env each build step is `exec`ed with. */
+    /** Capture the env each BUILD STEP is `exec`ed with. The repo COPY that
+     *  prepares the isolated build (`sh -c cp …`) is skipped — these assertions
+     *  are about the build steps' environment, and the copy carries none of it. */
     function captureBuildEnv(runtime: Fake): Array<Record<string, string> | undefined> {
         const seen: Array<Record<string, string> | undefined> = [];
-        runtime.exec = async (_id, _argv, opts) => {
-            seen.push(opts?.env);
+        runtime.exec = async (_id, argv, opts) => {
+            if (argv[0] !== 'sh') seen.push(opts?.env);
             return { code: 0, stdout: '', stderr: '' };
         };
         return seen;
