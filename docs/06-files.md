@@ -20,8 +20,8 @@ Files** tile, or **Add Files…** in the chooser.
 When no file is open the panel shows: *"Pick a file from the tree to start
 editing."*
 
-File types claimed by an enabled **plugin** (`.xlsx`, `.pptx`, `.md`, `.docx`
-with the bundled plugins) open as a tab in this same panel, rendered by the
+File types claimed by an enabled **plugin** (`.xlsx`, `.pptx`, `.md`, `.mdc`,
+`.docx` with the bundled plugins) open as a tab in this same panel, rendered by the
 plugin's editor instead of the text editor — see
 **[Plugins & marketplaces](11-plugins.md)**.
 

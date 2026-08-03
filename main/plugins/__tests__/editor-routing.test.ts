@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { matchEditorForExtension, type ResolvedPluginEditor } from '../editor-routing';
+import { BUNDLED_PLUGIN_SOURCES } from '../official';
+import { clientEditorExtensions } from '../side';
+import type { PluginManifest } from '../manifest';
 import type { PluginRow } from '../../db';
 import { emptyPluginGrants } from '../../db';
 
@@ -106,5 +109,39 @@ describe('matchEditorForExtension', () => {
     it('fails closed on a malformed manifest (skips it)', () => {
         const broken: PluginRow = { ...presentation, manifest_json: '{ not json' };
         expect(matchEditorForExtension([broken], 'deck.pptx')).toBeNull();
+    });
+});
+
+/**
+ * `.mdc` — Cursor's rule files — are markdown carrying a YAML front-matter
+ * block. They belong to the Document editor, and the fs allow-list has to agree:
+ * `clientEditorExtensions` is `editors[].extensions` INTERSECT
+ * `capabilities.fs.extensions`, so an extension declared in only one of the two
+ * lists opens to an empty allow-list and every read/write of it fails closed.
+ */
+describe('the bundled Document editor claims the markdown text types', () => {
+    const source = BUNDLED_PLUGIN_SOURCES.find((b) => b.id === 'ai.genie.document')!;
+    const manifest = source.manifest as unknown as PluginManifest;
+    const installed = [row('ai.genie.document', 'document', source.manifest)];
+
+    it.each(['rules.mdc', '.cursor/rules/seam.mdc', 'RULES.MDC'])(
+        'routes %s to the Document editor',
+        (file) => {
+            const r = matchEditorForExtension(installed, file) as ResolvedPluginEditor;
+            expect(r).not.toBeNull();
+            expect(r.pluginId).toBe('ai.genie.document');
+            expect(r.editorId).toBe('document');
+            expect(r.fancyExport).toBe('Editor');
+        },
+    );
+
+    it('still routes .md, .markdown and .docx', () => {
+        for (const f of ['notes.md', 'notes.markdown', 'report.docx']) {
+            expect(matchEditorForExtension(installed, f)?.pluginId).toBe('ai.genie.document');
+        }
+    });
+
+    it('grants .mdc through the fs sandbox as well as the editor claim', () => {
+        expect(clientEditorExtensions(manifest, 'rules.mdc')).toContain('.mdc');
     });
 });

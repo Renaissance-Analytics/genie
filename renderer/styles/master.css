@@ -5112,3 +5112,100 @@ body.gutter-dragging .grid-gutter {
     opacity: 0.45;
     cursor: not-allowed;
 }
+
+/* --- Markdown front matter: the fm pill + the drawer that falls from the top --
+   The pill is the ONLY chrome the Document editor adds above the Fancy Editor;
+   the drawer is `attach="container"`, so `.doc-shell` is what it slides inside
+   (react-fancy's Drawer.Container supplies `relative overflow-hidden` — the
+   flex column here is what lets the editor fill the tile beneath the pill). */
+.doc-shell {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+}
+.doc-chrome {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border-1);
+}
+/* The Editor ships `h-full`, which under the pill strip would overflow the
+   tile by the strip's height — make it the flex column's growing child. */
+.doc-shell > [data-react-fancy-editor] {
+    flex: 1;
+    min-height: 0;
+    height: auto;
+}
+.fm-pill {
+    display: inline-flex;
+    align-items: center;
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+}
+.fm-pill:hover {
+    filter: brightness(1.15);
+}
+.fm-drawer-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+.fm-drawer-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+}
+.fm-note {
+    flex: 0 0 auto;
+}
+.fm-empty {
+    color: var(--fg-2);
+}
+.fm-raw {
+    flex: 1;
+    min-height: 140px;
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 12.5px;
+    white-space: pre;
+}
+.fm-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+/* key · type · value · remove — the value column takes the slack so a Pillbox
+   of list items has room without the key/type columns jumping per row. */
+.fm-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) 110px minmax(180px, 2fr) auto;
+    align-items: center;
+    gap: 8px;
+}
+.fm-row .fm-key input,
+.fm-row .fm-value input {
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 12.5px;
+}
+.fm-complex {
+    color: var(--fg-2);
+    font-style: italic;
+}
+.fm-drawer-foot {
+    gap: 8px;
+}
+.fm-add {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.fm-add .fm-key {
+    width: 180px;
+}

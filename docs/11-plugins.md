@@ -11,7 +11,7 @@ Genie ships with three first-party plugins in the box:
 | --- | --- |
 | **Presentation** | A Slides editor for `.pptx`/`.odp`, a full-screen Present mode, and a `presentation.createDeck` agent tool that generates decks. |
 | **Spreadsheet** | A Sheets editor for `.xlsx`/`.csv`/`.ods` and a `spreadsheet.createWorkbook` agent tool that generates workbooks. |
-| **Document** | A WYSIWYG editor for Markdown (`.md`) and Word (`.docx`) files. Markdown round-trips exactly; `.docx` opens and saves with document-level fidelity (headings, lists, formatting, links, tables, embedded images) — Word-only features like tracked changes don't survive a save. |
+| **Document** | A WYSIWYG editor for Markdown (`.md`, `.markdown`), Cursor rules (`.mdc`) and Word (`.docx`) files. Markdown round-trips exactly, and a YAML front-matter block is edited through the **fm** pill instead of being typed into the document (see below); `.docx` opens and saves with document-level fidelity (headings, lists, formatting, links, tables, embedded images) — Word-only features like tracked changes don't survive a save. |
 
 ## Installing plugins
 
@@ -51,11 +51,33 @@ file's bytes. You don't need the editor plugin enabled on the host as well.
 ## Using plugin editors
 
 A file type claimed by an enabled plugin opens **as a tab in the Files
-panel**, right next to your text tabs — click a `.xlsx`, `.pptx`, `.md`, or
-`.docx` in the file tree and it opens where you clicked it, with the same
+panel**, right next to your text tabs — click a `.xlsx`, `.pptx`, `.md`, `.mdc`,
+or `.docx` in the file tree and it opens where you clicked it, with the same
 dirty-dot, **Ctrl/Cmd+S** save, close confirmation, session restore, and
 live-refresh-on-disk-change as any other tab. Unsaved plugin-tab edits survive
 switching tabs.
+
+### Front matter — the `fm` pill
+
+Markdown files (`.md`, `.markdown`, `.mdc`) can open with a **YAML front-matter
+block** — the `---` fenced header that carries things like `title`, `tags`, or a
+Cursor rule's `description` / `globs` / `alwaysApply`. That block is **not** part
+of the document you type in: Genie splits it off and the markdown editor shows an
+**fm** pill above the toolbar — `fm · 3 keys` when the file has one, `fm +` when
+it doesn't.
+
+Click the pill and a drawer falls from the top of the editor:
+
+- **Fields** — one row per key. Rename it, change its type (string, number,
+  boolean, list, null), and edit the value with the control that fits — a text
+  box, a switch, or a pill box for list items.
+- **YAML** — the block as written, for anything the field list can't stand in
+  for (nested maps, block literals). Keys like that show as *"nested — edit in
+  YAML"* rather than pretending to be editable.
+
+Edits mark the tab dirty and land on the next save. Remove every key (or use
+**Remove block**) and the `---` fences go with them. A block you never open is
+written back **byte for byte**, comments and formatting included.
 
 Plugin editors read and write files through a **capability-scoped bridge**: an
 editor can only touch the file types it declares it opens, inside the workspace
