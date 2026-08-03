@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import {
     FileBrowser,
     type FileBrowserProvider,
     type FileEntry,
 } from '@particle-academy/react-fancy';
 import { api, type TreeNodeData } from '../lib/genie';
+import { ensureOverlayRoot } from '../lib/overlay-root';
 
 /**
  * In-app file/folder picker — replaces the native OS `dialog.showOpenDialog`
@@ -177,6 +179,14 @@ export function pickPath(opts: {
  * The single always-mounted host for {@link pickPath}. Renders nothing until a
  * pick is requested. Mount it ONCE, high in the tree (e.g. _app), so the modal
  * overlays every page.
+ *
+ * The picker itself does NOT render here: it is portaled into Genie's overlay
+ * root, a direct child of `<body>` (see renderer/lib/overlay-root.ts). Where
+ * this component sits then stops mattering — the picker can't be trapped in an
+ * ancestor's stacking context, and it resolves Genie's surface tokens wherever
+ * the app mounts it. Both were live bugs: the first is genie #86, the second is
+ * genie #114, which is why the picker still LOOKED like it was behind the
+ * Add-workspace modal after #86 made it genuinely top-most and clickable.
  */
 export function FilePickerHost() {
     const request = useSyncExternalStore(
@@ -187,20 +197,28 @@ export function FilePickerHost() {
         () => currentRequest,
         () => currentRequest,
     );
-    if (!request) return null;
+    // Resolved on mount, not on demand: the host exists long before any pick is
+    // requested, so opening a picker costs no extra frame.
+    const [overlayRoot, setOverlayRoot] = useState<HTMLElement | null>(null);
+    useEffect(() => {
+        setOverlayRoot(ensureOverlayRoot<HTMLElement>(document));
+    }, []);
+
+    if (!request || !overlayRoot) return null;
     const finish = (path: string | null) => {
         const r = request;
         currentRequest = null;
         emit();
         r.resolve(path);
     };
-    return (
+    return createPortal(
         <FilePickerModal
             mode={request.mode}
             title={request.title}
             initialPath={request.initialPath}
             onPick={(p) => finish(p)}
             onCancel={() => finish(null)}
-        />
+        />,
+        overlayRoot,
     );
 }
