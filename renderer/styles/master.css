@@ -556,6 +556,14 @@
     background: var(--bg-2);
     color: var(--fg-1);
 }
+.gicon:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+.gicon:disabled:hover {
+    background: transparent;
+    color: var(--fg-3);
+}
 
 /* ===== Toolbar ========================================================== */
 .gtoolbar {

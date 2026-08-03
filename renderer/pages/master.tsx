@@ -15,7 +15,7 @@ import AddWorkspaceModal from '../components/AddWorkspaceModal';
 import BootScreen from '../components/Master/BootScreen';
 import HostUpgradeOverlay from '../components/Master/HostUpgradeOverlay';
 import HostBuildNudge from '../components/Master/HostBuildNudge';
-import { WorkstationSetupLauncher } from '../components/Wizard';
+import { RecipeLauncher, WorkstationSetupLauncher } from '../components/Wizard';
 import DocsFlyout from '../components/Master/DocsFlyout';
 import IssueWatchFlyout from '../components/Master/IssueWatchFlyout';
 import TaskManagerFlyout from '../components/Master/TaskManagerFlyout';
@@ -31,6 +31,7 @@ import SignInPrompt from '../components/SignInPrompt';
 import type { AgentType, BackendUser, ViewType, AgentInboxScope } from '../lib/genie';
 import { resolveShortcut } from '../lib/master-shortcuts';
 import { computeLaunchSelection } from '../lib/launch-restore';
+import { canRunRecipe, recipeLaunchScope } from '../lib/recipe-launch';
 import { applyPanelOrder } from '../lib/panel-reorder';
 import {
     overlayOwnConnKey,
@@ -62,6 +63,7 @@ import {
     IconGraph,
     IconSettings,
     IconAlert,
+    IconWand,
     IconX,
 } from '../components/Master/icons';
 import {
@@ -276,6 +278,10 @@ function MasterInner() {
     } | null>(null);
     const [addingWorkspace, setAddingWorkspace] = useState(false);
     const [settingsWorkspaceId, setSettingsWorkspaceId] = useState<string | null>(null);
+    // "Run a recipe" launcher (Toolbar wand button). Scoped to the active
+    // workspace so a recipe's git/gh terminal steps default their cwd to the
+    // repo — see recipeLaunchScope + RecipeLauncher.
+    const [recipeLauncherOpen, setRecipeLauncherOpen] = useState(false);
     // The container Dev Server (#234). One map of workspaceId → its dev sites,
     // because the rail's indicator is per-row and a per-workspace fetch on paint
     // would be N calls. LOCAL-only: `api().devServer` is not host-sourced, so in
@@ -1774,6 +1780,7 @@ function MasterInner() {
                         }
                         addDisabled={atMaxViews}
                         addDisabledReason={maxViewsReason}
+                        onRunRecipe={() => setRecipeLauncherOpen(true)}
                         lastTerminalType={lastTerminalType}
                         onLastTerminalType={setLastTerminalType}
                         onAgentCreated={selectAgentSpec}
@@ -1916,6 +1923,26 @@ function MasterInner() {
                     <WorkspaceSiteManager
                         workspace={ws}
                         onClose={() => setSiteManagerWsId(null)}
+                    />
+                );
+            })()}
+
+            {/* "Run a recipe" (Toolbar wand). Scoped to the active workspace:
+                the launcher lists every registered recipe (built-in + plugin —
+                e.g. the Repository plugin's git recipes) and runs the chosen one
+                in a WizardModal whose terminal steps default their cwd to the
+                workspace repo. The button is disabled without an active
+                workspace, so recipeLaunchScope is always resolvable here. */}
+            {recipeLauncherOpen && (() => {
+                const scope = activeWorkspaceId
+                    ? recipeLaunchScope(workspacesById.get(activeWorkspaceId))
+                    : null;
+                if (!scope) return null;
+                return (
+                    <RecipeLauncher
+                        workspaceId={scope.workspaceId}
+                        defaultCwd={scope.defaultCwd}
+                        onClose={() => setRecipeLauncherOpen(false)}
                     />
                 );
             })()}
@@ -3477,6 +3504,8 @@ interface ToolbarProps {
     onAddView: (type: ViewType) => void;
     addDisabled?: boolean;
     addDisabledReason?: string;
+    /** Open the "Run a recipe" launcher for the active workspace. */
+    onRunRecipe: () => void;
     /** Split Add-Terminal button: last-used type + its persistence + agent create. */
     lastTerminalType: TerminalTypeId;
     onLastTerminalType: (id: TerminalTypeId) => void;
@@ -3492,6 +3521,7 @@ function Toolbar({
     onAddView,
     addDisabled,
     addDisabledReason,
+    onRunRecipe,
     lastTerminalType,
     onLastTerminalType,
     onAgentCreated,
@@ -3546,6 +3576,20 @@ function Toolbar({
                     <IconColumns />
                 </button>
             </div>
+            <button
+                type="button"
+                className="gicon"
+                title={
+                    canRunRecipe(activeWorkspace)
+                        ? 'Run a recipe'
+                        : 'Run a recipe (activate a workspace first)'
+                }
+                aria-label="Run a recipe"
+                disabled={!canRunRecipe(activeWorkspace)}
+                onClick={onRunRecipe}
+            >
+                <IconWand />
+            </button>
             <button type="button" className="gicon" title="Maximize window">
                 <IconMaximize />
             </button>
