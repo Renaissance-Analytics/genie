@@ -32,12 +32,14 @@ import type {
     ContainerSpec,
     ContainerState,
     ContainerSummary,
+    ExecOptions,
     ImageBuildSpec,
     ImageProgressOptions,
     ImageResult,
     LogOptions,
     NetworkRef,
     PortMapping,
+    RunOptions,
     RuntimeDetection,
     StreamHandle,
 } from './container-runtime';
@@ -112,7 +114,8 @@ export function createCliRuntime(
     const platform = opts.platform ?? process.platform;
     const bin = opts.bin ?? kind;
 
-    const run = (args: string[]): Promise<CommandResult> => runner.run(bin, args);
+    const run = (args: string[], runOpts?: RunOptions): Promise<CommandResult> =>
+        runner.run(bin, args, runOpts);
     const ok = (result: CommandResult): boolean => result.code === 0;
 
     /** Everything the CLI said, trimmed to something a human can read. */
@@ -302,10 +305,16 @@ export function createCliRuntime(
             await runTolerant('rm', removeArgv(id));
         },
 
-        exec(id: string, argv: string[]): Promise<CommandResult> {
+        exec(id: string, argv: string[], execOpts: ExecOptions = {}): Promise<CommandResult> {
             // Verbatim: a non-zero exit from the command INSIDE the container is
             // the caller's news, not this adapter's failure.
-            return run(execArgv(id, argv));
+            //
+            // A production build step can take minutes (`composer install`,
+            // `cargo build --release`), so the caller's timeout wins over the
+            // adapter's default — which is sized for `docker ps`.
+            return run(execArgv(id, argv, execOpts), {
+                ...(execOpts.timeoutMs ? { timeoutMs: execOpts.timeoutMs } : {}),
+            });
         },
 
         async logs(id: string, logOpts: LogOptions = {}): Promise<string> {

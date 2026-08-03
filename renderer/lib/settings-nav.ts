@@ -57,7 +57,7 @@ export const NAV_GROUPS: NavGroup[] = [
             // workspace uses is per-workspace and lives in its Site Manager;
             // service ENGINES are shared across every workspace on the machine,
             // so they are managed here and nowhere else.
-            { id: 'dev-server', label: 'Dev Server', icon: 'server' },
+            { id: 'dev-server', label: 'Hosting Manager', icon: 'server' },
             { id: 'connections', label: 'Connections', icon: 'link' },
             { id: 'devices', label: 'Devices', icon: 'smartphone' },
         ],

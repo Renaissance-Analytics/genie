@@ -41,8 +41,8 @@ import {
 } from '../../lib/dev-server';
 
 /**
- * The WORKSPACE SITE MANAGER (Tynn #234 P4) — the human view over the container
- * Dev Server, and deliberately the SECONDARY one.
+ * The WORKSPACE SITE MANAGER — the human view over the Hosting Manager, and
+ * deliberately the SECONDARY one.
  *
  * The discovery decided agents administer this through the `manageSite` /
  * `manageService` MCP tools and a human UX exists beside them. So this panel is
@@ -57,10 +57,12 @@ import {
  *
  * ## What each tab is
  *
- *   - **SITES** — what this workspace SERVES. Status (with `ready` shown apart
- *     from `running`), both origins, start/stop/restart, the container log, open
- *     in the Genie Browser, and the layered run-option picker that turns "this
- *     repo" into a command and a port.
+ *   - **SITES** — what this workspace HOSTS. Each one is BUILT and then served
+ *     the way it runs in production, so status shows `ready` apart from
+ *     `running`, and the log carries the BUILD as well as the server. Both
+ *     origins, start/stop/restart, open in the Genie Browser, and the layered
+ *     recipe picker that turns "this repo" into a build, a production server
+ *     and a port.
  *   - **SERVICES** — what those sites CONNECT TO. The engine and version, how
  *     many workspaces hold it, what isolation this workspace actually has, the
  *     connection surface from both sides of the boundary, the injected env, the
@@ -217,12 +219,12 @@ export default function WorkspaceSiteManager({
             <div className="ws-settings site-manager">
                 <div className="ws-settings-head">
                     <Heading as="h2" size="sm">
-                        Dev Server — {workspace.project_name}
+                        Hosting — {workspace.project_name}
                     </Heading>
                     <Text size="xs" className="text-zinc-500">
-                        This workspace&apos;s dev servers and the services they connect to, each
-                        in a container sandboxed to this workspace. Nothing runs until you start
-                        it.
+                        The sites this workspace hosts and the services behind them, each in a
+                        container sandboxed to this workspace. Every site is built and then
+                        served the way it runs in production. Nothing runs until you start it.
                     </Text>
                 </div>
 
@@ -332,9 +334,11 @@ function SitesTab({
             <div className="set-section-head">
                 <h2>Sites</h2>
                 <span className="set-section-desc">
-                    A repo&apos;s dev server, running in this workspace&apos;s container sandbox
-                    and reachable at a stable <code>.gen</code> address — from here and from a
-                    connected remote.
+                    A repo, BUILT and then served the way it runs in production — FrankenPHP,
+                    gunicorn, a compiled binary, nginx over a built front end — in this
+                    workspace&apos;s container sandbox, reachable at a stable <code>.gen</code>{' '}
+                    address from here and from a connected remote. Its database and cache are
+                    reached inside the sandbox and are never exposed to the browser.
                 </span>
                 <span style={{ marginLeft: 'auto' }}>
                     <Action size="sm" variant="ghost" icon="refresh-cw" onClick={onRefresh}>
@@ -349,8 +353,9 @@ function SitesTab({
                 </Text>
             ) : sites.length === 0 ? (
                 <div className="set-note">
-                    No dev sites here yet. Add one below — Genie reads the repo, offers how it
-                    could run (a Dockerfile it ships, or the stack it detects), and starts it.
+                    Nothing hosted here yet. Add a site below — Genie reads the repo, offers how
+                    it should be built and served (a Dockerfile it ships, or the production
+                    recipe for the stack it detects), builds it, and serves it.
                 </div>
             ) : (
                 <div className="site-list">
@@ -406,7 +411,7 @@ function SitesTab({
     );
 }
 
-/** One dev site: what it serves, whether it is answering, where to reach it. */
+/** One hosted site: what it serves, whether it is answering, where to reach it. */
 function SiteCard({
     row,
     busy,

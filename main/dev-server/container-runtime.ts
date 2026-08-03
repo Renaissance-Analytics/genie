@@ -232,6 +232,23 @@ export interface LogOptions {
     tail?: number;
 }
 
+/**
+ * How a command runs INSIDE a container.
+ *
+ * The three fields exist for one caller: the production build. A build step has
+ * to run in the repo it is building, usually needs the environment the server
+ * will get, and can legitimately take minutes — `cargo build --release` and
+ * `composer install` both do. The adapter's default timeout is sized for
+ * `docker ps`, so a build that did not pass one would be killed mid-compile and
+ * report a failure that is entirely Genie's.
+ */
+export interface ExecOptions {
+    /** The container-side working directory. */
+    workdir?: string;
+    env?: Record<string, string>;
+    timeoutMs?: number;
+}
+
 // --- getting an image onto the machine -------------------------------------
 
 /**
@@ -335,7 +352,7 @@ export interface ContainerRuntime {
 
     /** Run a literal argv inside a container. Returns the result verbatim —
      *  a non-zero exit is the CALLER's to interpret, not a failure here. */
-    exec(id: string, argv: string[]): Promise<CommandResult>;
+    exec(id: string, argv: string[], opts?: ExecOptions): Promise<CommandResult>;
 
     /** A bounded log tail. */
     logs(id: string, opts?: LogOptions): Promise<string>;

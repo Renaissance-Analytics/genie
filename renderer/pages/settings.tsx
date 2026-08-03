@@ -267,8 +267,8 @@ export default function SettingsPage() {
                     label="Keep terminals running after quit"
                     desc={s.detached_terminals === 'off'
                         ? 'Off — quitting or updating Genie will close every terminal and agent. Turn this on to preserve them and reattach on next launch.'
-                        : 'On by default. Runs terminals in a detached background process so dev servers, shells, and the agents running in them survive a full quit of Genie and reattach on next launch. Falls back to in-process terminals if the background process can’t start.'}
-                    keywords="detached terminals keep running quit background survive reattach dev server"
+                        : 'On by default. Runs terminals in a detached background process so long-running commands, shells, and the agents running in them survive a full quit of Genie and reattach on next launch. Falls back to in-process terminals if the background process can’t start.'}
+                    keywords="detached terminals keep running quit background survive reattach"
                 >
                     <Switch
                         checked={s.detached_terminals === 'on'}
@@ -635,7 +635,7 @@ export default function SettingsPage() {
                             </SearchGroup>
                         )}
                         {show('dev-server') && (
-                            <SearchGroup label="Dev Server" searching={searching}>
+                            <SearchGroup label="Hosting Manager" searching={searching}>
 
             <DevServerSection
                 genieBrowserEnabled={s.genie_browser_enabled !== 'off'}
@@ -3328,7 +3328,7 @@ function RemoteHostCard() {
                                         size="sm"
                                         color="green"
                                         icon="globe"
-                                        title="Open the Testing Browser to view this host's local dev sites (*.gen) with a valid https lock"
+                                        title="Open the Testing Browser to view this host's hosted sites (*.gen) with a valid https lock"
                                         onClick={() =>
                                             void api().testingBrowser.open(
                                                 connKeys[key],
@@ -3388,23 +3388,23 @@ function RemoteHostCard() {
 }
 
 /**
- * Settings → Dev Server (Tynn #234) — the WORKSTATION view of the container Dev
- * Server: what this MACHINE can run, and what it is running.
+ * Settings → Hosting Manager — the WORKSTATION view: what this MACHINE can
+ * build and serve, and what it is serving.
  *
  * ## Why a machine-level page
  *
- * Everything else in the Dev Server is scoped to a workspace, because a site
- * is: one container, one project, gone when the project is. Three things are
- * not. The container RUNTIME is a property of the computer. The dev BASE IMAGE
+ * Everything else in the Hosting Manager is scoped to a workspace, because a
+ * site is: one container, one project, gone when the project is. Three things
+ * are not. The container RUNTIME is a property of the computer. The base IMAGE
  * is pulled once and mounted into every workspace. And a service ENGINE is
  * SHARED — one `postgres:16` serves every workspace pinned to Postgres 16, with
  * a reference-counted lifecycle across all of them. None of those has a
  * workspace to belong to, and a workspace panel answering for them is how a
  * user stops "their" database and takes five other projects down with it.
  *
- * So the split is: WHICH sites and services a project uses lives in its Site
- * Manager; WHAT exists on this machine, and the shared engines' start/stop,
- * live here.
+ * So the split is: WHICH sites a project HOSTS and which services it uses
+ * lives in its Site Manager; WHAT exists on this machine, and the shared
+ * engines' start/stop, live here.
  *
  * ## Everything is a READ until you press something
  *
@@ -3493,12 +3493,12 @@ function DevServerSection({
         <>
             <SetSection
                 title="Container runtime"
-                desc="What Genie runs a workspace's dev servers and services in — one container per site, sandboxed to its workspace"
+                desc="What Genie builds and serves a workspace's sites in — one container per site, sandboxed to its workspace, backed by the shared services below"
             >
                 <SettingRow
                     label="Docker or Podman"
                     desc={runtime?.headline ?? 'Checking…'}
-                    keywords="docker podman container runtime dev server engine install"
+                    keywords="docker podman container runtime hosting manager engine install"
                 >
                     <span
                         className={`site-dot site-${runtime?.usable ? 'running' : 'idle'}`}
@@ -3653,11 +3653,11 @@ function DevServerSection({
 
             <SetSection
                 title="Genie Browser"
-                desc="Genie's own browser — how a .gen dev site is opened, locally or over a remote connection"
+                desc="Genie's own browser — how a hosted .gen site is opened, locally or over a remote connection"
             >
                 <SettingRow
                     label="Enable the Genie Browser"
-                    desc="On by default. It renders this machine's dev sites with a valid https lock and device presets. Turning it off means a .gen site opens nowhere."
+                    desc="On by default. It renders this machine's hosted sites with a valid https lock and device presets. Turning it off means a .gen site opens nowhere."
                     keywords="genie browser testing browser gen sites preview enable"
                 >
                     <Switch checked={genieBrowserEnabled} onCheckedChange={onGenieBrowserChange} />

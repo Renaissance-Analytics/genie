@@ -141,8 +141,11 @@ const SITE: DevSiteConfig = {
     name: 'web',
     genName: 'web.acme.gen',
     repo: 'app',
-    runMode: 'detected',
-    command: ['python3', '-m', 'http.server', '8000'],
+    runMode: 'recipe',
+    stack: 'go',
+    server: 'binary',
+    build: [{ label: 'Compile', command: ['go', 'build', '-o', '.genie-build/server', '.'] }],
+    serve: ['.genie-build/server'],
     port: 8000,
     kind: 'http',
     enabled: true,
@@ -191,15 +194,44 @@ describe('sites-config', () => {
         expect(sanitizeDevSitePatch({ genName: 'WEB.acme.GEN' }).genName).toBe('web.acme.gen');
     });
 
-    it('keeps a command as literal argv and drops anything that is not', () => {
-        expect(sanitizeDevSitePatch({ command: ['npm', 'run', 'dev'] }).command).toEqual([
-            'npm',
-            'run',
-            'dev',
+    it('keeps a serve command as literal argv and drops anything that is not', () => {
+        expect(sanitizeDevSitePatch({ serve: ['gunicorn', 'app:wsgi'] }).serve).toEqual([
+            'gunicorn',
+            'app:wsgi',
         ]);
-        expect(sanitizeDevSitePatch({ command: 'npm run dev' as never }).command).toBeUndefined();
+        expect(sanitizeDevSitePatch({ serve: 'gunicorn app:wsgi' as never }).serve).toBeUndefined();
         // A NUL cannot be passed to a process at all.
-        expect(sanitizeDevSitePatch({ command: ['a\0b'] }).command).toBeUndefined();
+        expect(sanitizeDevSitePatch({ serve: ['a\0b'] }).serve).toBeUndefined();
+    });
+
+    it('keeps the BUILD steps, dropping any that carry no runnable argv', () => {
+        const build = sanitizeDevSitePatch({
+            build: [
+                { label: 'Install', command: ['npm', 'ci'] },
+                { label: 'Collect', command: ['manage.py'], optional: true },
+                { label: 'Bad', command: 'npm ci' as never },
+            ],
+        }).build;
+        expect(build).toEqual([
+            { label: 'Install', command: ['npm', 'ci'] },
+            { label: 'Collect', command: ['manage.py'], optional: true },
+        ]);
+    });
+
+    it('REFUSES to store an exposed surface that cannot say why the browser needs it', () => {
+        // The exposure boundary, enforced at the point of storage as well as at
+        // the point of use: a surface persisted without a reason could be
+        // re-applied later with nobody having stated the need.
+        const exposed = sanitizeDevSitePatch({
+            exposed: [
+                { name: 'live', port: 6001, protocol: 'ws', reason: 'the client subscribes' },
+                { name: 'db', port: 5432, protocol: 'tcp', reason: '' },
+                { name: 'Not A Label', port: 6002, protocol: 'ws', reason: 'x' },
+            ] as never,
+        }).exposed;
+        expect(exposed).toEqual([
+            { name: 'live', port: 6001, protocol: 'ws', reason: 'the client subscribes' },
+        ]);
     });
 
     it('clamps the port and refuses junk env names', () => {
@@ -236,7 +268,9 @@ describe('start', () => {
         // with the command running in the repo's subfolder.
         expect(site?.mounts).toEqual([{ source: '/work/acme', target: '/workspace' }]);
         expect(site?.workdir).toBe('/workspace/repos/app');
-        expect(site?.command).toEqual(['python3', '-m', 'http.server', '8000']);
+        // The PRODUCTION server, and only it — the build ran separately, in the
+        // sandbox container, before this one was created.
+        expect(site?.command).toEqual(['.genie-build/server']);
         // Loopback, ephemeral host port — never the LAN, never a fixed port.
         expect(site?.ports).toEqual([{ container: 8000, hostIp: '127.0.0.1' }]);
     });
@@ -250,8 +284,8 @@ describe('start', () => {
     });
 
     it('reports a site whose port never opened as running-but-not-ready', async () => {
-        // The container being up is not the same as the dev server having bound.
-        // Conflating them is how an agent reports a working site that 502s.
+        // The container being up is not the same as the production server having
+        // bound. Conflating them is how an agent reports a site that 502s.
         const runtime = fakeRuntime();
         const status = await manager(runtime, undefined, { probeReady: async () => false }).start(
             'acme',
@@ -284,7 +318,13 @@ describe('start', () => {
     it('builds a repo Dockerfile before running it', async () => {
         const runtime = fakeRuntime();
         const sites: DevSites = {
-            [SITE_ID]: { ...SITE, runMode: 'dockerfile', command: undefined, image: undefined },
+            [SITE_ID]: {
+                ...SITE,
+                runMode: 'dockerfile',
+                build: undefined,
+                serve: undefined,
+                image: undefined,
+            },
         };
         const status = await manager(runtime, sites).start('acme', SITE_ID);
 

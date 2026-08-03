@@ -133,7 +133,7 @@ describe('the rail sites indicator', () => {
 
     it('counts what it found in the tooltip', () => {
         const title = railSitesTitle([{ ...SITE }, { ...SITE, id: 'b', state: 'failed' }], 'acme');
-        expect(title).toContain('2 dev sites');
+        expect(title).toContain('2 hosted sites');
         expect(title).toContain('1 running');
         expect(title).toContain('1 failed');
     });

@@ -531,9 +531,9 @@ export interface ProvisionWorkspacesResult {
     errors?: string[];
 }
 
-// --- manageSite (the container Dev Server, #234 P2) --------------------------
+// --- manageSite (the Hosting Manager's sites) --------------------------------
 
-/** One dev site as the `manageSite` tool reports it. */
+/** One hosted site as the `manageSite` tool reports it. */
 export interface DevSiteInfo {
     /** The opaque id every non-create action takes back. */
     id: string;
@@ -549,7 +549,7 @@ export interface DevSiteInfo {
     /** running | stopped | failed */
     state: string;
     /** Whether the published port ACCEPTED a connection. `running` only says
-     *  the container is up; this says the dev server has bound. */
+     *  the container is up; this says the production server has bound. */
     ready?: boolean;
     /** The port inside the container. */
     port?: number;
@@ -559,19 +559,40 @@ export interface DevSiteInfo {
     origin?: string;
     /** The direct loopback origin (curl, a local browser, another program). */
     localOrigin?: string;
-    command?: string[];
+    /** What is being hosted: php | node | static | python | go | rust. */
+    stack?: string;
+    /** The production server holding the port: frankenphp | node | nginx |
+     *  gunicorn | uvicorn | binary. */
+    server?: string;
+    /** The PRODUCTION BUILD that runs before the server starts. */
+    build?: Array<{ label: string; command: string[]; optional?: boolean }>;
+    /** The production server's literal argv. */
+    serve?: string[];
     image?: string;
+    /** The last build's log. Present on a start that built, success or not — a
+     *  failed build is the most common reason a site does not come up. */
+    buildLog?: string;
+    /** Extra BROWSER-FACING surfaces, as they ended up. A raw one (gRPC/TCP)
+     *  carries the stable `hostPort` a client dials. */
+    exposed?: Array<{ name: string; protocol: string; genName: string; hostPort?: number }>;
     error?: string;
 }
 
-/** One way a repo could be run — the layered site definition's offer. */
+/** One way a repo could be built and served — a production recipe's offer. */
 export interface DevSiteRunOption {
     runMode: string;
     stack?: string;
+    /** The production server this would use. */
+    server?: string;
     /** The repo file that produced this option. */
     source: string;
     reason: string;
-    command?: string[];
+    /** The production build, in order. */
+    build?: Array<{ label: string; command: string[]; optional?: boolean }>;
+    /** The production server's literal argv. */
+    serve?: string[];
+    /** The image the SERVER runs in, when it is not the workspace dev image. */
+    image?: string;
     port?: number;
     /** False when something load-bearing here was guessed. */
     confident: boolean;
@@ -597,14 +618,18 @@ export interface ManageSiteRequest {
     name?: string;
     /** create/detect: a repo subfolder (repos/<repo>); omit for the workspace root. */
     repo?: string;
-    /** create: how it runs. Omit to take the detected recommendation. */
-    runMode?: 'dockerfile' | 'devcontainer' | 'compose' | 'detected' | 'explicit';
-    /** create: an explicit image. Omit to run in the workspace dev image. */
+    /** create: how it is built and served. Omit to take the recommendation. */
+    runMode?: 'dockerfile' | 'devcontainer' | 'compose' | 'recipe' | 'explicit';
+    /** create: the image the SERVER runs in. Omit for the workspace dev image. */
     image?: string;
-    /** create: literal argv (NOT a shell string) — e.g. ["npm","run","dev"]. */
-    command?: string[];
-    /** create: the port the server listens on INSIDE the container. */
+    /** create: the PRODUCTION BUILD, in order, run before the server starts. */
+    build?: Array<{ label?: string; command: string[]; optional?: boolean }>;
+    /** create: the production server's literal argv (NOT a shell string). */
+    serve?: string[];
+    /** create: the port the production server listens on INSIDE the container. */
     port?: number;
+    /** create: extra BROWSER-FACING surfaces. Backend services never go here. */
+    exposed?: Array<{ name: string; port: number; protocol: string; reason: string }>;
     env?: Record<string, string>;
     /** create: `http` (routable at `.gen`) or `tcp` (published + listed only). */
     kind?: 'http' | 'tcp';
@@ -628,7 +653,7 @@ export interface ManageSiteResult {
     sites: DevSiteInfo[];
     /** The site the action targeted/created. */
     affectedId?: string;
-    /** detect/create: every way the repo could run, best-offer first. */
+    /** detect/create: every way the repo could be built + served, best first. */
     options?: DevSiteRunOption[];
     /** create: which option was applied, when none was supplied. */
     applied?: DevSiteRunOption;
@@ -637,12 +662,13 @@ export interface ManageSiteResult {
     /**
      * create: what Genie did about the framework's Host-header allowlist.
      *
-     * A dev site is addressed as `<name>.gen`, and Vite, Django and Next check
-     * that header against a list they cannot know about — answering a "Blocked
-     * request" page from a container that is up, bound and probed healthy. This
-     * says whether Genie SOLVED it (something the framework definitely reads) or
-     * merely DOCUMENTED it (the repo has to change), so an agent stops guessing
-     * at a wall it was told had been removed.
+     * A hosted site is addressed as `<name>.gen`, and Django checks that header
+     * against `ALLOWED_HOSTS` — answering a 400 from a container that is up,
+     * bound and probed healthy. This says whether Genie SOLVED it (something the
+     * framework definitely reads) or merely DOCUMENTED it (the repo has to
+     * change), so an agent stops guessing at a wall it was told had been
+     * removed. Most stacks are now `not-needed`: host allowlists are largely
+     * dev-server features, and these sites are served the production way.
      */
     hostAllowlist?: {
         framework: string;
@@ -731,7 +757,9 @@ export interface ManageServiceRequest {
         | 'logs'
         | 'remove'
         | 'connection'
-        | 'dedicated';
+        | 'dedicated'
+        /** MACHINE-level: every engine on this workstation, and who holds it. */
+        | 'inventory';
     /** Target workspace. Omit for your own; an Ops agent may pass a governed one. */
     workspaceId?: string;
     /** add: which engine (see the `catalog` action). */
@@ -757,6 +785,42 @@ export interface ManageServiceRequest {
     tail?: number;
 }
 
+/**
+ * One shared engine on this MACHINE, as `inventory` reports it.
+ *
+ * `installed`, `state` and `holders` are three INDEPENDENT facts and every pair
+ * of them occurs: an image pulled once and never started (installed, absent); an
+ * engine brought up by the container runtime's restart policy before Genie
+ * opened (running, zero holders); a workspace that has it defined but disabled
+ * (configured, not held). Flattening them into one status is how an agent stops
+ * a container five other workspaces are using.
+ */
+export interface DevServiceEngineInfo {
+    /** The CONTAINER's identity — the engine key, or `<engineKey>@<workspaceId>`
+     *  for a dedicated one. What a machine-level action names. */
+    recordKey: string;
+    /** `<engine>-<major>` — the SHARING unit. */
+    engineKey: string;
+    engine: string;
+    version: string;
+    label: string;
+    image: string;
+    containerName: string;
+    /** The image is on this machine. Established WITHOUT downloading anything. */
+    installed: boolean;
+    /** running | stopped | absent. `absent` means no container at all. */
+    state: string;
+    containerId?: string;
+    dedicated: boolean;
+    ownerWorkspaceId?: string;
+    /** Workspaces holding it RIGHT NOW — the live reference count. */
+    holders: number;
+    /** Workspaces that have it configured at all, enabled or not. */
+    configured: number;
+    /** WHO. `holders: 6` is a number; this is the answer. */
+    workspaces: string[];
+}
+
 export interface ManageServiceResult {
     ok: boolean;
     /** Set when ok is false (no runtime, bad args, unknown id, …). */
@@ -767,6 +831,8 @@ export interface ManageServiceResult {
     affectedId?: string;
     /** catalog: every engine on offer. */
     catalog?: DevServiceCatalogEntry[];
+    /** inventory: every engine on THIS MACHINE, and who is holding it. */
+    engines?: DevServiceEngineInfo[];
     /** logs: the engine's log tail. */
     logs?: string;
     /** connection: the env this workspace's site containers are given. */
@@ -1330,7 +1396,7 @@ const PROVISION_WORKSPACES_TOOL = {
 const MANAGE_SITE_TOOL = {
     name: 'manageSite',
     description:
-        "Serve a repo's DEV SERVER from a container in this workspace's sandbox, and route it into the Genie Browser at a stable `https://<name>.gen` origin — reachable the same way whether the viewer is on this machine or connected remotely. Stack-agnostic: anything expressible as an image + a command + a port is servable (Node, Python, PHP, Go, Rust, …). The container joins the workspace's isolated network with the workspace directory mounted at /workspace, and publishes ONLY its own port, to loopback. Actions: `detect` (read a repo and return every way it could run — its Dockerfile, or a stack detected from package.json / composer.json / pyproject.toml / go.mod / Cargo.toml — each with `confident` and, when it is a guess, `needs`); `list` (every site + live state); `create` (define one and start it — `name` (a DNS label) plus either an explicit `command` + `port`, or nothing at all to take the detected recommendation; optional `repo` to run inside repos/<repo>, `image`, `env`, `kind`); `start` / `stop` / `restart` / `status` (by `id` from a prior list); `logs` (the container's log tail, `tail` lines); `open` (show the site in the Genie Browser for the user); `remove` (stop it and forget the definition). READ THE RESULT: `state:'running'` means the CONTAINER is up; `ready:true` means the published port actually accepted a connection — a dev server that is still compiling is running-but-not-ready, and reporting it as live is wrong. `origin` is the routable `https://<name>.gen`; `localOrigin` is the direct loopback origin for curl or another program. BINDING: a dev server that listens on `localhost` inside a container is unreachable no matter what is published — every command this tool generates binds 0.0.0.0, and one you supply must too. HOST ALLOWLISTS: upstream is sent `Host: <name>.gen`, which Vite (`server.allowedHosts`), Django (`ALLOWED_HOSTS`) and Rails (`config.hosts`) will reject unless told about it — either add the `.gen` name there, or pass `upstreamHost:'localhost'` on create. Requires Docker or Podman; when neither is usable the result carries the install hint instead of a site. `command` is literal argv (`[\"npm\",\"run\",\"dev\"]`), never a shell string. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
+        "HOST a repo the way it runs in PRODUCTION — Genie BUILDS it, then serves the built artifact with a real production server, in this workspace's container sandbox, at a stable `https://<name>.gen` origin reachable whether the viewer is on this machine or connected remotely. This is not a dev-server launcher: nothing here runs `npm run dev`, `artisan serve`, `manage.py runserver` or `go run`. Per stack: PHP → a production `composer install --no-dev` then FrankenPHP over public/; Next → `npm run build` then `next start`; Nuxt → the built Nitro server; a built front end (Vite/CRA) → nginx over dist/, with NO JavaScript process at all; Django → a virtualenv + collectstatic then GUNICORN; FastAPI/Flask → uvicorn; Go → `go build` and run the BINARY; Rust → `cargo build --release` and run the binary. A repo's own Dockerfile always wins over a recipe. Actions: `detect` (read a repo and return every build+serve recipe it could use, each with `confident` and, when it is a guess, `needs`); `list` (every site + live state); `create` (define one and host it — `name` (a DNS label) plus either an explicit `build` + `serve` + `port`, or nothing at all to take the detected recipe; optional `repo` to host repos/<repo>, `image`, `env`, `exposed`, `kind`); `start` / `stop` / `restart` / `status` (by `id` from a prior list); `logs` (the container's log tail); `open` (show the site in the Genie Browser for the user); `remove` (stop it and forget the definition). READ THE RESULT: a failed BUILD is the most common reason a site does not come up, and `buildLog` carries it — a required build step that fails means the site is deliberately NOT started, because serving the previous build while every health signal reads green is worse than not serving. `state:'running'` means the CONTAINER is up; `ready:true` means the published port actually accepted a connection. `origin` is the routable `https://<name>.gen`; `localOrigin` is the direct loopback origin for curl. EXPOSURE — this is the part agents get wrong: the workspace container's `localhost` IS the workspace, so the app reaches its own processes normally, and a DATABASE OR CACHE IS NEVER EXPOSED — shared engines are workstation-hosted and reached on the workspace network through the env `manageService` injects (`DATABASE_URL`, …). Only what the BROWSER itself connects to is exposed, via `exposed:[{name,port,protocol,reason}]`: a websocket on the app's own port needs nothing (it upgrades over the existing carrier), one on another port gets `<name>.<site>.gen`, and gRPC/TCP get a STABLE loopback port. A surface that cannot say why the browser needs it is REFUSED. BINDING: a server that listens on `localhost` inside a container is unreachable no matter what is published — every serve command this tool generates binds 0.0.0.0, and one you supply must too. HOST ALLOWLISTS: upstream is sent `Host: <name>.gen`; served in production only Django still checks it (`ALLOWED_HOSTS`), so either add the `.gen` name there or pass `upstreamHost:'localhost'`. Requires Docker or Podman; when neither is usable the result carries the install hint. `build` steps and `serve` are literal argv ([\"npm\",\"ci\"]), never shell strings. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -1368,30 +1434,75 @@ const MANAGE_SITE_TOOL = {
             },
             runMode: {
                 type: 'string',
-                enum: ['dockerfile', 'devcontainer', 'compose', 'detected', 'explicit'],
+                enum: ['dockerfile', 'devcontainer', 'compose', 'recipe', 'explicit'],
                 description:
-                    "create (optional): how it runs. `dockerfile` builds the repo's own Dockerfile; `detected` uses a stack-detected command; `explicit` uses exactly the `command`/`image` you pass. Omit to take the detected recommendation. `devcontainer` and `compose` are not runnable yet.",
+                    "create (optional): how it is built and served. `dockerfile` builds the repo's own Dockerfile and runs the image's CMD; `recipe` applies the detected stack's production build + serve; `explicit` uses exactly the `build`/`serve`/`image` you pass. Omit to take the recommendation. `devcontainer` and `compose` are not runnable yet.",
             },
             image: {
                 type: 'string',
                 description:
-                    "create (optional): the image to run. Omit to run in Genie's multi-language workspace dev image.",
+                    "create (optional): the image the SERVER runs in — often NOT the one the build ran in (a PHP site builds with Composer and serves from FrankenPHP; a front end builds with npm and serves from nginx). Omit to serve from Genie's multi-language workspace dev image.",
             },
-            command: {
+            build: {
+                type: 'array',
+                items: {
+                    type: 'object',
+                    properties: {
+                        label: { type: 'string', description: 'A short human label for this step.' },
+                        command: {
+                            type: 'array',
+                            items: { type: 'string' },
+                            description: 'LITERAL ARGV, not a shell string.',
+                        },
+                        optional: {
+                            type: 'boolean',
+                            description:
+                                'A non-zero exit is reported but does NOT fail the build. For steps that are correct to attempt and normal to fail, like collectstatic on a project with no STATIC_ROOT.',
+                        },
+                    },
+                    required: ['command'],
+                },
+                description:
+                    "create (optional): the PRODUCTION BUILD, in order, run in the workspace sandbox before the server starts. A required step that fails means the site is NOT started. Omit to take the detected recipe's build.",
+            },
+            serve: {
                 type: 'array',
                 items: { type: 'string' },
                 description:
-                    'create: LITERAL ARGV, not a shell string — ["npm","run","dev","--","--host","0.0.0.0"]. Must bind 0.0.0.0.',
+                    'create: the PRODUCTION SERVER\'s LITERAL ARGV, not a shell string — ["gunicorn","mysite.wsgi:application","--bind","0.0.0.0:8000"]. Must bind 0.0.0.0, and must never be a dev server.',
             },
             port: {
                 type: 'number',
                 description:
-                    'create: the port the server listens on INSIDE the container. Genie publishes it to an ephemeral loopback port and routes `.gen` there.',
+                    'create: the port the production server listens on INSIDE the container. Genie publishes it to an ephemeral loopback port and routes `.gen` there.',
+            },
+            exposed: {
+                type: 'array',
+                items: {
+                    type: 'object',
+                    properties: {
+                        name: {
+                            type: 'string',
+                            description: 'A DNS label — becomes `<name>.<site>.gen`.',
+                        },
+                        port: { type: 'number', description: 'The port INSIDE the container.' },
+                        protocol: { type: 'string', enum: ['http', 'ws', 'grpc', 'tcp'] },
+                        reason: {
+                            type: 'string',
+                            description:
+                                'REQUIRED: why the BROWSER must reach this. A surface with no reason is refused.',
+                        },
+                    },
+                    required: ['name', 'port', 'protocol', 'reason'],
+                },
+                description:
+                    "create (optional): extra BROWSER-FACING surfaces only. A database, cache or internal API the server calls is NOT one — those are reached on the workspace network through injected env and must never be listed here. A `ws` on the site's own port needs no entry at all: it already upgrades over the `.gen` carrier.",
             },
             env: {
                 type: 'object',
                 additionalProperties: { type: 'string' },
-                description: 'create (optional): environment for the container.',
+                description:
+                    "create (optional): environment for the container. Merged OVER the recipe's own env and over the services env, so a value you pin always wins.",
             },
             kind: {
                 type: 'string',
@@ -1407,12 +1518,12 @@ const MANAGE_SITE_TOOL = {
             upstreamHost: {
                 type: 'string',
                 description:
-                    "create (optional): the Host header sent to the dev server. Defaults to the `.gen` name so origins line up; set `localhost` when a framework's host allowlist rejects it.",
+                    "create (optional): the Host header sent to the app. Defaults to the `.gen` name so origins line up; set `localhost` when a framework's host allowlist rejects it — served in production, that is Django's ALLOWED_HOSTS.",
             },
             enabled: {
                 type: 'boolean',
                 description:
-                    'create (optional): default true — define AND start it. Pass false to define it without starting.',
+                    'create (optional): default true — define, BUILD and serve it. Pass false to define it without building or starting.',
             },
             id: {
                 type: 'string',
@@ -1432,7 +1543,7 @@ const MANAGE_SITE_TOOL = {
 const MANAGE_SERVICE_TOOL = {
     name: 'manageService',
     description:
-        "Give this workspace a backing SERVICE — Postgres, MySQL, Redis, Meilisearch, MinIO (S3), Mailpit, or any image — and get back how to connect to it. THE MODEL, because it changes what you should expect: an engine is SHARED per (engine, major version) across every workspace that asks for it, and each workspace gets its OWN database + role + credentials on it. Ten workspaces on Postgres 16 run ONE postgres container, not ten; a workspace's role cannot reach another workspace's database. The engine starts when the first workspace acquires it and stops when the last one releases it. A workspace that genuinely needs hard isolation (a custom config, an extension, destructive testing) flips `dedicated` and gets its own container — note that shared and dedicated have SEPARATE data volumes, so flipping does not move data. Actions: `catalog` (every engine on offer, its versions, and how strongly each isolates); `list` (this workspace's services + live state); `add` (`engine` plus optional `version` — defines it, starts the engine, creates this workspace's database/role/credentials, and attaches the engine to this workspace's network); `start` / `stop` / `status` (by `id` from a prior list); `logs` (the engine's log tail); `connection` (the connection surface + the exact env keys injected into this workspace's sites); `dedicated` (flip one service between shared and its own container); `remove` (release it, and with `purge` drop the engine's data volume — refused while another workspace still holds it). READ THE RESULT: `endpoints` carries TWO surfaces and they are not interchangeable — `host`+`port` is how a CONTAINER on this workspace's network dials the engine (its container name, its real port), `localAddress` is how a program on THIS MACHINE dials it (loopback, published port). A connection string built from the second and used inside a container fails every time. `envKeys` are already injected into this workspace's dev sites (`manageSite`), so an app served there needs no `.env` edit. Meilisearch, MinIO and Mailpit are NAMESPACE-isolated, not credential-isolated: workspaces share the master key and are separated by index prefix / bucket / inbox. `custom` takes `image` + `port` + `env` and is always dedicated. Requires Docker or Podman; when neither is usable the result carries the install hint. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
+        "Give this workspace a backing SERVICE — Postgres, MySQL, Redis, Meilisearch, MinIO (S3), Mailpit, or any image — and get back how to connect to it. These are the same engines a hosted site runs against, so a site served by `manageSite` is backed the way production is. THE MODEL, because it changes what you should expect: an engine is WORKSTATION-hosted and SHARED per (engine, major version) across every workspace that asks for it, and each workspace gets its OWN database + role + credentials on it. Ten workspaces on Postgres 16 run ONE postgres container, not ten; a workspace's role cannot reach another workspace's database. The engine starts when the first workspace acquires it and stops when the last one releases it. A workspace that genuinely needs hard isolation (a custom config, an extension, destructive testing) flips `dedicated` and gets its own container — note that shared and dedicated have SEPARATE data volumes, so flipping does not move data. Actions: `catalog` (every engine on offer, its versions, and how strongly each isolates); `inventory` (MACHINE-level — every engine on this WORKSTATION: whether its image is on disk, whether a container exists and is up, how many workspaces hold it right now and WHICH, plus the dedicated ones. Needs no workspace. Read this BEFORE stopping or removing anything: `installed`, `state` and `holders` are three independent facts, and stopping a shared engine stops it for every workspace holding it); `list` (this workspace's services + live state); `add` (`engine` plus optional `version` — defines it, starts the engine, creates this workspace's database/role/credentials, and attaches the engine to this workspace's network); `start` / `stop` / `status` (by `id` from a prior list); `logs` (the engine's log tail); `connection` (the connection surface + the exact env keys injected into this workspace's sites); `dedicated` (flip one service between shared and its own container); `remove` (release it, and with `purge` drop the engine's data volume — refused while another workspace still holds it). READ THE RESULT: `endpoints` carries TWO surfaces and they are not interchangeable — `host`+`port` is how a CONTAINER on this workspace's network dials the engine (its container name, its real port), `localAddress` is how a program on THIS MACHINE dials it (loopback, published port). A connection string built from the second and used inside a container fails every time. A service is BACKEND: it is never given a browser-facing name and never published to the browser, so do not try to expose one through `manageSite`. `envKeys` are already injected into this workspace's hosted sites (`manageSite`), and into their BUILD steps too, so an app served there needs no `.env` edit. Meilisearch, MinIO and Mailpit are NAMESPACE-isolated, not credential-isolated: workspaces share the master key and are separated by index prefix / bucket / inbox. `custom` takes `image` + `port` + `env` and is always dedicated. Requires Docker or Podman; when neither is usable the result carries the install hint. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -1450,6 +1561,7 @@ const MANAGE_SERVICE_TOOL = {
                     'remove',
                     'connection',
                     'dedicated',
+                    'inventory',
                 ],
                 description: 'What to do.',
             },
@@ -2073,6 +2185,22 @@ export function manageServiceSummary(result: ManageServiceResult): string {
         );
     }
 
+    if (result.engines) {
+        // The machine-level read's headline has to carry the machine-level
+        // facts, or an agent parses JSON to learn the one thing it asked for.
+        const up = result.engines.filter((e) => e.state === 'running');
+        const held = up.filter((e) => e.holders > 0).length;
+        const detail = up
+            .map((e) => `${e.engine} ${e.version} (${e.holders} holder${e.holders === 1 ? '' : 's'})`)
+            .join('; ');
+        return (
+            `${up.length} engine${up.length === 1 ? '' : 's'} running on this machine` +
+            (detail ? `: ${detail}` : '') +
+            `. ${result.engines.length} known, ${held} in use. ` +
+            'Stopping a SHARED engine stops it for every workspace holding it.'
+        );
+    }
+
     const running = result.services.filter((s) => s.state === 'running').length;
     return `${result.services.length} service${
         result.services.length === 1 ? '' : 's'
@@ -2508,8 +2636,10 @@ export async function handleMcpMessage(
                     repo: a.repo,
                     runMode: a.runMode,
                     image: a.image,
-                    command: a.command,
+                    build: a.build,
+                    serve: a.serve,
                     port: a.port,
+                    exposed: a.exposed,
                     env: a.env,
                     kind: a.kind,
                     genName: a.genName,
@@ -2540,6 +2670,7 @@ export async function handleMcpMessage(
                     'remove',
                     'connection',
                     'dedicated',
+                    'inventory',
                 ];
                 if (!a.action || !ACTIONS.includes(a.action)) {
                     return err(

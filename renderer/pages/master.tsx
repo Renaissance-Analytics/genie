@@ -2779,7 +2779,7 @@ function SitesButton() {
             <button
                 type="button"
                 className="gicon"
-                title="Browse your .gen dev sites — local and from connected hosts"
+                title="Browse your hosted .gen sites — local and from connected hosts"
                 aria-label=".gen sites"
                 aria-expanded={show}
                 onClick={() => setOpen((o) => !o)}
@@ -2889,8 +2889,8 @@ function SitesPanel({ onClose }: { onClose: () => void }) {
                 <div style={{ padding: '10px 6px', color: '#a1a1aa' }}>Finding .gen sites…</div>
             ) : empty ? (
                 <div style={{ padding: '10px 6px', color: '#a1a1aa', lineHeight: 1.5 }}>
-                    No enabled <code>.gen</code> sites. Enable a dev site in a workspace's
-                    <em> Serve local sites</em> settings.
+                    No enabled <code>.gen</code> sites. Host one from a workspace&apos;s
+                    <em> Hosting</em> panel.
                 </div>
             ) : (
                 <>

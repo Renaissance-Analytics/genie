@@ -2,7 +2,7 @@ import type { DevEngineInfo, DevRuntimeProbe, DevWorkstationInfo } from './genie
 import type { DevTone } from './dev-server';
 
 /**
- * PURE. Everything the WORKSTATION Dev Server page decides (#234, workstation
+ * PURE. Everything the WORKSTATION Hosting Manager page decides (workstation
  * half). The renderer test environment has no DOM, so this is the same split
  * `dev-server.ts` uses for the Site Manager: judgements here, wiring in the
  * component.
@@ -197,7 +197,7 @@ export function runtimeDiagnostics(info: DevWorkstationInfo): RuntimeDiagnostics
         headline,
         guidance:
             runtime.installHint ??
-            'Install Docker Desktop (or Podman) to run dev servers and services in containers.',
+            'Install Docker Desktop (or Podman) to build and serve sites, and to run their services, in containers.',
         probes,
     };
 }

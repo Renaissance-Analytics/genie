@@ -159,12 +159,12 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
     const devServer: GenieApi['devServer'] = {
         site: async () => ({
             ok: false,
-            error: 'The Dev Server is managed on the machine itself.',
+            error: 'Hosting is managed on the machine itself.',
             sites: [],
         }),
         service: async () => ({
             ok: false,
-            error: 'The Dev Server is managed on the machine itself.',
+            error: 'Hosting is managed on the machine itself.',
             services: [],
         }),
         runtimeStatus: async () => ({ kind: 'none' }),

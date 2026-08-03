@@ -7,13 +7,13 @@ import type { RuntimeProbe, RuntimeUnavailableReason } from './container-runtime
 import type { EngineActionRequest, EngineActionResult } from './services/service-manager';
 
 /**
- * THE WORKSTATION view of the Dev Server (#234) — one read that answers "what
- * can this MACHINE do, and what is it doing".
+ * THE WORKSTATION view of the Hosting Manager — one read that answers "what
+ * can this MACHINE build and serve, and what is it serving".
  *
  * ## Why there is a machine-level page at all
  *
- * Everything else in the Dev Server is scoped to a workspace, because a site
- * is: one container, one project, gone when the project is. A service ENGINE is
+ * Everything else in the Hosting Manager is scoped to a workspace, because a
+ * site is: one container, one project, gone when the project is. A service ENGINE is
  * not. One `postgres:16` serves every workspace pinned to Postgres 16, its
  * image is pulled once for the machine, and the container runtime underneath is
  * a property of the computer. Those three things have no workspace to belong
@@ -137,7 +137,7 @@ export async function workstationEngineAction(
     if (!manager) {
         return {
             ok: false,
-            error: 'The Genie Dev Server is not running in this process, so engines cannot be managed here.',
+            error: 'The Genie Hosting Manager is not running in this process, so engines cannot be managed here.',
         };
     }
     return manager.engineAction(req);
