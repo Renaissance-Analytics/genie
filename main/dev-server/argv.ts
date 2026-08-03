@@ -44,6 +44,20 @@ export const SITE_ROLE = 'site';
  *  Read back on adopt, so a restarted Genie recognises what is already up. */
 export const SITE_LABEL = 'genie.site';
 
+/**
+ * A container running one site's production BUILD in an ISOLATED copy (genie
+ * #119, Blocker 4).
+ *
+ * The build no longer `exec`s into the workspace's long-lived dev container over
+ * the bind-mounted working tree — that ran `composer install --no-dev`,
+ * `rm -rf vendor node_modules` and `npm run build` in the developer's live
+ * checkout and MUTATED it. It runs instead in this short-lived container, which
+ * copies the repo into a container-owned named volume and builds THERE, so the
+ * host tree is only ever read. Ephemeral: created for the build, removed the
+ * moment it is done, the volume it produced carried on to the serve container.
+ */
+export const SITE_BUILD_ROLE = 'site-build';
+
 /** A container running a backing SERVICE engine — Postgres, Redis, … (P3). */
 export const SERVICE_ROLE = 'service';
 
@@ -138,6 +152,32 @@ export function devContainerNameFor(workspaceId: string): string {
  */
 export function siteContainerNameFor(workspaceId: string, siteName: string): string {
     return `${networkNameFor(workspaceId)}-site-${workspaceSlugFor(siteName)}`;
+}
+
+/**
+ * The ephemeral container that BUILDS one site in an isolated copy (genie #119).
+ *
+ * Distinct name from the serve container (`-build-` vs `-site-`) so both can
+ * exist at once during a start and neither adopts the other, and derived — not
+ * stored — so a start that crashed between create and remove finds and clears
+ * its own leftover on the next attempt.
+ */
+export function siteBuildContainerNameFor(workspaceId: string, siteName: string): string {
+    return `${networkNameFor(workspaceId)}-build-${workspaceSlugFor(siteName)}`;
+}
+
+/**
+ * The named volume holding one site's isolated build copy (genie #119).
+ *
+ * The BUILD container copies the repo into it and builds there; the SERVE
+ * container mounts the SAME volume and serves the result. It is what carries the
+ * artifact between two containers without ever writing to the host working tree
+ * — the role the workspace bind mount used to (wrongly) play. Made fresh on each
+ * build and dropped when the site stops, so a preview is always a build from a
+ * clean checkout rather than an accreted one.
+ */
+export function siteBuildVolumeNameFor(workspaceId: string, siteName: string): string {
+    return `${networkNameFor(workspaceId)}-buildvol-${workspaceSlugFor(siteName)}`;
 }
 
 /**

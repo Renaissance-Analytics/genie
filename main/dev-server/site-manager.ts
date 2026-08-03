@@ -4,6 +4,7 @@ import {
     SITE_LABEL,
     SITE_ROLE,
     WORKSPACE_LABEL,
+    siteBuildVolumeNameFor,
     siteContainerNameFor,
     workspaceSlugFor,
 } from './argv';
@@ -12,7 +13,8 @@ import { DEFAULT_READY_TIMEOUT_MS, waitForHttp, waitForPort } from './port-probe
 import { planHostAllowlist } from './host-allowlist';
 import { planExposure } from './exposure';
 import { FRANKENPHP_IMAGE, resolveHostedRun } from './serve-recipe';
-import { runSiteBuild } from './site-build';
+import { BUILD_STEP_TIMEOUT_MS, runSiteBuild } from './site-build';
+import { prepareIsolatedBuild } from './isolated-build';
 import { buildAuthEnv } from './build-auth';
 import { ensureWorkspaceSandbox } from './workspace-sandbox';
 import type { ContainerHealthcheck, ContainerRuntime, RuntimeDetection } from './container-runtime';
@@ -556,6 +558,21 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 );
             }
 
+            // Already up (a second window, a re-entrant start, a reconcile
+            // pass): ADOPT it and rebuild nothing. A running site does not need
+            // to be produced again, and — critically — the build volume it is
+            // serving from must not be torn out from under it to make a fresh
+            // one. Moved AHEAD of the build so an adopt costs no rebuild.
+            const name = siteContainerNameFor(workspaceId, config.name);
+            const existing = (await runtime.ps(workspaceId)).find((c) => c.name === name);
+            if (existing?.state === 'running') {
+                return await recordLive(runtime, workspaceId, siteId, config, existing.id);
+            }
+            // A stopped leftover under the same name: the published port is fixed
+            // at create time and the artifact lives in a freshly built copy, so
+            // replace it rather than restart it.
+            if (existing) await runtime.remove(existing.id);
+
             // The build stage (Gap 2): a Dockerfile image build and/or the
             // production build steps below. Their logs stream through the pump.
             if (run.needsBuild || run.build.length) {
@@ -640,28 +657,64 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 ...serviceEnv,
             };
 
-            // --- BUILD, then serve ------------------------------------------
+            // --- BUILD in an ISOLATED copy, then serve ----------------------
             //
-            // In the SANDBOX container, because that is the one with the
-            // toolchain: the site's own image may be FrankenPHP or nginx, which
-            // serve a build and cannot make one. A required step that fails
-            // stops the site — starting anyway would serve the previous build
-            // while every health signal read green.
+            // NEVER the developer's working tree (genie #119, Blocker 4). The
+            // build used to `exec` into the workspace dev container over the
+            // bind-mounted checkout, so `composer install --no-dev`,
+            // `rm -rf vendor node_modules` and `npm run build` all MUTATED the
+            // user's live directory — and, as a foreign uid over host-owned
+            // files, could not own its own repo (git dubious-ownership) or
+            // overwrite a committed file (EPERM). Instead we copy the repo into a
+            // container-owned volume and build THERE: the host tree is only ever
+            // READ (a read-only bind), production parity is a build from a fresh
+            // checkout, and the serve container mounts that same volume.
+            //
+            // A required step that fails stops the site — starting anyway would
+            // serve the previous build while every health signal read green.
+            const useIsolatedCopy = run.build.length > 0;
+            const buildVolumeName = siteBuildVolumeNameFor(workspaceId, config.name);
             let buildLog: string | undefined;
             if (run.build.length) {
+                const prep = await prepareIsolatedBuild({
+                    runtime,
+                    workspaceId,
+                    siteId,
+                    siteName: config.name,
+                    // Copy the specific repo subdir being served (or the whole
+                    // workspace when the site IS the workspace root).
+                    hostSource: config.repo
+                        ? path.join(workspace.path, 'repos', config.repo)
+                        : workspace.path,
+                    network: sandbox.network,
+                    image: devImage,
+                    mountTarget,
+                    workdir: run.workdir,
+                    platform,
+                    ...(deps.hostIds === undefined ? {} : { hostIds: deps.hostIds }),
+                    copyTimeoutMs: BUILD_STEP_TIMEOUT_MS,
+                    ...(deps.onImagePullProgress
+                        ? { onProgress: deps.onImagePullProgress }
+                        : {}),
+                });
+                if (!prep.ok) return failed(workspaceId, siteId, config, prep.error);
+
                 // The build gets the serve env PLUS the auth/git-safety DEFAULTS
-                // (genie #119): a git `safe.directory` so composer does not die on
-                // dubious ownership, and — when Genie holds one — the managed
-                // GitHub token as COMPOSER_AUTH + GITHUB_TOKEN so github.com dist
-                // fetches authenticate instead of hitting the anonymous rate
-                // limit. The defaults sit UNDER `env`, so a value the user pinned
-                // still wins; the token rides ONLY the build (never the serving
-                // container) and is scrubbed from the surfaced build log.
+                // (genie #119): a git `safe.directory` — no longer load-bearing
+                // now that the copy is build-owned, kept as harmless belt-and-
+                // suspenders — and, when Genie holds one, the managed GitHub token
+                // as COMPOSER_AUTH + GITHUB_TOKEN so github.com dist fetches
+                // authenticate instead of hitting the anonymous rate limit. The
+                // defaults sit UNDER `env`, so a value the user pinned still wins;
+                // the token rides ONLY the build (never the serving container) and
+                // is scrubbed from the surfaced build log.
                 const auth = buildAuthEnv(deps.githubToken?.());
                 const buildEnv = { ...auth.env, ...env };
                 const built = await runSiteBuild(run.build, {
                     exec: (id, argv, execOpts) => runtime.exec(id, argv, execOpts),
-                    containerId: sandbox.container.id,
+                    // The ISOLATED build container, not the sandbox — its copy of
+                    // the repo, in the container-owned volume, is what gets built.
+                    containerId: prep.env.container.id,
                     workdir: run.workdir,
                     env: buildEnv,
                     ...(auth.secrets.length ? { secrets: auth.secrets } : {}),
@@ -670,7 +723,14 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                         : {}),
                 });
                 buildLog = built.log;
+                // The build container has served its only purpose — producing the
+                // artifact into the volume. Remove it whether the build passed or
+                // failed, so a failed build leaves no stopped container behind.
+                await runtime.remove(prep.env.container.id).catch(() => {});
                 if (!built.ok) {
+                    // The copy is worthless without a green build; drop it so the
+                    // next attempt starts clean and nothing leaks.
+                    await runtime.volumeRemove(buildVolumeName).catch(() => {});
                     return {
                         ...failed(workspaceId, siteId, config, built.error ?? 'The build failed.'),
                         buildLog,
@@ -690,22 +750,6 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 ...(config.exposed ? { exposed: config.exposed } : {}),
             });
 
-            const name = siteContainerNameFor(workspaceId, config.name);
-            const existing = (await runtime.ps(workspaceId)).find((c) => c.name === name);
-            if (existing) {
-                if (existing.state === 'running') {
-                    // Adopt: a site already up (a second window, a restarted
-                    // Genie) must not get a second container on the same name.
-                    const adopted = await recordLive(runtime, workspaceId, siteId, config, existing.id);
-                    return adopted;
-                }
-                // Replace rather than restart. The published port is fixed at
-                // create time, so a config whose port changed can only take
-                // effect on a fresh container — and the code lives in the bind
-                // mount, so the old layer holds nothing worth keeping.
-                await runtime.remove(existing.id);
-            }
-
             const healthcheck = siteHealthcheck(image, run.port);
             const container = await runtime.runContainer({
                 workspaceId,
@@ -718,7 +762,12 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                     [ROLE_LABEL]: SITE_ROLE,
                     [SITE_LABEL]: siteId,
                 },
-                mounts: [{ source: workspace.path, target: mountTarget }],
+                // Serve from the container-owned build COPY, not the host working
+                // tree (genie #119). A site with no build steps has no copy to
+                // serve, so it mounts the workspace as before.
+                ...(useIsolatedCopy
+                    ? { volumes: [{ name: buildVolumeName, target: mountTarget }] }
+                    : { mounts: [{ source: workspace.path, target: mountTarget }] }),
                 workdir: run.workdir,
                 // EXACTLY what the browser needs, and nothing else. The plan is
                 // the only thing that may open a port on this container — see
@@ -907,6 +956,18 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 await runtime.remove(entry.containerId);
             } catch {
                 /* tolerant — the adapter already treats "already gone" as success */
+            }
+            // Drop the isolated build copy (genie #119). It exists only to serve
+            // THIS site; the next start makes a fresh one (production parity). A
+            // site that never built has none — volumeRemove is tolerant of that.
+            // This is also what cleans it up on workspace removal, whose teardown
+            // sweeps containers by label but not volumes.
+            try {
+                await runtime.volumeRemove(
+                    siteBuildVolumeNameFor(entry.workspaceId, entry.config.name),
+                );
+            } catch {
+                /* already gone is success */
             }
         }
         changed();
