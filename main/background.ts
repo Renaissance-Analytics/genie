@@ -1075,6 +1075,13 @@ app.whenReady().then(async () => {
         listWorkspaces: () =>
             listWorkspaces().map((w) => ({ id: w.id, path: w.path, label: w.project_name })),
         devSitesFor: (id) => getWorkspaceDevSites(id),
+        // The managed GitHub token the production BUILD authenticates github.com
+        // with (genie #119) — the SAME token the clone path resolves. Read here,
+        // at the composition root, so the dev-server module stays free of the
+        // safeStorage import; `getToken` reads the stored token with no
+        // interactive login, so it works on a headless host too. Null (no GitHub
+        // connected) degrades the build to public access.
+        githubToken: () => getToken(),
         confirmImagePull: confirmContainerImagePull,
         // The `.gen` change event, so the header popover, the rail icon, the
         // Site Manager and the Testing Browser's resolver all re-pull when a

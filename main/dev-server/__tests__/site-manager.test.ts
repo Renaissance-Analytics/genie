@@ -499,6 +499,70 @@ describe('reconcile', () => {
     });
 });
 
+// --- production build auth (genie #119) -------------------------------------
+
+describe('production build auth', () => {
+    /** Capture the env each build step is `exec`ed with. */
+    function captureBuildEnv(runtime: Fake): Array<Record<string, string> | undefined> {
+        const seen: Array<Record<string, string> | undefined> = [];
+        runtime.exec = async (_id, _argv, opts) => {
+            seen.push(opts?.env);
+            return { code: 0, stdout: '', stderr: '' };
+        };
+        return seen;
+    }
+
+    it('ALWAYS injects git safe.directory into the build, so composer does not die on dubious ownership', async () => {
+        const runtime = fakeRuntime();
+        const seen = captureBuildEnv(runtime);
+        await manager(runtime).start('acme', SITE_ID);
+        expect(seen[0]?.GIT_CONFIG_KEY_0).toBe('safe.directory');
+        expect(seen[0]?.GIT_CONFIG_VALUE_0).toBe('*');
+    });
+
+    it('injects the managed GitHub token as COMPOSER_AUTH + GITHUB_TOKEN when the host holds one', async () => {
+        const runtime = fakeRuntime();
+        const seen = captureBuildEnv(runtime);
+        await manager(runtime, undefined, { githubToken: () => 'ghs_HOSTTOKEN' }).start('acme', SITE_ID);
+        expect(seen[0]?.GITHUB_TOKEN).toBe('ghs_HOSTTOKEN');
+        expect(JSON.parse(seen[0]!.COMPOSER_AUTH!)).toEqual({
+            'github-oauth': { 'github.com': 'ghs_HOSTTOKEN' },
+        });
+    });
+
+    it('omits the token vars when the host holds none — a public-only build still runs', async () => {
+        const runtime = fakeRuntime();
+        const seen = captureBuildEnv(runtime);
+        await manager(runtime, undefined, { githubToken: () => null }).start('acme', SITE_ID);
+        expect(seen[0]?.COMPOSER_AUTH).toBeUndefined();
+        expect(seen[0]?.GITHUB_TOKEN).toBeUndefined();
+        // …but safe.directory is unconditional.
+        expect(seen[0]?.GIT_CONFIG_VALUE_0).toBe('*');
+    });
+
+    it('NEVER leaks the token or the git-safety vars into the SERVING container', async () => {
+        // Auth is a BUILD concern. The serve container's env is inspectable
+        // (docker inspect), so the token must not be persisted there.
+        const runtime = fakeRuntime();
+        await manager(runtime, undefined, { githubToken: () => 'ghs_HOSTTOKEN' }).start('acme', SITE_ID);
+        const site = runtime.ran.find((s) => s.name.includes('-site-'));
+        expect(site?.env?.GITHUB_TOKEN).toBeUndefined();
+        expect(site?.env?.COMPOSER_AUTH).toBeUndefined();
+        expect(site?.env?.GIT_CONFIG_VALUE_0).toBeUndefined();
+    });
+
+    it('lets a user-pinned site env override the auth defaults — the defaults sit UNDER it', async () => {
+        const runtime = fakeRuntime();
+        const seen = captureBuildEnv(runtime);
+        await manager(
+            runtime,
+            { [SITE_ID]: { ...SITE, env: { GIT_CONFIG_VALUE_0: '/workspace/repos/app' } } },
+            { githubToken: () => 'ghs_HOSTTOKEN' },
+        ).start('acme', SITE_ID);
+        expect(seen[0]?.GIT_CONFIG_VALUE_0).toBe('/workspace/repos/app');
+    });
+});
+
 // --- P3: the services a site connects to ------------------------------------
 
 describe('service env injection (#234 P3)', () => {

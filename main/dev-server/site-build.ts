@@ -1,3 +1,4 @@
+import { redactSecrets } from '../workspace/git-auth';
 import type { CommandResult, ExecOptions } from './container-runtime';
 import type { BuildStep } from './serve-recipe';
 
@@ -55,6 +56,14 @@ export interface SiteBuildDeps {
     workdir: string;
     /** The environment the SERVER will get, given to the build as well. */
     env?: Record<string, string>;
+    /**
+     * Secret substrings to REDACT from every line of captured/surfaced output —
+     * the build log is shown in the UI verbatim, and the build env carries the
+     * managed GitHub token (COMPOSER_AUTH / GITHUB_TOKEN, see `build-auth.ts`).
+     * A tool that echoes its environment, or a git URL with the token inline,
+     * would otherwise leak it into the log. `[]`/absent = nothing to scrub.
+     */
+    secrets?: string[];
     /** Live output, line by line, for whatever is showing progress. */
     onProgress?: (chunk: string) => void;
 }
@@ -94,8 +103,15 @@ export async function runSiteBuild(
     const done: SiteBuildStepResult[] = [];
     const log: string[] = [];
 
+    // Every string that lands in the log or a progress chunk passes through
+    // here, so a token injected into the build env (see `build-auth.ts`) can
+    // never reach the UI-visible build log. A no-op when there is nothing to
+    // scrub (the public-build / no-token path).
+    const secrets = deps.secrets ?? [];
+    const scrub = (text: string): string => (secrets.length ? redactSecrets(text, secrets) : text);
+
     for (const step of steps) {
-        const header = `$ ${step.command.join(' ')}   # ${step.label}`;
+        const header = scrub(`$ ${step.command.join(' ')}   # ${step.label}`);
         log.push(header);
         deps.onProgress?.(`${header}\n`);
 
@@ -110,7 +126,7 @@ export async function runSiteBuild(
             // The runtime itself failed (the daemon stopped, the container is
             // gone). Reported as a failed STEP so the caller still gets the log
             // of everything that succeeded before it.
-            const message = messageOf(e);
+            const message = scrub(messageOf(e));
             log.push(message);
             done.push({ label: step.label, command: [...step.command], ok: false, code: null });
             return {
@@ -121,7 +137,7 @@ export async function runSiteBuild(
             };
         }
 
-        const output = outputOf(result).slice(0, STEP_OUTPUT_LIMIT);
+        const output = scrub(outputOf(result).slice(0, STEP_OUTPUT_LIMIT));
         if (output) {
             log.push(output);
             deps.onProgress?.(`${output}\n`);

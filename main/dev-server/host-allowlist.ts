@@ -80,6 +80,42 @@ export interface FrameworkInput {
     framework?: string;
     /** The literal argv the site runs. */
     command?: readonly string[];
+    /**
+     * The recipe STACK (`php`, `python`, `node`, …), when known. Threaded because
+     * the PRODUCTION serve argv usually cannot say what it is — a FrankenPHP
+     * `php-server` carries no `artisan` token — and keying off the stack is the
+     * robust way to still recognise it. Typed loosely to avoid a circular import
+     * with `serve-recipe.ts` (which imports {@link DevFramework} from here).
+     */
+    stack?: string;
+    /** The production SERVER holding the port (`frankenphp`, `gunicorn`, …), same
+     *  role as {@link FrameworkInput.stack}: a scheme/host hint the argv omits. */
+    server?: string;
+}
+
+/**
+ * Recognise the framework from the PRODUCTION serve — the stack/server the
+ * recipe resolved, falling back to the production argv tokens.
+ *
+ * This is the seam the live blank-page bug (genie #119) needed: a Laravel site
+ * is served by `frankenphp php-server`, which contains NO `artisan` token, so
+ * the dev-argv scan below called it `none` and skipped the APP_URL fix — and its
+ * assets then loaded over http behind the https `.gen` proxy (mixed content,
+ * blocked). PHP → the `laravel` case, whose APP_URL/ASSET_URL injection is the
+ * scheme fix (and is inert for a non-Laravel PHP app that does not read them);
+ * gunicorn → Django, the one framework whose host allowlist still bites in
+ * production. Returns `none` when the production shape says nothing.
+ */
+function frameworkFromProduction(input: FrameworkInput): DevFramework {
+    const argv = (input.command ?? []).map((t) => String(t).toLowerCase());
+    const has = (token: string) => argv.some((t) => t === token || t.endsWith(`/${token}`));
+
+    if (input.stack === 'php' || input.server === 'frankenphp' || has('frankenphp') || has('php-server')) {
+        return 'laravel';
+    }
+    // gunicorn is our Django-only production server (uvicorn serves ASGI apps).
+    if (input.server === 'gunicorn' || has('gunicorn')) return 'django';
+    return 'none';
 }
 
 /**
@@ -90,11 +126,16 @@ export interface FrameworkInput {
  * knew — it read the script body to decide those flags were safe to append — so
  * `site-def.ts` records what it knew.
  *
- * The argv scan is the fallback for an `explicit` site, where the user typed the
- * command and nothing detected anything.
+ * When nothing was stored, the PRODUCTION serve (stack/server, then production
+ * argv tokens) is recognised next — that is what keeps a FrankenPHP Laravel
+ * serve from being mis-read as `none`. The dev-command argv scan is the final
+ * fallback for an `explicit` site where the user typed a dev command themselves.
  */
 export function detectFramework(input: FrameworkInput): DevFramework {
     if (isDevFramework(input.framework) && input.framework !== 'none') return input.framework;
+
+    const fromProduction = frameworkFromProduction(input);
+    if (fromProduction !== 'none') return fromProduction;
 
     const argv = (input.command ?? []).map((t) => String(t).toLowerCase());
     const has = (token: string) => argv.some((t) => t === token || t.endsWith(`/${token}`));
@@ -123,6 +164,10 @@ export interface HostAllowlistInput {
     genName: string;
     framework?: string;
     command?: readonly string[];
+    /** The recipe stack/server, so a PRODUCTION serve is recognised even when the
+     *  argv cannot say what it runs — see {@link FrameworkInput}. */
+    stack?: string;
+    server?: string;
     /** Already set by the user. When present, nothing is planned. */
     upstreamHost?: string;
 }

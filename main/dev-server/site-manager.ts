@@ -13,6 +13,7 @@ import { planHostAllowlist } from './host-allowlist';
 import { planExposure } from './exposure';
 import { resolveHostedRun } from './serve-recipe';
 import { runSiteBuild } from './site-build';
+import { buildAuthEnv } from './build-auth';
 import { ensureWorkspaceSandbox } from './workspace-sandbox';
 import type { ContainerRuntime, RuntimeDetection } from './container-runtime';
 import type { ExposurePlan } from './exposure';
@@ -208,6 +209,19 @@ export interface DevSiteManagerDeps {
      * absent, and so this module still knows nothing about what a service is.
      */
     serviceEnvFor?: (workspaceId: string) => Promise<Record<string, string>>;
+    /**
+     * The managed GitHub token to authenticate the production BUILD with (genie
+     * #119), or null when Genie holds none.
+     *
+     * Injected — REUSE of the same token resolution the clone path uses
+     * (`github/storage.ts#getToken`), not a new store — so this module stays free
+     * of the electron/safeStorage import and a test can supply a fake. Resolved
+     * once per build and merged UNDER the site's own env as COMPOSER_AUTH +
+     * GITHUB_TOKEN (see `build-auth.ts`); absent on a host with no GitHub
+     * connected, where the build degrades to public access. Works on a headless
+     * host — `getToken` reads the stored token, no interactive login.
+     */
+    githubToken?: () => string | null | undefined;
     /** Fired whenever the live set changes, so the UX and other agents follow. */
     onChanged?: () => void;
 }
@@ -431,6 +445,13 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 ...planHostAllowlist({
                     genName: config.genName,
                     ...(config.framework ? { framework: config.framework } : {}),
+                    // The recipe STACK/SERVER, so a PRODUCTION serve is host/scheme
+                    // fixed even when the argv cannot say what it runs — a
+                    // FrankenPHP `php-server` has no `artisan` token, yet a Laravel
+                    // app still needs APP_URL on the https `.gen` origin or its
+                    // assets load over http and the browser blocks them (#119).
+                    ...(config.stack ? { stack: config.stack } : {}),
+                    ...(config.server ? { server: config.server } : {}),
                     ...(config.serve ? { command: config.serve } : {}),
                     ...(config.upstreamHost ? { upstreamHost: config.upstreamHost } : {}),
                 }).env,
@@ -447,11 +468,22 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             // while every health signal read green.
             let buildLog: string | undefined;
             if (run.build.length) {
+                // The build gets the serve env PLUS the auth/git-safety DEFAULTS
+                // (genie #119): a git `safe.directory` so composer does not die on
+                // dubious ownership, and — when Genie holds one — the managed
+                // GitHub token as COMPOSER_AUTH + GITHUB_TOKEN so github.com dist
+                // fetches authenticate instead of hitting the anonymous rate
+                // limit. The defaults sit UNDER `env`, so a value the user pinned
+                // still wins; the token rides ONLY the build (never the serving
+                // container) and is scrubbed from the surfaced build log.
+                const auth = buildAuthEnv(deps.githubToken?.());
+                const buildEnv = { ...auth.env, ...env };
                 const built = await runSiteBuild(run.build, {
                     exec: (id, argv, execOpts) => runtime.exec(id, argv, execOpts),
                     containerId: sandbox.container.id,
                     workdir: run.workdir,
-                    env,
+                    env: buildEnv,
+                    ...(auth.secrets.length ? { secrets: auth.secrets } : {}),
                     ...(deps.onImagePullProgress
                         ? { onProgress: deps.onImagePullProgress }
                         : {}),
