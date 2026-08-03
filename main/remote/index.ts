@@ -1146,6 +1146,18 @@ function handleBridgeMessage(conn: RemoteConnection, raw: string): void {
             ) {
                 flashConnWindows(conn);
             }
+            // A CURRENT host announces every change to its pending set with the
+            // PLURAL `questions:changed` (an OLDER host uses the singular
+            // `question:changed`, forwarded below). The passthrough above keeps the
+            // driver's flyout badge live, but the always-on-top PROMPT must ALSO
+            // pop on the driver for a newly-arrived host question when the driver
+            // isn't in DND — otherwise a remote user with Do-Not-Disturb OFF only
+            // ever sees the flyout while the modal pops on the unattended host (the
+            // questions:changed remote-parity gap). syncForwardedQuestions is
+            // idempotent (forwardedShown dedupes) and delegates the pop-vs-defer
+            // decision to the driver's per-workstation availability + the host
+            // kill-switch, so running it on every plural push is safe.
+            if (msg.type === 'questions:changed') void syncForwardedQuestions(conn);
             return;
         }
         // Host alerts/prompts forwarded to the driving member (handled in MAIN,

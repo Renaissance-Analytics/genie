@@ -42,7 +42,7 @@ const ask = vi.hoisted(() => {
         resolve: (r: { cancelled: boolean; answers: unknown[] }) => void;
     }
     const open: Raised[] = [];
-    const raises: { connKey: string; hostId: string }[] = [];
+    const raises: { connKey: string; hostId: string; workstationId?: string }[] = [];
 
     const settle = (hostId: string, r: { cancelled: boolean; answers: unknown[] }): void => {
         const idx = open.findIndex((o) => o.hostId === hostId);
@@ -59,8 +59,13 @@ const ask = vi.hoisted(() => {
             hostId: string;
             questions: unknown[];
             workspaceLabel?: string;
+            workstationId?: string;
         }): Promise<{ cancelled: boolean; answers: unknown[] }> {
-            raises.push({ connKey: opts.connKey, hostId: opts.hostId });
+            raises.push({
+                connKey: opts.connKey,
+                hostId: opts.hostId,
+                workstationId: opts.workstationId,
+            });
             return new Promise((resolve) => {
                 open.push({ connKey: opts.connKey, hostId: opts.hostId, resolve });
             });
@@ -494,5 +499,61 @@ describe('host-sourced question badge (genie #60)', () => {
         host.setQuestions([Q1]);
         await connect();
         await vi.waitFor(() => expect(sentTo('questions:changed')).not.toHaveLength(0));
+    });
+});
+
+/**
+ * Remote-parity for the always-on-top PROMPT (not just the flyout badge).
+ *
+ * A CURRENT host announces every change to its pending set with the PLURAL
+ * `questions:changed`; the singular `question:changed` is an OLDER host only.
+ * The plural push is a PASSTHROUGH event, so before this fix `handleBridgeMessage`
+ * re-emitted it to nudge the driver's flyout badge and RETURNED — it never reached
+ * `syncForwardedQuestions`. Result: a host question that arrived AFTER connect
+ * popped the always-on-top modal on the (unattended) HOST but only ever reached
+ * the driver's flyout, even with the driver's Do-Not-Disturb OFF. The plural push
+ * must drive `syncForwardedQuestions` exactly like the singular one so the prompt
+ * pops on the DRIVER. Whether it pops or defers is the driver's OWN per-workstation
+ * availability, delegated to `raiseForwardedQuestion` (available→modal / dnd→flyout,
+ * covered in main/ask/__tests__/force-question.test.ts).
+ */
+describe('plural questions:changed pops the driver prompt, not just the badge', () => {
+    it('raises a forwarded prompt for a NEW question announced via the plural push', async () => {
+        host.setQuestions([]);
+        await connect();
+        // A host question arrives AFTER connect — announced with the plural push.
+        host.setQuestions([Q1]);
+        host.pushQuestionsChanged({ count: 1, workspaces: 1 });
+        // Before the fix this stayed at 0 (the plural push only nudged the badge).
+        await vi.waitFor(() => expect(ask.raiseCount('hq-1')).toBe(1));
+        // The availability SOURCE is the driver's OWN per-workstation setting,
+        // keyed by this host's connKey — so its Do-Not-Disturb governs the prompt.
+        expect(ask.raises.at(-1)?.workstationId).toBe(connKey);
+    });
+
+    it('answering the plural-raised prompt POSTs the answer back to the host', async () => {
+        host.setQuestions([]);
+        await connect();
+        host.setQuestions([Q1]);
+        host.pushQuestionsChanged({ count: 1, workspaces: 1 });
+        await vi.waitFor(() => expect(ask.raiseCount('hq-1')).toBe(1));
+
+        // Answering on the driver resolves the forwarded question → POST back to
+        // the host (first-answer-wins is preserved: the host clears it).
+        ask.answer('hq-1', [{ text: 'yes' }]);
+        await vi.waitFor(() => expect(host.answerPosts()).toHaveLength(1));
+        expect(JSON.parse(host.answerPosts()[0].body)).toEqual({ answers: [{ text: 'yes' }] });
+    });
+
+    it('does not double-raise when connect and a later plural push both sync the same question', async () => {
+        host.setQuestions([Q1]);
+        await connect(); // connect already syncs → raise #1
+        await vi.waitFor(() => expect(ask.raiseCount('hq-1')).toBe(1));
+        // Repeated plural pushes over the SAME still-pending question must not
+        // stack duplicate modals (forwardedShown dedupes).
+        host.pushQuestionsChanged({ count: 1, workspaces: 1 });
+        host.pushQuestionsChanged({ count: 1, workspaces: 1 });
+        await vi.waitFor(() => expect(host.questionReads()).toBeGreaterThanOrEqual(3));
+        expect(ask.raiseCount('hq-1')).toBe(1);
     });
 });
