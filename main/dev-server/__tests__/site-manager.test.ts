@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createDevSiteManager } from '../site-manager';
 import { defaultGenNameFor, devSiteIdFor, parseDevSites, sanitizeDevSitePatch } from '../sites-config';
 import { SITE_LABEL, siteContainerNameFor } from '../argv';
+import { FRANKENPHP_IMAGE } from '../serve-recipe';
 import type { DevSiteConfig, DevSites } from '../sites-config';
 import type {
     ContainerRuntime,
@@ -152,6 +153,25 @@ const SITE: DevSiteConfig = {
 };
 
 const SITE_ID = devSiteIdFor('acme', 'web');
+
+/** A FrankenPHP-served PHP site — the one image that bakes in a broken
+ *  healthcheck (genie #119, Blocker 5). */
+const PHP_SITE: DevSiteConfig = {
+    name: 'app',
+    genName: 'app.acme.gen',
+    repo: 'app',
+    runMode: 'recipe',
+    stack: 'php',
+    server: 'frankenphp',
+    image: FRANKENPHP_IMAGE,
+    build: [{ label: 'Install PHP dependencies', command: ['composer', 'install', '--no-dev'] }],
+    serve: ['frankenphp', 'php-server', '--listen', '0.0.0.0:8080', '--root', 'public/'],
+    port: 8080,
+    kind: 'http',
+    enabled: true,
+};
+
+const PHP_SITE_ID = devSiteIdFor('acme', 'app');
 
 function manager(
     runtime: ContainerRuntime,
@@ -576,16 +596,21 @@ describe('service env injection (#234 P3)', () => {
         expect(site?.env?.DATABASE_URL).toBe('postgresql://ws:pw@genie-svc-postgres-16:5432/ws');
     });
 
-    it('lets the site’s OWN env win — a pinned value is the user’s decision', async () => {
+    it('lets the workspace SERVICE env win over a colliding site env — the real engine address is authoritative', async () => {
+        // The container can only reach the engine at its service name on the
+        // workspace network. A repo whose committed `.env` pins
+        // `DB_HOST=127.0.0.1` (carried into config.env) must NOT beat the
+        // managed `genie-svc-postgres-17`, or the app dials nothing. Service
+        // connection env is injected LAST and wins outright.
         const runtime = fakeRuntime();
         await manager(
             runtime,
-            { [SITE_ID]: { ...SITE, env: { DATABASE_URL: 'postgresql://mine' } } },
-            { serviceEnvFor: async () => ({ DATABASE_URL: 'postgresql://managed' }) },
+            { [SITE_ID]: { ...SITE, env: { DB_HOST: '127.0.0.1' } } },
+            { serviceEnvFor: async () => ({ DB_HOST: 'genie-svc-postgres-17' }) },
         ).start('acme', SITE_ID);
 
         const site = runtime.ran.find((s) => s.name.includes('-site-'));
-        expect(site?.env?.DATABASE_URL).toBe('postgresql://mine');
+        expect(site?.env?.DB_HOST).toBe('genie-svc-postgres-17');
     });
 
     it('starts the site anyway when the services cannot be brought up', async () => {
@@ -606,5 +631,31 @@ describe('service env injection (#234 P3)', () => {
         await manager(runtime).start('acme', SITE_ID);
         const site = runtime.ran.find((s) => s.name.includes('-site-'));
         expect(site?.env).toBeUndefined();
+    });
+});
+
+// --- the site healthcheck (genie #119, Blocker 5) ---------------------------
+
+describe('site healthcheck', () => {
+    it('OVERRIDES the FrankenPHP image’s broken :2019 admin check with one on the REAL serve port', async () => {
+        // The `dunglas/frankenphp` image bakes a HEALTHCHECK that curls its Caddy
+        // admin endpoint on :2019, which `php-server` mode disables — so the site
+        // is `(unhealthy)` forever while it serves fine. We point it at the port
+        // the recipe actually serves on, so a serving site reads healthy.
+        const runtime = fakeRuntime();
+        await manager(runtime, { [PHP_SITE_ID]: PHP_SITE }).start('acme', PHP_SITE_ID);
+        const site = runtime.ran.find((s) => s.name.includes('-site-'));
+        expect(site?.healthcheck?.cmd).toContain('http://127.0.0.1:8080/');
+        expect(site?.healthcheck?.cmd).not.toContain('2019');
+        expect(site?.healthcheck?.cmd).not.toContain('/metrics');
+    });
+
+    it('leaves every OTHER image to inherit — only FrankenPHP bakes a broken check', async () => {
+        // The Go site runs on the dev-base image, which carries no HEALTHCHECK, so
+        // Genie must not invent one (curl/nc are not guaranteed in every image).
+        const runtime = fakeRuntime();
+        await manager(runtime).start('acme', SITE_ID);
+        const site = runtime.ran.find((s) => s.name.includes('-site-'));
+        expect(site?.healthcheck).toBeUndefined();
     });
 });

@@ -23,6 +23,7 @@ import {
 import { createLocalSiteCarrier, type LocalTarget } from '../sites/local-carrier';
 import { listLocalEnabledGenSites, localTargetsBySiteId } from '../sites/local-sites';
 import { DEVICE_PRESETS, devicePreset, initialGenUrl, normalizeNavUrl } from './chrome';
+import { SITE_VIEW_WEB_PREFERENCES } from './site-view';
 
 /** The connKey the LOCAL Testing Browser instance uses (this machine's own
  *  loopback dev sites — no host connection). */
@@ -379,10 +380,12 @@ function openTab(inst: TestingBrowserInstance, url: string): Tab {
     const view = new WebContentsView({
         webPreferences: {
             session: inst.session,
-            contextIsolation: true,
-            nodeIntegration: false,
-            sandbox: true,
-            // NO Genie preload — this is REMOTE site content, never given the bridge.
+            // REMOTE site content: isolated from Node, no preload, no bridge — and
+            // deliberately UNSANDBOXED. A sandboxed child WebContentsView never
+            // receives its renderer startupData (electron#44897, genie #120), so
+            // the page would render blank. See `site-view.ts` for the full
+            // rationale and the security trade-off.
+            ...SITE_VIEW_WEB_PREFERENCES,
         },
     });
     const tab: Tab = { id: crypto.randomUUID(), view, url, title: url };
