@@ -6,6 +6,7 @@ import {
     captureTerminalOutput,
     evaluateTerminalUntil,
     resolveFields,
+    resolveTerminalStep,
     type BrowserStepSpec,
     type ChoiceStepSpec,
     type FormStepSpec,
@@ -240,6 +241,14 @@ function TerminalStep({ step, engine, ctx, active, defaultCwd, onTerminalCreated
     const doneRef = useRef(false);
     const [attempt, setAttempt] = useState(0);
 
+    // Fill `{{key}}` placeholders from the wizard inputs collected by preceding
+    // steps (e.g. the commit message / branch name). Args resolve element-wise and
+    // spawn as an argv array, so a value with spaces stays one argument. A step with
+    // no placeholders resolves to itself, so built-in recipes are unaffected. By the
+    // time this terminal step is ACTIVE the preceding form's required fields are set
+    // (the engine gates Next on them), so the values are present when it spawns.
+    const { command: resolvedCommand, args: resolvedArgs } = resolveTerminalStep(step, ctx);
+
     // A recipe scoped to a workspace (ctx.workspaceId set — e.g. the Workstation
     // Setup's reserved `__genie_setup__` binding) runs in a HOST window, so the
     // embedded terminal must be HOSTED exactly like a regular grid terminal: a
@@ -286,8 +295,8 @@ function TerminalStep({ step, engine, ctx, active, defaultCwd, onTerminalCreated
                         workspace_id: ctx.workspaceId ?? null,
                         label: step.title,
                         cwd: step.cwd ?? defaultCwd,
-                        shell: step.command,
-                        args: step.args,
+                        shell: resolvedCommand,
+                        args: resolvedArgs,
                         type: 'terminal',
                     });
                 } catch {
@@ -329,7 +338,7 @@ function TerminalStep({ step, engine, ctx, active, defaultCwd, onTerminalCreated
         if (verdict === 'success') succeed();
         else if (verdict === 'fail') {
             doneRef.current = true;
-            engine.markError(step.id, `"${step.command}" exited with code ${exitCode}.`);
+            engine.markError(step.id, `"${resolvedCommand}" exited with code ${exitCode}.`);
         }
     };
 
@@ -349,7 +358,7 @@ function TerminalStep({ step, engine, ctx, active, defaultCwd, onTerminalCreated
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
-                Running <code>{[step.command, ...(step.args ?? [])].join(' ')}</code>
+                Running <code>{[resolvedCommand, ...resolvedArgs].join(' ')}</code>
                 {hosted || ctx.workstationId ? ' on the host' : ''}.
             </Text>
             {openUrl && (
@@ -364,8 +373,8 @@ function TerminalStep({ step, engine, ctx, active, defaultCwd, onTerminalCreated
                         key={termIdRef.current}
                         id={termIdRef.current}
                         cwd={step.cwd ?? defaultCwd}
-                        shell={step.command}
-                        args={step.args}
+                        shell={resolvedCommand}
+                        args={resolvedArgs}
                         workspaceId={ctx.workspaceId}
                         onExit={onExit}
                         className="h-full w-full"

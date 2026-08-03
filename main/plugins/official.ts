@@ -363,11 +363,202 @@ const DOCUMENT_SOURCE: BundledPluginSource = {
     tools: DOCUMENT_TOOLS,
 };
 
+// --- Repository (repo-management — real git via recipe terminal steps) -------
+
+const REPOSITORY_TOOLS = `'use strict';
+// The Repository plugin is RECIPES-ONLY: its git actions run as recipe TERMINAL
+// steps on the HOST (a plugin worker sandbox can't spawn git). It registers no
+// MCP tools — agent-callable git tools await a host-git bridge (follow-up).
+module.exports = {};
+`;
+
+/**
+ * A recipe terminal step running a real git/gh command in the workspace repo.
+ * `cwd` is omitted deliberately: the WizardModal spawns terminal steps with the
+ * workspace as the default cwd, so every command runs in the repo the wizard was
+ * launched against. Wizard inputs reach the argv via `{{key}}` placeholders — the
+ * renderer interpolates them from the preceding form step's values at spawn time,
+ * and because args are passed to the pty as an ARGV array (never a shell string) a
+ * value with spaces stays a single argument (no shell-injection surface).
+ */
+function gitStep(id: string, title: string, command: string, args: string[]): {
+    type: 'terminal';
+    id: string;
+    title: string;
+    command: string;
+    args: string[];
+} {
+    return { type: 'terminal', id, title, command, args };
+}
+
+const REPOSITORY_SOURCE: BundledPluginSource = {
+    id: 'ai.genie.repository',
+    name: 'Repository',
+    description:
+        'Run real git — status, stage, commit, branch, push, pull and open a PR — as guided wizards.',
+    manifest: {
+        id: 'ai.genie.repository',
+        namespace: 'repository',
+        name: 'Repository',
+        version: '0.1.0',
+        description:
+            'Repository management for the workspace repo: run real git (status, stage, commit, create+switch branch, push, pull) and open a pull request with gh — each as a guided wizard whose terminal steps run on the host that holds the workspace. Destructive operations (force-push, reset) are intentionally excluded from v1.',
+        publisher: { name: 'Genie', url: 'https://github.com/Renaissance-Analytics/genie' },
+        engines: { genie: '>=0.7.0' },
+        entry: { tools: 'tools.cjs' },
+        mcpTools: [],
+        recipes: [
+            {
+                id: 'status',
+                title: 'Git status',
+                steps: [gitStep('run', 'git status', 'git', ['status'])],
+            },
+            {
+                id: 'stage',
+                title: 'Stage changes',
+                steps: [
+                    {
+                        type: 'form',
+                        id: 'what',
+                        title: 'What to stage',
+                        fields: [
+                            {
+                                key: 'paths',
+                                label: 'Path or pathspec',
+                                placeholder: '.',
+                                description: 'Defaults to "." — the whole worktree. Give a path to stage just that.',
+                                required: true,
+                                defaultValue: '.',
+                            },
+                        ],
+                    },
+                    gitStep('run', 'git add', 'git', ['add', '{{paths}}']),
+                ],
+            },
+            {
+                id: 'commit',
+                title: 'Commit',
+                steps: [
+                    {
+                        type: 'form',
+                        id: 'message',
+                        title: 'Commit message',
+                        fields: [
+                            {
+                                key: 'message',
+                                label: 'Commit message',
+                                placeholder: 'Describe your change',
+                                required: true,
+                            },
+                        ],
+                    },
+                    gitStep('run', 'git commit', 'git', ['commit', '-m', '{{message}}']),
+                ],
+            },
+            {
+                id: 'branch',
+                title: 'Create + switch branch',
+                steps: [
+                    {
+                        type: 'form',
+                        id: 'name-form',
+                        title: 'New branch',
+                        fields: [
+                            {
+                                key: 'name',
+                                label: 'Branch name',
+                                placeholder: 'feat/my-change',
+                                required: true,
+                            },
+                        ],
+                    },
+                    gitStep('run', 'git switch -c', 'git', ['switch', '-c', '{{name}}']),
+                ],
+            },
+            {
+                id: 'push',
+                title: 'Push',
+                steps: [
+                    {
+                        type: 'form',
+                        id: 'remote-form',
+                        title: 'Push to',
+                        fields: [
+                            {
+                                key: 'remote',
+                                label: 'Remote',
+                                placeholder: 'origin',
+                                description: 'Pushes the current branch and sets its upstream on this remote.',
+                                required: true,
+                                defaultValue: 'origin',
+                            },
+                        ],
+                    },
+                    // `-u <remote> HEAD` pushes the CURRENT branch and sets upstream —
+                    // works the same for a brand-new branch and an already-tracked one.
+                    gitStep('run', 'git push', 'git', ['push', '-u', '{{remote}}', 'HEAD']),
+                ],
+            },
+            {
+                id: 'pull',
+                title: 'Pull',
+                // `--ff-only` never fabricates a surprise merge commit: it fast-forwards
+                // or stops and tells you, which is the safe default for a wizard.
+                steps: [gitStep('run', 'git pull', 'git', ['pull', '--ff-only'])],
+            },
+            {
+                id: 'pr',
+                title: 'Open a pull request',
+                steps: [
+                    {
+                        type: 'form',
+                        id: 'pr-form',
+                        title: 'Pull request',
+                        fields: [
+                            {
+                                key: 'title',
+                                label: 'Title',
+                                placeholder: 'Add the thing',
+                                required: true,
+                            },
+                            {
+                                key: 'body',
+                                label: 'Description',
+                                placeholder: 'What and why (optional)',
+                            },
+                        ],
+                    },
+                    gitStep('run', 'gh pr create', 'gh', [
+                        'pr',
+                        'create',
+                        '--title',
+                        '{{title}}',
+                        '--body',
+                        '{{body}}',
+                    ]),
+                ],
+            },
+        ],
+        capabilities: {
+            // The recipe surface can spawn terminal commands, so it MUST be gated by a
+            // permission the user consents to at enable-time (the manifest schema
+            // enforces this when `recipes` are present).
+            genieApi: ['recipes'],
+            // No worker fs and no worker network: git runs as a host PROCESS in a
+            // recipe terminal step, not through the plugin bridges. Declared empty so
+            // "no network" is explicit + fail-closed.
+            network: { hosts: [] },
+        },
+    },
+    tools: REPOSITORY_TOOLS,
+};
+
 /** Every bundled plugin Genie ships in the box. Exported for tests. */
 export const BUNDLED_PLUGIN_SOURCES: BundledPluginSource[] = [
     PRESENTATION_SOURCE,
     SPREADSHEET_SOURCE,
     DOCUMENT_SOURCE,
+    REPOSITORY_SOURCE,
 ];
 
 /**

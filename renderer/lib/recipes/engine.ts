@@ -1,5 +1,13 @@
 import type { api } from '../genie';
-import type { FormStepSpec, Recipe, RecipeContext, RecipeField, RecipeStep, StepState } from './types';
+import type {
+    FormStepSpec,
+    Recipe,
+    RecipeContext,
+    RecipeField,
+    RecipeStep,
+    StepState,
+    TerminalStepSpec,
+} from './types';
 
 /**
  * RecipeEngine — a framework-agnostic runner for a Recipe. It owns the pure
@@ -315,4 +323,38 @@ export function captureTerminalOutput(
         if (m && m.length > 1 && m[1] !== undefined) return m[1];
     }
     return output.trim();
+}
+
+/**
+ * Substitute `{{key}}` placeholders in a template from the recipe context — the
+ * values collected by preceding form/choice steps. Whitespace inside the braces is
+ * tolerated (`{{ key }}`); an unknown or nullish key renders as the EMPTY string
+ * (never the literal "undefined"), so an optional field simply drops out.
+ *
+ * Pure and side-effect-free. A template with no placeholder is returned verbatim,
+ * so every existing recipe (whose commands carry no `{{…}}`) is unaffected.
+ */
+export function interpolateTemplate(template: string, ctx: Pick<RecipeContext, 'get'>): string {
+    return template.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_m, key: string) => {
+        const v = ctx.get(key);
+        return v === undefined || v === null ? '' : String(v);
+    });
+}
+
+/**
+ * Resolve a terminal step's runnable command + args against the context: each
+ * placeholder is filled from the collected wizard inputs. Args are resolved
+ * ELEMENT-WISE and returned as an argv array — the pty is spawned with argv, not a
+ * shell string, so a substituted value with spaces (e.g. a commit message) stays a
+ * single argument and there is no shell-injection surface. This is the seam that
+ * lets a plugin recipe run `git commit -m {{message}}` with the user's message.
+ */
+export function resolveTerminalStep(
+    step: TerminalStepSpec,
+    ctx: Pick<RecipeContext, 'get'>,
+): { command: string; args: string[] } {
+    return {
+        command: interpolateTemplate(step.command, ctx),
+        args: (step.args ?? []).map((a) => interpolateTemplate(a, ctx)),
+    };
 }
