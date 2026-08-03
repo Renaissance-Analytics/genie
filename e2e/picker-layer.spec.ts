@@ -2,28 +2,41 @@ import { test, expect, type ElectronApplication, type Page } from '@playwright/t
 import { launchGenieE2E } from './helpers/launch';
 
 /**
- * E2E test for the Add-workspace file picker's STACKING (genie #86).
+ * E2E test for the Add-workspace file picker's LAYER (genie #86, then #114).
  *
- * THE BUG: the in-app picker (`pickPath` → FilePickerModal) rode `.ctx-scrim` at
- * z-index 80, i.e. Genie's chrome rung. react-fancy's Modal portals to
- * `document.body` and — since genie #66 — is lifted to `--z-fancy-overlay` (900).
- * Add workspace is such a modal, so the picker it launched painted UNDERNEATH
- * the whole thing: dimmed by the modal's `bg-black/50 backdrop-blur-sm` backdrop
- * and covered by the Add-workspace form itself, which swallowed every click
- * aimed at the folder tree.
+ * THE FIRST BUG (#86) was z-order: the in-app picker (`pickPath` →
+ * FilePickerModal) rode `.ctx-scrim` at z-index 80, i.e. Genie's chrome rung.
+ * react-fancy's Modal portals to `document.body` and — since genie #66 — is
+ * lifted to `--z-fancy-overlay` (900). Add workspace is such a modal, so the
+ * picker it launched painted UNDERNEATH the whole thing: dimmed by the modal's
+ * `bg-black/50 backdrop-blur-sm` backdrop and covered by the Add-workspace form
+ * itself, which swallowed every click aimed at the folder tree.
  *
- * WHY E2E: the unit suite runs in Node with no DOM, so it can only assert the
- * CSS ladder's numbers (see renderer/lib/__tests__/overlay-layers.test.ts). It
- * cannot answer the question the owner actually asked — "can I click the
- * folder?" That needs a real compositor and real hit-testing, which is what this
- * spec gets from the compiled Electron app.
+ * THE SECOND BUG (#114) is why the owner still reported "renders behind the
+ * modal" after #86 shipped, and it is the reason this spec grew an APPEARANCE
+ * half. `.file-picker-modal` paints itself with `background: var(--shell)` and
+ * `box-shadow: var(--shadow-xl)` — two tokens declared on `.gwrap`, the master
+ * page's wrapper. The picker is mounted outside that wrapper, so both resolved
+ * to nothing, the declarations went invalid-at-computed-value-time, and the
+ * longhands fell back to `transparent` / `none`. The panel was on top, and
+ * clickable, and completely see-through: the modal showed straight through it.
+ * Every assertion #86 left behind passed the whole time.
  *
- * The two assertions that matter are both hit-tests, not appearances:
- *   1. `document.elementFromPoint` at the picker's centre lands INSIDE the
- *      picker. Pre-fix it landed on the Add-workspace form on every OS — a
- *      `<select>` on Windows, a flex row on macOS/Linux.
- *   2. Playwright's own actionability check on the picker's buttons — a click
- *      fails with "intercepts pointer events" if anything overlays the target.
+ * WHY E2E: the unit suite runs in Node with no DOM, so it can only assert what
+ * the stylesheet SAYS (see renderer/lib/__tests__/overlay-layers.test.ts). Only
+ * a real compositor can answer the two questions the owner actually asked —
+ * "can I click the folder?" and "why can I see the modal through it?" — because
+ * both are about computed style and hit-testing, not source.
+ *
+ * So the assertions come in two kinds, and neither is an appearance snapshot:
+ *   1. HIT-TESTS. `document.elementFromPoint` at the picker's centre lands
+ *      INSIDE the picker (pre-#86 it landed on the Add-workspace form on every
+ *      OS — a `<select>` on Windows, a flex row on macOS/Linux), and
+ *      Playwright's own actionability check, which fails a click with
+ *      "intercepts pointer events" if anything overlays the target.
+ *   2. COMPUTED PAINT. The panel's resolved `background-color` is fully opaque
+ *      and its `box-shadow` is not `none` — i.e. the tokens actually resolved
+ *      where the picker renders. That is the #114 regression in one number.
  *
  * It also pins the layering's second-order rule: dismissing the picker (button
  * OR Escape) must leave the Add-workspace modal — and the user's input — intact.
@@ -104,6 +117,73 @@ test('the picker opened from the modal is the TOP layer at its own centre', asyn
     expect(hit!.pickerZ).toBeGreaterThan(hit!.modalZ);
 });
 
+test('the picker panel is OPAQUE — the modal behind it must not show through', async () => {
+    await openPicker(page);
+    // Same precondition as the hit-test above: the modal is still there, so
+    // "you cannot see it through the picker" is a claim about the picker's
+    // paint and not about an empty screen.
+    await expectModalStanding(page);
+
+    const paint = await page.evaluate((sel) => {
+        const panel = document.querySelector(sel) as HTMLElement | null;
+        if (!panel) return null;
+        const cs = getComputedStyle(panel);
+        // Chromium reports `rgba(0, 0, 0, 0)` for a background that never
+        // resolved and `rgb(r, g, b)` for an opaque one, so the alpha channel
+        // is the whole test: 3 components means opaque, 4 means read it.
+        const parts = /^rgba?\(([^)]+)\)$/
+            .exec(cs.backgroundColor)?.[1]
+            .split(',')
+            .map((s) => Number(s.trim()));
+        return {
+            backgroundColor: cs.backgroundColor,
+            alpha: parts ? (parts.length === 4 ? parts[3] : 1) : 0,
+            boxShadow: cs.boxShadow,
+        };
+    }, PICKER);
+
+    expect(paint, 'picker should be mounted').not.toBeNull();
+    expect(
+        paint!.alpha,
+        `the panel's computed background is "${paint!.backgroundColor}" — a see-through ` +
+            `panel shows the Add-workspace modal straight through it, which is what ` +
+            `"the picker renders behind the modal" actually looked like (genie #114). ` +
+            `It means var(--shell) resolved to nothing where the picker renders.`,
+    ).toBe(1);
+    expect(
+        paint!.boxShadow,
+        'var(--shadow-xl) resolved to nothing too — the panel has no elevation at all',
+    ).not.toBe('none');
+});
+
+test("the picker is portaled to Genie's overlay root — a direct child of <body>", async () => {
+    // Being a body child is what makes the layer robust rather than lucky:
+    // `--z-picker` only outranks the Fancy portal while nothing between the
+    // picker and the root forms a stacking context. Rendered in place, that was
+    // one `transform` on an ancestor away from silently breaking again — on
+    // whichever screen grew the property, which is why this is asserted
+    // structurally instead of trusted.
+    await openPicker(page);
+
+    const dom = await page.evaluate((sel) => {
+        const panel = document.querySelector(sel);
+        const host = panel?.parentElement?.parentElement ?? null;
+        if (!host) return null;
+        return {
+            hostId: host.id,
+            hostClass: host.className,
+            parentIsBody: host.parentElement === document.body,
+        };
+    }, PICKER);
+
+    expect(dom, 'picker should be mounted inside a host element').not.toBeNull();
+    expect(dom!.hostId).toBe('genie-overlay-root');
+    expect(dom!.parentIsBody, `overlay root sat inside "${dom!.hostId}", not <body>`).toBe(true);
+    // The class is not decoration — it carries the surface tokens the panel
+    // paints with, which is the other half of #114.
+    expect(dom!.hostClass.split(/\s+/)).toContain('genie-overlay-root');
+});
+
 test('the picker receives clicks — the folder tree is usable, not just visible', async () => {
     await openPicker(page);
     const picker = page.locator(PICKER);
@@ -118,6 +198,30 @@ test('the picker receives clicks — the folder tree is usable, not just visible
 
     await expect(picker).toHaveCount(0);
     // Dismissing a picker must not throw away the form behind it.
+    await expectModalStanding(page);
+});
+
+test('the folder tree itself takes the click — picking a row arms Choose', async () => {
+    // The reported repro in one test: the owner's complaint was never about the
+    // picker's own buttons, it was that the DRIVE LIST — the thing sitting in
+    // the middle of the panel, right over the Add-workspace form — could not be
+    // used. The previous test cancelled its picker, so this opens a fresh one
+    // and nothing is selected yet.
+    await openPicker(page);
+    const picker = page.locator(PICKER);
+    const choose = picker.getByRole('button', { name: 'Choose' });
+    await expect(choose).toBeDisabled();
+
+    // Windows lists drive letters here, macOS/Linux the root's children; either
+    // way the first row is a directory and directories are selectable in this
+    // mode, so the assertion is the same everywhere.
+    const row = picker.locator('[data-react-fancy-file-browser-row]').first();
+    await expect(row).toBeVisible();
+    // If anything overlays the tree, this click fails the actionability check
+    // with "intercepts pointer events" instead of selecting.
+    await row.click();
+
+    await expect(choose, 'clicking a folder should select it and arm Choose').toBeEnabled();
     await expectModalStanding(page);
 });
 
