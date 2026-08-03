@@ -7,7 +7,7 @@
  * a signing authority). What Genie ships in the box are the BUNDLED plugins:
  *   - Presentation      — dark-slide .pptx generation (Phase 1).
  *   - Spreadsheet       — holy-sheet .xlsx generation (Phase 1).
- *   - Document          — .md/.docx WYSIWYG editing (react-fancy Editor);
+ *   - Document          — .md/.mdc/.docx WYSIWYG editing (react-fancy Editor);
  *                         editors-only, no MCP tools.
  *
  * hello-world is deliberately NOT bundled or otherwise installable from here —
@@ -322,22 +322,23 @@ const SPREADSHEET_SOURCE: BundledPluginSource = {
 // --- Document (Markdown + Word WYSIWYG editing — editors-only) ---------------
 
 const DOCUMENT_TOOLS = `'use strict';
-// The Document plugin is EDITORS-ONLY: it claims .md/.markdown/.docx for the
-// react-fancy Editor host. It registers no MCP tools.
+// The Document plugin is EDITORS-ONLY: it claims .md/.markdown/.mdc/.docx for
+// the react-fancy Editor host. It registers no MCP tools.
 module.exports = {};
 `;
 
 const DOCUMENT_SOURCE: BundledPluginSource = {
     id: 'ai.genie.document',
     name: 'Document',
-    description: 'Edit Markdown and Word documents (.md, .docx) in a WYSIWYG editor.',
+    description:
+        'Edit Markdown, Cursor rules and Word documents (.md, .mdc, .docx) in a WYSIWYG editor.',
     manifest: {
         id: 'ai.genie.document',
         namespace: 'document',
         name: 'Document',
         version: '0.1.0',
         description:
-            'WYSIWYG editing for Markdown (.md) and Word (.docx) files with the react-fancy Editor. Markdown round-trips exactly; .docx opens and saves with basic fidelity (headings, lists, formatting, links, tables, embedded images) — Word-only features like tracked changes do not survive a save.',
+            'WYSIWYG editing for Markdown (.md, .markdown), Cursor rules (.mdc) and Word (.docx) files with the react-fancy Editor. Markdown round-trips exactly, and a YAML front-matter block is split off and edited through the "fm" pill rather than typed into the document; .docx opens and saves with basic fidelity (headings, lists, formatting, links, tables, embedded images) — Word-only features like tracked changes do not survive a save.',
         publisher: { name: 'Genie', url: 'https://github.com/Renaissance-Analytics/genie' },
         engines: { genie: '>=0.7.0' },
         entry: { tools: 'tools.cjs' },
@@ -346,7 +347,7 @@ const DOCUMENT_SOURCE: BundledPluginSource = {
             {
                 id: 'document',
                 title: 'Document',
-                extensions: ['.md', '.markdown', '.docx'],
+                extensions: ['.md', '.markdown', '.mdc', '.docx'],
                 fancyEditor: {
                     package: '@particle-academy/react-fancy',
                     version: '>=4.9.0',
@@ -355,7 +356,7 @@ const DOCUMENT_SOURCE: BundledPluginSource = {
             },
         ],
         capabilities: {
-            fs: { scope: 'workspace', extensions: ['.md', '.markdown', '.docx'] },
+            fs: { scope: 'workspace', extensions: ['.md', '.markdown', '.mdc', '.docx'] },
             network: { hosts: [] },
         },
     },

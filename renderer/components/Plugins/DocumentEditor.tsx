@@ -1,4 +1,7 @@
-import { Editor } from '@particle-academy/react-fancy';
+import { useState } from 'react';
+import { Badge, Drawer, Editor } from '@particle-academy/react-fancy';
+import FrontMatterDrawer from './FrontMatterDrawer';
+import { frontMatterPill } from '../../lib/front-matter';
 
 /**
  * The Document plugin's editor surface — react-fancy's compound `Editor`
@@ -13,6 +16,12 @@ import { Editor } from '@particle-academy/react-fancy';
  * it's markdown, so the editor must never SNIFF it: dev markdown routinely
  * mentions `<code>`/`<table`, which used to flip the sniff to 'html' and
  * render the raw markdown as one collapsed wall.
+ *
+ * `value` here is the document BODY, never the whole file: a `.md`/`.mdc` file's
+ * YAML front matter is split off upstream (PluginEditorBody + `lib/front-matter`)
+ * and reaches this component as `frontMatter`, edited through the fm pill and
+ * the drawer that falls from the top. The Fancy `Editor` is untouched — the
+ * pill, the drawer and the split are all genie-side chrome.
  */
 
 const ACTIONS = [
@@ -31,12 +40,25 @@ const ACTIONS = [
 export default function DocumentEditor({
     value,
     onChange,
+    frontMatter,
+    onFrontMatterChange,
 }: {
-    /** The document as MARKDOWN (the model both .md and .docx open into). */
+    /** The document BODY as MARKDOWN (front matter, if any, arrives separately). */
     value: string;
     onChange: (v: string) => void;
+    /**
+     * The file's YAML front matter — `''` for an empty block, `null` when the
+     * file has none. Omit entirely for file types that cannot carry one
+     * (`.docx`); the fm pill then stays off.
+     */
+    frontMatter?: string | null;
+    onFrontMatterChange?: (v: string | null) => void;
 }) {
-    return (
+    const [drawerOpen, setDrawerOpen] = useState(false);
+    const canEditFrontMatter = frontMatter !== undefined && !!onFrontMatterChange;
+    const pill = frontMatterPill(frontMatter ?? null);
+
+    const editor = (
         <Editor
             value={value}
             onChange={onChange}
@@ -47,5 +69,37 @@ export default function DocumentEditor({
             <Editor.Toolbar actions={ACTIONS} />
             <Editor.Content className="flex-1 overflow-y-auto" />
         </Editor>
+    );
+
+    if (!canEditFrontMatter) return editor;
+
+    return (
+        <Drawer.Container className="doc-shell">
+            <div className="doc-chrome">
+                <button
+                    type="button"
+                    className="fm-pill"
+                    onClick={() => setDrawerOpen((o) => !o)}
+                    title={pill.title}
+                    aria-expanded={drawerOpen}
+                >
+                    <Badge
+                        size="sm"
+                        variant={pill.present ? 'soft' : 'outline'}
+                        color={pill.present ? 'violet' : 'zinc'}
+                        dot={pill.present}
+                    >
+                        {pill.label}
+                    </Badge>
+                </button>
+            </div>
+            {editor}
+            <FrontMatterDrawer
+                open={drawerOpen}
+                onClose={() => setDrawerOpen(false)}
+                value={frontMatter ?? null}
+                onChange={onFrontMatterChange!}
+            />
+        </Drawer.Container>
     );
 }

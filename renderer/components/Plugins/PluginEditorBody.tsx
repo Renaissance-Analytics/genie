@@ -17,6 +17,12 @@ import {
     holyBytesFromWorkbook,
     workbookFromHolyBytes,
 } from '../../lib/plugin-editor-models';
+import {
+    joinFrontMatter,
+    parseFrontMatter,
+    supportsFrontMatter,
+    type ParsedFrontMatter,
+} from '../../lib/front-matter';
 import { api } from '../../lib/genie';
 
 /**
@@ -33,6 +39,13 @@ import { api } from '../../lib/genie';
  * Data flow (save):  model -> writer -> bytes -> guarded binary write.
  * The parent drives save (its save button / Ctrl+S) via `registerSave`, and
  * mirrors the dirty flag via `onDirtyChange`.
+ *
+ * A markdown file's YAML front matter is split off here, between the read and
+ * the editor: the WYSIWYG's model is the markdown STRING, so a `---` block
+ * handed to it renders as prose and is rewritten on the first keystroke. The
+ * BODY goes to the editor, the block goes to the fm pill + drawer, and save
+ * recombines them — byte-identically when nobody touched the block (see
+ * `lib/front-matter`).
  */
 
 const DeckEditorLazy = lazy(() =>
@@ -89,6 +102,10 @@ export default function PluginEditorBody({
     const [deck, setDeck] = useState<Deck | null>(null);
     const [workbook, setWorkbook] = useState<WorkbookData | null>(null);
     const [docText, setDocText] = useState<string | null>(null);
+    /** The file's front-matter YAML, and the parse that puts it back verbatim.
+     *  Both null for a file type that carries no front matter (.docx). */
+    const [frontMatter, setFrontMatter] = useState<string | null>(null);
+    const [split, setSplit] = useState<ParsedFrontMatter | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [presenting, setPresenting] = useState(false);
@@ -99,14 +116,27 @@ export default function PluginEditorBody({
     workbookRef.current = workbook;
     const docTextRef = useRef<string | null>(null);
     docTextRef.current = docText;
+    const frontMatterRef = useRef<string | null>(null);
+    frontMatterRef.current = frontMatter;
+    const splitRef = useRef<ParsedFrontMatter | null>(null);
+    splitRef.current = split;
     const onDirtyRef = useRef(onDirtyChange);
     onDirtyRef.current = onDirtyChange;
 
     const markDirty = useCallback(() => onDirtyRef.current?.(true), []);
+    const changeFrontMatter = useCallback(
+        (v: string | null) => {
+            setFrontMatter(v);
+            markDirty();
+        },
+        [markDirty],
+    );
 
     // The Document editor's model is a MARKDOWN string for both file types;
     // .docx converts at the main-side seam (plugins:document-convert).
     const isDocx = /\.docx$/i.test(file);
+    // .docx is markdown-shaped but binary — no `---` block to split off.
+    const hasFrontMatter = kind === 'doc' && !isDocx && supportsFrontMatter(file);
 
     // Open: guarded binary read -> reader -> model.
     useEffect(() => {
@@ -131,7 +161,17 @@ export default function PluginEditorBody({
                     } else {
                         md = new TextDecoder('utf-8').decode(base64ToBytes(res.value.base64));
                     }
-                    if (alive) setDocText(md);
+                    if (!alive) return;
+                    if (hasFrontMatter) {
+                        const p = parseFrontMatter(md);
+                        setSplit(p);
+                        setFrontMatter(p.frontMatter);
+                        setDocText(p.body);
+                    } else {
+                        setSplit(null);
+                        setFrontMatter(null);
+                        setDocText(md);
+                    }
                     return;
                 }
                 const bytes = base64ToBytes(res.value.base64);
@@ -147,12 +187,13 @@ export default function PluginEditorBody({
         return () => {
             alive = false;
         };
-    }, [pluginId, root, file, kind, isDocx]);
+    }, [pluginId, root, file, kind, isDocx, hasFrontMatter]);
 
     // Save: model -> writer -> bytes -> guarded binary write.
     const save = useCallback(async () => {
         try {
             let base64: string;
+            let written: string | null = null;
             if (kind === 'doc') {
                 if (docTextRef.current === null) return;
                 if (isDocx) {
@@ -165,7 +206,16 @@ export default function PluginEditorBody({
                     }
                     base64 = conv.base64;
                 } else {
-                    base64 = bytesToBase64(new TextEncoder().encode(docTextRef.current));
+                    // Front matter back on top of the body — the block's own
+                    // bytes when the drawer never touched it.
+                    written = splitRef.current
+                        ? joinFrontMatter(
+                              splitRef.current,
+                              frontMatterRef.current,
+                              docTextRef.current,
+                          )
+                        : docTextRef.current;
+                    base64 = bytesToBase64(new TextEncoder().encode(written));
                 }
             } else if (kind === 'sheet') {
                 if (!workbookRef.current) return;
@@ -176,6 +226,11 @@ export default function PluginEditorBody({
             }
             const res = await api().plugins.editorWrite(pluginId, root, file, base64);
             if (!res.ok) throw new Error(res.error || 'Could not save the file.');
+            // Re-anchor the split on what is now ON DISK, so the next save's
+            // "nothing changed" fast path compares against the saved file. Only
+            // for a file that HAD a split — never mint one for a file type that
+            // carries no front matter.
+            if (written !== null && splitRef.current) setSplit(parseFrontMatter(written));
             onDirtyRef.current?.(false);
             setError(null);
         } catch (e) {
@@ -218,6 +273,10 @@ export default function PluginEditorBody({
                         setDocText(v);
                         markDirty();
                     }}
+                    // Both undefined for a file type with no front matter —
+                    // that is what keeps the fm pill off a .docx.
+                    frontMatter={split ? frontMatter : undefined}
+                    onFrontMatterChange={split ? changeFrontMatter : undefined}
                 />
             </Suspense>
         ) : null;
