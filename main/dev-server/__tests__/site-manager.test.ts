@@ -1,7 +1,13 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createDevSiteManager } from '../site-manager';
-import { defaultGenNameFor, devSiteIdFor, parseDevSites, sanitizeDevSitePatch } from '../sites-config';
+import {
+    defaultGenNameFor,
+    devSiteIdFor,
+    devSiteReconfigureNeedsRestart,
+    parseDevSites,
+    sanitizeDevSitePatch,
+} from '../sites-config';
 import { SITE_LABEL, siteContainerNameFor } from '../argv';
 import type { DevSiteConfig, DevSites } from '../sites-config';
 import type {
@@ -496,6 +502,172 @@ describe('reconcile', () => {
         sites[SITE_ID] = { ...SITE, enabled: false };
         await m.reconcile();
         expect(m.genSites()).toEqual([]);
+    });
+});
+
+// --- reconfigure: editing a site after create (Gap 1) -----------------------
+
+describe('devSiteReconfigureNeedsRestart', () => {
+    it('is true when a build / serve / port / env / image / routing field changed', () => {
+        expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, port: 9000 })).toBe(true);
+        expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, serve: ['./other'] })).toBe(true);
+        expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, env: { X: '1' } })).toBe(true);
+        expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, image: 'nginx:1' })).toBe(true);
+        expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, genName: 'web.new.gen' })).toBe(true);
+        expect(
+            devSiteReconfigureNeedsRestart(SITE, {
+                ...SITE,
+                build: [{ label: 'C', command: ['go', 'build', '.'] }],
+            }),
+        ).toBe(true);
+    });
+
+    it('is false for a cosmetic-only change — nothing the container depends on moved', () => {
+        // Toggling `enabled` is not a container change: a stopped site stays
+        // stopped, a running one keeps running. Re-saving with no edit is a no-op.
+        expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, enabled: !SITE.enabled })).toBe(false);
+        expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE })).toBe(false);
+    });
+});
+
+describe('reconfigure', () => {
+    it('rebuilds and restarts a RUNNING site when a restart-requiring field changed', async () => {
+        const runtime = fakeRuntime();
+        const sites: DevSites = { [SITE_ID]: { ...SITE } };
+        const m = manager(runtime, sites);
+        await m.start('acme', SITE_ID);
+        const ranBefore = runtime.ran.length;
+
+        sites[SITE_ID] = { ...SITE, port: 9000 };
+        const status = await m.reconfigure('acme', SITE_ID, {
+            previousSiteId: SITE_ID,
+            restart: true,
+        });
+
+        expect(status.state).toBe('running');
+        // The old container was torn down and a fresh one started (a published
+        // port is fixed at create time, so a port change can only take effect
+        // on a new container).
+        expect(runtime.removed.length).toBeGreaterThan(0);
+        expect(runtime.ran.length).toBe(ranBefore + 1);
+        expect(runtime.ran.at(-1)?.ports).toEqual([{ container: 9000, hostIp: '127.0.0.1' }]);
+    });
+
+    it('leaves a running site EXACTLY as it is when nothing that matters changed', async () => {
+        const runtime = fakeRuntime();
+        const m = manager(runtime);
+        await m.start('acme', SITE_ID);
+        const ranBefore = runtime.ran.length;
+        const removedBefore = runtime.removed.length;
+
+        const status = await m.reconfigure('acme', SITE_ID, {
+            previousSiteId: SITE_ID,
+            restart: false,
+        });
+
+        expect(status.state).toBe('running');
+        expect(runtime.ran.length).toBe(ranBefore); // no new container
+        expect(runtime.removed.length).toBe(removedBefore); // nothing torn down
+    });
+
+    it('does NOT start a STOPPED site — an edit is not a start', async () => {
+        const runtime = fakeRuntime();
+        const m = manager(runtime);
+        const status = await m.reconfigure('acme', SITE_ID, {
+            previousSiteId: SITE_ID,
+            restart: false,
+        });
+        expect(status.state).toBe('stopped');
+        expect(runtime.ran).toHaveLength(0);
+    });
+
+    it('moves a running site onto its new container + `.gen` when the name changed', async () => {
+        const runtime = fakeRuntime();
+        const NEW_ID = devSiteIdFor('acme', 'web2');
+        const sites: DevSites = { [SITE_ID]: { ...SITE } };
+        const m = manager(runtime, sites);
+        await m.start('acme', SITE_ID);
+
+        // A rename moves the map key (as setWorkspaceDevSite does on the real path).
+        delete sites[SITE_ID];
+        sites[NEW_ID] = { ...SITE, name: 'web2', genName: 'web2.acme.gen' };
+        const status = await m.reconfigure('acme', NEW_ID, {
+            previousSiteId: SITE_ID,
+            restart: true,
+        });
+
+        expect(status.state).toBe('running');
+        expect(status.genName).toBe('web2.acme.gen');
+        expect(runtime.removed).toContain(`id-${siteContainerNameFor('acme', 'web')}`);
+        expect(runtime.ran.some((s) => s.name === siteContainerNameFor('acme', 'web2'))).toBe(true);
+        // The old id is no longer advertised to the Genie Browser.
+        expect(m.genSites().map((g) => g.siteId)).toEqual([NEW_ID]);
+    });
+});
+
+// --- observable startup (Gap 2) ---------------------------------------------
+
+describe('startup progress', () => {
+    it('emits pulling → building → starting → ready as a start proceeds', async () => {
+        const runtime = fakeRuntime();
+        const phases: string[] = [];
+        const m = manager(runtime, undefined, {
+            onProgress: (p) => phases.push(p.phase),
+        });
+        await m.start('acme', SITE_ID);
+        // SITE carries a build step, so all four phases are visited in order.
+        expect(phases[0]).toBe('pulling');
+        expect(phases).toContain('building');
+        expect(phases).toContain('starting');
+        expect(phases.at(-1)).toBe('ready');
+        // The order is monotonic — building never comes after starting.
+        expect(phases.indexOf('building')).toBeLessThan(phases.indexOf('starting'));
+    });
+
+    it('streams the build log through progress, tagged with the site it belongs to', async () => {
+        const runtime = fakeRuntime();
+        const buildingLogs: string[] = [];
+        const m = manager(runtime, undefined, {
+            onProgress: (p) => {
+                if (p.phase === 'building' && p.log) {
+                    expect(p.siteId).toBe(SITE_ID);
+                    buildingLogs.push(p.log);
+                }
+            },
+        });
+        await m.start('acme', SITE_ID);
+        // runSiteBuild echoes each step header ("$ <cmd>   # <label>") to
+        // onProgress, and the manager routes that to the building site's card.
+        expect(buildingLogs.some((l) => l.includes('# Compile'))).toBe(true);
+    });
+
+    it('ends a failed start on a `failed` phase carrying the reason', async () => {
+        const runtime = fakeRuntime();
+        const events: Array<{ phase: string; error?: string }> = [];
+        const sites: DevSites = { [SITE_ID]: { ...SITE, port: undefined } };
+        const m = manager(runtime, sites, {
+            onProgress: (p) => events.push({ phase: p.phase, error: p.error }),
+        });
+        await m.start('acme', SITE_ID);
+        const last = events.at(-1);
+        expect(last?.phase).toBe('failed');
+        expect(last?.error).toMatch(/port/i);
+    });
+
+    it('surfaces the in-flight phase + log on `list` for a panel opened mid-start', async () => {
+        // A card that mounts while a build is running must be able to read the
+        // current phase from a plain `list`, not only from the push stream.
+        const runtime = fakeRuntime();
+        let phaseFromList: string | undefined;
+        const m = manager(runtime, undefined, {
+            onProgress: (p) => {
+                if (p.phase === 'building' && phaseFromList === undefined) {
+                    phaseFromList = m.list('acme')[0]?.phase;
+                }
+            },
+        });
+        await m.start('acme', SITE_ID);
+        expect(phaseFromList).toBe('building');
     });
 });
 

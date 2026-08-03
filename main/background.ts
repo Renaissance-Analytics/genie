@@ -165,7 +165,11 @@ import {
     provisionTargets,
     opsAutoProvisionEnabled,
 } from './tynn/ops-provision';
-import { broadcastDevServerChanged, broadcastWorkspacesChanged } from './ipc';
+import {
+    broadcastDevServerChanged,
+    broadcastDevSiteProgress,
+    broadcastWorkspacesChanged,
+} from './ipc';
 import {
     initTerminalBackend,
     isHostBacked,
@@ -1087,6 +1091,10 @@ app.whenReady().then(async () => {
         // Site Manager and the Testing Browser's resolver all re-pull when a
         // container starts or stops.
         onChanged: () => broadcastDevServerChanged(),
+        // Live START progress (Gap 2) — pushed to any open Site Manager so a
+        // card shows `pulling → building → starting → ready` with the build log
+        // streaming, instead of a disabled button until the whole build finishes.
+        onProgress: (progress) => broadcastDevSiteProgress(progress),
     });
     // The app LIFECYCLE hooks (#234 P4). Created after both managers because it
     // orchestrates them, and reading them lazily so the order stops mattering.

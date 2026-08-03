@@ -87,6 +87,38 @@ import type { ImagePullConsent } from './workspace-sandbox';
 
 export type DevSiteState = 'running' | 'stopped' | 'failed';
 
+/**
+ * The transient stages a START passes through, surfaced so the card can show
+ * something the instant the button is clicked instead of a dead disabled button
+ * until the whole build+start finishes (Gap 2).
+ *
+ *   pulling  — resolving the runtime + ensuring the workspace sandbox (an image
+ *              pull streams here on a cold machine)
+ *   building — the production build is running (its log streams live)
+ *   starting — the site container is being created and its port probed
+ *   ready    — terminal: the container is up and the port answered (serving)
+ *   failed   — terminal: it did not come up, and `error` says why
+ *
+ * `ready`/`failed` are the END of a start; the durable truth then lives in the
+ * row's {@link DevSiteState} (`running` + `ready`, or `failed`). A phase is only
+ * ever set WHILE a start is in flight.
+ */
+export type DevSitePhase = 'pulling' | 'building' | 'starting' | 'ready' | 'failed';
+
+/** One live progress tick for a starting site, pushed to the renderer (and the
+ *  remote bridge) so a card reflects a build as it happens rather than at the end. */
+export interface DevSiteProgress {
+    workspaceId: string;
+    siteId: string;
+    name: string;
+    genName: string;
+    phase: DevSitePhase;
+    /** The accumulated build/pull log tail, when there is one to tail. */
+    log?: string;
+    /** Set on `failed`: the reason the start did not complete. */
+    error?: string;
+}
+
 export interface DevSiteStatus {
     siteId: string;
     workspaceId: string;
@@ -133,6 +165,14 @@ export interface DevSiteRow extends DevSiteStatus {
     serve?: string[];
     port?: number;
     image?: string;
+    /** The stored env + upstream Host, so the Edit form can prefill them (they
+     *  are not otherwise visible on a row). `exposed` is deliberately NOT here —
+     *  the base status already uses it for the RESOLVED runtime routes. */
+    env?: DevSiteConfig['env'];
+    upstreamHost?: DevSiteConfig['upstreamHost'];
+    /** Set ONLY while a start is in flight (Gap 2): the transient stage a card
+     *  reflects live. Absent on a settled row — read `state`/`ready` then. */
+    phase?: DevSitePhase;
 }
 
 /** A running site as the Testing Browser reads it. Structurally the
@@ -224,6 +264,16 @@ export interface DevSiteManagerDeps {
     githubToken?: () => string | null | undefined;
     /** Fired whenever the live set changes, so the UX and other agents follow. */
     onChanged?: () => void;
+    /**
+     * A live START tick (Gap 2). Fired at each phase boundary and on every
+     * build/pull log chunk, so the Site Manager card shows a site coming up —
+     * `pulling → building → starting → ready|failed`, with the build log
+     * streaming — instead of a disabled button until the whole thing finishes.
+     *
+     * Distinct from {@link onChanged}: that says "re-read the list", this carries
+     * the in-flight detail without a round trip. A listener must never throw.
+     */
+    onProgress?: (progress: DevSiteProgress) => void;
 }
 
 export interface DevSiteManager {
@@ -231,6 +281,19 @@ export interface DevSiteManager {
     start(workspaceId: string, siteId: string): Promise<DevSiteStatus>;
     stop(siteId: string): Promise<void>;
     restart(workspaceId: string, siteId: string): Promise<DevSiteStatus>;
+    /**
+     * Apply an edited config to a site (Gap 1). Rebuild + restart it when the
+     * change requires it (`restart: true` — a running site whose port / build /
+     * serve / env / image / routing moved), otherwise leave the container exactly
+     * as it is. `previousSiteId` differs from `siteId` only on a RENAME, where the
+     * old container (under the old name) is torn down and a new one started.
+     * Never throws — a failure is a failed status, like {@link start}.
+     */
+    reconfigure(
+        workspaceId: string,
+        siteId: string,
+        opts: { previousSiteId: string; restart: boolean },
+    ): Promise<DevSiteStatus>;
     /**
      * Re-attach to site containers that are ALREADY running — never start one.
      *
@@ -277,6 +340,103 @@ const messageOf = (e: unknown): string => (e instanceof Error ? e.message : Stri
 const ADOPT_PROBE_MS = 2_000;
 
 export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
+    // --- observable startup (Gap 2) -----------------------------------------
+    //
+    // A start streams through phases and a build log. The pull + build already
+    // write chunks to `deps.onImagePullProgress`; we SHADOW that dep with a pump
+    // that both preserves the original sink AND tags each chunk with the site it
+    // belongs to, so the existing threading (sandbox / buildImage / runSiteBuild)
+    // feeds the renderer with no change to any of those call sites. `inFlight`
+    // holds the transient phase + accumulated log per starting site; it is the
+    // ONLY place a phase ever lives (a settled row reads `state`/`ready`).
+    const originalPull = deps.onImagePullProgress;
+    const inFlight = new Map<
+        string,
+        { workspaceId: string; name: string; genName: string; phase: DevSitePhase; log: string }
+    >();
+    /** The site the next progress chunk belongs to (set at each phase boundary). */
+    let chunkTarget: string | null = null;
+    /** Enough of a live build/pull tail to read, without unbounded growth. */
+    const MAX_PROGRESS_LOG = 16_000;
+
+    const emitProgress = (siteId: string, extra: Partial<DevSiteProgress> = {}): void => {
+        const f = inFlight.get(siteId);
+        if (!f || !deps.onProgress) return;
+        try {
+            deps.onProgress({
+                workspaceId: f.workspaceId,
+                siteId,
+                name: f.name,
+                genName: f.genName,
+                phase: f.phase,
+                ...(f.log ? { log: f.log } : {}),
+                ...extra,
+            });
+        } catch {
+            /* a progress listener must never be able to fail a start */
+        }
+    };
+
+    /** Enter a phase for a starting site (and route its log chunks here). */
+    const beginPhase = (
+        workspaceId: string,
+        siteId: string,
+        config: DevSiteConfig,
+        phase: DevSitePhase,
+    ): void => {
+        const prev = inFlight.get(siteId);
+        inFlight.set(siteId, {
+            workspaceId,
+            name: config.name,
+            genName: config.genName,
+            phase,
+            log: prev?.log ?? '',
+        });
+        chunkTarget = siteId;
+        emitProgress(siteId);
+    };
+
+    /** The shadowed progress sink: keep the original behaviour, and tag the
+     *  chunk with the current in-flight site so a card can tail it. */
+    const pump = (chunk: string): void => {
+        originalPull?.(chunk);
+        const siteId = chunkTarget;
+        if (!siteId) return;
+        const f = inFlight.get(siteId);
+        if (!f) return;
+        f.log = (f.log + chunk).slice(-MAX_PROGRESS_LOG);
+        emitProgress(siteId, { log: f.log });
+    };
+
+    /** Terminal tick: announce ready|failed, then forget the transient phase so
+     *  `list()` reads the real state from here on. */
+    const finishProgress = (siteId: string, status: DevSiteStatus): void => {
+        const f = inFlight.get(siteId);
+        if (!f) return;
+        const phase: DevSitePhase = status.state === 'running' ? 'ready' : 'failed';
+        const log = status.buildLog ?? (f.log || undefined);
+        if (deps.onProgress) {
+            try {
+                deps.onProgress({
+                    workspaceId: f.workspaceId,
+                    siteId,
+                    name: f.name,
+                    genName: f.genName,
+                    phase,
+                    ...(log ? { log } : {}),
+                    ...(status.error ? { error: status.error } : {}),
+                });
+            } catch {
+                /* never let a listener fail a start */
+            }
+        }
+        inFlight.delete(siteId);
+        if (chunkTarget === siteId) chunkTarget = null;
+    };
+
+    // Everything below reads `deps.onImagePullProgress`; from here it is the pump.
+    deps = { ...deps, onImagePullProgress: pump };
+
     const devImage = deps.image ?? GENIE_DEV_BASE_IMAGE;
     const mountTarget = deps.mountTarget ?? WORKSPACE_MOUNT_TARGET;
     const platform = deps.platform ?? process.platform;
@@ -346,6 +506,12 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         }
         const { workspace, config } = found;
 
+        // The instant a start begins — so the card leaves "off" the moment the
+        // button is clicked, not when the whole build finishes (Gap 2). Covers
+        // runtime resolution + the sandbox ensure, where a cold image pull
+        // streams its progress.
+        beginPhase(workspaceId, siteId, config, 'pulling');
+
         const { runtime, detection } = await deps.resolveRuntime();
         if (!runtime || detection.kind === 'none') {
             // The guided-install path, not an error — the message has to carry
@@ -388,6 +554,12 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                         ? `${sandbox.message} ${sandbox.installHint}`
                         : sandbox.message,
                 );
+            }
+
+            // The build stage (Gap 2): a Dockerfile image build and/or the
+            // production build steps below. Their logs stream through the pump.
+            if (run.needsBuild || run.build.length) {
+                beginPhase(workspaceId, siteId, config, 'building');
             }
 
             let image = run.image;
@@ -496,6 +668,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                     };
                 }
             }
+
+            // The build (if any) is done; the container is about to be created
+            // and its port probed (Gap 2).
+            beginPhase(workspaceId, siteId, config, 'starting');
 
             const exposure = planExposure({
                 siteId,
@@ -685,12 +861,15 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
     }
 
     async function start(workspaceId: string, siteId: string): Promise<DevSiteStatus> {
-        const inFlight = starting.get(siteId);
-        if (inFlight) return inFlight;
+        const pending = starting.get(siteId);
+        if (pending) return pending;
         const promise = startOnce(workspaceId, siteId)
             .then((status) => {
                 if (status.state === 'running') lastFailure.delete(siteId);
                 else lastFailure.set(siteId, status);
+                // Terminal progress tick (Gap 2): announce ready|failed and drop
+                // the transient phase so the row settles to its real state.
+                finishProgress(siteId, status);
                 return status;
             })
             .finally(() => starting.delete(siteId));
@@ -728,6 +907,56 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             return start(workspaceId, siteId);
         },
 
+        async reconfigure(workspaceId, siteId, opts) {
+            const { previousSiteId, restart } = opts;
+
+            // A restart-requiring edit on a running site: tear the old container
+            // down (under its OLD id/name, which a rename changes) and bring a
+            // fresh one up on the new definition. This is also the rename path.
+            if (restart) {
+                await stop(previousSiteId);
+                if (previousSiteId !== siteId) lastFailure.delete(previousSiteId);
+                return start(workspaceId, siteId);
+            }
+
+            // No restart needed. If it is running, keep it exactly as it is —
+            // only refresh the live config so a cosmetic field reads current
+            // (and carry the entry across an id change, though a no-restart edit
+            // never renames).
+            const found = findSite(workspaceId, siteId);
+            const entry = live.get(previousSiteId);
+            if (entry && found) {
+                if (previousSiteId !== siteId) live.delete(previousSiteId);
+                const next: Live = { ...entry, siteId, config: found.config };
+                live.set(siteId, next);
+                changed();
+                return statusOf(workspaceId, siteId, found.config, next);
+            }
+
+            // Not running: the persisted edit is already stored; there is nothing
+            // to reconcile on the container. Report the current state.
+            if (previousSiteId !== siteId) lastFailure.delete(previousSiteId);
+            changed();
+            if (!found) {
+                return failed(
+                    workspaceId,
+                    siteId,
+                    null,
+                    `Site ${siteId} is not configured in workspace ${workspaceId}.`,
+                );
+            }
+            const failure = lastFailure.get(siteId);
+            return (
+                failure ?? {
+                    siteId,
+                    workspaceId,
+                    name: found.config.name,
+                    genName: found.config.genName,
+                    state: 'stopped' as const,
+                }
+            );
+        },
+
         async adopt() {
             const { runtime } = await deps.resolveRuntime();
             if (!runtime) return;
@@ -761,6 +990,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 if (workspaceId && workspace.id !== workspaceId) continue;
                 for (const [siteId, config] of Object.entries(deps.devSitesFor(workspace.id))) {
                     const entry = live.get(siteId);
+                    // A start in flight (Gap 2): overlay its transient phase +
+                    // live log so a card that mounts mid-build reads the current
+                    // stage from a plain `list`, not only from the push stream.
+                    const flight = inFlight.get(siteId);
                     const status = entry
                         ? statusOf(workspace.id, siteId, config, entry)
                         : lastFailure.get(siteId) ?? {
@@ -786,6 +1019,16 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                         ...(config.serve ? { serve: config.serve } : {}),
                         ...(config.port ? { port: config.port } : {}),
                         ...(config.image ? { image: config.image } : {}),
+                        // Stored env + upstream Host, so the Edit form can prefill
+                        // fields a running row does not otherwise carry.
+                        ...(config.env && Object.keys(config.env).length ? { env: config.env } : {}),
+                        ...(config.upstreamHost ? { upstreamHost: config.upstreamHost } : {}),
+                        ...(flight
+                            ? {
+                                  phase: flight.phase,
+                                  ...(flight.log ? { buildLog: flight.log } : {}),
+                              }
+                            : {}),
                     });
                 }
             }

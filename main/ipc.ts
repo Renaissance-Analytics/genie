@@ -164,6 +164,7 @@ import { devLifecycle } from './dev-server/lifecycle';
 import { workstationDevServerInfo, workstationEngineAction } from './dev-server/workstation';
 import type { EngineActionRequest } from './dev-server/services/service-manager';
 import type { ManageServiceRequest, ManageSiteRequest } from './mcp/protocol';
+import type { DevSiteProgress } from './dev-server/site-manager';
 import { remoteGenUrl } from './sites/gen-url';
 import {
     openTestingBrowser,
@@ -1444,6 +1445,21 @@ function genieBrowserDisabled(): { ok: false; error: string } | null {
  */
 export function broadcastDevServerChanged(): void {
     broadcastLocal('dev-server:changed');
+}
+
+/**
+ * Push one live START tick (Gap 2) so an open Site Manager card reflects a site
+ * coming up — `pulling → building → starting → ready|failed`, with the build log
+ * streaming — instead of a disabled button until the whole build finishes.
+ *
+ * LOCAL-only, exactly like {@link broadcastDevServerChanged}: it drives THIS
+ * machine's containers, so a host window (showing the HOST's workspaces) must not
+ * repaint from a local site's build progress. High-frequency (a chunk per log
+ * line), which is why it is a distinct, payload-carrying channel rather than a
+ * coarse "re-read everything" event.
+ */
+export function broadcastDevSiteProgress(progress: DevSiteProgress): void {
+    broadcastLocal('dev-server:site-progress', progress);
 }
 
 /**

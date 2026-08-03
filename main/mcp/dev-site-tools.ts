@@ -4,7 +4,12 @@ import {
     getWorkspaceDevSites,
     setWorkspaceDevSite,
 } from '../db';
-import { devSiteIdFor, defaultGenNameFor, slugLabel } from '../dev-server/sites-config';
+import {
+    devSiteIdFor,
+    defaultGenNameFor,
+    devSiteReconfigureNeedsRestart,
+    slugLabel,
+} from '../dev-server/sites-config';
 import { describeRepoRun } from '../dev-server/repo-facts';
 import { devSiteManager } from '../dev-server/site-manager';
 import { resolveContainerRuntime } from '../dev-server';
@@ -144,6 +149,11 @@ function toInfo(row: DevSiteRow): DevSiteInfo {
         ...(row.image ? { image: row.image } : {}),
         ...(row.buildLog ? { buildLog: row.buildLog } : {}),
         ...(row.exposed?.length ? { exposed: row.exposed } : {}),
+        // Stored env + upstream Host, so the human Edit form can prefill them.
+        ...(row.env && Object.keys(row.env).length ? { env: row.env } : {}),
+        ...(row.upstreamHost ? { upstreamHost: row.upstreamHost } : {}),
+        // The transient start phase, present only while a start is in flight.
+        ...(row.phase ? { phase: row.phase } : {}),
         ...(row.error ? { error: row.error } : {}),
     };
 }
@@ -398,6 +408,61 @@ export async function runManageSite(
                     },
                     ...(options ? { options: options.map(toOption) } : {}),
                     ...(applied ? { applied: toOption(applied) } : {}),
+                };
+            }
+
+            case 'update': {
+                const target = targetSite();
+                if ('error' in target) return fail(target.error);
+                const before = target.config;
+
+                // A patch of ONLY the fields the caller named — anything omitted
+                // is left exactly as stored (see setWorkspaceDevSite's merge).
+                const patch: Partial<DevSiteConfig> & { siteId: string } = {
+                    siteId: target.siteId,
+                };
+                if (req.name !== undefined) patch.name = req.name;
+                if (req.genName !== undefined) patch.genName = req.genName;
+                if (req.repo !== undefined) patch.repo = req.repo;
+                if (req.runMode !== undefined) patch.runMode = req.runMode;
+                if (req.image !== undefined) patch.image = req.image;
+                if (req.build !== undefined) patch.build = toBuildSteps(req.build);
+                if (req.serve !== undefined) patch.serve = req.serve;
+                if (req.port !== undefined) patch.port = req.port;
+                if (req.exposed !== undefined) patch.exposed = req.exposed as never;
+                if (req.env !== undefined) patch.env = req.env;
+                if (req.kind !== undefined) patch.kind = req.kind;
+                if (req.upstreamHost !== undefined) patch.upstreamHost = req.upstreamHost;
+                if (req.enabled !== undefined) patch.enabled = req.enabled;
+
+                // Read live state under the CURRENT id BEFORE persisting — a
+                // rename moves the config to a new id, so afterwards the manager
+                // could no longer find the old-id container that is still running.
+                const running =
+                    manager.list(ws.id).find((s) => s.siteId === target.siteId)?.state === 'running';
+
+                const newId = setWorkspaceDevSite(ws.id, patch);
+                if (!newId) {
+                    return fail(
+                        'That change would make the site unusable. A `name` must be a DNS label, a `genName` must end in `.gen`, and an `exposed` surface must carry a `reason` naming what the BROWSER needs it for.',
+                    );
+                }
+                const after = getWorkspaceDevSites(ws.id)[newId];
+
+                // Only a RUNNING site whose container facts moved needs the
+                // rebuild/restart; a stopped site, or a cosmetic edit, is left as
+                // it is. `previousSiteId` differs only on a rename.
+                const restart = running && devSiteReconfigureNeedsRestart(before, after);
+                const status = await manager.reconfigure(ws.id, newId, {
+                    previousSiteId: target.siteId,
+                    restart,
+                });
+                return {
+                    ok: status.state !== 'failed',
+                    ...(status.error ? { error: status.error } : {}),
+                    sites: sites(),
+                    affectedId: newId,
+                    runtime,
                 };
             }
 

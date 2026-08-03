@@ -576,6 +576,14 @@ export interface DevSiteInfo {
     /** Extra BROWSER-FACING surfaces, as they ended up. A raw one (gRPC/TCP)
      *  carries the stable `hostPort` a client dials. */
     exposed?: Array<{ name: string; protocol: string; genName: string; hostPort?: number }>;
+    /** The stored environment, so the human Edit form can prefill it. */
+    env?: Record<string, string>;
+    /** The Host header sent upstream, when overridden from the `.gen` name. */
+    upstreamHost?: string;
+    /** The transient start stage, present ONLY while a start is in flight:
+     *  `pulling` → `building` → `starting` → `ready`|`failed`. A settled row omits
+     *  it — read `state`/`ready` then. Surfaces observable startup (Gap 2). */
+    phase?: 'pulling' | 'building' | 'starting' | 'ready' | 'failed';
     error?: string;
 }
 
@@ -606,6 +614,7 @@ export interface ManageSiteRequest {
         | 'list'
         | 'detect'
         | 'create'
+        | 'update'
         | 'start'
         | 'stop'
         | 'restart'
@@ -1416,7 +1425,7 @@ const PROVISION_WORKSPACES_TOOL = {
 const MANAGE_SITE_TOOL = {
     name: 'manageSite',
     description:
-        "HOST a repo the way it runs in PRODUCTION — Genie BUILDS it, then serves the built artifact with a real production server, in this workspace's container sandbox, at a stable `https://<name>.gen` origin reachable whether the viewer is on this machine or connected remotely. This is not a dev-server launcher: nothing here runs `npm run dev`, `artisan serve`, `manage.py runserver` or `go run`. Per stack: PHP → a production `composer install --no-dev` then FrankenPHP over public/; Next → `npm run build` then `next start`; Nuxt → the built Nitro server; a built front end (Vite/CRA) → nginx over dist/, with NO JavaScript process at all; Django → a virtualenv + collectstatic then GUNICORN; FastAPI/Flask → uvicorn; Go → `go build` and run the BINARY; Rust → `cargo build --release` and run the binary. A repo's own Dockerfile always wins over a recipe. Actions: `detect` (read a repo and return every build+serve recipe it could use, each with `confident` and, when it is a guess, `needs`); `list` (every site + live state); `create` (define one and host it — `name` (a DNS label) plus either an explicit `build` + `serve` + `port`, or nothing at all to take the detected recipe; optional `repo` to host repos/<repo>, `image`, `env`, `exposed`, `kind`); `start` / `stop` / `restart` / `status` (by `id` from a prior list); `logs` (the container's log tail); `open` (show the site in the Genie Browser for the user); `remove` (stop it and forget the definition). READ THE RESULT: a failed BUILD is the most common reason a site does not come up, and `buildLog` carries it — a required build step that fails means the site is deliberately NOT started, because serving the previous build while every health signal reads green is worse than not serving. `state:'running'` means the CONTAINER is up; `ready:true` means the published port actually accepted a connection. `origin` is the routable `https://<name>.gen`; `localOrigin` is the direct loopback origin for curl. EXPOSURE — this is the part agents get wrong: the workspace container's `localhost` IS the workspace, so the app reaches its own processes normally, and a DATABASE OR CACHE IS NEVER EXPOSED — shared engines are workstation-hosted and reached on the workspace network through the env `manageService` injects (`DATABASE_URL`, …). Only what the BROWSER itself connects to is exposed, via `exposed:[{name,port,protocol,reason}]`: a websocket on the app's own port needs nothing (it upgrades over the existing carrier), one on another port gets `<name>.<site>.gen`, and gRPC/TCP get a STABLE loopback port. A surface that cannot say why the browser needs it is REFUSED. BINDING: a server that listens on `localhost` inside a container is unreachable no matter what is published — every serve command this tool generates binds 0.0.0.0, and one you supply must too. HOST ALLOWLISTS: upstream is sent `Host: <name>.gen`; served in production only Django still checks it (`ALLOWED_HOSTS`), so either add the `.gen` name there or pass `upstreamHost:'localhost'`. Requires Docker or Podman; when neither is usable the result carries the install hint. `build` steps and `serve` are literal argv ([\"npm\",\"ci\"]), never shell strings. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
+        "HOST a repo the way it runs in PRODUCTION — Genie BUILDS it, then serves the built artifact with a real production server, in this workspace's container sandbox, at a stable `https://<name>.gen` origin reachable whether the viewer is on this machine or connected remotely. This is not a dev-server launcher: nothing here runs `npm run dev`, `artisan serve`, `manage.py runserver` or `go run`. Per stack: PHP → a production `composer install --no-dev` then FrankenPHP over public/; Next → `npm run build` then `next start`; Nuxt → the built Nitro server; a built front end (Vite/CRA) → nginx over dist/, with NO JavaScript process at all; Django → a virtualenv + collectstatic then GUNICORN; FastAPI/Flask → uvicorn; Go → `go build` and run the BINARY; Rust → `cargo build --release` and run the binary. A repo's own Dockerfile always wins over a recipe. Actions: `detect` (read a repo and return every build+serve recipe it could use, each with `confident` and, when it is a guess, `needs`); `list` (every site + live state); `create` (define one and host it — `name` (a DNS label) plus either an explicit `build` + `serve` + `port`, or nothing at all to take the detected recipe; optional `repo` to host repos/<repo>, `image`, `env`, `exposed`, `kind`); `update` (edit an existing site by `id` — pass only the fields to change: `name`/`genName`, `port`, `env`, `build`/`serve`, `image`, `runMode`, `exposed`, `upstreamHost`, `kind`; a RUNNING site is rebuilt/restarted only when the change requires it, and left as-is otherwise); `start` / `stop` / `restart` / `status` (by `id` from a prior list); `logs` (the container's log tail); `open` (show the site in the Genie Browser for the user); `remove` (stop it and forget the definition). READ THE RESULT: a failed BUILD is the most common reason a site does not come up, and `buildLog` carries it — a required build step that fails means the site is deliberately NOT started, because serving the previous build while every health signal reads green is worse than not serving. `state:'running'` means the CONTAINER is up; `ready:true` means the published port actually accepted a connection. `origin` is the routable `https://<name>.gen`; `localOrigin` is the direct loopback origin for curl. EXPOSURE — this is the part agents get wrong: the workspace container's `localhost` IS the workspace, so the app reaches its own processes normally, and a DATABASE OR CACHE IS NEVER EXPOSED — shared engines are workstation-hosted and reached on the workspace network through the env `manageService` injects (`DATABASE_URL`, …). Only what the BROWSER itself connects to is exposed, via `exposed:[{name,port,protocol,reason}]`: a websocket on the app's own port needs nothing (it upgrades over the existing carrier), one on another port gets `<name>.<site>.gen`, and gRPC/TCP get a STABLE loopback port. A surface that cannot say why the browser needs it is REFUSED. BINDING: a server that listens on `localhost` inside a container is unreachable no matter what is published — every serve command this tool generates binds 0.0.0.0, and one you supply must too. HOST ALLOWLISTS: upstream is sent `Host: <name>.gen`; served in production only Django still checks it (`ALLOWED_HOSTS`), so either add the `.gen` name there or pass `upstreamHost:'localhost'`. Requires Docker or Podman; when neither is usable the result carries the install hint. `build` steps and `serve` are literal argv ([\"npm\",\"ci\"]), never shell strings. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -1427,6 +1436,7 @@ const MANAGE_SITE_TOOL = {
                     'list',
                     'detect',
                     'create',
+                    'update',
                     'start',
                     'stop',
                     'restart',
@@ -1445,7 +1455,7 @@ const MANAGE_SITE_TOOL = {
             name: {
                 type: 'string',
                 description:
-                    'create: the site name — a DNS label (`web`, `api`). Becomes the first label of `<name>.<workspace>.gen`.',
+                    'create: the site name — a DNS label (`web`, `api`). Becomes the first label of `<name>.<workspace>.gen`. update: rename the site (moves its `.gen` and, if running, its container).',
             },
             repo: {
                 type: 'string',
@@ -2656,6 +2666,7 @@ export async function handleMcpMessage(
                     'list',
                     'detect',
                     'create',
+                    'update',
                     'start',
                     'stop',
                     'restart',
