@@ -2,6 +2,7 @@ import type {
     DevRuntimeInfo,
     DevServiceInfo,
     DevSiteInfo,
+    DevSitePhase,
     DevSiteRunOption,
 } from './genie';
 
@@ -44,15 +45,63 @@ export type DevAvailability = 'ready' | 'remote';
 
 // --- sites ------------------------------------------------------------------
 
+/**
+ * Observable startup (Gap 2). A site being STARTED streams a transient `phase`
+ * ahead of its settled state, so a card can show a spinner and the current step
+ * the instant Start is clicked — not a disabled button until the whole build
+ * finishes. `pulling`/`building`/`starting` are the in-flight stages; `ready` and
+ * `failed` are terminal and normally handed straight back to the settled state.
+ */
+export function siteIsStarting(site: DevSiteInfo): boolean {
+    return site.phase === 'pulling' || site.phase === 'building' || site.phase === 'starting';
+}
+
+/** A short badge for the current start stage — what the card chips while it comes up. */
+export function sitePhaseBadge(phase: DevSitePhase): string {
+    switch (phase) {
+        case 'pulling':
+            return 'Pulling image';
+        case 'building':
+            return 'Building';
+        case 'starting':
+            return 'Starting';
+        case 'ready':
+            return 'Ready';
+        case 'failed':
+            return 'Failed';
+    }
+}
+
+/** The full sentence under the card for the current start stage. */
+export function sitePhaseLabel(phase: DevSitePhase): string {
+    switch (phase) {
+        case 'pulling':
+            return 'Preparing the container — pulling the image if it is not already cached…';
+        case 'building':
+            return 'Building — running the production build. Its log is streaming below.';
+        case 'starting':
+            return 'Starting the container and waiting for the server to answer…';
+        case 'ready':
+            return 'Serving.';
+        case 'failed':
+            return 'Failed to start.';
+    }
+}
+
 export function siteStatusTone(site: DevSiteInfo): DevTone {
-    if (site.state === 'failed') return 'failed';
+    // A start in flight reads as `starting` regardless of the last settled
+    // state — the card shows a spinner while it comes up (Gap 2).
+    if (siteIsStarting(site)) return 'starting';
+    if (site.phase === 'failed' || site.state === 'failed') return 'failed';
     if (site.state !== 'running') return 'idle';
     // Up but not answering. Deliberately NOT `running` — see the file header.
     return site.ready === false ? 'starting' : 'running';
 }
 
 export function siteStatusLabel(site: DevSiteInfo): string {
-    if (site.state === 'failed') {
+    // While starting, the phase IS the status — say which stage it is in.
+    if (siteIsStarting(site)) return sitePhaseLabel(site.phase!);
+    if (site.phase === 'failed' || site.state === 'failed') {
         return site.error ? `Failed — ${site.error}` : 'Failed to start.';
     }
     if (site.state !== 'running') {
@@ -107,7 +156,10 @@ export function railSitesTone(sites: DevSiteInfo[], workspaceId: string): DevTon
     const mine = minesites(sites, workspaceId);
     if (mine.length === 0) return null;
     if (mine.some((s) => s.state === 'running')) return 'running';
-    if (mine.some((s) => s.state === 'failed')) return 'failed';
+    // A start in flight lights the rail amber (Gap 2) — something IS happening,
+    // so an idle dot would read as "nothing here".
+    if (mine.some((s) => siteIsStarting(s))) return 'starting';
+    if (mine.some((s) => s.state === 'failed' || s.phase === 'failed')) return 'failed';
     return 'idle';
 }
 

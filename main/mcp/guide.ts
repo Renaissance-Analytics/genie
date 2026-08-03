@@ -106,6 +106,10 @@ always wins over a recipe. Actions (\`action\`):
 - \`create\` — define one and host it: \`name\` (a DNS label) plus EITHER explicit
   \`build\` + \`serve\` + \`port\`, OR nothing at all to take the detected recipe.
   Optional \`repo\` (host \`repos/<repo>\`), \`image\`, \`env\`, \`exposed\`, \`kind\`.
+- \`update\` — edit an existing site by \`id\`: pass only the fields to change
+  (\`name\`/\`genName\`, \`port\`, \`env\`, \`build\`/\`serve\`, \`image\`, \`runMode\`,
+  \`exposed\`, \`upstreamHost\`, \`kind\`). A RUNNING site is rebuilt + restarted only
+  when the change needs it; a cosmetic edit leaves the container as it is.
 - \`start\` / \`stop\` / \`restart\` / \`logs\` — by \`id\` (from a \`list\`). \`open\` —
   show the site in the Genie Browser for the user. \`remove\` — stop it and forget
   the definition.

@@ -1512,6 +1512,26 @@ const api = {
             ipcRenderer.on('dev-server:changed', handler);
             return () => ipcRenderer.off('dev-server:changed', handler);
         },
+        /** A live START tick for one dev site (Gap 2): `pulling → building →
+         *  starting → ready|failed`, carrying the streaming build/pull log — so an
+         *  open Site Manager card reflects a site coming up the moment Start is
+         *  clicked, not only when the whole build finishes. High-frequency (a
+         *  chunk per log line), separate from the coarse `devServerChanged`. */
+        devSiteProgress: (
+            cb: (payload: {
+                workspaceId: string;
+                siteId: string;
+                name: string;
+                genName: string;
+                phase: 'pulling' | 'building' | 'starting' | 'ready' | 'failed';
+                log?: string;
+                error?: string;
+            }) => void,
+        ) => {
+            const handler = (_e: unknown, payload: Parameters<typeof cb>[0]) => cb(payload);
+            ipcRenderer.on('dev-server:site-progress', handler);
+            return () => ipcRenderer.off('dev-server:site-progress', handler);
+        },
         /** Tier 3 detached-host status — fired when the host is unavailable and
          *  Genie falls back to in-process. The renderer surfaces a non-fatal toast. */
         terminalHostStatus: (

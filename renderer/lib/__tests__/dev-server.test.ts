@@ -12,6 +12,9 @@ import {
     serviceStatusLabel,
     serviceStatusTone,
     serviceTitle,
+    siteIsStarting,
+    sitePhaseBadge,
+    sitePhaseLabel,
     siteReach,
     siteStatusLabel,
     siteStatusTone,
@@ -107,6 +110,62 @@ describe('site status', () => {
         });
         expect(siteReach({ ...SITE, state: 'stopped', origin: undefined, localOrigin: undefined }))
             .toEqual({ browser: null, local: null });
+    });
+});
+
+// --- observable startup (Gap 2) ---------------------------------------------
+
+describe('startup progress surfaces in the view model', () => {
+    it('reads an in-flight phase as `starting`, whatever the settled state says', () => {
+        // The point of Gap 2: the moment Start is clicked the row still says
+        // `stopped`, but a `pulling`/`building`/`starting` phase must show a
+        // spinner, not an idle dot.
+        expect(siteStatusTone({ ...SITE, state: 'stopped', ready: undefined, phase: 'pulling' })).toBe(
+            'starting',
+        );
+        expect(siteStatusTone({ ...SITE, state: 'stopped', ready: undefined, phase: 'building' })).toBe(
+            'starting',
+        );
+        expect(siteStatusTone({ ...SITE, state: 'stopped', ready: undefined, phase: 'starting' })).toBe(
+            'starting',
+        );
+        expect(siteIsStarting({ ...SITE, phase: 'building' })).toBe(true);
+        expect(siteIsStarting({ ...SITE, phase: undefined })).toBe(false);
+    });
+
+    it('names the current stage in the status line while a site comes up', () => {
+        expect(siteStatusLabel({ ...SITE, state: 'stopped', phase: 'pulling' })).toMatch(/pulling/i);
+        expect(siteStatusLabel({ ...SITE, state: 'stopped', phase: 'building' })).toMatch(/building/i);
+        expect(siteStatusLabel({ ...SITE, state: 'stopped', phase: 'starting' })).toMatch(
+            /waiting|starting/i,
+        );
+    });
+
+    it('shows a failed start IN the card, with its reason — never a silent button', () => {
+        const tone = siteStatusTone({ ...SITE, state: 'failed', ready: undefined, phase: 'failed' });
+        expect(tone).toBe('failed');
+        expect(
+            siteStatusLabel({
+                ...SITE,
+                state: 'failed',
+                ready: undefined,
+                phase: 'failed',
+                error: 'Build step "Install" failed (exit 1)',
+            }),
+        ).toContain('Install');
+    });
+
+    it('gives each phase a short badge and a full sentence', () => {
+        expect(sitePhaseBadge('pulling')).toMatch(/pull/i);
+        expect(sitePhaseBadge('building')).toBe('Building');
+        expect(sitePhaseBadge('starting')).toBe('Starting');
+        expect(sitePhaseLabel('building')).toMatch(/build/i);
+    });
+
+    it('lights the rail amber while a site is starting, not idle', () => {
+        expect(railSitesTone([{ ...SITE, state: 'stopped', phase: 'building' }], 'acme')).toBe(
+            'starting',
+        );
     });
 });
 

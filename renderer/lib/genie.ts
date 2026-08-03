@@ -284,6 +284,41 @@ export interface DevSiteInfo {
     localOrigin?: string;
     command?: string[];
     image?: string;
+    /** What is being hosted (`php`, `node`, `static`, …) and which production
+     *  server holds the port. */
+    stack?: string;
+    server?: string;
+    /** The production BUILD that runs before the server, and the server's argv. */
+    build?: Array<{ label: string; command: string[]; optional?: boolean }>;
+    serve?: string[];
+    /** The last build's log — present on a start that built, and streamed live
+     *  while a build is in flight (Gap 2). */
+    buildLog?: string;
+    /** Extra browser-facing surfaces, as they resolved. */
+    exposed?: Array<{ name: string; protocol: string; genName: string; hostPort?: number }>;
+    /** The stored env + upstream Host, so the Edit form can prefill them. */
+    env?: Record<string, string>;
+    upstreamHost?: string;
+    /** The transient start stage, present ONLY while a start is in flight (Gap 2):
+     *  `pulling → building → starting → ready|failed`. A settled row omits it. */
+    phase?: DevSitePhase;
+    error?: string;
+}
+
+/** The transient stages a starting site passes through (Gap 2) — surfaced live so
+ *  a card shows progress the instant Start is clicked, not only when it finishes. */
+export type DevSitePhase = 'pulling' | 'building' | 'starting' | 'ready' | 'failed';
+
+/** One live START tick for a dev site, pushed over `on.devSiteProgress`. */
+export interface DevSiteProgress {
+    workspaceId: string;
+    siteId: string;
+    name: string;
+    genName: string;
+    phase: DevSitePhase;
+    /** The accumulated build/pull log tail, when there is one. */
+    log?: string;
+    /** Set on `failed`: the reason the start did not complete. */
     error?: string;
 }
 
@@ -292,6 +327,7 @@ export interface ManageSiteRequest {
         | 'list'
         | 'detect'
         | 'create'
+        | 'update'
         | 'start'
         | 'stop'
         | 'restart'
@@ -304,8 +340,13 @@ export interface ManageSiteRequest {
     runMode?: string;
     image?: string;
     command?: string[];
+    /** create/update: the production build steps and the server's literal argv. */
+    build?: Array<{ label?: string; command: string[]; optional?: boolean }>;
+    serve?: string[];
     port?: number;
     env?: Record<string, string>;
+    /** create/update: extra browser-facing surfaces. */
+    exposed?: Array<{ name: string; port: number; protocol: string; reason: string }>;
     kind?: 'http' | 'tcp';
     genName?: string;
     upstreamHost?: string;
@@ -3063,6 +3104,11 @@ export interface GenieApi {
          *  Push, never a poll: a site can come up long after boot (an image
          *  pull, or a Dockerfile build). */
         devServerChanged: (cb: () => void) => () => void;
+        /** A live START tick for one dev site (Gap 2): `pulling → building →
+         *  starting → ready|failed`, carrying the streaming build/pull log — so an
+         *  open Site Manager card reflects a site coming up the moment Start is
+         *  clicked. High-frequency; separate from the coarse `devServerChanged`. */
+        devSiteProgress: (cb: (payload: DevSiteProgress) => void) => () => void;
         /** A file changed on disk in a watched workspace (an agent, a git op, a
          *  tool) — the Files panel re-lists its tree AND reloads ONLY the open
          *  tabs whose file is named in `changed` (forward-slashed rel paths). A

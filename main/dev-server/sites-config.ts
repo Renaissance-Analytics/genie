@@ -306,6 +306,52 @@ export function sanitizeDevSitePatch(
 }
 
 /**
+ * PURE. Does re-applying `after` over `before` need the CONTAINER rebuilt/
+ * restarted, or is the change cosmetic?
+ *
+ * A hosted site's container is created around a fixed set of facts — the image,
+ * the published port, the serve argv, the build steps, the injected env, and the
+ * routing identity (`name`/`genName`/`upstreamHost`/`kind`). Change any of them
+ * and the running container is serving the OLD definition; a restart is the only
+ * way the edit takes effect (the published port alone is fixed at create time —
+ * see `site-manager.ts`). Everything else — most obviously toggling `enabled` —
+ * touches nothing the live container depends on, so a running site is left
+ * exactly as it is. This is the decision the Site Manager's Edit form and the
+ * `manageSite update` action both read, so a human edit and an agent edit reach
+ * identical behaviour.
+ */
+const RECONFIGURE_KEYS: readonly (keyof DevSiteConfig)[] = [
+    'name',
+    'genName',
+    'repo',
+    'runMode',
+    'stack',
+    'server',
+    'image',
+    'build',
+    'serve',
+    'port',
+    'exposed',
+    'env',
+    'kind',
+    'framework',
+    'upstreamHost',
+];
+
+export function devSiteReconfigureNeedsRestart(
+    before: DevSiteConfig | undefined,
+    after: DevSiteConfig | undefined,
+): boolean {
+    if (!before || !after) return true;
+    // A structural compare per field: order-insensitive it is not, but the
+    // stored shapes are normalized through `sanitizeDevSitePatch`, so a genuine
+    // change always reads as different JSON and a no-op edit never does.
+    return RECONFIGURE_KEYS.some(
+        (k) => JSON.stringify(before[k] ?? null) !== JSON.stringify(after[k] ?? null),
+    );
+}
+
+/**
  * PURE. Parse a stored `dev_sites` blob. Robust to NULL, corrupt JSON and junk —
  * an unreadable blob reads as `{}` (the safe default: nothing runs).
  */

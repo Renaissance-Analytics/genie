@@ -150,6 +150,23 @@ describe('tools/call dispatch', () => {
         );
     });
 
+    it('accepts and forwards the `update` action with only the changed fields', async () => {
+        const manageSite = vi.fn().mockResolvedValue({ ok: true, sites: [] });
+        await call(
+            { action: 'update', id: 'abc', port: 9000, env: { LOG_LEVEL: 'debug' } },
+            { manageSite },
+        );
+        expect(manageSite).toHaveBeenCalledWith(
+            'term-1',
+            expect.objectContaining({
+                action: 'update',
+                id: 'abc',
+                port: 9000,
+                env: { LOG_LEVEL: 'debug' },
+            }),
+        );
+    });
+
     it('returns the headline followed by the full JSON result', async () => {
         const result: ManageSiteResult = {
             ok: true,

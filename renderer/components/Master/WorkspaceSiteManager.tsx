@@ -12,6 +12,7 @@ import {
     Select,
     Tabs,
     Text,
+    Textarea,
 } from '@particle-academy/react-fancy';
 import {
     api,
@@ -20,6 +21,7 @@ import {
     type DevServiceCatalogEntry,
     type DevServiceInfo,
     type DevSiteInfo,
+    type DevSitePhase,
     type DevSiteRunOption,
     type WorkspaceRow,
 } from '../../lib/genie';
@@ -34,11 +36,17 @@ import {
     serviceStatusLabel,
     serviceStatusTone,
     serviceTitle,
+    siteIsStarting,
+    sitePhaseBadge,
     siteReach,
     siteStatusLabel,
     siteStatusTone,
     type DevAvailability,
 } from '../../lib/dev-server';
+
+/** The live start progress the card overlays onto its row (Gap 2): the transient
+ *  phase plus the streaming build/pull log. Keyed by siteId in the panel. */
+type SiteProgress = { phase: DevSitePhase; log?: string; error?: string };
 
 /**
  * The WORKSPACE SITE MANAGER — the human view over the Hosting Manager, and
@@ -105,6 +113,14 @@ export default function WorkspaceSiteManager({
      *  visible after the form closes, because a `documented` outcome is
      *  something the user still has to act on in the repo. */
     const [hostNote, setHostNote] = useState<{ status: string; note: string } | null>(null);
+    /**
+     * Live START progress per site (Gap 2). Pushed from main as a site comes up
+     * (`pulling → building → starting`), so the card shows a spinner + the
+     * streaming build log the instant Start is clicked instead of a dead disabled
+     * button. A `ready` tick clears the entry (the row then shows the settled,
+     * serving state); a `failed` tick is kept so the reason stays IN the card.
+     */
+    const [progress, setProgress] = useState<Record<string, SiteProgress>>({});
 
     /**
      * Whether the Dev Server can be driven from HERE at all.
@@ -156,11 +172,42 @@ export default function WorkspaceSiteManager({
         return api().on.devServerChanged(() => void refresh());
     }, [refresh]);
 
+    // Live START progress (Gap 2), streamed as a site comes up. Distinct from
+    // the coarse `devServerChanged` above: this carries the phase + build-log
+    // tail so the card animates through the build without a round trip.
+    useEffect(() => {
+        return api().on.devSiteProgress((p) => {
+            if (p.workspaceId !== workspace.id) return;
+            setProgress((cur) => {
+                if (p.phase === 'ready') {
+                    // Settled: drop the transient entry and let the row (now
+                    // refreshed via devServerChanged) show the serving state.
+                    const { [p.siteId]: _done, ...rest } = cur;
+                    return rest;
+                }
+                return {
+                    ...cur,
+                    [p.siteId]: {
+                        phase: p.phase,
+                        ...(p.log !== undefined ? { log: p.log } : {}),
+                        ...(p.error !== undefined ? { error: p.error } : {}),
+                    },
+                };
+            });
+        });
+    }, [workspace.id]);
+
     /** Every site action goes through here, so the panel always reflects what
      *  the RUNTIME did rather than what we asked for. */
     const site = async (id: string | null, req: Record<string, unknown>) => {
         setBusy(id);
         setError(null);
+        // The instant Start/Retry is clicked, show a spinner (Gap 2): the push
+        // stream takes over within a tick, but the button must never read as a
+        // dead, silent disable while the build spins up.
+        if (id && (req.action === 'start' || req.action === 'restart')) {
+            setProgress((cur) => ({ ...cur, [id]: { phase: 'pulling' } }));
+        }
         try {
             const res = await api().devServer.site(workspace.id, req as never);
             if (!res.ok && res.error) setError(res.error);
@@ -255,6 +302,7 @@ export default function WorkspaceSiteManager({
                                         sites={sites}
                                         busy={busy}
                                         logs={logs}
+                                        progress={progress}
                                         hasRuntime={hasRuntime}
                                         adding={adding}
                                         onAddingChange={setAdding}
@@ -311,6 +359,7 @@ function SitesTab({
     sites,
     busy,
     logs,
+    progress,
     hasRuntime,
     adding,
     onAddingChange,
@@ -323,6 +372,7 @@ function SitesTab({
     sites: DevSiteInfo[] | null;
     busy: string | null;
     logs: { id: string; text: string } | null;
+    progress: Record<string, SiteProgress>;
     hasRuntime: boolean;
     adding: boolean;
     onAddingChange: (v: boolean) => void;
@@ -364,8 +414,10 @@ function SitesTab({
                     {sites.map((row) => (
                         <SiteCard
                             key={row.id}
+                            workspace={workspace}
                             row={row}
                             busy={busy === row.id}
+                            progress={progress[row.id] ?? null}
                             hasRuntime={hasRuntime}
                             log={logs?.id === row.id ? logs.text : null}
                             onAction={(req) => void onAction(row.id, { ...req, id: row.id })}
@@ -415,33 +467,59 @@ function SitesTab({
 
 /** One hosted site: what it serves, whether it is answering, where to reach it. */
 function SiteCard({
+    workspace,
     row,
     busy,
+    progress,
     hasRuntime,
     log,
     onAction,
     onToggleLog,
 }: {
+    workspace: WorkspaceRow;
     row: DevSiteInfo;
     busy: boolean;
+    progress: SiteProgress | null;
     hasRuntime: boolean;
     log: string | null;
     onAction: (req: Record<string, unknown>) => void;
     onToggleLog: () => void;
 }) {
-    const tone = siteStatusTone(row);
-    const reach = siteReach(row);
+    const [editing, setEditing] = useState(false);
+
+    // Overlay the live start progress (Gap 2) onto the row — but never over a
+    // site the list already reports RUNNING, so a stale tick can't hide a serving
+    // site. This is what makes the card animate through pulling → building →
+    // starting and show a failed build's reason in place.
+    const view: DevSiteInfo =
+        progress && row.state !== 'running'
+            ? {
+                  ...row,
+                  phase: progress.phase,
+                  ...(progress.log !== undefined ? { buildLog: progress.log } : {}),
+                  ...(progress.error !== undefined ? { error: progress.error } : {}),
+              }
+            : row;
+
+    const tone = siteStatusTone(view);
+    const reach = siteReach(view);
+    const starting = siteIsStarting(view);
+    const serve = view.serve ?? view.command;
+    // The streaming build/pull log while a site comes up, and the last build's
+    // log on a failure — the single most common reason a site does not start.
+    const buildLog = (starting || view.state === 'failed') && view.buildLog ? view.buildLog : null;
+
     return (
         <Card variant="outlined" padding="md" className="site-card">
             <div className="site-card-head">
                 <span className={`site-dot site-${tone}`} aria-hidden="true" />
                 <div className="site-card-name">
                     <Text size="sm" style={{ fontWeight: 600 }}>
-                        {row.name}{' '}
+                        {view.name}{' '}
                         <Badge size="sm" variant="soft" color="zinc">
-                            {row.runMode}
+                            {view.runMode}
                         </Badge>
-                        {row.kind === 'tcp' && (
+                        {view.kind === 'tcp' && (
                             <>
                                 {' '}
                                 <Badge size="sm" variant="soft" color="amber">
@@ -449,15 +527,23 @@ function SiteCard({
                                 </Badge>
                             </>
                         )}
+                        {starting && view.phase && (
+                            <>
+                                {' '}
+                                <Badge size="sm" variant="soft" color="amber">
+                                    {sitePhaseBadge(view.phase)}
+                                </Badge>
+                            </>
+                        )}
                     </Text>
                     <Text size="xs" className="text-zinc-500">
-                        {row.repo ? `repos/${row.repo}` : 'the workspace root'}
-                        {row.port ? ` · listens on :${row.port}` : ''}
+                        {view.repo ? `repos/${view.repo}` : 'the workspace root'}
+                        {view.port ? ` · listens on :${view.port}` : ''}
                     </Text>
                 </div>
             </div>
 
-            <div className={`site-card-status site-${tone}`}>{siteStatusLabel(row)}</div>
+            <div className={`site-card-status site-${tone}`}>{siteStatusLabel(view)}</div>
 
             {/* BOTH reaches. The `.gen` one works from a connected remote too;
                 the loopback one is what curl, a local browser or another program
@@ -480,10 +566,23 @@ function SiteCard({
                 </div>
             )}
 
-            {row.command && row.command.length > 0 && (
+            {serve && serve.length > 0 && (
                 <Text size="xs" className="text-zinc-500">
-                    <Icon name="terminal" size="xs" /> <code>{row.command.join(' ')}</code>
+                    <Icon name="terminal" size="xs" /> <code>{serve.join(' ')}</code>
                 </Text>
+            )}
+
+            {/* The build/pull log, streaming live while the site comes up (Gap 2)
+                and shown on a failed build too — so a start is never a silent
+                disabled button. Separate from the toggled container log below. */}
+            {buildLog !== null && (
+                <div className="svc-env site-build-log">
+                    <span className="svc-env-label">
+                        {starting ? <span className="site-dot site-starting" aria-hidden="true" /> : null}
+                        {view.state === 'failed' ? 'Build log' : 'Building…'}
+                    </span>
+                    <CodeView value={buildLog} readOnly minHeight={0} maxHeight={240} />
+                </div>
             )}
 
             {log !== null && (
@@ -503,12 +602,12 @@ function SiteCard({
                     size="sm"
                     color="blue"
                     icon="external-link"
-                    disabled={busy || !canOpenInBrowser(row)}
+                    disabled={busy || !canOpenInBrowser(view)}
                     onClick={() => onAction({ action: 'open' })}
                 >
                     Open in Genie Browser
                 </Action>
-                {row.state === 'running' ? (
+                {view.state === 'running' ? (
                     <>
                         <Action
                             size="sm"
@@ -537,9 +636,23 @@ function SiteCard({
                         disabled={busy || !hasRuntime}
                         onClick={() => onAction({ action: 'start' })}
                     >
-                        {row.state === 'failed' ? 'Retry' : 'Start'}
+                        {starting
+                            ? `${view.phase ? sitePhaseBadge(view.phase) : 'Starting'}…`
+                            : view.state === 'failed'
+                              ? 'Retry'
+                              : 'Start'}
                     </Action>
                 )}
+                <Action
+                    size="sm"
+                    variant="ghost"
+                    icon="pencil"
+                    disabled={busy}
+                    onClick={() => setEditing(true)}
+                    title="Change this site's name, URL, port, environment, build or serve, and more."
+                >
+                    Edit
+                </Action>
                 <Action size="sm" variant="ghost" icon="file-text" disabled={busy} onClick={onToggleLog}>
                     {log !== null ? 'Hide log' : 'Log'}
                 </Action>
@@ -554,7 +667,240 @@ function SiteCard({
                     Remove
                 </Action>
             </div>
+
+            {editing && (
+                <EditSiteForm
+                    workspace={workspace}
+                    row={row}
+                    onCancel={() => setEditing(false)}
+                    onSave={async (patch) => {
+                        await onAction({ action: 'update', ...patch });
+                        setEditing(false);
+                    }}
+                />
+            )}
         </Card>
+    );
+}
+
+/**
+ * Edit a site AFTER create (Gap 1) — the fields a running site is defined by, in
+ * a modal of Fancy form components. Only the fields the user actually changed are
+ * sent, so a `manageSite update` leaves everything else exactly as stored and a
+ * RUNNING site is rebuilt/restarted only when a container fact moved.
+ *
+ * `serve` and each `build` step are argv, shown space-separated; a first pass
+ * splits them on whitespace (an argument with a space is best set from an agent
+ * via the MCP tool, which takes real argv). `env` is KEY=value lines.
+ */
+function EditSiteForm({
+    workspace,
+    row,
+    onSave,
+    onCancel,
+}: {
+    workspace: WorkspaceRow;
+    row: DevSiteInfo;
+    onSave: (patch: Record<string, unknown>) => Promise<void>;
+    onCancel: () => void;
+}) {
+    const [name, setName] = useState(row.name);
+    const [genName, setGenName] = useState(row.genName);
+    const [repo, setRepo] = useState(row.repo ?? '');
+    const [repos, setRepos] = useState<string[]>([]);
+    const [port, setPort] = useState(row.port ? String(row.port) : '');
+    const [runMode, setRunMode] = useState(row.runMode);
+    const [image, setImage] = useState(row.image ?? '');
+    const [upstreamHost, setUpstreamHost] = useState(row.upstreamHost ?? '');
+    const [serve, setServe] = useState((row.serve ?? []).join(' '));
+    const [build, setBuild] = useState((row.build ?? []).map((s) => s.command.join(' ')).join('\n'));
+    const [env, setEnv] = useState(
+        Object.entries(row.env ?? {})
+            .map(([k, v]) => `${k}=${v}`)
+            .join('\n'),
+    );
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        void api()
+            .devServer.repos(workspace.id)
+            .then(setRepos)
+            .catch(() => setRepos([]));
+    }, [workspace.id]);
+
+    // Only the changed fields ride the update — an unchanged value is a no-op and
+    // never triggers a restart (main compares before/after).
+    const buildPatch = (): Record<string, unknown> => {
+        const patch: Record<string, unknown> = {};
+        if (name.trim() && name.trim() !== row.name) patch.name = name.trim();
+        if (genName.trim() && genName.trim() !== row.genName) patch.genName = genName.trim();
+        if (repo !== (row.repo ?? '')) patch.repo = repo;
+        if (runMode !== row.runMode) patch.runMode = runMode;
+        if (image.trim() !== (row.image ?? '')) patch.image = image.trim();
+        if (upstreamHost.trim() !== (row.upstreamHost ?? '')) patch.upstreamHost = upstreamHost.trim();
+
+        const portNum = port.trim() ? Number(port.trim()) : undefined;
+        if (portNum && portNum !== row.port) patch.port = portNum;
+
+        const serveArgv = serve.trim() ? serve.trim().split(/\s+/) : [];
+        if (serveArgv.length && serveArgv.join(' ') !== (row.serve ?? []).join(' ')) {
+            patch.serve = serveArgv;
+        }
+
+        const buildSteps = build
+            .split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => ({ command: line.split(/\s+/) }));
+        const buildSig = buildSteps.map((s) => s.command.join(' ')).join('\n');
+        const rowBuildSig = (row.build ?? []).map((s) => s.command.join(' ')).join('\n');
+        if (buildSig !== rowBuildSig) patch.build = buildSteps;
+
+        const envObj: Record<string, string> = {};
+        for (const line of env.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) continue;
+            const eq = trimmed.indexOf('=');
+            if (eq <= 0) continue;
+            envObj[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1);
+        }
+        const envSig = Object.entries(envObj)
+            .map(([k, v]) => `${k}=${v}`)
+            .sort()
+            .join('\n');
+        const rowEnvSig = Object.entries(row.env ?? {})
+            .map(([k, v]) => `${k}=${v}`)
+            .sort()
+            .join('\n');
+        if (envSig !== rowEnvSig) patch.env = envObj;
+
+        return patch;
+    };
+
+    const RUN_MODES = [
+        { value: 'recipe', label: 'Detected recipe' },
+        { value: 'explicit', label: 'Explicit build + serve' },
+        { value: 'dockerfile', label: "The repo's Dockerfile" },
+    ];
+
+    return (
+        <Modal open onClose={onCancel} size="lg">
+            <Modal.Header>
+                <Heading as="h3" size="xs">
+                    Edit {row.name}
+                </Heading>
+            </Modal.Header>
+            <div className="ws-settings site-manager">
+                {error && <div className="set-note bad">{error}</div>}
+                <div className="site-card-fields">
+                    <label className="site-field">
+                        <span>Name</span>
+                        <Input value={name} onValueChange={setName} placeholder="web" />
+                    </label>
+                    <label className="site-field">
+                        <span>Public address (.gen)</span>
+                        <Input value={genName} onValueChange={setGenName} placeholder="web.acme.gen" />
+                    </label>
+                    <label className="site-field">
+                        <span>Repo</span>
+                        <Select
+                            value={repo}
+                            onValueChange={setRepo}
+                            list={[
+                                { value: '', label: 'The workspace root' },
+                                ...repos.map((r) => ({ value: r, label: `repos/${r}` })),
+                            ]}
+                        />
+                    </label>
+                    <label className="site-field">
+                        <span>Port inside the container</span>
+                        <Input value={port} onValueChange={setPort} placeholder="8000" />
+                    </label>
+                    <label className="site-field">
+                        <span>How it runs</span>
+                        <Select
+                            value={runMode}
+                            onValueChange={setRunMode}
+                            list={RUN_MODES}
+                        />
+                    </label>
+                    <label className="site-field">
+                        <span>Server image (optional)</span>
+                        <Input value={image} onValueChange={setImage} placeholder="nginx:1.27" />
+                    </label>
+                    <label className="site-field">
+                        <span>Upstream Host (optional)</span>
+                        <Input
+                            value={upstreamHost}
+                            onValueChange={setUpstreamHost}
+                            placeholder="localhost"
+                        />
+                    </label>
+                    <label className="site-field site-field-wide">
+                        <span>Serve command</span>
+                        <Input
+                            value={serve}
+                            onValueChange={setServe}
+                            placeholder="gunicorn app.wsgi --bind 0.0.0.0:8000"
+                        />
+                    </label>
+                    <label className="site-field site-field-wide">
+                        <span>Build steps — one command per line</span>
+                        <Textarea
+                            value={build}
+                            onValueChange={setBuild}
+                            rows={3}
+                            spellCheck={false}
+                            placeholder={'composer install --no-dev\nnpm run build'}
+                        />
+                    </label>
+                    <label className="site-field site-field-wide">
+                        <span>Environment — KEY=value, one per line</span>
+                        <Textarea
+                            value={env}
+                            onValueChange={setEnv}
+                            rows={3}
+                            spellCheck={false}
+                            placeholder={'APP_ENV=production\nLOG_LEVEL=info'}
+                        />
+                    </label>
+                </div>
+                <Text size="xs" className="text-zinc-500">
+                    A running site is rebuilt and restarted only when a change needs it — a port,
+                    build, serve, env, image or address change. Cosmetic edits leave it serving.
+                </Text>
+                <div className="set-actions">
+                    <Action
+                        size="sm"
+                        color="blue"
+                        icon="check"
+                        disabled={saving || !name.trim() || !genName.trim()}
+                        onClick={async () => {
+                            const patch = buildPatch();
+                            if (Object.keys(patch).length === 0) {
+                                onCancel();
+                                return;
+                            }
+                            setSaving(true);
+                            setError(null);
+                            try {
+                                await onSave(patch);
+                            } catch (e) {
+                                setError(e instanceof Error ? e.message : String(e));
+                            } finally {
+                                setSaving(false);
+                            }
+                        }}
+                    >
+                        {saving ? 'Applying…' : 'Save changes'}
+                    </Action>
+                    <Action size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
+                        Cancel
+                    </Action>
+                </div>
+            </div>
+        </Modal>
     );
 }
 
