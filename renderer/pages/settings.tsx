@@ -7,6 +7,7 @@ import React, {
     type ReactNode,
 } from 'react';
 import {
+    Accordion,
     Action,
     Badge,
     Callout,
@@ -41,6 +42,7 @@ import {
     type WorkspaceRow,
 } from '../lib/genie';
 import { isolationNote } from '../lib/dev-server';
+import { checkedAgoLabel, pluginSummaryLine } from '../lib/plugins-view';
 import {
     engineActionAvailability,
     engineGroups,
@@ -2457,7 +2459,9 @@ function PluginsSection() {
     const [pubKey, setPubKey] = useState('');
     const [keyLabel, setKeyLabel] = useState('');
     const [busy, setBusy] = useState(false);
+    const [checking, setChecking] = useState(false);
     const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+    const filter = useContext(SettingsFilterCtx);
 
     // The discover lists offer only what ISN'T installed yet — an Install card
     // for a plugin you already have reads as "not installed" and confuses.
@@ -2486,6 +2490,50 @@ function PluginsSection() {
     useEffect(() => {
         void refresh();
     }, []);
+
+    /**
+     * Re-read the marketplace indexes from their repos. A marketplace's plugin
+     * list is a CACHE written when it was added, so without this you keep seeing
+     * whatever it listed that day and a plugin published since is simply absent.
+     * `maxAgeMs: 0` forces every index (the explicit "Check for new plugins").
+     */
+    const checkMarketplaces = async (maxAgeMs?: number) => {
+        setChecking(true);
+        try {
+            const r = await api().plugins.refreshMarketplaces(maxAgeMs);
+            if (!r.ok) {
+                setMsg({ kind: 'err', text: r.error });
+                return;
+            }
+            // Fail-soft per marketplace, but never silent: name the ones that
+            // couldn't be re-read, so a list frozen by a broken repo says so.
+            const failed = r.value.filter((m) => !m.ok);
+            if (failed.length > 0) {
+                setMsg({
+                    kind: 'err',
+                    text: `Couldn't re-read ${failed.map((f) => f.name).join(', ')}: ${failed[0].error ?? 'unknown error'}`,
+                });
+            } else if (maxAgeMs === 0) {
+                setMsg({
+                    kind: 'ok',
+                    text: r.value.length === 0 ? 'No marketplaces to check.' : `Re-read ${r.value.length} marketplace index${r.value.length === 1 ? '' : 'es'}.`,
+                });
+            }
+        } catch (e) {
+            setMsg({ kind: 'err', text: (e as Error).message });
+        } finally {
+            setChecking(false);
+            await refresh();
+        }
+    };
+
+    // Opening the Marketplaces tab is the moment the member lists matter, so that
+    // is when stale indexes are re-read (event-driven — never a poll; the main
+    // side skips any index read recently, so flipping tabs costs nothing).
+    useEffect(() => {
+        if (tab !== 'marketplaces') return;
+        void checkMarketplaces();
+    }, [tab]);
 
     /** Run an action, surface ok/err, then refresh the lists. */
     const run = async (
@@ -2555,23 +2603,37 @@ function PluginsSection() {
                         No plugins installed yet. Install one from a repo URL above, or from the Official / Marketplaces tabs below.
                     </Text>
                 ) : (
-                    installed.map((p) => (
-                        <PluginCard
-                            key={p.id}
-                            plugin={p}
-                            busy={busy}
-                            onEnable={(on) =>
-                                run(() => api().plugins.enable(p.id, on), on ? `Enabled ${p.name}.` : `Disabled ${p.name}.`)
-                            }
-                            onToggleGrant={(perm, granted) =>
-                                run(
-                                    () => api().plugins.setGrant(p.id, perm.category, perm.key, granted),
-                                    `${granted ? 'Granted' : 'Revoked'} ${perm.label}.`,
-                                )
-                            }
-                            onUninstall={() => run(() => api().plugins.uninstall(p.id), `Uninstalled ${p.name}.`)}
-                        />
-                    ))
+                    // Each plugin collapses to a summary; `multiple` so opening one
+                    // to compare permissions doesn't shut the one you just read.
+                    //
+                    // While a settings SEARCH is running every card opens: the
+                    // permission rows inside filter themselves, and a row that
+                    // matched your query but stayed folded away would read as
+                    // "settings search can't find it". The Accordion is
+                    // uncontrolled, so the key remounts it as search starts/stops.
+                    <Accordion
+                        key={filter ? 'searching' : 'browsing'}
+                        type="multiple"
+                        defaultOpen={filter ? installed.map((p) => p.id) : []}
+                    >
+                        {installed.map((p) => (
+                            <PluginCard
+                                key={p.id}
+                                plugin={p}
+                                busy={busy}
+                                onEnable={(on) =>
+                                    run(() => api().plugins.enable(p.id, on), on ? `Enabled ${p.name}.` : `Disabled ${p.name}.`)
+                                }
+                                onToggleGrant={(perm, granted) =>
+                                    run(
+                                        () => api().plugins.setGrant(p.id, perm.category, perm.key, granted),
+                                        `${granted ? 'Granted' : 'Revoked'} ${perm.label}.`,
+                                    )
+                                }
+                                onUninstall={() => run(() => api().plugins.uninstall(p.id), `Uninstalled ${p.name}.`)}
+                            />
+                        ))}
+                    </Accordion>
                 )}
             </SetSection>
 
@@ -2678,21 +2740,36 @@ function PluginsSection() {
                             </div>
                         </SettingRow>
 
-                        {marketplaces.length === 0 && (
+                        {marketplaces.length === 0 ? (
                             <Text size="xs" className="text-zinc-500">
                                 No marketplaces added. Paste a marketplace repo URL above to browse its plugins.
                             </Text>
+                        ) : (
+                            <div className="set-actions">
+                                <Action
+                                    variant="ghost"
+                                    icon="refresh-cw"
+                                    disabled={busy || checking}
+                                    onClick={() => void checkMarketplaces(0)}
+                                >
+                                    {checking ? 'Checking…' : 'Check for new plugins'}
+                                </Action>
+                                <Text size="xs" className="text-zinc-500">
+                                    Genie re-reads each index when you open this tab; this checks them all again now.
+                                </Text>
+                            </div>
                         )}
                         {marketplaces.map((m) => (
                             <div className="plugin-market" key={m.id}>
                                 <div className="plugin-market-head">
                                     <span className="set-row-label">{m.name}</span>
                                     <span className="set-row-desc">{m.url}</span>
+                                    <span className="set-row-desc">{checkedAgoLabel(m.checkedAt, Date.now())}</span>
                                     <div className="set-actions">
                                         <Action
                                             variant="ghost"
                                             icon="refresh-cw"
-                                            disabled={busy}
+                                            disabled={busy || checking}
                                             onClick={() => run(() => api().plugins.refreshMarketplace(m.id), 'Refreshed.')}
                                         >
                                             Refresh
@@ -2708,9 +2785,26 @@ function PluginsSection() {
                                         </Action>
                                     </div>
                                 </div>
+                                {/* A member Genie can't read is REPORTED, never just missing — otherwise a
+                                    published plugin that never appears looks like Genie failing to notice it. */}
+                                {m.issues.length > 0 && (
+                                    <div className="set-note warn">
+                                        {m.issues.length === 1 ? '1 plugin in this index' : `${m.issues.length} plugins in this index`}{' '}
+                                        can&apos;t be installed — the marketplace author needs to fix{' '}
+                                        {m.issues.length === 1 ? 'it' : 'them'}:
+                                        <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                                            {m.issues.map((issue) => (
+                                                <li key={issue.at}>
+                                                    <strong>{issue.name ?? issue.id ?? issue.at}</strong> ({issue.at}) —{' '}
+                                                    {issue.errors.join('; ')}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
                                 {m.plugins.length === 0 ? (
                                     <Text size="xs" className="text-zinc-500">
-                                        This marketplace lists no plugins (or its index hasn&apos;t been fetched).
+                                        This marketplace lists no plugins Genie can install.
                                     </Text>
                                 ) : m.plugins.every((mp) => mp.installed) ? (
                                     <Text size="xs" className="text-zinc-500">
@@ -2874,7 +2968,21 @@ function TrustBadge({ plugin }: { plugin: InstalledPluginView }) {
     );
 }
 
-/** One installed-plugin card: enable, tools, editors, granular permissions, uninstall. */
+/**
+ * One installed-plugin card, COLLAPSED by default.
+ *
+ * The list is a settings pane, not a dossier: a row shows its name, what it is
+ * ({@link pluginSummaryLine}) and its trust chip, and the two controls you
+ * actually reach for — the enable switch and Uninstall — stay live without
+ * expanding anything. Everything descriptive (description, source, editors, the
+ * permission switches) lives behind the disclosure.
+ *
+ * The switch and Uninstall sit OUTSIDE `Accordion.Trigger` on purpose: the
+ * trigger renders a `<button>`, and nesting controls inside one both breaks the
+ * markup and swallows their clicks into a toggle. A NON-trusted plugin also
+ * keeps its one-line explanation in the head — a dark switch with no reason
+ * given is the thing that sends you looking for a bug.
+ */
 function PluginCard({
     plugin,
     busy,
@@ -2889,46 +2997,34 @@ function PluginCard({
     onUninstall: () => void;
 }) {
     return (
-        <div className="plugin-card">
+        <Accordion.Item value={plugin.id} className="plugin-card border-b-0">
             <div className="plugin-card-head">
-                <div className="set-row-main">
-                    <span className="set-row-label">
-                        {plugin.name}{' '}
-                        <span className="text-zinc-500">
-                            v{plugin.version} · {plugin.namespace}
-                        </span>{' '}
-                        <TrustBadge plugin={plugin} />
+                {/* `py-0` so twMerge drops the trigger's own vertical padding — the
+                    card supplies its own, and this must not depend on CSS order. */}
+                <Accordion.Trigger className="plugin-card-summary py-0">
+                    <span className="set-row-main">
+                        <span className="set-row-label">
+                            {plugin.name} <span className="text-zinc-500">{pluginSummaryLine(plugin)}</span>{' '}
+                            <TrustBadge plugin={plugin} />
+                        </span>
+                        {plugin.trust === 'untrusted' && (
+                            <span className="set-row-desc" style={{ color: '#f87171' }}>
+                                Untrusted — its signature is invalid or its code was tampered with. This plugin cannot be enabled.
+                            </span>
+                        )}
+                        {plugin.trust === 'outdated' && (
+                            <span className="set-row-desc" style={{ color: '#fb923c' }}>
+                                Needs an update — this plugin&apos;s manifest predates a newer Genie requirement. Reinstall it to
+                                update; it can&apos;t load until then.
+                            </span>
+                        )}
+                        {plugin.trust === 'unsigned' && (
+                            <span className="set-row-desc" style={{ color: '#fbbf24' }}>
+                                Unsigned — not verified by a trusted publisher. Requires Developer Mode to enable.
+                            </span>
+                        )}
                     </span>
-                    {plugin.description && <span className="set-row-desc">{plugin.description}</span>}
-                    <span className="set-row-desc">
-                        Source: {plugin.sourceType}
-                        {plugin.sourceUrl ? ` — ${plugin.sourceUrl}` : ''}
-                        {plugin.publisher ? ` · by ${plugin.publisher}` : ''}
-                    </span>
-                    {plugin.trust === 'untrusted' && (
-                        <span className="set-row-desc" style={{ color: '#f87171' }}>
-                            Untrusted — its signature is invalid or its code was tampered with. This plugin cannot be enabled.
-                        </span>
-                    )}
-                    {plugin.trust === 'outdated' && (
-                        <span className="set-row-desc" style={{ color: '#fb923c' }}>
-                            Needs an update — this plugin&apos;s manifest predates a newer Genie requirement. Reinstall it to
-                            update; it can&apos;t load until then.
-                        </span>
-                    )}
-                    {plugin.trust === 'unsigned' && (
-                        <span className="set-row-desc" style={{ color: '#fbbf24' }}>
-                            Unsigned — not verified by a trusted publisher. Requires Developer Mode to enable.
-                        </span>
-                    )}
-                    {plugin.sides.client && !plugin.sides.host && (
-                        <span className="set-row-desc">
-                            Client-side — it only contributes editors, so it runs no code here. This switch
-                            controls whether files open in it in THIS window; a remote client connecting to
-                            this Genie uses its own setting and its own copy of the editor.
-                        </span>
-                    )}
-                </div>
+                </Accordion.Trigger>
                 <div className="set-actions">
                     <Switch checked={plugin.enabled} onCheckedChange={onEnable} />
                     <Action variant="ghost" color="red" icon="trash-2" disabled={busy} onClick={onUninstall}>
@@ -2937,68 +3033,84 @@ function PluginCard({
                 </div>
             </div>
 
-            {plugin.tools.length > 0 && (
-                <>
-                    <SetSubhead>Agent tools (run on this machine)</SetSubhead>
-                    {plugin.tools.map((t) => (
-                        <div className="plugin-row" key={t.name}>
-                            <div className="set-row-main">
-                                <span className="set-row-label">
-                                    <code>{t.name}</code>
-                                </span>
-                                <span className="set-row-desc">{t.description}</span>
-                            </div>
-                        </div>
-                    ))}
-                </>
-            )}
-
-            {plugin.editors.length > 0 && (
-                <>
-                    <SetSubhead>Editors (client-side)</SetSubhead>
+            <Accordion.Content className="plugin-card-details">
+                {plugin.description && <Text size="xs" className="text-zinc-500">{plugin.description}</Text>}
+                <Text size="xs" className="text-zinc-500">
+                    Source: {plugin.sourceType}
+                    {plugin.sourceUrl ? ` — ${plugin.sourceUrl}` : ''}
+                    {plugin.publisher ? ` · by ${plugin.publisher}` : ''}
+                </Text>
+                {plugin.sides.client && !plugin.sides.host && (
                     <Text size="xs" className="text-zinc-500">
-                        These render in whichever Genie window opens the file. The file types listed are
-                        also the sandbox: an editor only ever reads or writes those, inside the workspace.
+                        Client-side — it only contributes editors, so it runs no code here. This switch
+                        controls whether files open in it in THIS window; a remote client connecting to
+                        this Genie uses its own setting and its own copy of the editor.
                     </Text>
-                    {plugin.editors.map((e) => (
-                        <div className="plugin-row" key={e.id}>
-                            <div className="set-row-main">
-                                <span className="set-row-label">
-                                    {e.title} — {e.extensions.join(', ')}
-                                </span>
-                                <span className="set-row-desc">
-                                    <code>{e.fancyEditor}</code>
-                                </span>
-                            </div>
-                        </div>
-                    ))}
-                </>
-            )}
+                )}
 
-            <SetSubhead>Permissions</SetSubhead>
-            {!plugin.sides.host ? (
-                <Text size="xs" className="text-zinc-500">
-                    None needed — this plugin runs no code on this machine.
-                </Text>
-            ) : plugin.permissions.length === 0 ? (
-                <Text size="xs" className="text-zinc-500">
-                    This plugin declares no capabilities.
-                </Text>
-            ) : (
-                plugin.permissions.map((perm) => (
-                    <SettingRow
-                        key={`${perm.category}:${perm.key}`}
-                        label={perm.label}
-                        keywords={`permission grant ${perm.category} ${perm.key}`}
-                    >
-                        <Switch
-                            checked={perm.granted}
-                            onCheckedChange={(v: boolean) => onToggleGrant(perm, v)}
-                        />
-                    </SettingRow>
-                ))
-            )}
-        </div>
+                {plugin.tools.length > 0 && (
+                    <>
+                        <SetSubhead>Agent tools (run on this machine)</SetSubhead>
+                        {plugin.tools.map((t) => (
+                            <div className="plugin-row" key={t.name}>
+                                <div className="set-row-main">
+                                    <span className="set-row-label">
+                                        <code>{t.name}</code>
+                                    </span>
+                                    <span className="set-row-desc">{t.description}</span>
+                                </div>
+                            </div>
+                        ))}
+                    </>
+                )}
+
+                {plugin.editors.length > 0 && (
+                    <>
+                        <SetSubhead>Editors (client-side)</SetSubhead>
+                        <Text size="xs" className="text-zinc-500">
+                            These render in whichever Genie window opens the file. The file types listed are
+                            also the sandbox: an editor only ever reads or writes those, inside the workspace.
+                        </Text>
+                        {plugin.editors.map((e) => (
+                            <div className="plugin-row" key={e.id}>
+                                <div className="set-row-main">
+                                    <span className="set-row-label">
+                                        {e.title} — {e.extensions.join(', ')}
+                                    </span>
+                                    <span className="set-row-desc">
+                                        <code>{e.fancyEditor}</code>
+                                    </span>
+                                </div>
+                            </div>
+                        ))}
+                    </>
+                )}
+
+                <SetSubhead>Permissions</SetSubhead>
+                {!plugin.sides.host ? (
+                    <Text size="xs" className="text-zinc-500">
+                        None needed — this plugin runs no code on this machine.
+                    </Text>
+                ) : plugin.permissions.length === 0 ? (
+                    <Text size="xs" className="text-zinc-500">
+                        This plugin declares no capabilities.
+                    </Text>
+                ) : (
+                    plugin.permissions.map((perm) => (
+                        <SettingRow
+                            key={`${perm.category}:${perm.key}`}
+                            label={perm.label}
+                            keywords={`permission grant ${perm.category} ${perm.key}`}
+                        >
+                            <Switch
+                                checked={perm.granted}
+                                onCheckedChange={(v: boolean) => onToggleGrant(perm, v)}
+                            />
+                        </SettingRow>
+                    ))
+                )}
+            </Accordion.Content>
+        </Accordion.Item>
     );
 }
 

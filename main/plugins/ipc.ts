@@ -16,7 +16,7 @@ import {
     type PluginRow,
     type PluginGrants,
 } from '../db';
-import { validatePluginManifest, type PluginManifest } from './manifest';
+import { validatePluginManifest, type PluginManifest, type RejectedMarketplaceEntry } from './manifest';
 import {
     installPluginFromRepo,
     installPluginFromFolder,
@@ -25,7 +25,9 @@ import {
     addMarketplace,
     removeMarketplace,
     refreshMarketplace,
+    refreshStaleMarketplaces,
     marketplacePlugins,
+    marketplaceIndexIssues,
     revalidateAllPluginTrust,
 } from './install';
 import { disposePlugin } from './registry';
@@ -148,7 +150,11 @@ export interface MarketplaceView {
     name: string;
     url: string;
     official: boolean;
+    /** ISO timestamp of the last successful index read — the list's real age. */
+    checkedAt: string;
     plugins: Array<{ id: string; name: string; description: string | null; installed: boolean }>;
+    /** Members the index lists that Genie cannot install (surfaced, not dropped). */
+    issues: RejectedMarketplaceEntry[];
 }
 
 function marketplaceView(id: string): MarketplaceView | null {
@@ -161,12 +167,14 @@ function marketplaceView(id: string): MarketplaceView | null {
         name: row.name,
         url: row.url,
         official: row.official,
+        checkedAt: row.updated_at,
         plugins: marketplacePlugins(id).map((p) => ({
             id: p.id,
             name: p.name,
             description: p.description ?? null,
             installed: installedIds.has(p.id),
         })),
+        issues: marketplaceIndexIssues(id),
     };
 }
 
@@ -275,6 +283,21 @@ export function registerPluginsIpc(): void {
         try {
             const s = await refreshMarketplace(String(id));
             return ok(s);
+        } catch (e) {
+            return fail((e as Error).message);
+        }
+    });
+
+    // Re-read every STALE marketplace index. The renderer calls this when the
+    // Marketplaces tab is opened (and with maxAgeMs 0 for an explicit "Refresh
+    // all"), which is how a plugin published AFTER a marketplace was added ever
+    // becomes visible — nothing else re-clones the index.
+    ipcMain.handle('plugins:refresh-marketplaces', async (_e, maxAgeMs?: number) => {
+        try {
+            const reports = await refreshStaleMarketplaces(
+                typeof maxAgeMs === 'number' && maxAgeMs >= 0 ? maxAgeMs : undefined,
+            );
+            return ok(reports);
         } catch (e) {
             return fail((e as Error).message);
         }
