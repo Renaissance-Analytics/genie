@@ -374,6 +374,11 @@ export async function runManageSite(
                 const plan = planHostAllowlist({
                     genName: getWorkspaceDevSites(ws.id)[siteId]?.genName ?? '',
                     ...(framework ? { framework } : {}),
+                    // The recipe stack/server, so a production serve (e.g. a
+                    // FrankenPHP Laravel app with no `artisan` token) is reported
+                    // with its real host/scheme plan rather than as `none` (#119).
+                    ...(stack ? { stack } : {}),
+                    ...(server ? { server } : {}),
                     ...(serve ? { command: serve } : {}),
                     ...(req.upstreamHost ? { upstreamHost: req.upstreamHost } : {}),
                 });

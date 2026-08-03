@@ -123,4 +123,45 @@ describe('runSiteBuild', () => {
         expect(result.ok).toBe(false);
         expect(result.error).toContain('docker daemon went away');
     });
+
+    // --- secret scrubbing (genie #119) --------------------------------------
+    //
+    // The build injects a managed GitHub token (COMPOSER_AUTH / GITHUB_TOKEN) so
+    // composer and npm can fetch private/rate-limited github.com deps. That token
+    // must NEVER reach the surfaced build log — which the UI shows verbatim.
+
+    it('SCRUBS injected secrets out of the surfaced build log', async () => {
+        const token = 'ghs_SUPERSECRET';
+        const exec: ExecFn = async () => okResult(`composer using github-oauth ${token} for github.com`);
+        const result = await runSiteBuild(
+            [{ label: 'Install PHP dependencies', command: ['composer', 'install'] }],
+            { ...deps(exec), secrets: [token] },
+        );
+        expect(result.ok).toBe(true);
+        expect(result.log).not.toContain(token);
+        expect(result.log).toContain('***');
+    });
+
+    it('scrubs secrets out of a FAILED step error, where a leaked token would be most visible', async () => {
+        const token = 'ghs_SUPERSECRET';
+        const exec: ExecFn = async () => failResult(`auth against github.com failed with token ${token}`);
+        const result = await runSiteBuild(
+            [{ label: 'Install PHP dependencies', command: ['composer', 'install'] }],
+            { ...deps(exec), secrets: [token] },
+        );
+        expect(result.ok).toBe(false);
+        expect(result.error).not.toContain(token);
+        expect(result.log).not.toContain(token);
+    });
+
+    it('scrubs secrets from live progress output too', async () => {
+        const token = 'ghs_SUPERSECRET';
+        const chunks: string[] = [];
+        const exec: ExecFn = async () => okResult(`downloading from https://x-access-token:${token}@github.com`);
+        await runSiteBuild(
+            [{ label: 'Install', command: ['npm', 'ci'] }],
+            { ...deps(exec), secrets: [token], onProgress: (c) => chunks.push(c) },
+        );
+        expect(chunks.join('')).not.toContain(token);
+    });
 });

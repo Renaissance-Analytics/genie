@@ -86,6 +86,8 @@ export type {
 } from './serve-recipe';
 export { BUILD_STEP_TIMEOUT_MS, runSiteBuild } from './site-build';
 export type { SiteBuildDeps, SiteBuildResult, SiteBuildStepResult } from './site-build';
+export { buildAuthEnv } from './build-auth';
+export type { BuildAuth } from './build-auth';
 export { STABLE_PORT_RANGE, planExposure, stablePortFor } from './exposure';
 export type {
     BrowserProtocol,

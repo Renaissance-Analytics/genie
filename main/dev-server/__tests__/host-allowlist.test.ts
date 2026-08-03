@@ -69,6 +69,26 @@ describe('detecting which framework will check the Host header', () => {
         expect(laravel?.framework).toBe('laravel');
     });
 
+    it('recognises a PRODUCTION FrankenPHP serve as Laravel, even with no stored framework (genie #119)', () => {
+        // The live blank-page bug: a Laravel site served in production runs
+        // `frankenphp php-server` — there is NO `artisan` token — so the old argv
+        // scan called it 'none'. That skipped the APP_URL/ASSET_URL injection, so
+        // asset() emitted http:// behind the https .gen proxy: mixed content, the
+        // browser blocked the CSS/JS, and the page rendered blank.
+        expect(
+            detectFramework({
+                command: ['frankenphp', 'php-server', '--listen', '0.0.0.0:8080', '--root', 'public/'],
+            }),
+        ).toBe('laravel');
+        // The robust path: keyed off the recipe STACK/SERVER rather than the argv.
+        expect(detectFramework({ stack: 'php', server: 'frankenphp' })).toBe('laravel');
+    });
+
+    it('recognises a production gunicorn serve as Django from the recipe server', () => {
+        // `gunicorn mysite.wsgi` carries no "django" token; the recipe server does.
+        expect(detectFramework({ server: 'gunicorn' })).toBe('django');
+    });
+
     it('a BUILT front end has no framework to allow-list — nothing is running', () => {
         // The reframe, visible here: a Vite app in production is nginx over
         // `dist/`. There is no dev server left to reject a Host header, so
@@ -124,6 +144,24 @@ describe('planning what to inject', () => {
         const plan = planHostAllowlist({ genName, framework: 'laravel' });
         expect(plan.status).toBe('not-needed');
         expect(plan.env.APP_URL).toBe('https://web.acme.gen');
+    });
+
+    it('lines a PRODUCTION Laravel serve up with the https .gen origin — the mixed-content fix (genie #119)', () => {
+        // No stored framework — this is the shape the live site actually had: a
+        // FrankenPHP serve argv. The plan must still set APP_URL/ASSET_URL to
+        // https://<host> so no asset is requested over http and blocked.
+        const plan = planHostAllowlist({
+            genName,
+            command: ['frankenphp', 'php-server', '--listen', '0.0.0.0:8080', '--root', 'public/'],
+        });
+        expect(plan.env.APP_URL).toBe('https://web.acme.gen');
+        expect(plan.env.ASSET_URL).toBe('https://web.acme.gen');
+    });
+
+    it('keys the same fix off the recipe stack, so a php recipe gets it without argv guessing', () => {
+        const plan = planHostAllowlist({ genName, stack: 'php', server: 'frankenphp' });
+        expect(plan.env.APP_URL).toBe('https://web.acme.gen');
+        expect(plan.env.ASSET_URL).toBe('https://web.acme.gen');
     });
 
     it('injects nothing for a stack with no allowlist at all', () => {
