@@ -5047,7 +5047,76 @@ body.gutter-dragging .grid-gutter {
     color: var(--ai-green);
 }
 
+/* --- attachments (message chips + composer staging) --------------------- */
+.agentinbox-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 7px;
+}
+/* The chip is the button — a bare wrapper so the Fancy Badge keeps its own
+   shape and the whole thing is one click target. */
+.agentinbox-attachment {
+    display: inline-flex;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    cursor: pointer;
+}
+.agentinbox-attachment:disabled {
+    opacity: 0.55;
+    cursor: progress;
+}
+.agentinbox-attachment > * {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.agentinbox-attachment:hover:not(:disabled) > * {
+    filter: brightness(1.15);
+}
+
 /* --- footer (composer / read-only bar) --------------------------------- */
+.agentinbox-composer-wrap {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+}
+.agentinbox-staged {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px 0;
+}
+.agentinbox-staged > * {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.agentinbox-staged-x {
+    display: inline-flex;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0.7;
+}
+.agentinbox-staged-x:hover {
+    opacity: 1;
+}
+.agentinbox-staged-sum {
+    color: var(--fg-4);
+}
+.agentinbox-staged-err {
+    color: var(--ai-red, #f87171);
+}
+/* The real file input stays hidden — the paperclip button opens it. */
+.agentinbox-file-input {
+    display: none;
+}
 .agentinbox-foot,
 .agentinbox-composer {
     flex: 0 0 auto;

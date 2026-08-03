@@ -30,6 +30,7 @@ import type { AgentInboxScope, WorkspaceAgentAccess } from './agentinbox/types';
  */
 
 let db: Database.Database | null = null;
+let resolvedDataDir: string | null = null;
 
 /**
  * Open (once) the local SQLite store under `dataDir` and run pending migrations.
@@ -45,6 +46,7 @@ export function initDatabase(dataDir?: string): Database.Database {
         dataDir ??
         (require('electron') as typeof import('electron')).app.getPath('userData');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    resolvedDataDir = dir;
     const file = path.join(dir, 'genie.db');
 
     db = new Database(file);
@@ -58,6 +60,17 @@ export function initDatabase(dataDir?: string): Database.Database {
 export function getDb(): Database.Database {
     if (!db) throw new Error('Database not initialised. Call initDatabase().');
     return db;
+}
+
+/**
+ * The directory genie.db lives in — Electron's `userData` on the desktop, the
+ * data volume on the headless host. Recorded by {@link initDatabase} so sibling
+ * stores (e.g. the AgentInbox attachment blobs) land next to the database on BOTH
+ * shells without a second wiring step in each one.
+ */
+export function getDataDir(): string {
+    if (!resolvedDataDir) throw new Error('Database not initialised. Call initDatabase().');
+    return resolvedDataDir;
 }
 
 /**
@@ -906,6 +919,44 @@ export function runMigrations(d: Database.Database): void {
                 if (cols.has('workspace_services')) {
                     db.exec(`ALTER TABLE workspaces DROP COLUMN workspace_services`);
                 }
+            },
+        },
+        {
+            // v35 — AgentInbox FILE ATTACHMENTS (metadata).
+            //
+            // The BYTES are deliberately NOT here: they live in a
+            // content-addressed directory beside this database
+            // (`agentinbox-attachments/<sha>` — see agentinbox/attachments.ts).
+            // genie.db is on the hot path for every spec, message and cursor and
+            // is WAL-journalled; pushing tens of megabytes of opaque payload
+            // through it would bloat the WAL and slow every unrelated write, and
+            // a blob column can't dedup. What lives here is the part worth
+            // querying and joining: which files rode which message.
+            //
+            // `ON DELETE CASCADE` off `whisper_messages` is the point of the FK —
+            // the human's existing conversation wipes (v23's table, genie #64/#66)
+            // must take the attachment metadata with them rather than leave rows
+            // pointing at a message that no longer exists. The blobs are
+            // content-addressed and possibly shared, so reclaiming THOSE is a
+            // separate sweep, not a cascade.
+            version: 35,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS agentinbox_attachments (
+                        id         TEXT PRIMARY KEY,
+                        message_id TEXT NOT NULL,
+                        filename   TEXT NOT NULL,
+                        bytes      INTEGER NOT NULL DEFAULT 0,
+                        mime       TEXT NOT NULL DEFAULT '',
+                        sha256     TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        FOREIGN KEY (message_id) REFERENCES whisper_messages(id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_agentinbox_attachments_message
+                        ON agentinbox_attachments(message_id);
+                    CREATE INDEX IF NOT EXISTS idx_agentinbox_attachments_sha
+                        ON agentinbox_attachments(sha256);
+                `);
             },
         },
     ];

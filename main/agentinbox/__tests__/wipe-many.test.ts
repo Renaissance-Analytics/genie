@@ -57,6 +57,16 @@ function makeStore(): AgentInboxStore & { rows: AgentInboxMessage[]; cursors: Ma
             }
             return before - rows.length;
         },
+        getMessage(id) {
+            return rows.find((m) => m.id === id) ?? null;
+        },
+        getAttachment(id) {
+            for (const m of rows) {
+                const a = m.attachments?.find((x) => x.id === id);
+                if (a) return { ...a, messageId: m.id };
+            }
+            return null;
+        },
     };
 }
 

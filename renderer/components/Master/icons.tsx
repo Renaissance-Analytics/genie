@@ -522,6 +522,26 @@ export const IconReply = ({ size = 13, ...p }: Props) =>
         p.className,
         p.style,
     );
+/** Paperclip — attach a file to an AgentInbox message. */
+export const IconPaperclip = ({ size = 13, ...p }: Props) =>
+    wrap(
+        size,
+        <path d="M21.44 11.05 12.25 20.24a5.5 5.5 0 0 1-7.78-7.78l8.49-8.48a3.67 3.67 0 0 1 5.19 5.19l-8.49 8.48a1.83 1.83 0 0 1-2.6-2.6l7.79-7.78" />,
+        p.className,
+        p.style,
+    );
+/** Download — save an attachment out of the inbox. */
+export const IconDownload = ({ size = 12, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+        </>,
+        p.className,
+        p.style,
+    );
 /** Swap arrows — the ⇆ between two DM participants. */
 export const IconSwap = ({ size = 12, ...p }: Props) =>
     wrap(

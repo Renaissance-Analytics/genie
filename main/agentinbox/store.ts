@@ -1,5 +1,5 @@
 import { getDb } from '../db';
-import type { AgentInboxMessage } from './types';
+import type { AgentInboxAttachment, AgentInboxMessage } from './types';
 
 /**
  * Durable persistence port for the AgentInbox broker.
@@ -42,6 +42,18 @@ export interface AgentInboxStore {
     /** Wipe a DM thread's persisted history — BOTH directions of the pair
      *  (genie #64). Returns rows deleted. Cursors untouched, as above. */
     deleteDmThread(a: string, b: string): number;
+    /** One persisted message by id, attachments hydrated — the lookup behind
+     *  `saveAttachment`'s authorization check (who was this message FOR?). The
+     *  broker's own logs are capped, so an older message must come from here. */
+    getMessage(id: string): AgentInboxMessage | null;
+    /** One attachment's metadata by id, with the message it rode. Null when
+     *  unknown — or when the human has since wiped that conversation. */
+    getAttachment(id: string): StoredAttachment | null;
+}
+
+/** An attachment as persisted: the wire metadata plus its owning message. */
+export interface StoredAttachment extends AgentInboxAttachment {
+    messageId: string;
 }
 
 /** One sent-DM read-receipt: the message + whether its recipient has seen it. */
@@ -79,6 +91,12 @@ export const noopAgentInboxStore: AgentInboxStore = {
     deleteDmThread() {
         return 0;
     },
+    getMessage() {
+        return null;
+    },
+    getAttachment() {
+        return null;
+    },
 };
 
 interface Row {
@@ -94,7 +112,26 @@ interface Row {
     interrupt: number;
 }
 
-function toMsg(r: Row): AgentInboxMessage {
+interface AttachmentRow {
+    id: string;
+    message_id: string;
+    filename: string;
+    bytes: number;
+    mime: string;
+    sha256: string;
+}
+
+function toAttachment(r: AttachmentRow): AgentInboxAttachment {
+    return {
+        id: r.id,
+        filename: r.filename,
+        bytes: r.bytes,
+        mime: r.mime,
+        sha256: r.sha256,
+    };
+}
+
+function toMsg(r: Row, attachments?: AgentInboxAttachment[]): AgentInboxMessage {
     return {
         seq: r.seq,
         id: r.id,
@@ -106,19 +143,56 @@ function toMsg(r: Row): AgentInboxMessage {
         ...(r.kind === 'channel' ? { channel: r.channel_key ?? undefined } : {}),
         ...(r.kind === 'dm' ? { to: r.to_id ?? undefined } : {}),
         ...(r.interrupt ? { interrupt: true } : {}),
+        // ABSENT, not `[]`, when there are none — a plain message stays exactly
+        // the shape it was before attachments existed.
+        ...(attachments && attachments.length ? { attachments } : {}),
     };
+}
+
+/**
+ * Hydrate a batch of rows with their attachments in ONE query, not one per
+ * message: `loadRecent` runs at boot over thousands of rows, so a per-row lookup
+ * would turn a single read into a few thousand.
+ */
+function hydrate(rows: Row[]): AgentInboxMessage[] {
+    if (rows.length === 0) return [];
+    const byMessage = new Map<string, AgentInboxAttachment[]>();
+    // SQLite's default parameter ceiling is generous (32k+) but not infinite —
+    // chunk so a big rehydrate can never trip it.
+    for (let i = 0; i < rows.length; i += 500) {
+        const chunk = rows.slice(i, i + 500);
+        const placeholders = chunk.map(() => '?').join(',');
+        const attachments = getDb()
+            .prepare<unknown[], AttachmentRow>(
+                `SELECT * FROM agentinbox_attachments
+                  WHERE message_id IN (${placeholders})
+                  ORDER BY rowid ASC`,
+            )
+            .all(...chunk.map((r) => r.id));
+        for (const a of attachments) {
+            const list = byMessage.get(a.message_id) ?? [];
+            list.push(toAttachment(a));
+            byMessage.set(a.message_id, list);
+        }
+    }
+    return rows.map((r) => toMsg(r, byMessage.get(r.id)));
 }
 
 /** The genie.db-backed store — installed at boot (main process). */
 export const dbAgentInboxStore: AgentInboxStore = {
     append(msg) {
-        getDb()
-            .prepare(
+        const db = getDb();
+        // ONE transaction: the message and its attachments land together, so a
+        // reader can never observe a message that claims files it hasn't got.
+        // Order matters — `INSERT OR REPLACE` on the message REPLACES the row,
+        // which cascades its old attachment rows away, so the attachments must
+        // be (re)inserted after it.
+        db.transaction(() => {
+            db.prepare(
                 `INSERT OR REPLACE INTO whisper_messages
                  (id, seq, kind, from_id, from_label, to_id, channel_key, text, ts, interrupt)
                  VALUES (@id, @seq, @kind, @from_id, @from_label, @to_id, @channel_key, @text, @ts, @interrupt)`,
-            )
-            .run({
+            ).run({
                 id: msg.id,
                 seq: msg.seq,
                 kind: msg.kind,
@@ -130,6 +204,22 @@ export const dbAgentInboxStore: AgentInboxStore = {
                 ts: msg.ts,
                 interrupt: msg.interrupt ? 1 : 0,
             });
+            for (const a of msg.attachments ?? []) {
+                db.prepare(
+                    `INSERT OR REPLACE INTO agentinbox_attachments
+                     (id, message_id, filename, bytes, mime, sha256, created_at)
+                     VALUES (@id, @message_id, @filename, @bytes, @mime, @sha256, @created_at)`,
+                ).run({
+                    id: a.id,
+                    message_id: msg.id,
+                    filename: a.filename,
+                    bytes: a.bytes,
+                    mime: a.mime,
+                    sha256: a.sha256,
+                    created_at: msg.ts,
+                });
+            }
+        })();
     },
     maxSeq() {
         return (
@@ -142,7 +232,7 @@ export const dbAgentInboxStore: AgentInboxStore = {
         const rows = getDb()
             .prepare<[number], Row>('SELECT * FROM whisper_messages ORDER BY seq DESC LIMIT ?')
             .all(limit);
-        return rows.reverse().map(toMsg);
+        return hydrate(rows.reverse());
     },
     getCursor(agentId) {
         return (
@@ -174,7 +264,7 @@ export const dbAgentInboxStore: AgentInboxStore = {
                  ORDER BY seq ASC`,
             )
             .all(cursor, agentId, agentId, ...channelKeys);
-        return rows.map(toMsg);
+        return hydrate(rows);
     },
     sentDmReceipts(fromId, limit) {
         // A DM is SEEN once its recipient's ACK cursor (advanced on `receive`) has
@@ -217,5 +307,17 @@ export const dbAgentInboxStore: AgentInboxStore = {
                     AND ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))`,
             )
             .run(a, b, b, a).changes;
+    },
+    getMessage(id) {
+        const row = getDb()
+            .prepare<[string], Row>('SELECT * FROM whisper_messages WHERE id = ?')
+            .get(id);
+        return row ? (hydrate([row])[0] ?? null) : null;
+    },
+    getAttachment(id) {
+        const row = getDb()
+            .prepare<[string], AttachmentRow>('SELECT * FROM agentinbox_attachments WHERE id = ?')
+            .get(id);
+        return row ? { ...toAttachment(row), messageId: row.message_id } : null;
     },
 };

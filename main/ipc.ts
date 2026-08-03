@@ -78,6 +78,11 @@ import {
 import { agentInboxBroker } from './agentinbox/broker';
 import { type AgentInboxScope } from './agentinbox/types';
 import {
+    postAsHuman,
+    readHumanAttachment,
+    type HumanInboxAttachment,
+} from './agentinbox/human';
+import {
     listPendingQuestions,
     answerPendingQuestion,
     onQuestionsChanged,
@@ -1081,19 +1086,21 @@ export function registerIpcHandlers(): void {
     );
     ipcMain.handle(
         'agentinbox:post',
-        (_e, input: { channelKey?: string; toAgentId?: string; text: string }) => {
-            if (!input?.text?.trim()) return { ok: false, error: 'Message is empty.' };
-            if (!input.channelKey && !input.toAgentId) {
-                return { ok: false, error: 'Pick a channel or an agent to message.' };
-            }
-            const r = agentInboxBroker.send({
-                human: true,
-                channelArg: input.channelKey,
-                toAgentId: input.toAgentId,
-                text: input.text,
-            });
-            return r.ok ? { ok: true } : { ok: false, error: r.error };
-        },
+        async (
+            _e,
+            input: {
+                channelKey?: string;
+                toAgentId?: string;
+                text: string;
+                attachments?: HumanInboxAttachment[];
+            },
+        ) => postAsHuman(input),
+    );
+    // Hand an attachment's BYTES back to the panel so the human can download it.
+    // Genie reads its OWN blob store here — no filesystem egress — and the client
+    // saves the file, so a human on a remote window gets it on THEIR machine.
+    ipcMain.handle('agentinbox:attachment-bytes', (_e, id: string) =>
+        readHumanAttachment(String(id ?? '')),
     );
     // genie #64 — AGENT-LAG: how far behind the agents are on their inboxes. Seeds
     // the header badge on mount; the live `agentinbox:lag` push keeps it current.

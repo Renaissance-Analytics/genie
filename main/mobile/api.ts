@@ -55,6 +55,11 @@ import {
     pollWorkspace,
 } from '../issue-watch';
 import { agentInboxBroker } from '../agentinbox/broker';
+import {
+    postAsHuman,
+    readHumanAttachment,
+    type HumanInboxAttachment,
+} from '../agentinbox/human';
 import { listAllProjects, getTynnBackend } from '../backend/registry';
 import { workspaceDocHealth, repairWorkspaceDocs } from '../workspace/create-agi';
 import { runHostSessionSave, type SessionSaveReport } from '../workspace/session-save';
@@ -1585,6 +1590,8 @@ export async function handleApi(
             pairKey?: string;
             channelKeys?: string[];
             pairKeys?: string[];
+            attachments?: HumanInboxAttachment[];
+            attachmentId?: string;
             patch?: {
                 purpose?: string;
                 scope?: AgentInboxScope;
@@ -1614,21 +1621,26 @@ export async function handleApi(
         }
         if (pathname === '/api/desktop/agentinbox/post') {
             if (guardControl()) return true;
-            if (!wb.text || !wb.text.trim()) {
-                sendJson(res, 200, { ok: false, error: 'Message is empty.' });
-                return true;
-            }
-            if (!wb.channelKey && !wb.toAgentId) {
-                sendJson(res, 200, { ok: false, error: 'Pick a channel or an agent to message.' });
-                return true;
-            }
-            const r = agentInboxBroker.send({
-                human: true,
-                channelArg: wb.channelKey,
-                toAgentId: wb.toAgentId,
-                text: wb.text,
-            });
-            sendJson(res, 200, r.ok ? { ok: true } : { ok: false, error: r.error });
+            // Same `postAsHuman` the local IPC handler calls — including inline
+            // ATTACHMENTS, whose bytes ride the request so a remote human
+            // attaches from their OWN machine, never the host's disk.
+            sendJson(
+                res,
+                200,
+                await postAsHuman({
+                    channelKey: wb.channelKey,
+                    toAgentId: wb.toAgentId,
+                    text: wb.text,
+                    attachments: wb.attachments,
+                }),
+            );
+            return true;
+        }
+        // An attachment's BYTES, for the client to save. A READ of Genie's own
+        // store (no filesystem egress), so it is auth-only like the other reads —
+        // and the file lands on the human's machine, which is the point.
+        if (pathname === '/api/desktop/agentinbox/attachment') {
+            sendJson(res, 200, await readHumanAttachment(String(wb.attachmentId ?? '')));
             return true;
         }
         // genie #64 — WIPE a conversation. Destructive "drive the host" mutations

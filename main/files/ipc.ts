@@ -85,8 +85,13 @@ interface ListTreeOpts {
  * Returns the absolute path on success, or null when the resolved path
  * escapes (via `..`, an absolute path, or a different drive). The root
  * itself ('' or '.') resolves to the workspace root.
+ *
+ * EXPORTED as the one containment primitive: every workspace-confined surface
+ * (the `files:*` IPC, the plugin fs bridge, AgentInbox attachments) resolves
+ * through this, so there is a single definition of "inside the workspace" to
+ * audit rather than a copy per feature.
  */
-function guardedResolve(workspacePath: string, relPath: string): string | null {
+export function guardedResolve(workspacePath: string, relPath: string): string | null {
     const root = path.resolve(workspacePath);
     const abs = path.resolve(root, relPath);
     if (abs === root) return abs;
