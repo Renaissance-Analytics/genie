@@ -529,13 +529,18 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         expect(r.json.ok).toBe(true);
     });
 
-    it('POST /api/update/install: 423 while the desktop is locked', async () => {
+    it('POST /api/update/install: an OWNER may install while the desktop holds the baton (was 423)', async () => {
         const port = await start();
-        const token = await pair(port);
+        const token = await pair(port); // a PIN-paired device is the host OWNER
         updateReady = true;
+        // The desktop takes the baton — every per-session driver is frozen…
         setLocked(true);
-        const locked = await req(port, 'POST', '/api/update/install', { token });
-        expect(locked.status).toBe(423);
+        // …but a host upgrade RESTARTS the whole host regardless of who holds the
+        // baton, so install is gated on OWNERSHIP, not the per-session baton: the
+        // owner installs even while the desktop holds control. (Was 423 Locked.)
+        const r = await req(port, 'POST', '/api/update/install', { token });
+        expect(r.status).toBe(200);
+        expect(r.json.ok).toBe(true);
         setLocked(false);
     });
 
@@ -1292,6 +1297,49 @@ describe('multi-user baton (integration, 127.0.0.1)', () => {
         expect(String(blocked.json.error)).toMatch(/control/i);
 
         foxTerm.close();
+    });
+
+    it('lets an OWNER install a host update while ANOTHER user holds the baton', async () => {
+        const port = await start();
+        const { fox, turtle } = await twoUsers(port);
+        updateReady = true;
+
+        // 🐢 (a member) claims the free baton by driving first.
+        const turtleTerm = await openWs(
+            `ws://127.0.0.1:${port}/ws/term?terminal=t-1&token=${turtle}`,
+        );
+        turtleTerm.send(JSON.stringify({ type: 'input', data: 'echo turtle\r' }));
+        await settle();
+
+        // 🦊 (an owner) may still install the host update — an upgrade restarts the
+        // WHOLE host, so it is gated on ownership, not on holding the baton. Under
+        // the old baton gate this was 423 (another user has control).
+        const r = await req(port, 'POST', '/api/update/install', { token: fox });
+        expect(r.status).toBe(200);
+        expect(r.json.ok).toBe(true);
+
+        turtleTerm.close();
+    });
+
+    it('refuses a non-owner MEMBER installing a host update (403), even with a staged build', async () => {
+        const port = await start();
+        const { turtle } = await twoUsers(port);
+        updateReady = true; // a build IS staged — the refusal is on identity, not readiness
+
+        const r = await req(port, 'POST', '/api/update/install', { token: turtle });
+        expect(r.status).toBe(403);
+        expect(String(r.json.error)).toMatch(/owner/i);
+        // The install seam was never reached — the member was refused on identity.
+        expect(recentAudit().some((e) => e.action === 'update.install')).toBe(true);
+    });
+
+    it('still lets a non-owner MEMBER READ update status (reads are not owner-gated)', async () => {
+        const port = await start();
+        const { turtle } = await twoUsers(port);
+        updateReady = true;
+        const r = await req(port, 'GET', '/api/update/status', { token: turtle });
+        expect(r.status).toBe(200);
+        expect(r.json.readyToInstall).toBe(true);
     });
 
     it('lists the connected users with their emoji and pushes each client its own view', async () => {

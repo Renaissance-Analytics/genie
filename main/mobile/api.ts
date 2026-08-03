@@ -867,12 +867,27 @@ export async function handleApi(
     }
 
     // --- self-update apply: POST /api/update/install ----------------------
+    // Gated on OWNERSHIP, not the session baton. An upgrade RESTARTS the whole
+    // host — it disrupts every session regardless of who holds the baton — so the
+    // per-session baton (guardControl) is the wrong protection: it wrongly froze
+    // the host's own owner behind whoever was driving (a remote owner got 423
+    // Locked and couldn't upgrade their host). Instead the authenticated host
+    // OWNER may install a host update at ANY time, even while the desktop or
+    // another user holds the baton; a non-owner member may not (403). `principal.
+    // isOwner` is the session's owner bit (auth.ts sessionPrincipal): a PIN-paired
+    // device — the host owner's own — defaults to owner, and a Tynn-managed member
+    // carries the access grant's role ('owner' | 'member'). Reads
+    // (/api/update/status, /api/update/check) stay ungated.
     if (pathname === '/api/update/install') {
         if (method !== 'POST') {
             sendJson(res, 405, { error: 'method not allowed' });
             return true;
         }
-        if (guardControl()) return true;
+        if (!principal.isOwner) {
+            audit('update.install', 'refused (not owner)', actor);
+            sendJson(res, 403, { error: 'only the host owner can install a host update' });
+            return true;
+        }
         const result = deps.installUpdate();
         if (!result.ok) {
             // not-ready (nothing downloaded yet) and unsupported (non-packaged
