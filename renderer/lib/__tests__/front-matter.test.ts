@@ -342,6 +342,21 @@ describe('setFrontMatterField', () => {
         );
     });
 
+    it('escapes a trailing backslash in a quoted key so it cannot escape the closing quote', () => {
+        // js/incomplete-sanitization: the key needs quoting (the colon) AND ends
+        // with a backslash. Unescaped, it renders as `"a:b\"` — the trailing
+        // backslash escapes the closing quote, terminates the YAML string early
+        // and drops the field on the way back in. The key encoder must escape
+        // backslashes just like the scalar encoder does.
+        const key = 'a:b\\';
+        expect(setFrontMatterField('', key, { kind: 'string', value: 'v' })).toBe('"a:b\\\\": v');
+        expect(
+            parseFrontMatterFields(
+                setFrontMatterField('', key, { kind: 'string', value: 'v' }),
+            ).fields[0],
+        ).toMatchObject({ key, value: 'v' });
+    });
+
     it('writes a list as a block sequence', () => {
         expect(
             setFrontMatterField('title: Hi', 'tags', { kind: 'list', items: ['a', 'b c'] }),

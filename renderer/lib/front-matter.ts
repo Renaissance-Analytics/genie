@@ -343,21 +343,30 @@ function needsQuoting(s: string): boolean {
     return BOOLEAN.test(s) || NULLISH.test(s) || NUMBER.test(s);
 }
 
-/** Encode a string so YAML reads it back as the same string. */
-function encodeScalar(s: string): string {
-    if (!needsQuoting(s)) return s;
-    const escaped = s
+/**
+ * Escape a string for placement inside a YAML double-quoted scalar. Backslash
+ * MUST come first — escaping quotes before backslashes would double-escape the
+ * backslashes we just introduced, and leaving backslashes unescaped lets a
+ * trailing `\` escape the closing quote and break out of the string.
+ */
+function escapeDoubleQuoted(s: string): string {
+    return s
         .replace(/\\/g, '\\\\')
         .replace(/"/g, '\\"')
         .replace(/\n/g, '\\n')
         .replace(/\r/g, '\\r')
         .replace(/\t/g, '\\t');
-    return `"${escaped}"`;
+}
+
+/** Encode a string so YAML reads it back as the same string. */
+function encodeScalar(s: string): string {
+    if (!needsQuoting(s)) return s;
+    return `"${escapeDoubleQuoted(s)}"`;
 }
 
 function encodeKey(key: string): string {
     const plain = /^(?![\s#-])[^:#]+$/.test(key) && key === key.trim();
-    return plain ? key : `"${key.replace(/"/g, '\\"')}"`;
+    return plain ? key : `"${escapeDoubleQuoted(key)}"`;
 }
 
 /** Render one key as the YAML line(s) it occupies. */
