@@ -632,6 +632,28 @@ textarea.input {
     justify-content: space-between;
     gap: 12px;
 }
+/* The collapsed summary + its chevron. It is the Accordion trigger, so it takes
+   the row's spare width while the enable switch / Uninstall sit outside it. */
+.plugin-card-summary {
+    flex: 1;
+    min-width: 0;
+    gap: 8px;
+}
+.plugin-card-summary .set-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    text-align: left;
+}
+/* The disclosure body. Its first child needs no border — the head above it is
+   already a divider — but every later group keeps its own separator. */
+.plugin-card-details {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 8px;
+}
 .plugin-row {
     display: flex;
     align-items: center;

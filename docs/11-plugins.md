@@ -22,10 +22,26 @@ Everything lives in **Settings → Plugins**.
   already have are hidden here and managed under *Installed plugins* instead.
 - **Marketplaces tab** — third-party plugin collections you add by URL. A
   marketplace is just a git repo whose `genie-marketplace.json` indexes its
-  plugins; paste its URL, then install members individually. *Refresh* re-reads
-  the index; *Remove* forgets the marketplace (installed plugins stay).
+  plugins; paste its URL, then install members individually. *Remove* forgets
+  the marketplace (installed plugins stay).
+
+  A marketplace's plugin list is a **cache** of its index, so Genie re-reads any
+  index it hasn't checked in the last few minutes **whenever you open this tab** —
+  that's how a plugin published *after* you added the marketplace shows up. Each
+  marketplace says when it was last checked; *Check for new plugins* re-reads
+  them all right now, and *Refresh* re-reads just one.
+
+  If the index lists a plugin Genie can't install — a member with no `repo` or
+  `path`, a malformed id, a duplicate — that **one entry** is called out under
+  the marketplace with the reason, and its siblings still install normally.
 - **From a repo URL / from a folder** — install a single plugin directly, for
   plugins that aren't in any marketplace (or your own, while developing).
+
+Each installed plugin is one **collapsed row**: its name, what it contributes,
+and its trust chip, with the enable switch and *Uninstall* always to hand. Open
+the row for the rest — description, where it came from, its editors, and its
+permission switches. A plugin that hasn't been granted everything it declared
+says so on the collapsed row, so a half-granted plugin never hides.
 
 After installing, **enable** the plugin in the *Installed plugins* list. If the
 plugin adds **agent tools**, the first enable shows exactly which capabilities

@@ -217,6 +217,31 @@ export type ValidationResult<T> =
     | { ok: true; manifest: T }
     | { ok: false; errors: string[] };
 
+/** A member entry a marketplace index listed that Genie cannot use, and why. */
+export interface RejectedMarketplaceEntry {
+    /** Its coordinate in the index (`plugins[2]`) — what the author has to fix. */
+    at: string;
+    /** The declared id, when it has a usable one. */
+    id: string | null;
+    /** The declared display name, so the UI can say WHICH plugin is missing. */
+    name: string | null;
+    errors: string[];
+}
+
+/**
+ * The result of reading a marketplace index: the index itself, its USABLE member
+ * entries, and the ones that were rejected (never dropped silently).
+ */
+export type MarketplaceIndexParse =
+    | {
+          ok: true;
+          /** The index EXACTLY as published — never filtered (see {@link parseMarketplaceIndex}). */
+          manifest: MarketplaceManifest;
+          accepted: MarketplacePluginEntry[];
+          rejected: RejectedMarketplaceEntry[];
+      }
+    | { ok: false; errors: string[] };
+
 // --- validation helpers ------------------------------------------------------
 
 const REVERSE_DNS = /^[a-z0-9]+(?:[.-][a-z0-9]+)+$/i;
@@ -494,12 +519,47 @@ export function validatePluginManifest(raw: unknown): ValidationResult<PluginMan
     return { ok: true, manifest: raw as unknown as PluginManifest };
 }
 
+/** Everything wrong with ONE member entry. Empty ⇒ the entry is installable. */
+function marketplaceEntryErrors(p: unknown, at: string, seenIds: Set<string>): string[] {
+    const errors: string[] = [];
+    if (!isRecord(p)) return [`${at} must be an object`];
+
+    if (!nonEmpty(p.id)) errors.push(`${at}.id is required`);
+    else if (!REVERSE_DNS.test(p.id)) errors.push(`${at}.id must be reverse-DNS`);
+    else if (seenIds.has(p.id)) errors.push(`${at}.id "${p.id}" is duplicated`);
+    else seenIds.add(p.id);
+
+    if (!nonEmpty(p.name)) errors.push(`${at}.name is required`);
+    if (p.description !== undefined && !isStr(p.description))
+        errors.push(`${at}.description must be a string when present`);
+    // A member must be locatable: its own repo URL, or a path within the
+    // marketplace repo. Neither → it can't be fetched.
+    if (!nonEmpty(p.repo) && !nonEmpty(p.path))
+        errors.push(`${at} must set either \`repo\` (its own git URL) or \`path\` (a subdir of the marketplace repo)`);
+    if (p.repo !== undefined && !isStr(p.repo)) errors.push(`${at}.repo must be a string when present`);
+    if (p.path !== undefined && !isStr(p.path)) errors.push(`${at}.path must be a string when present`);
+    if (p.ref !== undefined && !isStr(p.ref)) errors.push(`${at}.ref must be a string when present`);
+    return errors;
+}
+
 /**
- * Validate a parsed `genie-marketplace.json` — a repo indexing many plugins.
- * Members are installed INDIVIDUALLY; a single-plugin repo is just the
- * degenerate case (install it directly by URL, no marketplace needed).
+ * Read a parsed `genie-marketplace.json` — a repo indexing many plugins.
+ *
+ * An index is a DIRECTORY LISTING, so it is validated in two tiers. The index
+ * ITSELF (id / name / publisher / `plugins` being an array) must be sound —
+ * without that there is nothing to read. Individual member entries are then
+ * PARTITIONED: usable ones are `accepted`, unusable ones are `rejected` with the
+ * reason and their coordinate in the file. One malformed entry therefore never
+ * hides its valid siblings — which is what used to freeze a whole marketplace at
+ * whatever it listed when it was first added, so a newly published plugin could
+ * never appear no matter how often you refreshed. Nothing is dropped silently:
+ * callers surface `rejected` to the user.
+ *
+ * `manifest` is the index EXACTLY as published, members and all. A signature is
+ * computed over those canonical bytes, so filtering entries out of it would
+ * break verification — {@link accepted} is the filtered view, not `manifest`.
  */
-export function validateMarketplaceManifest(raw: unknown): ValidationResult<MarketplaceManifest> {
+export function parseMarketplaceIndex(raw: unknown): MarketplaceIndexParse {
     const errors: string[] = [];
     if (!isRecord(raw)) {
         return { ok: false, errors: ['marketplace manifest must be a JSON object'] };
@@ -518,39 +578,50 @@ export function validateMarketplaceManifest(raw: unknown): ValidationResult<Mark
         else if (!nonEmpty(raw.publisher.name)) errors.push('`publisher.name` is required when `publisher` is present');
     }
 
-    const ids = new Set<string>();
-    if (!Array.isArray(raw.plugins)) {
-        errors.push('`plugins` is required and must be an array of member entries');
-    } else {
-        raw.plugins.forEach((p, i) => {
-            const at = `plugins[${i}]`;
-            if (!isRecord(p)) {
-                errors.push(`${at} must be an object`);
-                return;
-            }
-            if (!nonEmpty(p.id)) errors.push(`${at}.id is required`);
-            else if (!REVERSE_DNS.test(p.id)) errors.push(`${at}.id must be reverse-DNS`);
-            else if (ids.has(p.id)) errors.push(`${at}.id "${p.id}" is duplicated`);
-            else ids.add(p.id);
-
-            if (!nonEmpty(p.name)) errors.push(`${at}.name is required`);
-            if (p.description !== undefined && !isStr(p.description))
-                errors.push(`${at}.description must be a string when present`);
-            // A member must be locatable: its own repo URL, or a path within the
-            // marketplace repo. Neither → it can't be fetched.
-            if (!nonEmpty(p.repo) && !nonEmpty(p.path))
-                errors.push(`${at} must set either \`repo\` (its own git URL) or \`path\` (a subdir of the marketplace repo)`);
-            if (p.repo !== undefined && !isStr(p.repo)) errors.push(`${at}.repo must be a string when present`);
-            if (p.path !== undefined && !isStr(p.path)) errors.push(`${at}.path must be a string when present`);
-            if (p.ref !== undefined && !isStr(p.ref)) errors.push(`${at}.ref must be a string when present`);
-        });
-    }
-
     if (raw.signature !== undefined && !isStr(raw.signature))
         errors.push('`signature` must be a string when present');
 
+    if (!Array.isArray(raw.plugins)) {
+        errors.push('`plugins` is required and must be an array of member entries');
+    }
+
     if (errors.length > 0) return { ok: false, errors };
-    return { ok: true, manifest: raw as unknown as MarketplaceManifest };
+
+    const seenIds = new Set<string>();
+    const accepted: MarketplacePluginEntry[] = [];
+    const rejected: RejectedMarketplaceEntry[] = [];
+    for (const [i, p] of (raw.plugins as unknown[]).entries()) {
+        const at = `plugins[${i}]`;
+        const entryErrors = marketplaceEntryErrors(p, at, seenIds);
+        if (entryErrors.length === 0) {
+            accepted.push(p as MarketplacePluginEntry);
+            continue;
+        }
+        const rec = isRecord(p) ? p : {};
+        rejected.push({
+            at,
+            id: nonEmpty(rec.id) ? rec.id : null,
+            name: nonEmpty(rec.name) ? rec.name : null,
+            errors: entryErrors,
+        });
+    }
+
+    return { ok: true, manifest: raw as unknown as MarketplaceManifest, accepted, rejected };
+}
+
+/**
+ * STRICT read of a `genie-marketplace.json`: the index AND every member entry
+ * must validate. Members are installed INDIVIDUALLY; a single-plugin repo is
+ * just the degenerate case (install it directly by URL, no marketplace needed).
+ *
+ * Use {@link parseMarketplaceIndex} where a partly-usable index should still be
+ * browsable; use this where all-or-nothing is the right contract.
+ */
+export function validateMarketplaceManifest(raw: unknown): ValidationResult<MarketplaceManifest> {
+    const parsed = parseMarketplaceIndex(raw);
+    if (!parsed.ok) return { ok: false, errors: parsed.errors };
+    if (parsed.rejected.length > 0) return { ok: false, errors: parsed.rejected.flatMap((r) => r.errors) };
+    return { ok: true, manifest: parsed.manifest };
 }
 
 /** The runtime-namespaced name for a plugin tool: `${namespace}.${tool}`. */

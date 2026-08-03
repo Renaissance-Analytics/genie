@@ -22,13 +22,15 @@ import { app } from 'electron';
 import { simpleGit } from 'simple-git';
 import {
     validatePluginManifest,
-    validateMarketplaceManifest,
+    parseMarketplaceIndex,
     PLUGIN_MANIFEST_FILENAME,
     MARKETPLACE_MANIFEST_FILENAME,
     type PluginManifest,
     type MarketplaceManifest,
     type MarketplacePluginEntry,
+    type RejectedMarketplaceEntry,
 } from './manifest';
+import { MARKETPLACE_STALE_MS, marketplacesNeedingRefresh } from './marketplace-refresh';
 import {
     upsertPlugin,
     getPlugin,
@@ -38,6 +40,7 @@ import {
     upsertPluginMarketplace,
     getPluginMarketplace,
     deletePluginMarketplace,
+    listPluginMarketplaces,
     listPlugins,
     emptyPluginGrants,
     getAllSettings,
@@ -510,7 +513,13 @@ export function uninstallPlugin(id: string): void {
 
 // --- Marketplaces ------------------------------------------------------------
 
-function readMarketplaceFrom(dir: string): MarketplaceManifest {
+interface ReadMarketplace {
+    manifest: MarketplaceManifest;
+    accepted: MarketplacePluginEntry[];
+    rejected: RejectedMarketplaceEntry[];
+}
+
+function readMarketplaceFrom(dir: string): ReadMarketplace {
     const file = path.join(dir, MARKETPLACE_MANIFEST_FILENAME);
     if (!fs.existsSync(file)) {
         throw new Error(`No ${MARKETPLACE_MANIFEST_FILENAME} found at the marketplace repo root.`);
@@ -521,18 +530,25 @@ function readMarketplaceFrom(dir: string): MarketplaceManifest {
     } catch (e) {
         throw new Error(`${MARKETPLACE_MANIFEST_FILENAME} is not valid JSON: ${(e as Error).message}`);
     }
-    const res = validateMarketplaceManifest(raw);
+    // The INDEX must be sound; individual member entries are partitioned rather
+    // than fatal, so one malformed entry can't stop the index updating at all
+    // (see `parseMarketplaceIndex`). Rejections ride back to the caller for the
+    // user to see — never dropped quietly.
+    const res = parseMarketplaceIndex(raw);
     if (!res.ok) {
         throw new Error(`Invalid ${MARKETPLACE_MANIFEST_FILENAME}:\n  - ${res.errors.join('\n  - ')}`);
     }
-    return res.manifest;
+    return { manifest: res.manifest, accepted: res.accepted, rejected: res.rejected };
 }
 
 export interface MarketplaceSummary {
     id: string;
     name: string;
     url: string;
+    /** How many members this index lists that Genie can actually install. */
     pluginCount: number;
+    /** Members the index listed that Genie cannot use, and why. */
+    rejected: RejectedMarketplaceEntry[];
 }
 
 /** Add (or refresh) a marketplace by its repo URL; caches its parsed index. */
@@ -543,7 +559,7 @@ export async function addMarketplace(
 ): Promise<MarketplaceSummary> {
     const { dir } = await cloneToTemp(url, ref);
     try {
-        const manifest = readMarketplaceFrom(dir);
+        const { manifest, accepted, rejected } = readMarketplaceFrom(dir);
         // Verify the index signature (provenance). An OFFICIAL marketplace MUST be
         // validly signed by a trusted key; a bad signature is refused outright.
         const verdict = evaluateMarketplaceTrust(manifest, productionTrustStore());
@@ -559,11 +575,13 @@ export async function addMarketplace(
             url,
             ref: ref ?? null,
             official,
+            // Store the index AS PUBLISHED — the signature is over these bytes, and
+            // a member rejected by today's schema may be readable by tomorrow's.
             manifest_json: JSON.stringify(manifest),
             signature: manifest.signature ?? null,
             publisher_key_id: manifest.publisher?.keyId ?? null,
         });
-        return { id: manifest.id, name: manifest.name, url, pluginCount: manifest.plugins.length };
+        return { id: manifest.id, name: manifest.name, url, pluginCount: accepted.length, rejected };
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -573,19 +591,73 @@ export async function addMarketplace(
 export async function refreshMarketplace(id: string): Promise<MarketplaceSummary> {
     const row = getPluginMarketplace(id);
     if (!row) throw new Error(`Unknown marketplace "${id}".`);
-    return addMarketplace(row.url, row.ref ?? undefined, row.official);
+    const summary = await addMarketplace(row.url, row.ref ?? undefined, row.official);
+    // The URL is the marketplace's identity from the user's side. When the repo
+    // starts publishing a DIFFERENT index id the upsert lands on a NEW row, and
+    // the old one would sit there forever still listing what it held the day it
+    // was added — a second, undead copy of the same marketplace.
+    if (summary.id !== row.id) deletePluginMarketplace(row.id);
+    return summary;
+}
+
+/** The outcome of re-reading one marketplace index. */
+export interface MarketplaceRefreshReport {
+    id: string;
+    name: string;
+    ok: boolean;
+    /** Why the re-read failed (unreachable repo, unparseable index, …). */
+    error?: string;
+    /** Members this index lists that Genie cannot use. */
+    rejected?: RejectedMarketplaceEntry[];
+}
+
+/**
+ * Re-read every marketplace index that has gone stale (see
+ * `marketplace-refresh.ts` for the policy). Called when the Marketplaces tab is
+ * OPENED — the moment the list matters — so a plugin published since you added
+ * the marketplace shows up without you having to know a Refresh button exists.
+ *
+ * Fail-soft per marketplace (one unreachable repo must not stop the rest) but
+ * never silent: each failure comes back in the report for the UI to show.
+ */
+export async function refreshStaleMarketplaces(
+    maxAgeMs: number = MARKETPLACE_STALE_MS,
+): Promise<MarketplaceRefreshReport[]> {
+    const rows = listPluginMarketplaces();
+    const due = new Set(marketplacesNeedingRefresh(rows, Date.now(), maxAgeMs));
+    const reports: MarketplaceRefreshReport[] = [];
+    for (const row of rows) {
+        if (!due.has(row.id)) continue;
+        try {
+            const summary = await refreshMarketplace(row.id);
+            reports.push({ id: summary.id, name: summary.name, ok: true, rejected: summary.rejected });
+        } catch (e) {
+            reports.push({ id: row.id, name: row.name, ok: false, error: (e as Error).message });
+        }
+    }
+    return reports;
+}
+
+/** Read a marketplace's CACHED index, partitioned into usable + unusable members. */
+function cachedIndex(id: string): { accepted: MarketplacePluginEntry[]; rejected: RejectedMarketplaceEntry[] } {
+    const row = getPluginMarketplace(id);
+    if (!row?.manifest_json) return { accepted: [], rejected: [] };
+    try {
+        const res = parseMarketplaceIndex(JSON.parse(row.manifest_json));
+        return res.ok ? { accepted: res.accepted, rejected: res.rejected } : { accepted: [], rejected: [] };
+    } catch {
+        return { accepted: [], rejected: [] };
+    }
 }
 
 /** The member plugins a marketplace lists (from its cached index). */
 export function marketplacePlugins(id: string): MarketplacePluginEntry[] {
-    const row = getPluginMarketplace(id);
-    if (!row?.manifest_json) return [];
-    try {
-        const res = validateMarketplaceManifest(JSON.parse(row.manifest_json));
-        return res.ok ? res.manifest.plugins : [];
-    } catch {
-        return [];
-    }
+    return cachedIndex(id).accepted;
+}
+
+/** Members the cached index lists that Genie cannot install, and why. */
+export function marketplaceIndexIssues(id: string): RejectedMarketplaceEntry[] {
+    return cachedIndex(id).rejected;
 }
 
 /**

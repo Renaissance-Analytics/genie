@@ -170,6 +170,8 @@ const api = {
             ipcRenderer.invoke('plugins:add-marketplace', url, ref),
         refreshMarketplace: (id: string) =>
             ipcRenderer.invoke('plugins:refresh-marketplace', id),
+        refreshMarketplaces: (maxAgeMs?: number) =>
+            ipcRenderer.invoke('plugins:refresh-marketplaces', maxAgeMs),
         removeMarketplace: (id: string) =>
             ipcRenderer.invoke('plugins:remove-marketplace', id),
         installMarketplacePlugin: (marketplaceId: string, pluginId: string) =>

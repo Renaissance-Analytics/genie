@@ -1754,13 +1754,36 @@ export interface PluginDeveloperModeState {
     keys: Array<{ keyId: string; label: string }>;
 }
 
+/**
+ * A member entry a marketplace index listed that Genie cannot install, and why —
+ * shown in Settings so a plugin that never appears is explained, not just absent.
+ */
+export interface MarketplaceIssue {
+    at: string;
+    id: string | null;
+    name: string | null;
+    errors: string[];
+}
+
 /** A 3rd-party marketplace + its indexed member plugins. */
 export interface MarketplaceView {
     id: string;
     name: string;
     url: string;
     official: boolean;
+    /** ISO timestamp of the last successful index read — how old this list is. */
+    checkedAt: string;
     plugins: Array<{ id: string; name: string; description: string | null; installed: boolean }>;
+    issues: MarketplaceIssue[];
+}
+
+/** The outcome of re-reading one marketplace index. */
+export interface MarketplaceRefreshReport {
+    id: string;
+    name: string;
+    ok: boolean;
+    error?: string;
+    rejected?: MarketplaceIssue[];
 }
 
 export interface OfficialPluginEntry {
@@ -1961,6 +1984,10 @@ export interface GenieApi {
         marketplaces: () => Promise<MarketplaceView[]>;
         addMarketplace: (url: string, ref?: string) => Promise<PluginActionResult>;
         refreshMarketplace: (id: string) => Promise<PluginActionResult>;
+        /** Re-read every marketplace index older than `maxAgeMs` (0 = all of them). */
+        refreshMarketplaces: (
+            maxAgeMs?: number,
+        ) => Promise<PluginActionResult<MarketplaceRefreshReport[]>>;
         removeMarketplace: (id: string) => Promise<PluginActionResult<boolean>>;
         installMarketplacePlugin: (
             marketplaceId: string,
