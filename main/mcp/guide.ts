@@ -60,17 +60,92 @@ Genie automatically syncs a small routing skill plus focused skills for
 ## Tools
 
 ### manageProcess
-Set up and control this workspace's **background processes** — Genie's Processes
-feature: long-running dev servers, queue workers, SSR, etc., supervised with
-status + crash auto-restart. Use it whenever your work needs a service running.
-Actions (\`action\` arg):
-- \`list\` — the workspace's processes + their status (use this to get ids).
-- \`create\` — register a new process. Needs \`label\` + \`command\`; optional
-  \`repo\` to run inside \`repos/<repo>\` (else the workspace root); optional
-  \`autostart\` to start it now and on every launch.
-- \`start\` / \`stop\` / \`restart\` — by \`processId\` (from a \`list\`).
-Returns the resulting process list. Pass \`terminalId\` (your
-\`GENIE_TERMINAL_ID\`) for exact workspace resolution; optional.
+Set up and control this workspace's **background processes AND scheduled tasks**
+— Genie's Processes feature. A **process** is a long-running service (dev server,
+queue worker, SSR) supervised with status + crash auto-restart. A **scheduled
+task** is the same registration with a \`schedule\` (a 5-field cron expression):
+it runs one-shot on that cadence instead of staying up, lives on the Host so it
+fires whether or not anyone has Genie open, and survives restarts. Actions
+(\`action\` arg):
+- \`list\` — every process + scheduled task with status (scheduled rows also
+  carry \`schedule\`, \`nextRunAt\`, \`lastRunAt\`, \`lastRunStatus\`).
+- \`create\` — register one. Needs \`label\`, plus \`command\` for a process;
+  optional \`repo\` to run inside \`repos/<repo>\` (else the workspace root);
+  optional \`autostart\` to start it now and on every launch. Add a \`schedule\`
+  (cron: \`min hour day month weekday\`, e.g. \`0 3 * * *\` = daily 03:00) to make
+  it a scheduled task; set \`scheduleKind: 'agent-nudge'\` (with \`prompt\` +
+  \`nudgeTerminalId\`/\`nudgeAgentId\`) to deliver a prompt to an agent through
+  AgentInbox on each fire instead of running a command.
+- \`start\` / \`stop\` / \`restart\` — a service, by \`id\` (from a \`list\`).
+- \`enable\` / \`disable\` — suspend/resume a task without deleting it.
+- \`delete\`; \`run-now\` — fire a scheduled task immediately without disturbing
+  its cadence.
+Creating a scheduled task is approval-gated (the modal shows the command and its
+recurrence). This is for supervised COMMANDS — to HOST a repo as a real site,
+reach for \`manageSite\` (below), not a hand-rolled \`manageProcess\` dev server.
+Returns the resulting process list. Pass \`terminalId\` (your \`GENIE_TERMINAL_ID\`)
+for exact workspace resolution; optional.
+
+### manageSite
+**Host a repo the way it runs in PRODUCTION** — Genie's Hosting Manager. Given a
+repo it BUILDS it and serves the built artifact with a real production server, in
+this workspace's **container sandbox**, at a stable \`https://<name>.gen\` origin
+reachable whether the viewer is on this machine or connected remotely. **This is
+NOT a dev-server launcher** — nothing here runs \`npm run dev\`, \`artisan serve\`,
+\`manage.py runserver\` or \`go run\`. Per stack: PHP → \`composer install --no-dev\`
+then FrankenPHP over \`public/\`; Next → \`npm run build\` then \`next start\`; a
+built front end (Vite/CRA) → nginx over \`dist/\` with no JS process at all; Django
+→ collectstatic then gunicorn; FastAPI/Flask → uvicorn; Go → \`go build\` and run
+the binary; Rust → \`cargo build --release\` and run it. A repo's own Dockerfile
+always wins over a recipe. Actions (\`action\`):
+- \`detect\` — read a repo and return every build+serve recipe it could use (each
+  with \`confident\`, and \`needs\` when it is a guess).
+- \`list\` / \`status\` — every site + live state. \`state:'running'\` means the
+  container is up; \`ready:true\` means the published port actually accepted a
+  connection.
+- \`create\` — define one and host it: \`name\` (a DNS label) plus EITHER explicit
+  \`build\` + \`serve\` + \`port\`, OR nothing at all to take the detected recipe.
+  Optional \`repo\` (host \`repos/<repo>\`), \`image\`, \`env\`, \`exposed\`, \`kind\`.
+- \`start\` / \`stop\` / \`restart\` / \`logs\` — by \`id\` (from a \`list\`). \`open\` —
+  show the site in the Genie Browser for the user. \`remove\` — stop it and forget
+  the definition.
+READ THE RESULT: a failed BUILD is the most common reason a site does not come
+up, and \`buildLog\` carries it. EXPOSURE (agents get this wrong): the container's
+\`localhost\` IS the workspace, so the app reaches its own processes normally, and
+a DATABASE OR CACHE IS NEVER EXPOSED — those are reached over the workspace
+network through the env \`manageService\` injects. Only what the BROWSER connects
+to is exposed, via \`exposed:[{name,port,protocol,reason}]\`; a surface that
+cannot say why the browser needs it is refused. A production server must bind
+\`0.0.0.0\`, never \`localhost\`. Requires Docker or Podman; when neither is usable
+the result carries the install hint (and the tool is hidden from \`tools/list\`
+entirely). Pass \`terminalId\` for exact workspace resolution.
+
+### manageService
+**Give this workspace a backing SERVICE** — Postgres, MySQL, Redis, Meilisearch,
+MinIO (S3), Mailpit, or any image — and get back how to connect. These are the
+same engines a \`manageSite\` site runs against, so a hosted site is backed the
+way production is. THE MODEL: an engine is WORKSTATION-hosted and **shared per
+(engine, major version)** across every workspace that asks for it, and each
+workspace gets its OWN database + role + credentials on it — one \`postgres:16\`
+serves ten workspaces, and one workspace's role cannot reach another's data. The
+engine starts when the first workspace acquires it and stops when the last one
+releases it. Actions (\`action\`):
+- \`catalog\` — every engine on offer, its versions, and how strongly each isolates.
+- \`inventory\` — MACHINE-level: every engine on this workstation, whether its
+  image is on disk, whether it is up, and how many workspaces hold it (and
+  which). Read this BEFORE stopping/removing anything — \`stop\` is a RELEASE, and
+  it only stops the container if this was the last holder.
+- \`list\` / \`status\` — this workspace's services + live state.
+- \`add\` — \`engine\` (+ optional \`version\`): defines it, starts the engine,
+  creates this workspace's database/role/credentials, attaches the engine to the
+  workspace network, and injects the connection env.
+- \`start\` / \`stop\` / \`logs\` — by \`id\`. \`connection\` — the connection surface +
+  the exact env keys injected. \`dedicated\` — flip one service to its own
+  container. \`remove\` — release it (\`purge\` also drops the data volume).
+A service is BACKEND: it is never given a browser-facing name — reach it
+in-container through the injected \`envKeys\` (\`DATABASE_URL\`, …), which are also
+present in a site's BUILD steps, so a \`manageSite\` app needs no \`.env\` edit.
+Requires Docker or Podman. Pass \`terminalId\`.
 
 ### provisionWorkspaces
 **Only for an Ops project's workspace.** An Ops project governs other (child)
@@ -354,31 +429,35 @@ Confirm with the user before writing into a shared/committed config; a
 local-only hook file is fine to add on your own. This complements — doesn't
 replace — calling \`imDone\` explicitly when you finish.
 
-## Local dev sites over .gen
-Genie can serve a HOST's local dev site to a remote Genie through a built-in
-Testing Browser at \`https://<name>.gen\`. The \`.gen\` proxy serves exactly **one
-origin**, so a page opened there must reference **all** of its assets, scripts,
-styles and API calls **same-origin (relative URLs)** — NOT an absolute origin
-like its real \`.test\` vhost or a separate Vite dev-server port. Anything pinned to
-another origin isn't covered by the \`.gen\` proxy, so it fails to load (blank
-styles, dead scripts, CORS/HMR errors).
+## Hosting a repo at .gen (the Hosting Manager)
+When you need to actually RUN a repo — preview the frontend, hit the API, hand
+the user a working URL — use the **Hosting Manager** (\`manageSite\` +
+\`manageService\`), **not** a hand-rolled \`manageProcess\` dev server. It builds
+the repo and serves it **the production way** in the workspace's container
+sandbox, reachable at a stable \`https://<name>.gen\` whether the viewer is local
+or connected remotely:
 
-**Rule:** within a \`.gen\`-served page, every URL must be relative or resolve to
-the same \`.gen\` origin — never a hardcoded absolute host/port. Concrete but
-generic guidance:
+- **\`manageSite\`** BUILDS the repo (\`composer install\` / \`npm run build\` /
+  \`go build\` / …) and serves the built artifact with a real production server —
+  FrankenPHP for PHP, \`next start\` for Next, nginx for a built SPA,
+  gunicorn/uvicorn for Python, the compiled binary for Go/Rust. A repo's own
+  Dockerfile wins over a recipe. Call it with just a \`name\` to take the detected
+  recipe, or pass explicit \`build\` / \`serve\` / \`port\`.
+- **\`manageService\`** gives the site its backing engines (Postgres, MySQL,
+  Redis, Meilisearch, MinIO, Mailpit, …), SHARED per (engine, major version)
+  across the workstation, auto-injecting the connection env (\`DATABASE_URL\`, …)
+  into the site's runtime AND its build steps.
 
-- **Laravel:** keep \`asset()\` / \`url()\` producing relative or same-host URLs —
-  don't pin \`APP_URL\` (or \`ASSET_URL\`) to \`https://app.test\` for dev; leave them
-  unset/relative so links follow the request host.
-- **Vite dev server:** either set \`server.origin\` to the \`.gen\` URL (so the asset
-  + HMR URLs Vite injects point at the proxied origin) OR run \`vite build\` and
-  serve the built assets statically instead of the dev server.
-- **SPA build:** use \`base: '/'\` (root-relative) so bundled asset paths aren't
-  tied to a dev host/port.
-
-This is **DEV-only** config: guard it behind a dev/env check and NEVER commit an
-absolute \`.gen\` origin into production config — it must not affect prod CI or
-deploys.
+**Reachability:** the container's \`localhost\` IS the workspace, so the app talks
+to its own processes and to its services normally, in-container. **Backends are
+never exposed** — a database or cache has no \`.gen\` name. Only BROWSER-facing
+surfaces are published: the site at \`<name>.gen\`, plus anything you explicitly
+list in \`exposed\` with a reason the browser needs it. Every serve command must
+bind \`0.0.0.0\`, never \`localhost\`. One production gotcha survives: a framework's
+host allowlist (Django's \`ALLOWED_HOSTS\`) can reject the \`.gen\` Host header —
+add the \`.gen\` name there or pass \`upstreamHost:'localhost'\`. The Hosting
+Manager needs Docker or Podman; without a runtime the site tools do not appear
+in \`tools/list\` at all.
 
 ## Rule of thumb
 If you would otherwise stop and wait for the user — **finished**, **blocked**, or
@@ -392,6 +471,10 @@ multi-project workspace, an agent that waits silently is an agent that's stuck.
   \`.mcp.json\`. Pass \`GENIE_TERMINAL_ID\` as \`terminalId\` for exact targeting.
 - \`initializeWorkspace\` is available through both \`tools/call\` and MCP prompts
   (\`prompts/list\` / \`prompts/get\`) for client compatibility.
+- Enabled **plugins** contribute additional, namespaced tools that ride the same
+  \`tools/list\` after the core set (e.g. \`presentation.createDeck\`,
+  \`spreadsheet.createWorkbook\`). Which ones exist depends on the plugins this
+  workspace has enabled — re-read \`tools/list\` to see them.
 - More tools may appear over time, some contextual to the project type. Re-read this
   guide (or \`tools/list\`) if you need the current set.
 `;
@@ -404,7 +487,8 @@ export const GENIE_AGENTS_BRIEF = `You are running inside **Genie** — a deskto
 - **Need a decision, or blocked? → \`ForceTheQuestion\` — NEVER ask in plaintext and wait.** A plaintext question is invisible to the user; you'll hang forever. HOW: ONE call with 1–4 questions, each offering 2–4 options plus an always-available free-text note — **batch every open question together.** It pops an OS-level, always-on-top modal (above every app) and blocks until answered. Pass your \`terminalId\`.
   - **WRITE the question as MARKDOWN, structured.** The modal renders markdown: a short lead sentence, then blank-line paragraphs / bullet lists / **bold** for the key facts. Never one run-on paragraph.
   - **NAME THE ACTOR in every option.** The modal is read by the USER, so bare "I"/"you" invert and confuse. Convention: the agent = "Agent:"/"the agent", the user = "You:"/"you" — lead each option label with the actor (e.g. \`Agent: I create the repo and push\` vs \`You: you create the repo\`).
-- **Need a long-running background process (dev server, worker, SSR)? → \`manageProcess\`.** Don't \`&\`-background it in a terminal — Genie's Processes feature owns these so they survive and stay controllable. HOW: \`list\` / \`create\` (label + command, optional repo + autostart) / \`start\` / \`stop\` / \`restart\`.
+- **Need to HOST a repo as a real site (build + serve at \`<name>.gen\`), or give it a database/cache? → \`manageSite\` / \`manageService\` (the Hosting Manager).** \`manageSite\` BUILDS the repo and serves it the PRODUCTION way (FrankenPHP / \`next start\` / nginx / gunicorn / a compiled binary) in the workspace's container sandbox — it is NOT a \`npm run dev\` launcher, so don't stand an app up as a raw process. \`manageService\` backs it with shared Postgres/Redis/… engines and injects the connection env. Requires Docker/Podman; the tools only appear in \`tools/list\` when a runtime is present.
+- **Need a supervised background COMMAND (dev server, worker, SSR) or a cron job? → \`manageProcess\`.** Don't \`&\`-background it in a terminal — Genie's Processes feature owns these so they survive and stay controllable. HOW: \`list\` / \`create\` (label + command, optional repo + autostart; add a 5-field \`schedule\` to make it a cron task) / \`start\` / \`stop\` / \`restart\` / \`enable\` / \`disable\` / \`delete\` / \`run-now\`. To actually HOST an app, reach for \`manageSite\`, not this.
 - **Need to run commands, read terminal output, or launch/drive another coding agent? → \`manageTerminals\` / \`runAgent\`.** \`manageTerminals\` spawns + drives real terminals (\`create\` / \`write\` / \`read\` / \`list\` / \`kill\`); \`runAgent\` launches + steers a coding agent (claude / codex / custom) — here or in a workspace this Ops project governs. These are **HIGH-POWER** (arbitrary code + autonomous agents): \`create\` / \`write\` / agent \`start\` / \`send\` are approval-gated by default. Use \`manageWorkspaces\` to list / open / activate / remove the workspaces you can act on.
 
 **Automate \`imDone\`:** if your harness has an on-finish hook (Claude Code's \`Stop\` hook in \`.claude/settings.json\`; Codex's \`notify\`), wire it ONCE to POST a \`tools/call\` for \`imDone\` to \`$GENIE_MCP_URL\` (passing \`$GENIE_TERMINAL_ID\`) so the glow fires on every finish automatically. Configure this in YOUR harness yourself — Genie won't. Call \`genieGuide\` for the exact snippet.

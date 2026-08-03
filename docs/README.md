@@ -44,8 +44,9 @@ renders these same pages with a navigable sidebar.
 18. **[Hosts & Genie Cloud Workstations](17-hosts-and-workstations.md)** — drive
     another machine's Genie over Tailscale, cloud workstations, the host/local
     split.
-19. **[.gen dev sites & the Testing Browser](18-dev-sites.md)** — serve a host's
-    loopback dev sites as `*.gen` and open them in the built-in browser.
+19. **[Hosting sites at `.gen`](18-dev-sites.md)** — the Hosting Manager: build a
+    repo and serve it the production way at `*.gen`, its shared backing services,
+    and the Genie Browser.
 
 ## Developer & reference docs
 
