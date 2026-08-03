@@ -305,6 +305,23 @@ export function runArgv(spec: ContainerSpec, opts: ArgvOptions): string[] {
     if (spec.memory) args.push('--memory', spec.memory);
     if (spec.cpus) args.push('--cpus', spec.cpus);
 
+    // Override the image's baked-in HEALTHCHECK. Only ever set by the site
+    // manager, and only for the FrankenPHP image, whose default check curls a
+    // Caddy admin endpoint (:2019) that `php-server` mode disables — so the
+    // container reads `(unhealthy)` forever while it serves fine (genie #119).
+    // `--health-cmd` runs through the container shell (CMD-SHELL); docker and
+    // podman spell every one of these flags identically. This is the sole place
+    // a shell string is emitted — see the file header; the string is
+    // Genie-built from a validated port, never user text.
+    if (spec.healthcheck) {
+        const hc = spec.healthcheck;
+        args.push('--health-cmd', hc.cmd);
+        if (hc.intervalSec != null) args.push('--health-interval', `${hc.intervalSec}s`);
+        if (hc.timeoutSec != null) args.push('--health-timeout', `${hc.timeoutSec}s`);
+        if (hc.retries != null) args.push('--health-retries', String(hc.retries));
+        if (hc.startPeriodSec != null) args.push('--health-start-period', `${hc.startPeriodSec}s`);
+    }
+
     for (const mount of spec.mounts ?? []) {
         const source = toMountSource(mount.source, { platform: opts.platform, kind: opts.kind });
         if (!source) {

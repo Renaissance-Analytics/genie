@@ -131,6 +131,29 @@ export interface VolumeMount {
     target: string;
 }
 
+/**
+ * A container HEALTHCHECK that OVERRIDES whatever the image baked in.
+ *
+ * The load-bearing case: the FrankenPHP production image (`dunglas/frankenphp`)
+ * ships a HEALTHCHECK that curls its Caddy ADMIN endpoint on :2019 — which
+ * `php-server` mode leaves disabled ("admin endpoint disabled" in the log) — so
+ * the check can never pass and the container sits `(unhealthy)` forever even
+ * while it serves correctly (genie #119, Blocker 5). Genie replaces it with one
+ * aimed at the REAL serve port.
+ *
+ * `cmd` is a single shell string run via the container's `/bin/sh -c` (docker's
+ * `CMD-SHELL` form). It is the ONE deliberate exception to `argv.ts`'s "no argv
+ * is ever a shell string" rule, allowed only because it is Genie-constructed
+ * from a validated integer port and never carries user-supplied text.
+ */
+export interface ContainerHealthcheck {
+    cmd: string;
+    intervalSec?: number;
+    timeoutSec?: number;
+    retries?: number;
+    startPeriodSec?: number;
+}
+
 /** Everything needed to create one container. Workspace-scoped by construction,
  *  except for the machine-scoped shared service engines — see `workspaceId`. */
 export interface ContainerSpec {
@@ -171,6 +194,12 @@ export interface ContainerSpec {
     cpus?: string;
     /** Reap zombies — a dev container runs whatever the repo spawns. */
     init?: boolean;
+    /**
+     * Override the image's baked-in HEALTHCHECK. See {@link ContainerHealthcheck}
+     * — used to replace FrankenPHP's broken :2019 admin-endpoint check with one
+     * aimed at the real serve port (genie #119, Blocker 5).
+     */
+    healthcheck?: ContainerHealthcheck;
     /**
      * Rootless-Podman user-namespace mode. **Podman only** — the argv builder
      * DROPS it for docker.

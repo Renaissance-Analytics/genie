@@ -11,11 +11,11 @@ import { GENIE_DEV_BASE_IMAGE, WORKSPACE_MOUNT_TARGET } from './images';
 import { DEFAULT_READY_TIMEOUT_MS, waitForHttp, waitForPort } from './port-probe';
 import { planHostAllowlist } from './host-allowlist';
 import { planExposure } from './exposure';
-import { resolveHostedRun } from './serve-recipe';
+import { FRANKENPHP_IMAGE, resolveHostedRun } from './serve-recipe';
 import { runSiteBuild } from './site-build';
 import { buildAuthEnv } from './build-auth';
 import { ensureWorkspaceSandbox } from './workspace-sandbox';
-import type { ContainerRuntime, RuntimeDetection } from './container-runtime';
+import type { ContainerHealthcheck, ContainerRuntime, RuntimeDetection } from './container-runtime';
 import type { ExposurePlan } from './exposure';
 import type { HostIds } from './host-ids';
 import type { DevSiteConfig, DevSites } from './sites-config';
@@ -436,11 +436,20 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 }
             }
 
-            // The environment BOTH stages get. Layered, and the ORDER is the
-            // contract: the allow-host plan is the weakest (it is Genie's guess
-            // at making a framework accept the `.gen` Host), the recipe's own
-            // needs come next, then the services, and the site's OWN env
-            // overrides everything — a value the user pinned always wins.
+            // The environment BOTH stages get, and this SITE container's own env
+            // (per-repo scope — `serviceEnvFor` is resolved at workspace scope,
+            // but injected here, into each site's container). The ORDER is the
+            // contract, weakest first:
+            //   1. the allow-host plan (Genie's guess at making a framework
+            //      accept the `.gen` Host);
+            //   2. the site's OWN pinned env (`config.env`);
+            //   3. the workspace's SERVICE connection env — injected LAST, and it
+            //      WINS OUTRIGHT. DB_HOST / DATABASE_URL / PG* / REDIS_* name the
+            //      real engine the container can actually reach (e.g.
+            //      `genie-svc-postgres-17` on the workspace network). A repo whose
+            //      committed `.env` still says `127.0.0.1` (carried into
+            //      `config.env`, or read from the file by a framework that honours
+            //      real env vars) must NOT beat that, or the app dials nothing.
             const env: Record<string, string> = {
                 ...planHostAllowlist({
                     genName: config.genName,
@@ -455,8 +464,8 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                     ...(config.serve ? { command: config.serve } : {}),
                     ...(config.upstreamHost ? { upstreamHost: config.upstreamHost } : {}),
                 }).env,
-                ...serviceEnv,
                 ...(config.env ?? {}),
+                ...serviceEnv,
             };
 
             // --- BUILD, then serve ------------------------------------------
@@ -521,6 +530,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 await runtime.remove(existing.id);
             }
 
+            const healthcheck = siteHealthcheck(image, run.port);
             const container = await runtime.runContainer({
                 workspaceId,
                 name,
@@ -542,6 +552,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 // A production server still spawns workers (gunicorn, php-fpm,
                 // nginx); without a reaper their orphans accumulate as zombies.
                 init: true,
+                // Replace FrankenPHP's broken :2019 admin-endpoint healthcheck
+                // (genie #119, Blocker 5). Null for every other image — none of
+                // them bake in a broken one.
+                ...(healthcheck ? { healthcheck } : {}),
             });
 
             const status = await recordLive(
@@ -845,6 +859,40 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
  *  scoped, so two workspaces building a `web` do not clobber each other. */
 export function siteImageTagFor(workspaceId: string, siteName: string): string {
     return `genie-site-${workspaceSlugFor(workspaceId)}-${workspaceSlugFor(siteName)}:latest`;
+}
+
+/**
+ * The site container's HEALTHCHECK, or null to inherit the image's own.
+ *
+ * Only the FrankenPHP production image needs one. It bakes in a check that curls
+ * its Caddy admin endpoint on :2019 — which `php-server` mode disables — so the
+ * container is reported `(unhealthy)` forever even while it serves correctly
+ * (genie #119, Blocker 5). We replace it with a check aimed at the REAL serve
+ * port on `/`: ANY HTTP response counts as healthy, exactly the bar
+ * `port-probe.ts` uses for `ready`, so an app that boots but returns a 500 is
+ * still a server that has BOUND. `curl` is present in the FrankenPHP image — it
+ * is what the broken baked check uses. `port` is the container-internal serve
+ * port (what FrankenPHP binds `0.0.0.0:<port>` on), not the published host port.
+ *
+ * Gated on the IMAGE, not the server name: the image is what carries the broken
+ * HEALTHCHECK, and no other image Genie serves from (the dev-base image, nginx,
+ * a repo's own Dockerfile) bakes one in — so they are left to inherit, and Genie
+ * never invents a `curl`/`nc` check for an image that may not have the tool.
+ */
+function siteHealthcheck(image: string, port: number): ContainerHealthcheck | null {
+    if (image !== FRANKENPHP_IMAGE) return null;
+    return {
+        // -sS (not -f): a 4xx/5xx still means the server BOUND and answered,
+        // which is the same bar port-probe.ts uses for readiness. --max-time
+        // keeps one hung request from outlasting the health-timeout.
+        cmd: `curl -sS -o /dev/null --max-time 5 http://127.0.0.1:${port}/`,
+        intervalSec: 10,
+        timeoutSec: 5,
+        retries: 3,
+        // A grace window while FrankenPHP boots — failures here are not counted
+        // against the retry budget, so a normal cold start never flaps.
+        startPeriodSec: 10,
+    };
 }
 
 // --- the process-wide instance ---------------------------------------------

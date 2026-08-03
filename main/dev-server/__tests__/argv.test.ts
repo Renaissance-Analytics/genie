@@ -208,6 +208,39 @@ describe('runArgv', () => {
             }),
         ).toThrow();
     });
+
+    it('OVERRIDES the image healthcheck when the spec sets one, aimed at the real serve port', () => {
+        // The FrankenPHP image bakes a HEALTHCHECK that curls its disabled Caddy
+        // admin endpoint (:2019), so the container is `(unhealthy)` forever while
+        // it serves fine (genie #119, Blocker 5). The site manager replaces it.
+        const args = runArgv(
+            spec({
+                healthcheck: {
+                    cmd: 'curl -sS -o /dev/null --max-time 5 http://127.0.0.1:8080/',
+                    intervalSec: 10,
+                    timeoutSec: 5,
+                    retries: 3,
+                    startPeriodSec: 10,
+                },
+            }),
+            { kind: 'docker', platform: 'linux' },
+        );
+        expect(valueAfter(args, '--health-cmd')).toBe(
+            'curl -sS -o /dev/null --max-time 5 http://127.0.0.1:8080/',
+        );
+        expect(valueAfter(args, '--health-interval')).toBe('10s');
+        expect(valueAfter(args, '--health-timeout')).toBe('5s');
+        expect(valueAfter(args, '--health-retries')).toBe('3');
+        expect(valueAfter(args, '--health-start-period')).toBe('10s');
+        // Every health flag is a CLI flag, so it precedes the image.
+        expect(args.indexOf('--health-cmd')).toBeLessThan(args.indexOf('alpine:3.20'));
+    });
+
+    it('adds no health flags when the spec sets none — the image keeps its own', () => {
+        const args = runArgv(spec(), { kind: 'docker', platform: 'linux' });
+        expect(args).not.toContain('--health-cmd');
+        expect(args).not.toContain('--health-interval');
+    });
 });
 
 describe('the remaining verbs', () => {
