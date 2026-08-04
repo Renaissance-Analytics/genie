@@ -32,6 +32,17 @@
     "postcss": "$postcss",
     "@particle-academy/fancy-slides": {
       "@particle-academy/fancy-code": "$@particle-academy/fancy-code"
+    },
+    "fast-uri": "^3.1.5",
+    "tar": "^7.5.22",
+    "brace-expansion@1": "^1.1.18",
+    "brace-expansion@2": "^2.1.4",
+    "brace-expansion@5": "^5.0.9",
+    "@electron/get": {
+      "undici": "^7.29.0"
+    },
+    "node-gyp": {
+      "undici": "^6.28.0"
     }
   },
   "dependencies": {
