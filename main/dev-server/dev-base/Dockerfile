@@ -263,6 +263,34 @@ RUN set -eux; \
     "${CARGO_HOME}/bin/rustc" --version; \
     "${CARGO_HOME}/bin/cargo" --version
 
+# --- Caddy ------------------------------------------------------------------
+#
+# The per-workspace reverse proxy that fronts every hosted `.gen` site. It runs
+# INSIDE this sandbox alongside the app processes, publishes ONE https port,
+# TLS-terminates each `<name>.gen` (forcing https), and reverse-proxies to the
+# app's plain-http loopback port (masking it). Pinned + checksum-verified against
+# the release's own `checksums.txt` — same trust model as Go/Rust above, no
+# runtime download.
+ARG CADDY_VERSION=2.8.4
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in \
+        amd64) arch='amd64' ;; \
+        arm64) arch='arm64' ;; \
+        *) echo "genie-dev-base: unsupported architecture $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac; \
+    base="https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}"; \
+    file="caddy_${CADDY_VERSION}_linux_${arch}.tar.gz"; \
+    tmp="$(mktemp -d)"; \
+    curl -fsSL -o "${tmp}/${file}" "${base}/${file}"; \
+    want="$(curl -fsSL "${base}/caddy_${CADDY_VERSION}_checksums.txt" | grep " ${file}\$" | cut -d' ' -f1)"; \
+    got="$(sha256sum "${tmp}/${file}" | cut -d' ' -f1)"; \
+    test -n "${want}"; \
+    test "${want}" = "${got}"; \
+    tar -xzf "${tmp}/${file}" -C "${tmp}" caddy; \
+    install -m 0755 "${tmp}/caddy" /usr/local/bin/caddy; \
+    rm -rf "${tmp}"; \
+    caddy version
+
 # --- the genie user ---------------------------------------------------------
 #
 # Everything a workspace runs happens as `genie`, never as root. The uid is
