@@ -257,6 +257,22 @@ export class TynnBackend implements Backend {
         };
     }
 
+    /**
+     * Declare an already-linked project an `.agi` envelope WITHOUT minting a
+     * token (POST /api/v1/projects/declare-envelope). The self-heal for a
+     * workspace provisioned before the mint carried the flag: it re-sets
+     * `is_envelope` — which puts the project back in IssueWatch's poll set — with
+     * no token rotation. Sticky server-side (only ever sets true). Rides the web
+     * session cookie like every call here; throws TynnAuthError on a dead session.
+     */
+    async declareEnvelope(projectId: string): Promise<{ isEnvelope: boolean }> {
+        const data = await this.fetch<{ is_envelope?: boolean }>(
+            '/api/v1/projects/declare-envelope',
+            { method: 'POST', body: { project_id: projectId } },
+        );
+        return { isEnvelope: !!data.is_envelope };
+    }
+
     // --- Local Workstation (self-register + enroll) ------------------------
 
     /**

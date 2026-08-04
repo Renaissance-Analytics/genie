@@ -57,6 +57,19 @@ describe('provisionWorkspaceTynn — envelope declaration', () => {
         }));
     }
 
+    /** Make a linked workspace read as ALREADY provisioned: a literal Tynn bearer
+     *  token in `.mcp.json` is what `hasTynnLiteralToken` keys off. */
+    function markConfigured(dir: string): void {
+        fs.writeFileSync(
+            path.join(dir, '.mcp.json'),
+            JSON.stringify(
+                { mcpServers: { tynn: { headers: { Authorization: 'Bearer rpk.existing' } } } },
+                null,
+                2,
+            ),
+        );
+    }
+
     it('declares the envelope when the workspace IS a .agi envelope', async () => {
         const dir = linkedWorkspace('proj-env', true);
         const mint = mintSpy();
@@ -79,5 +92,36 @@ describe('provisionWorkspaceTynn — envelope declaration', () => {
         await provisionWorkspaceTynn(dir, { auth });
 
         expect(mint).toHaveBeenCalledWith('proj-plain', { workspaceEnvelope: false });
+    });
+
+    it('SELF-HEALS: declares the envelope for an ALREADY-provisioned .agi workspace, without re-minting', async () => {
+        // THE gap that keeps IssueWatch dead for pre-existing workspaces (tynn.ai
+        // #157 follow-up): the mint declares the envelope, but only fires on a
+        // FRESH provision. An already-tokened `.agi` workspace never re-declared,
+        // so Tynn's is_envelope stayed false and it was never polled. On 'already'
+        // we now declare it out-of-band — no new token, so no `.mcp.json` churn.
+        const dir = linkedWorkspace('proj-heal', true);
+        markConfigured(dir); // ⇒ decision 'already'
+        const mint = mintSpy();
+        const declareEnvelope = vi.fn(async () => ({ isEnvelope: true }));
+        const auth: TynnProvisionAuth = { ready: async () => true, mint, declareEnvelope };
+
+        const r = await provisionWorkspaceTynn(dir, { auth });
+
+        expect(r.status).toBe('already');
+        expect(declareEnvelope).toHaveBeenCalledWith('proj-heal');
+        // Critically NOT a re-mint — the existing token stays put.
+        expect(mint).not.toHaveBeenCalled();
+    });
+
+    it('does NOT declare on already for a PLAIN (non-envelope) already-provisioned folder', async () => {
+        const dir = linkedWorkspace('proj-plain-already', false);
+        markConfigured(dir);
+        const declareEnvelope = vi.fn(async () => ({ isEnvelope: false }));
+        const auth: TynnProvisionAuth = { ready: async () => true, mint: mintSpy(), declareEnvelope };
+
+        await provisionWorkspaceTynn(dir, { auth });
+
+        expect(declareEnvelope).not.toHaveBeenCalled();
     });
 });

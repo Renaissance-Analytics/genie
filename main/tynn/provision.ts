@@ -78,6 +78,14 @@ export interface TynnProvisionAuth {
      * linked is an `.agi` envelope (see {@link provisionWorkspaceTynn}).
      */
     mint(projectId: string, opts: TynnMintOptions): Promise<TynnAgentTokenMint>;
+    /**
+     * Declare an already-linked workspace an `.agi` envelope WITHOUT minting a
+     * token (the self-heal for a workspace provisioned before the declaration
+     * existed). Sticky server-side like the mint's flag — only ever sets true.
+     * Optional: an auth source that predates it (or a test) simply skips the
+     * self-heal.
+     */
+    declareEnvelope?(projectId: string): Promise<{ isEnvelope: boolean }>;
 }
 
 /**
@@ -104,11 +112,12 @@ export interface TynnMintOptions {
  * `POST /api/v1/projects/agent-token`. The backend is injectable for tests.
  */
 export function cookieProvisionAuth(
-    backend: Pick<TynnBackend, 'whoami' | 'mintAgentToken'> = new TynnBackend(),
+    backend: Pick<TynnBackend, 'whoami' | 'mintAgentToken' | 'declareEnvelope'> = new TynnBackend(),
 ): TynnProvisionAuth {
     return {
         ready: async () => !!(await backend.whoami()),
         mint: (projectId, opts) => backend.mintAgentToken(projectId, opts),
+        declareEnvelope: (projectId) => backend.declareEnvelope(projectId),
     };
 }
 
@@ -157,6 +166,23 @@ export async function provisionWorkspaceTynn(
         alreadyConfigured: hasTynnLiteralToken(workspacePath),
         force: !!opts.force,
     });
+
+    // SELF-HEAL the envelope flag on an already-provisioned `.agi` workspace.
+    //
+    // The mint below DECLARES the workspace an envelope, but it only runs on a
+    // FRESH provision — so a workspace tokened before that declaration existed
+    // never told Tynn it is an envelope, and Tynn gates IssueWatch on exactly
+    // that flag (a dead feed with no signal, tynn.ai#157 follow-up). Declare it
+    // out-of-band here — no new token, so no `.mcp.json`/`.env` churn and no
+    // agent restart. Best-effort and idempotent (Tynn's flag is sticky-true);
+    // gated on Genie's OWN envelope detector, never a bare project.json.
+    if (decision === 'already' && signedIn && link?.projectId && isEnvelopeFolder(workspacePath)) {
+        try {
+            await auth.declareEnvelope?.(link.projectId);
+        } catch {
+            /* a failed self-heal must never break the open-workspace path */
+        }
+    }
 
     if (decision !== 'provision') return { status: decision };
 
