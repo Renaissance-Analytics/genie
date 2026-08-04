@@ -70,9 +70,23 @@ export interface DevSiteConfig {
      * itself.
      */
     build?: BuildStep[];
-    /** The production server's literal argv, run inside the site's container. */
+    /**
+     * The USER-CONTROLLED startup command, as literal argv, run inside the
+     * workspace sandbox in the repo's live-mounted dir. This is the whole model:
+     * Genie makes NO assumptions — no forced dev server, no build, no `--no-dev` —
+     * it runs exactly what you give it (`['npm','run','dev']`, `['php','artisan',
+     * 'serve','--host=0.0.0.0']`, a binary, anything). The app binds {@link port}
+     * on loopback; Caddy in the sandbox fronts it at `<genName>` over https.
+     *
+     * Supersedes {@link serve} (the old per-container production argv). `serve` is
+     * still read as a fallback so pre-rework sites keep running until re-saved.
+     */
+    command?: string[];
+    /** LEGACY (pre-sandbox-serve): the production server's literal argv. Read as a
+     *  fallback for {@link command}; not written by the new model. */
     serve?: string[];
-    /** The port the production server listens on INSIDE the container. */
+    /** The port the app's {@link command} listens on (loopback, inside the sandbox);
+     *  Caddy reverse-proxies `<genName>` to it. */
     port?: number;
     /**
      * Extra BROWSER-FACING surfaces — a websocket, a gRPC endpoint.
@@ -236,6 +250,9 @@ export function sanitizeDevSitePatch(
     if (patch.stack && STACKS.includes(patch.stack)) out.stack = patch.stack;
     if (patch.server && SERVERS.includes(patch.server)) out.server = patch.server;
 
+    const command = cleanArgv(patch.command);
+    if (command) out.command = command;
+
     const serve = cleanArgv(patch.serve);
     if (serve) out.serve = serve;
 
@@ -329,6 +346,7 @@ const RECONFIGURE_KEYS: readonly (keyof DevSiteConfig)[] = [
     'server',
     'image',
     'build',
+    'command',
     'serve',
     'port',
     'exposed',
@@ -349,6 +367,18 @@ export function devSiteReconfigureNeedsRestart(
     return RECONFIGURE_KEYS.some(
         (k) => JSON.stringify(before[k] ?? null) !== JSON.stringify(after[k] ?? null),
     );
+}
+
+/**
+ * The argv to actually run for a site: the new user-controlled {@link
+ * DevSiteConfig.command}, falling back to the legacy {@link DevSiteConfig.serve}
+ * for a site saved before the sandbox-serve rework. Null when neither is set (the
+ * site has nothing to run — a config error the caller surfaces).
+ */
+export function effectiveCommand(config: DevSiteConfig): string[] | null {
+    if (config.command && config.command.length > 0) return config.command;
+    if (config.serve && config.serve.length > 0) return config.serve;
+    return null;
 }
 
 /**
