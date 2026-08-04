@@ -20,7 +20,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * to get a fresh singleton each time.
  */
 
-const { mockAuto, markQuit, handlers } = vi.hoisted(() => {
+const { mockAuto, markQuit, dbSetSettings, handlers } = vi.hoisted(() => {
     const handlers = new Map<string, (...a: unknown[]) => void>();
     const mockAuto = {
         autoDownload: true,
@@ -33,8 +33,11 @@ const { mockAuto, markQuit, handlers } = vi.hoisted(() => {
         downloadUpdate: vi.fn(async () => {}),
         quitAndInstall: vi.fn(),
     };
-    return { mockAuto, markQuit: vi.fn(), handlers };
+    return { mockAuto, markQuit: vi.fn(), dbSetSettings: vi.fn(), handlers };
 });
+// auto-updater persists the "reopen after update" one-shot flag via db.setSettings
+// before quitAndInstall; stub db so the flow runs in plain Node.
+vi.mock('../../db', () => ({ setSettings: dbSetSettings }));
 
 vi.mock('electron-updater', () => ({ autoUpdater: mockAuto }));
 vi.mock('electron', () => ({
@@ -348,6 +351,9 @@ describe('auto-updater one-click hands-free apply', () => {
         u.restartAndApply();
 
         expect(markQuit).toHaveBeenCalledTimes(1);
+        // Persist the one-shot "reopen the window after this update" marker so the
+        // relaunched boot reopens even if it looks like an autostart launch.
+        expect(dbSetSettings).toHaveBeenCalledWith({ reopen_after_update: '1' });
         // Silent (oneClick NSIS, no wizard/UAC), relaunch after.
         expect(mockAuto.quitAndInstall).toHaveBeenCalledWith(true, true);
     });

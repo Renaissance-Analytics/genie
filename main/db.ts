@@ -1037,6 +1037,11 @@ export interface Settings {
      *  window. Defaults 'off' — Genie starts OPEN. 'on' starts in the tray only
      *  (the window opens on the first tray click / global hotkey). */
     start_minimized?: 'on' | 'off';
+    /** One-shot flag set by `restartAndApply` before an auto-update quit and
+     *  consumed on the next boot: reopen the master window even if the updater's
+     *  relaunch looks like an autostart launch. '1' = reopen; cleared to '' after
+     *  boot reads it. */
+    reopen_after_update?: '1' | '';
     /** Play a chime when an agent calls imDone. Defaults 'off'. */
     notify_sound?: 'on' | 'off';
     /** Show an OS notification (tray popup) when an agent calls imDone.

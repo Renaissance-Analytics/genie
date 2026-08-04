@@ -21,6 +21,7 @@ import {
     listWorkspaces,
     listTerminalSpecs,
     getAllSettings,
+    setSettings,
     getTerminalSpec,
     getWorkspace,
     createTerminalSpec,
@@ -210,6 +211,10 @@ import {
     updateAgentInboxChannel,
 } from './mcp/host-tools';
 import { isQuittingForUpdate } from './updater/quit-state';
+import {
+    REOPEN_AFTER_UPDATE_KEY,
+    shouldShowMasterWindowOnBoot,
+} from './updater/reopen-after-update';
 import { markDesktopRuntime, isHeadless } from './runtime-mode';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
@@ -1334,12 +1339,28 @@ app.whenReady().then(async () => {
     // first tray click / quick-capture hotkey. E2E opened its own harness window
     // above. Shown here — right after IPC + the terminal backend are ready, before
     // the MCP/mobile servers — so it appears promptly and no later async step hides it.
-    if (
-        !isE2E() &&
-        !launchedFromAutostart() &&
-        (getAllSettings() as Record<string, string>)['start_minimized'] !== 'on'
-    ) {
-        showMasterWindow();
+    //
+    // EXCEPTION: an auto-update relaunch. The user was actively using Genie and
+    // clicked to update; on Windows the updater's relaunch can look like an
+    // autostart launch, which silently stranded the window in the tray after
+    // every upgrade. `restartAndApply` persists a one-shot flag we consume here
+    // to reopen anyway — but a deliberate `start_minimized` is still honoured.
+    {
+        const settings = getAllSettings() as Record<string, string>;
+        const reopenAfterUpdate = settings[REOPEN_AFTER_UPDATE_KEY] === '1';
+        // One-shot: clear it now so only the boot immediately after the update
+        // reopens (whatever we decide below).
+        if (reopenAfterUpdate) setSettings({ [REOPEN_AFTER_UPDATE_KEY]: '' });
+        if (
+            shouldShowMasterWindowOnBoot({
+                isE2E: isE2E(),
+                fromAutostart: launchedFromAutostart(),
+                startMinimized: settings['start_minimized'] === 'on',
+                reopenAfterUpdate,
+            })
+        ) {
+            showMasterWindow();
+        }
     }
     // Boot-time capability check: once GitHub is known-connected, detect any
     // missing required permission and broadcast `github:capabilities` so the

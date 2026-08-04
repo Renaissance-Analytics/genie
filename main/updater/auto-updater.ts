@@ -2,6 +2,8 @@ import { app, net } from 'electron';
 import { autoUpdater, type UpdateInfo } from 'electron-updater';
 import { EventEmitter } from 'node:events';
 import { markQuittingForUpdate } from './quit-state';
+import { REOPEN_AFTER_UPDATE_KEY } from './reopen-after-update';
+import { setSettings } from '../db';
 import { isNewer } from './git-updater';
 import { appImageUpdateUnavailable, planManualDownload } from './update-surface';
 
@@ -341,6 +343,16 @@ class AutoUpdater extends EventEmitter {
         // KILL the host so the installer can replace the binary. MUST be set
         // BEFORE quitAndInstall so before-quit sees it. (See quit-state.ts.)
         markQuittingForUpdate();
+        // Persist the "reopen the window after this update" intent across the
+        // relaunch (quit-state is in-memory and dies with the process). The
+        // updater's relaunch can look like an autostart launch on Windows, which
+        // would otherwise strand the actively-used window in the tray — boot
+        // consumes this one-shot flag to reopen anyway.
+        try {
+            setSettings({ [REOPEN_AFTER_UPDATE_KEY]: '1' });
+        } catch {
+            /* a failed marker write must never block the update apply */
+        }
         // `quitAndInstall(isSilent, isForceRunAfter)`:
         //   isSilent=true — run the oneClick NSIS installer with NO UI (our
         //     installer is `oneClick: true`, `perMachine: false` → no wizard,
