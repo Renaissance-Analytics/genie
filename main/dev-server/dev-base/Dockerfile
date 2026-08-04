@@ -270,7 +270,8 @@ RUN set -eux; \
 # TLS-terminates each `<name>.gen` (forcing https), and reverse-proxies to the
 # app's plain-http loopback port (masking it). Pinned + checksum-verified against
 # the release's own `checksums.txt` — same trust model as Go/Rust above, no
-# runtime download.
+# runtime download. NB: Caddy's checksums.txt publishes SHA-512 digests (unlike
+# Node's SHA-256 above), so this verifies with sha512sum.
 ARG CADDY_VERSION=2.8.4
 RUN set -eux; \
     case "$(dpkg --print-architecture)" in \
@@ -283,7 +284,7 @@ RUN set -eux; \
     tmp="$(mktemp -d)"; \
     curl -fsSL -o "${tmp}/${file}" "${base}/${file}"; \
     want="$(curl -fsSL "${base}/caddy_${CADDY_VERSION}_checksums.txt" | grep " ${file}\$" | cut -d' ' -f1)"; \
-    got="$(sha256sum "${tmp}/${file}" | cut -d' ' -f1)"; \
+    got="$(sha512sum "${tmp}/${file}" | cut -d' ' -f1)"; \
     test -n "${want}"; \
     test "${want}" = "${got}"; \
     tar -xzf "${tmp}/${file}" -C "${tmp}" caddy; \
