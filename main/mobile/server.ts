@@ -118,6 +118,13 @@ export interface MobileServerDeps {
      * 127.0.0.1 with no real tailnet. NEVER set in production.
      */
     bindIpOverride?: string;
+    /**
+     * How the HTTPS cert is obtained — defaults to {@link ensureCert} (the real
+     * `tailscale cert`). Injectable so the retry/rebind path can be exercised
+     * without a real tailnet. Under `bindIpOverride`, the cert is attempted ONLY
+     * when this is provided (production keeps issuing on real tailnet ips).
+     */
+    acquireCert?: (userDataDir: string) => Promise<MobileCert | null>;
 }
 
 const servers = new Map<string, http.Server | https.Server>();
@@ -132,6 +139,15 @@ let boundDnsName: string | null = null;
 let activeCert: MobileCert | null = null;
 /** Daily cert-renewal timer (rebinds when the cert nears expiry). */
 let renewTimer: ReturnType<typeof setInterval> | null = null;
+/** Pending cert RE-ACQUISITION timer after an http fallback (see scheduleCertRetry). */
+let certRetryTimer: ReturnType<typeof setTimeout> | null = null;
+/** Retries spent so far this bind-cycle — bounds the self-heal (reset on success/start). */
+let certRetryAttempts = 0;
+/** Fixed gap between cert re-acquisition attempts. */
+const CERT_RETRY_MS = 15_000;
+/** ~7.5 min of retries — long enough for a post-upgrade tailnet reconnect, then
+ *  give up rather than poll `tailscale cert` forever on a cert-less tailnet. */
+const CERT_RETRY_MAX_ATTEMPTS = 30;
 let conflict = false;
 let notDetected = false;
 let deps: MobileServerDeps | null = null;
@@ -612,12 +628,17 @@ function resolveBindIps(): string[] {
  *  Prefers browser-trusted HTTPS via a Tailscale cert; FAILS OPEN to http-over-
  *  WireGuard (still encrypted) when the tailnet can't provide one. */
 async function bind(ip: string, wantPort: number): Promise<void> {
-    // Try a Tailscale cert for HTTPS. Skipped under the test bind-override (no real
-    // tailnet — and we must never issue a real cert from the integration test).
-    activeCert =
-        deps && !deps.bindIpOverride && isCgnatIp(ip)
-            ? await ensureCert(deps.userDataDir)
-            : null;
+    // Whether HTTPS is EXPECTED on this listener: real tailnet ips in production;
+    // under the test bind-override only when a cert provider was injected (we must
+    // never issue a real cert from a test). Drives the retry decision below.
+    const wantCert = deps
+        ? deps.bindIpOverride
+            ? !!deps.acquireCert
+            : isCgnatIp(ip)
+        : false;
+    // Try a Tailscale cert for HTTPS (injectable; defaults to the real `tailscale
+    // cert`). Null → fall back to http-over-WireGuard.
+    activeCert = wantCert ? await (deps!.acquireCert ?? ensureCert)(deps!.userDataDir) : null;
 
     const onRequest = (req: http.IncomingMessage, res: http.ServerResponse) => {
         void handle(req, res).catch(() => {
@@ -671,7 +692,16 @@ async function bind(ip: string, wantPort: number): Promise<void> {
             conflict = false;
             attachWebSocket(srv);
             persistState();
-            scheduleCertRenewal();
+            if (boundSecure) {
+                // Secured — stop any pending retry and keep the cert fresh.
+                clearCertRetry();
+                scheduleCertRenewal();
+            } else if (wantCert) {
+                // A cert was EXPECTED but the tailnet wasn't ready (the norm right
+                // after an upgrade relaunch). Re-attempt + rebind so the phone's
+                // https://<magic-dns> URL recovers without a manual restart.
+                scheduleCertRetry();
+            }
             resolve();
         });
     });
@@ -689,6 +719,40 @@ function scheduleCertRenewal(): void {
 async function maybeRenewCert(): Promise<void> {
     if (servers.size === 0 || !activeCert) return;
     if (!shouldRenew(activeCert.notAfter)) return;
+    await restartMobileServer();
+}
+
+/** Cancel a pending cert re-acquisition and reset the budget (a fresh start, or
+ *  a bind that came up secure, gets the full retry budget again). */
+function clearCertRetry(): void {
+    if (certRetryTimer) {
+        clearTimeout(certRetryTimer);
+        certRetryTimer = null;
+    }
+    certRetryAttempts = 0;
+}
+
+/**
+ * After an http fallback where a Tailscale cert was EXPECTED, the cert is usually
+ * minutes away, not gone — the tailnet just hasn't finished reconnecting (classic
+ * right after an update relaunches the app). Re-attempt on a fixed interval and
+ * rebind to HTTPS the instant it succeeds, so a phone holding an
+ * `https://<magic-dns>` URL reconnects on its own. Bounded so a tailnet that
+ * simply has no HTTPS-cert capability isn't polled forever.
+ */
+function scheduleCertRetry(): void {
+    if (certRetryTimer) return; // one pending at a time
+    if (certRetryAttempts >= CERT_RETRY_MAX_ATTEMPTS) return; // budget spent → manual restart
+    certRetryAttempts += 1;
+    certRetryTimer = setTimeout(() => void retryCert(), CERT_RETRY_MS);
+    certRetryTimer.unref?.();
+}
+
+async function retryCert(): Promise<void> {
+    certRetryTimer = null;
+    if (servers.size === 0 || boundSecure || !deps || !deps.enabled) return;
+    // Rebind: bind() re-runs the cert provider. Ready now ⇒ it comes up HTTPS and
+    // clears the retry; still not ⇒ bind() schedules the next attempt.
     await restartMobileServer();
 }
 
@@ -729,6 +793,7 @@ export async function startMobileServer(d: MobileServerDeps): Promise<void> {
 
     conflict = false;
     notDetected = false;
+    clearCertRetry(); // a fresh start gets the full cert-retry budget
 
     if (!d.enabled) return; // opt-in — off by default
 
@@ -767,6 +832,13 @@ export function stopMobileServer(): void {
     if (renewTimer) {
         clearInterval(renewTimer);
         renewTimer = null;
+    }
+    // Cancel the TIMER but keep the attempt count — an internal retry rebind goes
+    // through here, and resetting the budget each time would defeat the cap. A
+    // fresh startMobileServer (or a secure bind) resets it via clearCertRetry.
+    if (certRetryTimer) {
+        clearTimeout(certRetryTimer);
+        certRetryTimer = null;
     }
     conflict = false;
 }
