@@ -99,4 +99,14 @@ describe('PASSTHROUGH_EVENTS — every host→client badge event passes through 
     it('includes agentinbox:lag so the host window badge tracks the HOST agents', () => {
         expect(PASSTHROUGH_EVENTS.has('agentinbox:lag')).toBe(true);
     });
+
+    // Hosting Manager remote parity: a host window's Site Manager (and the rail's
+    // per-workspace sites indicator) re-reads on `dev-server:changed`, and animates
+    // a starting site through its phases from the `dev-server:site-progress` stream.
+    // Both are host-sourced now, so both MUST pass through — without them a remote
+    // Site Manager card would freeze on a disabled Start button while the host built.
+    it('includes the dev-server host events so a remote Site Manager stays live', () => {
+        expect(PASSTHROUGH_EVENTS.has('dev-server:changed')).toBe(true);
+        expect(PASSTHROUGH_EVENTS.has('dev-server:site-progress')).toBe(true);
+    });
 });

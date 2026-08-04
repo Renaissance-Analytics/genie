@@ -18,6 +18,10 @@ import type {
     AgentInboxMessage,
     ScheduleInfo,
     PendingQuestionSpec,
+    ManageSiteRequest,
+    ManageSiteResult,
+    ManageServiceResult,
+    DevRuntimeInfo,
 } from './genie';
 import { isHostSourcedSettingKey } from './settings-nav';
 // The PURE inbox grouping main uses (electron-free by construction — see the
@@ -141,37 +145,63 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
     };
 
     /**
-     * The container DEV SERVER (#234) — DELIBERATELY INERT in a remote window.
+     * The container DEV SERVER (#234) — HOST-SOURCED in a remote window.
      *
-     * `...local` at the bottom of this file would otherwise pass the local
-     * preload's `devServer` straight through, and a host window drives ANOTHER
-     * machine: every call would start containers on the CLIENT while the surface
-     * around it lists the HOST's workspaces. And a service is STATE — a Postgres
-     * initialised on the client, with its credentials injected into containers
-     * that live on the host, points the app at a server on a machine it cannot
-     * reach. Silently serving the wrong machine is worse than not offering it,
-     * so the bridge reports "nothing, unavailable" and master.tsx hides the
-     * entry points.
+     * The sites + services a host window manages are hosted on the HOST (a site's
+     * container mounts the host's workspace; a service is state that lives there),
+     * so `site` / `service` / `runtimeStatus` / `repos` route through the bridge to
+     * the host's `/api/desktop/dev-server/*`, running the SAME `runManageSite` /
+     * `runManageService` an agent reaches — the Site Manager drives the HOST, not
+     * the client. `sites` above only READS + OPENS what this created.
      *
-     * Host-sourcing this properly needs `/api/dev-server/*` on the host, the
-     * same way `sites` is carried — P5, not a bridge shim.
+     * The one action that STAYS local is `open`: opening a `.gen` site is a Testing
+     * Browser WINDOW on THIS client pointed at the host's carrier (main can't open a
+     * window on the host), so the bridge resolves the site's genName from the host
+     * and then hands off to the local carrier — exactly the `.gen` popover path.
      */
+    const hostSite = (workspaceId: string, siteReq: ManageSiteRequest) =>
+        req('/api/desktop/dev-server/site', {
+            method: 'POST',
+            json: { workspaceId, req: siteReq },
+        }) as Promise<ManageSiteResult>;
     const devServer: GenieApi['devServer'] = {
-        site: async () => ({
-            ok: false,
-            error: 'Hosting is managed on the machine itself.',
-            sites: [],
-        }),
-        service: async () => ({
-            ok: false,
-            error: 'Hosting is managed on the machine itself.',
-            services: [],
-        }),
-        runtimeStatus: async () => ({ kind: 'none' }),
-        // The machine-level read is inert here for the same reason: it would
-        // describe the CLIENT's Docker, its images and its engines, under a
-        // window that is driving somebody else's machine. An empty catalog with
-        // no runtime is the one answer that cannot mislead.
+        site: async (workspaceId, siteReq) => {
+            if (siteReq.action === 'open') {
+                // Resolve genName from the host, then open on THIS client (the same
+                // local carrier the `.gen` popover uses) — never a browser on the host.
+                const listed = await hostSite(workspaceId, { action: 'list' });
+                const target = listed.sites?.find((s) => s.id === siteReq.id);
+                if (!target?.genName) {
+                    return { ...listed, ok: false, error: 'That site no longer exists.' };
+                }
+                const opened = await local.sites.open(target.genName);
+                return {
+                    ...listed,
+                    ok: opened.ok,
+                    ...(opened.error ? { error: opened.error } : {}),
+                    ...(siteReq.id ? { affectedId: siteReq.id } : {}),
+                };
+            }
+            return hostSite(workspaceId, siteReq);
+        },
+        service: async (workspaceId, serviceReq) =>
+            (await req('/api/desktop/dev-server/service', {
+                method: 'POST',
+                json: { workspaceId, req: serviceReq },
+            })) as ManageServiceResult,
+        runtimeStatus: async () =>
+            ((await req('/api/desktop/dev-server/runtime')) as { runtime: DevRuntimeInfo }).runtime,
+        repos: async (workspaceId) =>
+            ((await req('/api/desktop/dev-server/repos', {
+                method: 'POST',
+                json: { workspaceId },
+            })) as { repos: string[] }).repos,
+        // The MACHINE-level Workstation Dev Server (the SETTINGS surface, not the
+        // per-workspace Site Manager) stays inert in a remote window: it would
+        // describe the CLIENT's Docker, images and engines under a window driving
+        // another machine. The panel this bridge makes host-capable uses site /
+        // service / runtimeStatus / repos above; the machine-level `inventory`
+        // action of `service` already carries the host's engines when needed.
         workstation: async () => ({
             runtime: { kind: 'none', probes: [] },
             devBase: { image: '', installed: false, toolchain: [] },
@@ -181,7 +211,6 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             ok: false,
             error: 'Service engines are managed on the machine itself.',
         }),
-        repos: async () => [],
     };
 
     // The host's terminal-spec model (the grid's backbone) — pass-through.

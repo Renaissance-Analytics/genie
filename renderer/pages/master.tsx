@@ -284,13 +284,13 @@ function MasterInner() {
     const [recipeLauncherOpen, setRecipeLauncherOpen] = useState(false);
     // The container Dev Server (#234). One map of workspaceId → its dev sites,
     // because the rail's indicator is per-row and a per-workspace fetch on paint
-    // would be N calls. LOCAL-only: `api().devServer` is not host-sourced, so in
-    // a remote window (which lists the HOST's workspaces) this stays empty and
-    // the indicator + Site Manager entry points are absent rather than wrong.
+    // would be N calls. HOST-SOURCED in a remote window now: `api().devServer.site`
+    // routes to the HOST over the bridge, so the rail indicator reflects the HOST's
+    // sites and the `dev-server:changed` push arrives via PASSTHROUGH_EVENTS.
     const [siteManagerWsId, setSiteManagerWsId] = useState<string | null>(null);
     const [devSites, setDevSites] = useState<Record<string, DevSiteInfo[]>>({});
     useEffect(() => {
-        if (isRemoteWindow() || !hasGenieBridge()) return;
+        if (!hasGenieBridge()) return;
         const load = () => {
             const ids = workspaces.map((w) => w.id);
             void Promise.all(
@@ -1669,13 +1669,10 @@ function MasterInner() {
                         issueWatchCounts={issueWatchCounts}
                         onShowIssueWatch={openIssueWatch}
                         devSites={devSites}
-                        // The Dev Server drives THIS machine's containers, so
-                        // the Site Manager is a local-Floor surface; a host
-                        // window would otherwise offer it against the wrong
-                        // machine.
-                        onShowSiteManager={
-                            isRemoteWindow() ? undefined : setSiteManagerWsId
-                        }
+                        // The Site Manager is host-aware: in a remote window it
+                        // drives the HOST's containers over the bridge, so the
+                        // entry point is offered on a host Floor too.
+                        onShowSiteManager={setSiteManagerWsId}
                         activeWorkspaceId={activeWorkspaceId}
                         pinned={chooserPinned}
                         onTogglePin={() => setChooserPinned((p) => !p)}
@@ -1895,11 +1892,7 @@ function MasterInner() {
                         onOpenStage={() => openProjectInStage(ws.id)}
                         onOpenInBrowser={() => openProjectInBrowser(ws.id)}
                         onSettings={() => setSettingsWorkspaceId(ws.id)}
-                        onSiteManager={
-                            isRemoteWindow()
-                                ? undefined
-                                : () => setSiteManagerWsId(ws.id)
-                        }
+                        onSiteManager={() => setSiteManagerWsId(ws.id)}
                         onRemove={() => void removeWorkspaceRow(ws.id)}
                     />
                 );

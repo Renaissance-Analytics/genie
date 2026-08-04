@@ -1122,6 +1122,14 @@ export const PASSTHROUGH_EVENTS = new Set([
     // AgentPulse — per-workspace real-time terminal-activity (rail glow + live
     // sparkline); a remote window reflects the HOST's agent activity.
     'agent-pulse',
+    // Hosting Manager (#234): the host pushes `dev-server:changed` on every config
+    // edit / start-stop / boot adoption, and streams `dev-server:site-progress`
+    // (pulling → building → starting → ready|failed, with the build log) as a site
+    // comes up. Re-emitting both keeps a remote Site Manager + the rail's per-
+    // workspace sites indicator live with the HOST's containers — the coarse re-read
+    // and the high-frequency start stream the local preload already subscribes to.
+    'dev-server:changed',
+    'dev-server:site-progress',
 ]);
 
 /**
