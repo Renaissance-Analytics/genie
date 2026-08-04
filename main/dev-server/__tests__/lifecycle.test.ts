@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createDevSiteManager } from '../site-manager';
 import { createDevServiceManager } from '../services/service-manager';
 import { createDevServerLifecycle } from '../lifecycle';
-import { devContainerNameFor, serviceContainerNameFor, siteContainerNameFor } from '../argv';
+import { devContainerNameFor, serviceContainerNameFor } from '../argv';
+import { CADDY_HTTPS_PORT } from '../caddyfile';
 import type { DevSiteConfig, DevSites } from '../sites-config';
 import type { DevServiceConfig, DevServices } from '../services/services-config';
 import type {
@@ -72,7 +73,11 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; existing?: ContainerS
     );
     const ports = new Map<string, PortMapping[]>();
     for (const c of opts.existing ?? []) {
-        ports.set(c.id, [{ container: 8000, protocol: 'tcp', hostIp: '127.0.0.1', hostPort: 49_900 }]);
+        // A sandbox publishes its Caddy https port; that is the one door adopt
+        // reads back to route every `.gen` through.
+        ports.set(c.id, [
+            { container: CADDY_HTTPS_PORT, protocol: 'tcp', hostIp: '127.0.0.1', hostPort: 49_900 },
+        ]);
     }
 
     return {
@@ -217,13 +222,21 @@ function serviceManager(runtime: Fake, services: Record<string, DevServices>, wo
 // --- boot adoption ----------------------------------------------------------
 
 describe('adopting what is already running', () => {
-    it('adopts a SITE container that outlived a Genie restart, so `.gen` routes to it again', async () => {
-        // The container is up — Genie restarted, Docker did not. Nothing in the
-        // manager knows about it, so `genSites()` is empty and the Testing
-        // Browser resolves `web.acme.gen` to nothing while the server serves.
-        const name = siteContainerNameFor(WS.id, 'web');
+    it('adopts a SITE whose process outlived a Genie restart, so `.gen` routes to it again', async () => {
+        // The SANDBOX is up — Genie restarted, Docker did not — and the site's
+        // detached process is still alive inside it. Nothing in the manager knows,
+        // so `genSites()` is empty and the Testing Browser resolves `web.acme.gen`
+        // to nothing while the server serves.
         const runtime = fakeRuntime({
-            existing: [{ id: 'id-live', name, image: 'genie-dev', state: 'running', workspaceId: WS.id }],
+            existing: [
+                {
+                    id: 'id-sandbox',
+                    name: devContainerNameFor(WS.id),
+                    image: 'genie-dev',
+                    state: 'running',
+                    workspaceId: WS.id,
+                },
+            ],
         });
         const siteId = 'site-1';
         const manager = siteManager(runtime, { [WS.id]: { [siteId]: SITE } });
@@ -238,8 +251,10 @@ describe('adopting what is already running', () => {
                 workspaceId: WS.id,
                 genName: 'web.acme.gen',
                 siteId,
+                // Routed through the sandbox's shared Caddy port over https,
+                // distinguished by SNI = the `.gen` name.
                 hostname: 'web.acme.gen',
-                scheme: 'http',
+                scheme: 'https',
                 port: 49_900,
                 loopback: '127.0.0.1',
             },

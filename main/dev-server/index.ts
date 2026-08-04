@@ -112,7 +112,6 @@ export {
     devSiteManager,
     initDevSites,
     resetDevSitesForTests,
-    siteImageTagFor,
 } from './site-manager';
 export type {
     DevGenSite,

@@ -43,6 +43,29 @@ describe('buildCaddyfile', () => {
         expect(a).toBe(b); // sorted, order-independent
     });
 
+    it('rewrites the upstream Host when a site pins one (SNI stays the .gen name)', () => {
+        // The carrier dials with SNI = Host = the `.gen` name so Caddy can route;
+        // a framework that checks Host (Django ALLOWED_HOSTS) needs the UPSTREAM
+        // Host rewritten to a name it accepts. `header_up Host` does exactly that.
+        const cf = buildCaddyfile([{ host: 'web.acme.gen', port: 5173, upstreamHost: 'localhost' }]);
+        expect(cf).toContain('header_up Host localhost');
+        expect(cf).toContain('reverse_proxy 127.0.0.1:5173 {');
+        // The vhost Caddy routes by is still the `.gen` name, unchanged.
+        expect(cf).toContain(`web.acme.gen:${CADDY_HTTPS_PORT} {`);
+    });
+
+    it('omits the header rewrite when no upstream Host is pinned (one-line proxy)', () => {
+        const cf = buildCaddyfile([{ host: 'web.acme.gen', port: 5173 }]);
+        expect(cf).not.toContain('header_up');
+        expect(cf).toContain('reverse_proxy 127.0.0.1:5173\n');
+    });
+
+    it('REFUSES an injectable upstream host', () => {
+        expect(() =>
+            buildCaddyfile([{ host: 'ok.gen', port: 3000, upstreamHost: 'bad host {' }]),
+        ).toThrow();
+    });
+
     it('produces a valid empty config when there are no sites', () => {
         const cf = buildCaddyfile([]);
         expect(cf).not.toContain('reverse_proxy');

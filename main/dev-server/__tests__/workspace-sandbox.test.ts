@@ -158,9 +158,12 @@ function fakeRuntime(opts: FakeOptions = {}): Fake {
         async portMappings() {
             // A proper (post-rework) sandbox publishes the Caddy https port; a
             // pre-rework one publishes nothing, forcing an adopt to recreate it.
+            // Shape MUST match what the real runtime emits (`PortMapping.hostPort`,
+            // cli-runtime.ts#parsePorts) — an earlier fake used `host:` and hid a
+            // bug where `readCaddyHostPort` read the wrong field.
             return opts.caddyPortless
                 ? []
-                : [{ container: CADDY_HTTPS_PORT, host: 51820, hostIp: '127.0.0.1' }];
+                : [{ container: CADDY_HTTPS_PORT, protocol: 'tcp', hostIp: '127.0.0.1', hostPort: 51820 }];
         },
     };
 }

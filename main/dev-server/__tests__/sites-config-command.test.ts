@@ -15,7 +15,7 @@ const base = (over: Partial<DevSiteConfig> = {}): DevSiteConfig => ({
     name: 'web',
     genName: 'web.acme.gen',
     repo: 'app',
-    runMode: 'command',
+    runMode: 'explicit',
     kind: 'http',
     enabled: true,
     ...over,

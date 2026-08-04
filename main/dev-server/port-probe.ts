@@ -1,4 +1,5 @@
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 
 /**
@@ -146,4 +147,77 @@ export async function waitForHttp(
     host = '127.0.0.1',
 ): Promise<boolean> {
     return poll((attemptMs) => requestOnce(host, port, attemptMs, hostHeader), timeoutMs);
+}
+
+/** Caddy's own "the upstream app is not answering yet" statuses. A response
+ *  carrying one of these means Caddy is up but the site behind it has NOT bound,
+ *  so it is the one case where "a server answered" must NOT count as ready. */
+const GATEWAY_DOWN = new Set([502, 503, 504]);
+
+/** One HTTPS attempt with a chosen SNI. True only when the vhost behind Caddy
+ *  answered with a real (non-gateway) status. */
+function requestOnceHttps(
+    host: string,
+    port: number,
+    servername: string,
+    timeoutMs: number,
+    hostHeader?: string,
+): Promise<boolean> {
+    return new Promise((resolve) => {
+        let settled = false;
+        const done = (result: boolean) => {
+            if (settled) return;
+            settled = true;
+            resolve(result);
+        };
+        const req = https.request(
+            {
+                host,
+                port,
+                method: 'GET',
+                path: '/',
+                agent: false,
+                timeout: timeoutMs,
+                // Route to the right `.gen` vhost, and terminate Caddy's internal
+                // leaf as a client — loopback has no MITM surface, so validation
+                // off is fine (the browser-facing cert is the Genie CA elsewhere).
+                servername,
+                // codeql[js/disabling-certificate-validation]
+                rejectUnauthorized: false,
+                headers: { host: hostHeader ?? servername },
+            },
+            (res) => {
+                res.resume();
+                // A 502/503/504 is Caddy saying the app has not bound yet — keep
+                // polling. Any other status is the app itself, i.e. ready.
+                done(!GATEWAY_DOWN.has(res.statusCode ?? 0));
+            },
+        );
+        req.on('timeout', () => {
+            req.destroy();
+            done(false);
+        });
+        req.on('error', () => done(false));
+        req.end();
+    });
+}
+
+/**
+ * Poll the sandbox's published Caddy port until the `.gen` vhost behind it
+ * RESPONDS — the exact path the Testing Browser will take (loopback → Caddy →
+ * app), routed by TLS SNI.
+ *
+ * This replaces a direct dial of the app's port, which is now a private loopback
+ * detail INSIDE the sandbox and unreachable from the host. Because it goes
+ * through Caddy, a Caddy `502` (app still booting) is treated as not-ready rather
+ * than as "a server answered".
+ */
+export async function waitForHttpsSni(
+    port: number,
+    servername: string,
+    timeoutMs: number = DEFAULT_READY_TIMEOUT_MS,
+    hostHeader?: string,
+    host = '127.0.0.1',
+): Promise<boolean> {
+    return poll((attemptMs) => requestOnceHttps(host, port, servername, attemptMs, hostHeader), timeoutMs);
 }

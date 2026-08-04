@@ -21,7 +21,7 @@ async function readCaddyHostPort(
 ): Promise<number | undefined> {
     try {
         const maps = await runtime.portMappings(containerId);
-        return maps.find((m) => m.container === CADDY_HTTPS_PORT)?.host;
+        return maps.find((m) => m.container === CADDY_HTTPS_PORT)?.hostPort;
     } catch {
         return undefined;
     }

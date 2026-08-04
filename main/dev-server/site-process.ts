@@ -114,3 +114,27 @@ export async function siteProcessAlive(
         return false;
     }
 }
+
+/**
+ * The tail of a site's captured output. There is no per-site container to
+ * `docker logs`, so a site's stdout/stderr is its tmpfs log file; this reads the
+ * last `tail` lines of it. Never throws — an unreadable/absent log is ''.
+ */
+export async function readSiteProcessLog(
+    runtime: ContainerRuntime,
+    containerId: string,
+    siteId: string,
+    tail = 200,
+): Promise<string> {
+    if (!SITE_ID_RE.test(siteId)) return '';
+    const n = Number.isInteger(tail) && tail > 0 ? Math.min(tail, 10_000) : 200;
+    // `tail` is a POSITIVE integer we chose (never user input), so it is safe to
+    // interpolate; the log path is keyed by the validated site id.
+    const script = `tail -n ${n} '${logPath(siteId)}' 2>/dev/null || true`;
+    try {
+        const r = await runtime.exec(containerId, ['sh', '-c', script], { timeoutMs: 8_000 });
+        return r.stdout ?? '';
+    } catch {
+        return '';
+    }
+}

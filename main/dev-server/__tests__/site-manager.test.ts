@@ -1,4 +1,3 @@
-import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createDevSiteManager } from '../site-manager';
 import {
@@ -8,75 +7,68 @@ import {
     parseDevSites,
     sanitizeDevSitePatch,
 } from '../sites-config';
-import {
-    SITE_LABEL,
-    siteBuildContainerNameFor,
-    siteBuildVolumeNameFor,
-    siteContainerNameFor,
-} from '../argv';
-import { BUILD_SOURCE_MOUNT } from '../isolated-build';
-import { FRANKENPHP_IMAGE } from '../serve-recipe';
+import { devContainerNameFor } from '../argv';
+import { CADDY_HTTPS_PORT } from '../caddyfile';
 import type { DevSiteConfig, DevSites } from '../sites-config';
 import type {
     ContainerRuntime,
     ContainerSpec,
     ContainerSummary,
-    ImageBuildSpec,
     PortMapping,
     RuntimeDetection,
 } from '../container-runtime';
 
 /**
- * The DEV SITE MANAGER (Tynn #234, P2 items 3 + 4) — the piece that turns "this
- * workspace defines a site" into a container serving it, and into the ONE row
- * the Genie Browser already knows how to route.
+ * The DEV SITE MANAGER, sandbox-serve model — the piece that turns "this
+ * workspace defines a site" into a user command running against the LIVE repo
+ * inside the ONE workspace sandbox, fronted by that sandbox's Caddy over https,
+ * and into the ONE row the Genie Browser already routes.
  *
- * Two things are being proven here, and the second is the whole phase:
- *
- *   1. A site runs **in the workspace sandbox** — the workspace's network, the
- *      workspace's bind mount, the workspace's labels — with exactly its own
- *      port published to loopback.
- *   2. A running site emits an `EnabledGenSite` whose target is that PUBLISHED
- *      LOOPBACK PORT. That is the salvage seam: `sites/local-sites.ts` already
- *      overlays such rows, `localTargetsBySiteId` already resolves them, and the
- *      local carrier already dials them — so `<name>.gen` serves the container
- *      with no change to any of it, local or remote.
+ * What is proven here:
+ *   1. A site is the user's `command`, run DETACHED in the sandbox, in the repo's
+ *      LIVE-mounted dir — no copy, no build, no per-site container.
+ *   2. The sandbox's Caddy is pointed at each site (host → app loopback port), so
+ *      ports are masked and https is forced.
+ *   3. A running site emits an `EnabledGenSite` whose target is the sandbox's
+ *      shared published Caddy port, distinguished by TLS SNI = its `.gen` name —
+ *      exactly what the local carrier already dials.
  */
 
 // --- a fake runtime ---------------------------------------------------------
 
 const DOCKER_OK: RuntimeDetection = { kind: 'docker', version: '29.6.1', probes: [] };
 
+/** The host port the fake publishes the sandbox's Caddy port on. */
+const CADDY_HOST_PORT = 49_800;
+
 interface Fake extends ContainerRuntime {
     readonly ran: ContainerSpec[];
-    readonly built: ImageBuildSpec[];
     readonly removed: string[];
-    /** Volume names passed to `volumeRemove`, in order. */
-    readonly removedVolumes: string[];
-    /** Every `exec` the manager issued — the copy AND the build steps. */
+    /** Every `exec` the manager issued (start / caddy / stop / probe-alive). */
     readonly execs: Array<{ id: string; argv: string[]; env?: Record<string, string> }>;
     readonly containers: Map<string, ContainerSummary>;
-    /** What `portMappings` answers, per container id. */
     readonly ports: Map<string, PortMapping[]>;
 }
 
 function fakeRuntime(opts: { detection?: RuntimeDetection; existing?: ContainerSummary[] } = {}): Fake {
     const ran: ContainerSpec[] = [];
-    const built: ImageBuildSpec[] = [];
     const removed: string[] = [];
-    const removedVolumes: string[] = [];
     const execs: Array<{ id: string; argv: string[]; env?: Record<string, string> }> = [];
     const containers = new Map<string, ContainerSummary>(
         (opts.existing ?? []).map((c) => [c.name, c]),
     );
     const ports = new Map<string, PortMapping[]>();
+    // Seed port mappings for any pre-existing container (an adopted sandbox).
+    for (const c of containers.values()) {
+        ports.set(c.id, [
+            { container: CADDY_HTTPS_PORT, protocol: 'tcp', hostIp: '127.0.0.1', hostPort: CADDY_HOST_PORT },
+        ]);
+    }
 
     return {
         kind: 'docker',
         ran,
-        built,
         removed,
-        removedVolumes,
         execs,
         containers,
         ports,
@@ -92,9 +84,7 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; existing?: ContainerS
         },
         async networkConnect() {},
         async networkDisconnect() {},
-        async volumeRemove(name) {
-            removedVolumes.push(name);
-        },
+        async volumeRemove() {},
         async imageExists() {
             return true;
         },
@@ -102,7 +92,6 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; existing?: ContainerS
             return { ok: true, image };
         },
         async buildImage(spec) {
-            built.push(spec);
             return { ok: true, image: spec.tag };
         },
         async runContainer(spec) {
@@ -115,16 +104,13 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; existing?: ContainerS
                 state: 'running',
                 ...(spec.workspaceId === null ? {} : { workspaceId: spec.workspaceId }),
             });
-            // The runtime picks an ephemeral host port at CREATE time — which is
-            // exactly why a published port cannot be added to a container that
-            // is already running, and why a site gets its own container.
             ports.set(
                 id,
                 (spec.ports ?? []).map((p) => ({
                     container: p.container,
                     protocol: 'tcp' as const,
                     hostIp: p.hostIp ?? '127.0.0.1',
-                    hostPort: p.host ?? 49_800,
+                    hostPort: p.host ?? CADDY_HOST_PORT,
                 })),
             );
             return { id, name: spec.name };
@@ -137,10 +123,12 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; existing?: ContainerS
         },
         async exec(id, argv, opts) {
             execs.push({ id, argv, ...(opts?.env ? { env: opts.env } : {}) });
-            return { code: 0, stdout: '', stderr: '' };
+            // `siteProcessAlive` reads a pidfile + kill -0; answer "alive" so the
+            // re-entrant-start guard treats a live site as adopt-in-place.
+            return { code: 0, stdout: 'listening\n', stderr: '' };
         },
         async logs() {
-            return 'listening on 0.0.0.0:8000\n';
+            return '';
         },
         followLogs() {
             return { stop() {}, exited: Promise.resolve(0) };
@@ -160,41 +148,22 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; existing?: ContainerS
 // --- fixtures ---------------------------------------------------------------
 
 const WS = { id: 'acme', path: '/work/acme', label: 'acme' };
+const SANDBOX = devContainerNameFor('acme');
+const SANDBOX_ID = `id-${SANDBOX}`;
 
 const SITE: DevSiteConfig = {
     name: 'web',
     genName: 'web.acme.gen',
     repo: 'app',
-    runMode: 'recipe',
-    stack: 'go',
-    server: 'binary',
-    build: [{ label: 'Compile', command: ['go', 'build', '-o', '.genie-build/server', '.'] }],
-    serve: ['.genie-build/server'],
-    port: 8000,
+    runMode: 'explicit',
+    // The whole model: the user's own startup argv, run against the live source.
+    command: ['npm', 'run', 'dev'],
+    port: 5173,
     kind: 'http',
     enabled: true,
 };
 
 const SITE_ID = devSiteIdFor('acme', 'web');
-
-/** A FrankenPHP-served PHP site — the one image that bakes in a broken
- *  healthcheck (genie #119, Blocker 5). */
-const PHP_SITE: DevSiteConfig = {
-    name: 'app',
-    genName: 'app.acme.gen',
-    repo: 'app',
-    runMode: 'recipe',
-    stack: 'php',
-    server: 'frankenphp',
-    image: FRANKENPHP_IMAGE,
-    build: [{ label: 'Install PHP dependencies', command: ['composer', 'install', '--no-dev'] }],
-    serve: ['frankenphp', 'php-server', '--listen', '0.0.0.0:8080', '--root', 'public/'],
-    port: 8080,
-    kind: 'http',
-    enabled: true,
-};
-
-const PHP_SITE_ID = devSiteIdFor('acme', 'app');
 
 function manager(
     runtime: ContainerRuntime,
@@ -208,10 +177,24 @@ function manager(
         platform: 'linux',
         image: 'genie-dev-base:1',
         hostIds: null,
-        // Deterministic: the real one opens a socket.
+        // Deterministic: the real one opens a TLS socket to Caddy.
         probeReady: async () => true,
         ...extra,
     });
+}
+
+/** The `sh -c` script of the exec that STARTED a site (positional argv carries
+ *  `genie-site <cwd> <command…>`). */
+function startExec(runtime: Fake) {
+    return runtime.execs.find((e) => e.argv[3] === 'genie-site');
+}
+
+/** Decode the Caddyfile from the most recent `applyCaddyConfig` exec. */
+function lastCaddyfile(runtime: Fake): string {
+    const caddy = [...runtime.execs].reverse().find((e) => (e.argv[2] ?? '').includes('caddy reload'));
+    const script = caddy?.argv[2] ?? '';
+    const m = script.match(/printf %s '([^']+)' \| base64 -d/);
+    return m ? Buffer.from(m[1]!, 'base64').toString('utf8') : '';
 }
 
 // --- the stored model -------------------------------------------------------
@@ -237,44 +220,14 @@ describe('sites-config', () => {
         expect(sanitizeDevSitePatch({ genName: 'WEB.acme.GEN' }).genName).toBe('web.acme.gen');
     });
 
-    it('keeps a serve command as literal argv and drops anything that is not', () => {
-        expect(sanitizeDevSitePatch({ serve: ['gunicorn', 'app:wsgi'] }).serve).toEqual([
-            'gunicorn',
-            'app:wsgi',
+    it('keeps a command as literal argv and drops anything that is not', () => {
+        expect(sanitizeDevSitePatch({ command: ['npm', 'run', 'dev'] }).command).toEqual([
+            'npm',
+            'run',
+            'dev',
         ]);
-        expect(sanitizeDevSitePatch({ serve: 'gunicorn app:wsgi' as never }).serve).toBeUndefined();
-        // A NUL cannot be passed to a process at all.
-        expect(sanitizeDevSitePatch({ serve: ['a\0b'] }).serve).toBeUndefined();
-    });
-
-    it('keeps the BUILD steps, dropping any that carry no runnable argv', () => {
-        const build = sanitizeDevSitePatch({
-            build: [
-                { label: 'Install', command: ['npm', 'ci'] },
-                { label: 'Collect', command: ['manage.py'], optional: true },
-                { label: 'Bad', command: 'npm ci' as never },
-            ],
-        }).build;
-        expect(build).toEqual([
-            { label: 'Install', command: ['npm', 'ci'] },
-            { label: 'Collect', command: ['manage.py'], optional: true },
-        ]);
-    });
-
-    it('REFUSES to store an exposed surface that cannot say why the browser needs it', () => {
-        // The exposure boundary, enforced at the point of storage as well as at
-        // the point of use: a surface persisted without a reason could be
-        // re-applied later with nobody having stated the need.
-        const exposed = sanitizeDevSitePatch({
-            exposed: [
-                { name: 'live', port: 6001, protocol: 'ws', reason: 'the client subscribes' },
-                { name: 'db', port: 5432, protocol: 'tcp', reason: '' },
-                { name: 'Not A Label', port: 6002, protocol: 'ws', reason: 'x' },
-            ] as never,
-        }).exposed;
-        expect(exposed).toEqual([
-            { name: 'live', port: 6001, protocol: 'ws', reason: 'the client subscribes' },
-        ]);
+        expect(sanitizeDevSitePatch({ command: 'npm run dev' as never }).command).toBeUndefined();
+        expect(sanitizeDevSitePatch({ command: ['a\0b'] }).command).toBeUndefined();
     });
 
     it('clamps the port and refuses junk env names', () => {
@@ -296,43 +249,56 @@ describe('sites-config', () => {
 // --- running a site ---------------------------------------------------------
 
 describe('start', () => {
-    it('runs the site in the workspace sandbox with ONLY its port published', async () => {
+    it('runs the user command DETACHED in the sandbox, in the repo LIVE dir', async () => {
         const runtime = fakeRuntime();
         const status = await manager(runtime).start('acme', SITE_ID);
 
         expect(status.state).toBe('running');
-        // The site container, not the workspace dev container.
-        const site = runtime.ran.find((s) => s.name === siteContainerNameFor('acme', 'web'));
-        expect(site).toBeTruthy();
-        expect(site?.network).toBe('genie-ws-acme');
-        expect(site?.workspaceId).toBe('acme');
-        expect(site?.labels?.[SITE_LABEL]).toBe(SITE_ID);
-        // The site is BUILT, so it serves from the container-owned build COPY
-        // (a named volume), NOT the developer's working tree (genie #119). The
-        // host path is never bind-mounted into the serving container.
-        expect(site?.volumes).toEqual([
-            { name: siteBuildVolumeNameFor('acme', 'web'), target: '/workspace' },
+        // Exactly one container ran: the WORKSPACE SANDBOX. No per-site container.
+        expect(runtime.ran).toHaveLength(1);
+        expect(runtime.ran[0]?.name).toBe(SANDBOX);
+        // The site is a process exec'd INTO that sandbox…
+        const start = startExec(runtime);
+        expect(start?.id).toBe(SANDBOX_ID);
+        // …detached, keyed by the site id, in the repo's LIVE-mounted dir, with the
+        // command riding as POSITIONAL argv (never spliced into the shell).
+        expect(start?.argv[2]).toMatch(/setsid/);
+        expect(start?.argv[2]).toContain(`${SITE_ID}.pid`);
+        expect(start?.argv.slice(3)).toEqual([
+            'genie-site',
+            '/workspace/repos/app',
+            'npm',
+            'run',
+            'dev',
         ]);
-        expect(site?.mounts).toBeUndefined();
-        expect(site?.workdir).toBe('/workspace/repos/app');
-        // The PRODUCTION server, and only it — the build ran separately, in the
-        // sandbox container, before this one was created.
-        expect(site?.command).toEqual(['.genie-build/server']);
-        // Loopback, ephemeral host port — never the LAN, never a fixed port.
-        expect(site?.ports).toEqual([{ container: 8000, hostIp: '127.0.0.1' }]);
     });
 
-    it('reads the PUBLISHED host port back and reports both origins', async () => {
+    it('serves the LIVE workspace — the sandbox bind-mounts it, nothing is copied', async () => {
+        const runtime = fakeRuntime();
+        await manager(runtime).start('acme', SITE_ID);
+        const sandbox = runtime.ran[0];
+        // The whole workspace, bind-mounted live — no build volume, no copy.
+        expect(sandbox?.mounts).toEqual([{ source: '/work/acme', target: '/workspace' }]);
+        expect(sandbox?.volumes).toBeUndefined();
+    });
+
+    it('points the sandbox Caddy at the site (host → the app loopback port)', async () => {
+        const runtime = fakeRuntime();
+        await manager(runtime).start('acme', SITE_ID);
+        const cf = lastCaddyfile(runtime);
+        expect(cf).toContain(`web.acme.gen:${CADDY_HTTPS_PORT} {`);
+        expect(cf).toContain('reverse_proxy 127.0.0.1:5173');
+        expect(cf).toContain('tls internal');
+    });
+
+    it('reports the sandbox Caddy port and the https origin', async () => {
         const runtime = fakeRuntime();
         const status = await manager(runtime).start('acme', SITE_ID);
-        expect(status.hostPort).toBe(49_800);
+        expect(status.hostPort).toBe(CADDY_HOST_PORT);
         expect(status.origin).toBe('https://web.acme.gen');
-        expect(status.localOrigin).toBe('http://127.0.0.1:49800');
     });
 
-    it('reports a site whose port never opened as running-but-not-ready', async () => {
-        // The container being up is not the same as the production server having
-        // bound. Conflating them is how an agent reports a site that 502s.
+    it('reports a site whose port never answered through Caddy as running-but-not-ready', async () => {
         const runtime = fakeRuntime();
         const status = await manager(runtime, undefined, { probeReady: async () => false }).start(
             'acme',
@@ -340,48 +306,6 @@ describe('start', () => {
         );
         expect(status.state).toBe('running');
         expect(status.ready).toBe(false);
-    });
-
-    it('replaces a STOPPED site container rather than restarting it', async () => {
-        // The published port is fixed at create time, so a config whose port
-        // changed can only take effect on a fresh container. The code lives in
-        // the bind mount, so nothing is lost by recreating.
-        const runtime = fakeRuntime({
-            existing: [
-                {
-                    id: 'id-old',
-                    name: siteContainerNameFor('acme', 'web'),
-                    image: 'genie-dev-base:1',
-                    state: 'exited',
-                    workspaceId: 'acme',
-                },
-            ],
-        });
-        await manager(runtime).start('acme', SITE_ID);
-        // The stopped leftover was removed (replaced, not restarted). `removed`
-        // also carries the ephemeral build container, so assert containment.
-        expect(runtime.removed).toContain('id-old');
-        expect(runtime.ran.filter((s) => s.name.includes('-site-'))).toHaveLength(1);
-    });
-
-    it('builds a repo Dockerfile before running it', async () => {
-        const runtime = fakeRuntime();
-        const sites: DevSites = {
-            [SITE_ID]: {
-                ...SITE,
-                runMode: 'dockerfile',
-                build: undefined,
-                serve: undefined,
-                image: undefined,
-            },
-        };
-        const status = await manager(runtime, sites).start('acme', SITE_ID);
-
-        expect(runtime.built[0]).toMatchObject({ context: path.join('/work/acme', 'repos', 'app') });
-        // The built tag is what actually gets run.
-        const site = runtime.ran.find((s) => s.name.includes('-site-'));
-        expect(site?.image).toBe(runtime.built[0]?.tag);
-        expect(status.state).toBe('running');
     });
 
     it('is a FAILED STATUS, never a throw, when there is no container runtime', async () => {
@@ -404,13 +328,32 @@ describe('start', () => {
         expect(status.error).toMatch(/Install Docker Desktop/);
     });
 
+    it('is a failed status — and spawns nothing — for a site with no command', async () => {
+        const runtime = fakeRuntime();
+        const sites: DevSites = { [SITE_ID]: { ...SITE, command: undefined } };
+        const status = await manager(runtime, sites).start('acme', SITE_ID);
+        expect(status.state).toBe('failed');
+        expect(status.error).toMatch(/command/i);
+        expect(startExec(runtime)).toBeUndefined();
+    });
+
+    it('falls back to the legacy `serve` argv for a pre-rework site', async () => {
+        const runtime = fakeRuntime();
+        const sites: DevSites = {
+            [SITE_ID]: { ...SITE, command: undefined, serve: ['./bin/server'] },
+        };
+        const status = await manager(runtime, sites).start('acme', SITE_ID);
+        expect(status.state).toBe('running');
+        expect(startExec(runtime)?.argv.slice(5)).toEqual(['./bin/server']);
+    });
+
     it('is a failed status for a site with no port', async () => {
         const runtime = fakeRuntime();
         const sites: DevSites = { [SITE_ID]: { ...SITE, port: undefined } };
         const status = await manager(runtime, sites).start('acme', SITE_ID);
         expect(status.state).toBe('failed');
         expect(status.error).toMatch(/port/i);
-        expect(runtime.ran).toHaveLength(0);
+        expect(startExec(runtime)).toBeUndefined();
     });
 
     it('is a failed status for an unknown site id', async () => {
@@ -420,121 +363,10 @@ describe('start', () => {
     });
 });
 
-// --- THE ISOLATED BUILD (genie #119, Blocker 4) -----------------------------
-//
-// The build used to `exec` into the workspace dev container over the developer's
-// bind-mounted working tree, so `composer install --no-dev` / `rm -rf` /
-// `npm run build` MUTATED the live checkout (deleting dev deps, rewriting
-// public/) and — as a foreign uid over host-owned files — hit git
-// dubious-ownership + EPERM-on-overwrite. The fix builds in a container-owned
-// COPY: the host tree is only ever read, and the artifact is served from a named
-// volume, not the working directory.
-
-describe('isolated build', () => {
-    it('builds in a container-owned copy — the host tree is only a READ-ONLY source', async () => {
-        const runtime = fakeRuntime();
-        await manager(runtime).start('acme', SITE_ID);
-
-        const build = runtime.ran.find((s) => s.name === siteBuildContainerNameFor('acme', 'web'));
-        expect(build).toBeTruthy();
-        // The toolchain (dev) image, not the site's serve image.
-        expect(build?.image).toBe('genie-dev-base:1');
-        // The repo is bind-mounted READ-ONLY as the copy SOURCE — readable, but
-        // the working tree can never be written.
-        expect(build?.mounts).toEqual([
-            {
-                source: path.join('/work/acme', 'repos', 'app'),
-                target: BUILD_SOURCE_MOUNT,
-                readOnly: true,
-            },
-        ]);
-        // The build writes into the container-owned volume, mounted where the
-        // working tree used to be.
-        expect(build?.volumes).toEqual([
-            { name: siteBuildVolumeNameFor('acme', 'web'), target: '/workspace' },
-        ]);
-        // No host bind mount on the build container at all.
-        expect(build?.mounts?.some((m) => m.source === '/work/acme')).toBeFalsy();
-        // It is ephemeral: torn down once the artifact is in the volume.
-        expect(runtime.removed).toContain(`id-${siteBuildContainerNameFor('acme', 'web')}`);
-    });
-
-    it('runs the copy AND every build step in the isolated container, never the sandbox', async () => {
-        const runtime = fakeRuntime();
-        await manager(runtime).start('acme', SITE_ID);
-
-        const buildId = `id-${siteBuildContainerNameFor('acme', 'web')}`;
-        // The copy that seeds the volume…
-        const copy = runtime.execs.find(
-            (e) => e.argv[0] === 'sh' && e.argv.join(' ').includes('cp -a'),
-        );
-        expect(copy?.id).toBe(buildId);
-        // …and the build step itself…
-        const goStep = runtime.execs.find((e) => e.argv[0] === 'go');
-        expect(goStep?.id).toBe(buildId);
-        // …both run in the isolated build container. NOTHING execs against the
-        // workspace sandbox (whose bind mount is the user's live tree).
-        expect(runtime.execs.length).toBeGreaterThan(0);
-        expect(runtime.execs.every((e) => e.id === buildId)).toBe(true);
-    });
-
-    it('serves from the build-copy volume, not a host bind mount', async () => {
-        const runtime = fakeRuntime();
-        await manager(runtime).start('acme', SITE_ID);
-
-        const site = runtime.ran.find((s) => s.name === siteContainerNameFor('acme', 'web'));
-        expect(site?.mounts).toBeUndefined();
-        expect(site?.volumes).toEqual([
-            { name: siteBuildVolumeNameFor('acme', 'web'), target: '/workspace' },
-        ]);
-    });
-
-    it('makes a FRESH copy each build — the stale volume is dropped first', async () => {
-        const runtime = fakeRuntime();
-        await manager(runtime).start('acme', SITE_ID);
-        expect(runtime.removedVolumes).toContain(siteBuildVolumeNameFor('acme', 'web'));
-    });
-
-    it('a build FAILURE tears down the build container and drops the useless copy', async () => {
-        const runtime = fakeRuntime();
-        // The copy succeeds; the build STEP fails.
-        runtime.exec = async (_id, argv) =>
-            argv[0] === 'sh'
-                ? { code: 0, stdout: '', stderr: '' }
-                : { code: 1, stdout: '', stderr: 'compile error' };
-        const status = await manager(runtime).start('acme', SITE_ID);
-
-        expect(status.state).toBe('failed');
-        expect(status.buildLog).toBeTruthy();
-        expect(runtime.removed).toContain(`id-${siteBuildContainerNameFor('acme', 'web')}`);
-        expect(runtime.removedVolumes).toContain(siteBuildVolumeNameFor('acme', 'web'));
-        // The serving container is never created when the build fails.
-        expect(runtime.ran.some((s) => s.name.includes('-site-'))).toBe(false);
-    });
-
-    it('a site with NO build steps serves the workspace directly — unchanged', async () => {
-        // No build = no mutation, so there is nothing to isolate: it mounts the
-        // workspace exactly as before, and no build container/volume is made.
-        const runtime = fakeRuntime();
-        const sites: DevSites = { [SITE_ID]: { ...SITE, build: [] } };
-        await manager(runtime, sites).start('acme', SITE_ID);
-
-        const site = runtime.ran.find((s) => s.name.includes('-site-'));
-        expect(site?.mounts).toEqual([{ source: '/work/acme', target: '/workspace' }]);
-        expect(site?.volumes).toBeUndefined();
-        expect(runtime.ran.some((s) => s.name.includes('-build-'))).toBe(false);
-        expect(runtime.removedVolumes).toHaveLength(0);
-    });
-});
-
 // --- THE SALVAGE SEAM -------------------------------------------------------
 
 describe('genSites — the row the Genie Browser already routes', () => {
-    it('emits the published loopback port as an EnabledGenSite keyed by siteId', async () => {
-        // This one assertion is P2's thesis. `sites/local-sites.ts` overlays
-        // these rows, `localTargetsBySiteId` keys the carrier's resolver on
-        // `siteId`, and the local carrier dials `loopback:port` — so the whole
-        // chain from `https://web.acme.gen` to the container is this object.
+    it('emits the shared Caddy port, SNI = the .gen name, over https', async () => {
         const runtime = fakeRuntime();
         const m = manager(runtime);
         await m.start('acme', SITE_ID);
@@ -544,29 +376,29 @@ describe('genSites — the row the Genie Browser already routes', () => {
                 workspaceId: 'acme',
                 genName: 'web.acme.gen',
                 siteId: SITE_ID,
+                // SNI = Host = the `.gen` name so Caddy routes by SNI.
                 hostname: 'web.acme.gen',
-                scheme: 'http',
-                port: 49_800,
+                scheme: 'https',
+                port: CADDY_HOST_PORT,
                 loopback: '127.0.0.1',
             },
         ]);
     });
 
-    it('lets a site override the upstream Host for a framework that checks it', async () => {
-        // Vite's allowedHosts and Django's ALLOWED_HOSTS both reject a Host they
-        // were not told about, so the coherent default needs an escape hatch.
+    it('rewrites the upstream Host at CADDY for a framework that checks it', async () => {
+        // The SNI/Host the carrier sends stays the `.gen` name (so Caddy routes);
+        // the upstream Host rewrite is a `header_up` in the Caddyfile.
         const runtime = fakeRuntime();
         const sites: DevSites = { [SITE_ID]: { ...SITE, upstreamHost: 'localhost' } };
         const m = manager(runtime, sites);
         await m.start('acme', SITE_ID);
-        expect(m.genSites()[0]?.hostname).toBe('localhost');
-        // The BROWSER-facing name is unchanged — only what upstream is told.
-        expect(m.genSites()[0]?.genName).toBe('web.acme.gen');
+        // The browser-facing SNI is unchanged…
+        expect(m.genSites()[0]?.hostname).toBe('web.acme.gen');
+        // …and Caddy is told to send the app `Host: localhost`.
+        expect(lastCaddyfile(runtime)).toContain('header_up Host localhost');
     });
 
     it('advertises NOTHING for a site that is not running', async () => {
-        // A dead target would displace a working discovered site in the overlay
-        // — strictly worse than not advertising at all.
         const m = manager(fakeRuntime());
         expect(m.genSites()).toEqual([]);
     });
@@ -576,26 +408,30 @@ describe('genSites — the row the Genie Browser already routes', () => {
         const sites: DevSites = { [SITE_ID]: { ...SITE, kind: 'tcp' } };
         const m = manager(runtime, sites);
         const status = await m.start('acme', SITE_ID);
-        // It still RUNS and still publishes its port — it just is not a `.gen`.
         expect(status.state).toBe('running');
-        expect(status.hostPort).toBe(49_800);
         expect(m.genSites()).toEqual([]);
+        // A tcp site gets no Caddy vhost (secure web only).
+        expect(lastCaddyfile(runtime)).not.toContain('web.acme.gen');
     });
 });
 
 // --- lifecycle --------------------------------------------------------------
 
 describe('stop / list / logs', () => {
-    it('stops and removes the site container, and stops advertising it', async () => {
+    it('stops the site PROCESS and drops its Caddy vhost — but never the sandbox', async () => {
         const runtime = fakeRuntime();
         const m = manager(runtime);
         await m.start('acme', SITE_ID);
         await m.stop(SITE_ID);
 
-        expect(runtime.removed).toContain(`id-${siteContainerNameFor('acme', 'web')}`);
-        // The isolated build copy is dropped on stop — a fresh one is made on the
-        // next start (production parity), and this is what keeps it from leaking.
-        expect(runtime.removedVolumes).toContain(siteBuildVolumeNameFor('acme', 'web'));
+        // The site's process group was killed (by its pidfile)…
+        const stopExec = runtime.execs.find((e) => (e.argv[2] ?? '').includes('kill -TERM'));
+        expect(stopExec?.argv[2]).toContain(`${SITE_ID}.pid`);
+        expect(stopExec?.id).toBe(SANDBOX_ID);
+        // …the sandbox container is NEVER removed (it holds the toolchain + others)…
+        expect(runtime.removed).not.toContain(SANDBOX_ID);
+        // …and Caddy no longer serves the vhost.
+        expect(lastCaddyfile(runtime)).not.toContain('reverse_proxy 127.0.0.1:5173');
         expect(m.genSites()).toEqual([]);
         expect(m.list('acme')[0]?.state).toBe('stopped');
     });
@@ -609,6 +445,7 @@ describe('stop / list / logs', () => {
             genName: 'web.acme.gen',
             state: 'stopped',
             enabled: true,
+            command: ['npm', 'run', 'dev'],
         });
     });
 
@@ -621,10 +458,11 @@ describe('stop / list / logs', () => {
         expect(m.list('acme')[0]?.error).toMatch(/port/i);
     });
 
-    it('returns the container log for a running site', async () => {
-        const m = manager(fakeRuntime());
+    it('returns the site process log for a running site', async () => {
+        const runtime = fakeRuntime();
+        const m = manager(runtime);
         await m.start('acme', SITE_ID);
-        expect(await m.logs(SITE_ID)).toContain('listening on');
+        expect(await m.logs(SITE_ID)).toContain('listening');
     });
 
     it('says so rather than throwing when logs are asked for a stopped site', async () => {
@@ -638,13 +476,11 @@ describe('reconcile', () => {
         const other = devSiteIdFor('acme', 'api');
         const sites: DevSites = {
             [SITE_ID]: SITE,
-            [other]: { ...SITE, name: 'api', genName: 'api.acme.gen', enabled: false },
+            [other]: { ...SITE, name: 'api', genName: 'api.acme.gen', port: 8000, enabled: false },
         };
         const m = manager(runtime, sites);
         await m.reconcile();
-        expect(runtime.ran.filter((s) => s.name.includes('-site-')).map((s) => s.name)).toEqual([
-            siteContainerNameFor('acme', 'web'),
-        ]);
+        expect(m.genSites().map((g) => g.genName)).toEqual(['web.acme.gen']);
     });
 
     it('stops a site that is live but no longer enabled', async () => {
@@ -658,38 +494,51 @@ describe('reconcile', () => {
     });
 });
 
-// --- reconfigure: editing a site after create (Gap 1) -----------------------
+// --- adopt ------------------------------------------------------------------
+
+describe('adopt — re-attach to processes still running after a Genie restart', () => {
+    it('re-learns a site whose process is alive in an already-running sandbox', async () => {
+        const runtime = fakeRuntime({
+            existing: [
+                {
+                    id: SANDBOX_ID,
+                    name: SANDBOX,
+                    image: 'genie-dev-base:1',
+                    state: 'running',
+                    workspaceId: 'acme',
+                },
+            ],
+        });
+        const m = manager(runtime);
+        await m.adopt();
+        // No sandbox was created (it was adopted), and the live site is advertised.
+        expect(runtime.ran).toHaveLength(0);
+        expect(m.genSites().map((g) => g.siteId)).toEqual([SITE_ID]);
+    });
+});
+
+// --- reconfigure ------------------------------------------------------------
 
 describe('devSiteReconfigureNeedsRestart', () => {
-    it('is true when a build / serve / port / env / image / routing field changed', () => {
+    it('is true when a command / port / env / routing field changed', () => {
         expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, port: 9000 })).toBe(true);
-        expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, serve: ['./other'] })).toBe(true);
+        expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, command: ['./other'] })).toBe(true);
         expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, env: { X: '1' } })).toBe(true);
-        expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, image: 'nginx:1' })).toBe(true);
         expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, genName: 'web.new.gen' })).toBe(true);
-        expect(
-            devSiteReconfigureNeedsRestart(SITE, {
-                ...SITE,
-                build: [{ label: 'C', command: ['go', 'build', '.'] }],
-            }),
-        ).toBe(true);
     });
 
-    it('is false for a cosmetic-only change — nothing the container depends on moved', () => {
-        // Toggling `enabled` is not a container change: a stopped site stays
-        // stopped, a running one keeps running. Re-saving with no edit is a no-op.
+    it('is false for a cosmetic-only change — nothing the process depends on moved', () => {
         expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, enabled: !SITE.enabled })).toBe(false);
         expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE })).toBe(false);
     });
 });
 
 describe('reconfigure', () => {
-    it('rebuilds and restarts a RUNNING site when a restart-requiring field changed', async () => {
+    it('restarts a RUNNING site when a restart-requiring field changed', async () => {
         const runtime = fakeRuntime();
         const sites: DevSites = { [SITE_ID]: { ...SITE } };
         const m = manager(runtime, sites);
         await m.start('acme', SITE_ID);
-        const siteRunsBefore = runtime.ran.filter((s) => s.name.includes('-site-')).length;
 
         sites[SITE_ID] = { ...SITE, port: 9000 };
         const status = await m.reconfigure('acme', SITE_ID, {
@@ -698,21 +547,15 @@ describe('reconfigure', () => {
         });
 
         expect(status.state).toBe('running');
-        // The old container was torn down and a fresh one started (a published
-        // port is fixed at create time, so a port change can only take effect
-        // on a new container). Count SITE containers — a restart also spins up
-        // and tears down an ephemeral build container.
-        expect(runtime.removed.length).toBeGreaterThan(0);
-        expect(runtime.ran.filter((s) => s.name.includes('-site-')).length).toBe(siteRunsBefore + 1);
-        expect(runtime.ran.at(-1)?.ports).toEqual([{ container: 9000, hostIp: '127.0.0.1' }]);
+        // Caddy now proxies the new app port.
+        expect(lastCaddyfile(runtime)).toContain('reverse_proxy 127.0.0.1:9000');
     });
 
     it('leaves a running site EXACTLY as it is when nothing that matters changed', async () => {
         const runtime = fakeRuntime();
         const m = manager(runtime);
         await m.start('acme', SITE_ID);
-        const ranBefore = runtime.ran.length;
-        const removedBefore = runtime.removed.length;
+        const execsBefore = runtime.execs.length;
 
         const status = await m.reconfigure('acme', SITE_ID, {
             previousSiteId: SITE_ID,
@@ -720,8 +563,8 @@ describe('reconfigure', () => {
         });
 
         expect(status.state).toBe('running');
-        expect(runtime.ran.length).toBe(ranBefore); // no new container
-        expect(runtime.removed.length).toBe(removedBefore); // nothing torn down
+        // Nothing re-run: no new process started, no Caddy reapplied.
+        expect(runtime.execs.length).toBe(execsBefore);
     });
 
     it('does NOT start a STOPPED site — an edit is not a start', async () => {
@@ -732,17 +575,16 @@ describe('reconfigure', () => {
             restart: false,
         });
         expect(status.state).toBe('stopped');
-        expect(runtime.ran).toHaveLength(0);
+        expect(startExec(runtime)).toBeUndefined();
     });
 
-    it('moves a running site onto its new container + `.gen` when the name changed', async () => {
+    it('moves a running site onto its new `.gen` when the name changed', async () => {
         const runtime = fakeRuntime();
         const NEW_ID = devSiteIdFor('acme', 'web2');
         const sites: DevSites = { [SITE_ID]: { ...SITE } };
         const m = manager(runtime, sites);
         await m.start('acme', SITE_ID);
 
-        // A rename moves the map key (as setWorkspaceDevSite does on the real path).
         delete sites[SITE_ID];
         sites[NEW_ID] = { ...SITE, name: 'web2', genName: 'web2.acme.gen' };
         const status = await m.reconfigure('acme', NEW_ID, {
@@ -752,9 +594,6 @@ describe('reconfigure', () => {
 
         expect(status.state).toBe('running');
         expect(status.genName).toBe('web2.acme.gen');
-        expect(runtime.removed).toContain(`id-${siteContainerNameFor('acme', 'web')}`);
-        expect(runtime.ran.some((s) => s.name === siteContainerNameFor('acme', 'web2'))).toBe(true);
-        // The old id is no longer advertised to the Genie Browser.
         expect(m.genSites().map((g) => g.siteId)).toEqual([NEW_ID]);
     });
 });
@@ -762,37 +601,17 @@ describe('reconfigure', () => {
 // --- observable startup (Gap 2) ---------------------------------------------
 
 describe('startup progress', () => {
-    it('emits pulling → building → starting → ready as a start proceeds', async () => {
+    it('emits pulling → starting → ready as a start proceeds', async () => {
         const runtime = fakeRuntime();
         const phases: string[] = [];
         const m = manager(runtime, undefined, {
             onProgress: (p) => phases.push(p.phase),
         });
         await m.start('acme', SITE_ID);
-        // SITE carries a build step, so all four phases are visited in order.
         expect(phases[0]).toBe('pulling');
-        expect(phases).toContain('building');
         expect(phases).toContain('starting');
         expect(phases.at(-1)).toBe('ready');
-        // The order is monotonic — building never comes after starting.
-        expect(phases.indexOf('building')).toBeLessThan(phases.indexOf('starting'));
-    });
-
-    it('streams the build log through progress, tagged with the site it belongs to', async () => {
-        const runtime = fakeRuntime();
-        const buildingLogs: string[] = [];
-        const m = manager(runtime, undefined, {
-            onProgress: (p) => {
-                if (p.phase === 'building' && p.log) {
-                    expect(p.siteId).toBe(SITE_ID);
-                    buildingLogs.push(p.log);
-                }
-            },
-        });
-        await m.start('acme', SITE_ID);
-        // runSiteBuild echoes each step header ("$ <cmd>   # <label>") to
-        // onProgress, and the manager routes that to the building site's card.
-        expect(buildingLogs.some((l) => l.includes('# Compile'))).toBe(true);
+        expect(phases.indexOf('pulling')).toBeLessThan(phases.indexOf('starting'));
     });
 
     it('ends a failed start on a `failed` phase carrying the reason', async () => {
@@ -808,123 +627,45 @@ describe('startup progress', () => {
         expect(last?.error).toMatch(/port/i);
     });
 
-    it('surfaces the in-flight phase + log on `list` for a panel opened mid-start', async () => {
-        // A card that mounts while a build is running must be able to read the
-        // current phase from a plain `list`, not only from the push stream.
+    it('surfaces the in-flight phase on `list` for a panel opened mid-start', async () => {
         const runtime = fakeRuntime();
         let phaseFromList: string | undefined;
         const m = manager(runtime, undefined, {
             onProgress: (p) => {
-                if (p.phase === 'building' && phaseFromList === undefined) {
+                if (p.phase === 'starting' && phaseFromList === undefined) {
                     phaseFromList = m.list('acme')[0]?.phase;
                 }
             },
         });
         await m.start('acme', SITE_ID);
-        expect(phaseFromList).toBe('building');
-    });
-});
-
-// --- production build auth (genie #119) -------------------------------------
-
-describe('production build auth', () => {
-    /** Capture the env each BUILD STEP is `exec`ed with. The repo COPY that
-     *  prepares the isolated build (`sh -c cp …`) is skipped — these assertions
-     *  are about the build steps' environment, and the copy carries none of it. */
-    function captureBuildEnv(runtime: Fake): Array<Record<string, string> | undefined> {
-        const seen: Array<Record<string, string> | undefined> = [];
-        runtime.exec = async (_id, argv, opts) => {
-            if (argv[0] !== 'sh') seen.push(opts?.env);
-            return { code: 0, stdout: '', stderr: '' };
-        };
-        return seen;
-    }
-
-    it('ALWAYS injects git safe.directory into the build, so composer does not die on dubious ownership', async () => {
-        const runtime = fakeRuntime();
-        const seen = captureBuildEnv(runtime);
-        await manager(runtime).start('acme', SITE_ID);
-        expect(seen[0]?.GIT_CONFIG_KEY_0).toBe('safe.directory');
-        expect(seen[0]?.GIT_CONFIG_VALUE_0).toBe('*');
-    });
-
-    it('injects the managed GitHub token as COMPOSER_AUTH + GITHUB_TOKEN when the host holds one', async () => {
-        const runtime = fakeRuntime();
-        const seen = captureBuildEnv(runtime);
-        await manager(runtime, undefined, { githubToken: () => 'ghs_HOSTTOKEN' }).start('acme', SITE_ID);
-        expect(seen[0]?.GITHUB_TOKEN).toBe('ghs_HOSTTOKEN');
-        expect(JSON.parse(seen[0]!.COMPOSER_AUTH!)).toEqual({
-            'github-oauth': { 'github.com': 'ghs_HOSTTOKEN' },
-        });
-    });
-
-    it('omits the token vars when the host holds none — a public-only build still runs', async () => {
-        const runtime = fakeRuntime();
-        const seen = captureBuildEnv(runtime);
-        await manager(runtime, undefined, { githubToken: () => null }).start('acme', SITE_ID);
-        expect(seen[0]?.COMPOSER_AUTH).toBeUndefined();
-        expect(seen[0]?.GITHUB_TOKEN).toBeUndefined();
-        // …but safe.directory is unconditional.
-        expect(seen[0]?.GIT_CONFIG_VALUE_0).toBe('*');
-    });
-
-    it('NEVER leaks the token or the git-safety vars into the SERVING container', async () => {
-        // Auth is a BUILD concern. The serve container's env is inspectable
-        // (docker inspect), so the token must not be persisted there.
-        const runtime = fakeRuntime();
-        await manager(runtime, undefined, { githubToken: () => 'ghs_HOSTTOKEN' }).start('acme', SITE_ID);
-        const site = runtime.ran.find((s) => s.name.includes('-site-'));
-        expect(site?.env?.GITHUB_TOKEN).toBeUndefined();
-        expect(site?.env?.COMPOSER_AUTH).toBeUndefined();
-        expect(site?.env?.GIT_CONFIG_VALUE_0).toBeUndefined();
-    });
-
-    it('lets a user-pinned site env override the auth defaults — the defaults sit UNDER it', async () => {
-        const runtime = fakeRuntime();
-        const seen = captureBuildEnv(runtime);
-        await manager(
-            runtime,
-            { [SITE_ID]: { ...SITE, env: { GIT_CONFIG_VALUE_0: '/workspace/repos/app' } } },
-            { githubToken: () => 'ghs_HOSTTOKEN' },
-        ).start('acme', SITE_ID);
-        expect(seen[0]?.GIT_CONFIG_VALUE_0).toBe('/workspace/repos/app');
+        expect(phaseFromList).toBe('starting');
     });
 });
 
 // --- P3: the services a site connects to ------------------------------------
 
 describe('service env injection (#234 P3)', () => {
-    it('injects the workspace’s service env into the SITE container', async () => {
+    it('injects the workspace service env into the site PROCESS', async () => {
         const runtime = fakeRuntime();
         await manager(runtime, undefined, {
             serviceEnvFor: async () => ({ DATABASE_URL: 'postgresql://ws:pw@genie-svc-postgres-16:5432/ws' }),
         }).start('acme', SITE_ID);
-
-        const site = runtime.ran.find((s) => s.name.includes('-site-'));
-        expect(site?.env?.DATABASE_URL).toBe('postgresql://ws:pw@genie-svc-postgres-16:5432/ws');
+        expect(startExec(runtime)?.env?.DATABASE_URL).toBe(
+            'postgresql://ws:pw@genie-svc-postgres-16:5432/ws',
+        );
     });
 
-    it('lets the workspace SERVICE env win over a colliding site env — the real engine address is authoritative', async () => {
-        // The container can only reach the engine at its service name on the
-        // workspace network. A repo whose committed `.env` pins
-        // `DB_HOST=127.0.0.1` (carried into config.env) must NOT beat the
-        // managed `genie-svc-postgres-17`, or the app dials nothing. Service
-        // connection env is injected LAST and wins outright.
+    it('lets the workspace SERVICE env win over a colliding site env', async () => {
         const runtime = fakeRuntime();
         await manager(
             runtime,
             { [SITE_ID]: { ...SITE, env: { DB_HOST: '127.0.0.1' } } },
             { serviceEnvFor: async () => ({ DB_HOST: 'genie-svc-postgres-17' }) },
         ).start('acme', SITE_ID);
-
-        const site = runtime.ran.find((s) => s.name.includes('-site-'));
-        expect(site?.env?.DB_HOST).toBe('genie-svc-postgres-17');
+        expect(startExec(runtime)?.env?.DB_HOST).toBe('genie-svc-postgres-17');
     });
 
     it('starts the site anyway when the services cannot be brought up', async () => {
-        // A site whose database failed to start should come up and SAY the
-        // database is missing, not refuse to run at all — the dev server is
-        // often exactly where that error is diagnosed.
         const runtime = fakeRuntime();
         const status = await manager(runtime, undefined, {
             serviceEnvFor: async () => {
@@ -934,36 +675,9 @@ describe('service env injection (#234 P3)', () => {
         expect(status.state).toBe('running');
     });
 
-    it('is absent by default — P2 behaviour, verbatim', async () => {
+    it('is absent by default — a plain site carries no injected service env', async () => {
         const runtime = fakeRuntime();
         await manager(runtime).start('acme', SITE_ID);
-        const site = runtime.ran.find((s) => s.name.includes('-site-'));
-        expect(site?.env).toBeUndefined();
-    });
-});
-
-// --- the site healthcheck (genie #119, Blocker 5) ---------------------------
-
-describe('site healthcheck', () => {
-    it('OVERRIDES the FrankenPHP image’s broken :2019 admin check with one on the REAL serve port', async () => {
-        // The `dunglas/frankenphp` image bakes a HEALTHCHECK that curls its Caddy
-        // admin endpoint on :2019, which `php-server` mode disables — so the site
-        // is `(unhealthy)` forever while it serves fine. We point it at the port
-        // the recipe actually serves on, so a serving site reads healthy.
-        const runtime = fakeRuntime();
-        await manager(runtime, { [PHP_SITE_ID]: PHP_SITE }).start('acme', PHP_SITE_ID);
-        const site = runtime.ran.find((s) => s.name.includes('-site-'));
-        expect(site?.healthcheck?.cmd).toContain('http://127.0.0.1:8080/');
-        expect(site?.healthcheck?.cmd).not.toContain('2019');
-        expect(site?.healthcheck?.cmd).not.toContain('/metrics');
-    });
-
-    it('leaves every OTHER image to inherit — only FrankenPHP bakes a broken check', async () => {
-        // The Go site runs on the dev-base image, which carries no HEALTHCHECK, so
-        // Genie must not invent one (curl/nc are not guaranteed in every image).
-        const runtime = fakeRuntime();
-        await manager(runtime).start('acme', SITE_ID);
-        const site = runtime.ran.find((s) => s.name.includes('-site-'));
-        expect(site?.healthcheck).toBeUndefined();
+        expect(startExec(runtime)?.env).toBeUndefined();
     });
 });

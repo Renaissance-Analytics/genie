@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { startSiteProcess, stopSiteProcess, siteProcessAlive } from '../site-process';
+import {
+    startSiteProcess,
+    stopSiteProcess,
+    siteProcessAlive,
+    readSiteProcessLog,
+} from '../site-process';
 import type { CommandResult, ContainerRuntime, ExecOptions } from '../container-runtime';
 
 /**
@@ -99,5 +104,26 @@ describe('siteProcessAlive', () => {
     it('is false when the pid is gone', async () => {
         const { runtime } = fakeRuntime(() => ({ code: 1, stdout: '', stderr: '' }));
         expect(await siteProcessAlive(runtime, 'sandbox-1', SID)).toBe(false);
+    });
+});
+
+describe('readSiteProcessLog', () => {
+    it('tails the site log file keyed by the site id', async () => {
+        const { runtime, execs } = fakeRuntime(() => ({
+            code: 0,
+            stdout: 'listening on 127.0.0.1:5173\n',
+            stderr: '',
+        }));
+        const out = await readSiteProcessLog(runtime, 'sandbox-1', SID, 50);
+        expect(out).toContain('listening on');
+        const script = execs[0]?.argv[2] ?? '';
+        expect(script).toContain(`${SID}.log`);
+        expect(script).toContain('tail -n 50');
+    });
+
+    it('returns empty (never throws) for a bad site id', async () => {
+        const { runtime, execs } = fakeRuntime();
+        expect(await readSiteProcessLog(runtime, 'sandbox-1', 'no; rm -rf /')).toBe('');
+        expect(execs).toHaveLength(0);
     });
 });

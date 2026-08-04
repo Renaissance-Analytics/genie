@@ -25,10 +25,21 @@
 export const CADDY_HTTPS_PORT = 8443;
 
 export interface CaddySite {
-    /** The vhost this site answers on, e.g. `moic-suite.acme.gen`. */
+    /** The vhost this site answers on, e.g. `moic-suite.acme.gen`. This is BOTH
+     *  the TLS SNI Caddy routes by and the default `Host` sent upstream. */
     host: string;
     /** The app's PLAIN-HTTP port on loopback inside the sandbox. */
     port: number;
+    /**
+     * The `Host` header to send the app, when it must differ from {@link host}.
+     *
+     * The carrier always dials with SNI = Host = the `.gen` name (so Caddy can
+     * route by SNI), but some frameworks reject a Host they were not told about —
+     * Django's `ALLOWED_HOSTS`, Vite's `allowedHosts`. Setting this makes Caddy
+     * REWRITE the upstream Host (`header_up Host`) to a name the app accepts,
+     * without the browser-facing origin changing. Omit to pass `.gen` through.
+     */
+    upstreamHost?: string;
 }
 
 /** A hostname Caddy (and a `.gen` vhost) may safely carry — labels + dots only. */
@@ -40,6 +51,13 @@ function assertSite(s: CaddySite): void {
     }
     if (!Number.isInteger(s.port) || s.port < 1 || s.port > 65535) {
         throw new Error(`caddyfile: refusing invalid port ${JSON.stringify(s.port)} for ${s.host}`);
+    }
+    // An upstream Host also lands in the config verbatim, so it gets the same
+    // grammar check as the vhost — never an injectable value.
+    if (s.upstreamHost !== undefined && (typeof s.upstreamHost !== 'string' || !HOST_RE.test(s.upstreamHost))) {
+        throw new Error(
+            `caddyfile: refusing invalid upstream host ${JSON.stringify(s.upstreamHost)} for ${s.host}`,
+        );
     }
 }
 
@@ -66,7 +84,15 @@ export function buildCaddyfile(sites: CaddySite[]): string {
         [
             `${s.host}:${CADDY_HTTPS_PORT} {`,
             '\ttls internal',
-            `\treverse_proxy 127.0.0.1:${s.port}`,
+            // A one-line reverse_proxy when the app takes the `.gen` Host as-is; a
+            // block form only when the upstream Host must be rewritten.
+            ...(s.upstreamHost
+                ? [
+                      `\treverse_proxy 127.0.0.1:${s.port} {`,
+                      `\t\theader_up Host ${s.upstreamHost}`,
+                      '\t}',
+                  ]
+                : [`\treverse_proxy 127.0.0.1:${s.port}`]),
             '}',
             '',
         ].join('\n'),
