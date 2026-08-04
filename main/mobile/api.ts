@@ -449,13 +449,16 @@ export interface MobileDataDeps {
     };
     /**
      * Apply a downloaded update (the SAME desktop quitAndInstall path). Returns
-     * `ok:false` with `reason:'not-ready'` when nothing is staged yet (→ 409) or
-     * `reason:'unsupported'` on a non-packaged build.
+     * `ok:false` with `reason:'not-ready'` when nothing is staged yet (→ 409),
+     * `reason:'unsupported'` on a non-packaged build, or `reason:'agents-running'`
+     * with the at-risk `agents` when the update would kill live agents — the caller
+     * confirms and re-sends with `force` to proceed.
      */
-    installUpdate: () => {
+    installUpdate: (force?: boolean) => {
         ok: boolean;
         error?: string;
-        reason?: 'not-ready' | 'unsupported';
+        reason?: 'not-ready' | 'unsupported' | 'agents-running';
+        interruption?: { terminals: number; agentChats: number };
     };
     /** Trigger a check on the host's updater, returning the fresh compact status.
      *  The host never auto-downloads, so a pending update isn't visible until the
@@ -941,8 +944,29 @@ export async function handleApi(
             sendJson(res, 403, { error: 'only the host owner can install a host update' });
             return true;
         }
-        const result = deps.installUpdate();
+        // `force` re-sends the same install after the caller confirmed it's OK to
+        // stop running agents (there's no native dialog on a remote client).
+        let force = false;
+        try {
+            force = !!(await readJsonBody<{ force?: boolean }>(req)).force;
+        } catch {
+            /* no/invalid body → force stays false (the safe default) */
+        }
+        const result = deps.installUpdate(force);
         if (!result.ok) {
+            if (result.reason === 'agents-running') {
+                // The update would restart the host while terminals/agents are live.
+                // NOT silent: return the counts (409) so the remote can confirm +
+                // re-send with `force` — mirroring the desktop's held-restart confirm.
+                const it = result.interruption ?? { terminals: 0, agentChats: 0 };
+                audit('update.install', `held (${it.agentChats} agent chat(s) / ${it.terminals} terminal(s) live)`, actor);
+                sendJson(res, 409, {
+                    error: result.error ?? 'terminals are still running',
+                    reason: 'agents-running',
+                    interruption: it,
+                });
+                return true;
+            }
             // not-ready (nothing downloaded yet) and unsupported (non-packaged
             // build) are both "can't act right now" → 409 Conflict, so the phone
             // shows "up to date" / disables the button rather than erroring out.
@@ -952,7 +976,7 @@ export async function handleApi(
             });
             return true;
         }
-        audit('update.install', 'restart+apply triggered', actor);
+        audit('update.install', force ? 'restart+apply triggered (forced)' : 'restart+apply triggered', actor);
         sendJson(res, 200, { ok: true });
         return true;
     }

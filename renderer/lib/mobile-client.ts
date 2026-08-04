@@ -125,6 +125,9 @@ export class MobileApiError extends Error {
     constructor(
         public status: number,
         message: string,
+        /** The parsed JSON error body, when the server sent one (carries `reason`,
+         *  `interruption`, …) so callers can branch on a structured refusal. */
+        public body?: unknown,
     ) {
         super(message);
         this.name = 'MobileApiError';
@@ -242,15 +245,20 @@ async function request<T>(
     }
 
     if (!res.ok) {
-        // Try to lift a `{error}` message off the body; fall back to status.
+        // Try to lift a `{error}` message off the body; fall back to status. Keep
+        // the whole parsed body on the error so a structured refusal (e.g. a
+        // held update carrying its interruption counts) survives to the caller.
         let msg = `HTTP ${res.status}`;
+        let parsed: unknown;
         try {
-            const data = await res.json();
-            if (data && typeof data.error === 'string') msg = data.error;
+            parsed = await res.json();
+            if (parsed && typeof (parsed as { error?: unknown }).error === 'string') {
+                msg = (parsed as { error: string }).error;
+            }
         } catch {
             /* non-JSON error body — keep the status message */
         }
-        throw new MobileApiError(res.status, msg);
+        throw new MobileApiError(res.status, msg, parsed);
     }
 
     // 204 / empty bodies → undefined; callers that expect data won't ask for it.
@@ -356,13 +364,43 @@ export function checkUpdate(): Promise<MobileUpdateStatus> {
     return request<MobileUpdateStatus>('/api/update/check', { method: 'POST' });
 }
 
+/** Live terminals a restart-to-apply would tear down (agents flagged). */
+export interface UpdateInterruption {
+    terminals: number;
+    agentChats: number;
+}
+
+export type InstallUpdateResult =
+    | { ok: true }
+    | { ok: false; reason: 'agents-running'; interruption: UpdateInterruption };
+
 /**
  * Ask the desktop to restart + apply a downloaded update — the same one-click
- * path the desktop pill uses. The server answers 409 (→ MobileApiError) when
- * nothing is staged yet, so the caller only enables this when `readyToInstall`.
+ * path the desktop pill uses. The server answers 409 when nothing is staged yet
+ * (→ MobileApiError, the caller re-syncs). It ALSO holds with 409 +
+ * `reason:'agents-running'` when applying would restart the host while terminals
+ * are live — mirroring the desktop's held-restart confirm; we surface that as a
+ * structured result so the caller can confirm and re-send with `force`.
  */
-export function installUpdate(): Promise<{ ok: true }> {
-    return request<{ ok: true }>('/api/update/install', { method: 'POST' });
+export async function installUpdate(force = false): Promise<InstallUpdateResult> {
+    try {
+        await request<{ ok: true }>('/api/update/install', { method: 'POST', json: { force } });
+        return { ok: true };
+    } catch (e) {
+        if (
+            e instanceof MobileApiError &&
+            e.status === 409 &&
+            (e.body as { reason?: string } | undefined)?.reason === 'agents-running'
+        ) {
+            const it = (e.body as { interruption?: UpdateInterruption }).interruption;
+            return {
+                ok: false,
+                reason: 'agents-running',
+                interruption: it ?? { terminals: 0, agentChats: 0 },
+            };
+        }
+        throw e; // not-ready / locked / transport → real error for the caller
+    }
 }
 
 // ---- REST writes ----------------------------------------------------------

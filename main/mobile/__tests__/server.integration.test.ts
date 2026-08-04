@@ -47,6 +47,7 @@ const LINUX_PASTE_PATH = '/tmp/genie-clipboard/paste-123-abc.png';
 // Drives the mock updater deps: flip to true to simulate a staged build so the
 // install endpoint returns 200; left false it reports not-ready (→ 409).
 let updateReady = false;
+let agentsRunning = false;
 // Specialized-terminal host endpoint: when wired, records the plumbed input;
 // flip `specializedWired` false to simulate a host that doesn't support it (501).
 let specializedWired = true;
@@ -188,8 +189,16 @@ const deps = (): MobileDataDeps => ({
         latestVersion: updateReady ? '0.0.1-test' : null,
         readyToInstall: updateReady,
     }),
-    installUpdate: () =>
-        updateReady ? { ok: true } : { ok: false, reason: 'not-ready' as const },
+    installUpdate: (force?: boolean) =>
+        !updateReady
+            ? { ok: false, reason: 'not-ready' as const }
+            : agentsRunning && !force
+              ? {
+                    ok: false,
+                    reason: 'agents-running' as const,
+                    interruption: { terminals: 2, agentChats: 1 },
+                }
+              : { ok: true },
     checkUpdate: async () => ({
         state: updateReady ? 'ready-to-restart' : 'up-to-date',
         currentVersion: '0.0.0-test',
@@ -280,6 +289,7 @@ beforeEach(() => {
     _resetBridgeForTest();
     written.length = 0;
     updateReady = false;
+    agentsRunning = false;
     clipboardImages.length = 0;
     clipboardMode = 'desktop';
     specializedWired = true;
@@ -525,6 +535,27 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         const ready = await req(port, 'GET', '/api/update/status', { token });
         expect(ready.json.readyToInstall).toBe(true);
         const r = await req(port, 'POST', '/api/update/install', { token });
+        expect(r.status).toBe(200);
+        expect(r.json.ok).toBe(true);
+    });
+
+    it('POST /api/update/install: HOLDS with 409 + the live-terminal counts when agents are running (not silent)', async () => {
+        const port = await start();
+        const token = await pair(port);
+        updateReady = true;
+        agentsRunning = true;
+        const r = await req(port, 'POST', '/api/update/install', { token });
+        expect(r.status).toBe(409);
+        expect(r.json.reason).toBe('agents-running');
+        expect(r.json.interruption).toEqual({ terminals: 2, agentChats: 1 });
+    });
+
+    it('POST /api/update/install: force:true installs anyway once the owner confirms', async () => {
+        const port = await start();
+        const token = await pair(port);
+        updateReady = true;
+        agentsRunning = true;
+        const r = await req(port, 'POST', '/api/update/install', { token, body: { force: true } });
         expect(r.status).toBe(200);
         expect(r.json.ok).toBe(true);
     });

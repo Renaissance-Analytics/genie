@@ -6,6 +6,7 @@ import {
     checkUpdate,
     getUpdateStatus,
     installUpdate,
+    type UpdateInterruption,
     listProcesses,
     MobileApiError,
     processAction,
@@ -313,6 +314,9 @@ function UpgradeGenie({
     const [status, setStatus] = useState<MobileUpdateStatus | null>(null);
     const [installing, setInstalling] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // Set when the host HELD the update because a restart would stop live
+    // terminals/agents — drives an inline "Update anyway?" confirm (no silent kill).
+    const [held, setHeld] = useState<UpdateInterruption | null>(null);
 
     const refetch = () =>
         getUpdateStatus()
@@ -342,13 +346,21 @@ function UpgradeGenie({
         return off;
     }, [subscribe]);
 
-    const onInstall = async () => {
+    const onInstall = async (force = false) => {
         if (installing) return;
         setInstalling(true);
         setError(null);
+        setHeld(null);
         try {
-            await installUpdate();
-            // The desktop quits ~200ms later to apply; hold the "restarting" copy.
+            const r = await installUpdate(force);
+            if (!r.ok && r.reason === 'agents-running') {
+                // Host held the update — terminals/agents are live. Surface the
+                // inline confirm instead of silently killing them.
+                setInstalling(false);
+                setHeld(r.interruption);
+                return;
+            }
+            // ok → the desktop quits ~200ms later to apply; hold the "Updating…" copy.
         } catch (e) {
             setInstalling(false);
             if (e instanceof MobileApiError && e.isLocked) {
@@ -379,7 +391,46 @@ function UpgradeGenie({
     // Installing → restarting copy; ready → CTA; downloading/checking → progress;
     // else a slim "up to date" line.
     let body: React.ReactNode;
-    if (installing) {
+    if (held) {
+        const count = held.agentChats > 0 ? held.agentChats : held.terminals;
+        const noun =
+            held.agentChats > 0
+                ? `${held.agentChats} agent chat${held.agentChats === 1 ? '' : 's'}`
+                : `${held.terminals} terminal${held.terminals === 1 ? '' : 's'}`;
+        body = (
+            <>
+                <div className="m-tool-main">
+                    <Icon name="alert-triangle" size="xs" className="text-amber-500" />
+                    <Text size="sm" style={{ fontWeight: 600 }}>
+                        {noun} running
+                    </Text>
+                    <Text size="xs" style={{ color: 'inherit', opacity: 0.85 }}>
+                        Updating stops {count === 1 ? 'it' : 'them'}.
+                    </Text>
+                </div>
+                <button type="button" className="m-tool-cta" onClick={() => void onInstall(true)}>
+                    <Icon name="rotate-cw" size="xs" />
+                    Update anyway
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setHeld(null)}
+                    style={{
+                        marginLeft: 4,
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--fg-3)',
+                        cursor: 'pointer',
+                        font: 'inherit',
+                        fontSize: 12,
+                        padding: '4px 6px',
+                    }}
+                >
+                    Cancel
+                </button>
+            </>
+        );
+    } else if (installing) {
         body = (
             <div className="m-tool-main">
                 <Icon name="loader" size="xs" className="m-spin" />

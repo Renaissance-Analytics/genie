@@ -143,6 +143,10 @@ export function registerUpdaterIpc(): void {
             // could automate but it's a separate IPC.
             return { ok: false, error: 'Phase 1 updater does not handle restart here.' };
         }
+        // No agent guard here: the auto-updater already HOLDS a downloaded build
+        // (does not auto-apply) when a restart would tear down live terminals, and
+        // the renderer shows the held-restart confirm. Reaching this IPC means the
+        // user already confirmed there — re-prompting would double up.
         try {
             a.restartAndApply();
             return { ok: true };
@@ -247,10 +251,11 @@ export async function mobileCheckUpdate(): Promise<MobileUpdateStatus> {
  * checkout) has no installer → `unsupported`. The action is deferred a tick by
  * the caller so the REST response flushes to the phone before teardown begins.
  */
-export function mobileInstallUpdate(): {
+export function mobileInstallUpdate(force = false): {
     ok: boolean;
     error?: string;
-    reason?: 'not-ready' | 'unsupported';
+    reason?: 'not-ready' | 'unsupported' | 'agents-running';
+    interruption?: RestartInterruption;
 } {
     if (updaterMode() === 'phase1') {
         return {
@@ -267,6 +272,17 @@ export function mobileInstallUpdate(): {
             reason: 'not-ready',
             error: 'No update is available to install yet.',
         };
+    }
+    // Don't silently end running work. The desktop HOLDS a downloaded build behind
+    // a confirm when a restart would tear down live terminals; a remote caller
+    // can't see that dialog, so mirror the SAME probe here — if applying would
+    // restart the host while terminals (agents included) are live, hold and return
+    // the counts. The caller confirms and re-sends with force.
+    if (!force) {
+        const interruption = describeRestartInterruption();
+        if (interruption.terminals > 0) {
+            return { ok: false, reason: 'agents-running', interruption };
+        }
     }
     // Defer so the caller's HTTP 200 reaches the phone before the app starts the
     // download / tears down for the installer. From 'available' we download then

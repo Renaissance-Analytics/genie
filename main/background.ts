@@ -1718,7 +1718,7 @@ app.whenReady().then(async () => {
             // module the desktop pill drives, so a phone-triggered install walks
             // the identical quitAndInstall / two-phase teardown path.
             updateStatus: () => mobileUpdateStatus(),
-            installUpdate: () => mobileInstallUpdate(),
+            installUpdate: (force?: boolean) => mobileInstallUpdate(force),
             checkUpdate: () => mobileCheckUpdate(),
             // The host's `.gen` dev sites — the containers its Dev Server is
             // serving — read by a remote over /api/sites/enabled for its header
