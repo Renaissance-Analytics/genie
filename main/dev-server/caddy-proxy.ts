@@ -13,10 +13,21 @@ import type { ContainerRuntime } from './container-runtime';
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-/** Where Caddy's config lives inside the sandbox — a tmpfs path, not the mounted
- *  workspace, so it never pollutes the user's tree. */
-export const CADDY_DIR = '/run/genie-caddy';
+/**
+ * Where Caddy's config + data live inside the sandbox.
+ *
+ * `/tmp`, not `/run`: the sandbox runs as the NON-ROOT `genie` user (the dev
+ * image renumbers it to the host uid), and `/run` is root-owned — so `mkdir`
+ * there fails with EACCES and Caddy never starts. `/tmp` is world-writable. It
+ * is still outside the mounted workspace, so it never pollutes the user's tree.
+ */
+export const CADDY_DIR = '/tmp/genie-caddy';
 export const CADDY_CONFIG_PATH = `${CADDY_DIR}/Caddyfile`;
+/** Caddy's storage (its `tls internal` CA) — pointed here via XDG_DATA_HOME so
+ *  the CA can be written by the non-root user; `$HOME/.local/share` is not
+ *  writable in the sandbox. */
+export const CADDY_DATA_DIR = `${CADDY_DIR}/data`;
+export const CADDY_CONFIG_HOME = `${CADDY_DIR}/config`;
 
 export type ApplyCaddyResult = { ok: true } | { ok: false; error: string };
 
@@ -39,7 +50,11 @@ export async function applyCaddyConfig(
     }
     const b64 = Buffer.from(caddyfile, 'utf8').toString('base64');
     const script =
-        `set -e; mkdir -p '${CADDY_DIR}'; ` +
+        `set -e; ` +
+        // Caddy stores its internal CA under XDG_DATA_HOME; point it (and the
+        // config home) at a writable dir so `tls internal` works as non-root.
+        `export XDG_DATA_HOME='${CADDY_DATA_DIR}' XDG_CONFIG_HOME='${CADDY_CONFIG_HOME}'; ` +
+        `mkdir -p '${CADDY_DIR}' '${CADDY_DATA_DIR}' '${CADDY_CONFIG_HOME}'; ` +
         `printf %s '${b64}' | base64 -d > '${CADDY_CONFIG_PATH}'; ` +
         // Reload if Caddy is already running; otherwise start it. Either path
         // leaves Caddy serving the config just written.

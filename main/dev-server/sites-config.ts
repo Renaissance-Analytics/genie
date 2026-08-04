@@ -382,6 +382,70 @@ export function effectiveCommand(config: DevSiteConfig): string[] | null {
 }
 
 /**
+ * MIGRATION. A site created under the OLD production-recipe model stored a serve
+ * (or command) that runs a PRODUCTION SERVER — FrankenPHP, nginx — in the site's
+ * OWN image. The sandbox-serve rework runs the command INSIDE the workspace
+ * sandbox instead, which has PHP/Node but NOT frankenphp or nginx, so those argvs
+ * die on the first exec ("frankenphp: not found") and every pre-rework site is
+ * dark after the update.
+ *
+ * This translates the two recipes Genie ever generated into an equivalent DEV
+ * command that runs in the sandbox with tools it DOES have:
+ *   - FrankenPHP `php-server` (a Laravel/PHP app) → `php artisan serve` on the
+ *     same port (the sandbox has PHP; Laravel serves from public/ itself);
+ *   - the nginx static bootstrap → PHP's built-in server over the built docroot
+ *     (`php -S 0.0.0.0:<port> -t <docroot>`).
+ *
+ * Anything else — a real user command, a binary, `npm run dev` — is returned
+ * UNCHANGED, so a command the user actually chose is never rewritten. Returns
+ * null only when there is nothing to run at all.
+ */
+export function sandboxCommandFor(config: DevSiteConfig): string[] | null {
+    const raw = effectiveCommand(config);
+    if (!raw) return null;
+    return migrateLegacyServeRecipe(raw, config) ?? raw;
+}
+
+/** The `PORT` a derived dev command binds — the site's declared port, defaulted. */
+function sitePortOf(config: DevSiteConfig): number {
+    return typeof config.port === 'number' && config.port >= 1 && config.port <= 65535
+        ? config.port
+        : 8000;
+}
+
+/** Detect and translate a legacy FrankenPHP/nginx recipe. Null = not a recipe. */
+function migrateLegacyServeRecipe(argv: string[], config: DevSiteConfig): string[] | null {
+    const has = (t: string) => argv.some((a) => a.toLowerCase().includes(t));
+    const port = sitePortOf(config);
+
+    // FrankenPHP front-controller mode ⇒ a PHP app. `php artisan serve` is the
+    // sandbox-native dev equivalent (it serves public/ and rebuilds on request).
+    if (has('frankenphp') || has('php-server')) {
+        return ['php', 'artisan', 'serve', '--host=0.0.0.0', `--port=${port}`];
+    }
+
+    // The nginx static bootstrap: `sh -c '… root <docroot>; exec nginx …'`.
+    if (has('nginx')) {
+        const docroot = legacyStaticDocroot(argv, config);
+        return ['php', '-S', `0.0.0.0:${port}`, '-t', docroot];
+    }
+
+    return null;
+}
+
+/** The built static docroot a legacy nginx recipe served, for `php -S -t`. */
+function legacyStaticDocroot(argv: string[], config: DevSiteConfig): string {
+    // The recipe put it in GENIE_NGINX_ROOT env, or inlined `root $PWD/<docroot>`
+    // in the bootstrap script. Fall back to the Vite/CRA convention.
+    const fromEnv = config.env?.GENIE_NGINX_ROOT;
+    if (fromEnv && /^[\w./-]+$/.test(fromEnv)) return fromEnv;
+    const script = argv.find((a) => a.includes('root ')) ?? '';
+    const m = script.match(/root\s+\S*?\/([\w./-]+?)\s*;/) ?? script.match(/root\s+\S*?\/([\w./-]+)/);
+    const captured = m?.[1]?.replace(/%s\/?/g, '').replace(/\/+$/, '');
+    return captured && /^[\w./-]+$/.test(captured) ? captured : 'dist';
+}
+
+/**
  * PURE. Parse a stored `dev_sites` blob. Robust to NULL, corrupt JSON and junk —
  * an unreadable blob reads as `{}` (the safe default: nothing runs).
  */

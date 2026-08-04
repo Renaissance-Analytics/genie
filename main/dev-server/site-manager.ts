@@ -11,7 +11,7 @@ import {
     stopSiteProcess,
 } from './site-process';
 import { ensureWorkspaceSandbox } from './workspace-sandbox';
-import { effectiveCommand } from './sites-config';
+import { sandboxCommandFor } from './sites-config';
 import type { ContainerRuntime, RuntimeDetection } from './container-runtime';
 import type { HostIds } from './host-ids';
 import type { DevSiteConfig, DevSites } from './sites-config';
@@ -479,7 +479,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
 
         // Validate BEFORE creating anything: a site is a command + a port + a
         // valid repo dir. A site missing any of these has nothing to run.
-        const command = effectiveCommand(config);
+        // `sandboxCommandFor` also migrates a pre-rework FrankenPHP/nginx recipe
+        // to a sandbox-runnable dev command, so existing sites are not left dark
+        // by the switch to serving inside the sandbox.
+        const command = sandboxCommandFor(config);
         if (!command) {
             return failed(
                 workspaceId,

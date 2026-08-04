@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { GENIE_DEV_BASE_IMAGE, WORKSPACE_MOUNT_TARGET } from '../images';
-import { ensureWorkspaceSandbox, teardownWorkspaceSandbox } from '../workspace-sandbox';
+import {
+    ensureWorkspaceSandbox,
+    resetSandboxRefreshForTests,
+    teardownWorkspaceSandbox,
+} from '../workspace-sandbox';
 import { WORKSPACE_LABEL } from '../argv';
 import { CADDY_HTTPS_PORT } from '../caddyfile';
 import type {
@@ -50,6 +54,10 @@ interface FakeOptions {
     /** Simulate a PRE-REWORK sandbox: it publishes no Caddy port, so an adopt
      *  must recreate it. Default false (a proper sandbox reports the port). */
     caddyPortless?: boolean;
+    /** Simulate a sandbox on an OLD dev image: it publishes the Caddy port but has
+     *  no caddy binary, so the caddy-presence probe fails and an adopt must
+     *  refresh + recreate. Default false (a proper sandbox has caddy). */
+    noCaddy?: boolean;
 }
 
 const DOCKER_OK: RuntimeDetection = { kind: 'docker', version: '27.3.1', probes: [] };
@@ -137,7 +145,11 @@ function fakeRuntime(opts: FakeOptions = {}): Fake {
             removed.push(id);
             for (const [name, c] of containers) if (c.id === id) containers.delete(name);
         },
-        async exec() {
+        async exec(_id: string, argv: string[]) {
+            // The sandbox's caddy-presence probe: `command -v caddy`. A sandbox on
+            // an old (caddy-less) dev image answers non-zero, forcing a recreate.
+            const isCaddyProbe = argv.some((a) => a.includes('command -v caddy'));
+            if (isCaddyProbe && opts.noCaddy) return { code: 1, stdout: '', stderr: '' };
             return { code: 0, stdout: '', stderr: '' };
         },
         async logs() {
@@ -173,6 +185,8 @@ const WS_PATH = '/repos/acme';
 // --- ensure -----------------------------------------------------------------
 
 describe('ensureWorkspaceSandbox', () => {
+    beforeEach(() => resetSandboxRefreshForTests());
+
     it('creates an isolated network and a dev container with the workspace mounted', async () => {
         const runtime = fakeRuntime();
 
@@ -222,6 +236,74 @@ describe('ensureWorkspaceSandbox', () => {
         expect(runtime.removed).toContain('id-genie-ws-acme-dev');
         expect(result).toMatchObject({ ok: true, created: { container: true } });
         expect(runtime.ran[0]?.ports).toEqual([{ container: CADDY_HTTPS_PORT, hostIp: '127.0.0.1' }]);
+    });
+
+    it('REFRESHES + recreates a sandbox on an OLD dev image (has the port, but no caddy)', async () => {
+        // The "sites down after upgrade" case: a workspace opened on the update
+        // before the caddy-carrying dev image was pulled got a sandbox with the
+        // proxy PORT but a caddy-LESS image, so applyCaddyConfig fails forever.
+        const runtime = fakeRuntime({
+            noCaddy: true,
+            existingNetworks: ['genie-ws-acme'],
+            existing: [
+                {
+                    id: 'id-genie-ws-acme-dev',
+                    name: 'genie-ws-acme-dev',
+                    image: GENIE_DEV_BASE_IMAGE,
+                    state: 'running',
+                    workspaceId: 'acme',
+                },
+            ],
+        });
+        const result = await ensureWorkspaceSandbox('acme', WS_PATH, { runtime, platform: 'linux' });
+        // The dev image is refreshed (a moved `:1` reaches an existing workspace
+        // only this way) and the stale sandbox recreated from it.
+        expect(runtime.pulled).toContain(GENIE_DEV_BASE_IMAGE);
+        expect(runtime.removed).toContain('id-genie-ws-acme-dev');
+        expect(result).toMatchObject({ ok: true, created: { container: true } });
+    });
+
+    it('ADOPTS a sandbox that publishes the port AND has caddy — no refresh, no recreate', async () => {
+        const runtime = fakeRuntime({
+            existingNetworks: ['genie-ws-acme'],
+            existing: [
+                {
+                    id: 'id-genie-ws-acme-dev',
+                    name: 'genie-ws-acme-dev',
+                    image: GENIE_DEV_BASE_IMAGE,
+                    state: 'running',
+                    workspaceId: 'acme',
+                },
+            ],
+        });
+        const result = await ensureWorkspaceSandbox('acme', WS_PATH, { runtime, platform: 'linux' });
+        expect(result).toMatchObject({ ok: true, created: { container: false }, caddyHostPort: 51820 });
+        expect(runtime.removed).toHaveLength(0);
+        expect(runtime.pulled).toHaveLength(0);
+        expect(runtime.ran).toHaveLength(0);
+    });
+
+    it('does not LOOP: a sandbox still missing caddy after one refresh is adopted as-is', async () => {
+        const runtime = fakeRuntime({
+            noCaddy: true,
+            existingNetworks: ['genie-ws-acme'],
+            existing: [
+                {
+                    id: 'id-genie-ws-acme-dev',
+                    name: 'genie-ws-acme-dev',
+                    image: GENIE_DEV_BASE_IMAGE,
+                    state: 'running',
+                    workspaceId: 'acme',
+                },
+            ],
+        });
+        // First ensure recreates once; the recreated sandbox is ALSO caddy-less
+        // (the fake keeps answering noCaddy), so a second ensure must NOT recreate
+        // again — it adopts to avoid a remove/recreate spin.
+        await ensureWorkspaceSandbox('acme', WS_PATH, { runtime, platform: 'linux' });
+        const removedAfterFirst = runtime.removed.length;
+        await ensureWorkspaceSandbox('acme', WS_PATH, { runtime, platform: 'linux' });
+        expect(runtime.removed.length).toBe(removedAfterFirst); // no second recreate
     });
 
     it('keeps the container alive across restarts and holds it open', async () => {

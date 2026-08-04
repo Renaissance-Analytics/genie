@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     effectiveCommand,
+    sandboxCommandFor,
     sanitizeDevSitePatch,
     devSiteReconfigureNeedsRestart,
     type DevSiteConfig,
@@ -45,6 +46,62 @@ describe('site config — user-controlled command', () => {
         ]);
         expect(effectiveCommand(base({}))).toBeNull();
         expect(effectiveCommand(base({ command: [] }))).toBeNull(); // empty ⇒ nothing to run
+    });
+
+    it('migrates a legacy FrankenPHP recipe to `php artisan serve` in the sandbox', () => {
+        // The exact serve the old PHP recipe stored (see the user's live sites).
+        const cfg = base({
+            server: 'frankenphp',
+            stack: 'php',
+            port: 8080,
+            serve: ['frankenphp', 'php-server', '--listen', '0.0.0.0:8080', '--root', 'public/'],
+        });
+        expect(sandboxCommandFor(cfg)).toEqual([
+            'php',
+            'artisan',
+            'serve',
+            '--host=0.0.0.0',
+            '--port=8080',
+        ]);
+    });
+
+    it('migrates a legacy nginx static recipe to PHP\'s built-in server over the docroot', () => {
+        // docroot from the GENIE_NGINX_ROOT env the recipe set…
+        const fromEnv = base({
+            port: 3000,
+            env: { GENIE_NGINX_ROOT: 'dist' },
+            serve: ['sh', '-c', 'printf "...root %s/%s..."; exec nginx -g "daemon off;"'],
+        });
+        expect(sandboxCommandFor(fromEnv)).toEqual(['php', '-S', '0.0.0.0:3000', '-t', 'dist']);
+
+        // …or parsed from an inlined `root $PWD/<docroot>` (the karma case).
+        const inlined = base({
+            port: 3000,
+            command: [
+                'sh',
+                '-c',
+                "set -e; printf 'server { listen 3000; root %s/dashboard/dist; index index.html; }' \"$PWD\" > /etc/nginx/conf.d/default.conf; exec nginx -g 'daemon off;'",
+            ],
+        });
+        expect(sandboxCommandFor(inlined)).toEqual([
+            'php',
+            '-S',
+            '0.0.0.0:3000',
+            '-t',
+            'dashboard/dist',
+        ]);
+    });
+
+    it('leaves a real user command UNTOUCHED — a chosen command is never rewritten', () => {
+        expect(sandboxCommandFor(base({ command: ['npm', 'run', 'dev'], port: 5173 }))).toEqual([
+            'npm',
+            'run',
+            'dev',
+        ]);
+        expect(sandboxCommandFor(base({ serve: ['./bin/server'], port: 8000 }))).toEqual([
+            './bin/server',
+        ]);
+        expect(sandboxCommandFor(base({}))).toBeNull();
     });
 
     it('a command change is a restart-worthy reconfigure', () => {

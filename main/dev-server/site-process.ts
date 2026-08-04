@@ -19,8 +19,11 @@ import type { ContainerRuntime } from './container-runtime';
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-/** tmpfs, not the mounted workspace — pid/log state never touches the user's tree. */
-export const SITE_RUN_DIR = '/run/genie-site';
+/** A writable scratch dir, not the mounted workspace — pid/log state never
+ *  touches the user's tree. `/tmp` (not `/run`): the sandbox runs as the
+ *  non-root `genie` user and `/run` is root-owned, so a pidfile write there
+ *  fails with EACCES. */
+export const SITE_RUN_DIR = '/tmp/genie-site';
 
 /** Site ids are `devSiteIdFor` hashes; anything else must never reach the shell. */
 const SITE_ID_RE = /^[A-Za-z0-9_-]+$/;

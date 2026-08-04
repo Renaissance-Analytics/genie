@@ -141,6 +141,41 @@ export interface SandboxDeps {
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/**
+ * Workspaces whose sandbox we have already refresh-recreated this session.
+ *
+ * A guard against a remove/recreate LOOP: if a sandbox still can't front the
+ * model after one refresh (the machine is offline, or the local dev image
+ * genuinely lacks the proxy), we adopt it as-is instead of recreating it again
+ * on every ensure. Cleared on a fresh app launch (in-memory), which is exactly
+ * when a newly-pulled image should get another chance.
+ */
+const refreshedSandboxes = new Set<string>();
+
+/** Test-only: forget the once-per-session sandbox-refresh guard. */
+export function resetSandboxRefreshForTests(): void {
+    refreshedSandboxes.clear();
+}
+
+/**
+ * Whether a sandbox can actually FRONT the hosting model — i.e. its dev image
+ * carries the `caddy` proxy that every `.gen` site is served through.
+ *
+ * A sandbox created on an OLD dev image (a workspace opened on the update before
+ * the caddy-carrying image was pulled) publishes the proxy port but has no caddy
+ * binary, so `applyCaddyConfig` fails and every site is dead. Checking for the
+ * binary is what lets `ensureWorkspaceSandbox` self-heal such a sandbox by
+ * recreating it on the refreshed image.
+ */
+async function sandboxHasCaddy(runtime: ContainerRuntime, containerId: string): Promise<boolean> {
+    try {
+        const r = await runtime.exec(containerId, ['sh', '-c', 'command -v caddy >/dev/null 2>&1']);
+        return r.code === 0;
+    } catch {
+        return false;
+    }
+}
+
 // --- ensure ----------------------------------------------------------------
 
 export async function ensureWorkspaceSandbox(
@@ -186,22 +221,43 @@ export async function ensureWorkspaceSandbox(
             // is restarted rather than replaced — its filesystem layer may hold
             // an installed toolchain the user has been working in.
             if (existing.state !== 'running') await deps.runtime.start(existing.id);
+            const adopt = (caddyHostPort?: number): SandboxOk => ({
+                ok: true,
+                workspaceId,
+                network: network.name,
+                container: { id: existing.id, name },
+                mountTarget,
+                created: { network: network.created, container: false },
+                ...(caddyHostPort !== undefined ? { caddyHostPort } : {}),
+            });
+
             const caddyHostPort = await readCaddyHostPort(deps.runtime, existing.id);
-            if (caddyHostPort !== undefined) {
-                return {
-                    ok: true,
-                    workspaceId,
-                    network: network.name,
-                    container: { id: existing.id, name },
-                    mountTarget,
-                    created: { network: network.created, container: false },
-                    caddyHostPort,
-                };
+            // A sandbox is adoptable only if it can FRONT the model: it publishes
+            // the Caddy proxy port AND its image carries the caddy binary. A
+            // pre-rework sandbox fails the first; a sandbox created on an OLD dev
+            // image (a workspace opened on the update before the caddy-carrying
+            // image was pulled) fails the second — the exact "sites down after
+            // upgrade" case.
+            if (caddyHostPort !== undefined && (await sandboxHasCaddy(deps.runtime, existing.id))) {
+                return adopt(caddyHostPort);
             }
-            // A PRE-REWORK sandbox published no proxy port — Caddy can't be reached
-            // through it. Recreate once (running processes restart), so the sites
-            // model has its one published door. This migration self-heals on the
-            // first open after the update.
+            if (refreshedSandboxes.has(workspaceId)) {
+                // Already recreated once this session and it still can't front the
+                // model (offline, or the local dev image genuinely lacks caddy).
+                // Don't loop — adopt as-is; a site start surfaces the missing proxy
+                // with a clear error instead of a remove/recreate spin.
+                return adopt(caddyHostPort);
+            }
+            // REFRESH the dev image (best-effort — a same-major republish, e.g. a
+            // security or toolchain rebuild that moved `:1`, reaches an existing
+            // workspace ONLY this way since `imageExists` short-circuits the pull)
+            // then recreate the sandbox from it. Guarded to once per session above.
+            refreshedSandboxes.add(workspaceId);
+            await deps.runtime
+                .pullImage(image, {
+                    ...(deps.onImagePullProgress ? { onProgress: deps.onImagePullProgress } : {}),
+                })
+                .catch(() => {});
             await deps.runtime.remove(existing.id).catch(() => {});
         }
 
