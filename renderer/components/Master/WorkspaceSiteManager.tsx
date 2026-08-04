@@ -693,8 +693,10 @@ function EditSiteForm({
     const [runMode, setRunMode] = useState(row.runMode);
     const [image, setImage] = useState(row.image ?? '');
     const [upstreamHost, setUpstreamHost] = useState(row.upstreamHost ?? '');
+    // The USER-CONTROLLED startup argv — the canonical way to start a site. Falls
+    // back to the legacy serve argv for a site saved before the sandbox-serve rework.
+    const [command, setCommand] = useState((row.command ?? row.serve ?? []).join(' '));
     const [serve, setServe] = useState((row.serve ?? []).join(' '));
-    const [build, setBuild] = useState((row.build ?? []).map((s) => s.command.join(' ')).join('\n'));
     const [env, setEnv] = useState(
         Object.entries(row.env ?? {})
             .map(([k, v]) => `${k}=${v}`)
@@ -724,19 +726,14 @@ function EditSiteForm({
         const portNum = port.trim() ? Number(port.trim()) : undefined;
         if (portNum && portNum !== row.port) patch.port = portNum;
 
+        const commandArgv = command.trim() ? command.trim().split(/\s+/) : [];
+        const rowCommandSig = (row.command ?? row.serve ?? []).join(' ');
+        if (commandArgv.join(' ') !== rowCommandSig) patch.command = commandArgv;
+
         const serveArgv = serve.trim() ? serve.trim().split(/\s+/) : [];
         if (serveArgv.length && serveArgv.join(' ') !== (row.serve ?? []).join(' ')) {
             patch.serve = serveArgv;
         }
-
-        const buildSteps = build
-            .split('\n')
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .map((line) => ({ command: line.split(/\s+/) }));
-        const buildSig = buildSteps.map((s) => s.command.join(' ')).join('\n');
-        const rowBuildSig = (row.build ?? []).map((s) => s.command.join(' ')).join('\n');
-        if (buildSig !== rowBuildSig) patch.build = buildSteps;
 
         const envObj: Record<string, string> = {};
         for (const line of env.split('\n')) {
@@ -819,23 +816,28 @@ function EditSiteForm({
                         />
                     </label>
                     <label className="site-field site-field-wide">
-                        <span>Serve command</span>
+                        <span>Startup command</span>
                         <Input
-                            value={serve}
-                            onValueChange={setServe}
-                            placeholder="gunicorn app.wsgi --bind 0.0.0.0:8000"
+                            value={command}
+                            onValueChange={setCommand}
+                            placeholder="npm run dev"
                         />
+                        <small className="site-field-hint">
+                            The exact argv Genie runs against your live source in the sandbox — no
+                            forced dev server, no build. It must listen on the port above; Genie
+                            fronts it at your .gen address over https.
+                        </small>
                     </label>
-                    <label className="site-field site-field-wide">
-                        <span>Build steps — one command per line</span>
-                        <Textarea
-                            value={build}
-                            onValueChange={setBuild}
-                            rows={3}
-                            spellCheck={false}
-                            placeholder={'composer install --no-dev\nnpm run build'}
-                        />
-                    </label>
+                    {row.serve && row.serve.length > 0 && (
+                        <label className="site-field site-field-wide">
+                            <span>Serve command (legacy)</span>
+                            <Input
+                                value={serve}
+                                onValueChange={setServe}
+                                placeholder="gunicorn app.wsgi --bind 0.0.0.0:8000"
+                            />
+                        </label>
+                    )}
                     <label className="site-field site-field-wide">
                         <span>Environment — KEY=value, one per line</span>
                         <Textarea

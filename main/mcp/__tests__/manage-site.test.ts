@@ -118,8 +118,7 @@ describe('tools/call dispatch', () => {
                 name: 'web',
                 repo: 'app',
                 runMode: 'explicit',
-                build: [{ label: 'Build', command: ['npm', 'run', 'build'] }],
-                serve: ['node', 'server.js'],
+                command: ['npm', 'run', 'dev'],
                 port: 5173,
                 kind: 'http',
                 exposed: [
@@ -137,8 +136,8 @@ describe('tools/call dispatch', () => {
                 action: 'create',
                 name: 'web',
                 repo: 'app',
-                build: [{ label: 'Build', command: ['npm', 'run', 'build'] }],
-                serve: ['node', 'server.js'],
+                // The USER-CONTROLLED startup argv reaches the host verbatim.
+                command: ['npm', 'run', 'dev'],
                 port: 5173,
                 exposed: [
                     { name: 'live', port: 6001, protocol: 'ws', reason: 'the client subscribes' },

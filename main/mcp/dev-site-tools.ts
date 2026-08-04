@@ -145,6 +145,7 @@ function toInfo(row: DevSiteRow): DevSiteInfo {
         ...(row.stack ? { stack: row.stack } : {}),
         ...(row.server ? { server: row.server } : {}),
         ...(row.build?.length ? { build: row.build } : {}),
+        ...(row.command ? { command: row.command } : {}),
         ...(row.serve ? { serve: row.serve } : {}),
         ...(row.image ? { image: row.image } : {}),
         ...(row.buildLog ? { buildLog: row.buildLog } : {}),
@@ -285,6 +286,10 @@ export async function runManageSite(
                 const repo = resolveRepoDir(req.repo);
                 if ('error' in repo) return fail(repo.error);
 
+                // The USER-CONTROLLED startup argv — the canonical way to start a
+                // site in the sandbox-serve model. When supplied, Genie runs it
+                // verbatim against the live source; no recipe is detected.
+                const command = req.command;
                 let serve = req.serve;
                 let build = req.build ? toBuildSteps(req.build) : undefined;
                 let image = req.image;
@@ -297,10 +302,10 @@ export async function runManageSite(
                 let stack: HostingOption['stack'] | undefined;
                 let server: HostingOption['server'] | undefined;
 
-                // Nothing explicit supplied → read the repo and take the
-                // recommended PRODUCTION recipe, so "host the frontend" is ONE
-                // call that builds and serves.
-                if (!serve && !req.image) {
+                // Nothing to start supplied → read the repo and take the
+                // recommended recipe's serve, so "host the frontend" is ONE call.
+                // Skipped entirely when the caller gave a `command` (or image).
+                if (!command && !serve && !req.image) {
                     const described = describeRepoRun(repo.dir, port ? { port } : {});
                     options = described.options;
                     applied = runMode
@@ -330,9 +335,15 @@ export async function runManageSite(
                     framework = applied.framework;
                 }
 
+                if (!command && !serve && !image) {
+                    return fail(
+                        'create needs a `command` — the argv Genie runs to start the site against the live source, e.g. ["npm","run","dev"]. (Legacy `serve`/`image` also work.)',
+                        options ? { options: options.map(toOption) } : {},
+                    );
+                }
                 if (!port) {
                     return fail(
-                        'create requires `port` — the port the production server listens on INSIDE the container. Without it there is nothing to publish.',
+                        'create requires `port` — the port the site\'s command listens on INSIDE the sandbox. Without it Caddy has nothing to route `.gen` to.',
                         options ? { options: options.map(toOption) } : {},
                     );
                 }
@@ -346,6 +357,7 @@ export async function runManageSite(
                     ...(server ? { server } : {}),
                     ...(image ? { image } : {}),
                     ...(build?.length ? { build } : {}),
+                    ...(command?.length ? { command } : {}),
                     ...(serve ? { serve } : {}),
                     port,
                     ...(req.exposed
@@ -389,7 +401,9 @@ export async function runManageSite(
                     // with its real host/scheme plan rather than as `none` (#119).
                     ...(stack ? { stack } : {}),
                     ...(server ? { server } : {}),
-                    ...(serve ? { command: serve } : {}),
+                    // The site's actual startup argv (the new command, or a legacy
+                    // serve), so a framework hint the argv carries is recognised.
+                    ...(command ?? serve ? { command: command ?? serve } : {}),
                     ...(req.upstreamHost ? { upstreamHost: req.upstreamHost } : {}),
                 });
                 return {
@@ -427,6 +441,7 @@ export async function runManageSite(
                 if (req.runMode !== undefined) patch.runMode = req.runMode;
                 if (req.image !== undefined) patch.image = req.image;
                 if (req.build !== undefined) patch.build = toBuildSteps(req.build);
+                if (req.command !== undefined) patch.command = req.command;
                 if (req.serve !== undefined) patch.serve = req.serve;
                 if (req.port !== undefined) patch.port = req.port;
                 if (req.exposed !== undefined) patch.exposed = req.exposed as never;

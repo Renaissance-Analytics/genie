@@ -23,7 +23,7 @@ import {
 import { createLocalSiteCarrier, type LocalTarget } from '../sites/local-carrier';
 import { listLocalEnabledGenSites, localTargetsBySiteId } from '../sites/local-sites';
 import { DEVICE_PRESETS, devicePreset, initialGenUrl, normalizeNavUrl } from './chrome';
-import { SITE_VIEW_WEB_PREFERENCES } from './site-view';
+import { SITE_VIEW_WEB_PREFERENCES, isSecureBrowserUrl } from './site-view';
 
 /** The connKey the LOCAL Testing Browser instance uses (this machine's own
  *  loopback dev sites — no host connection). */
@@ -222,6 +222,13 @@ export async function openTestingBrowser(
         resolveGen: (genHost) => genMap.get(genHost) ?? null,
     });
 
+    // SECURE-ONLY (user directive): cancel any request that is not a secure web
+    // transport or an internal Chromium scheme, so a `.gen` page cannot pull an
+    // `http://` asset or open a `ws://` socket. The address bar already forces
+    // https on navigation; this is the network-layer guarantee behind it.
+    ses.webRequest.onBeforeRequest((details, callback) => {
+        callback({ cancel: !isSecureBrowserUrl(details.url) });
+    });
     // Route the session through the shim (it refuses non-`.gen`). Chromium keeps
     // its default loopback bypass, which we never load anyway.
     await ses.setProxy({ proxyRules: shim.proxyRules });

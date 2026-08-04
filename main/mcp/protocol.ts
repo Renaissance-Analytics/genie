@@ -565,9 +565,16 @@ export interface DevSiteInfo {
     /** The production server holding the port: frankenphp | node | nginx |
      *  gunicorn | uvicorn | binary. */
     server?: string;
-    /** The PRODUCTION BUILD that runs before the server starts. */
+    /** The PRODUCTION BUILD that runs before the server starts. LEGACY — the
+     *  sandbox-serve model runs no build. */
     build?: Array<{ label: string; command: string[]; optional?: boolean }>;
-    /** The production server's literal argv. */
+    /** The USER-CONTROLLED startup argv Genie runs against the LIVE source inside
+     *  the workspace sandbox (`["npm","run","dev"]`, `["php","artisan","serve"]`,
+     *  a binary — whatever you choose). This is the model: no forced dev server,
+     *  no build. Supersedes {@link serve}. */
+    command?: string[];
+    /** LEGACY (pre-sandbox-serve): the production server's literal argv. Read as a
+     *  fallback for {@link command} for sites saved before the rework. */
     serve?: string[];
     image?: string;
     /** The last build's log. Present on a start that built, success or not — a
@@ -632,11 +639,17 @@ export interface ManageSiteRequest {
     runMode?: 'dockerfile' | 'devcontainer' | 'compose' | 'recipe' | 'explicit';
     /** create: the image the SERVER runs in. Omit for the workspace dev image. */
     image?: string;
-    /** create: the PRODUCTION BUILD, in order, run before the server starts. */
+    /** create: the PRODUCTION BUILD, in order. LEGACY — the sandbox-serve model
+     *  runs no build. */
     build?: Array<{ label?: string; command: string[]; optional?: boolean }>;
-    /** create: the production server's literal argv (NOT a shell string). */
+    /** create/update: the USER-CONTROLLED startup argv (NOT a shell string) Genie
+     *  runs against the LIVE source in the sandbox. The canonical way to start a
+     *  site; supersedes {@link serve}. */
+    command?: string[];
+    /** create: LEGACY production server argv. Prefer {@link command}. */
     serve?: string[];
-    /** create: the port the production server listens on INSIDE the container. */
+    /** create: the port the site's command listens on INSIDE the sandbox; Caddy
+     *  fronts `.gen` to it over https. */
     port?: number;
     /** create: extra BROWSER-FACING surfaces. Backend services never go here. */
     exposed?: Array<{ name: string; port: number; protocol: string; reason: string }>;
@@ -1495,16 +1508,22 @@ const MANAGE_SITE_TOOL = {
                 description:
                     "create (optional): the PRODUCTION BUILD, in order, run in the workspace sandbox before the server starts. A required step that fails means the site is NOT started. Omit to take the detected recipe's build.",
             },
+            command: {
+                type: 'array',
+                items: { type: 'string' },
+                description:
+                    'create/update: the USER-CONTROLLED startup argv Genie runs against the LIVE source inside the workspace sandbox — LITERAL ARGV, not a shell string: ["npm","run","dev"], ["php","artisan","serve","--host=0.0.0.0"], a binary, anything. Genie makes NO assumptions (no forced dev server, no build). The command must bind `port` on loopback inside the sandbox; Caddy fronts `.gen` to it over https. This is the canonical way to start a site.',
+            },
             serve: {
                 type: 'array',
                 items: { type: 'string' },
                 description:
-                    'create: the PRODUCTION SERVER\'s LITERAL ARGV, not a shell string — ["gunicorn","mysite.wsgi:application","--bind","0.0.0.0:8000"]. Must bind 0.0.0.0, and must never be a dev server.',
+                    'create: LEGACY production server argv (LITERAL ARGV). Read as a fallback for `command` for sites saved before the sandbox-serve rework — prefer `command`.',
             },
             port: {
                 type: 'number',
                 description:
-                    'create: the port the production server listens on INSIDE the container. Genie publishes it to an ephemeral loopback port and routes `.gen` there.',
+                    'create: the port the site\'s `command` listens on INSIDE the sandbox (on loopback). Caddy reverse-proxies `<name>.gen` to it over https.',
             },
             exposed: {
                 type: 'array',
@@ -2690,6 +2709,7 @@ export async function handleMcpMessage(
                     runMode: a.runMode,
                     image: a.image,
                     build: a.build,
+                    command: a.command,
                     serve: a.serve,
                     port: a.port,
                     exposed: a.exposed,
