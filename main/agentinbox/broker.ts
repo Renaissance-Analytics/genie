@@ -241,6 +241,11 @@ export class AgentInboxBroker {
         if (a) a.lastOutputAt = this.now();
     }
 
+    /** Whether a terminal is a registered agent (drives the mid-turn AgentPulse glow). */
+    isAgentTerminal(terminalId: string): boolean {
+        return this.byTerminal.has(terminalId);
+    }
+
     private agentForTerminal(terminalId: string): AgentInboxAgent | null {
         const id = this.byTerminal.get(terminalId);
         return id ? this.agents.get(id) ?? null : null;

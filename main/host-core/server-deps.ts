@@ -26,6 +26,7 @@ import { openFileForUserForMcp } from '../editor/open-file';
 import { applySetEnv, applyCheckEnv } from '../env-store';
 import { pluginToolDescriptors, dispatchPluginTool } from '../plugins/registry';
 import { agentInboxBroker } from '../agentinbox/broker';
+import { agentPulse } from '../terminal/agent-pulse';
 import { formatAgentInboxMailLine } from '../mcp/protocol';
 import type { ServerDeps } from '../mcp/server';
 import type { HostCorePorts } from './ports';
@@ -70,7 +71,12 @@ export function buildHostServerDeps(
             // it's now at its prompt. A later DM may wake it IF no output follows.
             agentInboxBroker.markTurnEnd(terminalId);
             const wsId = workspaceIdOfTerminal(terminalId);
-            if (wsId) broadcastWorkspacePulse(wsId);
+            if (wsId) {
+                broadcastWorkspacePulse(wsId);
+                // Turn ended → drop the mid-turn AgentPulse glow (the byte ring/idle
+                // path handles genuine output activity separately).
+                agentPulse.noteAgentIdle(wsId, terminalId);
+            }
             // The user-facing notification (chime/toast/window-flash on desktop;
             // log/forward headless) — the injected Notifier port.
             ports.notifier.imDone(terminalId);

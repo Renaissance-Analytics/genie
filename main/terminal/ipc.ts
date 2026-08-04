@@ -598,7 +598,13 @@ function feedTerminalData(id: string, data: string): void {
     // real-time activity pulse (rail glow + 1-min sparkline). Single hook for
     // every terminal, desktop AND headless.
     const pulseWs = getTerminalSpec(id)?.workspace_id;
-    if (pulseWs) agentPulse.note(pulseWs, data.length);
+    if (pulseWs) {
+        agentPulse.note(pulseWs, data.length);
+        // Turn-state glow: an agent terminal producing output is MID-TURN, so keep
+        // the workspace lit even if it then goes quiet waiting on a tool/API call —
+        // until imDone / exit. Byte-activity alone darkened it after 1.5s.
+        if (agentInboxBroker.isAgentTerminal(id)) agentPulse.noteAgentWorking(pulseWs, id);
+    }
     // Wake-on-DM idle signal (issue #9): any output means the agent is active — so
     // a DM wake fails closed until it's genuinely quiet again. Cheap (a timestamp).
     agentInboxBroker.noteOutput(id);
@@ -614,6 +620,10 @@ function feedTerminalExit(id: string, payload: { exitCode: number; signal?: numb
     // AgentInbox: the pty exited but the spec is retained (revivable) — mark the
     // agent `away` (no-op for a non-agent terminal).
     agentInboxBroker.away(id);
+    // AgentPulse: the agent's process is gone → its turn is over. Drop the mid-turn
+    // glow (no-op if the terminal wasn't a working agent).
+    const exitWs = getTerminalSpec(id)?.workspace_id;
+    if (exitWs) agentPulse.noteAgentIdle(exitWs, id);
     // Tell any attached mobile /ws/term socket the pty exited + drop it.
     mobileTermClose(id, payload);
 }

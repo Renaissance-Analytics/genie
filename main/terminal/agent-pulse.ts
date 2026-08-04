@@ -1,26 +1,40 @@
 /**
  * AgentPulse — per-workspace real-time terminal-activity tracker.
  *
- * Every pty OUTPUT byte (an agent "doing something") flows through the single
- * choke point `feedTerminalData` (terminal/ipc.ts), which calls {@link AgentPulse.note}
- * with the byte count and the owning workspace. From that one signal this tracker
- * derives two things the UI needs:
+ * The workspace side-rail icon GLOWS while a workspace has live agent work, and a
+ * 1-minute sparkline draws behind each bar. Two independent signals drive the glow:
  *
- *   - a real-time `active` flag per workspace (bytes seen within the last
- *     {@link ACTIVE_WINDOW_MS}) → the workspace side-rail icon glows live; and
- *   - a rolling 60×1s byte-count ring per workspace ({@link AgentPulse.snapshot})
- *     → the 1-minute sparkline drawn behind each bar when the workspace menu is open.
+ *   1. **pty OUTPUT bytes** — every output byte flows through the single choke
+ *      point `feedTerminalData` (terminal/ipc.ts) into {@link AgentPulse.note},
+ *      giving a byte-active flag (bytes within {@link ACTIVE_WINDOW_MS}) + the
+ *      60×1s byte ring the sparkline reads ({@link AgentPulse.snapshot}); and
+ *   2. **agent TURN state** — an agent terminal is "working" from when it produces
+ *      output until it calls `imDone` (turn end) or exits. {@link noteAgentWorking}
+ *      / {@link noteAgentIdle} carry that in, so a mid-turn agent that goes QUIET
+ *      (waiting on a tool/API call) keeps its workspace lit. Byte-activity alone
+ *      darkened it after 1.5s — the reason a user couldn't tell agents were still
+ *      running, and an upgrade killed them silently.
  *
- * PUSH-first (no idle polling): the tracker pushes a coalesced `agent-pulse`
- * event on activity (throttled to {@link COALESCE_MS}) and exactly once when a
- * workspace goes idle. The sparkline's decay animation runs client-side only
- * while the menu is open. PURE: no electron/db/fs — the emitter is injected
- * (presence wiring installs the real broadcast; tests pass a spy), and the clock
- * is injectable so the bucketing/window logic is deterministically testable.
+ * A workspace reads as ACTIVE when EITHER signal is live; the emitted `active`
+ * flag is that OR. The sparkline stays byte-only (it shows real output, not the
+ * glow). A never-signalling agent can't glow forever: a mid-turn agent with no
+ * output and no imDone decays after {@link AGENT_WORK_WINDOW_MS}.
+ *
+ * PUSH-first (no idle polling): a coalesced `agent-pulse` event pushes on activity
+ * (throttled to {@link COALESCE_MS}) and once on each active↔idle transition. PURE:
+ * no electron/db/fs — the emitter is injected (tests pass a spy) and the clock is
+ * injectable, so bucketing/window/turn logic is deterministically testable.
  */
 
-/** Bytes seen within this window ⇒ the workspace reads as ACTIVE (icon glows). */
+/** Bytes seen within this window ⇒ the workspace reads as byte-ACTIVE (icon glows). */
 export const ACTIVE_WINDOW_MS = 1500;
+/**
+ * A mid-turn agent with NO output and NO `imDone` for this long decays to idle — a
+ * backstop so an agent that never signals its turn end can't glow forever. Generous
+ * (5 min) so an ordinary wait-on-a-tool gap never trips it; `imDone`/exit clear it
+ * immediately in the normal case.
+ */
+export const AGENT_WORK_WINDOW_MS = 5 * 60_000;
 /** Sparkline span: 60 one-second buckets = the last minute. */
 export const BUCKET_COUNT = 60;
 export const BUCKET_MS = 1000;
@@ -39,7 +53,12 @@ interface WsState {
     /** absolute-second → byte count, pruned to the last BUCKET_COUNT seconds. */
     buckets: Map<number, number>;
     lastByteTs: number;
-    active: boolean;
+    /** Whether pty bytes arrived within ACTIVE_WINDOW_MS (the byte half of active). */
+    byteActive: boolean;
+    /** Agent terminals currently MID-TURN in this workspace (the turn half of active). */
+    workingAgents: Set<string>;
+    /** Per-agent backstop decay timer (id → timer) — cleared/re-armed by turn signals. */
+    workBackstop: Map<string, ReturnType<typeof setTimeout>>;
     /** Bytes accrued since the last coalesced emit. */
     pendingBytes: number;
     lastEmitTs: number;
@@ -66,7 +85,9 @@ export class AgentPulse {
             s = {
                 buckets: new Map(),
                 lastByteTs: 0,
-                active: false,
+                byteActive: false,
+                workingAgents: new Set(),
+                workBackstop: new Map(),
                 pendingBytes: 0,
                 lastEmitTs: 0,
                 idleTimer: null,
@@ -75,6 +96,17 @@ export class AgentPulse {
             this.ws.set(workspaceId, s);
         }
         return s;
+    }
+
+    /** Combined active: byte-activity OR any agent mid-turn. This is what glows. */
+    private combinedActive(s: WsState): boolean {
+        return s.byteActive || s.workingAgents.size > 0;
+    }
+
+    private unref(timer: ReturnType<typeof setTimeout>): void {
+        if (typeof (timer as { unref?: () => void }).unref === 'function') {
+            (timer as { unref: () => void }).unref();
+        }
     }
 
     /** Drop bucket entries older than the 60s window. */
@@ -87,9 +119,8 @@ export class AgentPulse {
 
     /**
      * Record `bytes` of pty output for `workspaceId`. Updates the ring, flips the
-     * workspace active (emitting on the transition), coalesces live pushes during
-     * sustained output, and (re)arms the idle timer that emits `active:false` once
-     * output stops for {@link ACTIVE_WINDOW_MS}.
+     * workspace byte-active (emitting on the transition), coalesces live pushes
+     * during sustained output, and (re)arms the byte idle timer.
      */
     note(workspaceId: string, bytes: number): void {
         if (!workspaceId || bytes <= 0) return;
@@ -102,9 +133,9 @@ export class AgentPulse {
         s.lastByteTs = t;
         s.pendingBytes += bytes;
 
-        // Transition idle→active: emit immediately so the glow is instant.
-        if (!s.active) {
-            s.active = true;
+        // Transition byte-idle→byte-active: emit immediately so the glow is instant.
+        if (!s.byteActive) {
+            s.byteActive = true;
             this.flush(workspaceId, s, t);
         } else if (t - s.lastEmitTs >= COALESCE_MS) {
             // Sustained output: push a coalesced tick (feeds the live sparkline)
@@ -116,21 +147,60 @@ export class AgentPulse {
                 s.coalesceTimer = null;
                 this.flush(workspaceId, s, this.now());
             }, COALESCE_MS);
-            if (typeof (s.coalesceTimer as { unref?: () => void }).unref === 'function') {
-                (s.coalesceTimer as { unref: () => void }).unref();
-            }
+            this.unref(s.coalesceTimer);
         }
 
-        // (Re)arm the idle timer — active:false fires ACTIVE_WINDOW_MS after the
-        // last byte if nothing more arrives.
+        // (Re)arm the byte idle timer — byteActive drops ACTIVE_WINDOW_MS after the
+        // last byte if nothing more arrives (the glow may still hold on agent work).
         if (s.idleTimer) clearTimeout(s.idleTimer);
         s.idleTimer = setTimeout(() => this.checkIdle(workspaceId), ACTIVE_WINDOW_MS);
-        if (typeof (s.idleTimer as { unref?: () => void }).unref === 'function') {
-            (s.idleTimer as { unref: () => void }).unref();
-        }
+        this.unref(s.idleTimer);
     }
 
-    /** Emit the pending bytes + current active state; reset the coalesce accrual. */
+    /**
+     * Mark an agent terminal as MID-TURN in its workspace — call on agent output.
+     * Keeps the workspace lit through byte-silence until {@link noteAgentIdle}
+     * (imDone / exit) or the backstop decay. Re-arming on continued output keeps a
+     * long active turn from decaying early.
+     */
+    noteAgentWorking(workspaceId: string, terminalId: string): void {
+        if (!workspaceId || !terminalId) return;
+        const s = this.state(workspaceId);
+        const wasActive = this.combinedActive(s);
+        s.workingAgents.add(terminalId);
+
+        const prev = s.workBackstop.get(terminalId);
+        if (prev) clearTimeout(prev);
+        const timer = setTimeout(
+            () => this.noteAgentIdle(workspaceId, terminalId),
+            AGENT_WORK_WINDOW_MS,
+        );
+        this.unref(timer);
+        s.workBackstop.set(terminalId, timer);
+
+        // Newly lit (was fully idle) → emit the glow-on immediately.
+        if (!wasActive) this.emit({ workspaceId, active: true, bytes: 0 });
+    }
+
+    /**
+     * Clear an agent terminal's MID-TURN state — call on `imDone` (turn end) or on
+     * the agent terminal's exit. Emits glow-off only when this drops the LAST live
+     * signal (no other working agent AND no byte activity).
+     */
+    noteAgentIdle(workspaceId: string, terminalId: string): void {
+        if (!workspaceId || !terminalId) return;
+        const s = this.ws.get(workspaceId);
+        if (!s) return;
+        const timer = s.workBackstop.get(terminalId);
+        if (timer) {
+            clearTimeout(timer);
+            s.workBackstop.delete(terminalId);
+        }
+        if (!s.workingAgents.delete(terminalId)) return; // wasn't marked working
+        if (!this.combinedActive(s)) this.emit({ workspaceId, active: false, bytes: 0 });
+    }
+
+    /** Emit the pending bytes + combined active state; reset the coalesce accrual. */
     private flush(workspaceId: string, s: WsState, t: number): void {
         if (s.coalesceTimer) {
             clearTimeout(s.coalesceTimer);
@@ -139,24 +209,26 @@ export class AgentPulse {
         const bytes = s.pendingBytes;
         s.pendingBytes = 0;
         s.lastEmitTs = t;
-        this.emit({ workspaceId, active: s.active, bytes });
+        this.emit({ workspaceId, active: this.combinedActive(s), bytes });
     }
 
-    /** Idle-timer callback: if no bytes for the active window, go inactive + emit. */
+    /** Byte idle-timer callback: drop byteActive after the window. The glow only
+     *  goes off if no agent is still mid-turn (combinedActive handles that). */
     private checkIdle(workspaceId: string): void {
         const s = this.ws.get(workspaceId);
-        if (!s || !s.active) return;
+        if (!s || !s.byteActive) return;
         if (this.now() - s.lastByteTs < ACTIVE_WINDOW_MS) return; // more bytes arrived
-        s.active = false;
+        s.byteActive = false;
         s.idleTimer = null;
         this.flush(workspaceId, s, this.now());
     }
 
-    /** Whether a workspace currently reads as active. */
+    /** Whether a workspace currently reads as active (byte activity OR agent mid-turn). */
     isActive(workspaceId: string): boolean {
         const s = this.ws.get(workspaceId);
         if (!s) return false;
-        return s.active && this.now() - s.lastByteTs < ACTIVE_WINDOW_MS;
+        if (s.workingAgents.size > 0) return true;
+        return s.byteActive && this.now() - s.lastByteTs < ACTIVE_WINDOW_MS;
     }
 
     /**
@@ -183,6 +255,7 @@ export class AgentPulse {
         for (const s of this.ws.values()) {
             if (s.idleTimer) clearTimeout(s.idleTimer);
             if (s.coalesceTimer) clearTimeout(s.coalesceTimer);
+            for (const t of s.workBackstop.values()) clearTimeout(t);
         }
         this.ws.clear();
     }
