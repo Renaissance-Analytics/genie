@@ -1193,31 +1193,32 @@ export default function Chooser({
                                     >
                                         <IconCpu size={13} />
                                     </span>
-                                    {/* Genie HOSTS sites for this workspace.
-                                        Shown only when at least one is enabled
-                                        — an absent icon means "this workspace
-                                        hosts nothing", which is the common case
-                                        and must stay silent. Opens the Site
-                                        Manager. */}
-                                    {(() => {
-                                        const mine = devSites[ws.id] ?? [];
-                                        const tone = railSitesTone(mine, ws.id);
-                                        if (!tone || !onShowSiteManager) return null;
-                                        return (
-                                            <span
-                                                className={`sites-ind sites-${tone}`}
-                                                role="button"
-                                                tabIndex={-1}
-                                                title={railSitesTitle(mine, ws.id)}
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    onShowSiteManager(ws.id);
-                                                }}
-                                            >
-                                                <IconServer size={13} />
-                                            </span>
-                                        );
-                                    })()}
+                                    {/* Genie HOSTS sites for this workspace. Always
+                                        shown (greyed when nothing is hosted, like
+                                        the Processes icon) so the entry point to the
+                                        Site Manager is always discoverable; the
+                                        colour says whether a site is up. Hidden only
+                                        when site management isn't available at all
+                                        (no handler). */}
+                                    {onShowSiteManager &&
+                                        (() => {
+                                            const mine = devSites[ws.id] ?? [];
+                                            const tone = railSitesTone(mine, ws.id) ?? 'none';
+                                            return (
+                                                <span
+                                                    className={`sites-ind sites-${tone}`}
+                                                    role="button"
+                                                    tabIndex={-1}
+                                                    title={railSitesTitle(mine, ws.id)}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        onShowSiteManager(ws.id);
+                                                    }}
+                                                >
+                                                    <IconServer size={13} />
+                                                </span>
+                                            );
+                                        })()}
                                 </button>
                                 <div className="tproj-body">
                                     {wsSpecs.map((s) => (

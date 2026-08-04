@@ -165,6 +165,9 @@ export function railSitesTone(sites: DevSiteInfo[], workspaceId: string): DevTon
 
 export function railSitesTitle(sites: DevSiteInfo[], workspaceId: string): string {
     const mine = minesites(sites, workspaceId);
+    // The indicator is always shown (greyed) even with nothing hosted, so it needs
+    // a sensible empty title rather than "0 hosted sites".
+    if (mine.length === 0) return 'No hosted sites yet — click to open the Site Manager';
     const running = mine.filter((s) => s.state === 'running').length;
     const failed = mine.filter((s) => s.state === 'failed').length;
     const parts = [`${mine.length} hosted site${mine.length === 1 ? '' : 's'}`];

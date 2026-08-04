@@ -172,9 +172,15 @@ describe('startup progress surfaces in the view model', () => {
 // --- the rail indicator -----------------------------------------------------
 
 describe('the rail sites indicator', () => {
-    it('is hidden for a workspace that defines nothing', () => {
+    it('has no tone for a workspace that defines nothing (the icon renders greyed, not hidden)', () => {
         expect(railSitesTone([], 'acme')).toBeNull();
         expect(railSitesTone([{ ...SITE, enabled: false }], 'acme')).toBeNull();
+    });
+
+    it('gives the empty indicator a sensible tooltip rather than "0 hosted sites"', () => {
+        const title = railSitesTitle([], 'acme');
+        expect(title).toMatch(/no hosted sites/i);
+        expect(title).toContain('Site Manager');
     });
 
     it('lets RUNNING win over failed — an amber dot on a workspace that is serving is a lie', () => {

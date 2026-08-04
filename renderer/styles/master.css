@@ -3222,8 +3222,9 @@ body.gutter-dragging .grid-gutter {
 }
 
 /* Hosted-sites indicator (#232) — the sibling of .proc-ind, immediately after
-   it in the row. Rendered ONLY for a workspace with a site enabled, so its mere
-   presence is the signal; the colour says whether the site is actually up. */
+   it in the row. Always shown (greyed via .sites-none when nothing is hosted,
+   like .proc-none), so the Site Manager entry point is always discoverable; the
+   colour says whether a site is actually up. */
 .tproj-head .sites-ind {
     display: inline-flex;
     align-items: center;
@@ -3237,6 +3238,10 @@ body.gutter-dragging .grid-gutter {
 }
 .tproj-head .sites-ind:hover {
     background: rgba(255, 255, 255, 0.08);
+}
+.sites-ind.sites-none {
+    color: var(--fg-4);
+    opacity: 0.55;
 }
 .sites-ind.sites-running {
     color: #10b981;
