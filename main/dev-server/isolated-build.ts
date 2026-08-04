@@ -49,16 +49,20 @@ import type { HostIds } from './host-ids';
  *
  * ## Why the copy takes ownership of the mount target first
  *
- * A FRESH named volume does NOT reliably inherit the image directory's ownership.
- * The dev image creates {@link WORKSPACE_MOUNT_TARGET} owned by `genie`, but on
- * Docker Desktop (macOS/Windows) the volume's driver mounts it ROOT-owned — so
- * the non-root build user's `cp` gets `Permission denied` on every file (the
- * genie #119 regression that broke every rebuilding site). The build user cannot
- * `chown` a directory it does not own, but the dev image grants `genie` NOPASSWD
- * sudo (`dev-base/Dockerfile`), so the copy step `sudo chown`s the mount target
- * to `genie` FIRST, then copies as `genie`. Taking ownership of the volume root
- * is safe and fast (one empty directory) precisely because it is a fresh,
- * engine-owned volume — never the bind-mounted working tree.
+ * The volume the copy lands in can arrive DIRTY, two ways:
+ *   - a FRESH named volume does not inherit the image dir's `genie` ownership — on
+ *     Docker Desktop (macOS/Windows) the driver mounts it ROOT-owned; and
+ *   - a REUSED volume carries root-owned files a previous serve container wrote.
+ *     The serve container mounts THIS volume, so the pre-build reset can't drop it
+ *     while serve is up, and `volume rm` is tolerant (silently no-ops) — so the
+ *     build reuses a stale, part-root-owned tree.
+ * Either way the non-root build user's `cp` gets `Permission denied` (the genie
+ * #119 regression that broke rebuilding sites). The build user can't `chown` what
+ * it doesn't own, but the dev image grants `genie` NOPASSWD sudo, so the copy step
+ * `sudo chown -R`s the mount target to `genie` FIRST — RECURSIVE, so nested dirs a
+ * prior serve left root-owned are fixed too, not just the volume root — then wipes
+ * the workdir (a clean checkout every build) and copies as `genie`. This is the
+ * build's OWN engine-owned volume — never the bind-mounted working tree.
  *
  * ## Why the copy runs through `exec`, not the container command
  *
@@ -186,16 +190,23 @@ export async function prepareIsolatedBuild(
     }
 
     // Populate the copy, through `exec` so it lands on the build uid (see header).
-    // A fresh named volume mounts ROOT-owned on Docker Desktop, so `sudo chown`
-    // the mount target to `genie` FIRST (the dev image grants genie NOPASSWD
-    // sudo) — else the copy dies with `Permission denied` on every file. Then
-    // `cp -a` as (non-root) genie: every file comes out owned by the copier
-    // regardless of the host source's ownership — the exact property that
-    // defeats the dubious-ownership + EPERM failures.
+    // The volume can arrive DIRTY: a fresh one mounts ROOT-owned on Docker Desktop,
+    // and a REUSED one carries root-owned files the serve container wrote (the pre-
+    // build reset can't drop a volume the running serve container still holds, and
+    // `volume rm` is tolerant, so it silently no-ops). So, as `genie` (NOPASSWD sudo
+    // in the dev image):
+    //   1. `chown -R` the WHOLE mount target to genie — RECURSIVE, so nested dirs a
+    //      previous serve left root-owned (e.g. `<workdir>/node_modules`) become
+    //      writable, not just the volume root;
+    //   2. `rm -rf` the workdir — a clean checkout every build, never one accreted
+    //      across restarts (now possible since genie owns everything);
+    //   3. `cp -a` the source in as genie — every file owned by the copier, which is
+    //      what defeats git dubious-ownership + EPERM regardless of the source's
+    //      ownership.
     const copyCommand = [
         'sh',
         '-c',
-        `set -e; sudo chown genie:genie '${mountTarget}'; mkdir -p '${workdir}' && cp -a ${BUILD_SOURCE_MOUNT}/. '${workdir}'/`,
+        `set -e; sudo chown -R genie:genie '${mountTarget}'; rm -rf '${workdir}'; mkdir -p '${workdir}'; cp -a ${BUILD_SOURCE_MOUNT}/. '${workdir}'/`,
     ];
     deps.onProgress?.(`$ ${copyCommand.join(' ')}   # Copy the repo into an isolated build volume\n`);
     let copy;

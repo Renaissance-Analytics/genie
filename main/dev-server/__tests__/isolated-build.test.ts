@@ -121,18 +121,23 @@ describe('prepareIsolatedBuild', () => {
         expect(copy?.argv.join(' ')).toContain('/workspace/repos/app');
     });
 
-    it('takes ownership of the fresh (root-owned) volume BEFORE copying — else the build user cannot write it', async () => {
+    it('RECURSIVELY takes ownership + wipes the workdir BEFORE copying — else a reused/root-owned volume blocks the copy', async () => {
         const { runtime, calls } = fakeRuntime({});
         await prepareIsolatedBuild({ runtime, ...base() });
         const script = calls.execs.find((e) => e.argv[0] === 'sh')?.argv[2] ?? '';
-        // A fresh named volume mounts ROOT-owned on Docker Desktop (its VM does
-        // NOT inherit the image dir's `genie` ownership), so the non-root build
-        // user's `cp` gets "Permission denied" on every file (genie #119 regression).
-        // The dev image grants `genie` NOPASSWD sudo — take ownership of the mount
-        // target first, and do it BEFORE the copy, not after.
-        expect(script).toMatch(/sudo\s+chown/);
+        // The volume can arrive DIRTY: fresh ones mount ROOT-owned on Docker
+        // Desktop, and REUSED ones carry root-owned files a prior serve container
+        // wrote (the reset can't drop a volume serve still holds, and `volume rm`
+        // is tolerant). A non-recursive chown of just the volume root leaves a
+        // root-owned `<workdir>/node_modules` etc. → `cp` dies "Permission denied"
+        // + "preserving times … Operation not permitted". So: chown -R the whole
+        // mount target (genie has NOPASSWD sudo), wipe the workdir for a clean
+        // checkout, THEN copy — all before `cp -a`.
+        expect(script).toMatch(/sudo\s+chown\s+-R\b/); // RECURSIVE, not just the root
         expect(script).toContain('/workspace');
-        expect(script.indexOf('chown')).toBeLessThan(script.indexOf('cp -a'));
+        expect(script).toMatch(/rm\s+-rf/); // clean checkout on a reused volume
+        expect(script.indexOf('chown')).toBeLessThan(script.indexOf('rm -rf')); // own before wipe
+        expect(script.indexOf('rm -rf')).toBeLessThan(script.indexOf('cp -a')); // wipe before copy
     });
 
     it('tears the container down AND drops the volume when the copy fails', async () => {
