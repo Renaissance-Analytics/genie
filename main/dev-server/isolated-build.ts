@@ -47,14 +47,18 @@ import type { HostIds } from './host-ids';
  * workdir, removes it, and mounts the volume into the serve container. The host's
  * `vendor/`, `node_modules/`, `public/`, `.git` are never touched.
  *
- * ## Why the volume mounts at the mount target
+ * ## Why the copy takes ownership of the mount target first
  *
- * The dev image creates {@link WORKSPACE_MOUNT_TARGET} owned by its non-root
- * `genie` user (see `dev-base/Dockerfile`). A FRESH named volume mounted onto a
- * path that exists in the image inherits that directory's ownership, so the
- * build user can write the copy without a privileged `chown` first — the reason
- * the volume mounts at the SAME target the working tree used to, rather than at
- * the (root-owned) nested repo path.
+ * A FRESH named volume does NOT reliably inherit the image directory's ownership.
+ * The dev image creates {@link WORKSPACE_MOUNT_TARGET} owned by `genie`, but on
+ * Docker Desktop (macOS/Windows) the volume's driver mounts it ROOT-owned — so
+ * the non-root build user's `cp` gets `Permission denied` on every file (the
+ * genie #119 regression that broke every rebuilding site). The build user cannot
+ * `chown` a directory it does not own, but the dev image grants `genie` NOPASSWD
+ * sudo (`dev-base/Dockerfile`), so the copy step `sudo chown`s the mount target
+ * to `genie` FIRST, then copies as `genie`. Taking ownership of the volume root
+ * is safe and fast (one empty directory) precisely because it is a fresh,
+ * engine-owned volume — never the bind-mounted working tree.
  *
  * ## Why the copy runs through `exec`, not the container command
  *
@@ -182,13 +186,16 @@ export async function prepareIsolatedBuild(
     }
 
     // Populate the copy, through `exec` so it lands on the build uid (see header).
-    // `cp -a` as a non-root user cannot chown, so every file comes out owned by
-    // the copier regardless of the host source's ownership — which is exactly the
-    // property that defeats the dubious-ownership + EPERM failures.
+    // A fresh named volume mounts ROOT-owned on Docker Desktop, so `sudo chown`
+    // the mount target to `genie` FIRST (the dev image grants genie NOPASSWD
+    // sudo) — else the copy dies with `Permission denied` on every file. Then
+    // `cp -a` as (non-root) genie: every file comes out owned by the copier
+    // regardless of the host source's ownership — the exact property that
+    // defeats the dubious-ownership + EPERM failures.
     const copyCommand = [
         'sh',
         '-c',
-        `set -e; mkdir -p '${workdir}' && cp -a ${BUILD_SOURCE_MOUNT}/. '${workdir}'/`,
+        `set -e; sudo chown genie:genie '${mountTarget}'; mkdir -p '${workdir}' && cp -a ${BUILD_SOURCE_MOUNT}/. '${workdir}'/`,
     ];
     deps.onProgress?.(`$ ${copyCommand.join(' ')}   # Copy the repo into an isolated build volume\n`);
     let copy;

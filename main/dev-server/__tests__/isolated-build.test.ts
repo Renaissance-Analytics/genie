@@ -121,6 +121,20 @@ describe('prepareIsolatedBuild', () => {
         expect(copy?.argv.join(' ')).toContain('/workspace/repos/app');
     });
 
+    it('takes ownership of the fresh (root-owned) volume BEFORE copying — else the build user cannot write it', async () => {
+        const { runtime, calls } = fakeRuntime({});
+        await prepareIsolatedBuild({ runtime, ...base() });
+        const script = calls.execs.find((e) => e.argv[0] === 'sh')?.argv[2] ?? '';
+        // A fresh named volume mounts ROOT-owned on Docker Desktop (its VM does
+        // NOT inherit the image dir's `genie` ownership), so the non-root build
+        // user's `cp` gets "Permission denied" on every file (genie #119 regression).
+        // The dev image grants `genie` NOPASSWD sudo — take ownership of the mount
+        // target first, and do it BEFORE the copy, not after.
+        expect(script).toMatch(/sudo\s+chown/);
+        expect(script).toContain('/workspace');
+        expect(script.indexOf('chown')).toBeLessThan(script.indexOf('cp -a'));
+    });
+
     it('tears the container down AND drops the volume when the copy fails', async () => {
         const { runtime, calls } = fakeRuntime({
             exec: () => ({ code: 1, stdout: '', stderr: 'no space left on device' }),
