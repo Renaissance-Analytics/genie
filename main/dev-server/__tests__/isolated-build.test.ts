@@ -140,6 +140,18 @@ describe('prepareIsolatedBuild', () => {
         expect(script.indexOf('rm -rf')).toBeLessThan(script.indexOf('cp -a')); // wipe before copy
     });
 
+    it('drops a dangling submodule gitlink AFTER the copy so `composer install`\'s git call survives (genie #122)', async () => {
+        const { runtime, calls } = fakeRuntime({});
+        await prepareIsolatedBuild({ runtime, ...base() });
+        const script = calls.execs.find((e) => e.argv[0] === 'sh')?.argv[2] ?? '';
+        // A submodule's `.git` is a gitlink FILE pointing outside the copied subdir
+        // → dangles in the isolated copy → composer's `git show-ref` dies. Only a
+        // regular-file `.git` (the gitlink) is removed; a real `.git` DIR is kept.
+        expect(script).toMatch(/\[ -f '[^']*\/\.git' \]/); // guarded on it being a FILE
+        expect(script).toContain("rm -f '/workspace/repos/app/.git'");
+        expect(script.indexOf('cp -a')).toBeLessThan(script.indexOf('.git')); // after the copy
+    });
+
     it('tears the container down AND drops the volume when the copy fails', async () => {
         const { runtime, calls } = fakeRuntime({
             exec: () => ({ code: 1, stdout: '', stderr: 'no space left on device' }),

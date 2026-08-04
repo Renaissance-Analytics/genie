@@ -206,7 +206,14 @@ export async function prepareIsolatedBuild(
     const copyCommand = [
         'sh',
         '-c',
-        `set -e; sudo chown -R genie:genie '${mountTarget}'; rm -rf '${workdir}'; mkdir -p '${workdir}'; cp -a ${BUILD_SOURCE_MOUNT}/. '${workdir}'/`,
+        // A SUBMODULE's `.git` is a gitlink FILE (`gitdir: ../../.git/modules/...`)
+        // pointing OUTSIDE the copied subdir, so in the isolated copy it dangles —
+        // and `composer install`'s first `git show-ref` then dies "not a git
+        // repository" (genie #122). The build needs the working tree, not git
+        // history, so drop a dangling gitlink → git sees a clean non-VCS checkout
+        // and the build proceeds. A normal repo's `.git` is a DIRECTORY (`-f` is
+        // false), so it is left intact and `safe.directory` covers it as before.
+        `set -e; sudo chown -R genie:genie '${mountTarget}'; rm -rf '${workdir}'; mkdir -p '${workdir}'; cp -a ${BUILD_SOURCE_MOUNT}/. '${workdir}'/; if [ -f '${workdir}/.git' ]; then rm -f '${workdir}/.git'; fi`,
     ];
     deps.onProgress?.(`$ ${copyCommand.join(' ')}   # Copy the repo into an isolated build volume\n`);
     let copy;
