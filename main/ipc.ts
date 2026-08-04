@@ -1439,12 +1439,16 @@ function genieBrowserDisabled(): { ok: false; error: string } | null {
  * window that opened the Site Manager in another workspace still needs it,
  * because the rail icon is workspace-wide.
  *
- * LOCAL-only (like `workspaces:changed`): this drives THIS machine's containers,
- * so a host window — which shows the HOST's workspaces — must not repaint its
- * rail from a local site starting.
+ * Two audiences, like `workspaces:changed`: `broadcastLocal` fans to THIS client's
+ * own windows but SKIPS its host windows (a local site starting must not repaint a
+ * window that is driving another machine), while `mobileEmit` fans over `/ws/events`
+ * to REMOTE clients driving THIS host — so their Site Manager + rail re-read the
+ * HOST's sites (the client re-emits it via PASSTHROUGH_EVENTS onto the same local
+ * channel). No-op when nothing is connected.
  */
 export function broadcastDevServerChanged(): void {
     broadcastLocal('dev-server:changed');
+    mobileEmit('dev-server:changed');
 }
 
 /**
@@ -1452,14 +1456,18 @@ export function broadcastDevServerChanged(): void {
  * coming up — `pulling → building → starting → ready|failed`, with the build log
  * streaming — instead of a disabled button until the whole build finishes.
  *
- * LOCAL-only, exactly like {@link broadcastDevServerChanged}: it drives THIS
- * machine's containers, so a host window (showing the HOST's workspaces) must not
- * repaint from a local site's build progress. High-frequency (a chunk per log
- * line), which is why it is a distinct, payload-carrying channel rather than a
- * coarse "re-read everything" event.
+ * Two audiences, exactly like {@link broadcastDevServerChanged}: `broadcastLocal`
+ * reaches THIS client's own windows (skipping its host windows), and `mobileEmit`
+ * streams the tick over `/ws/events` to REMOTE clients driving THIS host, so a
+ * remote Site Manager card animates `pulling → building → starting → ready|failed`
+ * with the live build log instead of a dead disabled button (the payload carries
+ * the HOST's `workspaceId`, which the remote panel matches its own row against).
+ * High-frequency (a chunk per log line), which is why it is a distinct,
+ * payload-carrying channel rather than a coarse "re-read everything" event.
  */
 export function broadcastDevSiteProgress(progress: DevSiteProgress): void {
     broadcastLocal('dev-server:site-progress', progress);
+    mobileEmit('dev-server:site-progress', progress);
 }
 
 /**

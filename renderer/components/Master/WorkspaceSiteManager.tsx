@@ -16,7 +16,6 @@ import {
 } from '@particle-academy/react-fancy';
 import {
     api,
-    isRemoteWindow,
     type DevRuntimeInfo,
     type DevServiceCatalogEntry,
     type DevServiceInfo,
@@ -27,7 +26,6 @@ import {
 } from '../../lib/genie';
 import {
     canOpenInBrowser,
-    devServerGuidance,
     holdersNote,
     isolationNote,
     optionCaveat,
@@ -41,7 +39,6 @@ import {
     siteReach,
     siteStatusLabel,
     siteStatusTone,
-    type DevAvailability,
 } from '../../lib/dev-server';
 
 /** The live start progress the card overlays onto its row (Gap 2): the transient
@@ -122,26 +119,18 @@ export default function WorkspaceSiteManager({
      */
     const [progress, setProgress] = useState<Record<string, SiteProgress>>({});
 
-    /**
-     * Whether the Dev Server can be driven from HERE at all.
-     *
-     * A remote window is the case that matters: it drives another machine, and
-     * a container started on the CLIENT would mount the client's filesystem
-     * while the surface around it lists the HOST's workspaces.
-     * `remote-bridge.ts` makes the calls inert; this is what says so out loud
-     * instead of showing controls that do nothing.
-     */
-    const availability: DevAvailability = isRemoteWindow() ? 'remote' : 'ready';
-    const remoteNote = devServerGuidance(availability);
+    // The Site Manager drives whatever machine THIS window represents: in a remote
+    // window `api().devServer` routes to the HOST over the bridge (the same
+    // `runManageSite` / `runManageService` an agent reaches), so the panel manages
+    // the HOST's sites + services and the runtime banner reflects the HOST's
+    // container runtime — there is no local/remote fork here. A host that predates
+    // the `/api/desktop/dev-server/*` endpoints simply reads back no runtime + no
+    // sites (the catch arms below), the same graceful-empty a machine without Docker
+    // shows, rather than a broken panel.
     const runtimeInfo = runtimeSummary(runtime);
     const hasRuntime = runtimeInfo.tone === 'running';
 
     const refresh = useCallback(async () => {
-        if (availability === 'remote') {
-            setSites([]);
-            setServices([]);
-            return;
-        }
         try {
             setRuntime(await api().devServer.runtimeStatus());
         } catch {
@@ -163,7 +152,7 @@ export default function WorkspaceSiteManager({
         } catch {
             setServices([]);
         }
-    }, [workspace.id, availability]);
+    }, [workspace.id]);
 
     useEffect(() => {
         void refresh();
@@ -277,57 +266,49 @@ export default function WorkspaceSiteManager({
                     </Text>
                 </div>
 
-                {remoteNote ? (
-                    <Callout color="amber" icon={<Icon name="info" size="sm" />}>
-                        {remoteNote}
-                    </Callout>
-                ) : (
-                    <>
-                        <RuntimeBanner summary={runtimeInfo} />
-                        {error && <div className="set-note bad">{error}</div>}
+                <RuntimeBanner summary={runtimeInfo} />
+                {error && <div className="set-note bad">{error}</div>}
 
-                        <Tabs activeTab={tab} onTabChange={(t) => setTab(t as Tab)}>
-                            <Tabs.List>
-                                <Tabs.Tab value="sites">
-                                    Sites{siteRows.length ? ` (${runningSites}/${siteRows.length})` : ''}
-                                </Tabs.Tab>
-                                <Tabs.Tab value="services">
-                                    Services{serviceRows.length ? ` (${serviceRows.length})` : ''}
-                                </Tabs.Tab>
-                            </Tabs.List>
-                            <Tabs.Panels>
-                                <Tabs.Panel value="sites">
-                                    <SitesTab
-                                        workspace={workspace}
-                                        sites={sites}
-                                        busy={busy}
-                                        logs={logs}
-                                        progress={progress}
-                                        hasRuntime={hasRuntime}
-                                        adding={adding}
-                                        onAddingChange={setAdding}
-                                        hostNote={hostNote}
-                                        onAction={site}
-                                        onToggleLog={(id) => void toggleLog(id, 'site')}
-                                        onRefresh={() => void refresh()}
-                                    />
-                                </Tabs.Panel>
-                                <Tabs.Panel value="services">
-                                    <ServicesTab
-                                        services={services}
-                                        catalog={catalog}
-                                        busy={busy}
-                                        logs={logs}
-                                        connEnv={connEnv}
-                                        hasRuntime={hasRuntime}
-                                        onAction={service}
-                                        onToggleLog={(id) => void toggleLog(id, 'service')}
-                                    />
-                                </Tabs.Panel>
-                            </Tabs.Panels>
-                        </Tabs>
-                    </>
-                )}
+                <Tabs activeTab={tab} onTabChange={(t) => setTab(t as Tab)}>
+                    <Tabs.List>
+                        <Tabs.Tab value="sites">
+                            Sites{siteRows.length ? ` (${runningSites}/${siteRows.length})` : ''}
+                        </Tabs.Tab>
+                        <Tabs.Tab value="services">
+                            Services{serviceRows.length ? ` (${serviceRows.length})` : ''}
+                        </Tabs.Tab>
+                    </Tabs.List>
+                    <Tabs.Panels>
+                        <Tabs.Panel value="sites">
+                            <SitesTab
+                                workspace={workspace}
+                                sites={sites}
+                                busy={busy}
+                                logs={logs}
+                                progress={progress}
+                                hasRuntime={hasRuntime}
+                                adding={adding}
+                                onAddingChange={setAdding}
+                                hostNote={hostNote}
+                                onAction={site}
+                                onToggleLog={(id) => void toggleLog(id, 'site')}
+                                onRefresh={() => void refresh()}
+                            />
+                        </Tabs.Panel>
+                        <Tabs.Panel value="services">
+                            <ServicesTab
+                                services={services}
+                                catalog={catalog}
+                                busy={busy}
+                                logs={logs}
+                                connEnv={connEnv}
+                                hasRuntime={hasRuntime}
+                                onAction={service}
+                                onToggleLog={(id) => void toggleLog(id, 'service')}
+                            />
+                        </Tabs.Panel>
+                    </Tabs.Panels>
+                </Tabs>
             </div>
         </Modal>
     );

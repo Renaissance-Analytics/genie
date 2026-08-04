@@ -63,6 +63,13 @@ import {
 import { listAllProjects, getTynnBackend } from '../backend/registry';
 import { workspaceDocHealth, repairWorkspaceDocs } from '../workspace/create-agi';
 import { runHostSessionSave, type SessionSaveReport } from '../workspace/session-save';
+// Types only (erased at runtime): the Hosting-Manager request shapes. The
+// IMPLEMENTATIONS (`runManageSite` / `runManageService` / `runtimeInfo` /
+// `detectFolder`) are loaded LAZILY in the dev-server route — see `loadDevHosting`
+// — so merely importing api.ts (as the mobile unit tests do) never drags the
+// dev-server + MCP host-tools graph, which reaches `../ipc` → the Electron app
+// bootstrap, into the module graph.
+import type { ManageSiteRequest, ManageServiceRequest } from '../mcp/protocol';
 import { runPluginEditorFs } from '../plugins/editor-bridge';
 import {
     provisionWorkspaceTynn,
@@ -90,6 +97,52 @@ import type { ProjectJsonTynn } from '../workspace/project-json';
 
 /** Hard cap on an uploaded file's decoded size (25 MiB). */
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+/**
+ * The `manageSite` / `manageService` actions that MUTATE — a config edit, a
+ * container start/stop, a service acquire/release. These take the BATON on the
+ * Hosting-Manager REST surface exactly like process-control does; every OTHER
+ * action (list, status, detect, logs, catalog, inventory, connection) is a READ,
+ * so a view-only member still SEES the host's sites even without control. Kept
+ * beside the routes that read them so the gate can't fall out of step with the
+ * verbs `runManageSite` / `runManageService` actually branch on.
+ */
+const SITE_WRITE_ACTIONS = new Set(['create', 'update', 'start', 'restart', 'stop', 'remove']);
+const SERVICE_WRITE_ACTIONS = new Set(['add', 'start', 'stop', 'dedicated', 'remove']);
+
+/**
+ * The Hosting-Manager backend, loaded on first use. `runManageSite` /
+ * `runManageService` are the SAME functions the local `dev:site` / `dev:service`
+ * IPC and the MCP tools call — one implementation. They are pulled in DYNAMICALLY
+ * (not at the top of the file) on purpose: the dev-server + MCP host-tools graph
+ * transitively imports `../ipc` → `./tray` → the Electron app bootstrap, and a
+ * static import would drag all of that into every module that imports api.ts —
+ * including the lightweight mobile unit tests. The dev-server routes are the only
+ * ones that need it, and only when a remote actually drives hosting, so the module
+ * is fetched once here and memoised.
+ */
+let devHosting: {
+    runManageSite: typeof import('../mcp/dev-site-tools')['runManageSite'];
+    runtimeInfo: typeof import('../mcp/dev-site-tools')['runtimeInfo'];
+    runManageService: typeof import('../mcp/dev-service-tools')['runManageService'];
+    detectFolder: typeof import('../workspace/detect')['detectFolder'];
+} | null = null;
+async function loadDevHosting(): Promise<NonNullable<typeof devHosting>> {
+    if (!devHosting) {
+        const [site, service, detect] = await Promise.all([
+            import('../mcp/dev-site-tools'),
+            import('../mcp/dev-service-tools'),
+            import('../workspace/detect'),
+        ]);
+        devHosting = {
+            runManageSite: site.runManageSite,
+            runtimeInfo: site.runtimeInfo,
+            runManageService: service.runManageService,
+            detectFolder: detect.detectFolder,
+        };
+    }
+    return devHosting;
+}
 
 /**
  * WORKSPACE / AGENT-ENVIRONMENT settings a remote DESKTOP may read + write on THIS
@@ -1878,6 +1931,113 @@ export async function handleApi(
                 await runPluginEditorFs(pluginId, root, relPath, 'fs.writeBytes', String(pb.base64 ?? '')),
             ),
         );
+        return true;
+    }
+
+    // --- host-sourced Hosting Manager (dev sites + services) — for a remote DESKTOP ---
+    // The Site Manager in a remote window drives the HOST's containers: its sites +
+    // services are hosted on the HOST, so `devServer.site` / `.service` route here
+    // and run the SAME `runManageSite` / `runManageService` the local `dev:site` IPC
+    // and the MCP tools use — never a second implementation. Per-ACTION gating: reads
+    // (list/detect/status/logs/catalog/inventory) are auth-only so a view-only member
+    // still sees the host's sites; writes (create/update/start/stop/remove/add/…) take
+    // the baton exactly like process-control, and are audited. The workspace is
+    // resolved against THIS host's OWN served list (deps.listWorkspaces) so a remote
+    // can never target an arbitrary id — and the System / unattached workspace, which
+    // has no served row, is never reachable. MUST precede the generic `/api/desktop/`
+    // block below (which would 404 these as unknown desktop routes).
+    if (pathname.startsWith('/api/desktop/dev-server/')) {
+        const hosting = await loadDevHosting();
+        // Which container runtime is driving, or why none is — a pure probe (it never
+        // pulls or starts anything), so auth-only like every other read here.
+        if (pathname === '/api/desktop/dev-server/runtime' && method === 'GET') {
+            sendJson(res, 200, { runtime: await hosting.runtimeInfo() });
+            return true;
+        }
+        if (method !== 'POST') {
+            sendJson(res, 405, { error: 'method not allowed' });
+            return true;
+        }
+        let dsb: { workspaceId?: string; req?: Record<string, unknown> };
+        try {
+            dsb = await readJsonBody(req);
+        } catch {
+            sendJson(res, 400, { error: 'invalid body' });
+            return true;
+        }
+        const findWs = () =>
+            deps.listWorkspaces().find((w) => w.id === String(dsb.workspaceId ?? '')) ?? null;
+
+        // The repo subfolders a site can be created against — what the Add/Edit
+        // forms offer instead of asking the user to type an exact subfolder name.
+        // A read.
+        if (pathname === '/api/desktop/dev-server/repos') {
+            const ws = findWs();
+            if (!ws) {
+                sendJson(res, 404, { error: 'unknown workspace' });
+                return true;
+            }
+            let repos: string[] = [];
+            try {
+                repos = hosting.detectFolder(ws.path).repos ?? [];
+            } catch {
+                repos = [];
+            }
+            sendJson(res, 200, { repos });
+            return true;
+        }
+
+        const action = String(dsb.req?.action ?? '');
+
+        if (pathname === '/api/desktop/dev-server/site') {
+            // Writes take the baton BEFORE anything is resolved or run.
+            if (SITE_WRITE_ACTIONS.has(action) && guardControl()) return true;
+            const ws = findWs();
+            if (!ws) {
+                sendJson(res, 404, { ok: false, error: 'unknown workspace', sites: [] });
+                return true;
+            }
+            const result = await hosting.runManageSite(
+                ws,
+                (dsb.req ?? { action: 'list' }) as unknown as ManageSiteRequest,
+            );
+            if (SITE_WRITE_ACTIONS.has(action)) {
+                audit(
+                    `dev-site.${action}`,
+                    `${String(dsb.req?.id ?? dsb.req?.name ?? '')} in ${ws.project_name}`.trim(),
+                    actor,
+                );
+            }
+            sendJson(res, 200, result);
+            return true;
+        }
+
+        if (pathname === '/api/desktop/dev-server/service') {
+            if (SERVICE_WRITE_ACTIONS.has(action) && guardControl()) return true;
+            // `catalog` + `inventory` are machine-level — answerable with no
+            // workspace (what COULD run here / what IS running), so a null target is
+            // allowed for exactly those two, like the local IPC + MCP path.
+            const ws = findWs();
+            if (!ws && action !== 'catalog' && action !== 'inventory') {
+                sendJson(res, 404, { ok: false, error: 'unknown workspace', services: [] });
+                return true;
+            }
+            const result = await hosting.runManageService(
+                ws,
+                (dsb.req ?? { action: 'list' }) as unknown as ManageServiceRequest,
+            );
+            if (SERVICE_WRITE_ACTIONS.has(action)) {
+                audit(
+                    `dev-service.${action}`,
+                    `${String(dsb.req?.id ?? dsb.req?.engine ?? '')} in ${ws?.project_name ?? '-'}`.trim(),
+                    actor,
+                );
+            }
+            sendJson(res, 200, result);
+            return true;
+        }
+
+        sendJson(res, 404, { error: 'unknown dev-server route' });
         return true;
     }
 
