@@ -8,8 +8,24 @@ import {
 import { detectHostIds } from './host-ids';
 import { DEV_CONTAINER_HOLD_COMMAND, GENIE_DEV_BASE_IMAGE, WORKSPACE_MOUNT_TARGET } from './images';
 import { toMountSource } from './mount-path';
+import { CADDY_HTTPS_PORT } from './caddyfile';
 import type { HostIds } from './host-ids';
 import type { ContainerRef, ContainerRuntime } from './container-runtime';
+
+/** The published loopback host port for the sandbox's Caddy, or undefined when
+ *  the container doesn't publish {@link CADDY_HTTPS_PORT} (a pre-rework sandbox)
+ *  or the runtime can't report mappings. */
+async function readCaddyHostPort(
+    runtime: ContainerRuntime,
+    containerId: string,
+): Promise<number | undefined> {
+    try {
+        const maps = await runtime.portMappings(containerId);
+        return maps.find((m) => m.container === CADDY_HTTPS_PORT)?.host;
+    } catch {
+        return undefined;
+    }
+}
 
 /**
  * The per-workspace SANDBOX — the whole of what P1 delivers above the runtime.
@@ -71,6 +87,10 @@ export interface SandboxOk {
     created: { network: boolean; container: boolean };
     /** True when this call fetched the image (a first run, with consent). */
     pulledImage?: boolean;
+    /** The loopback host port published to the sandbox's Caddy (container
+     *  {@link CADDY_HTTPS_PORT}). The one door every `.gen` site is reached
+     *  through; undefined only on a runtime that can't report mappings. */
+    caddyHostPort?: number;
 }
 
 export interface SandboxFailed {
@@ -166,14 +186,23 @@ export async function ensureWorkspaceSandbox(
             // is restarted rather than replaced — its filesystem layer may hold
             // an installed toolchain the user has been working in.
             if (existing.state !== 'running') await deps.runtime.start(existing.id);
-            return {
-                ok: true,
-                workspaceId,
-                network: network.name,
-                container: { id: existing.id, name },
-                mountTarget,
-                created: { network: network.created, container: false },
-            };
+            const caddyHostPort = await readCaddyHostPort(deps.runtime, existing.id);
+            if (caddyHostPort !== undefined) {
+                return {
+                    ok: true,
+                    workspaceId,
+                    network: network.name,
+                    container: { id: existing.id, name },
+                    mountTarget,
+                    created: { network: network.created, container: false },
+                    caddyHostPort,
+                };
+            }
+            // A PRE-REWORK sandbox published no proxy port — Caddy can't be reached
+            // through it. Recreate once (running processes restart), so the sites
+            // model has its one published door. This migration self-heals on the
+            // first open after the update.
+            await deps.runtime.remove(existing.id).catch(() => {});
         }
 
         let pulledImage = false;
@@ -235,6 +264,11 @@ export async function ensureWorkspaceSandbox(
             network: network.name,
             labels: { [WORKSPACE_LABEL]: workspaceId, [ROLE_LABEL]: WORKSPACE_DEV_ROLE },
             mounts: [{ source: workspacePath, target: mountTarget }],
+            // The ONE published door: the sandbox's Caddy listens on
+            // CADDY_HTTPS_PORT and every `.gen` site is reached through it (routed
+            // by SNI). Loopback only — a workspace's sites are not put on the LAN.
+            // Ephemeral host port; read back below.
+            ports: [{ container: CADDY_HTTPS_PORT, hostIp: '127.0.0.1' }],
             workdir: mountTarget,
             ...(Object.keys(identityEnv).length ? { env: identityEnv } : {}),
             ...(keepId ? { userns: 'keep-id' as const } : {}),
@@ -248,6 +282,7 @@ export async function ensureWorkspaceSandbox(
             ...(deps.cpus ? { cpus: deps.cpus } : {}),
         });
 
+        const caddyHostPort = await readCaddyHostPort(deps.runtime, container.id);
         return {
             ok: true,
             workspaceId,
@@ -256,6 +291,7 @@ export async function ensureWorkspaceSandbox(
             mountTarget,
             created: { network: network.created, container: true },
             ...(pulledImage ? { pulledImage: true } : {}),
+            ...(caddyHostPort !== undefined ? { caddyHostPort } : {}),
         };
     } catch (e) {
         return failed('error', messageOf(e));

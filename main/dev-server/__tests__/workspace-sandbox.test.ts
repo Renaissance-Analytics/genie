@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GENIE_DEV_BASE_IMAGE, WORKSPACE_MOUNT_TARGET } from '../images';
 import { ensureWorkspaceSandbox, teardownWorkspaceSandbox } from '../workspace-sandbox';
 import { WORKSPACE_LABEL } from '../argv';
+import { CADDY_HTTPS_PORT } from '../caddyfile';
 import type {
     ContainerRuntime,
     ContainerSpec,
@@ -46,6 +47,9 @@ interface FakeOptions {
     kind?: 'docker' | 'podman';
     /** What a pull does. Default: succeeds and makes the image present. */
     pullFails?: string;
+    /** Simulate a PRE-REWORK sandbox: it publishes no Caddy port, so an adopt
+     *  must recreate it. Default false (a proper sandbox reports the port). */
+    caddyPortless?: boolean;
 }
 
 const DOCKER_OK: RuntimeDetection = { kind: 'docker', version: '27.3.1', probes: [] };
@@ -152,7 +156,11 @@ function fakeRuntime(opts: FakeOptions = {}): Fake {
             );
         },
         async portMappings() {
-            return [];
+            // A proper (post-rework) sandbox publishes the Caddy https port; a
+            // pre-rework one publishes nothing, forcing an adopt to recreate it.
+            return opts.caddyPortless
+                ? []
+                : [{ container: CADDY_HTTPS_PORT, host: 51820, hostIp: '127.0.0.1' }];
         },
     };
 }
@@ -184,10 +192,33 @@ describe('ensureWorkspaceSandbox', () => {
         expect(spec?.workdir).toBe(WORKSPACE_MOUNT_TARGET);
     });
 
-    it('publishes nothing — P1 has no sites, so nothing is exposed yet', async () => {
+    it('publishes ONE loopback https port for the workspace Caddy — the single .gen door', async () => {
         const runtime = fakeRuntime();
-        await ensureWorkspaceSandbox('acme', WS_PATH, { runtime, platform: 'linux' });
-        expect(runtime.ran[0]?.ports ?? []).toEqual([]);
+        const result = await ensureWorkspaceSandbox('acme', WS_PATH, { runtime, platform: 'linux' });
+        expect(runtime.ran[0]?.ports).toEqual([{ container: CADDY_HTTPS_PORT, hostIp: '127.0.0.1' }]);
+        // The published host port is read back and surfaced for the router.
+        expect(result).toMatchObject({ ok: true, caddyHostPort: 51820 });
+    });
+
+    it('recreates a PRE-REWORK sandbox that has no published Caddy port (one-time migration)', async () => {
+        const runtime = fakeRuntime({
+            caddyPortless: true,
+            existingNetworks: ['genie-ws-acme'],
+            existing: [
+                {
+                    id: 'id-genie-ws-acme-dev',
+                    name: 'genie-ws-acme-dev',
+                    image: GENIE_DEV_BASE_IMAGE,
+                    state: 'running',
+                    workspaceId: 'acme',
+                },
+            ],
+        });
+        const result = await ensureWorkspaceSandbox('acme', WS_PATH, { runtime, platform: 'linux' });
+        // The portless one is removed and a fresh, port-publishing one created.
+        expect(runtime.removed).toContain('id-genie-ws-acme-dev');
+        expect(result).toMatchObject({ ok: true, created: { container: true } });
+        expect(runtime.ran[0]?.ports).toEqual([{ container: CADDY_HTTPS_PORT, hostIp: '127.0.0.1' }]);
     });
 
     it('keeps the container alive across restarts and holds it open', async () => {
