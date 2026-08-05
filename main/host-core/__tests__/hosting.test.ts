@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildHostingDeps, type HostingPorts } from '../hosting';
+import { buildHostingDeps, initHosting, type HostingPorts } from '../hosting';
+import { devSiteManager } from '../../dev-server/site-manager';
+import { devServiceManager } from '../../dev-server/services/service-manager';
+import { devLifecycle } from '../../dev-server/lifecycle';
 
 /**
  * The host-owned HOSTING seam.
@@ -74,5 +77,20 @@ describe('buildHostingDeps — the host-core hosting seam', () => {
         const opener = vi.fn(async () => ({ ok: true }));
         expect(buildHostingDeps(fakePorts()).siteTools.openInBrowser).toBeUndefined();
         expect(buildHostingDeps(fakePorts({ openInBrowser: opener })).siteTools.openInBrowser).toBe(opener);
+    });
+});
+
+describe('initHosting — stands the managers up from ports', () => {
+    it('constructs the site + service + lifecycle managers and registers them process-wide', () => {
+        // The exact path a shell boot relies on: after initHosting, the MCP tools
+        // (which read the process-wide singletons) resolve a live manager. Before
+        // this seam that only happened in the desktop boot; now any host does it.
+        const handles = initHosting(fakePorts());
+        expect(handles.sites).toBe(devSiteManager());
+        expect(handles.services).toBe(devServiceManager());
+        expect(handles.lifecycle).toBe(devLifecycle());
+        expect(devSiteManager()).not.toBeNull();
+        expect(devServiceManager()).not.toBeNull();
+        expect(devLifecycle()).not.toBeNull();
     });
 });

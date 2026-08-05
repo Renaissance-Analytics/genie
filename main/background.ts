@@ -35,16 +35,10 @@ import {
 import { listLocalEnabledGenSites, resolveEnabledSite } from './sites/local-sites';
 import { remoteGenUrl } from './sites/gen-url';
 import { LOCAL_CONN_KEY, openTestingBrowser } from './testing-browser';
-import { initDevSites, devSiteManager } from './dev-server/site-manager';
-import { devLifecycle, initDevLifecycle } from './dev-server/lifecycle';
-import {
-    initDevServices,
-    devServiceManager,
-    devServiceEnvFor,
-} from './dev-server/services/service-manager';
+import { devLifecycle } from './dev-server/lifecycle';
+import { devServiceEnvFor } from './dev-server/services/service-manager';
 import { resolveContainerRuntime } from './dev-server';
-import { waitForHttp, waitForPort } from './dev-server/port-probe';
-import { registerDevSiteTools } from './mcp/dev-site-tools';
+import { initHosting } from './host-core/hosting';
 import {
     writeWorkspaceAgentMcp,
     healTynnLiteralToken,
@@ -1041,77 +1035,44 @@ app.whenReady().then(async () => {
     });
 
     initDatabase(app.getPath('userData'));
-    // The container DEV SERVER (#234 P2). Creating the manager starts NOTHING —
-    // it probes no runtime and touches no daemon until a site is acted on, so a
-    // machine with no Docker pays nothing for this line. Sites are started by
-    // `manageSite`, by the Site Manager, or by a workspace the user opens —
-    // never implicitly on boot of a workspace nobody asked to serve.
-    // The container Dev Server's SERVICES (#234 P3). Created BEFORE the site
-    // manager because the latter reads this one's env when it starts a site —
-    // creating it starts nothing either way, and no engine is pulled or run
-    // until a workspace actually asks for one.
-    initDevServices({
+    // The container DEV SERVER — sites (#234 P2), services (P3) and their
+    // lifecycle (P4). Hosting is an agent ability, so the WIRING lives in
+    // host-core's `initHosting`; this desktop shell supplies only the Electron +
+    // genie.db-backed ports (the headless genie-cloud host supplies its own).
+    // Creating the managers starts NOTHING — no runtime is probed and no daemon
+    // touched until a site or service is acted on, so a machine with no Docker
+    // pays nothing, and nothing comes up on boot of a workspace nobody asked to
+    // serve. `initHosting` builds services before sites (a site reads its
+    // workspace's service env when it starts) and reads both lazily for the
+    // lifecycle — the ordering the four inline calls used to encode by hand.
+    initHosting({
         resolveRuntime: () => resolveContainerRuntime(),
         listWorkspaces: () =>
             listWorkspaces().map((w) => ({ id: w.id, path: w.path, label: w.project_name })),
-        devServicesFor: (id) => getWorkspaceDevServices(id),
-        // Machine-scoped, minted once per engine CONTAINER: a shared engine's
-        // superuser credential cannot live in any one workspace's row.
-        engineAdmin: (req) => getOrCreateDevServiceEngine(req),
-        // REQUIRED, not an optimisation. Mailpit, Meilisearch and MinIO have no
-        // in-container readiness check, so `waitReady` has nothing to ask and —
-        // without this — answers "not ready" honestly but immediately, failing
-        // every acquire of those three with "started but never became ready".
-        // Found by the live smoke; a unit test with a fake runtime cannot see it.
-        probeReady: ({ port, kind, timeoutMs }) =>
-            kind === 'http' ? waitForHttp(port, timeoutMs) : waitForPort(port, timeoutMs),
-        confirmImagePull: confirmContainerImagePull,
-        onChanged: () => broadcastDevServerChanged(),
-    });
-    initDevSites({
-        resolveRuntime: () => resolveContainerRuntime(),
-        // A site gets its workspace's services as env — and asking for them
-        // ENSURES they are running first, so a dev server never comes up
-        // pointed at an engine that is not there.
-        serviceEnvFor: async (workspaceId) => {
-            const services = devServiceManager();
-            if (!services) return {};
-            for (const row of services.list(workspaceId)) {
-                if (row.enabled) await services.acquire(workspaceId, row.serviceId);
-            }
-            return devServiceEnvFor(workspaceId);
-        },
-        listWorkspaces: () =>
-            listWorkspaces().map((w) => ({ id: w.id, path: w.path, label: w.project_name })),
-        devSitesFor: (id) => getWorkspaceDevSites(id),
-        confirmImagePull: confirmContainerImagePull,
-        // The `.gen` change event, so the header popover, the rail icon, the
-        // Site Manager and the Testing Browser's resolver all re-pull when a
-        // container starts or stops.
-        onChanged: () => broadcastDevServerChanged(),
-        // Live START progress (Gap 2) — pushed to any open Site Manager so a
-        // card shows `pulling → building → starting → ready` with the build log
-        // streaming, instead of a disabled button until the whole build finishes.
-        onProgress: (progress) => broadcastDevSiteProgress(progress),
-    });
-    // The app LIFECYCLE hooks (#234 P4). Created after both managers because it
-    // orchestrates them, and reading them lazily so the order stops mattering.
-    // Creating it starts nothing; `onBoot` (below) only ADOPTS what is already
-    // running, and `onWorkspaceOpen` only warms a workspace that uses this.
-    initDevLifecycle({
-        resolveRuntime: () => resolveContainerRuntime(),
         workspaceFor: (id) => {
             const row = getWorkspace(id);
             return row ? { id: row.id, path: row.path, label: row.project_name } : null;
         },
         devSitesFor: (id) => getWorkspaceDevSites(id),
         devServicesFor: (id) => getWorkspaceDevServices(id),
-        sites: () => devSiteManager(),
-        services: () => devServiceManager(),
-    });
-    // `manageSite open` — the ONE desktop-shaped action, injected so the headless
-    // build reports "no browser here" instead of failing obscurely.
-    registerDevSiteTools({
+        // Machine-scoped, minted once per engine CONTAINER: a shared engine's
+        // superuser credential cannot live in any one workspace's row.
+        engineAdmin: (req) => getOrCreateDevServiceEngine(req),
+        // This workspace's provisioned services, as environment. `initHosting`
+        // ENSURES they are up (acquire) before handing them to a starting site,
+        // so a dev server never comes up pointed at an engine that is not there.
+        devServiceEnvFor: (id) => devServiceEnvFor(id),
+        confirmImagePull: confirmContainerImagePull,
+        // The `.gen` change event, so the header popover, the rail icon, the Site
+        // Manager and the Testing Browser's resolver all re-pull when a container
+        // starts or stops. Fires for both managers.
+        onChanged: () => broadcastDevServerChanged(),
+        // Live site START progress (Gap 2) — pushed to any open Site Manager so a
+        // card shows `pulling → building → starting → ready` with the build log
+        // streaming, instead of a disabled button until the build finishes.
+        onSiteProgress: (progress) => broadcastDevSiteProgress(progress),
+        // `manageSite open` — the ONE desktop-shaped action; the headless build
+        // leaves it off and `open` says "no browser here" rather than failing.
         openInBrowser: (genName) =>
             openTestingBrowser(LOCAL_CONN_KEY, 'This machine', remoteGenUrl(genName)),
     });
