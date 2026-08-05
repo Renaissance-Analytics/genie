@@ -8,6 +8,9 @@ import {
     type DevSiteConfig,
     type DevSites,
 } from './dev-server/sites-config';
+import { resolveDevSites, persistDevSites, type DevSitesStore } from './workspace/hosting-config';
+import { isEnvelopeFolder } from './workspace/envelope';
+import { readProjectJson, writeProjectJson } from './workspace/project-json';
 import {
     devServiceIdFor,
     generateServicePassword,
@@ -1882,19 +1885,39 @@ export function listWorkspaceIssuewatchAgents(
 // id is workspace-SCOPED (two workspaces can each have a `web`).
 // Parse/sanitize live in main/dev-server/sites-config.ts.
 
-/** This workspace's stored dev sites (NULL/absent ⇒ {} = none defined). */
+/**
+ * The dev-site store: the `.agi` envelope (project.json `sites`) is the source of
+ * truth so config travels with the repo; genie.db is the mirror. A non-envelope
+ * workspace has no project.json and stays genie.db-only. Policy in
+ * {@link resolveDevSites}/{@link persistDevSites}; this only supplies the raw
+ * genie.db + envelope IO (all resolved lazily so nothing runs before the DB is up).
+ */
+const devSitesStore: DevSitesStore = {
+    workspacePath: (id) => getWorkspace(id)?.path ?? null,
+    isEnvelope: (folder) => isEnvelopeFolder(folder),
+    readEnvelopeSites: (folder) => readProjectJson(folder)?.sites ?? null,
+    writeEnvelopeSites: (folder, sites) => writeProjectJson(folder, { sites }),
+    dbRead: (id) => {
+        const row = getDb()
+            .prepare<[string], { dev_sites: string | null } | undefined>(
+                'SELECT dev_sites FROM workspaces WHERE id = ?',
+            )
+            .get(id);
+        return parseDevSites(row?.dev_sites ?? null);
+    },
+    dbWrite: (id, sites) => {
+        getDb().prepare('UPDATE workspaces SET dev_sites = ? WHERE id = ?').run(JSON.stringify(sites), id);
+    },
+};
+
+/** This workspace's dev sites — envelope-authoritative (NULL/absent ⇒ {} = none). */
 export function getWorkspaceDevSites(id: string): DevSites {
-    const row = getDb()
-        .prepare<[string], { dev_sites: string | null } | undefined>(
-            'SELECT dev_sites FROM workspaces WHERE id = ?',
-        )
-        .get(id);
-    return parseDevSites(row?.dev_sites ?? null);
+    return resolveDevSites(devSitesStore, id);
 }
 
-/** Replace this workspace's whole dev-site map (JSON-encoded). */
+/** Replace this workspace's whole dev-site map — writes the envelope + mirror. */
 export function setWorkspaceDevSites(id: string, sites: DevSites): void {
-    getDb().prepare('UPDATE workspaces SET dev_sites = ? WHERE id = ?').run(JSON.stringify(sites), id);
+    persistDevSites(devSitesStore, id, sites);
 }
 
 /**

@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import type { DevSites } from '../dev-server/sites-config';
 
 /**
  * Shared config between Genie and the Aionima AGI gateway. Unknown
@@ -69,6 +70,14 @@ export interface ProjectJson {
         mode?: 'development' | 'staging' | 'production';
     };
     repos?: ProjectJsonRepo[];
+    /**
+     * The workspace's dev-site definitions, keyed by site id — the hosting config
+     * `manageSite` reads and writes. Saved HERE (not only in the desktop's
+     * genie.db) so it is git-versioned and travels with the envelope; genie.db is
+     * a mirror. See {@link ../hosting-config}. Kept in the shared envelope schema
+     * (agi#178). Absent ⇒ no sites defined yet.
+     */
+    sites?: DevSites;
     /** Tynn project link for auto-provisioning. MAPPING ONLY — no secret. */
     tynn?: ProjectJsonTynn;
     // NB: project.json ships inside the monorepo and must NEVER carry a
