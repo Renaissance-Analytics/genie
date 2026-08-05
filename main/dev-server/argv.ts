@@ -399,6 +399,17 @@ export function runArgv(spec: ContainerSpec, opts: ArgvOptions): string[] {
         args.push('--publish', `${hostIp}:${port.host ?? ''}:${port.container}/${protocol}`);
     }
 
+    for (const [host, ip] of Object.entries(spec.extraHosts ?? {})) {
+        // `--add-host host:ip`. The `host-gateway` special value resolves to the
+        // Docker host — on Linux too, where `host.docker.internal` is otherwise
+        // undefined — so a sandboxed site reaches a HOST manageProcess service via
+        // GENIE_HOST_GATEWAY (#130). Same flag on docker and podman.
+        if (!/^[A-Za-z0-9.-]+$/.test(host) || /[,\s]/.test(ip)) {
+            throw new Error(`dev-server: refusing add-host ${JSON.stringify(`${host}:${ip}`)}`);
+        }
+        args.push('--add-host', `${host}:${ip}`);
+    }
+
     for (const [name, value] of Object.entries(spec.env ?? {})) {
         if (!ENV_NAME.test(name)) {
             throw new Error(`dev-server: refusing env name ${JSON.stringify(name)}`);

@@ -271,6 +271,9 @@ describe('start', () => {
             'run',
             'dev',
         ]);
+        // The site is told how to reach a HOST manageProcess service — its own
+        // localhost is the sandbox, not the host (#130).
+        expect(start?.env?.GENIE_HOST_GATEWAY).toBe('host.docker.internal');
     });
 
     it('serves the LIVE workspace — the sandbox bind-mounts it, nothing is copied', async () => {
@@ -699,9 +702,11 @@ describe('service env injection (#234 P3)', () => {
         expect(status.state).toBe('running');
     });
 
-    it('is absent by default — a plain site carries no injected service env', async () => {
+    it('carries only the host-gateway by default — no injected SERVICE env for a plain site', async () => {
         const runtime = fakeRuntime();
         await manager(runtime).start('acme', SITE_ID);
-        expect(startExec(runtime)?.env).toBeUndefined();
+        // The host-gateway is ALWAYS present (#130); a plain site with no
+        // manageService still carries no DB_HOST/DATABASE_URL etc.
+        expect(startExec(runtime)?.env).toEqual({ GENIE_HOST_GATEWAY: 'host.docker.internal' });
     });
 });

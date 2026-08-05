@@ -164,6 +164,23 @@ describe('runArgv', () => {
         expect(valueAfter(args, '--publish')).toBe('127.0.0.1::5173/tcp');
     });
 
+    it('maps extraHosts to --add-host so a site can reach a host process (#130)', () => {
+        const args = runArgv(spec({ extraHosts: { 'host.docker.internal': 'host-gateway' } }), {
+            kind: 'docker',
+            platform: 'linux',
+        });
+        expect(valueAfter(args, '--add-host')).toBe('host.docker.internal:host-gateway');
+    });
+
+    it('refuses an add-host with shell/whitespace injection in the value', () => {
+        expect(() =>
+            runArgv(spec({ extraHosts: { 'host.docker.internal': 'a b' } }), {
+                kind: 'docker',
+                platform: 'linux',
+            }),
+        ).toThrow(/add-host/i);
+    });
+
     it('never adds --network host or --privileged', () => {
         // The sandbox boundary IS the isolated network. Either flag dissolves it.
         const args = runArgv(spec({ ports: [{ container: 80 }] }), {
