@@ -62,7 +62,7 @@ describe('buildEngineInventory', () => {
             engine: 'postgres',
             version: '16',
             engineKey: 'postgres-16',
-            image: 'postgres:16-alpine',
+            image: 'pgvector/pgvector:pg16',
             installed: false,
             state: 'absent',
             holders: 0,
@@ -84,7 +84,7 @@ describe('buildEngineInventory', () => {
     it('separates INSTALLED (image pulled) from RUNNING (container up)', () => {
         const rows = buildEngineInventory({
             ...bare,
-            images: new Set(['postgres:16-alpine', 'redis:7-alpine']),
+            images: new Set(['pgvector/pgvector:pg16', 'redis:7-alpine']),
             containers: new Map([['genie-svc-postgres-16', { id: 'c1', state: 'running' }]]),
         });
         expect(rowFor(rows, 'postgres-16')).toMatchObject({
@@ -237,7 +237,7 @@ describe('buildEngineInventory', () => {
                 },
             ],
         }).map((r) => r.image);
-        expect(wanted).toContain('postgres:16-alpine');
+        expect(wanted).toContain('pgvector/pgvector:pg16');
         expect(wanted).toContain('ghcr.io/acme/thing:2');
     });
 });
