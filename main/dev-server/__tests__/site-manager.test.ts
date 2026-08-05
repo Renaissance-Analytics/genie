@@ -515,6 +515,30 @@ describe('adopt — re-attach to processes still running after a Genie restart',
         expect(runtime.ran).toHaveLength(0);
         expect(m.genSites().map((g) => g.siteId)).toEqual([SITE_ID]);
     });
+
+    it('reports an adopted SLOW-but-healthy site as ready — the probe budget clears real latency', async () => {
+        // A single-threaded dev server (`php artisan serve`) re-bootstraps per
+        // request: ~2.5s every response. An adopted site is serving 200s the whole
+        // time — but if the adopt probe's budget is shorter than one real request,
+        // it reads not-ready forever (the `ready:false` false-negative). Model the
+        // probe as ready only when its budget covers real per-request latency.
+        const runtime = fakeRuntime({
+            existing: [
+                {
+                    id: SANDBOX_ID,
+                    name: SANDBOX,
+                    image: 'genie-dev-base:1',
+                    state: 'running',
+                    workspaceId: 'acme',
+                },
+            ],
+        });
+        const m = manager(runtime, { [SITE_ID]: SITE }, {
+            probeReady: async ({ timeoutMs }) => timeoutMs >= 2_500,
+        });
+        await m.adopt();
+        expect(m.list('acme')[0]?.ready).toBe(true);
+    });
 });
 
 // --- reconfigure ------------------------------------------------------------

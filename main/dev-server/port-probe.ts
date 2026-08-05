@@ -37,8 +37,17 @@ export const DEFAULT_READY_TIMEOUT_MS = 15_000;
 /** Gap between attempts. Short — a bound port usually answers immediately. */
 const RETRY_MS = 250;
 
-/** Ceiling on any single attempt, so one hung connect cannot eat the budget. */
-const ATTEMPT_CAP_MS = 2_000;
+/**
+ * Ceiling on any single attempt, so one genuinely hung connect cannot eat the
+ * whole budget — but generous, because for an HTTP surface a SLOW response is
+ * readiness, not a hang. A single-threaded dev server that re-bootstraps per
+ * request answers in seconds every time (`php artisan serve`: measured ~2.5s
+ * warm, ~7s on the cold first hit); capping an attempt below that destroys the
+ * request before the honest response lands, and a serving site reads not-ready
+ * forever. This cap must clear real per-request latency; it still bounds a true
+ * black hole (a connection accepted but never answered) within the total budget.
+ */
+const ATTEMPT_CAP_MS = 10_000;
 
 /** Run `attempt` until it is true or the budget runs out. Never throws. */
 async function poll(

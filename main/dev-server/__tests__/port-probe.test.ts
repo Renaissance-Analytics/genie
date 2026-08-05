@@ -95,6 +95,24 @@ function listenTls(status: () => number): Promise<number> {
     });
 }
 
+/** An https listener that has BOUND and answers 200, but delays its response by
+ *  `delayMs` on EVERY request — the single-threaded, no-opcache dev server that
+ *  re-bootstraps the framework per request (measured ~2.5s first-byte on `php
+ *  artisan serve`, ~7s on the cold first hit). A slow real response is readiness,
+ *  not a hang, so the probe must wait for it rather than cap it off. */
+function listenTlsSlow(delayMs: number): Promise<number> {
+    const server = https.createServer({ cert: TEST_CERT, key: TEST_KEY }, (_req, res) => {
+        setTimeout(() => {
+            res.writeHead(200);
+            res.end('x');
+        }, delayMs);
+    });
+    servers.push(server);
+    return new Promise((resolve) => {
+        server.listen(0, '127.0.0.1', () => resolve((server.address() as net.AddressInfo).port));
+    });
+}
+
 /** Listen on an ephemeral port with the given connection behaviour. */
 function listen(onConnection: (socket: net.Socket) => void): Promise<number> {
     const server = net.createServer(onConnection);
@@ -197,5 +215,16 @@ describe('waitForHttpsSni — readiness THROUGH the sandbox Caddy', () => {
 
     it('is false, not a throw, when nothing is listening', async () => {
         expect(await waitForHttpsSni(await closedPort(), 'web.acme.gen', 300)).toBe(false);
+    });
+
+    it('is ready for a bound server SLOWER than one attempt but within budget', async () => {
+        // The `ready:false` false-negative: `php artisan serve` is single-threaded
+        // and re-bootstraps per request, so every response takes ~2.5s (the first
+        // ~7s). The site serves 200s through Caddy the whole time — it is healthy,
+        // just slow. If a single probe attempt is capped BELOW real per-request
+        // latency, every attempt is destroyed before the honest response lands and
+        // a serving site reads not-ready forever. A slow real response is readiness.
+        const port = await listenTlsSlow(2_400); // > the old 2_000ms attempt cap
+        expect(await waitForHttpsSni(port, 'web.acme.gen', 12_000)).toBe(true);
     });
 });

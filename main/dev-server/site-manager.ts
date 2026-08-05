@@ -287,8 +287,17 @@ function repoCwd(mountTarget: string, repo: string): string | null {
     return `${mountTarget}/repos/${repo}`;
 }
 
-/** How long an ADOPTED site gets to answer before it is reported not-ready. */
-const ADOPT_PROBE_MS = 2_000;
+/**
+ * How long an ADOPTED site gets to answer before it is reported not-ready.
+ *
+ * NOT short: an adopted process is up, but "up" does not mean "answers at once".
+ * A single-threaded dev server (`php artisan serve`) re-bootstraps per request,
+ * so a healthy site still takes ~2.5s to respond (the cold first hit ~7s). A
+ * budget below that reports a serving site as not-ready — the `ready:false`
+ * false-negative — so it must clear real per-request latency, like the start
+ * probe's per-attempt cap in port-probe.ts.
+ */
+const ADOPT_PROBE_MS = 12_000;
 
 export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
     // --- observable startup (Gap 2) -----------------------------------------
