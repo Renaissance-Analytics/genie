@@ -207,6 +207,9 @@ describe('ensureWorkspaceSandbox', () => {
         expect(spec?.labels?.[WORKSPACE_LABEL]).toBe('acme');
         expect(spec?.mounts).toEqual([{ source: WS_PATH, target: WORKSPACE_MOUNT_TARGET }]);
         expect(spec?.workdir).toBe(WORKSPACE_MOUNT_TARGET);
+        // The sandbox maps host.docker.internal → host-gateway so a site can
+        // reach a HOST manageProcess service (#130).
+        expect(spec?.extraHosts).toEqual({ 'host.docker.internal': 'host-gateway' });
     });
 
     it('publishes ONE loopback https port for the workspace Caddy — the single .gen door', async () => {

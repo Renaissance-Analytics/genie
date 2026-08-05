@@ -185,6 +185,14 @@ export interface ContainerSpec {
     ports?: PortPublish[];
     /** Defaults to the workspace's own network — the isolation boundary. */
     network?: string;
+    /**
+     * Extra `host:ip` entries (`--add-host`). The sandbox sets
+     * `host.docker.internal → host-gateway` so a site can reach a HOST
+     * `manageProcess` service (Docker Desktop resolves that name already; Linux
+     * needs the `host-gateway` add-host). Surfaced to the app as
+     * `GENIE_HOST_GATEWAY` (#130).
+     */
+    extraHosts?: Record<string, string>;
     labels?: Record<string, string>;
     workdir?: string;
     restart?: 'no' | 'unless-stopped';

@@ -139,6 +139,11 @@ export interface SandboxDeps {
     hostIds?: HostIds | null;
 }
 
+/** The hostname the sandbox maps to the Docker host (`--add-host … :host-gateway`),
+ *  so a site can reach a HOST `manageProcess` service. Surfaced to sites as the
+ *  `GENIE_HOST_GATEWAY` env var (#130). */
+export const HOST_GATEWAY_HOSTNAME = 'host.docker.internal';
+
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /**
@@ -319,6 +324,12 @@ export async function ensureWorkspaceSandbox(
             command: [...DEV_CONTAINER_HOLD_COMMAND],
             network: network.name,
             labels: { [WORKSPACE_LABEL]: workspaceId, [ROLE_LABEL]: WORKSPACE_DEV_ROLE },
+            // Reach a HOST `manageProcess` service from inside the sandbox — a
+            // site's `localhost` is the SANDBOX, not the host, so a host-bound
+            // manager is otherwise unreachable. `host-gateway` resolves to the
+            // Docker host on Linux too (Docker Desktop provides the name already).
+            // Surfaced to sites as `GENIE_HOST_GATEWAY` (#130).
+            extraHosts: { [HOST_GATEWAY_HOSTNAME]: 'host-gateway' },
             mounts: [{ source: workspacePath, target: mountTarget }],
             // The ONE published door: the sandbox's Caddy listens on
             // CADDY_HTTPS_PORT and every `.gen` site is reached through it (routed

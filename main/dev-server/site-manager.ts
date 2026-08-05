@@ -10,7 +10,7 @@ import {
     startSiteProcess,
     stopSiteProcess,
 } from './site-process';
-import { ensureWorkspaceSandbox } from './workspace-sandbox';
+import { ensureWorkspaceSandbox, HOST_GATEWAY_HOSTNAME } from './workspace-sandbox';
 import { sandboxCommandFor } from './sites-config';
 import type { ContainerRuntime, RuntimeDetection } from './container-runtime';
 import type { HostIds } from './host-ids';
@@ -576,6 +576,12 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 }
             }
             const env: Record<string, string> = {
+                // Weakest, so a user can override: how to reach a HOST
+                // `manageProcess` service from inside the sandbox. A site's
+                // `localhost` is the SANDBOX, not the host, so a host-bound manager
+                // is unreachable via 127.0.0.1 — apps use GENIE_HOST_GATEWAY
+                // instead (backed by the sandbox's host-gateway add-host, #130).
+                GENIE_HOST_GATEWAY: HOST_GATEWAY_HOSTNAME,
                 ...planHostAllowlist({
                     genName: config.genName,
                     ...(config.framework ? { framework: config.framework } : {}),

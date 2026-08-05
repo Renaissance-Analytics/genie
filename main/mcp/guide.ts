@@ -115,9 +115,11 @@ always wins over a recipe. Actions (\`action\`):
   the definition.
 READ THE RESULT: a failed BUILD is the most common reason a site does not come
 up, and \`buildLog\` carries it. EXPOSURE (agents get this wrong): the container's
-\`localhost\` IS the workspace, so the app reaches its own processes normally, and
-a DATABASE OR CACHE IS NEVER EXPOSED — those are reached over the workspace
-network through the env \`manageService\` injects. Only what the BROWSER connects
+\`localhost\` is the SANDBOX — the app reaches its own IN-sandbox processes there,
+but a HOST \`manageProcess\` service is NOT on \`localhost\`: reach it at
+\`\${GENIE_HOST_GATEWAY}:<port>\` (injected into every site). A DATABASE OR CACHE IS
+NEVER EXPOSED — those are reached over the workspace network through the env
+\`manageService\` injects. Only what the BROWSER connects
 to is exposed, via \`exposed:[{name,port,protocol,reason}]\`; a surface that
 cannot say why the browser needs it is refused. A production server must bind
 \`0.0.0.0\`, never \`localhost\`. Requires Docker or Podman; when neither is usable
