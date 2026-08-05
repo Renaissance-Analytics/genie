@@ -216,6 +216,24 @@ export async function manageSiteForMcp(
  * resolves it from the window's own workspace. Everything after that point is
  * identical, and deliberately so — see the file header.
  */
+/**
+ * Advisory notes to surface on `create` — things recorded but not the trap they
+ * look like. Pure, so it is tested without the DB/manager the rest of create
+ * needs. Currently: a custom `image` is a legacy per-site-container concept; in
+ * the sandbox-serve model a site runs its command inside the shared workspace dev
+ * sandbox, so the ref is stored but never used — say so rather than let it be a
+ * silent trap (genie #125).
+ */
+export function createAdvisoryNotes(req: Pick<ManageSiteRequest, 'image'>): string[] {
+    const notes: string[] = [];
+    if (req.image) {
+        notes.push(
+            'The custom `image` is recorded but NOT used at runtime — a site runs its command inside the workspace dev sandbox, not a per-site image container. Put extra runtime tools in the workspace / its dev image, not a per-site `image`.',
+        );
+    }
+    return notes;
+}
+
 export async function runManageSite(
     ws: DevSiteTarget,
     req: ManageSiteRequest,
@@ -379,12 +397,15 @@ export async function runManageSite(
                     );
                 }
 
+                // Advisory notes, surfaced on CREATE where they are actionable.
+                const notes = createAdvisoryNotes(req);
                 if (req.enabled === false) {
                     return {
                         ok: true,
                         sites: sites(),
                         affectedId: siteId,
                         runtime,
+                        ...(notes.length ? { notes } : {}),
                         ...(options ? { options: options.map(toOption) } : {}),
                         ...(applied ? { applied: toOption(applied) } : {}),
                     };
@@ -420,6 +441,7 @@ export async function runManageSite(
                             ? { upstreamHostFallback: plan.upstreamHostFallback }
                             : {}),
                     },
+                    ...(notes.length ? { notes } : {}),
                     ...(options ? { options: options.map(toOption) } : {}),
                     ...(applied ? { applied: toOption(applied) } : {}),
                 };
