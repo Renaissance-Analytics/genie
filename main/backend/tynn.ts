@@ -1,5 +1,6 @@
 import { app, session, shell } from 'electron';
 import { getAllSettings } from '../db';
+import type { DevSites } from '../dev-server/sites-config';
 import type {
     Backend,
     BackendCaptureResult,
@@ -271,6 +272,24 @@ export class TynnBackend implements Backend {
             { method: 'POST', body: { project_id: projectId } },
         );
         return { isEnvelope: !!data.is_envelope };
+    }
+
+    /**
+     * Push a workspace's hosted-site config to Tynn (POST /api/v1/projects/
+     * hosted-sites) so it is tracked for the hosting control UX (#235 / #661).
+     * The `.agi` envelope is the source of truth; this sends the WHOLE `sites`
+     * map and Tynn REPLACES the project's set. Rides the web session cookie like
+     * every call here; throws TynnAuthError on a dead session.
+     */
+    async syncHostedSites(
+        projectId: string,
+        sites: DevSites,
+    ): Promise<{ ok: boolean; count: number }> {
+        const data = await this.fetch<{ ok?: boolean; count?: number }>(
+            '/api/v1/projects/hosted-sites',
+            { method: 'POST', body: { project_id: projectId, sites } },
+        );
+        return { ok: !!data.ok, count: data.count ?? 0 };
     }
 
     // --- Local Workstation (self-register + enroll) ------------------------
