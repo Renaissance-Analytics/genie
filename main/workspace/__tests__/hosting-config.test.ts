@@ -30,6 +30,7 @@ function fakeStore(
         db: over.db ?? ({} as DevSites),
     };
     const writes = { envelope: [] as DevSites[], db: [] as DevSites[] };
+    const persisted: Array<{ path: string; sites: DevSites }> = [];
     const store: DevSitesStore = {
         workspacePath: () => state.path,
         isEnvelope: () => state.envelope,
@@ -43,8 +44,9 @@ function fakeStore(
             state.db = sites;
             writes.db.push(sites);
         },
+        onEnvelopePersisted: (path, sites) => persisted.push({ path, sites }),
     };
-    return { store, state, writes };
+    return { store, state, writes, persisted };
 }
 
 describe('resolveDevSites — the .agi envelope is the source of truth', () => {
@@ -88,5 +90,17 @@ describe('persistDevSites — writes the truth, keeps the mirror', () => {
         persistDevSites(store, 'w', { a: SITE('a') });
         expect(writes.envelope).toContainEqual({ a: SITE('a') });
         expect(writes.db).toContainEqual({ a: SITE('a') });
+    });
+
+    it('fires onEnvelopePersisted with (path, sites) after an envelope write — the Tynn-push seam', () => {
+        const { store, persisted } = fakeStore({ envelope: true, path: '/ws' });
+        persistDevSites(store, 'w', { a: SITE('a') });
+        expect(persisted).toEqual([{ path: '/ws', sites: { a: SITE('a') } }]);
+    });
+
+    it('does NOT fire onEnvelopePersisted for a non-envelope workspace (nothing to sync)', () => {
+        const { store, persisted } = fakeStore({ envelope: false });
+        persistDevSites(store, 'w', { a: SITE('a') });
+        expect(persisted).toHaveLength(0);
     });
 });

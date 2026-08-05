@@ -29,6 +29,13 @@ export interface DevSitesStore {
     /** The genie.db mirror. */
     dbRead(id: string): DevSites;
     dbWrite(id: string, sites: DevSites): void;
+    /**
+     * Fired AFTER the ENVELOPE's sites were written (envelope workspaces only) —
+     * the seam a shell uses to mirror the config onward, e.g. push it to Tynn so
+     * the hosting control UX can track it. Optional; must never throw into the
+     * write path (the local write has already succeeded by the time it runs).
+     */
+    onEnvelopePersisted?(path: string, sites: DevSites): void;
 }
 
 /** The workspace's dev sites, resolving the `.agi` envelope as source of truth. */
@@ -55,5 +62,8 @@ export function resolveDevSites(store: DevSitesStore, id: string): DevSites {
 export function persistDevSites(store: DevSitesStore, id: string, sites: DevSites): void {
     store.dbWrite(id, sites); // mirror always — fast reads + non-envelope workspaces
     const path = store.workspacePath(id);
-    if (path && store.isEnvelope(path)) store.writeEnvelopeSites(path, sites);
+    if (path && store.isEnvelope(path)) {
+        store.writeEnvelopeSites(path, sites);
+        store.onEnvelopePersisted?.(path, sites); // mirror onward (e.g. push to Tynn)
+    }
 }

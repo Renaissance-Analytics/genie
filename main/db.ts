@@ -1886,6 +1886,20 @@ export function listWorkspaceIssuewatchAgents(
 // Parse/sanitize live in main/dev-server/sites-config.ts.
 
 /**
+ * The Tynn hosted-sites push (#661), injected by the desktop boot. db.ts must NOT
+ * import the Tynn client itself — tynn.ts imports db.ts (getAllSettings), so a
+ * direct import here would cycle. Default no-op: headless, not-linked, and tests
+ * simply don't set it. `setHostedSitesSync(null)` clears it.
+ */
+let hostedSitesSync: ((projectId: string, sites: DevSites) => void) | null = null;
+
+export function setHostedSitesSync(
+    fn: ((projectId: string, sites: DevSites) => void) | null,
+): void {
+    hostedSitesSync = fn;
+}
+
+/**
  * The dev-site store: the `.agi` envelope (project.json `sites`) is the source of
  * truth so config travels with the repo; genie.db is the mirror. A non-envelope
  * workspace has no project.json and stays genie.db-only. Policy in
@@ -1907,6 +1921,13 @@ const devSitesStore: DevSitesStore = {
     },
     dbWrite: (id, sites) => {
         getDb().prepare('UPDATE workspaces SET dev_sites = ? WHERE id = ?').run(JSON.stringify(sites), id);
+    },
+    // A Tynn-linked envelope mirrors its sites onward to Tynn (#661). We resolve
+    // the linked project id from the envelope; the injected push does the network
+    // (fire-and-forget), so a dead session never fails the local write.
+    onEnvelopePersisted: (folder, sites) => {
+        const projectId = readProjectJson(folder)?.tynn?.projectId;
+        if (projectId && hostedSitesSync) hostedSitesSync(projectId, sites);
     },
 };
 

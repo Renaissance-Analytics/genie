@@ -29,6 +29,7 @@ import {
     workspaceTerminalApproval,
     removeWorkspace,
     getWorkspaceDevSites,
+    setHostedSitesSync,
     getWorkspaceDevServices,
     getOrCreateDevServiceEngine,
 } from './db';
@@ -86,6 +87,7 @@ import { installAgentInboxPresence } from './agentinbox/presence';
 import { agentInboxBroker } from './agentinbox/broker';
 import { dbAgentInboxStore } from './agentinbox/store';
 import { getWorkspaceAgentAccess } from './db';
+import { getTynnBackend } from './backend/registry';
 import { installKnowledgeBroadcast } from './knowledge/presence';
 import {
     buildSubmitBytes,
@@ -1075,6 +1077,18 @@ app.whenReady().then(async () => {
         // leaves it off and `open` says "no browser here" rather than failing.
         openInBrowser: (genName) =>
             openTestingBrowser(LOCAL_CONN_KEY, 'This machine', remoteGenUrl(genName)),
+    });
+    // Mirror a Tynn-linked envelope's hosted-site config to Tynn (#661) whenever
+    // it is persisted, so the hosting control UX can track it. Fire-and-forget:
+    // a dead session or offline Tynn must never fail the local write. db.ts
+    // resolves the linked project id and calls this; it must not import the Tynn
+    // client (tynn.ts imports db.ts, which would cycle).
+    setHostedSitesSync((projectId, sites) => {
+        void getTynnBackend()
+            .syncHostedSites(projectId, sites)
+            .catch(() => {
+                /* offline / unlinked / dead session — the envelope stays the truth */
+            });
     });
     // Install the secrets-at-rest encryptor for ALL token stores (mobile / remote
     // / GitHub) BEFORE anything reads them. Desktop injects the Electron
