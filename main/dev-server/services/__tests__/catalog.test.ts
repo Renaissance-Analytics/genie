@@ -62,12 +62,23 @@ describe('the catalog', () => {
         // and checked. Each of these was pulled successfully against real Docker.
         const ref = (engine: Parameters<typeof engineSpecFor>[0]) =>
             engineSpecFor(engine).image(DEFAULT_VERSIONS[engine]);
-        expect(ref('postgres')).toBe('postgres:17-alpine');
+        expect(ref('postgres')).toBe('pgvector/pgvector:pg17');
         expect(ref('mysql')).toBe('mysql:8.4');
         expect(ref('redis')).toBe('redis:7-alpine');
         expect(ref('meilisearch')).toBe('getmeili/meilisearch:v1');
         expect(ref('minio')).toBe('minio/minio:latest');
         expect(ref('mailpit')).toBe('axllent/mailpit:v1.30');
+    });
+
+    it('serves postgres from a pgvector image so `CREATE EXTENSION vector` is available', () => {
+        // The stock `postgres` image does not carry pgvector; pgvector/pgvector is
+        // stock postgres of the same major PLUS the `vector` extension (and the
+        // standard contrib set), so a workspace can enable pgvector on its DB.
+        const postgres = engineSpecFor('postgres');
+        for (const v of postgres.versions) {
+            expect(postgres.image(v)).toBe(`pgvector/pgvector:pg${v}`);
+        }
+        expect(postgres.image('17')).toContain('pgvector');
     });
 
     it('does not prefix `latest` with a `v` — that is a tag nobody publishes', () => {

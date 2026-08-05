@@ -116,9 +116,17 @@ const POSTGRES: EngineSpec = {
     label: 'Postgres',
     summary: 'PostgreSQL. Each workspace gets its own database + login role on the shared engine.',
     versions: ['17', '16', '15', '14'],
-    // alpine: a tenth of the debian variant to pull, and it still ships `psql`
-    // and `pg_isready`, which is what provisioning and readiness need.
-    image: (version) => `postgres:${version}-alpine`,
+    // pgvector/pgvector: stock PostgreSQL of the SAME major with the `vector`
+    // extension preinstalled (plus the standard contrib set — hstore, pg_trgm,
+    // uuid-ossp, citext, …), so `CREATE EXTENSION vector` (and the rest) just
+    // works — extensions, especially pgvector, must be enable-able. Debian-based
+    // (larger than the old `-alpine`) but still ships `psql`/`pg_isready` and keeps
+    // the same PGDATA layout + env, so it is a drop-in for provisioning/readiness.
+    // pgvector publishes pg14–pg17. NOTE: re-opening an EXISTING alpine (musl) data
+    // volume with this debian (glibc) image can hit text-index collation
+    // differences — fine for regenerable dev data; recreate the engine if a stale
+    // volume misbehaves.
+    image: (version) => `pgvector/pgvector:pg${version}`,
     ports: [{ name: 'postgres', container: 5432, kind: 'tcp', primary: true }],
     // PGDATA is a SUBDIRECTORY of the mount, not the mount itself: some volume
     // drivers leave a `lost+found` in the root, and initdb refuses to
