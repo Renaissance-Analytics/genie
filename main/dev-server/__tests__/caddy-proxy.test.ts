@@ -37,6 +37,11 @@ describe('applyCaddyConfig', () => {
         // Reload if running, else start — Caddy converges either way.
         expect(script).toMatch(/caddy reload .*\|\| .*caddy start/);
         expect(script).toContain('--adapter caddyfile');
+        // The START is DETACHED: setsid + stdio to a log FILE + </dev/null, so the
+        // daemon doesn't inherit the exec pipe and die with EPIPE on its first
+        // logged request. Without this a site "works, then stops".
+        expect(script).toMatch(/setsid .*caddy start/);
+        expect(script).toMatch(/caddy start[^|]*>'[^']*caddy\.log' 2>&1 <\/dev\/null/);
     });
 
     it('carries the site set into the written config (base64 round-trips the vhost)', async () => {

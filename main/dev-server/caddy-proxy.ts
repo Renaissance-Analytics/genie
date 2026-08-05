@@ -28,6 +28,9 @@ export const CADDY_CONFIG_PATH = `${CADDY_DIR}/Caddyfile`;
  *  writable in the sandbox. */
 export const CADDY_DATA_DIR = `${CADDY_DIR}/data`;
 export const CADDY_CONFIG_HOME = `${CADDY_DIR}/config`;
+/** Where the started Caddy daemon's own stdout/stderr go — a FILE, so the daemon
+ *  never inherits the ephemeral `docker exec` pipe (see the start command below). */
+export const CADDY_LOG_PATH = `${CADDY_DIR}/caddy.log`;
 
 export type ApplyCaddyResult = { ok: true } | { ok: false; error: string };
 
@@ -58,8 +61,16 @@ export async function applyCaddyConfig(
         `printf %s '${b64}' | base64 -d > '${CADDY_CONFIG_PATH}'; ` +
         // Reload if Caddy is already running; otherwise start it. Either path
         // leaves Caddy serving the config just written.
+        //
+        // The start is DETACHED — `setsid` + stdio to a log FILE + `</dev/null`.
+        // Without it the caddy daemon inherits the `docker exec` stdout pipe, and
+        // the instant `runtime.exec` returns and closes that pipe the daemon dies
+        // with EPIPE on its NEXT log write — i.e. the first request it serves. That
+        // presents as "the site worked, then stopped." `site-process.ts` detaches
+        // the site process the same way.
         `caddy reload --config '${CADDY_CONFIG_PATH}' --adapter caddyfile 2>/dev/null || ` +
-        `caddy start --config '${CADDY_CONFIG_PATH}' --adapter caddyfile`;
+        `setsid sh -c "caddy start --config '${CADDY_CONFIG_PATH}' --adapter caddyfile" ` +
+        `>'${CADDY_LOG_PATH}' 2>&1 </dev/null`;
     try {
         const r = await runtime.exec(containerId, ['sh', '-c', script], {
             timeoutMs: opts.timeoutMs ?? 20_000,
