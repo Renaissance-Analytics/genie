@@ -80,6 +80,13 @@ fires whether or not anyone has Genie open, and survives restarts. Actions
 - \`enable\` / \`disable\` — suspend/resume a task without deleting it.
 - \`delete\`; \`run-now\` — fire a scheduled task immediately without disturbing
   its cadence.
+**WHERE THEY RUN:** on the **HOST machine** (a headless terminal), NOT inside a
+workspace container — so a process's \`localhost\` is the HOST. A sandboxed
+\`manageSite\` site does NOT share that network: to reach a host process from a
+site, use \`\${GENIE_HOST_GATEWAY}:<port>\` (see \`manageSite\`), never \`127.0.0.1\`.
+Running a process INSIDE a workspace container is not available yet — if a
+service must run alongside a containerized site (a queue worker on the site's DB
+network), that gap is known.
 Creating a scheduled task is approval-gated (the modal shows the command and its
 recurrence). This is for supervised COMMANDS — to HOST a repo as a real site,
 reach for \`manageSite\` (below), not a hand-rolled \`manageProcess\` dev server.
