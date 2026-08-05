@@ -704,4 +704,76 @@ describe('service env injection (#234 P3)', () => {
         await manager(runtime).start('acme', SITE_ID);
         expect(startExec(runtime)?.env).toBeUndefined();
     });
+
+    /**
+     * REGRESSION — genie #125.
+     *
+     * A site created with a custom `image` + an explicit legacy `serve` (and NO
+     * `command`), `runMode: 'explicit'` — the FrankenPHP-on-managed-Postgres shape
+     * from the bug report. `image` is a pre-rework per-site-container concept; in
+     * the sandbox-serve model there is no per-site container, so this must route
+     * through the SAME sandbox path every other site does:
+     *
+     *   (a) it runs in the ONE workspace sandbox (the custom image spawns NO
+     *       second container), as the migrated dev command (`frankenphp` is not in
+     *       the sandbox — `sandboxCommandFor` rewrites it to `php artisan serve`);
+     *   (b) its start receives the workspace SERVICE env (so a managed-Postgres app
+     *       gets `DB_HOST=genie-svc-…`, not an empty value that falls back to
+     *       127.0.0.1:5432); and
+     *   (c) its reported `hostPort` is the sandbox's published Caddy port — the one
+     *       door every `.gen` is reached through — never a per-site/IDE port.
+     *
+     * The bug report described (b)/(c) failing (serve ran env-less in the dev
+     * container, `hostPort` pointed at 8443); this pins the sandbox-serve model's
+     * correct behaviour so that path can never regress to it.
+     */
+    it('routes a custom-image + explicit-serve site through the sandbox WITH service env and the Caddy port', async () => {
+        const runtime = fakeRuntime();
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'web',
+                genName: 'web.acme.gen',
+                repo: 'app',
+                runMode: 'explicit',
+                // A custom runtime image (FrankenPHP + pdo_pgsql) and the exact
+                // legacy serve from the report — NOT a `command`.
+                image: 'ghcr.io/acme/frankenphp-pg:latest',
+                serve: ['frankenphp', 'php-server', '--listen', '0.0.0.0:8080', '--root', 'public/'],
+                port: 8080,
+                kind: 'http',
+                enabled: true,
+            },
+        };
+        const status = await manager(runtime, sites, {
+            serviceEnvFor: async () => ({
+                DB_CONNECTION: 'pgsql',
+                DB_HOST: 'genie-svc-postgres-17',
+                DB_PORT: '5432',
+            }),
+        }).start('acme', SITE_ID);
+
+        // (a) one container — the WORKSPACE SANDBOX — and the process runs INTO it
+        //     as the migrated dev command (frankenphp is not in the sandbox).
+        expect(status.state).toBe('running');
+        expect(runtime.ran).toHaveLength(1);
+        expect(runtime.ran[0]?.name).toBe(SANDBOX);
+        const start = startExec(runtime);
+        expect(start?.id).toBe(SANDBOX_ID);
+        expect(start?.argv.slice(5)).toEqual([
+            'php',
+            'artisan',
+            'serve',
+            '--host=0.0.0.0',
+            '--port=8080',
+        ]);
+
+        // (b) the workspace service env reaches the site process.
+        expect(start?.env?.DB_CONNECTION).toBe('pgsql');
+        expect(start?.env?.DB_HOST).toBe('genie-svc-postgres-17');
+        expect(start?.env?.DB_PORT).toBe('5432');
+
+        // (c) the reported port is the sandbox's published Caddy port.
+        expect(status.hostPort).toBe(CADDY_HOST_PORT);
+        expect(status.origin).toBe('https://web.acme.gen');
+    });
 });
