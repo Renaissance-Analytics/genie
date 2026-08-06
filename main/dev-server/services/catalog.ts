@@ -245,7 +245,13 @@ const REVERB: EngineSpec = {
     image: (version) => `ghcr.io/renaissance-analytics/genie-reverb:${version}`,
     // Reverb speaks HTTP and upgrades to WebSocket on the SAME port. `http` so
     // readiness probes the published port (any HTTP answer = the server is up).
-    ports: [{ name: 'reverb', container: 8080, kind: 'http', primary: true }],
+    // The image also serves a monitoring/debugging DASHBOARD on 8081 (live apps,
+    // channels, connections) — published + listed like MinIO's console so a
+    // person or agent can open it; NOT the primary.
+    ports: [
+        { name: 'reverb', container: 8080, kind: 'http', primary: true },
+        { name: 'dashboard', container: 8081, kind: 'http' },
+    ],
     // Stateless: connection + channel state is in memory, nothing to persist.
     volumes: [],
     // Namespace isolation, exactly like MinIO/Meilisearch: the engine is shared,
