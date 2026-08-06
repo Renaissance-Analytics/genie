@@ -50,6 +50,7 @@ export const SERVICE_ENGINES = [
     'meilisearch',
     'minio',
     'mailpit',
+    'reverb',
     /** The generic `{image, port, env}` escape hatch. Always dedicated. */
     'custom',
 ] as const;
@@ -233,6 +234,34 @@ const MAILPIT: EngineSpec = {
     adminEnv: () => ({ MP_DATABASE: '/data/mailpit.db' }),
 };
 
+const REVERB: EngineSpec = {
+    engine: 'reverb',
+    label: 'Reverb (WebSockets)',
+    summary:
+        'Laravel Reverb — a Pusher-protocol WebSocket + broadcast server. Shared instance; each workspace gets its OWN Reverb app (namespace isolation) whose secret is DERIVED from the shared master, so no per-workspace registration is needed.',
+    // The genie-owned image major (`ghcr.io/renaissance-analytics/genie-reverb`),
+    // NOT the Reverb library version — a same-major rebuild is one edit here.
+    versions: ['1'],
+    image: (version) => `ghcr.io/renaissance-analytics/genie-reverb:${version}`,
+    // Reverb speaks HTTP and upgrades to WebSocket on the SAME port. `http` so
+    // readiness probes the published port (any HTTP answer = the server is up).
+    // The image also serves a monitoring/debugging DASHBOARD on 8081 (live apps,
+    // channels, connections) — published + listed like MinIO's console so a
+    // person or agent can open it; NOT the primary.
+    ports: [
+        { name: 'reverb', container: 8080, kind: 'http', primary: true },
+        { name: 'dashboard', container: 8081, kind: 'http' },
+    ],
+    // Stateless: connection + channel state is in memory, nothing to persist.
+    volumes: [],
+    // Namespace isolation, exactly like MinIO/Meilisearch: the engine is shared,
+    // separation is by app id, and the workspaces share the master credential —
+    // here the master is the HMAC key the server derives every app secret from,
+    // so a workspace can never forge another's secret without the master.
+    provision: 'namespace',
+    adminEnv: (password) => ({ REVERB_MASTER_SECRET: password }),
+};
+
 const CUSTOM: EngineSpec = {
     engine: 'custom',
     label: 'Custom image',
@@ -255,6 +284,7 @@ const CATALOG: Record<ServiceEngine, EngineSpec> = {
     meilisearch: MEILISEARCH,
     minio: MINIO,
     mailpit: MAILPIT,
+    reverb: REVERB,
     custom: CUSTOM,
 };
 

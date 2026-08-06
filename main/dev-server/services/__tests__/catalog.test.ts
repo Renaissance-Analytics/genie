@@ -29,8 +29,23 @@ describe('the catalog', () => {
             'meilisearch',
             'minio',
             'mailpit',
+            'reverb',
             'custom',
         ]);
+    });
+
+    it('models Reverb as a namespace-isolated, stateless engine off a genie-owned image', () => {
+        const reverb = engineSpecFor('reverb');
+        // Namespace isolation (shared master, per-workspace app) — NOT a
+        // per-workspace credential engine, exactly like MinIO/Meilisearch.
+        expect(reverb.provision).toBe('namespace');
+        // The master the server derives every app secret from (HMAC key).
+        expect(reverb.adminEnv?.('sekret')).toEqual({ REVERB_MASTER_SECRET: 'sekret' });
+        // Stateless — no data volume to persist.
+        expect(reverb.volumes).toEqual([]);
+        // A genie-OWNED image, pinned by major, on our registry (no third party).
+        expect(reverb.image('1')).toBe('ghcr.io/renaissance-analytics/genie-reverb:1');
+        expect(reverb.ports[0]).toMatchObject({ container: 8080, primary: true });
     });
 
     it('gives every engine an image, a primary port and a default version', () => {

@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { SERVICE_ENGINES } from './catalog';
 import type { ServiceEngine } from './catalog';
 import type { WorkspaceSlice } from './provision';
@@ -55,6 +56,18 @@ function sorted(entries: ProvisionedService[]): ProvisionedService[] {
         const byEngine = SERVICE_ENGINES.indexOf(a.engine) - SERVICE_ENGINES.indexOf(b.engine);
         return byEngine !== 0 ? byEngine : a.host.localeCompare(b.host);
     });
+}
+
+/**
+ * The secret for a workspace's Reverb app: HMAC-SHA256 of the app id, keyed by
+ * the engine's master secret. The shared genie-reverb server derives the EXACT
+ * same value from the same master (`hash_hmac('sha256', $appId, $master)`), so
+ * the site and the server agree on a per-workspace app with NO registration —
+ * and no workspace can forge another's secret without the master. This formula
+ * is a CONTRACT: keep it in lockstep with the server's app provider.
+ */
+export function reverbAppSecret(master: string, appId: string): string {
+    return createHmac('sha256', master).update(appId).digest('hex');
 }
 
 /** `thing` → `THING`, for the custom escape hatch's endpoint variables. */
@@ -165,6 +178,32 @@ export function serviceEnv(entries: ProvisionedService[]): Record<string, string
                     MAIL_MAILER: 'smtp',
                     MAIL_HOST: host,
                     MAIL_PORT: String(port),
+                });
+                break;
+            }
+
+            case 'reverb': {
+                const appId = slice.identifier;
+                // Namespace isolation: shared master, per-workspace app whose
+                // secret is DERIVED so the server needs no registration.
+                const secret = entry.adminPassword
+                    ? reverbAppSecret(entry.adminPassword, appId)
+                    : '';
+                Object.assign(env, {
+                    BROADCAST_CONNECTION: 'reverb',
+                    REVERB_APP_ID: appId,
+                    // The app KEY is the public client identifier — the workspace
+                    // slug is fine, it is not a secret.
+                    REVERB_APP_KEY: appId,
+                    REVERB_APP_SECRET: secret,
+                    // BACKEND path: the site reaches the shared server by
+                    // CONTAINER name on its container port over http — never the
+                    // published loopback. The BROWSER-facing wss route
+                    // (VITE_REVERB_* → reverb.<ws>.gen) is injected at the site
+                    // layer, where the `.gen` name is known.
+                    REVERB_HOST: host,
+                    REVERB_PORT: String(port),
+                    REVERB_SCHEME: 'http',
                 });
                 break;
             }

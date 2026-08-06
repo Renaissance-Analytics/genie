@@ -135,7 +135,8 @@ entirely). Pass \`terminalId\` for exact workspace resolution.
 
 ### manageService
 **Give this workspace a backing SERVICE** — Postgres, MySQL, Redis, Meilisearch,
-MinIO (S3), Mailpit, or any image — and get back how to connect. These are the
+MinIO (S3), Mailpit, Reverb (WebSockets/broadcasting), or any image — and get
+back how to connect. These are the
 same engines a \`manageSite\` site runs against, so a hosted site is backed the
 way production is. THE MODEL: an engine is WORKSTATION-hosted and **shared per
 (engine, major version)** across every workspace that asks for it, and each

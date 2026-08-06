@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { serviceEnv } from '../env-wiring';
 import type { ProvisionedService } from '../env-wiring';
@@ -138,6 +139,43 @@ describe('namespace engines', () => {
             MAIL_HOST: 'genie-svc-mailpit-1',
             MAIL_PORT: '1025',
         });
+    });
+});
+
+describe('reverb (websockets)', () => {
+    const reverb = (over: Partial<ProvisionedService> = {}): ProvisionedService => ({
+        engine: 'reverb',
+        host: 'genie-svc-reverb-1',
+        port: 8080,
+        slice: { identifier: 'ws_acme', dnsName: 'ws-acme', password: 'unused' },
+        adminPassword: 'master-secret',
+        ...over,
+    });
+
+    it('gives the backend the CONTAINER connection + a per-workspace app whose secret is derived from the master', () => {
+        const env = serviceEnv([reverb()]);
+        // The app secret is HMAC(master, app_id) — the SAME formula the shared
+        // genie-reverb server uses, so the two agree without any registration.
+        const derived = createHmac('sha256', 'master-secret').update('ws_acme').digest('hex');
+        expect(env).toMatchObject({
+            BROADCAST_CONNECTION: 'reverb',
+            REVERB_APP_ID: 'ws_acme',
+            REVERB_APP_KEY: 'ws_acme',
+            REVERB_APP_SECRET: derived,
+            // BACKEND path: container name + container port over http — never the
+            // published loopback (the same rule every other engine follows).
+            REVERB_HOST: 'genie-svc-reverb-1',
+            REVERB_PORT: '8080',
+            REVERB_SCHEME: 'http',
+        });
+    });
+
+    it('derives DIFFERENT secrets per workspace from the same master, so one cannot forge another', () => {
+        const secretFor = (id: string) =>
+            serviceEnv([
+                reverb({ slice: { identifier: id, dnsName: id.replace(/_/g, '-'), password: 'x' } }),
+            ]).REVERB_APP_SECRET;
+        expect(secretFor('ws_a')).not.toBe(secretFor('ws_b'));
     });
 });
 
