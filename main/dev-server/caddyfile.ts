@@ -84,15 +84,22 @@ export function buildCaddyfile(sites: CaddySite[]): string {
         [
             `${s.host}:${CADDY_HTTPS_PORT} {`,
             '\ttls internal',
-            // A one-line reverse_proxy when the app takes the `.gen` Host as-is; a
-            // block form only when the upstream Host must be rewritten.
-            ...(s.upstreamHost
-                ? [
-                      `\treverse_proxy 127.0.0.1:${s.port} {`,
-                      `\t\theader_up Host ${s.upstreamHost}`,
-                      '\t}',
-                  ]
-                : [`\treverse_proxy 127.0.0.1:${s.port}`]),
+            `\treverse_proxy 127.0.0.1:${s.port} {`,
+            // Only when the app checks Host (Django ALLOWED_HOSTS, Vite): rewrite
+            // the upstream Host to one it accepts, browser origin unchanged.
+            ...(s.upstreamHost ? [`\t\theader_up Host ${s.upstreamHost}`] : []),
+            // FORCE https on the app's own redirects. Caddy already sends
+            // `X-Forwarded-Proto: https`, but a Laravel app only honours it with
+            // TrustProxies; without it, an in-request `redirect()`/`url()` builds
+            // off the plain-http proxy hop and emits `Location: http://<name>.gen/…`.
+            // The browser then follows it to a scheme Caddy does not serve (the
+            // reported `.gen` dead-navigation). Rewrite the redirect scheme back to
+            // https at the front door so NO app needs configuring. `^http:` (not
+            // `http://`) matches only the leading scheme — leaving `https:` and
+            // relative Locations untouched — and keeps this config free of a
+            // literal http URL.
+            '\t\theader_down Location "^http:" "https:"',
+            '\t}',
             '}',
             '',
         ].join('\n'),
