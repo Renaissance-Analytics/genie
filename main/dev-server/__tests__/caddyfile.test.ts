@@ -54,10 +54,21 @@ describe('buildCaddyfile', () => {
         expect(cf).toContain(`web.acme.gen:${CADDY_HTTPS_PORT} {`);
     });
 
-    it('omits the header rewrite when no upstream Host is pinned (one-line proxy)', () => {
+    it('adds no upstream Host when none is pinned, but STILL forces https on redirects', () => {
         const cf = buildCaddyfile([{ host: 'web.acme.gen', port: 5173 }]);
         expect(cf).not.toContain('header_up');
-        expect(cf).toContain('reverse_proxy 127.0.0.1:5173\n');
+        // The redirect-scheme rewrite is on EVERY site: an app that builds
+        // in-request URLs off the plain-http proxy hop (no TrustProxies) emits a
+        // `Location: http://<name>.gen/…`, and the browser then follows it to a
+        // scheme Caddy does not serve. Rewrite it back to https at the front door.
+        expect(cf).toContain('reverse_proxy 127.0.0.1:5173 {');
+        expect(cf).toContain('header_down Location "^http:" "https:"');
+    });
+
+    it('forces https on redirects for a site WITH a pinned upstream Host too', () => {
+        const cf = buildCaddyfile([{ host: 'web.acme.gen', port: 5173, upstreamHost: 'localhost' }]);
+        expect(cf).toContain('header_up Host localhost');
+        expect(cf).toContain('header_down Location "^http:" "https:"');
     });
 
     it('REFUSES an injectable upstream host', () => {
