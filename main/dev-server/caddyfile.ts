@@ -84,20 +84,40 @@ export function buildCaddyfile(sites: CaddySite[]): string {
         [
             `${s.host}:${CADDY_HTTPS_PORT} {`,
             '\ttls internal',
+            // FORCE https on the app's own IN-BODY self-links. An app built off the
+            // plain-http proxy hop (no TrustProxies) renders `http://<name>.gen`
+            // Ziggy/route()/asset URLs into its HTML/JSON; a secure client (the
+            // Genie Browser) then blocks those as mixed content — the reported
+            // `.gen` dead-navigation. The `replace` directive (from the
+            // caddyserver/replace-response module baked into the sandbox Caddy;
+            // auto-ordered AFTER `encode`, so it runs before the proxy and sees the
+            // full response) rewrites the app's own `http://<host>` back to
+            // `https://<host>` in the RESPONSE BODY, so NO app needs proxy-trust
+            // config. `stream` rewrites incrementally (drops Content-Length) so
+            // streamed/SSE responses keep flowing; `header_up -Accept-Encoding`
+            // below makes the upstream answer in plaintext so the body is
+            // rewritable. Scoped to THIS vhost's own validated host, so the quoted
+            // literal is never injectable. (Redirects — `Location` — handled below.)
+            '\treplace {',
+            '\t\tstream',
+            `\t\t"http://${s.host}" "https://${s.host}"`,
+            '\t}',
             `\treverse_proxy 127.0.0.1:${s.port} {`,
             // Only when the app checks Host (Django ALLOWED_HOSTS, Vite): rewrite
             // the upstream Host to one it accepts, browser origin unchanged.
             ...(s.upstreamHost ? [`\t\theader_up Host ${s.upstreamHost}`] : []),
+            // Strip the upstream's compression so `replace` sees a plaintext body
+            // to rewrite (a gzipped response would slip through unchanged). Cheap on
+            // a loopback dev hop.
+            '\t\theader_up -Accept-Encoding',
             // FORCE https on the app's own redirects. Caddy already sends
             // `X-Forwarded-Proto: https`, but a Laravel app only honours it with
             // TrustProxies; without it, an in-request `redirect()`/`url()` builds
             // off the plain-http proxy hop and emits `Location: http://<name>.gen/…`.
-            // The browser then follows it to a scheme Caddy does not serve (the
-            // reported `.gen` dead-navigation). Rewrite the redirect scheme back to
-            // https at the front door so NO app needs configuring. `^http:` (not
+            // The browser then follows it to a scheme Caddy does not serve. Rewrite
+            // the redirect scheme back to https at the front door. `^http:` (not
             // `http://`) matches only the leading scheme — leaving `https:` and
-            // relative Locations untouched — and keeps this config free of a
-            // literal http URL.
+            // relative Locations untouched.
             '\t\theader_down Location "^http:" "https:"',
             '\t}',
             '}',
