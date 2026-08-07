@@ -133,6 +133,12 @@ interface RemoteConnection {
     /** Grant heartbeat timer (transport === 'relay' only) — polls Tynn's grant
      *  introspect to keep the session warm + catch revocation/lock/expiry. */
     relayHeartbeat: NodeJS.Timeout | null;
+    /** Rebuild this relay session IN PLACE for the Reconnect button: re-mint a
+     *  fresh (short-TTL) grant, re-dial a NEW member client, and swap it onto THIS
+     *  same conn (keeping its window bindings). Set on connect for a workstation
+     *  opened with a `mintGrant`; absent for a relay conn with no re-mint path,
+     *  where reconnect can only advise close+reopen. (transport === 'relay' only) */
+    relayReconnect?: () => Promise<{ ok: boolean; error?: string }>;
     eventsWs: WebSocket | null;
     eventsClosed: boolean;
     eventsRetry: NodeJS.Timeout | null;
@@ -1077,6 +1083,39 @@ export async function remoteReconnect(wcId: number): Promise<{ ok: boolean; erro
     }
     conn.limboSince = null;
     conn.reconnectAttempt = 0;
+
+    // Relay ("Genie Cloud") has no live socket to re-open — its session is a grant
+    // + member client that BOTH die on a timed drop. Re-subscribing events over the
+    // dead client (the tailnet path below) is what left linkState stuck on
+    // `reconnecting` forever — the reported hang. Rebuild the session instead, and
+    // arm a watchdog so a stalled re-dial can never leave the spinner spinning.
+    if (conn.transport === 'relay') {
+        if (!conn.relayReconnect) {
+            setConnLinkState(conn, { phase: 'lost' });
+            return { ok: false, error: 'Close and reopen this workstation to reconnect.' };
+        }
+        setConnLinkState(conn, { phase: 'reconnecting', reason: 'dropped' });
+        const watchdog = setTimeout(() => {
+            if (conn.linkState.phase === 'reconnecting') setConnLinkState(conn, { phase: 'lost' });
+        }, LIMBO_TIMEOUT_MS);
+        watchdog.unref?.();
+        let res: { ok: boolean; error?: string };
+        try {
+            res = await conn.relayReconnect();
+        } catch (e) {
+            res = { ok: false, error: e instanceof Error ? e.message : 'Reconnect failed.' };
+        }
+        clearTimeout(watchdog);
+        // Only transition from `reconnecting`: if the watchdog already gave up to
+        // `lost`, a late success must not silently re-show `connected` for a session
+        // that may be half-built.
+        if (conn.linkState.phase === 'reconnecting') {
+            setConnLinkState(conn, res.ok ? { phase: 'connected' } : { phase: 'lost' });
+        }
+        return res;
+    }
+
+    // Tailnet: re-open the events WS; it recovers on `open` (reattach + control).
     setConnLinkState(conn, { phase: 'reconnecting', reason: 'dropped' });
     startEventsBridge(conn); // clears eventsClosed + re-opens (recovers on `open`)
     return { ok: true };
@@ -1863,13 +1902,9 @@ function workstationConnKey(workstationId: string): string {
     return `ws:${workstationId}`;
 }
 
-/** What `connectWorkstation` needs to dial a Virtual Workstation over the relay.
- *  `grant` is the short-TTL Tynn connection grant (EdDSA JWS) minted by the
- *  member-facing connect-grant endpoint; `relayUrl` is its `relay_endpoint`. */
-export interface WorkstationConnectInput {
-    workstationId: string;
-    /** Display name for the host window title + the Hosts list. */
-    name: string;
+/** The dial params for ONE relay member session, minted from a fresh short-TTL
+ *  Tynn connection grant — and RE-minted (fresh grant + PoP) for a reconnect. */
+export interface WorkstationDial {
     relayUrl: string;
     grant: string;
     /** Tynn-pinned enrolled host identity key for the site E2E handshake. */
@@ -1884,6 +1919,20 @@ export interface WorkstationConnectInput {
      *  lock/expiry. Injected by the IPC layer (which owns the Tynn client) so this
      *  module stays free of the backend dependency. */
     onHeartbeat?: () => Promise<{ active: boolean }>;
+}
+
+/** What `connectWorkstation` needs to dial a Virtual Workstation over the relay.
+ *  `grant` is the short-TTL Tynn connection grant (EdDSA JWS) minted by the
+ *  member-facing connect-grant endpoint; `relayUrl` is its `relay_endpoint`. */
+export interface WorkstationConnectInput extends WorkstationDial {
+    workstationId: string;
+    /** Display name for the host window title + the Hosts list. */
+    name: string;
+    /** Re-mint a FRESH grant + PoP + dial params for an in-place RECONNECT: a
+     *  relay grant is short-TTL, so reconnecting means minting a brand-new one and
+     *  rebuilding the member session (the previous grant/keypair are dead). The
+     *  IPC/open layer supplies it, since it owns the Tynn client. */
+    mintGrant?: () => Promise<WorkstationDial>;
 }
 
 /**
@@ -1967,10 +2016,88 @@ async function connectWorkstationInner(
         limboTimer: null,
     };
     connections.set(connKey, conn);
+    // The Reconnect button needs to RE-mint a fresh short-TTL grant + rebuild this
+    // session in place (the grant/PoP that opened it are dead by the time it drops).
+    // Capture the re-mint here so `remoteReconnect` can rebuild without a new window.
+    if (input.mintGrant) {
+        const mint = input.mintGrant;
+        conn.relayReconnect = () => rebuildRelayConnection(conn, input.workstationId, mint);
+    }
     startEventsBridge(conn);
     startRelayHeartbeat(conn, input);
     broadcastStatus();
     return { ok: true, connKey };
+}
+
+/**
+ * Rebuild a relay connection IN PLACE for the Reconnect button — the piece the
+ * relay transport was missing (deferred as "a later increment", which left the
+ * spinner hanging forever). Tears down the STALE member session but keeps the
+ * `conn` entry + its window bindings, re-mints a FRESH short-TTL grant + PoP,
+ * dials a NEW RelayMemberClient, and swaps it onto the same conn — the relay
+ * analogue of close+reopen (`openWorkstationById`) minus a new window. Terminals
+ * are re-attached because their `/ws/term` streams died with the old session.
+ *
+ * Returns ok/error; the CALLER (`remoteReconnect`) owns the linkState transitions
+ * and the hang-proof watchdog.
+ */
+async function rebuildRelayConnection(
+    conn: RemoteConnection,
+    workstationId: string,
+    mintGrant: () => Promise<WorkstationDial>,
+): Promise<{ ok: boolean; error?: string }> {
+    // Tear down the dead relay session — but NOT the conn entry or its window
+    // bindings, so the overlay keeps showing THIS connection reconnecting.
+    stopEventsBridge(conn);
+    if (conn.relayHeartbeat) {
+        clearInterval(conn.relayHeartbeat);
+        conn.relayHeartbeat = null;
+    }
+    if (conn.relay) {
+        try {
+            conn.relay.close();
+        } catch {
+            /* already closing */
+        }
+        conn.relay = null;
+    }
+
+    let dial: WorkstationDial;
+    try {
+        dial = await mintGrant();
+    } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : 'Could not get a connection grant.' };
+    }
+
+    const relay = new RelayMemberClient();
+    try {
+        await relay.connect({
+            relayUrl: dial.relayUrl,
+            workstationId,
+            grant: dial.grant,
+            popKeypair: dial.popKeypair,
+            hostPublicKeyB64: dial.hostPublicKeyB64,
+        });
+    } catch (e) {
+        try {
+            relay.close();
+        } catch {
+            /* never opened */
+        }
+        return { ok: false, error: `Couldn't reach the workstation: ${(e as Error).message}` };
+    }
+
+    // Install the fresh session onto the existing conn + reset the events state so
+    // the bridge seeds as a first connect, restart the grant heartbeat with the NEW
+    // token, and re-attach the terminals the renderer still wants.
+    conn.relay = relay;
+    conn.everConnected = false;
+    conn.eventsFailures = 0;
+    conn.reconnectAttempt = 0;
+    startEventsBridge(conn);
+    startRelayHeartbeat(conn, { workstationId, name: conn.host.hostname, ...dial });
+    reattachTerminals(conn);
+    return { ok: true };
 }
 
 /**

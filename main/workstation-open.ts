@@ -17,10 +17,10 @@
  * runs the heartbeat for the connection's lifetime.
  */
 import { PopKeypair } from './remote/relay-pop';
-import { connectWorkstation, type RemoteHost } from './remote';
+import { connectWorkstation, type RemoteHost, type WorkstationDial } from './remote';
 import { showHostWindow } from './background';
 import { getTynnBackend } from './backend/registry';
-import { TynnAuthError, type WorkstationConnectGrant } from './backend/tynn';
+import { TynnAuthError } from './backend/tynn';
 
 export interface OpenWorkstationResult {
     ok: boolean;
@@ -40,10 +40,28 @@ export async function openWorkstationById(
     // the grant (cnf.jkt) and its private key answers the host's post-welcome
     // challenge. The private key never leaves main and is wiped when the
     // connection tears down (RelayMemberClient.close → discard).
-    const popKeypair = PopKeypair.generate();
-    let grant: WorkstationConnectGrant;
+    // Mint (or RE-mint, on reconnect) a fresh PoP keypair + short-TTL connection
+    // grant and the relay dial params it yields. Reused verbatim by the Reconnect
+    // button: a relay grant is short-lived, so rebuilding a dropped session means
+    // minting a brand-new one (the private PoP key never leaves main and is wiped
+    // on teardown).
+    const mintGrant = async (): Promise<WorkstationDial> => {
+        const popKeypair = PopKeypair.generate();
+        const grant = await getTynnBackend().connectGrant(workstationId, popKeypair.publicJwk);
+        return {
+            relayUrl: grant.relay_endpoint,
+            grant: grant.token,
+            hostPublicKeyB64: grant.host_public_key,
+            popKeypair,
+            heartbeatIntervalMs:
+                grant.heartbeat_interval > 0 ? grant.heartbeat_interval * 1000 : undefined,
+            onHeartbeat: () => getTynnBackend().introspectGrant(grant.token),
+        };
+    };
+
+    let dial: WorkstationDial;
     try {
-        grant = await getTynnBackend().connectGrant(workstationId, popKeypair.publicJwk);
+        dial = await mintGrant();
     } catch (e) {
         if (e instanceof TynnAuthError) {
             return { ok: false, error: 'Sign in to Tynn to connect to this workstation.' };
@@ -56,13 +74,10 @@ export async function openWorkstationById(
     const res = await connectWorkstation({
         workstationId,
         name: displayName,
-        relayUrl: grant.relay_endpoint,
-        grant: grant.token,
-        hostPublicKeyB64: grant.host_public_key,
-        popKeypair,
-        heartbeatIntervalMs:
-            grant.heartbeat_interval > 0 ? grant.heartbeat_interval * 1000 : undefined,
-        onHeartbeat: () => getTynnBackend().introspectGrant(grant.token),
+        ...dial,
+        // The Reconnect button re-mints + rebuilds in place (the grant above is
+        // dead by the time a relay session drops).
+        mintGrant,
     });
     if (res.ok && res.connKey) {
         const host: RemoteHost = { ip: 'relay', port: 0, hostname: displayName };
