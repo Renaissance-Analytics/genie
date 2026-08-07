@@ -164,17 +164,28 @@ export function resetSandboxRefreshForTests(): void {
 
 /**
  * Whether a sandbox can actually FRONT the hosting model — i.e. its dev image
- * carries the `caddy` proxy that every `.gen` site is served through.
+ * carries a `caddy` that both serves every `.gen` site AND can rewrite their http
+ * self-links up to https (the `replace` directive; see caddyfile.ts).
  *
- * A sandbox created on an OLD dev image (a workspace opened on the update before
- * the caddy-carrying image was pulled) publishes the proxy port but has no caddy
- * binary, so `applyCaddyConfig` fails and every site is dead. Checking for the
- * binary is what lets `ensureWorkspaceSandbox` self-heal such a sandbox by
- * recreating it on the refreshed image.
+ * Two ways an OLD dev image fails this: no caddy binary at all (a workspace opened
+ * before the caddy-carrying image shipped), or a caddy WITHOUT the response-body-
+ * rewrite module (opened before the module-carrying image). The first makes
+ * `applyCaddyConfig` fail; the second makes a `replace` config fail to reload —
+ * both leave every site dead. Probing for the MODULE (not just the binary) is what
+ * lets `ensureWorkspaceSandbox` self-heal either one by recreating the sandbox on
+ * the refreshed image — so shipping the `replace` config needs only a moved-`:1`
+ * image republish, never a coordinated flag day.
  */
 async function sandboxHasCaddy(runtime: ContainerRuntime, containerId: string): Promise<boolean> {
     try {
-        const r = await runtime.exec(containerId, ['sh', '-c', 'command -v caddy >/dev/null 2>&1']);
+        // `list-modules` prints the JSON module id `http.handlers.replace_response`
+        // iff the rewrite module is compiled into this caddy. A missing binary
+        // makes the pipe fail too, so this one probe subsumes the old presence check.
+        const r = await runtime.exec(containerId, [
+            'sh',
+            '-c',
+            "caddy list-modules 2>/dev/null | grep -q '^http.handlers.replace_response$'",
+        ]);
         return r.code === 0;
     } catch {
         return false;

@@ -58,6 +58,11 @@ interface FakeOptions {
      *  no caddy binary, so the caddy-presence probe fails and an adopt must
      *  refresh + recreate. Default false (a proper sandbox has caddy). */
     noCaddy?: boolean;
+    /** Simulate a sandbox whose caddy predates the response-body rewrite: the
+     *  binary IS present but `list-modules` lacks `replace_response`, so the
+     *  capability probe fails and an adopt must refresh + recreate — the exact
+     *  "sites break once the app emits `replace`" case. Default false. */
+    noReplaceModule?: boolean;
 }
 
 const DOCKER_OK: RuntimeDetection = { kind: 'docker', version: '27.3.1', probes: [] };
@@ -146,10 +151,17 @@ function fakeRuntime(opts: FakeOptions = {}): Fake {
             for (const [name, c] of containers) if (c.id === id) containers.delete(name);
         },
         async exec(_id: string, argv: string[]) {
-            // The sandbox's caddy-presence probe: `command -v caddy`. A sandbox on
-            // an old (caddy-less) dev image answers non-zero, forcing a recreate.
-            const isCaddyProbe = argv.some((a) => a.includes('command -v caddy'));
-            if (isCaddyProbe && opts.noCaddy) return { code: 1, stdout: '', stderr: '' };
+            // The sandbox's caddy-capability probe. Was `command -v caddy` (binary
+            // present?); now `caddy list-modules | grep replace_response` (binary
+            // present AND carries the response-body rewriter?). A caddy-less image
+            // fails the first; an old caddy WITHOUT the module fails the second.
+            // Either forces a refresh + recreate.
+            const isBinaryProbe = argv.some((a) => a.includes('command -v caddy'));
+            const isModuleProbe = argv.some((a) => a.includes('list-modules'));
+            if (isBinaryProbe && opts.noCaddy) return { code: 1, stdout: '', stderr: '' };
+            if (isModuleProbe && (opts.noCaddy || opts.noReplaceModule)) {
+                return { code: 1, stdout: '', stderr: '' };
+            }
             return { code: 0, stdout: '', stderr: '' };
         },
         async logs() {
@@ -261,6 +273,30 @@ describe('ensureWorkspaceSandbox', () => {
         const result = await ensureWorkspaceSandbox('acme', WS_PATH, { runtime, platform: 'linux' });
         // The dev image is refreshed (a moved `:1` reaches an existing workspace
         // only this way) and the stale sandbox recreated from it.
+        expect(runtime.pulled).toContain(GENIE_DEV_BASE_IMAGE);
+        expect(runtime.removed).toContain('id-genie-ws-acme-dev');
+        expect(result).toMatchObject({ ok: true, created: { container: true } });
+    });
+
+    it('REFRESHES + recreates a sandbox whose caddy LACKS the replace module (pre-rewrite Caddy)', async () => {
+        // The "sites break once the app emits `replace`" case: a sandbox on an old
+        // dev image has a caddy BINARY but no response-body-rewrite module, so a
+        // Caddyfile using `replace` fails to reload and every site dies. It must be
+        // treated as unadoptable — refreshed + recreated on the module-carrying image.
+        const runtime = fakeRuntime({
+            noReplaceModule: true,
+            existingNetworks: ['genie-ws-acme'],
+            existing: [
+                {
+                    id: 'id-genie-ws-acme-dev',
+                    name: 'genie-ws-acme-dev',
+                    image: GENIE_DEV_BASE_IMAGE,
+                    state: 'running',
+                    workspaceId: 'acme',
+                },
+            ],
+        });
+        const result = await ensureWorkspaceSandbox('acme', WS_PATH, { runtime, platform: 'linux' });
         expect(runtime.pulled).toContain(GENIE_DEV_BASE_IMAGE);
         expect(runtime.removed).toContain('id-genie-ws-acme-dev');
         expect(result).toMatchObject({ ok: true, created: { container: true } });
