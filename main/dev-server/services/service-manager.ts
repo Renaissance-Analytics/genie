@@ -190,8 +190,13 @@ export interface DevServiceManager {
     logs(serviceId: string, tail?: number): Promise<string>;
     /** Release, and — only when nobody else holds it — remove the engine. */
     remove(workspaceId: string, serviceId: string, opts?: { purge?: boolean }): Promise<void>;
-    /** The env this workspace's SITE containers get. */
+    /** The env this workspace's SITE containers get (engine reached by container
+     *  name — for a sibling container on the workspace network). */
     envFor(workspaceId: string): Record<string, string>;
+    /** The env a HOST-run process/terminal gets — the same connections, but on
+     *  the engine's PUBLISHED loopback port (127.0.0.1) it can actually dial.
+     *  Omits any service the runtime published nothing for. */
+    hostEnvFor(workspaceId: string): Record<string, string>;
     /** Acquire every enabled service; release everything that no longer is. */
     reconcile(): Promise<void>;
     releaseAll(): Promise<void>;
@@ -622,6 +627,23 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         };
     }
 
+    /**
+     * Like {@link provisionedFor}, but for a HOST-run consumer — a managed
+     * process, a person, a `psql`. A host process reaches the engine on its
+     * PUBLISHED loopback port, never the container name a sibling container uses
+     * (it cannot resolve that name). Returns `null` when nothing was published:
+     * then the engine is simply unreachable from the host, so it is left out
+     * rather than emitting a connection string that would fail.
+     */
+    function provisionedForHost(entry: Live): ProvisionedService | null {
+        const spec = engineSpecFor(entry.config.engine);
+        const primary =
+            entry.endpoints.find((e) => e.name === (spec.ports.find((p) => p.primary)?.name ?? '')) ??
+            entry.endpoints[0];
+        if (!primary?.hostPort) return null;
+        return { ...provisionedFor(entry), host: '127.0.0.1', port: primary.hostPort };
+    }
+
     function statusOf(entry: Live): DevServiceStatus {
         return {
             serviceId: entry.serviceId,
@@ -812,6 +834,13 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             return serviceEnv(mine.map(provisionedFor));
         },
 
+        hostEnvFor(workspaceId) {
+            const mine = [...live.values()].filter((e) => e.workspaceId === workspaceId);
+            return serviceEnv(
+                mine.map(provisionedForHost).filter((p): p is ProvisionedService => p !== null),
+            );
+        },
+
         async reconcile() {
             const wanted = new Set<string>();
             for (const workspace of deps.listWorkspaces()) {
@@ -991,6 +1020,16 @@ export function devServiceManager(): DevServiceManager | null {
  */
 export function devServiceEnvFor(workspaceId: string): Record<string, string> {
     return instance?.envFor(workspaceId) ?? {};
+}
+
+/**
+ * The HOST-form service env for a workspace: the same connection strings as
+ * {@link devServiceEnvFor}, but on the engines' published `127.0.0.1` ports so a
+ * process or terminal running on the HOST (a `queue:work`, a test run, a dev
+ * server) can reach them. `{}` when nothing is initialised.
+ */
+export function devServiceHostEnvFor(workspaceId: string): Record<string, string> {
+    return instance?.hostEnvFor(workspaceId) ?? {};
 }
 
 /** Test-only: drop the process-wide instance. */
