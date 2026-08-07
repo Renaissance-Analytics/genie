@@ -12,6 +12,7 @@ import {
     remoteAttachTerminal,
     remoteTerminalInput,
     remoteDetachTerminal,
+    remoteReconnect,
 } from '../index';
 import { PopKeypair, popSignedInput } from '../relay-pop';
 
@@ -176,6 +177,51 @@ describe('relay transport — connectWorkstation', () => {
         });
         expect(res.ok).toBe(false);
         expect(res.error).toMatch(/workstation/i);
+    });
+});
+
+describe('relay transport — reconnect (genie#138)', () => {
+    it('RE-MINTS a fresh grant and re-dials the member session, instead of re-subscribing the dead one', async () => {
+        // A fresh grant per mint — the Reconnect path must call this (the original
+        // short-TTL grant is dead by the time a relay session drops).
+        const mintGrant = vi.fn(async () => ({ relayUrl: stub.url, grant: 'jws.reminted.grant' }));
+        await connectWorkstation({
+            workstationId: WS_ID,
+            name: 'Studio Box',
+            relayUrl: stub.url,
+            grant: 'jws.initial.grant',
+            mintGrant,
+        });
+        bindWindowToConnection(WC_ID, CONN_KEY);
+
+        // The bug: relay `remoteReconnect` re-subscribed events over the ALREADY-DEAD
+        // member client — it never re-minted the grant, never re-dialed, and never
+        // returned the link to `connected`, so the spinner hung forever. The fix
+        // rebuilds the session in place.
+        const res = await remoteReconnect(WC_ID);
+
+        // Re-minted a fresh grant AND re-dialed a genuinely new member session (a
+        // second member-welcome completed — res.ok is only true if the rebuild's
+        // relay.connect handshaked). Pre-fix this called mintGrant 0 times (it
+        // re-subscribed the dead client), so this assertion is the red→green line.
+        expect(mintGrant).toHaveBeenCalledTimes(1);
+        expect(res.ok).toBe(true);
+    });
+
+    it('with NO re-mint path, reconnect gives up to `lost` (advise close+reopen) rather than hanging', async () => {
+        // A relay conn opened without a mintGrant can't rebuild in place; reconnect
+        // must resolve to a failure (→ `lost` overlay), never sit in `reconnecting`.
+        await connectWorkstation({
+            workstationId: WS_ID,
+            name: 'Studio Box',
+            relayUrl: stub.url,
+            grant: 'g',
+        });
+        bindWindowToConnection(WC_ID, CONN_KEY);
+
+        const res = await remoteReconnect(WC_ID);
+        expect(res.ok).toBe(false);
+        expect(res.error).toMatch(/reopen/i);
     });
 });
 
