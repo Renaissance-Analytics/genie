@@ -164,6 +164,7 @@ export type { ProvisionedService } from './services/env-wiring';
 export {
     createDevServiceManager,
     devServiceEnvFor,
+    devServiceHostEnvFor,
     devServiceManager,
     engineRecordKeyFor,
     initDevServices,

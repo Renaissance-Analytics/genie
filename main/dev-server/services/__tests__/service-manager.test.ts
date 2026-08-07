@@ -275,6 +275,26 @@ describe('one engine, two workspaces', () => {
         expect(primary?.port).toBe(5432);
         expect(primary?.hostPort).toBeGreaterThan(1024);
     });
+
+    it('hostEnvFor reaches the engine on 127.0.0.1:<published port>, so a HOST process can hit the DB', async () => {
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }));
+        const status = await manager.acquire('a', 'svc-a');
+        const hostPort = status.endpoints?.find((e) => e.name === 'postgres')?.hostPort;
+        expect(hostPort).toBeGreaterThan(1024);
+
+        // The SITE-container form dials the engine by container NAME (a sibling
+        // container) — a managed process on the HOST cannot resolve that name. So
+        // hostEnvFor swaps in the published loopback port, which is what lets a
+        // host-run `queue:work` / test / dev server actually reach the DB.
+        const containerEnv = manager.envFor('a');
+        expect(containerEnv.DB_HOST).toBe('genie-svc-postgres-16');
+
+        const hostEnv = manager.hostEnvFor('a');
+        expect(hostEnv.DB_HOST).toBe('127.0.0.1');
+        expect(hostEnv.DB_PORT).toBe(String(hostPort));
+        expect(hostEnv.DATABASE_URL).toContain(`@127.0.0.1:${hostPort}/`);
+    });
 });
 
 describe('reference counting', () => {
