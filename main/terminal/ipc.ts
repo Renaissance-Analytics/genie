@@ -740,15 +740,16 @@ export function registerTerminalIpc(): void {
             if (Object.keys(envFileVars).length) {
                 opts = { ...opts, env: { ...envFileVars, ...opts.env } };
             }
-            // Managed processes run on the HOST, so they must reach the workspace's
-            // Genie-managed services on their PUBLISHED loopback ports
-            // (127.0.0.1:<port>) — the site container's env names the engine
-            // container, which a host process cannot resolve. Inject that host-form
-            // service env into the process ENVIRONMENT (applied at execution, never
-            // in the command text), authoritative like the site's injected env, so
-            // a `queue:work`, a test run or a dev server reaches the DB/redis/reverb
-            // with nothing typed.
-            if (spec?.type === 'process' && spec.workspace_id) {
+            // A workspace's terminals AND managed processes run on the HOST, so
+            // they must reach the workspace's Genie-managed services on their
+            // PUBLISHED loopback ports (127.0.0.1:<port>) — the site container's env
+            // names the engine container, which a host shell/process cannot resolve.
+            // Inject that host-form service env into the pty ENVIRONMENT (applied at
+            // execution, never in a typed command), authoritative like the site's
+            // injected env, so an agent's `artisan test`/`tinker` in a terminal and a
+            // `queue:work` in a process both reach the DB/redis/reverb with nothing
+            // typed. (Host-native hosting, Wish #102.)
+            if (spec?.workspace_id) {
                 const svcEnv = devServiceHostEnvFor(spec.workspace_id);
                 if (Object.keys(svcEnv).length) {
                     opts = { ...opts, env: { ...opts.env, ...svcEnv } };
