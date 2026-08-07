@@ -25,10 +25,34 @@ describe('buildCaddyfile', () => {
         expect(cf).toContain('reverse_proxy 127.0.0.1:8000');
     });
 
-    it('never emits a bare http (port 80) listener — https only', () => {
+    it('never serves plain http — no :80 listener, and every http:// is a rewrite SOURCE mapped to https', () => {
         const cf = buildCaddyfile([{ host: 'x.acme.gen', port: 3000 }]);
-        expect(cf).not.toMatch(/http:\/\//);
+        // No bare http listener.
         expect(cf).not.toMatch(/:80\b/);
+        // The config now legitimately CONTAINS `http://<host>` — but only as the
+        // left side of the body-rewrite pair, mapped to the https:// of the same
+        // host. It exists solely to be rewritten away, never served as an origin.
+        expect(cf).toContain('"http://x.acme.gen" "https://x.acme.gen"');
+        const httpUrls = [...cf.matchAll(/http:\/\/[a-z0-9.-]+/g)].map((m) => m[0]);
+        expect(httpUrls).toEqual(['http://x.acme.gen']);
+    });
+
+    it('rewrites the app\'s own in-body http://<host> up to https via a streamed `replace`', () => {
+        const cf = buildCaddyfile([{ host: 'app.acme.gen', port: 4000 }]);
+        expect(cf).toContain('replace {');
+        expect(cf).toContain('stream');
+        expect(cf).toContain('"http://app.acme.gen" "https://app.acme.gen"');
+        // `replace` is auto-ordered AFTER encode (hence before reverse_proxy), so
+        // it sits at site level and precedes the proxy in the emitted config.
+        const replaceIdx = cf.indexOf('replace {');
+        const proxyIdx = cf.indexOf('reverse_proxy 127.0.0.1:4000');
+        expect(replaceIdx).toBeGreaterThan(-1);
+        expect(proxyIdx).toBeGreaterThan(replaceIdx);
+    });
+
+    it('strips upstream Accept-Encoding so the body is plaintext for the rewrite', () => {
+        const cf = buildCaddyfile([{ host: 'app.acme.gen', port: 4000 }]);
+        expect(cf).toContain('header_up -Accept-Encoding');
     });
 
     it('is stable/deterministic for the same sites (so a no-op reload is a no-op)', () => {
@@ -54,15 +78,18 @@ describe('buildCaddyfile', () => {
         expect(cf).toContain(`web.acme.gen:${CADDY_HTTPS_PORT} {`);
     });
 
-    it('adds no upstream Host when none is pinned, but STILL forces https on redirects', () => {
+    it('adds no upstream Host rewrite when none is pinned, but STILL rewrites body + redirect scheme', () => {
         const cf = buildCaddyfile([{ host: 'web.acme.gen', port: 5173 }]);
-        expect(cf).not.toContain('header_up');
-        // The redirect-scheme rewrite is on EVERY site: an app that builds
-        // in-request URLs off the plain-http proxy hop (no TrustProxies) emits a
-        // `Location: http://<name>.gen/…`, and the browser then follows it to a
-        // scheme Caddy does not serve. Rewrite it back to https at the front door.
+        // No HOST rewrite (that's only for host-checking frameworks). The
+        // `header_up -Accept-Encoding` strip is always present, so assert on the
+        // precise `header_up Host` rather than any `header_up`.
+        expect(cf).not.toContain('header_up Host');
+        // Both scheme rewrites are on EVERY site: the response BODY (in-request
+        // self-links) and the `Location` header (redirects), so an app that builds
+        // URLs off the plain-http proxy hop still reaches the browser as https.
         expect(cf).toContain('reverse_proxy 127.0.0.1:5173 {');
         expect(cf).toContain('header_down Location "^http:" "https:"');
+        expect(cf).toContain('"http://web.acme.gen" "https://web.acme.gen"');
     });
 
     it('forces https on redirects for a site WITH a pinned upstream Host too', () => {

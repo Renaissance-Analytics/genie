@@ -31,6 +31,23 @@
 # `trixie` (Debian 13) is the pin that fixes PHP at 8.4 and Python at 3.13 —
 # those two come from apt, so the base tag IS their version pin. Bumping the
 # base is what bumps them.
+# --- custom Caddy builder ---------------------------------------------------
+#
+# The sandbox's front-door Caddy needs the `replace` directive (a response-body
+# http→https rewrite; see main/dev-server/caddyfile.ts) which a STOCK Caddy build
+# does not carry. Build Caddy here from a pinned version + a pinned module commit,
+# then COPY the (static) binary into the image below. xcaddy + Go come
+# preinstalled in Caddy's official builder image. Pinned both ways so this stays
+# reproducible, same discipline as every other toolchain in this file.
+ARG CADDY_VERSION=2.9.1
+ARG CADDY_REPLACE_RESPONSE_VERSION=v0.0.0-20250618171559-80962887e4c6
+FROM caddy:${CADDY_VERSION}-builder AS caddybuild
+ARG CADDY_VERSION
+ARG CADDY_REPLACE_RESPONSE_VERSION
+RUN xcaddy build "v${CADDY_VERSION}" \
+    --with "github.com/caddyserver/replace-response@${CADDY_REPLACE_RESPONSE_VERSION}" \
+    --output /out/caddy
+
 FROM debian:trixie-slim
 
 # Fail a pipeline on the FIRST command that fails, not just the last. Without
@@ -263,34 +280,20 @@ RUN set -eux; \
     "${CARGO_HOME}/bin/rustc" --version; \
     "${CARGO_HOME}/bin/cargo" --version
 
-# --- Caddy ------------------------------------------------------------------
+# --- Caddy (custom build) ---------------------------------------------------
 #
 # The per-workspace reverse proxy that fronts every hosted `.gen` site. It runs
 # INSIDE this sandbox alongside the app processes, publishes ONE https port,
-# TLS-terminates each `<name>.gen` (forcing https), and reverse-proxies to the
-# app's plain-http loopback port (masking it). Pinned + checksum-verified against
-# the release's own `checksums.txt` — same trust model as Go/Rust above, no
-# runtime download. NB: Caddy's checksums.txt publishes SHA-512 digests (unlike
-# Node's SHA-256 above), so this verifies with sha512sum.
-ARG CADDY_VERSION=2.8.4
-RUN set -eux; \
-    case "$(dpkg --print-architecture)" in \
-        amd64) arch='amd64' ;; \
-        arm64) arch='arm64' ;; \
-        *) echo "genie-dev-base: unsupported architecture $(dpkg --print-architecture)" >&2; exit 1 ;; \
-    esac; \
-    base="https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}"; \
-    file="caddy_${CADDY_VERSION}_linux_${arch}.tar.gz"; \
-    tmp="$(mktemp -d)"; \
-    curl -fsSL -o "${tmp}/${file}" "${base}/${file}"; \
-    want="$(curl -fsSL "${base}/caddy_${CADDY_VERSION}_checksums.txt" | grep " ${file}\$" | cut -d' ' -f1)"; \
-    got="$(sha512sum "${tmp}/${file}" | cut -d' ' -f1)"; \
-    test -n "${want}"; \
-    test "${want}" = "${got}"; \
-    tar -xzf "${tmp}/${file}" -C "${tmp}" caddy; \
-    install -m 0755 "${tmp}/caddy" /usr/local/bin/caddy; \
-    rm -rf "${tmp}"; \
-    caddy version
+# TLS-terminates each `<name>.gen` (forcing https), reverse-proxies to the app's
+# plain-http loopback port (masking it), AND rewrites the app's own in-body +
+# redirect `http://<name>.gen` back to https so NO app needs proxy-trust config
+# (see main/dev-server/caddyfile.ts). That last part uses the `replace` directive
+# from the caddyserver/replace-response module, which a stock Caddy lacks — so
+# Caddy is built with it in the `caddybuild` stage above (pinned Caddy version +
+# pinned module commit) and its static binary copied in here. The RUN below fails
+# the build if the module is somehow absent, so a Caddy without it can never ship.
+COPY --from=caddybuild /out/caddy /usr/local/bin/caddy
+RUN caddy version && caddy list-modules | grep -q '^http.handlers.replace_response$'
 
 # --- the genie user ---------------------------------------------------------
 #
