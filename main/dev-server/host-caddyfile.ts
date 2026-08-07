@@ -78,8 +78,6 @@ function quotePath(p: string, which: string): string {
  */
 export function buildHostCaddyfile(sites: HostCaddySite[], tls: HostCaddyTls): string {
     for (const s of sites) assertSite(s);
-    const cert = quotePath(tls.certPath, 'cert');
-    const key = quotePath(tls.keyPath, 'key');
     const sorted = [...sites].sort((a, b) => a.host.localeCompare(b.host));
 
     const header = [
@@ -90,6 +88,13 @@ export function buildHostCaddyfile(sites: HostCaddySite[], tls: HostCaddyTls): s
         '}',
         '',
     ];
+
+    // No sites ⇒ no vhost references a cert, so don't demand one (the reconcile
+    // engine writes this empty config before any leaf has been issued).
+    if (sorted.length === 0) return header.join('\n');
+
+    const cert = quotePath(tls.certPath, 'cert');
+    const key = quotePath(tls.keyPath, 'key');
 
     const blocks = sorted.flatMap((s) => [
         // Plain http → https, so a bare `name.gen` typed in the browser lands on TLS.

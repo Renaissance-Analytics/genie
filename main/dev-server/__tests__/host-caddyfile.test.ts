@@ -82,6 +82,12 @@ describe('buildHostCaddyfile', () => {
         expect(typeof cf).toBe('string');
     });
 
+    it('tolerates empty TLS paths when there are no sites (nothing references a cert)', () => {
+        // The reconcile engine writes an empty config before any leaf exists, so a
+        // site-less config must not demand a cert it has no vhost to use.
+        expect(() => buildHostCaddyfile([], { certPath: '', keyPath: '' })).not.toThrow();
+    });
+
     it('REFUSES a bad host/port, an injectable upstream host, or an injectable cert path', () => {
         expect(() => buildHostCaddyfile([{ host: 'ok.gen', port: 0 }], TLS)).toThrow();
         expect(() => buildHostCaddyfile([{ host: 'ok.gen', port: 70000 }], TLS)).toThrow();
