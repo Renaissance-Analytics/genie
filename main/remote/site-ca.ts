@@ -1,4 +1,5 @@
-import crypto, { X509Certificate } from 'node:crypto';
+import { X509Certificate } from 'node:crypto';
+import { buildSignedCertPem, genKeyPair } from '../host-core/crypto/x509';
 
 /**
  * Per-session Genie CA for the Testing Browser (serve-local-sites Phase D, design
@@ -23,49 +24,15 @@ import crypto, { X509Certificate } from 'node:crypto';
  *     from a DIFFERENT session's CA fails closed — that is the per-connection
  *     `.gen` isolation guarantee at the crypto layer.
  *
- * KEYGEN: keys come from Node's native `crypto.generateKeyPairSync` (fast, ~60ms),
- * and node-forge only assembles + signs the X.509 structure (Node has no cert
- * BUILDER, only the read-only `X509Certificate`). Verification uses Node's built-in
- * `X509Certificate` (no forge), so the trust decision never leaves the platform
- * crypto. One shared leaf keypair backs every issued leaf (standard MITM practice)
- * — only the per-name cert differs, and issued leaves are cached by name.
+ * The X.509 assembly (keygen, the genie#78 serial fix, native TBS signing) lives
+ * in main/host-core/crypto/x509.ts, shared with the stable host-native CA
+ * (dev-server/host-ca.ts); this file keeps only the session-scoped POLICY —
+ * validity window, the CA/leaf extensions, the per-name leaf cache, and the
+ * `verifyLeaf` trust oracle. Verification uses Node's built-in `X509Certificate`,
+ * so the trust decision never leaves the platform crypto. One shared leaf keypair
+ * backs every issued leaf (standard MITM practice) — only the per-name cert
+ * differs, and issued leaves are cached by name.
  */
-
-// --- minimal node-forge typing --------------------------------------------
-// node-forge ships no types and we deliberately DON'T add an ambient
-// `declare module 'node-forge'` (it would collide with a future
-// `@types/node-forge` the owner may install). Instead we type ONLY the surface we
-// use and load it through a CommonJS require cast — see the dependency flag in the
-// Phase D report.
-
-interface ForgeCertificate {
-    publicKey: unknown;
-    serialNumber: string;
-    validity: { notBefore: Date; notAfter: Date };
-    setSubject(attrs: Array<{ name: string; value: string }>): void;
-    setIssuer(attrs: Array<{ name: string; value: string }>): void;
-    setExtensions(exts: Array<Record<string, unknown>>): void;
-    sign(key: unknown, md: unknown): void;
-    signatureOid?: string;
-    siginfo?: { algorithmOid?: string };
-    tbsCertificate?: unknown;
-    signature?: string;
-}
-interface ForgePki {
-    publicKeyFromPem(pem: string): unknown;
-    createCertificate(): ForgeCertificate;
-    getTBSCertificate(cert: ForgeCertificate): unknown;
-    certificateToPem(cert: ForgeCertificate): string;
-    privateKeyToPem(key: unknown): string;
-}
-interface Forge {
-    pki: ForgePki;
-    md: { sha256: { create(): unknown } };
-    asn1: { toDer(value: unknown): { getBytes(): string } };
-}
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const forge = require('node-forge') as Forge;
 
 /** A signed leaf cert + its private key, both PEM — fed to `tls.createSecureContext`. */
 export interface LeafCert {
@@ -84,57 +51,6 @@ const VALIDITY_MS = 397 * 24 * 60 * 60 * 1000;
 const BACKDATE_MS = 60 * 60 * 1000;
 
 const CA_SUBJECT = [{ name: 'commonName', value: 'Genie Testing Browser Session CA' }];
-
-function genKeyPair(): { pub: unknown; privPem: string } {
-    const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
-        modulusLength: 2048,
-        publicKeyEncoding: { type: 'spki', format: 'pem' },
-        privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
-    });
-    return {
-        pub: forge.pki.publicKeyFromPem(publicKey),
-        privPem: privateKey,
-    };
-}
-
-const SHA256_WITH_RSA_OID = '1.2.840.113549.1.1.11';
-
-/** Assemble the certificate with forge, but sign the TBS bytes with Node/OpenSSL.
- * Forge's pure-JS RSA signer intermittently emitted a malformed signature BIT
- * STRING under full-suite CPU contention; native signing keeps the certificate
- * construction synchronous while removing that nondeterministic crypto seam. */
-function signCertificate(cert: ForgeCertificate, privateKeyPem: string): void {
-    cert.signatureOid = SHA256_WITH_RSA_OID;
-    cert.siginfo = { algorithmOid: SHA256_WITH_RSA_OID };
-    cert.tbsCertificate = forge.pki.getTBSCertificate(cert);
-    const tbs = forge.asn1.toDer(cert.tbsCertificate).getBytes();
-    cert.signature = crypto
-        .sign('sha256', Buffer.from(tbs, 'binary'), privateKeyPem)
-        .toString('binary');
-}
-
-/**
- * A random hex serial (positive, ≤20 bytes) for each cert.
- *
- * The serial is the one RANDOM field in these certificates, and a DER INTEGER must
- * be both POSITIVE and MINIMALLY encoded — a leading `0x00` is legal ONLY when it
- * is needed to keep the next byte from reading as a sign bit. Anything else makes
- * OpenSSL reject the whole certificate with
- * `error:068000DD:asn1 encoding routines::illegal padding` (genie#78).
- *
- * Prefixing a literal `00` pad byte does NOT guarantee that: node-forge's DER
- * writer strips exactly ONE redundant pad byte, so a draw that itself began
- * `00 <msb-clear>` still emitted a non-minimal `00 <msb-clear>` — ~1 cert in 500,
- * which intermittently broke `new SessionCa()` and every leaf the shim issued.
- * Instead we make the leading byte minimal by construction: clear its sign bit so
- * no pad byte is needed at all, and keep it non-zero so it can't BE a pad byte.
- * That is valid DER whether or not forge normalises it.
- */
-function randomSerial(): string {
-    const bytes = crypto.randomBytes(16);
-    bytes[0] = (bytes[0] & 0x7f) || 0x01;
-    return bytes.toString('hex');
-}
 
 /**
  * A per-Testing-Browser-session Certificate Authority. Construct ONE per host
@@ -157,19 +73,18 @@ export class SessionCa {
         const ca = genKeyPair();
         this.caPrivateKeyPem = ca.privPem;
         const now = Date.now();
-        const caCert = forge.pki.createCertificate();
-        caCert.publicKey = ca.pub;
-        caCert.serialNumber = randomSerial();
-        caCert.validity.notBefore = new Date(now - BACKDATE_MS);
-        caCert.validity.notAfter = new Date(now + VALIDITY_MS);
-        caCert.setSubject(CA_SUBJECT);
-        caCert.setIssuer(CA_SUBJECT);
-        caCert.setExtensions([
-            { name: 'basicConstraints', cA: true, critical: true },
-            { name: 'keyUsage', keyCertSign: true, cRLSign: true, critical: true },
-        ]);
-        signCertificate(caCert, this.caPrivateKeyPem);
-        this.caPem = forge.pki.certificateToPem(caCert);
+        this.caPem = buildSignedCertPem({
+            publicKey: ca.pub,
+            notBefore: new Date(now - BACKDATE_MS),
+            notAfter: new Date(now + VALIDITY_MS),
+            subject: CA_SUBJECT,
+            issuer: CA_SUBJECT,
+            extensions: [
+                { name: 'basicConstraints', cA: true, critical: true },
+                { name: 'keyUsage', keyCertSign: true, cRLSign: true, critical: true },
+            ],
+            signingKeyPem: this.caPrivateKeyPem,
+        });
         this.caX509 = new X509Certificate(this.caPem);
 
         const leaf = genKeyPair();
@@ -187,25 +102,21 @@ export class SessionCa {
         const cached = this.leaves.get(key);
         if (cached) return cached;
         const now = Date.now();
-        const cert = forge.pki.createCertificate();
-        cert.publicKey = this.leafPub;
-        cert.serialNumber = randomSerial();
-        cert.validity.notBefore = new Date(now - BACKDATE_MS);
-        cert.validity.notAfter = new Date(now + VALIDITY_MS);
-        cert.setSubject([{ name: 'commonName', value: key }]);
-        cert.setIssuer(CA_SUBJECT);
-        cert.setExtensions([
-            { name: 'basicConstraints', cA: false },
-            { name: 'keyUsage', digitalSignature: true, keyEncipherment: true },
-            { name: 'extKeyUsage', serverAuth: true },
-            { name: 'subjectAltName', altNames: [{ type: 2, value: key }] },
-        ]);
-        signCertificate(cert, this.caPrivateKeyPem);
-        const issued: LeafCert = {
-            certPem: forge.pki.certificateToPem(cert),
-            keyPem: this.leafKeyPem,
-            caPem: this.caPem,
-        };
+        const certPem = buildSignedCertPem({
+            publicKey: this.leafPub,
+            notBefore: new Date(now - BACKDATE_MS),
+            notAfter: new Date(now + VALIDITY_MS),
+            subject: [{ name: 'commonName', value: key }],
+            issuer: CA_SUBJECT,
+            extensions: [
+                { name: 'basicConstraints', cA: false },
+                { name: 'keyUsage', digitalSignature: true, keyEncipherment: true },
+                { name: 'extKeyUsage', serverAuth: true },
+                { name: 'subjectAltName', altNames: [{ type: 2, value: key }] },
+            ],
+            signingKeyPem: this.caPrivateKeyPem,
+        });
+        const issued: LeafCert = { certPem, keyPem: this.leafKeyPem, caPem: this.caPem };
         this.leaves.set(key, issued);
         return issued;
     }

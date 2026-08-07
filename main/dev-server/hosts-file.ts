@@ -29,7 +29,9 @@ export const HOSTS_BLOCK_END = '# END GENIE SITES';
  *  it MUST be a `.gen` name — we only ever manage our own sites. */
 const GEN_HOST_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.gen$/;
 
-function assertGenName(name: string): void {
+/** Validate a `.gen` hostname (DNS labels, no whitespace, `.gen` suffix) — shared
+ *  with the host CA (host-ca.ts) so both refuse the same injectable names. */
+export function assertGenName(name: string): void {
     if (typeof name !== 'string' || !GEN_HOST_RE.test(name)) {
         throw new Error(`hosts-file: refusing invalid .gen name ${JSON.stringify(name)}`);
     }
