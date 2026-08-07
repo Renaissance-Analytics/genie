@@ -42,3 +42,55 @@ export function composeHostSiteEnv(
         ...serviceHostEnv,
     };
 }
+
+/** Everything a detached host site process is started with. */
+export interface HostSiteSpawnSpec {
+    /** The serve command argv (validated upstream). */
+    command: string[];
+    /** The repo dir on the host to run it in. */
+    cwd: string;
+    env: Record<string, string>;
+    /** File the process's stdout/stderr are captured to. */
+    logPath: string;
+}
+
+/** The platform primitives a host site's lifecycle needs, injected so the
+ *  start/stop/alive orchestration is unit-tested and only the leaves (Node
+ *  child_process / process.kill / taskkill) touch the OS. */
+export interface HostSpawnPrimitives {
+    platform: NodeJS.Platform;
+    /** Spawn detached, returning the pid (a process-GROUP leader on posix). */
+    spawnDetached: (spec: HostSiteSpawnSpec) => number;
+    /** process.kill semantics: false when the target is gone (throws → dead). */
+    signal: (pid: number, sig: NodeJS.Signals | 0) => boolean;
+    /** Windows tree kill (no process groups there). */
+    killTreeWin: (pid: number) => Promise<void>;
+}
+
+/** `taskkill` argv that ends a process AND its children, forcefully. */
+export function killTreeWinArgv(pid: number): string[] {
+    return ['taskkill', '/pid', String(pid), '/t', '/f'];
+}
+
+/** Start a host site's serve command detached; returns the tracked pid. */
+export function startHostSite(spec: HostSiteSpawnSpec, prims: HostSpawnPrimitives): number {
+    if (!Array.isArray(spec.command) || spec.command.length === 0) {
+        throw new Error('host site has no command to run');
+    }
+    return prims.spawnDetached(spec);
+}
+
+/** Stop a host site: on posix signal the whole GROUP (the detached child is its
+ *  leader, so its dev server + children die together); on Windows tree-kill. */
+export async function stopHostSite(pid: number, prims: HostSpawnPrimitives): Promise<void> {
+    if (prims.platform === 'win32') {
+        await prims.killTreeWin(pid);
+        return;
+    }
+    prims.signal(-pid, 'SIGTERM');
+}
+
+/** Whether a host site's process is still alive (signal 0 probe). */
+export function hostSiteAlive(pid: number, prims: HostSpawnPrimitives): boolean {
+    return prims.signal(pid, 0);
+}
