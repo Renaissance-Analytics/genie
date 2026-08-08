@@ -65,7 +65,12 @@ export function elevationLauncherArgv(cmd: string, args: string[], platform: Nod
     }
     if (platform === 'darwin') {
         const shell = [cmd, ...args].map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
-        return ['osascript', '-e', `do shell script "${shell.replace(/"/g, '\\"')}" with administrator privileges`];
+        // AppleScript string literal: backslash is the escape char, so escape `\`
+        // BEFORE `"` — otherwise a backslash in the sh string (every '\'' quote
+        // escape produces one) reaches AppleScript unescaped and corrupts the
+        // command. Order matters: doubling backslashes first, then quotes.
+        const literal = shell.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        return ['osascript', '-e', `do shell script "${literal}" with administrator privileges`];
     }
     return ['pkexec', cmd, ...args];
 }

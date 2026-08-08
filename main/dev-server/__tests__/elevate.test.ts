@@ -61,6 +61,28 @@ describe('elevationLauncherArgv', () => {
         expect(argv[0]).toBe('osascript');
         expect(argv.join(' ')).toContain('administrator privileges');
     });
+
+    it('escapes BACKSLASHES, not just quotes, in the macOS AppleScript literal', () => {
+        // An arg with a single quote becomes '\'' in the inner /bin/sh string —
+        // which INTRODUCES a backslash — and an arg may carry a backslash of its
+        // own. AppleScript's `do shell script "…"` literal treats backslash as its
+        // escape char, so a lone backslash corrupts the command (and is an
+        // injection vector: CodeQL js/incomplete-sanitization, the bug this guards).
+        const argv = elevationLauncherArgv('security', ["a'b", 'c\\d'], 'darwin');
+        const m = argv[2].match(/^do shell script "(.*)" with administrator privileges$/s);
+        expect(m).not.toBeNull();
+        const literal = m![1];
+
+        // Every backslash in the literal must belong to a \\ or \" escape — no lone
+        // backslash may reach AppleScript.
+        expect(literal.replace(/\\[\\"]/g, '')).not.toContain('\\');
+
+        // And decoding the AppleScript escaping must recover the exact /bin/sh
+        // command, with each arg still single-quote-safe.
+        const sh = literal.replace(/\\(["\\])/g, '$1');
+        expect(sh).toContain("'a'\\''b'"); // POSIX single-quote escaping of a'b
+        expect(sh).toContain("'c\\d'"); // backslash is literal inside sh single quotes
+    });
 });
 
 describe('isProcessElevated', () => {
