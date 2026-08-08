@@ -59,6 +59,19 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 /** Pinned standalone Node — Iron LTS, the line CI/release setup-node 20 uses. */
 const NODE_VERSION = process.env.NODE_RUNTIME_VERSION || '20.20.2';
 
+/**
+ * The HOST Caddy for host-native `.gen` in real browsers (story #238). The SAME
+ * custom build the sandbox uses (main/dev-server/dev-base/Dockerfile): Caddy +
+ * the `replace-response` module (the response-body http→https rewrite). Pinned
+ * both ways so the host binary matches the container one. Built with xcaddy, which
+ * needs a Go toolchain — absent Go, the build SKIPS with a warning (the feature is
+ * just unavailable) unless REQUIRE_HOST_CADDY is set (release), which makes it fail.
+ */
+const CADDY_VERSION = process.env.CADDY_VERSION || '2.9.1';
+const CADDY_REPLACE_RESPONSE_VERSION =
+    process.env.CADDY_REPLACE_RESPONSE_VERSION || 'v0.0.0-20250618171559-80962887e4c6';
+const XCADDY_VERSION = process.env.XCADDY_VERSION || 'v0.4.5';
+
 /** Parse `--platform x --arch y` overrides; default to the current process. */
 function parseArgs(argv) {
     const out = { platform: process.platform, arch: process.arch };
@@ -269,6 +282,65 @@ async function buildNodePty(tmpDir) {
     return dest;
 }
 
+/**
+ * Build the custom host Caddy into resources/runtime/caddy[.exe] (story #238).
+ * Uses xcaddy (installed into a scratch GOBIN so the user's PATH is untouched) to
+ * produce Caddy + the replace-response module — the exact pair the sandbox image
+ * builds. Native to the runner's os/arch (GOOS/GOARCH set for correctness + cross
+ * support). Returns the binary path, or null when skipped (no Go, not required).
+ */
+async function buildCaddy(tmpDir) {
+    const out = path.join(RUNTIME_DIR, platform === 'win32' ? 'caddy.exe' : 'caddy');
+
+    let hasGo = true;
+    try {
+        execFileSync('go', ['version'], { stdio: 'ignore' });
+    } catch {
+        hasGo = false;
+    }
+    if (!hasGo) {
+        const msg = 'Go toolchain not found — cannot build the custom host Caddy (.gen in real browsers)';
+        if (process.env.REQUIRE_HOST_CADDY) die(`${msg}. Install Go, or unset REQUIRE_HOST_CADDY.`);
+        log(`\x1b[33mSKIP host Caddy: ${msg}. The external-browser feature will be unavailable in this build.\x1b[0m`);
+        return null;
+    }
+
+    const gobin = path.join(tmpDir, 'gobin');
+    await fs.mkdir(gobin, { recursive: true });
+    log(`installing xcaddy ${XCADDY_VERSION}…`);
+    execFileSync('go', ['install', `github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}`], {
+        stdio: 'inherit',
+        env: { ...process.env, GOBIN: gobin },
+    });
+    const xcaddy = path.join(gobin, process.platform === 'win32' ? 'xcaddy.exe' : 'xcaddy');
+    if (!existsSync(xcaddy)) die(`xcaddy was not installed at ${xcaddy}`);
+
+    const GOOS = { win32: 'windows', darwin: 'darwin', linux: 'linux' }[platform];
+    const GOARCH = { x64: 'amd64', arm64: 'arm64' }[arch];
+    log(`building custom Caddy ${CADDY_VERSION} (+replace-response) for ${GOOS}/${GOARCH} via xcaddy…`);
+    execFileSync(
+        xcaddy,
+        [
+            'build',
+            `v${CADDY_VERSION}`,
+            '--with',
+            `github.com/caddyserver/replace-response@${CADDY_REPLACE_RESPONSE_VERSION}`,
+            '--output',
+            out,
+        ],
+        { stdio: 'inherit', env: { ...process.env, CGO_ENABLED: '0', GOOS, GOARCH } },
+    );
+    if (!existsSync(out)) die('xcaddy produced no caddy binary');
+    if (platform !== 'win32') await fs.chmod(out, 0o755);
+
+    // Native build ⇒ prove it runs; a cross-built foreign binary can't exec here.
+    if (platform === process.platform && arch === process.arch) {
+        log('verifying the built caddy runs…');
+        execFileSync(out, ['version'], { stdio: 'inherit' });
+    }
+    return out;
+}
+
 /** Recursive copy (dirs + files + exec bits), no symlink following surprises. */
 async function copyDir(src, dest) {
     await fs.mkdir(dest, { recursive: true });
@@ -334,6 +406,9 @@ async function main() {
 
         verifyLoads(nodePath);
 
+        const caddyBin = await buildCaddy(tmpDir);
+        if (caddyBin) log(`host Caddy → ${path.relative(REPO_ROOT, caddyBin)}`);
+
         // Version marker, read by resolveShippedRuntime() to key the per-user
         // MATERIALIZED copy of this runtime (<userData>/runtime/<key>/). The host
         // runs from that copy — OUTSIDE the install dir — so an auto-update
@@ -348,6 +423,9 @@ async function main() {
         log(`layout:`);
         log(`  resources/runtime/${NODE_BIN_NAME}`);
         log(`  resources/runtime/node-pty/  (incl. prebuilds/${platform}-${arch})`);
+        if (existsSync(path.join(RUNTIME_DIR, platform === 'win32' ? 'caddy.exe' : 'caddy'))) {
+            log(`  resources/runtime/caddy${platform === 'win32' ? '.exe' : ''}  (Caddy ${CADDY_VERSION} + replace-response)`);
+        }
         log(`  resources/runtime/version.txt  (${NODE_VERSION}-${platform}-${arch})`);
     } finally {
         await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});

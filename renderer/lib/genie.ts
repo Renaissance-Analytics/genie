@@ -273,6 +273,8 @@ export interface DevSiteInfo {
     runMode: string;
     kind: 'http' | 'tcp';
     enabled: boolean;
+    /** Opt-in: `<name>.gen` exposed to real external browsers (story #238). */
+    browserExposed?: boolean;
     /** running | stopped | failed */
     state: string;
     /** Whether the published port ANSWERED. `running` only says the container

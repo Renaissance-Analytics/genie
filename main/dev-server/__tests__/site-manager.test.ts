@@ -822,6 +822,44 @@ describe('service env injection (#234 P3)', () => {
         ]);
     });
 
+    it('exposes a browser-opted-in host-native site to the external-browser reconcile (story #238 P2)', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'web',
+                genName: 'web.acme.gen',
+                repo: 'app',
+                runMode: 'explicit',
+                hostPort: 8001,
+                kind: 'http',
+                enabled: true,
+                browserExposed: true,
+            },
+        };
+        const m = manager(runtime, sites, { probeReady: async () => true });
+        await m.start('acme', SITE_ID);
+        // The route the host Caddy :443 fronts, on the LIVE loopback port.
+        expect(m.hostBrowserRoutes()).toEqual([{ genName: 'web.acme.gen', port: 8001 }]);
+    });
+
+    it('does NOT expose a host-native site that was not browser-opted-in (story #238 P2)', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'web',
+                genName: 'web.acme.gen',
+                repo: 'app',
+                runMode: 'explicit',
+                hostPort: 8001,
+                kind: 'http',
+                enabled: true,
+            },
+        };
+        const m = manager(runtime, sites, { probeReady: async () => true });
+        await m.start('acme', SITE_ID);
+        expect(m.hostBrowserRoutes()).toEqual([]);
+    });
+
     it('runs a MANAGED HOST-NATIVE site (runMode=host) as a HOST process — no container, host-form env, routed (story #238)', async () => {
         const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
         const spawned: Array<{ siteId: string; command: string[]; cwd: string; env: Record<string, string> }> = [];

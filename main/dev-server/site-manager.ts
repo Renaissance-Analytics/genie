@@ -11,6 +11,8 @@ import {
     stopSiteProcess,
 } from './site-process';
 import { composeHostSiteEnv } from './host-site-process';
+import { hostBrowserRoutes as selectHostBrowserRoutes } from './host-browser-routes';
+import type { HostSiteRoute } from './host-reconcile';
 import { ensureWorkspaceSandbox, HOST_GATEWAY_HOSTNAME } from './workspace-sandbox';
 import { effectiveCommand, hostNativeRoute, sandboxCommandFor, type HostNativeRoute } from './sites-config';
 import type { ContainerRuntime, RuntimeDetection } from './container-runtime';
@@ -144,6 +146,8 @@ export interface DevSiteRow extends DevSiteStatus {
     image?: string;
     env?: DevSiteConfig['env'];
     upstreamHost?: DevSiteConfig['upstreamHost'];
+    /** Opt-in: `<name>.gen` exposed to real external browsers (story #238). */
+    browserExposed?: DevSiteConfig['browserExposed'];
     /** Set ONLY while a start is in flight (Gap 2). */
     phase?: DevSitePhase;
 }
@@ -284,6 +288,9 @@ export interface DevSiteManager {
     reconcile(): Promise<void>;
     /** RUNNING http sites as Testing-Browser rows. Synchronous. */
     genSites(): DevGenSite[];
+    /** The browser-exposed HOST-NATIVE routes across all workspaces — the input to
+     *  the external-browser host reconcile (story #238). Synchronous. */
+    hostBrowserRoutes(): HostSiteRoute[];
     stopAll(): Promise<void>;
 }
 
@@ -1071,6 +1078,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                         ...(config.image ? { image: config.image } : {}),
                         ...(config.env && Object.keys(config.env).length ? { env: config.env } : {}),
                         ...(config.upstreamHost ? { upstreamHost: config.upstreamHost } : {}),
+                        ...(config.browserExposed ? { browserExposed: config.browserExposed } : {}),
                         ...(flight
                             ? {
                                   phase: flight.phase,
@@ -1128,6 +1136,12 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             return rows;
         },
 
+        hostBrowserRoutes() {
+            return selectHostBrowserRoutes(
+                [...live.values()].map((e) => ({ config: e.config, port: e.caddyHostPort })),
+            );
+        },
+
         async stopAll() {
             for (const siteId of [...live.keys()]) await stop(siteId);
         },
@@ -1159,6 +1173,12 @@ export function devSiteManager(): DevSiteManager | null {
  */
 export function devServerGenSites(): DevGenSite[] {
     return instance?.genSites() ?? [];
+}
+
+/** The browser-exposed host-native routes for the external-browser reconcile
+ *  (story #238). `[]` when the dev server was never initialised. */
+export function devServerHostBrowserRoutes(): HostSiteRoute[] {
+    return instance?.hostBrowserRoutes() ?? [];
 }
 
 /** Test-only: drop the process-wide instance. */
