@@ -635,8 +635,11 @@ export interface ManageSiteRequest {
     name?: string;
     /** create/detect: a repo subfolder (repos/<repo>); omit for the workspace root. */
     repo?: string;
-    /** create: how it is built and served. Omit to take the recommendation. */
-    runMode?: 'dockerfile' | 'devcontainer' | 'compose' | 'recipe' | 'explicit';
+    /** create: how it is built and served. Omit to take the recommendation, which
+     *  is the DEV server run host-native (`host`) — no container, no build. Pass
+     *  `recipe`/`dockerfile`/`compose`/`devcontainer` to opt INTO a production
+     *  build+serve instead. */
+    runMode?: 'dockerfile' | 'devcontainer' | 'compose' | 'recipe' | 'explicit' | 'host';
     /** create: the image the SERVER runs in. Omit for the workspace dev image. */
     image?: string;
     /** create: the PRODUCTION BUILD, in order. LEGACY — the sandbox-serve model

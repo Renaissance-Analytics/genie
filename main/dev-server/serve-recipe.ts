@@ -185,6 +185,51 @@ export const DEFAULT_STACK_PORTS: Readonly<Record<HostingStack, number>> = {
     rust: 8080,
 };
 
+/** A repo's DEV server, run against live source as a HOST process (story #238). */
+export interface DevServe {
+    command: string[];
+    /** The port the dev server binds on 127.0.0.1 — where `.gen` routes. */
+    port: number;
+    framework?: DevFramework;
+    stack?: HostingStack;
+}
+
+/**
+ * The DEV command for a detected recipe — what "just serve the repo" runs instead
+ * of a production BUILD+SERVE. Genie runs this as a HOST process against the live
+ * source (no container, no build, deps installed with dev). Returns null when the
+ * stack has no unambiguous dev server Genie can pick (the caller then asks for an
+ * explicit `command`), because guessing a dev server wrong is worse than asking.
+ *
+ * Ports: for the stacks where Genie controls the flag (php/python/go) it pins one;
+ * for node it takes the repo's own `dev` script and the framework's conventional
+ * port, which the user overrides with an explicit `command` + `port` if it differs.
+ */
+export function devCommandForRecipe(option: Pick<HostingOption, 'stack' | 'framework' | 'port'>): DevServe | null {
+    const fw = option.framework;
+    const stack = option.stack;
+
+    if (fw === 'laravel' || stack === 'php') {
+        const port = option.port ?? 8000;
+        return { command: ['php', 'artisan', 'serve', '--host=127.0.0.1', `--port=${port}`], port, framework: 'laravel', stack: 'php' };
+    }
+    if (fw === 'django') {
+        const port = option.port ?? 8000;
+        return { command: ['python', 'manage.py', 'runserver', `127.0.0.1:${port}`], port, framework: 'django', stack: 'python' };
+    }
+    if (fw === 'vite' || fw === 'next' || stack === 'node') {
+        // The repo's OWN dev script (Vite/Next/Nuxt all define `dev`), on the
+        // framework's conventional port — not a port Genie forces onto it.
+        const port = option.port ?? (fw === 'vite' ? 5173 : 3000);
+        return { command: ['npm', 'run', 'dev'], port, ...(fw ? { framework: fw } : {}), stack: 'node' };
+    }
+    if (stack === 'go') {
+        const port = option.port ?? 8080;
+        return { command: ['go', 'run', '.'], port, stack: 'go' };
+    }
+    return null;
+}
+
 // --- layer 1: the repo's own container config ------------------------------
 
 const COMPOSE_FILES = [
