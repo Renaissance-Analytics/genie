@@ -103,6 +103,18 @@ describe('startUserChannelIssueWatch', () => {
         expect(handle).toMatchObject({ userId: 'u-1' });
         const sock = sockets[0];
 
+        // STARTUP reconcile — fires immediately, decoupled from the socket → the
+        // reconcile GET runs and dispatches p1, p2 before any connect event.
+        await vi.waitFor(() => expect(applyDelta).toHaveBeenCalledTimes(2));
+        const reconcileCall = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.find((c) =>
+            String(c[0]).endsWith('/api/v1/user/issue-watch'),
+        )!;
+        expect(reconcileCall[0]).toBe('https://tynn.test/api/v1/user/issue-watch');
+        expect(applyDelta.mock.calls.slice(0, 2).map((c) => (c[0] as IssueWatchDeltaPush).workspaceId)).toEqual([
+            'p1',
+            'p2',
+        ]);
+
         // connection_established → authorize (POST) → subscribe
         sock.emit('message', frame({ event: 'pusher:connection_established', data: frame({ socket_id: '9.9' }) }));
         await vi.waitFor(() =>
@@ -117,14 +129,9 @@ describe('startUserChannelIssueWatch', () => {
         expect(authInit.method).toBe('POST');
         expect(JSON.parse(authInit.body)).toMatchObject({ socket_id: '9.9', channel_name: channel });
 
-        // subscription_succeeded → onConnected → reconcile GET → applyDelta per workspace
+        // subscription_succeeded → onConnected → a SECOND reconcile (catch-up) → 2 more
         sock.emit('message', frame({ event: 'pusher_internal:subscription_succeeded', channel }));
-        await vi.waitFor(() => expect(applyDelta).toHaveBeenCalledTimes(2));
-        const reconcileCall = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.find((c) =>
-            String(c[0]).endsWith('/api/v1/user/issue-watch'),
-        )!;
-        expect(reconcileCall[0]).toBe('https://tynn.test/api/v1/user/issue-watch');
-        expect(applyDelta.mock.calls.map((c) => (c[0] as IssueWatchDeltaPush).workspaceId)).toEqual(['p1', 'p2']);
+        await vi.waitFor(() => expect(applyDelta).toHaveBeenCalledTimes(4));
 
         // a live push feeds the same store
         sock.emit('message', frame({
@@ -132,8 +139,32 @@ describe('startUserChannelIssueWatch', () => {
             channel,
             data: frame({ workspaceId: 'p3', projectId: 'p3', counts: { issue: 5, pr: 0, security: 0 }, items: [] }),
         }));
-        expect(applyDelta).toHaveBeenCalledTimes(3);
-        expect((applyDelta.mock.calls[2][0] as IssueWatchDeltaPush).workspaceId).toBe('p3');
+        expect(applyDelta).toHaveBeenCalledTimes(5);
+        expect((applyDelta.mock.calls.at(-1)![0] as IssueWatchDeltaPush).workspaceId).toBe('p3');
+    });
+
+    it('reconciles on STARTUP even when the push socket never connects (decoupled from onConnected)', async () => {
+        // tynn.ai#154/#155: in production the Pusher socket can't authorize
+        // (broadcasting-auth is dead), so onConnected never fires. The reconcile
+        // endpoint itself is healthy (session-cookie authed), so the feed MUST still
+        // populate from it — the self-heal reconcile cannot be chained to the socket,
+        // or a dead push blanks EVERY workspace to "not tracking".
+        const applyDelta = vi.fn();
+        const snapshot = {
+            workspaces: [{ workspaceId: 'p1', projectId: 'p1', counts: { issue: 1, pr: 0, security: 0 }, items: [] }],
+        };
+        const handle = await startUserChannelIssueWatch({
+            whoami: async () => ({ id: 'u-1' }),
+            broadcastConfig: async () => ({ appKey: 'k', cluster: 'us2' }),
+            tynnApiBaseUrl: () => 'https://tynn.test',
+            fetchImpl: makeUserFetch(snapshot),
+            applyDelta,
+            // A transport whose socket NEVER connects: open() never fires onConnected.
+            makeTransport: () => ({ open: () => ({ close: () => {} }) }) as never,
+        });
+        expect(handle).toMatchObject({ userId: 'u-1' });
+        await vi.waitFor(() => expect(applyDelta).toHaveBeenCalledTimes(1));
+        expect((applyDelta.mock.calls[0][0] as IssueWatchDeltaPush).workspaceId).toBe('p1');
     });
 
     it('does NOT start (returns null, builds no transport) when whoami has no user', async () => {
@@ -150,17 +181,25 @@ describe('startUserChannelIssueWatch', () => {
         expect(makeTransport).not.toHaveBeenCalled();
     });
 
-    it('does NOT start when no broadcast config resolves', async () => {
+    it('still RECONCILES (loads the feed) but builds no push transport when no broadcast config resolves', async () => {
+        // The reconcile is independent of Pusher, so a missing broadcast config turns
+        // OFF real-time push but must NOT stop the feed from loading — otherwise a
+        // config gap blanks every workspace to "not tracking".
         const makeTransport = vi.fn();
+        const applyDelta = vi.fn();
         const handle = await startUserChannelIssueWatch({
             whoami: async () => ({ id: 'u-1' }),
             broadcastConfig: async () => null,
             tynnApiBaseUrl: () => 'https://tynn.test',
-            fetchImpl: makeUserFetch({ workspaces: [] }),
-            applyDelta: vi.fn(),
+            fetchImpl: makeUserFetch({
+                workspaces: [{ workspaceId: 'p1', projectId: 'p1', counts: { issue: 1, pr: 0, security: 0 }, items: [] }],
+            }),
+            applyDelta,
             makeTransport: makeTransport as never,
         });
-        expect(handle).toBeNull();
         expect(makeTransport).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(applyDelta).toHaveBeenCalledTimes(1));
+        expect((applyDelta.mock.calls[0][0] as IssueWatchDeltaPush).workspaceId).toBe('p1');
+        expect(handle).toBeNull();
     });
 });

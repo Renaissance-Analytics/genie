@@ -132,7 +132,34 @@ export async function startUserChannelIssueWatch(
         const channel = userChannel(user.id);
         const tynnApiBaseUrl = (deps.tynnApiBaseUrl ?? (() => backend.host()))();
 
-        // 2) The (public) Pusher app key + cluster — env override → Tynn.
+        const fetchSnapshot = deps.fetchSnapshot ?? ((base: string) => defaultFetchUserSnapshot(base, fetchImpl));
+        const applyDelta =
+            deps.applyDelta ?? ((d: IssueWatchDeltaPush) => applyPushedDelta(d as unknown as PushedIssueWatchDelta));
+
+        // The reconcile is the self-heal net for the WHOLE feed, and it is
+        // session-cookie authed — TOTALLY independent of Pusher. So run it FIRST,
+        // before (and regardless of) the push subscription. In production the Pusher
+        // socket cannot authorize — `/api/v1/user/broadcasting-auth` is dead
+        // (tynn.ai#154 Passport down / #155 wrong-guard) — so `onConnected` never
+        // fires; and if broadcast config never resolves the function used to bail
+        // entirely. In BOTH cases the reconcile ran nowhere and every workspace read
+        // "not tracking" despite a perfectly healthy reconcile endpoint. Running it
+        // here loads the feed no matter what push does; it also re-runs on every
+        // (re)connect below to catch up deltas missed while offline.
+        // `applyPushedDelta` is idempotent, so the overlap is safe.
+        const runReconcile = async () => {
+            try {
+                const deltas = await fetchSnapshot(tynnApiBaseUrl);
+                for (const d of deltas) applyDelta(d);
+                log(`reconciled ${deltas.length} user IssueWatch snapshot(s)`);
+            } catch (e) {
+                log(`user issue-watch reconcile failed: ${errMsg(e)}`);
+            }
+        };
+        void runReconcile();
+
+        // The (public) Pusher app key + cluster — env override → Tynn. No config ⇒
+        // real-time push is off, but the reconcile above already loaded the feed.
         const cfg = await (deps.broadcastConfig ??
             (() =>
                 resolveBroadcastConfig({
@@ -140,12 +167,12 @@ export async function startUserChannelIssueWatch(
                     fromTynn: () => backend.fetchBroadcastConfig(),
                 })))();
         if (!cfg) {
-            log('no Pusher broadcast config resolved — user-channel IssueWatch off');
+            log('no Pusher broadcast config resolved — real-time push off (startup reconcile still ran)');
             return null;
         }
 
-        // 3) One persistent subscription to the user's personal channel, authorized
-        //    with the desktop's Tynn session cookie.
+        // One persistent subscription to the user's personal channel, authorized with
+        // the desktop's Tynn session cookie; each (re)connect re-runs the reconcile.
         const authorize = (socketId: string) =>
             authorizeUserChannel(socketId, channel, tynnApiBaseUrl, fetchImpl);
         const transport: WorkstationTransportLike = deps.makeTransport
@@ -160,23 +187,9 @@ export async function startUserChannelIssueWatch(
                   log,
               });
 
-        const fetchSnapshot = deps.fetchSnapshot ?? ((base: string) => defaultFetchUserSnapshot(base, fetchImpl));
-        const applyDelta =
-            deps.applyDelta ?? ((d: IssueWatchDeltaPush) => applyPushedDelta(d as unknown as PushedIssueWatchDelta));
-
         const handle = transport.open({
-            // On every (re)connect: reconcile the full user-scoped snapshot so a
-            // workspace whose delta pushed while we were offline is caught up.
             onConnected: () => {
-                void (async () => {
-                    try {
-                        const deltas = await fetchSnapshot(tynnApiBaseUrl);
-                        for (const d of deltas) applyDelta(d);
-                        log(`reconciled ${deltas.length} user IssueWatch snapshot(s)`);
-                    } catch (e) {
-                        log(`user issue-watch reconcile failed: ${errMsg(e)}`);
-                    }
-                })();
+                void runReconcile();
             },
             // Each live push: feed the issue-watch store (it stores + rebroadcasts).
             onIssueWatchDelta: (delta) => {
