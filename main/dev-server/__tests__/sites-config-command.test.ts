@@ -65,6 +65,36 @@ describe('site config — user-controlled command', () => {
         ]);
     });
 
+    it('does NOT rewrite `frankenphp run --config` — a real command, not the legacy php-server recipe (#141)', () => {
+        // The over-broad `has("frankenphp")` used to catch this and rewrite it to
+        // `php artisan serve`, so a site serving a custom Caddyfile (e.g. a Reverb
+        // /app proxy) silently ran the wrong server. Only the legacy php-server SHAPE
+        // is a recipe; `frankenphp run` is the user's own command and passes through.
+        const cfg = base({
+            server: 'frankenphp',
+            stack: 'php',
+            port: 8080,
+            serve: ['frankenphp', 'run', '--config', 'Caddyfile'],
+        });
+        expect(sandboxCommandFor(cfg)).toEqual(['frankenphp', 'run', '--config', 'Caddyfile']);
+    });
+
+    it('STILL migrates a legacy php-server recipe even with a custom image (image is runtime-ignored)', () => {
+        // A custom `image` is build metadata; the site still runs in the workspace
+        // sandbox (which lacks frankenphp), so the legacy php-server recipe must be
+        // migrated to `php artisan serve` regardless of the image. (See
+        // site-manager.test.ts "routes a custom-image + explicit-serve site through
+        // the sandbox".)
+        const cfg = base({
+            server: 'frankenphp',
+            stack: 'php',
+            port: 8080,
+            image: 'dunglas/frankenphp:1-php8.4',
+            serve: ['frankenphp', 'php-server', '--listen', '0.0.0.0:8080', '--root', 'public/'],
+        });
+        expect(sandboxCommandFor(cfg)).toEqual(['php', 'artisan', 'serve', '--host=0.0.0.0', '--port=8080']);
+    });
+
     it('migrates a legacy nginx static recipe to PHP\'s built-in server over the docroot', () => {
         // docroot from the GENIE_NGINX_ROOT env the recipe set…
         const fromEnv = base({
