@@ -37,7 +37,7 @@ import { listLocalEnabledGenSites, resolveEnabledSite } from './sites/local-site
 import { remoteGenUrl } from './sites/gen-url';
 import { LOCAL_CONN_KEY, openTestingBrowser } from './testing-browser';
 import { devLifecycle } from './dev-server/lifecycle';
-import { devServiceEnvFor } from './dev-server/services/service-manager';
+import { devServiceEnvFor, devServiceHostEnvFor } from './dev-server/services/service-manager';
 import { resolveContainerRuntime } from './dev-server';
 import { initHosting } from './host-core/hosting';
 import {
@@ -1064,6 +1064,12 @@ app.whenReady().then(async () => {
         // ENSURES they are up (acquire) before handing them to a starting site,
         // so a dev server never comes up pointed at an engine that is not there.
         devServiceEnvFor: (id) => devServiceEnvFor(id),
+        // Same services in HOST form (127.0.0.1:<published port>) for a HOST-NATIVE
+        // site's dev server (story #238 / beta.237).
+        devServiceHostEnvFor: (id) => devServiceHostEnvFor(id),
+        // A host-native site's dev server runs as a real HOST process; its captured
+        // output is logged here (under the Genie data dir).
+        hostSiteLogDir: path.join(app.getPath('userData'), 'host-sites'),
         confirmImagePull: confirmContainerImagePull,
         // The `.gen` change event, so the header popover, the rail icon, the Site
         // Manager and the Testing Browser's resolver all re-pull when a container

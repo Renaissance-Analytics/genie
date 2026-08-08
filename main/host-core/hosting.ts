@@ -33,6 +33,7 @@ import type {
     DevServiceManagerDeps,
     EngineAdminRequest,
 } from '../dev-server/services/service-manager';
+import { createHostProcessRun } from '../dev-server/host-process-run';
 import { initDevLifecycle } from '../dev-server/lifecycle';
 import type { DevServerLifecycle, DevServerLifecycleDeps } from '../dev-server/lifecycle';
 import { registerDevSiteTools } from '../mcp/dev-site-tools';
@@ -62,6 +63,13 @@ export interface HostingPorts {
     engineAdmin: (req: EngineAdminRequest) => EngineAdmin;
     /** This workspace's provisioned services, as environment. */
     devServiceEnvFor: (workspaceId: string) => Record<string, string>;
+    /** This workspace's provisioned services in HOST form (127.0.0.1:<published
+     *  port>), for a HOST-NATIVE site's dev server (story #238 / beta.237). */
+    devServiceHostEnvFor: (workspaceId: string) => Record<string, string>;
+    /** Where a HOST-NATIVE site's dev-server output is logged (a Genie data dir).
+     *  Absent ⇒ host-native hosting (runMode 'host') is off and fails with a clear
+     *  message rather than silently containerising. */
+    hostSiteLogDir?: string;
     /** Consent for fetching a missing image. Absent ⇒ no pull. */
     confirmImagePull?: (req: ImagePullConsent) => Promise<boolean> | boolean;
     /** The `.gen` change event — desktop broadcasts to the renderer, the cloud
@@ -139,6 +147,21 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
             }
             return ports.devServiceEnvFor(workspaceId);
         },
+        // The HOST-FORM service env (127.0.0.1:<published port>) a host-native dev
+        // server uses — same ensure-services-up-first as serviceEnvFor (story #238).
+        serviceHostEnvFor: async (workspaceId) => {
+            const svc = devServiceManager();
+            if (!svc) return {};
+            for (const row of svc.list(workspaceId)) {
+                if (row.enabled) await svc.acquire(workspaceId, row.serviceId);
+            }
+            return ports.devServiceHostEnvFor(workspaceId);
+        },
+        // Genie runs a host-native site's dev server as a real HOST process (no
+        // container). Only when a log dir is provided — otherwise host-native is off.
+        ...(ports.hostSiteLogDir
+            ? { hostSpawn: createHostProcessRun({ logDir: ports.hostSiteLogDir }) }
+            : {}),
         onChanged: ports.onChanged,
         onProgress: ports.onSiteProgress,
     };
