@@ -101,6 +101,14 @@ jobs:
           node-version: '20'
           cache: npm
 
+      - name: Set up Go (xcaddy builds the host Caddy for resources/runtime)
+        # The external-browser host Caddy (story #238) is xcaddy-built into
+        # resources/runtime by build:runtime below. Pin Go so that binary is
+        # reproducible, same discipline as the Node pin.
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
       - name: Set up Python (node-gyp needs distutils)
         # node-pty / better-sqlite3 native rebuild goes through node-gyp,
         # which still imports distutils. Python 3.12 dropped it from
@@ -124,6 +132,10 @@ jobs:
         # per-user OS-service host can't activate (Genie falls back to the
         # detached host). Must run BEFORE nextron build so packaging includes it.
         # The script self-verifies node-pty loads under the standalone Node.
+        # REQUIRE_HOST_CADDY makes a missing Go / xcaddy build FAIL the release
+        # (story #238) rather than silently ship without the host Caddy.
+        env:
+          REQUIRE_HOST_CADDY: '1'
         run: npm run build:runtime
 
       # The build steps below conditionally export signing env vars only

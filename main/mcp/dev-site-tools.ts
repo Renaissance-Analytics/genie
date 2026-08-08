@@ -159,6 +159,7 @@ function toInfo(row: DevSiteRow): DevSiteInfo {
         // Stored env + upstream Host, so the human Edit form can prefill them.
         ...(row.env && Object.keys(row.env).length ? { env: row.env } : {}),
         ...(row.upstreamHost ? { upstreamHost: row.upstreamHost } : {}),
+        ...(row.browserExposed ? { browserExposed: row.browserExposed } : {}),
         // The transient start phase, present only while a start is in flight.
         ...(row.phase ? { phase: row.phase } : {}),
         ...(row.error ? { error: row.error } : {}),
@@ -423,6 +424,7 @@ export async function runManageSite(
                     kind: req.kind ?? 'http',
                     ...(framework ? { framework } : {}),
                     ...(req.upstreamHost ? { upstreamHost: req.upstreamHost } : {}),
+                    ...(req.browserExposed ? { browserExposed: req.browserExposed } : {}),
                     // Defined, BUILT and served unless the caller says
                     // otherwise: a site nobody asked to keep off is one they
                     // want hosted.
@@ -464,6 +466,7 @@ export async function runManageSite(
                     // serve), so a framework hint the argv carries is recognised.
                     ...(command ?? serve ? { command: command ?? serve } : {}),
                     ...(req.upstreamHost ? { upstreamHost: req.upstreamHost } : {}),
+                    ...(req.browserExposed ? { browserExposed: req.browserExposed } : {}),
                 });
                 return {
                     ok: status.state !== 'failed',
@@ -509,6 +512,7 @@ export async function runManageSite(
                 if (req.kind !== undefined) patch.kind = req.kind;
                 if (req.upstreamHost !== undefined) patch.upstreamHost = req.upstreamHost;
                 if (req.enabled !== undefined) patch.enabled = req.enabled;
+                if (req.browserExposed !== undefined) patch.browserExposed = req.browserExposed;
 
                 // Read live state under the CURRENT id BEFORE persisting — a
                 // rename moves the config to a new id, so afterwards the manager

@@ -46,6 +46,11 @@ jobs:
           node-version: '20'
           cache: npm
 
+      - name: Set up Go (xcaddy builds the host Caddy for resources/runtime)
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
       - name: Set up Python (node-gyp needs distutils)
         uses: actions/setup-python@v6
         with:
@@ -59,6 +64,10 @@ jobs:
       - name: Build service runtime (resources/runtime)
         # Standalone Node + ABI-matched node-pty for THIS os/arch. The script
         # self-verifies node-pty loads under the downloaded standalone Node.
+        # REQUIRE_HOST_CADDY makes the host-Caddy build mandatory here too (story
+        # #238), so this non-publishing build is a real validator for the release.
+        env:
+          REQUIRE_HOST_CADDY: '1'
         run: npm run build:runtime
 
       - name: Assert runtime shipped (node + node-pty .node present)
@@ -83,7 +92,12 @@ jobs:
           echo "checking target binding $WANT"
           test -f "$WANT" || { echo "MISSING target node-pty binding: $WANT"; \
             find resources/runtime/node-pty -name '*.node'; exit 1; }
-          echo "runtime OK: $NODE_BIN + $WANT"
+          # Host Caddy (story #238) — present AND runnable (native build).
+          if [ "${{ runner.os }}" = "Windows" ]; then CADDY="resources/runtime/caddy.exe"; else CADDY="resources/runtime/caddy"; fi
+          echo "checking host caddy $CADDY"
+          test -f "$CADDY" || { echo "MISSING host caddy: $CADDY"; exit 1; }
+          "$CADDY" version || { echo "host caddy did not run"; exit 1; }
+          echo "runtime OK: $NODE_BIN + $WANT + $CADDY"
 
       - name: Build installers (Windows) — NO publish
         if: runner.os == 'Windows'
@@ -126,7 +140,10 @@ jobs:
             \( -path '*/prebuilds/*' -o -path '*/build/Release/*' \) -print -quit 2>/dev/null || true)"
           test -n "$BINDING" || { echo "node-pty binding NOT shipped inside app"; \
             find "$(dirname "$NODE_BIN")/node-pty" -name '*.node' || true; exit 1; }
-          echo "SHIPPED OK: $NODE_BIN + $BINDING"
+          # Host Caddy ships alongside node in resources/runtime (story #238).
+          if [ "${{ runner.os }}" = "Windows" ]; then SHIPPED_CADDY="$(dirname "$NODE_BIN")/caddy.exe"; else SHIPPED_CADDY="$(dirname "$NODE_BIN")/caddy"; fi
+          test -f "$SHIPPED_CADDY" || { echo "host caddy NOT shipped inside app: $SHIPPED_CADDY"; exit 1; }
+          echo "SHIPPED OK: $NODE_BIN + $BINDING + $SHIPPED_CADDY"
 
       - name: Drop the local auto-update manifest (defence in depth)
         # electron-builder ALWAYS writes dist/latest*.yml during packaging, even

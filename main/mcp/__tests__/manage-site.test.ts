@@ -126,6 +126,7 @@ describe('tools/call dispatch', () => {
                 upstreamHost: 'localhost',
                 env: { NODE_ENV: 'production' },
                 enabled: false,
+                browserExposed: true,
             },
             { manageSite },
         );
@@ -144,6 +145,8 @@ describe('tools/call dispatch', () => {
                 upstreamHost: 'localhost',
                 env: { NODE_ENV: 'production' },
                 enabled: false,
+                // The external-browser opt-in (story #238) rides through verbatim.
+                browserExposed: true,
             }),
         );
     });

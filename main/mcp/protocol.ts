@@ -547,6 +547,8 @@ export interface DevSiteInfo {
     runMode: string;
     kind: 'http' | 'tcp';
     enabled: boolean;
+    /** Whether `<name>.gen` is exposed to real external browsers (story #238). */
+    browserExposed?: boolean;
     /** running | stopped | failed */
     state: string;
     /** Whether the published port ACCEPTED a connection. `running` only says
@@ -673,6 +675,14 @@ export interface ManageSiteRequest {
     upstreamHost?: string;
     /** create: leave it defined but not started. Default true (start it). */
     enabled?: boolean;
+    /**
+     * create/update (story #238): expose `<name>.gen` to REAL external browsers
+     * (Chrome/Edge), not just the in-app Testing Browser. Host-native sites only.
+     * On first enable Genie installs its local CA + hosts entry + a host Caddy on
+     * `:443` — a ONE-TIME admin prompt. Off by default (the in-app browser needs no
+     * setup); turning it off leaves the site running, just not in an external browser.
+     */
+    browserExposed?: boolean;
     /** Every action except list/detect/create: the site `id` from a prior list. */
     id?: string;
     /** logs: how many lines. */
@@ -1584,6 +1594,11 @@ const MANAGE_SITE_TOOL = {
                 type: 'boolean',
                 description:
                     'create (optional): default true — define, BUILD and serve it. Pass false to define it without building or starting.',
+            },
+            browserExposed: {
+                type: 'boolean',
+                description:
+                    'create/update (optional): expose `<name>.gen` to REAL external browsers (Chrome/Edge), not just the in-app Testing Browser. Host-native sites only. First enable installs Genie’s local CA + hosts entry + a host Caddy on :443 — a one-time admin prompt. Off by default.',
             },
             id: {
                 type: 'string',
@@ -2739,6 +2754,7 @@ export async function handleMcpMessage(
                     genName: a.genName,
                     upstreamHost: a.upstreamHost,
                     enabled: a.enabled,
+                    browserExposed: a.browserExposed,
                     id: a.id,
                     tail: a.tail,
                 });
