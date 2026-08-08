@@ -79,9 +79,12 @@ describe('site config — user-controlled command', () => {
         expect(sandboxCommandFor(cfg)).toEqual(['frankenphp', 'run', '--config', 'Caddyfile']);
     });
 
-    it('does NOT migrate when a custom image supplies the toolchain (#141)', () => {
-        // The migration exists only because the dev-base image lacks frankenphp; a
-        // custom frankenphp image HAS it, so even the php-server recipe runs unchanged.
+    it('STILL migrates a legacy php-server recipe even with a custom image (image is runtime-ignored)', () => {
+        // A custom `image` is build metadata; the site still runs in the workspace
+        // sandbox (which lacks frankenphp), so the legacy php-server recipe must be
+        // migrated to `php artisan serve` regardless of the image. (See
+        // site-manager.test.ts "routes a custom-image + explicit-serve site through
+        // the sandbox".)
         const cfg = base({
             server: 'frankenphp',
             stack: 'php',
@@ -89,14 +92,7 @@ describe('site config — user-controlled command', () => {
             image: 'dunglas/frankenphp:1-php8.4',
             serve: ['frankenphp', 'php-server', '--listen', '0.0.0.0:8080', '--root', 'public/'],
         });
-        expect(sandboxCommandFor(cfg)).toEqual([
-            'frankenphp',
-            'php-server',
-            '--listen',
-            '0.0.0.0:8080',
-            '--root',
-            'public/',
-        ]);
+        expect(sandboxCommandFor(cfg)).toEqual(['php', 'artisan', 'serve', '--host=0.0.0.0', '--port=8080']);
     });
 
     it('migrates a legacy nginx static recipe to PHP\'s built-in server over the docroot', () => {

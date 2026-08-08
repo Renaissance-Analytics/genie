@@ -415,12 +415,6 @@ function sitePortOf(config: DevSiteConfig): number {
 
 /** Detect and translate a legacy FrankenPHP/nginx recipe. Null = not a recipe. */
 function migrateLegacyServeRecipe(argv: string[], config: DevSiteConfig): string[] | null {
-    // A custom image supplies its OWN toolchain (e.g. dunglas/frankenphp has the
-    // frankenphp binary), so the command must run UNCHANGED there. The migration
-    // exists ONLY to substitute for tools the dev-base sandbox image lacks — with a
-    // real image behind it there is nothing to substitute. (genie#141)
-    if (config.image) return null;
-
     const has = (t: string) => argv.some((a) => a.toLowerCase().includes(t));
     const port = sitePortOf(config);
 
@@ -428,8 +422,9 @@ function migrateLegacyServeRecipe(argv: string[], config: DevSiteConfig): string
     // `php artisan serve` is the sandbox-native dev equivalent (it serves public/
     // and rebuilds on request). Match that SHAPE — both tokens — not any argv that
     // merely mentions frankenphp: a real `frankenphp run --config Caddyfile` is the
-    // user's own command (e.g. to serve a custom Caddyfile) and must pass through
-    // untouched, not be silently rewritten to artisan serve. (genie#141)
+    // user's own command (e.g. to serve a custom Caddyfile) and must NOT be silently
+    // rewritten to artisan serve — it passes through so the real limitation
+    // (frankenphp is not in the sandbox) surfaces instead of being masked. (genie#141)
     if (has('frankenphp') && has('php-server')) {
         return ['php', 'artisan', 'serve', '--host=0.0.0.0', `--port=${port}`];
     }
