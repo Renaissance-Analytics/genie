@@ -178,3 +178,25 @@ describe('host-native site (story #238) — point .gen at a host dev-server port
         expect(devSiteReconfigureNeedsRestart(base({ hostPort: 8001 }), base({ hostPort: 8001 }))).toBe(false);
     });
 });
+
+describe('external-browser opt-in (story #238 P1) — `browserExposed`', () => {
+    it('sanitize keeps browserExposed only as a boolean', () => {
+        expect(sanitizeDevSitePatch({ ...base(), browserExposed: true }).browserExposed).toBe(true);
+        expect(sanitizeDevSitePatch({ ...base(), browserExposed: false }).browserExposed).toBe(false);
+        // A non-boolean is dropped, never coerced.
+        expect(
+            sanitizeDevSitePatch({ ...base(), browserExposed: 'yes' as unknown as boolean }).browserExposed,
+        ).toBeUndefined();
+        // Absent stays absent (opt-in: undefined ⇒ not exposed).
+        expect(sanitizeDevSitePatch(base()).browserExposed).toBeUndefined();
+    });
+
+    it('toggling browserExposed does NOT restart the dev server', () => {
+        // It adds/removes the site from the HOST Caddy + hosts-file + leaf (the
+        // external-browser reconcile), which never touches the running process —
+        // so it must not be a restart-forcing (RECONFIGURE) key.
+        expect(
+            devSiteReconfigureNeedsRestart(base({ browserExposed: false }), base({ browserExposed: true })),
+        ).toBe(false);
+    });
+});

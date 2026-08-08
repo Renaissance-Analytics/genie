@@ -136,6 +136,16 @@ export interface DevSiteConfig {
     upstreamHost?: string;
     /** Strict opt-in: nothing runs until this is true. */
     enabled: boolean;
+    /**
+     * Opt-in (story #238): expose `<genName>` to REAL external browsers
+     * (Chrome/Edge), not just the in-app Testing Browser. When true, the site
+     * joins the host reconcile — Genie installs its local CA, adds the hosts-file
+     * entry, and fronts it on the host Caddy `:443` — which prompts for admin
+     * ONCE. Off by default: the in-app browser already serves the site with zero
+     * prompts, so external access is a deliberate choice. Drives the HOST
+     * reconcile, never the site process, so toggling it does not restart anything.
+     */
+    browserExposed?: boolean;
 }
 
 /** A workspace's dev sites, keyed by {@link devSiteIdFor}. */
@@ -340,6 +350,11 @@ export function sanitizeDevSitePatch(
     }
 
     if (typeof patch.enabled === 'boolean') out.enabled = patch.enabled;
+
+    // Opt-in external-browser exposure (#238). A boolean only — never coerced;
+    // deliberately NOT a RECONFIGURE key, since it changes the host reconcile,
+    // not the running dev server.
+    if (typeof patch.browserExposed === 'boolean') out.browserExposed = patch.browserExposed;
 
     return out;
 }
