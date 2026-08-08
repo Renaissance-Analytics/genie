@@ -89,6 +89,7 @@ describe('tools/list plugin generalization', () => {
             'checkIssues',
             'ForceTheQuestion',
             'manageProcess',
+            'manageSite',
             'manageTerminals',
             'runAgent',
             'manageWorkspaces',
