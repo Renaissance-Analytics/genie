@@ -781,4 +781,118 @@ describe('service env injection (#234 P3)', () => {
         expect(status.hostPort).toBe(CADDY_HOST_PORT);
         expect(status.origin).toBe('https://web.acme.gen');
     });
+
+    it('hosts a HOST-NATIVE site by ROUTING .gen at a host dev-server port — no container, no runtime (story #238)', async () => {
+        // The owner's model: run the repo's dev server as a HOST process (e.g. via
+        // manageProcess) on 127.0.0.1:<hostPort> and just POINT the site at it. No
+        // container, no build, no runtime needed.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'web',
+                genName: 'web.acme.gen',
+                repo: 'app',
+                runMode: 'explicit',
+                hostPort: 8001,
+                kind: 'http',
+                enabled: true,
+            },
+        };
+        const m = manager(runtime, sites, { probeReady: async () => true });
+        const status = await m.start('acme', SITE_ID);
+
+        // (a) running + ready, and NOTHING was spawned — no container at all, even
+        //     though the runtime reports `none` (host-native needs no Docker).
+        expect(status.state).toBe('running');
+        expect(status.ready).toBe(true);
+        expect(runtime.ran).toHaveLength(0);
+
+        // (b) the .gen route points STRAIGHT at the host loopback dev-server port,
+        //     plain http (the Testing Browser's session-CA shim adds TLS at .gen).
+        expect(m.genSites()).toEqual([
+            {
+                workspaceId: 'acme',
+                genName: 'web.acme.gen',
+                siteId: SITE_ID,
+                hostname: 'web.acme.gen',
+                scheme: 'http',
+                port: 8001,
+                loopback: '127.0.0.1',
+            },
+        ]);
+    });
+
+    it('runs a MANAGED HOST-NATIVE site (runMode=host) as a HOST process — no container, host-form env, routed (story #238)', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const spawned: Array<{ siteId: string; command: string[]; cwd: string; env: Record<string, string> }> = [];
+        const hostSpawn = {
+            start: async (i: { siteId: string; workspaceId: string; command: string[]; cwd: string; env: Record<string, string> }) => {
+                spawned.push(i);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async () => {},
+            alive: async () => false,
+            readLog: async () => 'dev server log',
+        };
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'web',
+                genName: 'web.acme.gen',
+                repo: 'app',
+                runMode: 'host',
+                command: ['php', 'artisan', 'serve', '--host=127.0.0.1', '--port=8001'],
+                port: 8001,
+                kind: 'http',
+                enabled: true,
+            },
+        };
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            serviceHostEnvFor: async () => ({ DB_HOST: '127.0.0.1', DB_PORT: '54329' }),
+            probeReady: async () => true,
+        });
+        const status = await m.start('acme', SITE_ID);
+
+        // Genie ran the repo's dev server as a HOST process — NOTHING containerised.
+        expect(status.state).toBe('running');
+        expect(status.ready).toBe(true);
+        expect(runtime.ran).toHaveLength(0);
+        expect(spawned).toHaveLength(1);
+        expect(spawned[0]?.command).toEqual(['php', 'artisan', 'serve', '--host=127.0.0.1', '--port=8001']);
+        // Host-form service env (beta.237) reached the dev server.
+        expect(spawned[0]?.env.DB_HOST).toBe('127.0.0.1');
+        expect(spawned[0]?.env.DB_PORT).toBe('54329');
+        // .gen routes straight at the host dev-server port.
+        expect(m.genSites()).toEqual([
+            {
+                workspaceId: 'acme',
+                genName: 'web.acme.gen',
+                siteId: SITE_ID,
+                hostname: 'web.acme.gen',
+                scheme: 'http',
+                port: 8001,
+                loopback: '127.0.0.1',
+            },
+        ]);
+    });
+
+    it('a MANAGED host-native site FAILS clearly when host-native hosting is unavailable (no hostSpawn)', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'web',
+                genName: 'web.acme.gen',
+                repo: 'app',
+                runMode: 'host',
+                command: ['php', 'artisan', 'serve'],
+                port: 8001,
+                kind: 'http',
+                enabled: true,
+            },
+        };
+        const status = await manager(runtime, sites, {}).start('acme', SITE_ID);
+        expect(status.state).toBe('failed');
+        expect(status.error).toMatch(/host-native hosting is not available/i);
+        expect(runtime.ran).toHaveLength(0);
+    });
 });

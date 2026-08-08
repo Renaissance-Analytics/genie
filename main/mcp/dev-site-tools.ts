@@ -17,6 +17,7 @@ import { detectFolder } from '../workspace/detect';
 import { resolveAgentTarget } from './host-tools';
 import { planHostAllowlist } from '../dev-server/host-allowlist';
 import type { DevFramework } from '../dev-server/host-allowlist';
+import { devCommandForRecipe } from '../dev-server/serve-recipe';
 import type { BuildStep, HostingOption } from '../dev-server/serve-recipe';
 import type { DevSiteRow } from '../dev-server/site-manager';
 import type { DevSiteConfig } from '../dev-server/sites-config';
@@ -39,12 +40,17 @@ import type {
  *
  * ## Two behaviours worth naming
  *
- * **`create` finishes the job.** An agent asked to "host the frontend" should
- * not have to make four calls. `create` with just a `name` detects the repo's
- * stack, takes the recommended production BUILD + SERVE recipe, stores it,
- * builds it and starts the production server — reporting which recipe it applied
- * and what else was on offer. When nothing can be recommended it FAILS with the
- * options attached, so the next call is obvious rather than a guess.
+ * **`create` finishes the job — and defaults to DEV, not production.** An agent
+ * asked to "host the frontend" should not have to make four calls. `create` with
+ * just a `name` detects the repo's stack and runs its DEV server HOST-NATIVE
+ * (runMode `host`): a real host process against the LIVE source, `.gen` routed
+ * straight to it, with NO container and NO build — "just serve the repo the site
+ * points to", the way Herd did (Docker only for services). A production
+ * BUILD+SERVE recipe is still available, but OPT-IN (runMode
+ * `recipe`/`dockerfile`/`compose`/`devcontainer`). Two other host-native shapes:
+ * pass `command` + `port` to run YOUR dev server, or `hostPort` to point `.gen` at
+ * a dev server you already run (e.g. via `manageProcess`). When nothing can be
+ * recommended it FAILS with the options attached, so the next call is obvious.
  *
  * **The runtime's absence is data, not an exception.** Every result carries
  * `runtime`, so an agent that gets `ok: false` on a machine with no Docker reads
@@ -307,61 +313,92 @@ export async function runManageSite(
                 // The USER-CONTROLLED startup argv — the canonical way to start a
                 // site in the sandbox-serve model. When supplied, Genie runs it
                 // verbatim against the live source; no recipe is detected.
-                const command = req.command;
+                let command = req.command;
                 let serve = req.serve;
                 let build = req.build ? toBuildSteps(req.build) : undefined;
                 let image = req.image;
                 let env = req.env;
                 let port = req.port;
                 let runMode = req.runMode;
+                // HOST-NATIVE (story #238): point .gen at a dev server already
+                // running as a HOST process on 127.0.0.1:<hostPort> — no container,
+                // no recipe, no build. When set, it bypasses recipe detection and
+                // the command/port requirements below.
+                const hostPort = req.hostPort;
                 let applied: HostingOption | undefined;
                 let options: HostingOption[] | undefined;
                 let framework: DevFramework | undefined;
                 let stack: HostingOption['stack'] | undefined;
                 let server: HostingOption['server'] | undefined;
 
-                // Nothing to start supplied → read the repo and take the
-                // recommended recipe's serve, so "host the frontend" is ONE call.
-                // Skipped entirely when the caller gave a `command` (or image).
-                if (!command && !serve && !req.image) {
+                // Nothing to start supplied → read the repo and, BY DEFAULT, run its
+                // DEV server host-native (story #238): "just serve the repo the site
+                // points to" — a HOST process against live source, NO container, NO
+                // build. A production BUILD+SERVE is still available, but only when
+                // the caller EXPLICITLY asks (runMode: recipe|dockerfile|compose|
+                // devcontainer). Skipped entirely when the caller gave a `command`,
+                // `image` or `hostPort`.
+                if (!command && !serve && !req.image && !hostPort) {
                     const described = describeRepoRun(repo.dir, port ? { port } : {});
                     options = described.options;
                     applied = runMode
                         ? described.options.find((o) => o.runMode === runMode)
                         : (described.recommended ?? undefined);
-                    if (!applied || (!applied.serve && applied.runMode !== 'dockerfile')) {
+                    if (!applied) {
                         return fail(
-                            `Nothing in ${req.repo || 'this workspace'} says how it is built and served in production. Supply \`serve\` (literal argv) and \`port\` — plus \`build\` steps if it has to be built — or pick one of the options below.`,
+                            `Genie could not detect how to run ${req.repo || 'this workspace'}. Pass a \`command\` + \`port\` (the dev server to run), or \`hostPort\` to point \`.gen\` at a dev server you already run on the host.`,
                             { options: described.options.map(toOption) },
                         );
                     }
-                    serve = applied.serve;
-                    build = build ?? applied.build;
-                    // The recipe's image is load-bearing, not a preference: a
-                    // PHP site serves from FrankenPHP and a built front end from
-                    // nginx, and neither is the workspace dev image.
-                    image = image ?? applied.image;
-                    // UNDER the caller's env — a value they pinned always wins.
-                    env = { ...(applied.env ?? {}), ...(env ?? {}) };
-                    port = port ?? applied.port;
-                    runMode = applied.runMode as ManageSiteRequest['runMode'];
-                    stack = applied.stack;
-                    server = applied.server;
-                    // The ONLY moment this is knowable: `gunicorn mysite.wsgi`
-                    // contains no token spelling "django", and Django is the one
-                    // framework whose host allowlist still bites in production.
-                    framework = applied.framework;
+
+                    const wantsProduction =
+                        runMode === 'recipe' ||
+                        runMode === 'dockerfile' ||
+                        runMode === 'compose' ||
+                        runMode === 'devcontainer';
+                    const dev = wantsProduction ? null : devCommandForRecipe(applied);
+
+                    if (dev) {
+                        // DEV BY DEFAULT — the repo's dev server run host-native.
+                        command = dev.command;
+                        port = port ?? dev.port;
+                        runMode = 'host';
+                        stack = dev.stack ?? applied.stack;
+                        framework = dev.framework ?? applied.framework;
+                    } else if (applied.serve || applied.runMode === 'dockerfile') {
+                        // Explicit production, or a stack with no dev server Genie can
+                        // pick → the production BUILD+SERVE recipe (a container). The
+                        // recipe's image is load-bearing (FrankenPHP / nginx), not a
+                        // preference; env merges UNDER the caller's own.
+                        serve = applied.serve;
+                        build = build ?? applied.build;
+                        image = image ?? applied.image;
+                        env = { ...(applied.env ?? {}), ...(env ?? {}) };
+                        port = port ?? applied.port;
+                        runMode = applied.runMode as ManageSiteRequest['runMode'];
+                        stack = applied.stack;
+                        server = applied.server;
+                        // The ONLY moment this is knowable: `gunicorn mysite.wsgi`
+                        // contains no token spelling "django", the one framework whose
+                        // host allowlist still bites in production.
+                        framework = applied.framework;
+                    } else {
+                        return fail(
+                            `Genie could not pick a dev server for ${req.repo || 'this workspace'}. Pass a \`command\` + \`port\` (the dev server to run), or \`hostPort\` to point \`.gen\` at one you already run.`,
+                            { options: described.options.map(toOption) },
+                        );
+                    }
                 }
 
-                if (!command && !serve && !image) {
+                if (!command && !serve && !image && !hostPort) {
                     return fail(
-                        'create needs a `command` — the argv Genie runs to start the site against the live source, e.g. ["npm","run","dev"]. (Legacy `serve`/`image` also work.)',
+                        'create needs a `command` — the argv Genie runs to start the site against the live source, e.g. ["npm","run","dev"]. (Legacy `serve`/`image` also work; or pass `hostPort` to point `.gen` at a dev server you already run on the host, no container.)',
                         options ? { options: options.map(toOption) } : {},
                     );
                 }
-                if (!port) {
+                if (!port && !hostPort) {
                     return fail(
-                        'create requires `port` — the port the site\'s command listens on INSIDE the sandbox. Without it Caddy has nothing to route `.gen` to.',
+                        'create requires `port` — the port the site\'s command listens on INSIDE the sandbox. Without it Caddy has nothing to route `.gen` to. (Or pass `hostPort` for a host-native site that points `.gen` straight at a host dev-server port.)',
                         options ? { options: options.map(toOption) } : {},
                     );
                 }
@@ -377,7 +414,8 @@ export async function runManageSite(
                     ...(build?.length ? { build } : {}),
                     ...(command?.length ? { command } : {}),
                     ...(serve ? { serve } : {}),
-                    port,
+                    ...(port ? { port } : {}),
+                    ...(hostPort ? { hostPort } : {}),
                     ...(req.exposed
                         ? { exposed: req.exposed as never }
                         : {}),

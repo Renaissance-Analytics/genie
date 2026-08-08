@@ -28,6 +28,7 @@ function fakePorts(over: Partial<HostingPorts> = {}): HostingPorts {
         devServicesFor: () => ({}),
         engineAdmin: () => ({}) as never,
         devServiceEnvFor: () => ({}),
+        devServiceHostEnvFor: () => ({}),
         onChanged: () => {},
         onSiteProgress: () => {},
         ...over,

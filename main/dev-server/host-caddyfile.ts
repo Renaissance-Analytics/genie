@@ -1,0 +1,132 @@
+/**
+ * The HOST reverse-proxy config for host-native `.gen` sites.
+ *
+ * In the container model a Caddy runs INSIDE the workspace sandbox on :8443 with
+ * `tls internal`, reached only by the in-app carrier (see caddyfile.ts). Host-
+ * native (Wish #102, story #238) instead runs ONE Caddy on the HOST that owns
+ * :443, so the machine's REAL browser can reach `https://<name>.gen` after a
+ * hosts-file entry (hosts-file.ts) resolves the name to loopback. Because a real
+ * browser validates the certificate, this Caddy serves a leaf issued by the Genie
+ * local CA (installed in the OS trust store), NOT Caddy's internal issuer.
+ *
+ * It keeps the two properties the sandbox Caddy delivered — ports masked, https
+ * forced (the beta.236 body `replace` + `Location` rewrite) — and adds a plain
+ * `:80 → :443` redirect so a bare `name.gen` typed into the browser lands on TLS.
+ *
+ * PURE string builder — no Caddy, no fs — so the config is deterministically
+ * testable and a reload with an unchanged site set is a true no-op.
+ */
+
+/** The single https port the HOST Caddy listens on. */
+export const HOST_CADDY_HTTPS_PORT = 443;
+
+/** The plain http port the redirect listener binds. */
+const HOST_CADDY_HTTP_PORT = 80;
+
+export interface HostCaddySite {
+    /** The vhost this site answers on, e.g. `moic.gen`. Both the TLS SNI and the
+     *  default upstream `Host`. */
+    host: string;
+    /** The app's PLAIN-HTTP port on the HOST's loopback (127.0.0.1:port). */
+    port: number;
+    /** The `Host` header to send the app when it must differ from {@link host}
+     *  (Django `ALLOWED_HOSTS`, Vite `allowedHosts`). Omit to pass `.gen` through. */
+    upstreamHost?: string;
+}
+
+/** The single Genie-CA leaf (multi-SAN over every live `.gen`) every vhost serves. */
+export interface HostCaddyTls {
+    certPath: string;
+    keyPath: string;
+}
+
+const HOST_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*$/;
+
+function assertSite(s: HostCaddySite): void {
+    if (typeof s.host !== 'string' || !HOST_RE.test(s.host)) {
+        throw new Error(`host-caddyfile: refusing invalid host ${JSON.stringify(s.host)}`);
+    }
+    if (!Number.isInteger(s.port) || s.port < 1 || s.port > 65535) {
+        throw new Error(`host-caddyfile: refusing invalid port ${JSON.stringify(s.port)} for ${s.host}`);
+    }
+    if (s.upstreamHost !== undefined && (typeof s.upstreamHost !== 'string' || !HOST_RE.test(s.upstreamHost))) {
+        throw new Error(
+            `host-caddyfile: refusing invalid upstream host ${JSON.stringify(s.upstreamHost)} for ${s.host}`,
+        );
+    }
+}
+
+/** A cert/key path lands in the config quoted; normalise Windows `\` to `/`
+ *  (Caddy accepts forward slashes on Windows and it dodges quote-escaping), then
+ *  refuse anything that could break out of the quotes or inject a directive. */
+function quotePath(p: string, which: string): string {
+    if (typeof p !== 'string' || p.length === 0) {
+        throw new Error(`host-caddyfile: missing ${which} path`);
+    }
+    const norm = p.replace(/\\/g, '/');
+    if (/["\n\r{}]/.test(norm)) {
+        throw new Error(`host-caddyfile: refusing injectable ${which} path ${JSON.stringify(p)}`);
+    }
+    return `"${norm}"`;
+}
+
+/**
+ * Build the HOST Caddyfile for `sites`, all served with the one Genie-CA leaf in
+ * `tls`. Sorted by host so the same set yields byte-identical output (a reload can
+ * then be skipped when nothing changed). Throws on a bad host/port/upstream or an
+ * injectable cert path rather than emit a broken or injectable config.
+ */
+export function buildHostCaddyfile(sites: HostCaddySite[], tls: HostCaddyTls): string {
+    for (const s of sites) assertSite(s);
+    const sorted = [...sites].sort((a, b) => a.host.localeCompare(b.host));
+
+    const header = [
+        '{',
+        // We manage TLS ourselves (the Genie CA leaf), so Caddy must not try to
+        // auto-provision or auto-redirect; our own :80 blocks do the redirect.
+        '\tauto_https disable_redirects',
+        '}',
+        '',
+    ];
+
+    // No sites ⇒ no vhost references a cert, so don't demand one (the reconcile
+    // engine writes this empty config before any leaf has been issued).
+    if (sorted.length === 0) return header.join('\n');
+
+    const cert = quotePath(tls.certPath, 'cert');
+    const key = quotePath(tls.keyPath, 'key');
+
+    const blocks = sorted.flatMap((s) => [
+        // Plain http → https, so a bare `name.gen` typed in the browser lands on TLS.
+        `http://${s.host}:${HOST_CADDY_HTTP_PORT} {`,
+        `\tredir https://${s.host}{uri} permanent`,
+        '}',
+        '',
+        `${s.host}:${HOST_CADDY_HTTPS_PORT} {`,
+        // The Genie CA leaf — trusted by the real browser via the OS trust store.
+        `\ttls ${cert} ${key}`,
+        // FORCE https on the app's own in-body self-links (beta.236). The `replace`
+        // directive (caddyserver/replace-response, auto-ordered after `encode`, so
+        // it sees the full response before the proxy) rewrites `http://<host>` back
+        // to `https://<host>` in the RESPONSE BODY, so no app needs proxy-trust
+        // config. `stream` rewrites incrementally so SSE keeps flowing.
+        '\treplace {',
+        '\t\tstream',
+        `\t\t"http://${s.host}" "https://${s.host}"`,
+        '\t}',
+        `\treverse_proxy 127.0.0.1:${s.port} {`,
+        // Only when the app checks Host: rewrite the upstream Host, browser origin
+        // unchanged.
+        ...(s.upstreamHost ? [`\t\theader_up Host ${s.upstreamHost}`] : []),
+        // Strip upstream compression so `replace` sees a plaintext body to rewrite.
+        '\t\theader_up -Accept-Encoding',
+        // FORCE https on the app's own redirects (beta.236): rewrite a leading
+        // `http:` Location back to `https:` at the front door.
+        '\t\theader_down Location "^http:" "https:"',
+        '\t}',
+        '}',
+        '',
+    ]);
+
+    return [...header, ...blocks].join('\n');
+}

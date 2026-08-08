@@ -4,6 +4,7 @@ import {
     sandboxCommandFor,
     sanitizeDevSitePatch,
     devSiteReconfigureNeedsRestart,
+    hostNativeRoute,
     type DevSiteConfig,
 } from '../sites-config';
 
@@ -141,5 +142,39 @@ describe('site config — user-controlled command', () => {
         expect(devSiteReconfigureNeedsRestart(before, base({ command: ['npm', 'run', 'dev'] }))).toBe(
             false,
         );
+    });
+});
+
+describe('host-native site (story #238) — point .gen at a host dev-server port, no container', () => {
+    it('sanitize accepts a valid hostPort and drops an out-of-range/non-integer one', () => {
+        expect(sanitizeDevSitePatch({ ...base(), hostPort: 8001 }).hostPort).toBe(8001);
+        expect(sanitizeDevSitePatch({ ...base(), hostPort: 0 }).hostPort).toBeUndefined();
+        expect(sanitizeDevSitePatch({ ...base(), hostPort: 70000 }).hostPort).toBeUndefined();
+        expect(sanitizeDevSitePatch({ ...base(), hostPort: 1.5 as unknown as number }).hostPort).toBeUndefined();
+    });
+
+    it('hostNativeRoute points .gen straight at 127.0.0.1:<hostPort> over plain http', () => {
+        expect(hostNativeRoute(base({ genName: 'moic.gen', hostPort: 8001 }))).toEqual({
+            genName: 'moic.gen',
+            scheme: 'http',
+            loopback: '127.0.0.1',
+            port: 8001,
+        });
+    });
+
+    it('carries an upstreamHost override when pinned', () => {
+        expect(
+            hostNativeRoute(base({ genName: 'moic.gen', hostPort: 8001, upstreamHost: 'localhost' })),
+        ).toMatchObject({ upstreamHost: 'localhost' });
+    });
+
+    it('is null for an ordinary container site (no hostPort) or a non-http site', () => {
+        expect(hostNativeRoute(base({ command: ['npm', 'run', 'dev'], port: 5173 }))).toBeNull();
+        expect(hostNativeRoute(base({ hostPort: 8001, kind: 'tcp' }))).toBeNull();
+    });
+
+    it('a hostPort change needs a restart (routing identity)', () => {
+        expect(devSiteReconfigureNeedsRestart(base({ hostPort: 8001 }), base({ hostPort: 8002 }))).toBe(true);
+        expect(devSiteReconfigureNeedsRestart(base({ hostPort: 8001 }), base({ hostPort: 8001 }))).toBe(false);
     });
 });

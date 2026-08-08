@@ -10,8 +10,9 @@ import {
     startSiteProcess,
     stopSiteProcess,
 } from './site-process';
+import { composeHostSiteEnv } from './host-site-process';
 import { ensureWorkspaceSandbox, HOST_GATEWAY_HOSTNAME } from './workspace-sandbox';
-import { sandboxCommandFor } from './sites-config';
+import { effectiveCommand, hostNativeRoute, sandboxCommandFor, type HostNativeRoute } from './sites-config';
 import type { ContainerRuntime, RuntimeDetection } from './container-runtime';
 import type { HostIds } from './host-ids';
 import type { DevSiteConfig, DevSites } from './sites-config';
@@ -175,6 +176,25 @@ export interface ResolvedRuntimeLike {
     detection: RuntimeDetection;
 }
 
+/** Runs a HOST-NATIVE site's dev server as a real HOST process (story #238),
+ *  keyed by siteId. The site manager owns lifecycle + routing; this owns the
+ *  actual process (detached spawn, pid, log). Never throws — a failure is an
+ *  `ok:false` result / `false`. The real binding uses Node child_process +
+ *  host-site-process.ts; tests inject a fake. */
+export interface HostProcessRun {
+    start(input: {
+        siteId: string;
+        workspaceId: string;
+        command: string[];
+        /** The repo dir ON THE HOST (not a container mount). */
+        cwd: string;
+        env: Record<string, string>;
+    }): Promise<{ ok: true; pid: number } | { ok: false; error: string }>;
+    stop(siteId: string): Promise<void>;
+    alive(siteId: string): Promise<boolean>;
+    readLog(siteId: string, tail?: number): Promise<string>;
+}
+
 export interface DevSiteManagerDeps {
     /**
      * Which runtime, and is it usable. Called per action rather than resolved
@@ -212,6 +232,19 @@ export interface DevSiteManagerDeps {
      * user pinned wins but the real engine address is authoritative.
      */
     serviceEnvFor?: (workspaceId: string) => Promise<Record<string, string>>;
+    /**
+     * HOST-FORM service env (127.0.0.1:<published port>) for a HOST-NATIVE site's
+     * dev server — the same host-form env terminals + manageProcess already get
+     * (beta.237), so the dev server reaches the managed DB/redis on the host.
+     * Merged UNDER the site's own env.
+     */
+    serviceHostEnvFor?: (workspaceId: string) => Promise<Record<string, string>>;
+    /**
+     * Run a HOST-NATIVE site's dev server as a real HOST process (story #238).
+     * Absent ⇒ a `runMode: 'host'` site fails with a clear "not available" status
+     * rather than silently falling back to a container.
+     */
+    hostSpawn?: HostProcessRun;
     /** Fired whenever the live set changes, so the UX and other agents follow. */
     onChanged?: () => void;
     /**
@@ -261,13 +294,14 @@ interface Live {
     siteId: string;
     config: DevSiteConfig;
     /** The SANDBOX container the process runs in (shared by every site in the
-     *  workspace). */
-    containerId: string;
-    /** The sandbox's published Caddy port — the one door every `.gen` is reached
-     *  through. */
+     *  workspace). Absent for a HOST-NATIVE site (story #238): it runs no container. */
+    containerId?: string;
+    /** The port `.gen` is reached through — the sandbox's published Caddy port for a
+     *  container site, or the host loopback dev-server port for a host-native one. */
     caddyHostPort: number;
-    /** The app's own loopback port INSIDE the sandbox — what Caddy proxies to. */
-    internalPort: number;
+    /** The app's own loopback port INSIDE the sandbox — what Caddy proxies to.
+     *  Absent for a host-native site (there is no sandbox hop). */
+    internalPort?: number;
     ready: boolean;
     /** The `.gen` rows this site contributes (its own). Resolved at start so
      *  `genSites()` stays synchronous. */
@@ -285,6 +319,15 @@ function repoCwd(mountTarget: string, repo: string): string | null {
     if (!repo) return mountTarget;
     if (!SAFE_REPO.test(repo) || repo === '.' || repo === '..') return null;
     return `${mountTarget}/repos/${repo}`;
+}
+
+/** The repo's dir ON THE HOST (workspace root, or `repos/<repo>`), or null when the
+ *  repo name is unsafe. A HOST-NATIVE site (story #238) runs its dev server here —
+ *  the real on-disk repo — not in a container mount. */
+function repoCwdOnHost(workspacePath: string, repo: string): string | null {
+    if (!repo) return workspacePath;
+    if (!SAFE_REPO.test(repo) || repo === '.' || repo === '..') return null;
+    return `${workspacePath}/repos/${repo}`;
 }
 
 /**
@@ -438,6 +481,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         const sites: CaddySite[] = [];
         for (const e of live.values()) {
             if (e.workspaceId !== workspaceId || e.config.kind !== 'http') continue;
+            // A HOST-NATIVE site (story #238) is served straight off its host port,
+            // not through the sandbox Caddy, and has no internal container port — so
+            // it contributes no vhost here.
+            if (e.internalPort === undefined) continue;
             sites.push({
                 host: e.config.genName,
                 port: e.internalPort,
@@ -469,6 +516,25 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             );
         }
         const { workspace, config } = found;
+
+        // HOST-NATIVE (story #238): the site points `.gen` at a dev server already
+        // running as a HOST process (e.g. started via manageProcess) on
+        // 127.0.0.1:<hostPort>. Register its route and probe it — spawn NOTHING, and
+        // need NO container runtime. This is the owner's model: "just serve the repo
+        // the site points to; don't use containers." Guarded, so the container path
+        // below is untouched for ordinary sites.
+        const hostRoute = hostNativeRoute(config);
+        if (hostRoute) {
+            beginPhase(workspaceId, siteId, config, 'starting');
+            return await recordHostNativeLive(workspaceId, siteId, config, hostRoute);
+        }
+
+        // MANAGED HOST-NATIVE (story #238): Genie runs the repo's dev server as a
+        // HOST process (no container) and routes `.gen` to it — "just serve the repo
+        // the site points to", the way Herd did (Docker only for services).
+        if (config.runMode === 'host') {
+            return await startHostNativeManaged(workspaceId, siteId, config, workspace.path);
+        }
 
         // The instant a start begins — so the card leaves "off" the moment the
         // button is clicked (Gap 2). Covers runtime resolution + the sandbox
@@ -687,6 +753,121 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         };
     }
 
+    /**
+     * Record a HOST-NATIVE site (story #238): one whose `.gen` points straight at a
+     * dev server already running as a HOST process on `127.0.0.1:<hostPort>`. No
+     * container, no Caddy — just the route + a plain-http readiness probe on the
+     * host port. The Testing Browser's session-CA shim terminates TLS at `.gen`, so
+     * the plain-http dev server is reachable as `https://<name>.gen` with nothing
+     * else. This is what makes "run a dev server and point a site at it" work.
+     */
+    async function recordHostNativeLive(
+        workspaceId: string,
+        siteId: string,
+        config: DevSiteConfig,
+        route: HostNativeRoute,
+        probeTimeoutMs: number = readyTimeoutMs,
+    ): Promise<DevSiteStatus> {
+        const routes: DevGenSite[] = [
+            {
+                workspaceId,
+                genName: config.genName,
+                siteId,
+                hostname: config.genName,
+                // Plain http on the host port; the Testing Browser's shim adds TLS.
+                scheme: route.scheme,
+                port: route.port,
+                loopback: route.loopback,
+            },
+        ];
+        live.set(siteId, { workspaceId, siteId, config, caddyHostPort: route.port, ready: false, routes });
+
+        const ready = await probe({
+            port: route.port,
+            kind: 'http',
+            servername: config.genName,
+            hostHeader: config.upstreamHost ?? config.genName,
+            timeoutMs: probeTimeoutMs,
+        });
+        const entry = live.get(siteId);
+        if (entry) entry.ready = ready;
+        changed();
+        return statusOf(workspaceId, siteId, config, live.get(siteId)!);
+    }
+
+    /**
+     * Start a MANAGED HOST-NATIVE site (story #238): run the repo's dev server as a
+     * real HOST process (no container) and route `.gen` to it. Genie owns the
+     * process (via {@link DevSiteManagerDeps.hostSpawn}); the dev server runs in the
+     * repo's real on-disk dir with the workspace's HOST-FORM service env (beta.237),
+     * so it reaches the managed DB/redis. Nothing is containerised.
+     */
+    async function startHostNativeManaged(
+        workspaceId: string,
+        siteId: string,
+        config: DevSiteConfig,
+        workspacePath: string,
+    ): Promise<DevSiteStatus> {
+        const command = effectiveCommand(config);
+        if (!command) {
+            return failed(
+                workspaceId,
+                siteId,
+                config,
+                `Host-native site "${config.name}" has no command — set its \`command\`, e.g. ["php","artisan","serve","--host=127.0.0.1","--port=8001"].`,
+            );
+        }
+        const port = config.port;
+        if (!port || !Number.isInteger(port) || port < 1 || port > 65535) {
+            return failed(
+                workspaceId,
+                siteId,
+                config,
+                `Host-native site "${config.name}" needs a valid port — the port its dev server binds on the host, so \`.gen\` can route to it.`,
+            );
+        }
+        const cwd = repoCwdOnHost(workspacePath, config.repo);
+        if (cwd === null) {
+            return failed(workspaceId, siteId, config, `Invalid repo name ${JSON.stringify(config.repo)}.`);
+        }
+        if (!deps.hostSpawn) {
+            return failed(
+                workspaceId,
+                siteId,
+                config,
+                'Host-native hosting is not available in this build, so this site cannot run without a container.',
+            );
+        }
+        const hostSpawn = deps.hostSpawn;
+
+        beginPhase(workspaceId, siteId, config, 'starting');
+        const route: HostNativeRoute = {
+            genName: config.genName,
+            scheme: 'http',
+            loopback: '127.0.0.1',
+            port,
+            ...(config.upstreamHost ? { upstreamHost: config.upstreamHost } : {}),
+        };
+
+        // Already running (a reconcile, a re-entrant start): re-record, don't respawn.
+        if (live.has(siteId) && (await hostSpawn.alive(siteId))) {
+            return await recordHostNativeLive(workspaceId, siteId, config, route);
+        }
+        live.delete(siteId);
+
+        // Same env precedence as a container site, but HOST-FORM services (beta.237).
+        const serviceHostEnv = deps.serviceHostEnvFor
+            ? await deps.serviceHostEnvFor(workspaceId).catch(() => ({}))
+            : {};
+        const env = composeHostSiteEnv(config, command, serviceHostEnv);
+
+        const started = await hostSpawn.start({ siteId, workspaceId, command, cwd, env });
+        if (!started.ok) {
+            return failed(workspaceId, siteId, config, `The dev server did not start: ${started.error}`);
+        }
+        return await recordHostNativeLive(workspaceId, siteId, config, route);
+    }
+
     function statusOf(
         workspaceId: string,
         siteId: string,
@@ -729,8 +910,18 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         const entry = live.get(siteId);
         if (!entry) return;
         live.delete(siteId);
+        // MANAGED HOST-NATIVE (story #238): Genie owns the dev server process — stop
+        // it. No container runtime involved.
+        if (entry.config.runMode === 'host') {
+            if (deps.hostSpawn) await deps.hostSpawn.stop(siteId).catch(() => {});
+            changed();
+            return;
+        }
         const { runtime } = await deps.resolveRuntime();
-        if (runtime) {
+        // An EXTERNAL host-native site (hostPort, no container) runs no process Genie
+        // owns — dropping its route above IS the stop; the dev server it points at is
+        // the user's own host process (via manageProcess), left running.
+        if (runtime && entry.containerId) {
             // Stop ONLY this site's process group — never the shared sandbox, which
             // holds the toolchain and the other sites. Then re-point Caddy at what
             // remains, dropping this site's vhost.
@@ -899,6 +1090,18 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 return failure?.error
                     ? `This site is not running. It last failed with:\n${failure.error}`
                     : 'This site is not running, so it has no log.';
+            }
+            // MANAGED HOST-NATIVE (story #238): Genie owns the dev server process, so
+            // its captured output IS available.
+            if (entry.config.runMode === 'host') {
+                return deps.hostSpawn
+                    ? deps.hostSpawn.readLog(siteId, tail)
+                    : 'Host-native hosting is not available, so the log cannot be read.';
+            }
+            // An EXTERNAL host-native site (hostPort) has no container and no process
+            // Genie owns: its output is the user's own dev server log.
+            if (!entry.containerId) {
+                return `This site points at a host dev server on 127.0.0.1:${entry.caddyHostPort}. Its output is that dev server's own log, not a container log.`;
             }
             const { runtime } = await deps.resolveRuntime();
             if (!runtime) return 'No container runtime is available, so the log cannot be read.';
