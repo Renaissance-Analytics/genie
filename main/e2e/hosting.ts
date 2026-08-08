@@ -117,6 +117,7 @@ interface SiteInfo {
     origin?: string;
     localOrigin?: string;
     command?: string[];
+    browserExposed?: boolean;
 }
 
 interface RunOption {
@@ -426,6 +427,7 @@ interface SiteRequest {
     runMode?: string;
     command?: string[];
     port?: number;
+    browserExposed?: boolean;
 }
 
 interface ServiceRequest {
@@ -529,6 +531,15 @@ export function registerHostingE2EMocks(): void {
                 if (row) {
                     row.state = 'stopped';
                     row.ready = false;
+                }
+                return { ok: true, sites, ...(row ? { affectedId: row.id } : {}) };
+            case 'update':
+                if (row) {
+                    if (req.name !== undefined) row.name = req.name;
+                    if (req.runMode !== undefined) row.runMode = req.runMode;
+                    if (req.port !== undefined) row.port = req.port;
+                    if (req.command !== undefined) row.command = req.command;
+                    if (req.browserExposed !== undefined) row.browserExposed = req.browserExposed;
                 }
                 return { ok: true, sites, ...(row ? { affectedId: row.id } : {}) };
             case 'logs':

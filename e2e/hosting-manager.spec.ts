@@ -2,8 +2,10 @@ import { test, expect, type ElectronApplication, type Page } from '@playwright/t
 import {
     hostingRuntimeUnavailable,
     launchGenieE2E,
+    readHostingSites,
     readHostingState,
     resetHosting,
+    seedHostingSites,
 } from './helpers/launch';
 
 /**
@@ -325,4 +327,85 @@ test('the Services view shows what this workspace uses, and what a stop would re
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('panel-closed')).toBeVisible();
     await expect(page.locator('.set-row', { hasText: 'Docker or Podman' })).toBeVisible();
+});
+
+// --- the external-browser toggle (story #238) -------------------------------
+
+test('the site Edit form offers the external-browser toggle for a host-native site, and persists it', async () => {
+    // A host-native site (a hostPort, no container) — the ONLY kind the host Caddy
+    // fronts, so the only kind the toggle is offered for.
+    await seedHostingSites(app, [
+        {
+            id: 'site-web',
+            name: 'web',
+            genName: 'web.hosting-e2e.gen',
+            repo: '',
+            runMode: 'host',
+            kind: 'http',
+            enabled: true,
+            state: 'running',
+            ready: true,
+            port: 5173,
+            hostPort: 49010,
+        },
+    ]);
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    const modal = await openPanel(page);
+
+    await modal.getByRole('button', { name: 'Edit' }).click();
+    const edit = page.locator(MODAL);
+    await expect(edit.getByRole('heading', { name: 'Edit web' })).toBeVisible();
+
+    // The toggle is offered, OFF by default, and its hint says the first enable is
+    // a one-time admin prompt — not a silent privileged side effect.
+    const toggleRow = edit.locator('label.site-field', { hasText: 'Open in a real browser' });
+    await expect(toggleRow).toBeVisible();
+    await expect(toggleRow).toContainText('one-time admin prompt');
+    const toggle = toggleRow.getByRole('switch');
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+
+    // Turn it on and save.
+    await toggle.click();
+    await edit.getByRole('button', { name: 'Save changes' }).click();
+    await expect(page.locator(MODAL).getByRole('heading', { name: 'Edit web' })).toHaveCount(0);
+
+    // THE assertion the DOM only implies: the update carried browserExposed, so the
+    // site now records it — this is exactly what the host reconcile reads to bring
+    // up the CA + hosts entry + Caddy :443.
+    const site = (await readHostingSites(app)).find((s) => s.id === 'site-web');
+    expect(site?.browserExposed, 'toggling on must persist browserExposed').toBe(true);
+    // And it rode over the real IPC as an `update`, not some side channel.
+    expect((await readHostingState(app))?.calls.site).toContain('update');
+});
+
+test('the external-browser toggle is HIDDEN for a container site — never a dead control', async () => {
+    // A container site (no hostPort) is served by the SANDBOX Caddy, not the host
+    // one, so the toggle would do nothing — and a control that silently does
+    // nothing is the bug this gate prevents.
+    await seedHostingSites(app, [
+        {
+            id: 'site-api',
+            name: 'api',
+            genName: 'api.hosting-e2e.gen',
+            repo: '',
+            runMode: 'dockerfile',
+            kind: 'http',
+            enabled: true,
+            state: 'running',
+            ready: true,
+            port: 8000,
+        },
+    ]);
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    const modal = await openPanel(page);
+
+    await modal.getByRole('button', { name: 'Edit' }).click();
+    const edit = page.locator(MODAL);
+    await expect(edit.getByRole('heading', { name: 'Edit api' })).toBeVisible();
+    // No toggle for a container site.
+    await expect(
+        edit.locator('label.site-field', { hasText: 'Open in a real browser' }),
+    ).toHaveCount(0);
 });

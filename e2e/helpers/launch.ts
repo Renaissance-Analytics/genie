@@ -111,6 +111,52 @@ export async function readHostingState(app: ElectronApplication): Promise<{
     });
 }
 
+export interface E2ESeedSite {
+    id: string;
+    name: string;
+    genName: string;
+    repo: string;
+    runMode: string;
+    kind: 'http' | 'tcp';
+    enabled: boolean;
+    state: string;
+    ready?: boolean;
+    port?: number;
+    hostPort?: number;
+    browserExposed?: boolean;
+}
+
+/** Seed the hosting fixture's site list (story #238 toggle E2E), then push a
+ *  `dev-server:changed` so the panel repaints. Cleared by {@link resetHosting}. */
+export async function seedHostingSites(
+    app: ElectronApplication,
+    sites: E2ESeedSite[],
+): Promise<void> {
+    await app.evaluate((_e, seed) => {
+        const h = (globalThis as Record<string, any>).__GENIE_E2E_HOSTING__;
+        if (!h) return;
+        h.state.sites = seed;
+        h.notifyChanged?.();
+    }, sites);
+}
+
+/** Read the hosting fixture's sites back — to assert an edit PERSISTED what the
+ *  DOM only implied (e.g. the browserExposed the toggle sends). */
+export async function readHostingSites(app: ElectronApplication): Promise<
+    Array<{ id: string; name: string; runMode: string; hostPort?: number; browserExposed?: boolean }>
+> {
+    return app.evaluate(() => {
+        const h = (globalThis as Record<string, any>).__GENIE_E2E_HOSTING__;
+        return (h?.state.sites ?? []).map((s: Record<string, unknown>) => ({
+            id: s.id as string,
+            name: s.name as string,
+            runMode: s.runMode as string,
+            hostPort: s.hostPort as number | undefined,
+            browserExposed: s.browserExposed as boolean | undefined,
+        }));
+    });
+}
+
 /** Restore the hosting fixture to its defaults — every test starts from the
  *  same machine, whatever the one before it started or stopped. */
 export async function resetHosting(app: ElectronApplication): Promise<void> {
