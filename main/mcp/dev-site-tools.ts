@@ -314,6 +314,11 @@ export async function runManageSite(
                 let env = req.env;
                 let port = req.port;
                 let runMode = req.runMode;
+                // HOST-NATIVE (story #238): point .gen at a dev server already
+                // running as a HOST process on 127.0.0.1:<hostPort> — no container,
+                // no recipe, no build. When set, it bypasses recipe detection and
+                // the command/port requirements below.
+                const hostPort = req.hostPort;
                 let applied: HostingOption | undefined;
                 let options: HostingOption[] | undefined;
                 let framework: DevFramework | undefined;
@@ -323,7 +328,7 @@ export async function runManageSite(
                 // Nothing to start supplied → read the repo and take the
                 // recommended recipe's serve, so "host the frontend" is ONE call.
                 // Skipped entirely when the caller gave a `command` (or image).
-                if (!command && !serve && !req.image) {
+                if (!command && !serve && !req.image && !hostPort) {
                     const described = describeRepoRun(repo.dir, port ? { port } : {});
                     options = described.options;
                     applied = runMode
@@ -353,15 +358,15 @@ export async function runManageSite(
                     framework = applied.framework;
                 }
 
-                if (!command && !serve && !image) {
+                if (!command && !serve && !image && !hostPort) {
                     return fail(
-                        'create needs a `command` — the argv Genie runs to start the site against the live source, e.g. ["npm","run","dev"]. (Legacy `serve`/`image` also work.)',
+                        'create needs a `command` — the argv Genie runs to start the site against the live source, e.g. ["npm","run","dev"]. (Legacy `serve`/`image` also work; or pass `hostPort` to point `.gen` at a dev server you already run on the host, no container.)',
                         options ? { options: options.map(toOption) } : {},
                     );
                 }
-                if (!port) {
+                if (!port && !hostPort) {
                     return fail(
-                        'create requires `port` — the port the site\'s command listens on INSIDE the sandbox. Without it Caddy has nothing to route `.gen` to.',
+                        'create requires `port` — the port the site\'s command listens on INSIDE the sandbox. Without it Caddy has nothing to route `.gen` to. (Or pass `hostPort` for a host-native site that points `.gen` straight at a host dev-server port.)',
                         options ? { options: options.map(toOption) } : {},
                     );
                 }
@@ -377,7 +382,8 @@ export async function runManageSite(
                     ...(build?.length ? { build } : {}),
                     ...(command?.length ? { command } : {}),
                     ...(serve ? { serve } : {}),
-                    port,
+                    ...(port ? { port } : {}),
+                    ...(hostPort ? { hostPort } : {}),
                     ...(req.exposed
                         ? { exposed: req.exposed as never }
                         : {}),

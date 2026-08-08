@@ -651,6 +651,14 @@ export interface ManageSiteRequest {
     /** create: the port the site's command listens on INSIDE the sandbox; Caddy
      *  fronts `.gen` to it over https. */
     port?: number;
+    /**
+     * create: HOST-NATIVE — point `<name>.gen` straight at a dev server already
+     * running as a HOST process on `127.0.0.1:<hostPort>` (e.g. one you started with
+     * `manageProcess`), with NO container and NO build. This is the way to just
+     * "serve the repo the site points to": run the repo's own dev server on the host
+     * and pass its port here. Mutually exclusive with `command`/`serve`/`image`/`build`.
+     */
+    hostPort?: number;
     /** create: extra BROWSER-FACING surfaces. Backend services never go here. */
     exposed?: Array<{ name: string; port: number; protocol: string; reason: string }>;
     env?: Record<string, string>;
