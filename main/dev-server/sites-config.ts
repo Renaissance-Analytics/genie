@@ -157,6 +157,9 @@ const RUN_MODES: readonly HostingRunMode[] = [
     'compose',
     'recipe',
     'explicit',
+    // Story #238: the repo's dev server run as a HOST process (no container),
+    // with `.gen` routed straight to it. "Just serve the repo the site points to."
+    'host',
 ];
 
 const STACKS: readonly HostingStack[] = ['php', 'node', 'static', 'python', 'go', 'rust'];

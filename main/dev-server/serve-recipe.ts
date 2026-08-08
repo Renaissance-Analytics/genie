@@ -110,7 +110,7 @@ export type ProductionServer =
  * is detected is the STACK, but what is applied is a production build + serve
  * recipe, and a caller storing `detected` would be recording only half of it.
  */
-export type HostingRunMode = 'dockerfile' | 'devcontainer' | 'compose' | 'recipe' | 'explicit';
+export type HostingRunMode = 'dockerfile' | 'devcontainer' | 'compose' | 'recipe' | 'explicit' | 'host';
 
 /** One step of the production build, run before the server starts. */
 export interface BuildStep {
