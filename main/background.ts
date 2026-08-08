@@ -39,6 +39,9 @@ import { LOCAL_CONN_KEY, openTestingBrowser } from './testing-browser';
 import { devLifecycle } from './dev-server/lifecycle';
 import { devServiceEnvFor, devServiceHostEnvFor } from './dev-server/services/service-manager';
 import { resolveContainerRuntime } from './dev-server';
+import { devServerHostBrowserRoutes } from './dev-server/site-manager';
+import { createDesktopHostBrowserReconciler } from './dev-server/host-browser-desktop';
+import type { HostBrowserReconciler } from './dev-server/host-browser-reconcile';
 import { initHosting } from './host-core/hosting';
 import {
     writeWorkspaceAgentMcp,
@@ -347,6 +350,10 @@ let settingsConnKey: string | null = null;
 let docsWindow: BrowserWindow | null = null;
 let knowledgeWindow: BrowserWindow | null = null;
 let masterWindow: BrowserWindow | null = null;
+// The external-browser host reconcile (story #238): brings up the host CA +
+// hosts-file + Caddy :443 for browser-exposed host-native sites. Created once at
+// hosting init; fired on boot + (debounced) on every `.gen` change.
+let hostBrowserReconciler: HostBrowserReconciler | null = null;
 const terminalWindows = new Set<BrowserWindow>();
 
 export function getMainWindow(): BrowserWindow | null {
@@ -1047,6 +1054,17 @@ app.whenReady().then(async () => {
     // serve. `initHosting` builds services before sites (a site reads its
     // workspace's service env when it starts) and reads both lazily for the
     // lifecycle — the ordering the four inline calls used to encode by hand.
+    // The external-browser reconcile (story #238): live browser-exposed host-
+    // native routes → the real host CA + hosts-file + Caddy :443. Assembled once;
+    // fired on boot and (debounced) on every `.gen` change below. No-op — and no
+    // admin prompt — until a site is opted in.
+    hostBrowserReconciler = createDesktopHostBrowserReconciler({
+        userDataDir: app.getPath('userData'),
+        resourcesPath: process.resourcesPath,
+        platform: process.platform,
+        routes: () => devServerHostBrowserRoutes(),
+        log: (m) => console.warn('[host-browser]', m),
+    });
     initHosting({
         resolveRuntime: () => resolveContainerRuntime(),
         listWorkspaces: () =>
@@ -1073,8 +1091,13 @@ app.whenReady().then(async () => {
         confirmImagePull: confirmContainerImagePull,
         // The `.gen` change event, so the header popover, the rail icon, the Site
         // Manager and the Testing Browser's resolver all re-pull when a container
-        // starts or stops. Fires for both managers.
-        onChanged: () => broadcastDevServerChanged(),
+        // starts or stops. Fires for both managers. Also (debounced) re-reconciles
+        // the external browser's host Caddy/hosts when a browser-exposed site
+        // starts, stops, or is toggled.
+        onChanged: () => {
+            broadcastDevServerChanged();
+            hostBrowserReconciler?.schedule();
+        },
         // Live site START progress (Gap 2) — pushed to any open Site Manager so a
         // card shows `pulling → building → starting → ready` with the build log
         // streaming, instead of a disabled button until the build finishes.
@@ -1754,6 +1777,10 @@ app.whenReady().then(async () => {
             console.error('[dev-server] boot adoption failed', e);
         }
         broadcastDevServerChanged();
+        // Adopt re-attached any browser-exposed host-native site that was already
+        // running — bring its host Caddy/hosts/CA back in one pass. No-op (and no
+        // prompt) when nothing is opted in.
+        void hostBrowserReconciler?.runNow();
     })();
     // Two-phase quit (Tier 1 terminal persistence). On the FIRST before-quit we
     // hold the quit, ask every window to serialize its terminals one last time,
