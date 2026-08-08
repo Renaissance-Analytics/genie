@@ -11,7 +11,7 @@ import {
     stopSiteProcess,
 } from './site-process';
 import { ensureWorkspaceSandbox, HOST_GATEWAY_HOSTNAME } from './workspace-sandbox';
-import { sandboxCommandFor } from './sites-config';
+import { hostNativeRoute, sandboxCommandFor, type HostNativeRoute } from './sites-config';
 import type { ContainerRuntime, RuntimeDetection } from './container-runtime';
 import type { HostIds } from './host-ids';
 import type { DevSiteConfig, DevSites } from './sites-config';
@@ -261,13 +261,14 @@ interface Live {
     siteId: string;
     config: DevSiteConfig;
     /** The SANDBOX container the process runs in (shared by every site in the
-     *  workspace). */
-    containerId: string;
-    /** The sandbox's published Caddy port — the one door every `.gen` is reached
-     *  through. */
+     *  workspace). Absent for a HOST-NATIVE site (story #238): it runs no container. */
+    containerId?: string;
+    /** The port `.gen` is reached through — the sandbox's published Caddy port for a
+     *  container site, or the host loopback dev-server port for a host-native one. */
     caddyHostPort: number;
-    /** The app's own loopback port INSIDE the sandbox — what Caddy proxies to. */
-    internalPort: number;
+    /** The app's own loopback port INSIDE the sandbox — what Caddy proxies to.
+     *  Absent for a host-native site (there is no sandbox hop). */
+    internalPort?: number;
     ready: boolean;
     /** The `.gen` rows this site contributes (its own). Resolved at start so
      *  `genSites()` stays synchronous. */
@@ -438,6 +439,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         const sites: CaddySite[] = [];
         for (const e of live.values()) {
             if (e.workspaceId !== workspaceId || e.config.kind !== 'http') continue;
+            // A HOST-NATIVE site (story #238) is served straight off its host port,
+            // not through the sandbox Caddy, and has no internal container port — so
+            // it contributes no vhost here.
+            if (e.internalPort === undefined) continue;
             sites.push({
                 host: e.config.genName,
                 port: e.internalPort,
@@ -469,6 +474,18 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             );
         }
         const { workspace, config } = found;
+
+        // HOST-NATIVE (story #238): the site points `.gen` at a dev server already
+        // running as a HOST process (e.g. started via manageProcess) on
+        // 127.0.0.1:<hostPort>. Register its route and probe it — spawn NOTHING, and
+        // need NO container runtime. This is the owner's model: "just serve the repo
+        // the site points to; don't use containers." Guarded, so the container path
+        // below is untouched for ordinary sites.
+        const hostRoute = hostNativeRoute(config);
+        if (hostRoute) {
+            beginPhase(workspaceId, siteId, config, 'starting');
+            return await recordHostNativeLive(workspaceId, siteId, config, hostRoute);
+        }
 
         // The instant a start begins — so the card leaves "off" the moment the
         // button is clicked (Gap 2). Covers runtime resolution + the sandbox
@@ -687,6 +704,48 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         };
     }
 
+    /**
+     * Record a HOST-NATIVE site (story #238): one whose `.gen` points straight at a
+     * dev server already running as a HOST process on `127.0.0.1:<hostPort>`. No
+     * container, no Caddy — just the route + a plain-http readiness probe on the
+     * host port. The Testing Browser's session-CA shim terminates TLS at `.gen`, so
+     * the plain-http dev server is reachable as `https://<name>.gen` with nothing
+     * else. This is what makes "run a dev server and point a site at it" work.
+     */
+    async function recordHostNativeLive(
+        workspaceId: string,
+        siteId: string,
+        config: DevSiteConfig,
+        route: HostNativeRoute,
+        probeTimeoutMs: number = readyTimeoutMs,
+    ): Promise<DevSiteStatus> {
+        const routes: DevGenSite[] = [
+            {
+                workspaceId,
+                genName: config.genName,
+                siteId,
+                hostname: config.genName,
+                // Plain http on the host port; the Testing Browser's shim adds TLS.
+                scheme: route.scheme,
+                port: route.port,
+                loopback: route.loopback,
+            },
+        ];
+        live.set(siteId, { workspaceId, siteId, config, caddyHostPort: route.port, ready: false, routes });
+
+        const ready = await probe({
+            port: route.port,
+            kind: 'http',
+            servername: config.genName,
+            hostHeader: config.upstreamHost ?? config.genName,
+            timeoutMs: probeTimeoutMs,
+        });
+        const entry = live.get(siteId);
+        if (entry) entry.ready = ready;
+        changed();
+        return statusOf(workspaceId, siteId, config, live.get(siteId)!);
+    }
+
     function statusOf(
         workspaceId: string,
         siteId: string,
@@ -730,7 +789,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         if (!entry) return;
         live.delete(siteId);
         const { runtime } = await deps.resolveRuntime();
-        if (runtime) {
+        // A HOST-NATIVE site (story #238) runs no container — dropping its route
+        // above IS the stop; the dev server it points at is a separate host process
+        // the user owns (started via manageProcess), left running.
+        if (runtime && entry.containerId) {
             // Stop ONLY this site's process group — never the shared sandbox, which
             // holds the toolchain and the other sites. Then re-point Caddy at what
             // remains, dropping this site's vhost.
@@ -899,6 +961,12 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 return failure?.error
                     ? `This site is not running. It last failed with:\n${failure.error}`
                     : 'This site is not running, so it has no log.';
+            }
+            // A host-native site (story #238) has no container: its output is the
+            // dev server's OWN log (the process the user started, e.g. via
+            // manageProcess), not a container log.
+            if (!entry.containerId) {
+                return `This site points at a host dev server on 127.0.0.1:${entry.caddyHostPort}. Its output is that dev server's own log, not a container log.`;
             }
             const { runtime } = await deps.resolveRuntime();
             if (!runtime) return 'No container runtime is available, so the log cannot be read.';

@@ -781,4 +781,44 @@ describe('service env injection (#234 P3)', () => {
         expect(status.hostPort).toBe(CADDY_HOST_PORT);
         expect(status.origin).toBe('https://web.acme.gen');
     });
+
+    it('hosts a HOST-NATIVE site by ROUTING .gen at a host dev-server port — no container, no runtime (story #238)', async () => {
+        // The owner's model: run the repo's dev server as a HOST process (e.g. via
+        // manageProcess) on 127.0.0.1:<hostPort> and just POINT the site at it. No
+        // container, no build, no runtime needed.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'web',
+                genName: 'web.acme.gen',
+                repo: 'app',
+                runMode: 'explicit',
+                hostPort: 8001,
+                kind: 'http',
+                enabled: true,
+            },
+        };
+        const m = manager(runtime, sites, { probeReady: async () => true });
+        const status = await m.start('acme', SITE_ID);
+
+        // (a) running + ready, and NOTHING was spawned — no container at all, even
+        //     though the runtime reports `none` (host-native needs no Docker).
+        expect(status.state).toBe('running');
+        expect(status.ready).toBe(true);
+        expect(runtime.ran).toHaveLength(0);
+
+        // (b) the .gen route points STRAIGHT at the host loopback dev-server port,
+        //     plain http (the Testing Browser's session-CA shim adds TLS at .gen).
+        expect(m.genSites()).toEqual([
+            {
+                workspaceId: 'acme',
+                genName: 'web.acme.gen',
+                siteId: SITE_ID,
+                hostname: 'web.acme.gen',
+                scheme: 'http',
+                port: 8001,
+                loopback: '127.0.0.1',
+            },
+        ]);
+    });
 });
