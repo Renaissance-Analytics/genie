@@ -40,12 +40,17 @@ import type {
  *
  * ## Two behaviours worth naming
  *
- * **`create` finishes the job.** An agent asked to "host the frontend" should
- * not have to make four calls. `create` with just a `name` detects the repo's
- * stack, takes the recommended production BUILD + SERVE recipe, stores it,
- * builds it and starts the production server — reporting which recipe it applied
- * and what else was on offer. When nothing can be recommended it FAILS with the
- * options attached, so the next call is obvious rather than a guess.
+ * **`create` finishes the job — and defaults to DEV, not production.** An agent
+ * asked to "host the frontend" should not have to make four calls. `create` with
+ * just a `name` detects the repo's stack and runs its DEV server HOST-NATIVE
+ * (runMode `host`): a real host process against the LIVE source, `.gen` routed
+ * straight to it, with NO container and NO build — "just serve the repo the site
+ * points to", the way Herd did (Docker only for services). A production
+ * BUILD+SERVE recipe is still available, but OPT-IN (runMode
+ * `recipe`/`dockerfile`/`compose`/`devcontainer`). Two other host-native shapes:
+ * pass `command` + `port` to run YOUR dev server, or `hostPort` to point `.gen` at
+ * a dev server you already run (e.g. via `manageProcess`). When nothing can be
+ * recommended it FAILS with the options attached, so the next call is obvious.
  *
  * **The runtime's absence is data, not an exception.** Every result carries
  * `runtime`, so an agent that gets `ok: false` on a machine with no Docker reads

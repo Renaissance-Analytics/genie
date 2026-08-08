@@ -69,31 +69,30 @@ const call = (args: Partial<ManageSiteRequest>, over: Partial<McpContext> = {}) 
 // --- the gate ---------------------------------------------------------------
 
 describe('tools/list gating', () => {
-    it('lists manageSite where a container runtime is usable', async () => {
+    it('lists manageSite whenever the host wires it — host-native dev hosting needs NO Docker', async () => {
         expect(await listTools({ devServerAvailable: async () => true })).toContain('manageSite');
+        // No container runtime: manageSite is STILL listed — dev sites run host-native
+        // (story #238); only the opt-in production recipe needs a runtime, per-action.
+        expect(await listTools({ devServerAvailable: async () => false })).toContain('manageSite');
     });
 
-    it('OMITS it where none is', async () => {
-        expect(await listTools({ devServerAvailable: async () => false })).not.toContain(
-            'manageSite',
-        );
-    });
-
-    it('omits it when the probe THROWS — fail closed', async () => {
+    it('a broken/absent Docker probe never removes manageSite (host-native is fail-open)', async () => {
         const tools = await listTools({
             devServerAvailable: async () => {
                 throw new Error('docker socket exploded');
             },
         });
-        expect(tools).not.toContain('manageSite');
-        // And the rest of the surface is untouched: a broken probe must never
-        // be able to remove a core tool.
+        expect(tools).toContain('manageSite');
         expect(tools).toContain('manageProcess');
         expect(tools).toContain('manageTerminals');
     });
 
-    it('omits it when the seam is not wired at all', async () => {
-        expect(await listTools()).not.toContain('manageSite');
+    it('gates manageService (a container SERVICE) on a usable container runtime', async () => {
+        const svc = vi.fn().mockResolvedValue({ ok: true });
+        expect(await listTools({ devServerAvailable: async () => true, manageService: svc })).toContain('manageService');
+        expect(await listTools({ devServerAvailable: async () => false, manageService: svc })).not.toContain(
+            'manageService',
+        );
     });
 });
 
