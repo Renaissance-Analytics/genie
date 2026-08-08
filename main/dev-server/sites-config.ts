@@ -89,6 +89,21 @@ export interface DevSiteConfig {
      *  Caddy reverse-proxies `<genName>` to it. */
     port?: number;
     /**
+     * HOST-NATIVE routing target (Wish #102 / story #238). When set, the site is
+     * served NOT by a container but by a dev server already running as a HOST
+     * process — the repo's own dev server (e.g. `php artisan serve` / `npm run
+     * dev`), started via `manageProcess` so it holds `127.0.0.1:<hostPort>` on the
+     * host and reaches the workspace's managed services in host form (beta.237).
+     * `<genName>` routes straight to it: NO sandbox, NO build — "just serve the
+     * repo the site points to", the way Herd did (Docker only for pg/redis/…).
+     *
+     * The dev server speaks plain http; in the Testing Browser the session-CA shim
+     * terminates TLS at `.gen`, so it is reachable as https there with no host
+     * Caddy. Mutually exclusive with the container path — when this is set,
+     * `command`/`serve`/`image`/`build` do not apply (nothing is spawned).
+     */
+    hostPort?: number;
+    /**
      * Extra BROWSER-FACING surfaces — a websocket, a gRPC endpoint.
      *
      * Only what the browser itself connects to. A database, a cache or an
@@ -297,6 +312,10 @@ export function sanitizeDevSitePatch(
         if (patch.port >= 1 && patch.port <= 65535) out.port = patch.port;
     }
 
+    if (typeof patch.hostPort === 'number' && Number.isInteger(patch.hostPort)) {
+        if (patch.hostPort >= 1 && patch.hostPort <= 65535) out.hostPort = patch.hostPort;
+    }
+
     if (patch.env && typeof patch.env === 'object' && !Array.isArray(patch.env)) {
         const env: Record<string, string> = {};
         for (const [name, value] of Object.entries(patch.env)) {
@@ -349,6 +368,7 @@ const RECONFIGURE_KEYS: readonly (keyof DevSiteConfig)[] = [
     'command',
     'serve',
     'port',
+    'hostPort',
     'exposed',
     'env',
     'kind',
@@ -379,6 +399,31 @@ export function effectiveCommand(config: DevSiteConfig): string[] | null {
     if (config.command && config.command.length > 0) return config.command;
     if (config.serve && config.serve.length > 0) return config.serve;
     return null;
+}
+
+/** The routing target of a HOST-NATIVE site (story #238) — one that points
+ *  `<genName>` straight at a dev server already running as a HOST process on
+ *  `127.0.0.1:<hostPort>`, with NO container. Null for an ordinary container site
+ *  (or a non-http one). When non-null the site manager registers this route and
+ *  spawns nothing; the dev server speaks plain http and the Testing Browser's
+ *  session-CA shim terminates TLS at `.gen`. */
+export interface HostNativeRoute {
+    genName: string;
+    scheme: 'http';
+    loopback: '127.0.0.1';
+    port: number;
+    upstreamHost?: string;
+}
+
+export function hostNativeRoute(config: DevSiteConfig): HostNativeRoute | null {
+    if (typeof config.hostPort !== 'number' || config.kind !== 'http') return null;
+    return {
+        genName: config.genName,
+        scheme: 'http',
+        loopback: '127.0.0.1',
+        port: config.hostPort,
+        ...(config.upstreamHost ? { upstreamHost: config.upstreamHost } : {}),
+    };
 }
 
 /**
