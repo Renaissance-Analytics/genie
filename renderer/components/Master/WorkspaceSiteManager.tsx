@@ -10,6 +10,7 @@ import {
     Input,
     Modal,
     Select,
+    Switch,
     Tabs,
     Text,
     Textarea,
@@ -693,6 +694,11 @@ function EditSiteForm({
     const [runMode, setRunMode] = useState(row.runMode);
     const [image, setImage] = useState(row.image ?? '');
     const [upstreamHost, setUpstreamHost] = useState(row.upstreamHost ?? '');
+    const [browserExposed, setBrowserExposed] = useState(row.browserExposed ?? false);
+    // The external-browser toggle only means anything for a host-native site (one
+    // Genie fronts on the host Caddy, not the sandbox one) — don't show a control
+    // that would silently do nothing for a container site.
+    const isHostNative = runMode === 'host' || Boolean(row.hostPort);
     // The USER-CONTROLLED startup argv — the canonical way to start a site. Falls
     // back to the legacy serve argv for a site saved before the sandbox-serve rework.
     const [command, setCommand] = useState((row.command ?? row.serve ?? []).join(' '));
@@ -722,6 +728,7 @@ function EditSiteForm({
         if (runMode !== row.runMode) patch.runMode = runMode;
         if (image.trim() !== (row.image ?? '')) patch.image = image.trim();
         if (upstreamHost.trim() !== (row.upstreamHost ?? '')) patch.upstreamHost = upstreamHost.trim();
+        if (browserExposed !== (row.browserExposed ?? false)) patch.browserExposed = browserExposed;
 
         const portNum = port.trim() ? Number(port.trim()) : undefined;
         if (portNum && portNum !== row.port) patch.port = portNum;
@@ -815,6 +822,21 @@ function EditSiteForm({
                             placeholder="localhost"
                         />
                     </label>
+                    {isHostNative && (
+                        <label className="site-field site-field-wide">
+                            <span>Open in a real browser (Chrome/Edge)</span>
+                            <Switch
+                                checked={browserExposed}
+                                onCheckedChange={(on: boolean) => setBrowserExposed(on)}
+                            />
+                            <small className="site-field-hint">
+                                Off by default — the in-app Testing Browser already serves this site with
+                                no setup. Turn on to reach <code>{genName || row.genName}</code> from a real
+                                browser: the first time, Genie installs its local certificate, adds a hosts
+                                entry, and runs a small local proxy — a one-time admin prompt.
+                            </small>
+                        </label>
+                    )}
                     <label className="site-field site-field-wide">
                         <span>Startup command</span>
                         <Input

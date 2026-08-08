@@ -146,6 +146,8 @@ export interface DevSiteRow extends DevSiteStatus {
     image?: string;
     env?: DevSiteConfig['env'];
     upstreamHost?: DevSiteConfig['upstreamHost'];
+    /** Opt-in: `<name>.gen` exposed to real external browsers (story #238). */
+    browserExposed?: DevSiteConfig['browserExposed'];
     /** Set ONLY while a start is in flight (Gap 2). */
     phase?: DevSitePhase;
 }
@@ -1076,6 +1078,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                         ...(config.image ? { image: config.image } : {}),
                         ...(config.env && Object.keys(config.env).length ? { env: config.env } : {}),
                         ...(config.upstreamHost ? { upstreamHost: config.upstreamHost } : {}),
+                        ...(config.browserExposed ? { browserExposed: config.browserExposed } : {}),
                         ...(flight
                             ? {
                                   phase: flight.phase,
