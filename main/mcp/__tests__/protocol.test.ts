@@ -93,7 +93,13 @@ describe('handleMcpMessage', () => {
         ]);
     });
 
-    it('OMITS the ops-only provisionWorkspaces tool for a non-Ops workspace', async () => {
+    it('ALWAYS lists provisionWorkspaces — even for a workspace NOT flagged as Ops (genie #85)', async () => {
+        // Regression guard: an MCP client fetches tools/list ONCE at connection
+        // setup, so gating this tool on a fail-closed runtime ops probe silently
+        // HID it from genuine Ops workspaces on any transient backend hiccup —
+        // leaving no agent-callable path to provision a governed child (#85).
+        // Visibility is now a STATIC fact; the handler is the authoritative Ops
+        // gate (a non-Ops caller gets a clear "not an Ops project" error).
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 2, method: 'tools/list' },
             ctx({ isOpsProject: vi.fn().mockResolvedValue(false) }),
@@ -104,6 +110,7 @@ describe('handleMcpMessage', () => {
             'checkIssues',
             'ForceTheQuestion',
             'manageProcess',
+            'provisionWorkspaces',
             'manageSite',
             'manageTerminals',
             'runAgent',
@@ -118,13 +125,13 @@ describe('handleMcpMessage', () => {
         ]);
     });
 
-    it('fails CLOSED — omits provisionWorkspaces when the ops check throws', async () => {
+    it('lists provisionWorkspaces even when the ops probe THROWS — visibility never depends on it (genie #85)', async () => {
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 2, method: 'tools/list' },
             ctx({ isOpsProject: vi.fn().mockRejectedValue(new Error('backend down')) }),
         );
         const tools = (res?.result as { tools: Array<{ name: string }> }).tools;
-        expect(tools.map((t) => t.name)).not.toContain('provisionWorkspaces');
+        expect(tools.map((t) => t.name)).toContain('provisionWorkspaces');
     });
 
     it('advertises the prompts capability on initialize', async () => {
