@@ -112,6 +112,11 @@ export async function readHumanAttachment(
             base64: buf.toString('base64'),
         };
     } catch (e) {
-        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        // This read is reachable over the REMOTE/mobile API, so the raw fs error
+        // (a host path, or stack detail) must never reach the response — log it,
+        // return a FIXED reason (genie#11, js/stack-trace-exposure; same discipline
+        // as redactPluginFsError in mobile/api.ts).
+        console.warn('[agentinbox] reading a human attachment failed:', e);
+        return { ok: false, error: 'That attachment could not be read.' };
     }
 }
