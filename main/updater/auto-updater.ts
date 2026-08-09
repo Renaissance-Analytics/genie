@@ -122,12 +122,32 @@ class AutoUpdater extends EventEmitter {
      * gate sees no interruption and applies hands-free (the pre-existing behaviour).
      */
     private interruptionProbe: (() => RestartInterruption) | null = null;
+    /**
+     * The version electron-updater has DOWNLOADED and staged, waiting for a restart
+     * to take effect (set by the `update-downloaded` handler). Durable for the life
+     * of the process so a re-check can't regress it: the RUNNING process keeps
+     * executing the OLD code until the restart, so even once the on-disk install
+     * (and `app.getVersion()`) advances to this version, the check must keep
+     * surfacing restart-pending — NEVER "up to date" (issue #127). Null until a
+     * build finishes downloading this session; only ever moves FORWARD (a newer
+     * download supersedes it).
+     */
+    private pendingRestartVersion: string | null = null;
+    /**
+     * The version the RUNNING process booted on — captured ONCE at construction
+     * (early, before any staged build could be applied to disk). Update decisions
+     * compare the feed against THIS, not a live `app.getVersion()`, which reflects
+     * the ON-DISK install and can drift ahead of the running code after a staged
+     * apply. See issue #127.
+     */
+    private readonly runningVersion: string;
 
     constructor() {
         super();
+        this.runningVersion = app.getVersion();
         this.status = {
             state: 'idle',
-            currentVersion: app.getVersion(),
+            currentVersion: this.runningVersion,
             latestVersion: null,
             publishedAt: null,
             releaseUrl: null,
@@ -151,6 +171,21 @@ class AutoUpdater extends EventEmitter {
 
     getStatus(): AutoUpdaterStatus {
         return { ...this.status, log: [...this.status.log] };
+    }
+
+    /**
+     * The version already downloaded and waiting for a restart to apply, or null.
+     * Reads the DURABLE `pendingRestartVersion` first (survives a re-check that
+     * flips us through 'checking'), falling back to the transient status for a
+     * build staged before this field existed / by an external code path. This is
+     * the signal that keeps a re-check from regressing a staged build to
+     * "up to date" while the RUNNING process is still the old code (#127).
+     */
+    private stagedVersion(): string | null {
+        return (
+            this.pendingRestartVersion ??
+            (this.status.state === 'ready-to-restart' ? this.status.latestVersion : null)
+        );
     }
 
     /**
@@ -207,11 +242,10 @@ class AutoUpdater extends EventEmitter {
     private async runCheck(): Promise<void> {
         // What (if anything) is already downloaded and waiting to apply. Lets us
         // tell "the staged build is still the latest" (keep it) apart from "a
-        // newer build now exists" (supersede it).
-        const stagedVersion =
-            this.status.state === 'ready-to-restart'
-                ? this.status.latestVersion
-                : null;
+        // newer build now exists" (supersede it). Snapshotted before we flip to
+        // 'checking'; re-read from the durable field after the network call in
+        // case a cached build re-fires `update-downloaded` mid-check.
+        const stagedVersion = this.stagedVersion();
 
         this.setStatus({ state: 'checking', error: null, manualDownloadUrl: null, interruption: null });
 
@@ -225,27 +259,38 @@ class AutoUpdater extends EventEmitter {
 
         try {
             const res = await autoUpdater.checkForUpdates();
+            // Re-read the staged build AFTER the await: electron-updater can
+            // re-fire `update-downloaded` for a cached build DURING the check,
+            // which is only reflected in the durable field by now.
+            const staged = this.stagedVersion() ?? stagedVersion;
             if (!res || !res.updateInfo) {
                 // No release metadata — don't drop a good staged build back to a
                 // bare "up to date"; keep it ready to apply.
                 this.setStatus(
-                    stagedVersion
-                        ? { state: 'ready-to-restart', latestVersion: stagedVersion, progress: 1 }
+                    staged
+                        ? { state: 'ready-to-restart', latestVersion: staged, progress: 1 }
                         : { state: 'up-to-date' },
                 );
                 return;
             }
             const latest = res.updateInfo.version;
-            if (latest === app.getVersion()) {
-                this.setStatus({ state: 'up-to-date', latestVersion: latest });
-            } else if (stagedVersion && latest === stagedVersion) {
-                // The build we already downloaded IS still the latest — return to
-                // the ready-to-restart resting state without re-downloading it.
+            if (staged && !isNewer(latest, staged)) {
+                // A build we've already downloaded is still the newest the feed
+                // offers. The RUNNING process is OLDER than it, so surface
+                // restart-pending — NEVER "up to date" just because the on-disk
+                // install (and `app.getVersion()`) has advanced to the staged
+                // build. Applying it is a restart away, not a re-download. (#127)
                 this.setStatus({
                     state: 'ready-to-restart',
-                    latestVersion: latest,
+                    latestVersion: staged,
                     progress: 1,
                 });
+            } else if (!isNewer(latest, this.runningVersion)) {
+                // Nothing newer than the version the RUNNING process booted on —
+                // genuinely up to date. Compared against the captured running
+                // version, not a live `app.getVersion()` that reflects the ON-DISK
+                // install and can drift ahead of the running code. (#127)
+                this.setStatus({ state: 'up-to-date', latestVersion: latest });
             } else {
                 // A version newer than the running app (and than anything already
                 // staged): surface it as 'available'. We do NOT download here —
@@ -266,11 +311,12 @@ class AutoUpdater extends EventEmitter {
             // A flaky/offline re-check must not throw away a build we'd already
             // downloaded and staged — restore it so the user can still apply it.
             // The failure is still captured in the log stream.
-            if (stagedVersion) {
+            const staged = this.stagedVersion() ?? stagedVersion;
+            if (staged) {
                 this.appendLog(`check failed: ${msg}`);
                 this.setStatus({
                     state: 'ready-to-restart',
-                    latestVersion: stagedVersion,
+                    latestVersion: staged,
                     progress: 1,
                 });
                 return;
@@ -395,6 +441,11 @@ class AutoUpdater extends EventEmitter {
         });
         autoUpdater.on('update-downloaded', (info) => {
             this.appendLog(`update-downloaded ${info.version}`);
+            // Record durably that this build is downloaded and pending a restart.
+            // The RUNNING process keeps executing the OLD code until then, so a
+            // later check must keep surfacing restart-pending — never "up to
+            // date" — even once the on-disk install advances to it (#127).
+            this.pendingRestartVersion = info.version;
             // What a restart would tear down right now. Runs on EVERY download-
             // complete, so the gate is stack-safe (a build that superseded an
             // earlier staged one is checked the same way).
