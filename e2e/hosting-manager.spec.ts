@@ -214,20 +214,19 @@ test('the workspace Hosting panel leads with HOST-NATIVE hosting (dev server on 
     const modal = await openPanel(page);
 
     await expect(modal.getByRole('heading', { name: 'Hosting — Hosting E2E' })).toBeVisible();
-    // The model, front and centre: the repo's own dev server, run on the host — no
-    // per-site container, no build ("just serve the repo the site points to").
-    await expect(modal).toContainText('dev server on the host');
-    await expect(modal).toContainText('no per-site container, no build');
+    // The model, plainly: each site is the repo's own dev server on the host;
+    // Docker is only for the services behind it.
+    await expect(modal).toContainText("Each site is your repo's dev server");
+    await expect(modal).toContainText('Docker runs the services');
 
-    // The reframe, asserted as an ABSENCE: this panel USED to sell the container
-    // production-build recipe ("built and then served the way it runs in
-    // production"). Host-native retired that as the default (owner decision), so
-    // the panel must no longer LEAD with it.
+    // The reframe, asserted as an ABSENCE: the panel copy must carry NO container
+    // production-build / opt-in language at all — the owner ripped that framing out
+    // of the UI (it read as "why is Genie still doing containers").
     const panelText = await modal.innerText();
     expect(
         panelText,
-        'the Hosting panel must not still lead with the container production-build model',
-    ).not.toMatch(/built and then\s+served the way it runs in production/i);
+        'the Hosting panel copy must not use production-build / opt-in / container language',
+    ).not.toMatch(/production build|opt-in|built and then\s+served the way it runs in production/i);
 
     // Docker is for the SERVICES behind the sites now, not the sites themselves.
     await expect(modal).toContainText('Sites run on the host');
@@ -255,13 +254,10 @@ test('add-a-site: the DEFAULT runs the repo\'s dev server on the HOST — no rec
     await name.fill('web');
     await expect(modal.getByRole('button', { name: 'Add & start' })).toBeEnabled();
 
-    // The panel LEADS with host-native and demotes the production build to an
-    // explicit opt-in — the primary action says what it does, the container path
-    // is a secondary "advanced" control.
-    await expect(modal).toContainText("runs the repo's own dev server on the host");
-    await expect(modal).toContainText('no per-site container, no build');
+    // The advanced (recipe) path is a secondary control, not the default — a plain
+    // Add & start never touches it, and it carries no "production build" wording.
     await expect(
-        modal.getByRole('button', { name: 'Set up a production build instead (advanced)' }),
+        modal.getByRole('button', { name: 'Advanced — pick how it runs' }),
     ).toBeVisible();
 
     // Add & start WITHOUT touching the recipe picker. THE state assertion: the
@@ -274,18 +270,18 @@ test('add-a-site: the DEFAULT runs the repo\'s dev server on the HOST — no rec
     expect((await readHostingState(app))?.calls.site).toContain('create');
 });
 
-test('add-a-site: the production-build OPT-IN picker moves the port with the choice, and says what it guessed', async () => {
+test('add-a-site: the advanced run-picker moves the port with the choice, and says what it guessed', async () => {
     const modal = await openPanel(page);
     await modal.getByRole('button', { name: 'Add a site…' }).click();
 
     const name = modal.getByLabel('Name for the new site');
-    const port = modal.getByLabel('The port the dev server binds on the host');
+    const port = modal.getByLabel('The port the dev server listens on');
     await name.fill('web');
 
-    // The production build is the OPT-IN, behind an explicit "advanced" control —
-    // the default path (Add & start, above) never reaches it. Until this runs
-    // there is nothing to choose between.
-    await modal.getByRole('button', { name: 'Set up a production build instead (advanced)' }).click();
+    // The recipe/build path is behind the explicit "advanced" control — the default
+    // path (Add & start, above) never reaches it. Until this runs there is nothing
+    // to choose between.
+    await modal.getByRole('button', { name: 'Advanced — pick how it runs' }).click();
 
     const runAs = modal.locator('label.site-field', { hasText: 'Run it as' }).locator('select');
     await expect(runAs).toBeVisible();

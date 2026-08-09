@@ -261,10 +261,9 @@ export default function WorkspaceSiteManager({
             <div className="ws-settings site-manager">
                 <div className="ws-settings-head">
                     <Text size="xs" className="text-zinc-500">
-                        The sites this workspace hosts and the services behind them. A site runs
-                        the repo&apos;s own dev server on the host at a stable <code>.gen</code>{' '}
-                        address — no per-site container, no build; Docker is only for the services
-                        (Postgres, Redis, …) behind it. Nothing runs until you start it.
+                        Each site is your repo&apos;s dev server, running on the host at{' '}
+                        <code>&lt;name&gt;.gen</code>. Docker runs the services behind it (Postgres,
+                        Redis, …).
                     </Text>
                 </div>
 
@@ -369,11 +368,7 @@ function SitesTab({
             <div className="set-section-head">
                 <h2>Sites</h2>
                 <span className="set-section-desc">
-                    A repo served by its own dev server running on the host — no per-site
-                    container, no build (&ldquo;just serve the repo the site points to&rdquo;),
-                    reachable at a stable <code>.gen</code> address from here and from a connected
-                    remote. It reaches this workspace&apos;s database and cache on the host and they
-                    are never exposed to the browser. A production build-and-serve is an opt-in.
+                    Your repo&apos;s dev server, on the host at a stable <code>.gen</code> address.
                 </span>
                 <span style={{ marginLeft: 'auto' }}>
                     <Action size="sm" variant="ghost" icon="refresh-cw" onClick={onRefresh}>
@@ -388,11 +383,8 @@ function SitesTab({
                 </Text>
             ) : sites.length === 0 ? (
                 <div className="set-note">
-                    Nothing hosted here yet. Add a site below — Genie detects the repo&apos;s dev
-                    server (<code>php artisan serve</code>, <code>npm run dev</code>,{' '}
-                    <code>manage.py runserver</code>, <code>go run</code>) and runs it on the host
-                    at <code>.gen</code>. No per-site container, no build — a production
-                    build-and-serve is an opt-in.
+                    Nothing hosted here yet. Add a site — Genie runs the repo&apos;s dev server on
+                    the host at <code>.gen</code>.
                 </div>
             ) : (
                 <div className="site-list">
@@ -987,21 +979,15 @@ function AddSiteForm({
                     />
                 </label>
                 <label className="site-field">
-                    <span>Port the dev server binds (optional)</span>
+                    <span>Port (optional)</span>
                     <Input
                         value={port}
                         onValueChange={setPort}
                         placeholder="5173"
-                        aria-label="The port the dev server binds on the host"
+                        aria-label="The port the dev server listens on"
                     />
                 </label>
             </div>
-
-            <Text size="xs" className="text-zinc-500">
-                <strong>Add &amp; start</strong> runs the repo&apos;s own dev server on the host at{' '}
-                <code>.gen</code> — no per-site container, no build. Only reach for a production
-                build below if you specifically need it.
-            </Text>
 
             <div className="set-actions">
                 <Action
@@ -1011,7 +997,7 @@ function AddSiteForm({
                     disabled={detecting}
                     onClick={() => void detect()}
                 >
-                    {detecting ? 'Reading the repo…' : 'Set up a production build instead (advanced)'}
+                    {detecting ? 'Reading the repo…' : 'Advanced — pick how it runs'}
                 </Action>
             </div>
 

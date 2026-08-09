@@ -79,6 +79,16 @@ describe('site status', () => {
         expect(siteStatusLabel({ ...SITE, ready: false })).toMatch(/has not answered|not answered/i);
     });
 
+    it('a HOST-NATIVE not-ready site never says "container" — it has none', () => {
+        // A `runMode:'host'` site is the repo's dev server on the host, so the
+        // not-answering message calling it "the container" is wrong container
+        // language on a site with no container (the user saw this on a host-native
+        // `php artisan serve` site).
+        const label = siteStatusLabel({ ...SITE, runMode: 'host', ready: false });
+        expect(label).not.toMatch(/container/i);
+        expect(label).toMatch(/dev server/i);
+    });
+
     it('shows the runtime’s REASON on a failure, never a bare "failed"', () => {
         const label = siteStatusLabel({
             ...SITE,

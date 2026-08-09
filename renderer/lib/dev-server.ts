@@ -110,10 +110,14 @@ export function siteStatusLabel(site: DevSiteInfo): string {
             : 'Off. Nothing is served until you start it.';
     }
     if (site.ready === false) {
-        return (
-            'The container is up, but the server inside it has not answered yet — ' +
-            'a first run often installs dependencies or builds. Check the log if it stays here.'
-        );
+        // A host-native site (the repo's dev server on the host) has NO container —
+        // saying "the container is up" on it is exactly the wrong-model language the
+        // panel is meant to have dropped.
+        return site.runMode === 'host'
+            ? 'The dev server is up but has not answered yet — a first run often installs ' +
+                  'dependencies. Check the log if it stays here.'
+            : 'The container is up, but the server inside it has not answered yet — ' +
+                  'a first run often installs dependencies or builds. Check the log if it stays here.';
     }
     return 'Serving.';
 }

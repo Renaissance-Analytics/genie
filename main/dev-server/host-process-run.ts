@@ -105,11 +105,15 @@ function realPrimitives(platform: NodeJS.Platform): HostSpawnPrimitives {
             const fd = openSync(spec.logPath, 'a');
             let child;
             try {
-                const { file, args, shell } = hostSpawnInvocation(spec.command, platform);
+                const { file, args, shell, detached } = hostSpawnInvocation(spec.command, platform);
                 child = spawn(file, args, {
                     cwd: spec.cwd,
                     env: { ...process.env, ...spec.env },
-                    detached: true,
+                    // posix: detach into its own process group so stopHostSite's `-pid`
+                    // reaches the tree. Windows: NEVER detach — a detached console pops
+                    // a stray terminal window; `windowsHide` keeps it invisible and
+                    // `taskkill /t` kills the tree.
+                    detached,
                     stdio: ['ignore', fd, fd],
                     windowsHide: true,
                     shell,

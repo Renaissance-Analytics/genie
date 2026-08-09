@@ -80,6 +80,14 @@ export interface HostSpawnInvocation {
     args: string[];
     /** Whether to run through the shell (win32 only). */
     shell: boolean;
+    /**
+     * Detach into a new process GROUP — posix only. On Windows `detached:true`
+     * allocates a NEW CONSOLE for the child, which pops as a stray terminal window
+     * OUTSIDE Genie (and `windowsHide` does NOT suppress a detached console); Windows
+     * has no process groups, so we never detach there and kill the tree with
+     * `taskkill /t` instead.
+     */
+    detached: boolean;
 }
 
 /** Quote ONE argv token for a cmd.exe command line — only when it needs it, so a
@@ -111,9 +119,9 @@ export function hostSpawnInvocation(
     platform: NodeJS.Platform,
 ): HostSpawnInvocation {
     if (platform === 'win32') {
-        return { file: command.map(quoteWinToken).join(' '), args: [], shell: true };
+        return { file: command.map(quoteWinToken).join(' '), args: [], shell: true, detached: false };
     }
-    return { file: command[0], args: command.slice(1), shell: false };
+    return { file: command[0], args: command.slice(1), shell: false, detached: true };
 }
 
 /**
