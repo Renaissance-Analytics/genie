@@ -210,26 +210,28 @@ test('losing the container runtime repaints the page from the PUSH — guided, n
 
 // --- the per-workspace Hosting panel ----------------------------------------
 
-test('the workspace Hosting panel leads with PRODUCTION parity, never "dev server"', async () => {
+test('the workspace Hosting panel leads with HOST-NATIVE hosting (dev server on the host, no per-site container)', async () => {
     const modal = await openPanel(page);
 
     await expect(modal.getByRole('heading', { name: 'Hosting — Hosting E2E' })).toBeVisible();
-    await expect(modal).toContainText(
-        'Every site is built and then served the way it runs in production.',
-    );
-    await expect(modal).toContainText('BUILT and then served the way it runs in production');
+    // The model, front and centre: the repo's own dev server, run on the host — no
+    // per-site container, no build ("just serve the repo the site points to").
+    await expect(modal).toContainText('dev server on the host');
+    await expect(modal).toContainText('no per-site container, no build');
 
-    // The reframe, asserted as an ABSENCE: this panel used to be the "dev
-    // server". A site here is built and served the way it runs in production,
-    // and copy that still says otherwise sets the wrong expectation about what
-    // the container is.
+    // The reframe, asserted as an ABSENCE: this panel USED to sell the container
+    // production-build recipe ("built and then served the way it runs in
+    // production"). Host-native retired that as the default (owner decision), so
+    // the panel must no longer LEAD with it.
     const panelText = await modal.innerText();
-    expect(panelText, 'the Hosting panel must not still call itself a dev server').not.toMatch(
-        /dev server/i,
-    );
+    expect(
+        panelText,
+        'the Hosting panel must not still lead with the container production-build model',
+    ).not.toMatch(/built and then\s+served the way it runs in production/i);
 
-    // The runtime banner, from the same live probe the workstation page reads.
-    await expect(modal).toContainText('Running containers with Docker 27.1.1.');
+    // Docker is for the SERVICES behind the sites now, not the sites themselves.
+    await expect(modal).toContainText('Sites run on the host');
+    await expect(modal).toContainText('Docker 27.1.1 runs the services');
 
     // Nothing hosted yet — the first thing a real user meets, and it points at
     // the next step rather than showing an empty box.
@@ -237,12 +239,15 @@ test('the workspace Hosting panel leads with PRODUCTION parity, never "dev serve
     await expect(modal.getByRole('button', { name: 'Add a site…' })).toBeVisible();
 });
 
-test('add-a-site: the option picker moves the port with the choice, and says what it guessed', async () => {
+test('add-a-site: the DEFAULT runs the repo\'s dev server on the HOST — no recipe, no container', async () => {
+    // This is the host-native pivot (story #238) at the seam a human meets it:
+    // a plain "Add & start" must run the repo's own dev server on the host, NOT
+    // build a container. A create that quietly forced a recipe runMode is the
+    // exact "why is Genie still doing containers" regression this guards.
     const modal = await openPanel(page);
     await modal.getByRole('button', { name: 'Add a site…' }).click();
 
     const name = modal.getByLabel('Name for the new site');
-    const port = modal.getByLabel('The port the server listens on inside the container');
     await expect(name).toBeVisible();
     // Gated until it is named — a site with no name has no address to be
     // reached at.
@@ -250,8 +255,37 @@ test('add-a-site: the option picker moves the port with the choice, and says wha
     await name.fill('web');
     await expect(modal.getByRole('button', { name: 'Add & start' })).toBeEnabled();
 
-    // Read the repo. Until this runs there is nothing to choose between.
-    await modal.getByRole('button', { name: 'See how this repo could run' }).click();
+    // The panel LEADS with host-native and demotes the production build to an
+    // explicit opt-in — the primary action says what it does, the container path
+    // is a secondary "advanced" control.
+    await expect(modal).toContainText("runs the repo's own dev server on the host");
+    await expect(modal).toContainText('no per-site container, no build');
+    await expect(
+        modal.getByRole('button', { name: 'Set up a production build instead (advanced)' }),
+    ).toBeVisible();
+
+    // Add & start WITHOUT touching the recipe picker. THE state assertion: the
+    // created site is HOST-NATIVE (`runMode: 'host'`) — the backend's
+    // dev-native-first create, not a forced container recipe.
+    await modal.getByRole('button', { name: 'Add & start' }).click();
+    await expect
+        .poll(async () => (await readHostingSites(app)).find((s) => s.name === 'web')?.runMode)
+        .toBe('host');
+    expect((await readHostingState(app))?.calls.site).toContain('create');
+});
+
+test('add-a-site: the production-build OPT-IN picker moves the port with the choice, and says what it guessed', async () => {
+    const modal = await openPanel(page);
+    await modal.getByRole('button', { name: 'Add a site…' }).click();
+
+    const name = modal.getByLabel('Name for the new site');
+    const port = modal.getByLabel('The port the dev server binds on the host');
+    await name.fill('web');
+
+    // The production build is the OPT-IN, behind an explicit "advanced" control —
+    // the default path (Add & start, above) never reaches it. Until this runs
+    // there is nothing to choose between.
+    await modal.getByRole('button', { name: 'Set up a production build instead (advanced)' }).click();
 
     const runAs = modal.locator('label.site-field', { hasText: 'Run it as' }).locator('select');
     await expect(runAs).toBeVisible();

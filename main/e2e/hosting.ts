@@ -501,12 +501,18 @@ export function registerHostingE2EMocks(): void {
                 return { ok: true, sites, options: hostingE2EState.runOptions };
             case 'create': {
                 const name = req.name ?? 'web';
+                // Mirror production's DEV-NATIVE-FIRST create: with no runMode /
+                // command / image the backend runs the repo's own dev server on
+                // the HOST (`runMode: 'host'`), not a built container. A recipe
+                // runMode is the opt-in, and only reaches here when the human
+                // chose the production-build picker.
+                const runMode = req.runMode ?? 'host';
                 const created: SiteInfo = {
                     id: `site-${name}`,
                     name,
                     genName: `${name}.hosting-e2e.gen`,
                     repo: req.repo ?? '',
-                    runMode: req.runMode ?? 'dockerfile',
+                    runMode,
                     kind: 'http',
                     enabled: true,
                     state: 'running',

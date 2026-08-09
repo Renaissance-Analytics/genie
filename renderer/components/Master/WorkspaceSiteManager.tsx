@@ -261,9 +261,10 @@ export default function WorkspaceSiteManager({
             <div className="ws-settings site-manager">
                 <div className="ws-settings-head">
                     <Text size="xs" className="text-zinc-500">
-                        The sites this workspace hosts and the services behind them, each in a
-                        container sandboxed to this workspace. Every site is built and then
-                        served the way it runs in production. Nothing runs until you start it.
+                        The sites this workspace hosts and the services behind them. A site runs
+                        the repo&apos;s own dev server on the host at a stable <code>.gen</code>{' '}
+                        address — no per-site container, no build; Docker is only for the services
+                        (Postgres, Redis, …) behind it. Nothing runs until you start it.
                     </Text>
                 </div>
 
@@ -321,8 +322,8 @@ function RuntimeBanner({ summary }: { summary: ReturnType<typeof runtimeSummary>
     if (!summary.guidance) {
         return (
             <Text size="xs" className="text-zinc-500">
-                <span className="site-dot site-running" aria-hidden="true" /> Running containers
-                with {summary.label}.
+                <span className="site-dot site-running" aria-hidden="true" /> Sites run on the
+                host; {summary.label} runs the services behind them.
             </Text>
         );
     }
@@ -368,11 +369,11 @@ function SitesTab({
             <div className="set-section-head">
                 <h2>Sites</h2>
                 <span className="set-section-desc">
-                    A repo, BUILT and then served the way it runs in production — FrankenPHP,
-                    gunicorn, a compiled binary, nginx over a built front end — in this
-                    workspace&apos;s container sandbox, reachable at a stable <code>.gen</code>{' '}
-                    address from here and from a connected remote. Its database and cache are
-                    reached inside the sandbox and are never exposed to the browser.
+                    A repo served by its own dev server running on the host — no per-site
+                    container, no build (&ldquo;just serve the repo the site points to&rdquo;),
+                    reachable at a stable <code>.gen</code> address from here and from a connected
+                    remote. It reaches this workspace&apos;s database and cache on the host and they
+                    are never exposed to the browser. A production build-and-serve is an opt-in.
                 </span>
                 <span style={{ marginLeft: 'auto' }}>
                     <Action size="sm" variant="ghost" icon="refresh-cw" onClick={onRefresh}>
@@ -387,9 +388,11 @@ function SitesTab({
                 </Text>
             ) : sites.length === 0 ? (
                 <div className="set-note">
-                    Nothing hosted here yet. Add a site below — Genie reads the repo, offers how
-                    it should be built and served (a Dockerfile it ships, or the production
-                    recipe for the stack it detects), builds it, and serves it.
+                    Nothing hosted here yet. Add a site below — Genie detects the repo&apos;s dev
+                    server (<code>php artisan serve</code>, <code>npm run dev</code>,{' '}
+                    <code>manage.py runserver</code>, <code>go run</code>) and runs it on the host
+                    at <code>.gen</code>. No per-site container, no build — a production
+                    build-and-serve is an opt-in.
                 </div>
             ) : (
                 <div className="site-list">
@@ -984,15 +987,21 @@ function AddSiteForm({
                     />
                 </label>
                 <label className="site-field">
-                    <span>Port inside the container</span>
+                    <span>Port the dev server binds (optional)</span>
                     <Input
                         value={port}
                         onValueChange={setPort}
                         placeholder="5173"
-                        aria-label="The port the server listens on inside the container"
+                        aria-label="The port the dev server binds on the host"
                     />
                 </label>
             </div>
+
+            <Text size="xs" className="text-zinc-500">
+                <strong>Add &amp; start</strong> runs the repo&apos;s own dev server on the host at{' '}
+                <code>.gen</code> — no per-site container, no build. Only reach for a production
+                build below if you specifically need it.
+            </Text>
 
             <div className="set-actions">
                 <Action
@@ -1002,7 +1011,7 @@ function AddSiteForm({
                     disabled={detecting}
                     onClick={() => void detect()}
                 >
-                    {detecting ? 'Reading the repo…' : 'See how this repo could run'}
+                    {detecting ? 'Reading the repo…' : 'Set up a production build instead (advanced)'}
                 </Action>
             </div>
 

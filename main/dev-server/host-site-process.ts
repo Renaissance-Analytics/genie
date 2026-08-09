@@ -72,6 +72,66 @@ export function killTreeWinArgv(pid: number): string[] {
     return ['taskkill', '/pid', String(pid), '/t', '/f'];
 }
 
+/** How to hand a host-native command to `child_process.spawn` on THIS platform. */
+export interface HostSpawnInvocation {
+    /** The spawn `file`: the bare binary on posix, the full command line on win32. */
+    file: string;
+    /** The spawn `args`: the rest on posix, EMPTY on win32 (folded into `file`). */
+    args: string[];
+    /** Whether to run through the shell (win32 only). */
+    shell: boolean;
+}
+
+/** Quote ONE argv token for a cmd.exe command line — only when it needs it, so a
+ *  token with a space (a path, a flag value) survives as a single argument. */
+function quoteWinToken(token: string): string {
+    if (token === '') return '""';
+    if (!/[\s"&|<>^()]/.test(token)) return token;
+    return `"${token.replace(/"/g, '""')}"`;
+}
+
+/**
+ * How a host-native dev server is launched on each platform (story #238; the moic
+ * "no pid" report).
+ *
+ * On WINDOWS the dev-server entrypoints are almost all shims — `npm`/`pnpm`/`yarn`
+ * are `.cmd`, and `php` is often a `.bat` (Herd, XAMPP) — and `child_process.spawn`
+ * launches `.exe` only: without a shell it fails with ENOENT and returns no pid,
+ * which is exactly the failure the reporter saw. So on win32 Genie runs the command
+ * THROUGH the shell as a single, properly-quoted command line and lets cmd.exe do
+ * the PATHEXT resolution the shim needs.
+ *
+ * On POSIX there are no such shims and native PATH resolution applies, so the
+ * command runs DIRECTLY (no shell) — which keeps the dev server itself the
+ * process-GROUP leader that {@link stopHostSite}'s `-pid` SIGTERM signals. A shell
+ * there would make the SHELL the leader and the signal would miss the real server.
+ */
+export function hostSpawnInvocation(
+    command: string[],
+    platform: NodeJS.Platform,
+): HostSpawnInvocation {
+    if (platform === 'win32') {
+        return { file: command.map(quoteWinToken).join(' '), args: [], shell: true };
+    }
+    return { file: command[0], args: command.slice(1), shell: false };
+}
+
+/**
+ * The DIAGNOSABLE reason a host-native spawn failed. A host-native site runs the
+ * repo's OWN dev server as a host process, so the overwhelmingly common failure is
+ * the binary not being installed / on Genie's PATH — which `child_process` surfaces
+ * only as an absent pid (the errno arrives later, on an async `error` event). Name
+ * the binary and the host-toolchain requirement so the message is actionable on its
+ * own, and fold in the errno when the async error handler recovers it.
+ */
+export function describeHostSpawnFailure(command: string[], detail?: string): string {
+    const bin = command[0] ?? '';
+    const base =
+        `could not start "${bin}" — a host-native site runs the repo's own dev server ` +
+        `on the host, so "${bin}" must be installed and on Genie's PATH`;
+    return detail ? `${base} (${detail})` : base;
+}
+
 /** Start a host site's serve command detached; returns the tracked pid. */
 export function startHostSite(spec: HostSiteSpawnSpec, prims: HostSpawnPrimitives): number {
     if (!Array.isArray(spec.command) || spec.command.length === 0) {

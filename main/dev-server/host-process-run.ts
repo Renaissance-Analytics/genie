@@ -1,8 +1,10 @@
 import { spawn } from 'node:child_process';
-import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
+import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+    describeHostSpawnFailure,
     hostSiteAlive,
+    hostSpawnInvocation,
     killTreeWinArgv,
     startHostSite,
     stopHostSite,
@@ -96,22 +98,45 @@ function realPrimitives(platform: NodeJS.Platform): HostSpawnPrimitives {
         spawnDetached(spec) {
             // Append so a restart keeps history; stdout+stderr to the log file, no
             // stdin. Detached so the dev server outlives THIS call — its own group
-            // leader on posix, so stopHostSite can signal the whole tree.
+            // leader on posix, so stopHostSite can signal the whole tree. On win32
+            // the command runs through the shell so a `.cmd`/`.bat` dev-server shim
+            // (npm/pnpm/php) resolves — spawn launches `.exe` only, and its absence
+            // is the "no pid" a host-native start otherwise dies on.
             const fd = openSync(spec.logPath, 'a');
+            let child;
             try {
-                const child = spawn(spec.command[0], spec.command.slice(1), {
+                const { file, args, shell } = hostSpawnInvocation(spec.command, platform);
+                child = spawn(file, args, {
                     cwd: spec.cwd,
                     env: { ...process.env, ...spec.env },
                     detached: true,
                     stdio: ['ignore', fd, fd],
                     windowsHide: true,
+                    shell,
                 });
-                child.unref();
-                if (typeof child.pid !== 'number') throw new Error('the process did not start (no pid)');
-                return child.pid;
             } finally {
                 closeSync(fd);
             }
+            // The spawn error (ENOENT, EACCES, …) arrives ASYNCHRONOUSLY and would
+            // otherwise be lost — leaving `logs` empty and, worse, crashing main on
+            // the unhandled 'error'. Capture it into the site's own log so the real
+            // reason is diagnosable, not just "no pid".
+            child.on('error', (err: NodeJS.ErrnoException) => {
+                const detail = err.code ?? messageOf(err);
+                try {
+                    appendFileSync(
+                        spec.logPath,
+                        `\n[genie] ${describeHostSpawnFailure(spec.command, detail)}\n`,
+                    );
+                } catch {
+                    // best-effort — the thrown message below still names the binary.
+                }
+            });
+            child.unref();
+            if (typeof child.pid !== 'number') {
+                throw new Error(describeHostSpawnFailure(spec.command));
+            }
+            return child.pid;
         },
         signal(pid, sig) {
             try {

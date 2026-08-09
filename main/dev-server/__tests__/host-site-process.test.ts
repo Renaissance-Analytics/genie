@@ -5,6 +5,8 @@ import {
     stopHostSite,
     hostSiteAlive,
     killTreeWinArgv,
+    hostSpawnInvocation,
+    describeHostSpawnFailure,
     type HostSpawnPrimitives,
 } from '../host-site-process';
 import type { DevSiteConfig } from '../sites-config';
@@ -86,5 +88,56 @@ describe('host site spawn lifecycle', () => {
 
     it('killTreeWinArgv targets the whole tree, forcefully', () => {
         expect(killTreeWinArgv(4242)).toEqual(['taskkill', '/pid', '4242', '/t', '/f']);
+    });
+});
+
+/**
+ * How a host-native dev server is actually launched on each platform (genie#…,
+ * the moic "no pid" report). On Windows the dev-server entrypoints are shims —
+ * `npm`/`pnpm`/`yarn` are `.cmd`, `php` may be a `.bat` — which `spawn` CANNOT
+ * launch without a shell, so the "no pid" the reporter saw is a spawn that never
+ * happened. The invocation therefore differs by platform, and the failure has to
+ * NAME the binary rather than say only "no pid".
+ */
+describe('hostSpawnInvocation', () => {
+    it('runs the command THROUGH the shell on Windows so a .cmd/.bat shim resolves', () => {
+        // `npm` is `npm.cmd` on Windows — spawn without a shell fails with ENOENT,
+        // which is exactly the "no pid" the reporter hit.
+        expect(hostSpawnInvocation(['npm', 'run', 'dev'], 'win32')).toEqual({
+            file: 'npm run dev',
+            args: [],
+            shell: true,
+        });
+    });
+
+    it('quotes a Windows token that carries a space so it stays ONE argument', () => {
+        const inv = hostSpawnInvocation(
+            ['php', 'artisan', 'serve', '--path=C:/My Repos/app'],
+            'win32',
+        );
+        expect(inv.shell).toBe(true);
+        expect(inv.file).toBe('php artisan serve "--path=C:/My Repos/app"');
+    });
+
+    it('runs the binary DIRECTLY on posix (no shell — so it stays the group leader)', () => {
+        // A shell here would make the SHELL the process-group leader, and the
+        // `-pid` SIGTERM in stopHostSite would miss the real dev server.
+        expect(hostSpawnInvocation(['php', 'artisan', 'serve'], 'linux')).toEqual({
+            file: 'php',
+            args: ['artisan', 'serve'],
+            shell: false,
+        });
+    });
+});
+
+describe('describeHostSpawnFailure', () => {
+    it('names the binary and the host-toolchain requirement — not just "no pid"', () => {
+        const msg = describeHostSpawnFailure(['php', 'artisan', 'serve']);
+        expect(msg).toContain('php');
+        expect(msg).toMatch(/PATH/);
+    });
+
+    it('folds in the underlying errno when the async error carried one', () => {
+        expect(describeHostSpawnFailure(['php'], 'ENOENT')).toContain('ENOENT');
     });
 });

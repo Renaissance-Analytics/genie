@@ -81,12 +81,11 @@ fires whether or not anyone has Genie open, and survives restarts. Actions
 - \`delete\`; \`run-now\` — fire a scheduled task immediately without disturbing
   its cadence.
 **WHERE THEY RUN:** on the **HOST machine** (a headless terminal), NOT inside a
-workspace container — so a process's \`localhost\` is the HOST. A sandboxed
-\`manageSite\` site does NOT share that network: to reach a host process from a
-site, use \`\${GENIE_HOST_GATEWAY}:<port>\` (see \`manageSite\`), never \`127.0.0.1\`.
-Running a process INSIDE a workspace container is not available yet — if a
-service must run alongside a containerized site (a queue worker on the site's DB
-network), that gap is known.
+workspace container — so a process's \`localhost\` is the HOST. A **host-native**
+\`manageSite\` site (the default) runs on the host too, so it reaches a process on
+plain \`127.0.0.1:<port>\`. Only a container-recipe \`manageSite\` site is off that
+network — from there, reach a host process at \`\${GENIE_HOST_GATEWAY}:<port>\`
+(see \`manageSite\`), never \`127.0.0.1\`.
 Creating a scheduled task is approval-gated (the modal shows the command and its
 recurrence). This is for supervised COMMANDS — to HOST a repo as a real site,
 reach for \`manageSite\` (below), not a hand-rolled \`manageProcess\` dev server.
@@ -94,44 +93,57 @@ Returns the resulting process list. Pass \`terminalId\` (your \`GENIE_TERMINAL_I
 for exact workspace resolution; optional.
 
 ### manageSite
-**Host a repo the way it runs in PRODUCTION** — Genie's Hosting Manager. Given a
-repo it BUILDS it and serves the built artifact with a real production server, in
-this workspace's **container sandbox**, at a stable \`https://<name>.gen\` origin
-reachable whether the viewer is on this machine or connected remotely. **This is
-NOT a dev-server launcher** — nothing here runs \`npm run dev\`, \`artisan serve\`,
-\`manage.py runserver\` or \`go run\`. Per stack: PHP → \`composer install --no-dev\`
-then FrankenPHP over \`public/\`; Next → \`npm run build\` then \`next start\`; a
-built front end (Vite/CRA) → nginx over \`dist/\` with no JS process at all; Django
-→ collectstatic then gunicorn; FastAPI/Flask → uvicorn; Go → \`go build\` and run
-the binary; Rust → \`cargo build --release\` and run it. A repo's own Dockerfile
-always wins over a recipe. Actions (\`action\`):
-- \`detect\` — read a repo and return every build+serve recipe it could use (each
-  with \`confident\`, and \`needs\` when it is a guess).
+**Host a repo the way you DEVELOP it** — Genie's Hosting Manager. The DEFAULT is
+**host-native** (story #238): Genie runs the repo's OWN dev server as a HOST
+process against the LIVE source — **no container, no build** — and serves it at a
+stable \`https://<name>.gen\` origin reachable whether the viewer is on this
+machine or connected remotely. "Just serve the repo the site points to", the way
+Herd did. A bare \`create {name}\` DETECTS the stack and runs its own dev server:
+PHP/Laravel → \`php artisan serve\`; Node (Vite/Next/Nuxt) → the repo's own
+\`npm run dev\`; Django → \`manage.py runserver\`; Go → \`go run .\`. Override with an
+explicit \`command\` + \`port\` to run YOUR dev server, or \`hostPort\` to point
+\`.gen\` at a dev server you ALREADY run (e.g. one started with \`manageProcess\`).
+Docker is only for the SERVICES behind it and for the OPT-IN production build.
+
+A **production build+serve** is OPT-IN via \`runMode:'recipe'\` — for when you want
+the artifact the app actually ships: PHP → \`composer install --no-dev\` then
+FrankenPHP over \`public/\`; Next → \`npm run build\` then \`next start\`; a built
+front end (Vite/CRA) → nginx over \`dist/\`; Django → collectstatic then gunicorn;
+FastAPI/Flask → uvicorn; Go → the compiled binary — each in a container. A repo's
+own Dockerfile is \`runMode:'dockerfile'\`. Actions (\`action\`):
+- \`detect\` — read a repo and return every recipe it could use (each with
+  \`confident\`, and \`needs\` when it is a guess). Host-native dev needs none of it.
 - \`list\` / \`status\` — every site + live state. \`state:'running'\` means the
-  container is up; \`ready:true\` means the published port actually accepted a
+  process/container is up; \`ready:true\` means the port actually accepted a
   connection.
-- \`create\` — define one and host it: \`name\` (a DNS label) plus EITHER explicit
-  \`build\` + \`serve\` + \`port\`, OR nothing at all to take the detected recipe.
-  Optional \`repo\` (host \`repos/<repo>\`), \`image\`, \`env\`, \`exposed\`, \`kind\`.
+- \`create\` — define one and host it: \`name\` (a DNS label) and, for the default,
+  NOTHING else (host-native dev is inferred). Or an explicit \`command\` + \`port\`,
+  or \`runMode:'recipe'\` for the production build. Optional \`repo\`
+  (host \`repos/<repo>\`), \`image\`, \`env\`, \`exposed\`, \`kind\`.
 - \`update\` — edit an existing site by \`id\`: pass only the fields to change
-  (\`name\`/\`genName\`, \`port\`, \`env\`, \`build\`/\`serve\`, \`image\`, \`runMode\`,
-  \`exposed\`, \`upstreamHost\`, \`kind\`). A RUNNING site is rebuilt + restarted only
-  when the change needs it; a cosmetic edit leaves the container as it is.
+  (\`name\`/\`genName\`, \`port\`, \`env\`, \`command\`/\`build\`/\`serve\`, \`image\`,
+  \`runMode\`, \`exposed\`, \`upstreamHost\`, \`kind\`). A RUNNING site is
+  rebuilt/restarted only when the change needs it; a cosmetic edit leaves it as is.
 - \`start\` / \`stop\` / \`restart\` / \`logs\` — by \`id\` (from a \`list\`). \`open\` —
   show the site in the Genie Browser for the user. \`remove\` — stop it and forget
   the definition.
-READ THE RESULT: a failed BUILD is the most common reason a site does not come
-up, and \`buildLog\` carries it. EXPOSURE (agents get this wrong): the container's
-\`localhost\` is the SANDBOX — the app reaches its own IN-sandbox processes there,
-but a HOST \`manageProcess\` service is NOT on \`localhost\`: reach it at
-\`\${GENIE_HOST_GATEWAY}:<port>\` (injected into every site). A DATABASE OR CACHE IS
-NEVER EXPOSED — those are reached over the workspace network through the env
-\`manageService\` injects. Only what the BROWSER connects
-to is exposed, via \`exposed:[{name,port,protocol,reason}]\`; a surface that
-cannot say why the browser needs it is refused. A production server must bind
-\`0.0.0.0\`, never \`localhost\`. Requires Docker or Podman; when neither is usable
-the result carries the install hint (and the tool is hidden from \`tools/list\`
-entirely). Pass \`terminalId\` for exact workspace resolution.
+READ THE RESULT: for a host-native site, \`logs\` carries the dev server's own
+output AND any spawn failure (e.g. the binary not being on the host PATH — a
+host-native site runs the repo's toolchain, so \`php\`/\`node\` must be installed and
+resolvable). For a production recipe, a failed BUILD is the usual reason a site
+does not come up, and \`buildLog\` carries it. SERVICES: a host-native dev server
+runs ON THE HOST, so it reaches a \`manageProcess\` service and the managed DB/cache
+on \`127.0.0.1:<published port>\` — the host-form env (\`DATABASE_URL\`, …) Genie
+injects, the SAME env terminals get. (A container-recipe site instead reaches
+services by engine name on the workspace network; there its \`localhost\` is the
+sandbox and a host \`manageProcess\` service is at \`\${GENIE_HOST_GATEWAY}:<port>\`.)
+A DATABASE OR CACHE IS NEVER EXPOSED. Only what the BROWSER connects to is exposed,
+via \`exposed:[{name,port,protocol,reason}]\`; a surface that cannot say why the
+browser needs it is refused. BIND the dev server to the \`port\` you give (a server
+on a random port \`.gen\` can't find is the common mistake; a container-recipe
+server must bind \`0.0.0.0\`). Host-native dev needs NO Docker; the OPT-IN
+production recipe and services do — when neither is usable that path's result
+carries the install hint. Pass \`terminalId\` for exact workspace resolution.
 
 ### manageService
 **Give this workspace a backing SERVICE** — Postgres, MySQL, Redis, Meilisearch,
@@ -446,32 +458,39 @@ replace — calling \`imDone\` explicitly when you finish.
 ## Hosting a repo at .gen (the Hosting Manager)
 When you need to actually RUN a repo — preview the frontend, hit the API, hand
 the user a working URL — use the **Hosting Manager** (\`manageSite\` +
-\`manageService\`), **not** a hand-rolled \`manageProcess\` dev server. It builds
-the repo and serves it **the production way** in the workspace's container
-sandbox, reachable at a stable \`https://<name>.gen\` whether the viewer is local
-or connected remotely:
+\`manageService\`), **not** a hand-rolled \`manageProcess\` dev server. The DEFAULT
+is **host-native** (story #238): Genie runs the repo's OWN dev server as a HOST
+process against the live source — **no container, no build** — reachable at a
+stable \`https://<name>.gen\` whether the viewer is local or connected remotely:
 
-- **\`manageSite\`** BUILDS the repo (\`composer install\` / \`npm run build\` /
-  \`go build\` / …) and serves the built artifact with a real production server —
-  FrankenPHP for PHP, \`next start\` for Next, nginx for a built SPA,
-  gunicorn/uvicorn for Python, the compiled binary for Go/Rust. A repo's own
-  Dockerfile wins over a recipe. Call it with just a \`name\` to take the detected
-  recipe, or pass explicit \`build\` / \`serve\` / \`port\`.
+- **\`manageSite\`** runs the repo's dev server on the host — \`php artisan serve\`
+  for Laravel, the repo's \`npm run dev\` for Vite/Next/Nuxt, \`manage.py runserver\`
+  for Django, \`go run .\` for Go — the way Herd did. Call it with just a \`name\` to
+  take the detected dev server, or pass an explicit \`command\` + \`port\`. A
+  PRODUCTION build+serve (the shipped artifact — FrankenPHP over \`public/\`,
+  \`next start\`, nginx over a built SPA, gunicorn/uvicorn, a compiled binary, or
+  the repo's own Dockerfile) is OPT-IN via \`runMode:'recipe'\`/\`'dockerfile'\`.
+  Because a host-native site runs the repo's toolchain, that toolchain
+  (\`php\`/\`node\`/\`python\`/\`go\`) must be installed and on Genie's PATH — a spawn
+  failure is reported in \`logs\`.
 - **\`manageService\`** gives the site its backing engines (Postgres, MySQL,
   Redis, Meilisearch, MinIO, Mailpit, …), SHARED per (engine, major version)
-  across the workstation, auto-injecting the connection env (\`DATABASE_URL\`, …)
-  into the site's runtime AND its build steps.
+  across the workstation, auto-injecting the connection env (\`DATABASE_URL\`, …).
 
-**Reachability:** the container's \`localhost\` IS the workspace, so the app talks
-to its own processes and to its services normally, in-container. **Backends are
-never exposed** — a database or cache has no \`.gen\` name. Only BROWSER-facing
-surfaces are published: the site at \`<name>.gen\`, plus anything you explicitly
-list in \`exposed\` with a reason the browser needs it. Every serve command must
-bind \`0.0.0.0\`, never \`localhost\`. One production gotcha survives: a framework's
-host allowlist (Django's \`ALLOWED_HOSTS\`) can reject the \`.gen\` Host header —
-add the \`.gen\` name there or pass \`upstreamHost:'localhost'\`. The Hosting
-Manager needs Docker or Podman; without a runtime the site tools do not appear
-in \`tools/list\` at all.
+**Reachability:** a host-native dev server runs ON THE HOST, so its \`localhost\`
+IS the host — it reaches the workspace's managed DB/cache and any \`manageProcess\`
+service on \`127.0.0.1:<published port>\` through the host-form env Genie injects
+(the same env terminals get). (A container-recipe site instead reaches services
+by engine name on the workspace network, with host processes at
+\`\${GENIE_HOST_GATEWAY}:<port>\`.) **Backends are never exposed** — a database or
+cache has no \`.gen\` name. Only BROWSER-facing surfaces are published: the site at
+\`<name>.gen\`, plus anything you explicitly list in \`exposed\` with a reason the
+browser needs it. BIND the dev server to the \`port\` you gave it (a container
+recipe must bind \`0.0.0.0\`). One host-allowlist gotcha survives: a framework's
+host check (Django's \`ALLOWED_HOSTS\`, Vite's \`allowedHosts\`) can reject the
+\`.gen\` Host header — Genie's allowlist plan handles the common ones, or pass
+\`upstreamHost:'localhost'\`. Host-native dev needs NO runtime; the OPT-IN
+production recipe and services need Docker or Podman.
 
 ## Rule of thumb
 If you would otherwise stop and wait for the user — **finished**, **blocked**, or
