@@ -107,7 +107,16 @@ describe('hostSpawnInvocation', () => {
             file: 'npm run dev',
             args: [],
             shell: true,
+            detached: false,
         });
+    });
+
+    it('does NOT detach on Windows — a detached console pops a stray terminal window', () => {
+        // detached:true on Windows makes the child allocate a NEW CONSOLE, which
+        // appears as a terminal window OUTSIDE Genie (the `php artisan serve` window
+        // the user saw). `windowsHide` does not suppress a detached console. Windows
+        // has no process groups anyway — the tree is killed with `taskkill /t`.
+        expect(hostSpawnInvocation(['php', 'artisan', 'serve'], 'win32').detached).toBe(false);
     });
 
     it('quotes a Windows token that carries a space so it stays ONE argument', () => {
@@ -119,13 +128,15 @@ describe('hostSpawnInvocation', () => {
         expect(inv.file).toBe('php artisan serve "--path=C:/My Repos/app"');
     });
 
-    it('runs the binary DIRECTLY on posix (no shell — so it stays the group leader)', () => {
-        // A shell here would make the SHELL the process-group leader, and the
-        // `-pid` SIGTERM in stopHostSite would miss the real dev server.
+    it('runs the binary DIRECTLY on posix, detached as its own group leader', () => {
+        // No shell (so the dev server itself is the process-GROUP leader the `-pid`
+        // SIGTERM in stopHostSite reaches); detached to make that group. There is no
+        // console on posix, so no window.
         expect(hostSpawnInvocation(['php', 'artisan', 'serve'], 'linux')).toEqual({
             file: 'php',
             args: ['artisan', 'serve'],
             shell: false,
+            detached: true,
         });
     });
 });
