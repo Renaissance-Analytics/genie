@@ -171,12 +171,20 @@ describe('the guide names every tool the protocol advertises', () => {
 });
 
 describe('the guide describes the Hosting Manager, not the retired dev-site proxy', () => {
-    it('names the Hosting Manager tools and the production build+serve model', () => {
+    it('teaches the HOST-NATIVE dev default, with the production build+serve as an opt-in', () => {
         expect(GENIE_MCP_GUIDE).toContain('manageSite');
         expect(GENIE_MCP_GUIDE).toContain('manageService');
         expect(GENIE_MCP_GUIDE).toMatch(/Hosting Manager/);
-        // The production servers are the whole point — it is NOT a dev-server
-        // launcher, so the recipe names must be in the prose.
+        // The DEFAULT is host-native (story #238): Genie runs the repo's OWN dev
+        // server as a HOST process — no container, no build. The guide must TEACH
+        // that and NAME the dev servers it runs, or agents reach for the retired
+        // production-only model. The old "NOT a dev-server launcher" framing is
+        // the exact drift that model caused.
+        expect(GENIE_MCP_GUIDE).toMatch(/host-native/i);
+        expect(GENIE_MCP_GUIDE).toMatch(/artisan serve/);
+        expect(GENIE_MCP_GUIDE).toMatch(/npm run dev/);
+        expect(GENIE_MCP_GUIDE).not.toMatch(/NOT a dev-server launcher/i);
+        // The production build+serve is still there — as the OPT-IN, still named.
         expect(GENIE_MCP_GUIDE).toContain('FrankenPHP');
         expect(GENIE_MCP_GUIDE).toMatch(/production/i);
     });
