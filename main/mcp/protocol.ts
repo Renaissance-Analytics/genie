@@ -241,8 +241,10 @@ export interface McpContext {
      * workspace + db/cache I/O (kept out of this pure module).
      */
     checkIssues: (terminalId: string) => Promise<IssueWatchSnapshot>;
-    /** True when the caller's workspace is an Ops project. Gates the ops-only
-     *  `provisionWorkspaces` tool out of tools/list for non-Ops workspaces. */
+    /** True when the caller's workspace is an Ops project. NO LONGER gates
+     *  `provisionWorkspaces` out of tools/list — that tool is always advertised
+     *  and its handler enforces Ops membership (genie #85); this capability is
+     *  retained for callers that need the fact directly. */
     isOpsProject: (terminalId: string) => Promise<boolean>;
     /**
      * Raise an OS-level always-on-top modal asking the user one or more
@@ -2531,12 +2533,17 @@ export async function handleMcpMessage(
             return ok(msg.id, {});
 
         case 'tools/list': {
-            // `provisionWorkspaces` is meaningful ONLY for an Ops project's
-            // workspace (it stands up workspaces for the project's governed
-            // children); a non-Ops caller just gets a "not an ops project" error.
-            // List it ONLY for an Ops caller — fail CLOSED (omit it) on any error
-            // so a non-Ops / uncertain workspace never sees the ops tool.
-            const isOps = await ctx.isOpsProject(ctx.terminalId).catch(() => false);
+            // `provisionWorkspaces` is ALWAYS advertised (genie #85). It is
+            // self-describing ("ONLY usable from an Ops project's workspace") and
+            // its handler is the single authoritative Ops gate — a non-Ops caller
+            // gets a clear "not an Ops project" error. Visibility must be a STATIC
+            // fact, never a runtime probe: a client fetches tools/list ONCE at
+            // connection setup, so gating the tool on a fail-closed network check
+            // (`isOpsProject`) silently HID it from genuine Ops workspaces on any
+            // transient backend hiccup — the exact regression #85 reported, leaving
+            // no agent-callable path to provision a governed child. The Ops check
+            // now lives only where it can't misfire at the wrong time: in the
+            // handler, at call time, where the error is actionable.
             // Enabled-plugin tools ride the SAME list, namespaced, AFTER the core
             // tools. Fail CLOSED: a throwing plugin registry contributes nothing
             // (never poisons the core surface — same discipline as the ops gate).
@@ -2560,7 +2567,7 @@ export async function handleMcpMessage(
                     CHECK_ISSUES_TOOL,
                     FORCE_QUESTION_TOOL,
                     MANAGE_PROCESS_TOOL,
-                    ...(isOps ? [PROVISION_WORKSPACES_TOOL] : []),
+                    PROVISION_WORKSPACES_TOOL,
                     MANAGE_SITE_TOOL,
                     ...(hasContainerRuntime && ctx.manageService ? [MANAGE_SERVICE_TOOL] : []),
                     MANAGE_TERMINALS_TOOL,
