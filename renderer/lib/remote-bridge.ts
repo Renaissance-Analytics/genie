@@ -752,18 +752,110 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             ).result,
     };
 
-    // genie#54 — a `.md`/`.docx`/… file opens as a PLUGIN tab, whose binary editor
-    // I/O (`editorRead`/`editorWrite`) resolves the file. Left on the client, its
-    // win32 `path.resolve` mangled the host's POSIX root (`/data/…` → `C:\data\…`) and
-    // `fsp.stat` ENOENT'd. Route the I/O to the host so it resolves with its OWN path.
+    // The CLIENT/HOST seam for plugins (main/plugins/side.ts). Plugin ABILITIES —
+    // MCP tools + recipes — run on the HOST, so a remote window's Settings → Plugins
+    // panel must view and manage the HOST's plugin registry, not the empty
+    // client-side one it renders from (genie#101). Every host-targeting MANAGEMENT
+    // verb therefore dials the host's `/api/desktop/plugins/*` route, which runs the
+    // SAME `main/plugins/manage.ts` operations the local `plugins:*` IPC does — one
+    // implementation, so the two paths can't diverge. Reads are auth-only; writes are
+    // kill-switch-gated + audited host-side.
     //
-    // This is the CLIENT/HOST seam for plugins (main/plugins/side.ts): a document
-    // editor is a CLIENT surface, so `editorFor` (which editor claims the extension),
-    // the editor component, and the .docx↔markdown conversion all stay client-local —
-    // only the BYTES live on the host, and the host authorises that read/write from
-    // the plugin's own manifest sandbox rather than from ITS enabled-plugin list.
+    // What STAYS client-local (spread from `local.plugins`):
+    //   - `editorFor` (which client editor claims a file type), the editor component
+    //     itself, and `convertDocument` (the .docx↔markdown conversion) — a document
+    //     editor is a CLIENT surface;
+    //   - `installFolder` — its native folder picker + chosen path live on the
+    //     machine the user is sitting at, with no headless-host equivalent.
+    //
+    // genie#54 — the binary editor I/O (`editorRead`/`editorWrite`) is bridged too,
+    // but for a NARROWER reason: only the document's BYTES live on the host, which
+    // authorises that read/write from the plugin's own manifest sandbox rather than
+    // from ITS enabled-plugin list. Left on the client, win32 `path.resolve` mangled
+    // the host's POSIX root (`/data/…` → `C:\data\…`) and `fsp.stat` ENOENT'd.
     const plugins: GenieApi['plugins'] = {
         ...local.plugins,
+        list: async () =>
+            ((await req('/api/desktop/plugins')) as {
+                plugins: Awaited<ReturnType<GenieApi['plugins']['list']>>;
+            }).plugins,
+        installRepo: async (url, ref) =>
+            (await req('/api/desktop/plugins/install-repo', {
+                method: 'POST',
+                json: { url, ref },
+            })) as Awaited<ReturnType<GenieApi['plugins']['installRepo']>>,
+        enable: async (id, enabled) =>
+            (await req('/api/desktop/plugins/enable', {
+                method: 'POST',
+                json: { id, enabled },
+            })) as Awaited<ReturnType<GenieApi['plugins']['enable']>>,
+        setGrant: async (id, category, key, granted) =>
+            (await req('/api/desktop/plugins/set-grant', {
+                method: 'POST',
+                json: { id, category, key, granted },
+            })) as Awaited<ReturnType<GenieApi['plugins']['setGrant']>>,
+        uninstall: async (id) =>
+            (await req('/api/desktop/plugins/uninstall', {
+                method: 'POST',
+                json: { id },
+            })) as Awaited<ReturnType<GenieApi['plugins']['uninstall']>>,
+        marketplaces: async () =>
+            ((await req('/api/desktop/plugins/marketplaces')) as {
+                marketplaces: Awaited<ReturnType<GenieApi['plugins']['marketplaces']>>;
+            }).marketplaces,
+        addMarketplace: async (url, ref) =>
+            (await req('/api/desktop/plugins/add-marketplace', {
+                method: 'POST',
+                json: { url, ref },
+            })) as Awaited<ReturnType<GenieApi['plugins']['addMarketplace']>>,
+        refreshMarketplace: async (id) =>
+            (await req('/api/desktop/plugins/refresh-marketplace', {
+                method: 'POST',
+                json: { id },
+            })) as Awaited<ReturnType<GenieApi['plugins']['refreshMarketplace']>>,
+        refreshMarketplaces: async (maxAgeMs) =>
+            (await req('/api/desktop/plugins/refresh-marketplaces', {
+                method: 'POST',
+                json: { maxAgeMs },
+            })) as Awaited<ReturnType<GenieApi['plugins']['refreshMarketplaces']>>,
+        removeMarketplace: async (id) =>
+            (await req('/api/desktop/plugins/remove-marketplace', {
+                method: 'POST',
+                json: { id },
+            })) as Awaited<ReturnType<GenieApi['plugins']['removeMarketplace']>>,
+        installMarketplacePlugin: async (marketplaceId, pluginId) =>
+            (await req('/api/desktop/plugins/install-marketplace-plugin', {
+                method: 'POST',
+                json: { marketplaceId, pluginId },
+            })) as Awaited<ReturnType<GenieApi['plugins']['installMarketplacePlugin']>>,
+        official: async () =>
+            ((await req('/api/desktop/plugins/official')) as {
+                official: Awaited<ReturnType<GenieApi['plugins']['official']>>;
+            }).official,
+        installBundled: async (id) =>
+            (await req('/api/desktop/plugins/install-bundled', {
+                method: 'POST',
+                json: { id },
+            })) as Awaited<ReturnType<GenieApi['plugins']['installBundled']>>,
+        developerMode: async () =>
+            (await req('/api/desktop/plugins/developer-mode')) as Awaited<
+                ReturnType<GenieApi['plugins']['developerMode']>
+            >,
+        setDeveloperMode: async (enabled) =>
+            (await req('/api/desktop/plugins/set-developer-mode', {
+                method: 'POST',
+                json: { enabled },
+            })) as Awaited<ReturnType<GenieApi['plugins']['setDeveloperMode']>>,
+        addTrustedKey: async (publicKeyPem, label) =>
+            (await req('/api/desktop/plugins/add-trusted-key', {
+                method: 'POST',
+                json: { publicKeyPem, label },
+            })) as Awaited<ReturnType<GenieApi['plugins']['addTrustedKey']>>,
+        removeTrustedKey: async (keyId) =>
+            (await req('/api/desktop/plugins/remove-trusted-key', {
+                method: 'POST',
+                json: { keyId },
+            })) as Awaited<ReturnType<GenieApi['plugins']['removeTrustedKey']>>,
         editorRead: async (pluginId, root, relPath) =>
             (await req('/api/plugins/editor-read', {
                 method: 'POST',

@@ -72,6 +72,25 @@ import { runHostSessionSave, type SessionSaveReport } from '../workspace/session
 import type { ManageSiteRequest, ManageServiceRequest } from '../mcp/protocol';
 import { runPluginEditorFs } from '../plugins/editor-bridge';
 import {
+    pluginsList,
+    pluginsInstallRepo,
+    pluginsEnable,
+    pluginsSetGrant,
+    pluginsUninstall,
+    pluginsMarketplaces,
+    pluginsAddMarketplace,
+    pluginsRefreshMarketplace,
+    pluginsRefreshMarketplaces,
+    pluginsRemoveMarketplace,
+    pluginsInstallMarketplacePlugin,
+    pluginsOfficial,
+    pluginsInstallBundled,
+    pluginsDeveloperMode,
+    pluginsSetDeveloperMode,
+    pluginsAddTrustedKey,
+    pluginsRemoveTrustedKey,
+} from '../plugins/manage';
+import {
     provisionWorkspaceTynn,
     provisionStatus as tynnProvisionStatus,
     linkWorkspaceTynn,
@@ -2062,6 +2081,149 @@ export async function handleApi(
         }
 
         sendJson(res, 404, { error: 'unknown dev-server route' });
+        return true;
+    }
+
+    // --- host-sourced Settings → Plugins MANAGEMENT — for a remote DESKTOP (genie#101) ---
+    // Plugin ABILITIES (MCP tools + recipes) run on the HOST (plugins/side.ts), so a
+    // remote window's Plugins panel manages the HOST's registry, not the empty
+    // client-side one. These run the SAME `plugins/manage.ts` operations the local
+    // `plugins:*` IPC does — one implementation, never a divergent re-impl. Reads
+    // (list/marketplaces/official/developer-mode) are auth-only so a view-only member
+    // still sees the host's plugins; writes take the baton (guardControl) exactly like
+    // process-control and are audited. `install-folder` is intentionally ABSENT — its
+    // native picker + chosen path live on the client, with no headless-host equivalent.
+    // MUST precede the generic `/api/desktop/` block below (which 404s unknown desktop
+    // routes).
+    if (pathname.startsWith('/api/desktop/plugins')) {
+        if (method === 'GET') {
+            if (pathname === '/api/desktop/plugins') {
+                sendJson(res, 200, { plugins: pluginsList() });
+                return true;
+            }
+            if (pathname === '/api/desktop/plugins/marketplaces') {
+                sendJson(res, 200, { marketplaces: pluginsMarketplaces() });
+                return true;
+            }
+            if (pathname === '/api/desktop/plugins/official') {
+                sendJson(res, 200, { official: pluginsOfficial() });
+                return true;
+            }
+            if (pathname === '/api/desktop/plugins/developer-mode') {
+                sendJson(res, 200, pluginsDeveloperMode());
+                return true;
+            }
+            sendJson(res, 404, { error: 'unknown plugins route' });
+            return true;
+        }
+        if (method !== 'POST') {
+            sendJson(res, 405, { error: 'method not allowed' });
+            return true;
+        }
+        // Every write drives the HOST's plugin registry — kill-switch-gated + audited.
+        if (guardControl()) return true;
+        let pb: {
+            id?: string;
+            enabled?: boolean;
+            url?: string;
+            ref?: string;
+            category?: 'fs' | 'network' | 'genieApi';
+            key?: string;
+            granted?: boolean;
+            marketplaceId?: string;
+            pluginId?: string;
+            maxAgeMs?: number;
+            publicKeyPem?: string;
+            label?: string;
+            keyId?: string;
+        };
+        try {
+            pb = await readJsonBody(req);
+        } catch {
+            sendJson(res, 400, { error: 'invalid body' });
+            return true;
+        }
+        if (pathname === '/api/desktop/plugins/enable') {
+            audit('plugins.enable', `${String(pb.id ?? '')} → ${pb.enabled === true}`, actor);
+            // Enabling awaits the host's consent gate — its answer arrives via the
+            // host's own PendingQuestions, which the remote window already surfaces.
+            sendJson(res, 200, await pluginsEnable(String(pb.id ?? ''), pb.enabled === true));
+            return true;
+        }
+        if (pathname === '/api/desktop/plugins/set-grant') {
+            audit('plugins.set-grant', `${String(pb.id ?? '')} ${String(pb.key ?? '')}=${pb.granted === true}`, actor);
+            sendJson(
+                res,
+                200,
+                pluginsSetGrant(
+                    String(pb.id ?? ''),
+                    pb.category as 'fs' | 'network' | 'genieApi',
+                    String(pb.key ?? ''),
+                    pb.granted === true,
+                ),
+            );
+            return true;
+        }
+        if (pathname === '/api/desktop/plugins/uninstall') {
+            audit('plugins.uninstall', String(pb.id ?? ''), actor);
+            sendJson(res, 200, pluginsUninstall(String(pb.id ?? '')));
+            return true;
+        }
+        if (pathname === '/api/desktop/plugins/install-repo') {
+            audit('plugins.install-repo', String(pb.url ?? ''), actor);
+            sendJson(res, 200, await pluginsInstallRepo(String(pb.url ?? ''), pb.ref));
+            return true;
+        }
+        if (pathname === '/api/desktop/plugins/add-marketplace') {
+            audit('plugins.add-marketplace', String(pb.url ?? ''), actor);
+            sendJson(res, 200, await pluginsAddMarketplace(String(pb.url ?? ''), pb.ref));
+            return true;
+        }
+        if (pathname === '/api/desktop/plugins/refresh-marketplace') {
+            audit('plugins.refresh-marketplace', String(pb.id ?? ''), actor);
+            sendJson(res, 200, await pluginsRefreshMarketplace(String(pb.id ?? '')));
+            return true;
+        }
+        if (pathname === '/api/desktop/plugins/refresh-marketplaces') {
+            audit('plugins.refresh-marketplaces', String(pb.maxAgeMs ?? ''), actor);
+            sendJson(res, 200, await pluginsRefreshMarketplaces(pb.maxAgeMs));
+            return true;
+        }
+        if (pathname === '/api/desktop/plugins/remove-marketplace') {
+            audit('plugins.remove-marketplace', String(pb.id ?? ''), actor);
+            sendJson(res, 200, pluginsRemoveMarketplace(String(pb.id ?? '')));
+            return true;
+        }
+        if (pathname === '/api/desktop/plugins/install-marketplace-plugin') {
+            audit('plugins.install-marketplace-plugin', `${String(pb.marketplaceId ?? '')}/${String(pb.pluginId ?? '')}`, actor);
+            sendJson(
+                res,
+                200,
+                await pluginsInstallMarketplacePlugin(String(pb.marketplaceId ?? ''), String(pb.pluginId ?? '')),
+            );
+            return true;
+        }
+        if (pathname === '/api/desktop/plugins/install-bundled') {
+            audit('plugins.install-bundled', String(pb.id ?? ''), actor);
+            sendJson(res, 200, await pluginsInstallBundled(String(pb.id ?? '')));
+            return true;
+        }
+        if (pathname === '/api/desktop/plugins/set-developer-mode') {
+            audit('plugins.set-developer-mode', String(pb.enabled === true), actor);
+            sendJson(res, 200, pluginsSetDeveloperMode(pb.enabled === true));
+            return true;
+        }
+        if (pathname === '/api/desktop/plugins/add-trusted-key') {
+            audit('plugins.add-trusted-key', String(pb.label ?? ''), actor);
+            sendJson(res, 200, pluginsAddTrustedKey(String(pb.publicKeyPem ?? ''), pb.label));
+            return true;
+        }
+        if (pathname === '/api/desktop/plugins/remove-trusted-key') {
+            audit('plugins.remove-trusted-key', String(pb.keyId ?? ''), actor);
+            sendJson(res, 200, pluginsRemoveTrustedKey(String(pb.keyId ?? '')));
+            return true;
+        }
+        sendJson(res, 404, { error: 'unknown plugins route' });
         return true;
     }
 
