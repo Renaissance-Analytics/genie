@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { AgentInboxBroker } from '../broker';
+import { blobPathFor } from '../attachments';
 import { postAsHuman, readHumanAttachment } from '../human';
 import type { AgentInboxJoinInput, AgentInboxMessage } from '../types';
 import type { AgentInboxStore, StoredAttachment } from '../store';
@@ -163,6 +164,31 @@ describe('readHumanAttachment', () => {
         expect(await readHumanAttachment('', deps)).toMatchObject({ ok: false });
     });
 
+    it('redacts a raw fs read error — never leaks the path/stack to the (remote) caller', async () => {
+        // The human panel's read is reachable over the mobile/remote API, so a raw
+        // fs error here would expose a host path (CodeQL js/stack-trace-exposure,
+        // genie#11). Store an attachment, then delete its blob so the byte read
+        // throws ENOENT with a real path.
+        const { store, deps } = harness();
+        await postAsHuman(
+            {
+                toAgentId: 'A',
+                text: 'file',
+                attachments: [{ filename: 'a.txt', base64: Buffer.from('hi').toString('base64') }],
+            },
+            deps,
+        );
+        const att = store.rows[0].attachments![0];
+        fs.rmSync(blobPathFor(blobs, att.sha256), { force: true });
+
+        const r = await readHumanAttachment(att.id, deps);
+        expect(r.ok).toBe(false);
+        // A FIXED reason only — the raw fs error (path / ENOENT / stack) must never
+        // reach the response.
+        expect(r.error).toBe('That attachment could not be read.');
+        expect(r.error).not.toMatch(/ENOENT|no such file|[\\/]/);
+    });
+
     it('reads an attachment an AGENT sent — the human sees every conversation', async () => {
         const { broker, store, deps } = harness();
         broker.join(agent('B'));
@@ -180,6 +206,7 @@ describe('readHumanAttachment', () => {
         // the BYTES are missing here (nothing was ever put in this test's store).
         const r = await readHumanAttachment('x1', deps);
         expect(r.ok).toBe(false);
-        expect(r.error).toMatch(/no longer available/i);
+        // A missing blob is a read failure → the redacted fixed reason (genie#11).
+        expect(r.error).toBe('That attachment could not be read.');
     });
 });
