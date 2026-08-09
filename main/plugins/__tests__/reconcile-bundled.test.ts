@@ -18,6 +18,8 @@ import {
     ensureBundledPluginsInstalled,
 } from '../install';
 import { BUNDLED_PLUGIN_SOURCES } from '../official';
+import { runPluginFsOp } from '../fs-bridge';
+import { validatePluginManifest } from '../manifest';
 
 /**
  * Bundled-plugin trust SELF-HEAL (plugin plan Phase A).
@@ -358,5 +360,68 @@ describe('ensureBundledPluginsInstalled (genie #56 — headless host install + e
             expect(row).not.toBeNull();
             expect(row!.enabled).toBe(false);
         }
+    });
+});
+
+/**
+ * genie #100 — auto-enabling a bundled first-party plugin on a HEADLESS host left
+ * it with EMPTY grants, so `runPluginFsOp` failed EVERY fs op closed.
+ *
+ * The desktop grants a plugin's declared capabilities through the enable-time
+ * CONSENT modal; a headless host has no such UI. Enabling alone therefore left the
+ * grants map that `record()` writes — `emptyPluginGrants()` — untouched, and the
+ * host fs gate denies at `grants.fs.workspace !== true`. A bundled plugin is
+ * Genie's OWN signed code, so on the headless auto-enable path its manifest-DECLARED
+ * capabilities ARE the consented set: grant exactly those (never more), so the fs
+ * ops the manifest declares are permitted.
+ */
+describe('ensureBundledPluginsInstalled — auto-grants first-party DECLARED capabilities (#100)', () => {
+    beforeEach(() => {
+        for (const b of BUNDLED_PLUGIN_SOURCES) {
+            try {
+                deletePlugin(b.id);
+            } catch {
+                /* not present — fine */
+            }
+        }
+    });
+
+    it('records the DECLARED fs grant (not empty) so runPluginFsOp permits a declared fs op', async () => {
+        await ensureBundledPluginsInstalled({ enable: true });
+
+        const row = getPlugin('ai.genie.presentation')!;
+        // The declared fs.workspace capability is GRANTED — not the empty map
+        // record() leaves, which made every host fs op fail closed (#100).
+        expect(row.grants.fs.workspace).toBe(true);
+
+        // End-to-end: the host fs gate now PERMITS a declared fs write.
+        const parsed = validatePluginManifest(JSON.parse(row.manifest_json));
+        if (!parsed.ok) throw new Error('bundled manifest failed to validate');
+        const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-plugin-ws-'));
+        try {
+            const res = await runPluginFsOp(parsed.manifest, row.grants, workspace, 'fs.writeFile', {
+                rel: 'deck.pptx',
+                data: 'hello',
+            });
+            expect(res.ok).toBe(true); // NOT 'fs access is not granted to this plugin'
+            expect(fs.existsSync(path.join(workspace, 'deck.pptx'))).toBe(true);
+        } finally {
+            fs.rmSync(workspace, { recursive: true, force: true });
+        }
+    });
+
+    it('grants EXACTLY the declared set — Repository gets its genieApi recipe grant but NO fs grant it never declared', async () => {
+        await ensureBundledPluginsInstalled({ enable: true });
+        const row = getPlugin('ai.genie.repository')!;
+        // It declares `genieApi: ['recipes']` — granted.
+        expect(row.grants.genieApi.recipes).toBe(true);
+        // …and no fs capability, so it is granted none (declared, never blanket).
+        expect(row.grants.fs.workspace).toBeFalsy();
+    });
+
+    it('leaves grants EMPTY when enable is not requested (install-only stays fail-closed)', async () => {
+        await ensureBundledPluginsInstalled();
+        const row = getPlugin('ai.genie.presentation')!;
+        expect(row.grants.fs.workspace).toBeFalsy();
     });
 });

@@ -78,6 +78,25 @@ export function declaredPermissions(manifest: PluginManifest): DeclaredPermissio
     return out;
 }
 
+/**
+ * The grants map that GRANTS every capability a manifest DECLARES.
+ *
+ * This is the auto-consent for a BUNDLED first-party plugin enabled on a HEADLESS
+ * host, which has no consent modal: the plugin is Genie's OWN signed code, so its
+ * manifest-declared capabilities ARE the consented set. It grants EXACTLY the
+ * declared permissions (fs scope / network hosts / genieApi) and never more, so it
+ * can only ever grant what the plugin asked for. Third-party plugins never use
+ * this — they still grant only the per-capability subset the user picks in
+ * {@link consentAndEnablePlugin}.
+ */
+export function declaredGrants(manifest: PluginManifest): PluginGrants {
+    const grants = emptyPluginGrants();
+    for (const p of declaredPermissions(manifest)) {
+        grants[p.category][p.key] = true;
+    }
+    return grants;
+}
+
 export interface ConsentResult {
     ok: boolean;
     enabled: boolean;

@@ -37,6 +37,7 @@ import {
     deletePlugin,
     setPluginTrust,
     setPluginEnabled,
+    setPluginGrants,
     upsertPluginMarketplace,
     getPluginMarketplace,
     deletePluginMarketplace,
@@ -64,8 +65,10 @@ import {
     evaluateManifestTrust,
     evaluateMarketplaceTrust,
     pluginRowIsSurfaceable,
+    restrictGrantsForTrust,
     type TrustVerdict,
 } from './trust';
+import { declaredGrants } from './consent';
 
 function pluginsRoot(): string {
     const dir = path.join(app.getPath('userData'), 'plugins');
@@ -407,11 +410,40 @@ export async function ensureBundledPluginsInstalled(opts?: { enable?: boolean })
                 const dir = materialiseBundled(src.id);
                 await installPluginFromFolder(dir.path, true); // first-party → trusted
             }
-            if (opts?.enable) setPluginEnabled(src.id, true);
+            if (opts?.enable) {
+                grantDeclaredCapabilitiesForBundled(src.id);
+                setPluginEnabled(src.id, true);
+            }
         } catch {
             /* best-effort per plugin — one failure must not block the others or boot */
         }
     }
+}
+
+/**
+ * Auto-grant a BUNDLED first-party plugin the capabilities its manifest DECLARES —
+ * the headless-host stand-in for the desktop's enable-time CONSENT modal (genie
+ * #100).
+ *
+ * `record()` installs a plugin with EMPTY grants (declared ≠ granted): on the
+ * desktop the consent flow then records the user-chosen subset, but a headless host
+ * has no such UI, so enabling alone left the grants empty and `runPluginFsOp` denied
+ * EVERY fs op at `grants.fs.workspace !== true` — bundled generators (deck/workbook)
+ * could not write their output. A bundled plugin is Genie's OWN signed code, so its
+ * DECLARED capabilities are the consented set here; grant exactly those.
+ *
+ * Only ever called for BUNDLED first-party ids, and only when the row holds NO grant
+ * yet (a fresh headless install) — a plugin that already carries grants keeps them,
+ * so a future explicit choice is never clobbered. Fail-closed: an unvalidatable
+ * manifest grants nothing, and `restrictGrantsForTrust` strips any capability a
+ * non-trusted row must not hold.
+ */
+function grantDeclaredCapabilitiesForBundled(id: string): void {
+    const row = getPlugin(id);
+    if (!row || holdsConsentGrant(row)) return;
+    const parsed = validatePluginManifest(JSON.parse(row.manifest_json));
+    if (!parsed.ok) return; // fail-closed — no grants for an unloadable manifest
+    setPluginGrants(id, restrictGrantsForTrust(row.trust, declaredGrants(parsed.manifest)));
 }
 
 /**
