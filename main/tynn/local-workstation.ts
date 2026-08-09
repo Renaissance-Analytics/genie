@@ -12,6 +12,7 @@ import {
     type WorkstationIdentity,
 } from './workstation-identity';
 import { toIssueWatchDelta } from './pusher-protocol';
+import { resolveTynnLinkForRow } from '../workspace/tynn-link';
 import {
     WorkstationPusherTransport,
     type WorkstationSubscriptionHandle,
@@ -153,6 +154,63 @@ export interface WorkstationInventory {
         projectId?: string | null;
         sites: Array<{ id: string; name: string; hostname: string }>;
     }>;
+}
+
+/** The minimal workspace-row shape the inventory needs. A superset of this (the
+ *  real `WorkspaceRow`) is passed at runtime — narrow here so the assembly is
+ *  unit-testable without a db. `path` + the legacy `tynn_*` mirrors are what
+ *  `resolveTynnLinkForRow` reads to derive the EFFECTIVE Tynn link. */
+export interface InventoryWorkspaceRow {
+    id: string;
+    project_name: string;
+    backend: string;
+    path: string;
+    project_id?: string | null;
+    tynn_project_id?: string | null;
+    tynn_project_name?: string | null;
+}
+
+/** The minimal enabled-site shape the inventory needs (superset: `EnabledGenSite`). */
+export interface InventorySite {
+    workspaceId: string;
+    siteId: string;
+    genName: string;
+    hostname: string;
+}
+
+/**
+ * Assemble the workstation inventory the local-workstation client PUTs to Tynn.
+ *
+ * A workspace's reported `projectId` is its EFFECTIVE Tynn link, resolved via
+ * the shared {@link resolveTynnLinkForRow} — NOT the raw `project_id` column.
+ * A locally-scaffolded `.agi` envelope records its Tynn link ONLY in project.json
+ * (its row's `project_id`/`tynn_project_id` are empty), so reading the column
+ * alone reported `projectId: null` and the host workstation channel could never
+ * be matched to that workspace, leaving IssueWatch unable to track it (genie#91).
+ * Resolving through the same helper the pushed-delta matcher uses
+ * (`issue-watch/index.ts` `localWorkspaceIdFor`) makes both linkage homes agree:
+ * project.json is authoritative, with a fallback to the durable row.
+ */
+export function buildWorkstationInventory(
+    workspaces: InventoryWorkspaceRow[],
+    sites: InventorySite[],
+    resolveProjectId: (row: InventoryWorkspaceRow) => string | null = (row) =>
+        resolveTynnLinkForRow(row)?.projectId ?? null,
+): WorkstationInventory {
+    return {
+        workspaces: workspaces.map((workspace) => ({
+            id: workspace.id,
+            name: workspace.project_name,
+            projectId: resolveProjectId(workspace),
+            sites: sites
+                .filter((site) => site.workspaceId === workspace.id)
+                .map((site) => ({
+                    id: site.siteId,
+                    name: site.genName,
+                    hostname: site.hostname,
+                })),
+        })),
+    };
 }
 
 export interface LocalWorkstationHandle {

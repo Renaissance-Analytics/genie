@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { cleanupTmpRoot, makeTmpDir } from '../../../test/helpers';
 
 // The default (uninjected) socket factory constructs `ws`'s WebSocket — mock the
 // module so covering that arm never dials a real Pusher endpoint. Every transport
@@ -22,10 +25,12 @@ import {
     type WebSocketLike,
 } from '../pusher-transport';
 import {
+    buildWorkstationInventory,
     parseIssueWatchSnapshot,
     resolveBroadcastConfig,
     startLocalWorkstation,
     syncWorkstationInventory,
+    type InventoryWorkspaceRow,
     type WorkstationTransportLike,
 } from '../local-workstation';
 import type { IssueWatchDeltaPush } from '../workspace-assignment';
@@ -521,5 +526,89 @@ describe('startLocalWorkstation', () => {
             }) as never,
         });
         expect(handle).toBeNull();
+    });
+});
+
+// --- inventory assembly (genie#91) ----------------------------------------
+
+describe('buildWorkstationInventory', () => {
+    afterAll(() => cleanupTmpRoot());
+
+    function rowAt(dir: string, over: Partial<InventoryWorkspaceRow> = {}): InventoryWorkspaceRow {
+        return {
+            id: 'ws-1',
+            project_name: 'Envelope',
+            backend: 'tynn',
+            path: dir,
+            project_id: '',
+            tynn_project_id: '',
+            tynn_project_name: '',
+            ...over,
+        };
+    }
+
+    it('resolves projectId from project.json when the row records no link (genie#91)', () => {
+        // A locally-scaffolded `.agi` envelope: the Tynn link lives ONLY in
+        // project.json; the workspace row's project_id / tynn_project_id are empty.
+        const dir = makeTmpDir('inv-local');
+        fs.writeFileSync(
+            path.join(dir, 'project.json'),
+            JSON.stringify({
+                name: 'Local Envelope',
+                tynn: { projectId: 'proj-local-1', project: 'local' },
+            }),
+        );
+
+        const inv = buildWorkstationInventory(
+            [rowAt(dir, { id: 'ws-local-1', project_name: 'Local Envelope' })],
+            [],
+        );
+
+        expect(inv.workspaces).toHaveLength(1);
+        expect(inv.workspaces[0]).toMatchObject({
+            id: 'ws-local-1',
+            name: 'Local Envelope',
+            projectId: 'proj-local-1',
+            sites: [],
+        });
+    });
+
+    it('falls back to the workspace row link when project.json has no tynn key', () => {
+        // No project.json on disk → the durable row is the only link home.
+        const dir = makeTmpDir('inv-row');
+        const inv = buildWorkstationInventory(
+            [rowAt(dir, { tynn_project_id: 'proj-row-1', tynn_project_name: 'row' })],
+            [],
+        );
+        expect(inv.workspaces[0].projectId).toBe('proj-row-1');
+    });
+
+    it('honours an explicit unlink in project.json over a stale row link', () => {
+        // `{}` is the deliberate "unlinked" marker — it must not be silently
+        // re-linked from the row (same rule the pushed-delta matcher applies).
+        const dir = makeTmpDir('inv-unlink');
+        fs.writeFileSync(
+            path.join(dir, 'project.json'),
+            JSON.stringify({ name: 'Unlinked', tynn: {} }),
+        );
+        const inv = buildWorkstationInventory(
+            [rowAt(dir, { tynn_project_id: 'proj-stale', tynn_project_name: 'stale' })],
+            [],
+        );
+        expect(inv.workspaces[0].projectId).toBeNull();
+    });
+
+    it('attaches only the workspace-owned enabled sites', () => {
+        const dir = makeTmpDir('inv-sites');
+        const inv = buildWorkstationInventory(
+            [rowAt(dir, { id: 'ws-s', tynn_project_id: 'p', tynn_project_name: 'n' })],
+            [
+                { workspaceId: 'ws-s', siteId: 's1', genName: 'app.gen', hostname: 'app.gen' },
+                { workspaceId: 'other', siteId: 's2', genName: 'nope.gen', hostname: 'nope.gen' },
+            ],
+        );
+        expect(inv.workspaces[0].sites).toEqual([
+            { id: 's1', name: 'app.gen', hostname: 'app.gen' },
+        ]);
     });
 });
