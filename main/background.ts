@@ -148,7 +148,7 @@ import type {
 } from './mcp/protocol';
 import { resolveTargetWorkspace, type TargetDecision } from './mcp/target-workspace';
 import { TynnBackend } from './backend/tynn';
-import { startLocalWorkstation } from './tynn/local-workstation';
+import { buildWorkstationInventory, startLocalWorkstation } from './tynn/local-workstation';
 import { startManagedCredentials } from './tynn/managed-credentials-service';
 import { startUserChannelIssueWatch } from './tynn/user-channel-issuewatch';
 import { readTynnLink, ensureMcpGitignored } from './tynn/provision';
@@ -1538,20 +1538,13 @@ app.whenReady().then(async () => {
                 inventory: async () => {
                     const workspaces = listWorkspaces();
                     const sites = await listLocalEnabledGenSites();
-                    return {
-                        workspaces: workspaces.map((workspace) => ({
-                            id: workspace.id,
-                            name: workspace.project_name,
-                            projectId: workspace.project_id || null,
-                            sites: sites
-                                .filter((site) => site.workspaceId === workspace.id)
-                                .map((site) => ({
-                                    id: site.siteId,
-                                    name: site.genName,
-                                    hostname: site.hostname,
-                                })),
-                        })),
-                    };
+                    // projectId is the workspace's EFFECTIVE Tynn link, not the raw
+                    // row column: a locally-scaffolded `.agi` envelope records the
+                    // link only in project.json, so buildWorkstationInventory falls
+                    // back to it via resolveTynnLinkForRow — otherwise the host
+                    // workstation channel can't be matched and IssueWatch can't
+                    // track the workspace (genie#91).
+                    return buildWorkstationInventory(workspaces, sites);
                 },
                 log: (m) => console.log('[workstation]', m),
                 // Late-bound on purpose: the managed-credential service starts
