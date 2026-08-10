@@ -44,9 +44,19 @@ function assertPort(port: number, which: string): void {
 }
 
 /**
- * The per-site PLAIN-HTTP Caddyfile for a generated serve mode. `auto_https off`
- * because the `.gen` front door owns TLS; the site listens on `sitePort` (loopback)
- * and the front door proxies to it.
+ * The per-site PLAIN-HTTP Caddyfile for a generated serve mode.
+ *
+ * The global block disables three Caddy defaults that only make sense for a
+ * SINGLE, API-managed Caddy — and every hostServe site spawns its OWN:
+ *   - `auto_https off` — the `.gen` front door owns TLS; the site is plain http on
+ *     `sitePort` (loopback) and the front door proxies to it.
+ *   - `admin off` — Caddy's admin API binds `127.0.0.1:2019` by DEFAULT, so a
+ *     SECOND per-site Caddy died with "listen tcp 127.0.0.1:2019: bind: address
+ *     already in use" and never started (two static/php sites could not run at
+ *     once). Genie drives these Caddys through hostSpawn, never the API, so it is
+ *     off — which frees the port and lets any number of sites run.
+ *   - `persist_config off` — with the API off there is nothing to persist, and it
+ *     stops every per-site Caddy racing to overwrite one shared autosave.json.
  */
 export function serveCaddyfile(opts: { sitePort: number; serve: SiteServe }): string {
     assertPort(opts.sitePort, 'site port');
@@ -63,7 +73,17 @@ export function serveCaddyfile(opts: { sitePort: number; serve: SiteServe }): st
         // `php_fastcgi` adds its own file server + front-controller try_files.
         body.push(`\tphp_fastcgi 127.0.0.1:${opts.serve.fcgiPort}`);
     }
-    return ['{', '\tauto_https off', '}', `:${opts.sitePort} {`, ...body, '}', ''].join('\n');
+    return [
+        '{',
+        '\tadmin off',
+        '\tpersist_config off',
+        '\tauto_https off',
+        '}',
+        `:${opts.sitePort} {`,
+        ...body,
+        '}',
+        '',
+    ].join('\n');
 }
 
 /**
