@@ -999,4 +999,34 @@ describe('service env injection (#234 P3)', () => {
         expect(status.error).toMatch(/host-native hosting is not available/i);
         expect(runtime.ran).toHaveLength(0);
     });
+
+    it('probes a host-native site over PLAIN HTTP — no servername (the ready:false bug, genie#160)', async () => {
+        // A host-native dev server speaks plain http on 127.0.0.1. Passing a
+        // servername routes the readiness probe to the HTTPS-SNI path, whose TLS
+        // handshake fails against the plain-http port → every host-native site reads
+        // ready:false even when it answers. The probe must stay plain http.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const hostSpawn = {
+            start: async () => ({ ok: true as const, pid: 4242 }),
+            stop: async () => {},
+            alive: async () => false,
+            readLog: async () => '',
+        };
+        const probeCalls: Array<{ kind: string; servername?: string }> = [];
+        const sites: DevSites = {
+            [SITE_ID]: { name: 'web', genName: 'web.acme.gen', repo: 'app', runMode: 'host', command: ['php', 'artisan', 'serve'], port: 8001, kind: 'http', enabled: true },
+        };
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            allocateFreePort: async () => 5321,
+            probeReady: async (args: { kind: string; servername?: string }) => {
+                probeCalls.push(args);
+                return true;
+            },
+        });
+        await m.start('acme', SITE_ID);
+        expect(probeCalls).toHaveLength(1);
+        expect(probeCalls[0]?.kind).toBe('http');
+        expect(probeCalls[0]?.servername).toBeUndefined(); // plain http → waitForHttp, not waitForHttpsSni
+    });
 });
