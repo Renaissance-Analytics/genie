@@ -980,6 +980,59 @@ describe('service env injection (#234 P3)', () => {
         expect(m.genSites()[0]?.port).toBe(5321); // still on the live port
     });
 
+    it('serves a PHP site the HERD way when FrankenPHP can — php_server on the allocated port, no artisan serve', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const spawned: Array<{ command: string[] }> = [];
+        const hostSpawn = {
+            start: async (i: { command: string[] }) => {
+                spawned.push(i);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async () => {},
+            alive: async () => false,
+            readLog: async () => '',
+        };
+        const sites: DevSites = {
+            [SITE_ID]: { name: 'web', genName: 'web.acme.gen', repo: 'app', runMode: 'host', stack: 'php', framework: 'laravel', command: ['php', 'artisan', 'serve'], kind: 'http', enabled: true },
+        };
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            probeReady: async () => true,
+            allocateFreePort: async () => 5321,
+            frankenphpServeRoot: async () => '/repos/app/public',
+        });
+        await m.start('acme', SITE_ID);
+        expect(spawned[0]?.command).toEqual([
+            'frankenphp', 'php-server', '--listen', '127.0.0.1:5321', '--root', '/repos/app/public',
+        ]);
+    });
+
+    it('falls back to the detected dev command when FrankenPHP is not available (root null)', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const spawned: Array<{ command: string[] }> = [];
+        const hostSpawn = {
+            start: async (i: { command: string[] }) => {
+                spawned.push(i);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async () => {},
+            alive: async () => false,
+            readLog: async () => '',
+        };
+        const sites: DevSites = {
+            [SITE_ID]: { name: 'web', genName: 'web.acme.gen', repo: 'app', runMode: 'host', stack: 'php', framework: 'laravel', command: ['php', 'artisan', 'serve'], kind: 'http', enabled: true },
+        };
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            probeReady: async () => true,
+            allocateFreePort: async () => 5321,
+            frankenphpServeRoot: async () => null, // binary absent → fall back
+        });
+        await m.start('acme', SITE_ID);
+        // The detected php artisan serve, re-pointed at the allocated port.
+        expect(spawned[0]?.command).toEqual(['php', 'artisan', 'serve', '--port=5321']);
+    });
+
     it('a MANAGED host-native site FAILS clearly when host-native hosting is unavailable (no hostSpawn)', async () => {
         const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
         const sites: DevSites = {

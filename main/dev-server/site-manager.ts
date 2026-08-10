@@ -3,7 +3,7 @@ import { CADDY_HTTPS_PORT, type CaddySite } from './caddyfile';
 import { applyCaddyConfig } from './caddy-proxy';
 import { GENIE_DEV_BASE_IMAGE, WORKSPACE_MOUNT_TARGET } from './images';
 import { allocateFreePort as realAllocateFreePort, DEFAULT_READY_TIMEOUT_MS, waitForHttp, waitForHttpsSni, waitForPort } from './port-probe';
-import { withPort } from './serve-recipe';
+import { frankenphpDevServe, withPort } from './serve-recipe';
 import { planHostAllowlist } from './host-allowlist';
 import {
     readSiteProcessLog,
@@ -257,6 +257,16 @@ export interface DevSiteManagerDeps {
      * defaults to the real loopback allocator.
      */
     allocateFreePort?: (exclude: Set<number>) => Promise<number>;
+    /**
+     * Decide whether a php host-native site should be served the HERD way — Genie's
+     * bundled FrankenPHP serving the repo's `public/` directly, as a host process on
+     * the allocated port. Returns the docroot to serve, or null to fall back to the
+     * detected dev command (`php artisan serve`). Absent ⇒ always fall back, so the
+     * default is exactly today's behaviour until the FrankenPHP binary + capability
+     * detection land. The real impl checks: php stack, the binary is present + php_server
+     * capable, and `<cwd>/public` exists.
+     */
+    frankenphpServeRoot?: (config: DevSiteConfig, cwd: string) => Promise<string | null>;
     /** Fired whenever the live set changes, so the UX and other agents follow. */
     onChanged?: () => void;
     /**
@@ -878,10 +888,20 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         // stored `config.port` is ignored on this path precisely because a fixed
         // stored port is the collision vector.
         const port = await allocateFreePort(livePortSet());
-        const { command, env: portEnv } = withPort(baseCommand, port, {
-            ...(config.stack ? { stack: config.stack } : {}),
-            ...(config.framework ? { framework: config.framework } : {}),
-        });
+
+        // Herd-model PHP serving: if this is a php site and Genie's FrankenPHP binary
+        // can serve the repo's public/ directly, serve it as a host process via
+        // php_server (no artisan serve, no build). Otherwise fall back to the detected
+        // dev command, re-pointed at the allocated port.
+        const phpRoot = deps.frankenphpServeRoot
+            ? await deps.frankenphpServeRoot(config, cwd).catch(() => null)
+            : null;
+        const { command, env: portEnv } = phpRoot
+            ? { command: frankenphpDevServe(phpRoot, port).command, env: {} as Record<string, string> }
+            : withPort(baseCommand, port, {
+                  ...(config.stack ? { stack: config.stack } : {}),
+                  ...(config.framework ? { framework: config.framework } : {}),
+              });
 
         // Same env precedence as a container site, but HOST-FORM services (beta.237).
         // `portEnv` (the allocated PORT, for stacks that read it) is stamped LAST so
