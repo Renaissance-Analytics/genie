@@ -230,13 +230,13 @@ describe('sites-config', () => {
         expect(sanitizeDevSitePatch({ command: ['a\0b'] }).command).toBeUndefined();
     });
 
-    it('clamps the port and refuses junk env names', () => {
+    it('clamps the port and drops env entirely — env is NEVER persisted (genie #168)', () => {
         expect(sanitizeDevSitePatch({ port: 0 }).port).toBeUndefined();
         expect(sanitizeDevSitePatch({ port: 70_000 }).port).toBeUndefined();
         expect(sanitizeDevSitePatch({ port: 5173 }).port).toBe(5173);
-        expect(sanitizeDevSitePatch({ env: { 'BAD NAME': 'x', GOOD: 'y' } }).env).toEqual({
-            GOOD: 'y',
-        });
+        // env is dropped WHOLE (not filtered) — it belongs in the repo .env, never
+        // the tracked project.json manifest.
+        expect(sanitizeDevSitePatch({ env: { GOOD: 'y' } }).env).toBeUndefined();
     });
 
     it('reads a corrupt blob as "no sites" rather than throwing', () => {
@@ -547,16 +547,17 @@ describe('adopt — re-attach to processes still running after a Genie restart',
 // --- reconfigure ------------------------------------------------------------
 
 describe('devSiteReconfigureNeedsRestart', () => {
-    it('is true when a command / port / env / routing field changed', () => {
+    it('is true when a command / port / routing field changed', () => {
         expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, port: 9000 })).toBe(true);
         expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, command: ['./other'] })).toBe(true);
-        expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, env: { X: '1' } })).toBe(true);
         expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, genName: 'web.new.gen' })).toBe(true);
     });
 
     it('is false for a cosmetic-only change — nothing the process depends on moved', () => {
         expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, enabled: !SITE.enabled })).toBe(false);
         expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE })).toBe(false);
+        // env is not persisted (genie #168), so an env change is not a reconfigure trigger.
+        expect(devSiteReconfigureNeedsRestart(SITE, { ...SITE, env: { X: '1' } })).toBe(false);
     });
 });
 

@@ -11,6 +11,7 @@ import {
     slugLabel,
 } from '../dev-server/sites-config';
 import { describeRepoRun } from '../dev-server/repo-facts';
+import { applySetEnv } from '../env-store';
 import { devSiteManager } from '../dev-server/site-manager';
 import { resolveContainerRuntime } from '../dev-server';
 import { detectFolder } from '../workspace/detect';
@@ -241,6 +242,37 @@ export function createAdvisoryNotes(req: Pick<ManageSiteRequest, 'image'>): stri
     return notes;
 }
 
+/**
+ * Route a site's `env` to the repo's `.env`, NOT the tracked `project.json` (genie
+ * #168). `project.json` is committed + pushed, so a secret in `sites.<id>.env`
+ * leaks; env — secret or not, and per-dev — belongs in the repo's `.env`, which the
+ * app reads and which Genie gitignores. Writes each key via {@link applySetEnv} and
+ * returns advisory notes naming where they went (so the write is never silent).
+ */
+export function routeSiteEnvToDotEnv(
+    workspaceRoot: string,
+    repo: string | undefined,
+    env: Record<string, string> | undefined,
+): string[] {
+    if (!env || Object.keys(env).length === 0) return [];
+    const wrote: string[] = [];
+    const failed: string[] = [];
+    for (const [key, value] of Object.entries(env)) {
+        const res = applySetEnv(workspaceRoot, { key, value, ...(repo ? { target: repo } : {}) });
+        if (res.ok) wrote.push(key);
+        else failed.push(`${key} (${res.error})`);
+    }
+    const file = repo ? `repos/${repo}/.env` : '.env';
+    const notes: string[] = [];
+    if (wrote.length) {
+        notes.push(
+            `Wrote ${wrote.join(', ')} to ${file} (gitignored), NOT project.json — a site's env is never stored in the tracked manifest (it would leak on push); the app reads it from its \`.env\` and Genie injects service env at runtime.`,
+        );
+    }
+    if (failed.length) notes.push(`Could not write to ${file}: ${failed.join('; ')}.`);
+    return notes;
+}
+
 export async function runManageSite(
     ws: DevSiteTarget,
     req: ManageSiteRequest,
@@ -457,8 +489,14 @@ export async function runManageSite(
                     );
                 }
 
-                // Advisory notes, surfaced on CREATE where they are actionable.
-                const notes = createAdvisoryNotes(req);
+                // Advisory notes, surfaced on CREATE where they are actionable. A
+                // passed `env` is written to the repo's `.env` (gitignored), never
+                // the tracked project.json (genie #168) — done before the site
+                // starts so the app reads it.
+                const notes = [
+                    ...createAdvisoryNotes(req),
+                    ...routeSiteEnvToDotEnv(ws.path, req.repo, req.env),
+                ];
                 if (req.enabled === false) {
                     return {
                         ok: true,
@@ -534,6 +572,11 @@ export async function runManageSite(
                 if (req.enabled !== undefined) patch.enabled = req.enabled;
                 if (req.browserExposed !== undefined) patch.browserExposed = req.browserExposed;
 
+                // A passed `env` goes to the repo's `.env` (gitignored), never the
+                // tracked project.json (genie #168) — written before the reconfigure
+                // below so a restart picks it up.
+                const envNotes = routeSiteEnvToDotEnv(ws.path, req.repo ?? before.repo, req.env);
+
                 // Read live state under the CURRENT id BEFORE persisting — a
                 // rename moves the config to a new id, so afterwards the manager
                 // could no longer find the old-id container that is still running.
@@ -562,6 +605,7 @@ export async function runManageSite(
                     sites: sites(),
                     affectedId: newId,
                     runtime,
+                    ...(envNotes.length ? { notes: envNotes } : {}),
                 };
             }
 

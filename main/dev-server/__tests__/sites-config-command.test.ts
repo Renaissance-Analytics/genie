@@ -3,6 +3,7 @@ import {
     effectiveCommand,
     sandboxCommandFor,
     sanitizeDevSitePatch,
+    withoutPersistedEnv,
     devSiteReconfigureNeedsRestart,
     hostNativeRoute,
     type DevSiteConfig,
@@ -176,6 +177,49 @@ describe('host-native site (story #238) — point .gen at a host dev-server port
     it('a hostPort change needs a restart (routing identity)', () => {
         expect(devSiteReconfigureNeedsRestart(base({ hostPort: 8001 }), base({ hostPort: 8002 }))).toBe(true);
         expect(devSiteReconfigureNeedsRestart(base({ hostPort: 8001 }), base({ hostPort: 8001 }))).toBe(false);
+    });
+});
+
+describe('site env is NEVER persisted to the tracked manifest (genie #168 — secrets out of project.json)', () => {
+    it('drops `env` from the sanitized (persisted) patch — even non-secret values', () => {
+        // project.json is tracked + committed + pushed; a secret in sites.<id>.env
+        // (e.g. Laravel APP_KEY) leaks. The manifest carries STACK META only — env
+        // lives in the repo .env (per-dev, gitignored), which the app reads.
+        const clean = sanitizeDevSitePatch({
+            ...base(),
+            env: { APP_KEY: 'base64:supersecret', NODE_ENV: 'production' },
+        });
+        expect(clean.env).toBeUndefined();
+    });
+
+    it('withoutPersistedEnv strips env from EVERY site — the write-boundary scrub that beats the merge', () => {
+        // sanitizeDevSitePatch drops env from a fresh patch, but a write merges the
+        // patch OVER the stored row, so a row that already holds env (a pre-fix leak,
+        // or a patch that did not touch env) would keep it. The write-boundary
+        // transform scrubs it regardless.
+        const sites = {
+            a: { ...base(), env: { APP_KEY: 'base64:leaked' } },
+            b: { ...base({ name: 'b', genName: 'b.acme.gen' }) },
+        };
+        const clean = withoutPersistedEnv(sites);
+        expect(clean.a?.env).toBeUndefined();
+        expect(clean.b?.env).toBeUndefined();
+        // Everything else survives — only env is removed.
+        expect(clean.a?.genName).toBe('web.acme.gen');
+        expect(clean.b?.name).toBe('b');
+    });
+
+    it('keeps the stack meta a workspace needs to set the site up on another machine', () => {
+        const clean = sanitizeDevSitePatch({
+            ...base({ repo: 'app', runMode: 'host', stack: 'php', port: 8080 }),
+            hostServe: { mode: 'static', root: 'dist' },
+            env: { SECRET: 'x' },
+        });
+        // The recipe survives (portable across devs); only env is stripped.
+        expect(clean.repo).toBe('app');
+        expect(clean.runMode).toBe('host');
+        expect(clean.hostServe).toEqual({ mode: 'static', root: 'dist' });
+        expect(clean.env).toBeUndefined();
     });
 });
 

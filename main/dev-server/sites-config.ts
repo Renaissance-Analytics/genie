@@ -284,6 +284,25 @@ function cleanHostServe(hs: unknown): HostServeConfig | null {
     return null;
 }
 
+/**
+ * Strip `env` from EVERY site (genie #168) — the single authoritative transform
+ * the persistence layer applies before writing `project.json`. {@link
+ * sanitizeDevSitePatch} already drops env from a fresh patch, but a write merges
+ * the patch OVER the stored row, and a stored row from before this fix (or a patch
+ * that did not touch env) still carries an env the merge would keep. Applying this
+ * at the write boundary guarantees the tracked manifest never holds a secret,
+ * scrubbing an existing leak on the next write. Env lives in the repo `.env`.
+ */
+export function withoutPersistedEnv(sites: DevSites): DevSites {
+    const out: DevSites = {};
+    for (const [id, site] of Object.entries(sites)) {
+        const copy = { ...site };
+        delete copy.env;
+        out[id] = copy;
+    }
+    return out;
+}
+
 export function sanitizeDevSitePatch(
     patch: Partial<DevSiteConfig> | null | undefined,
 ): Partial<DevSiteConfig> {
@@ -376,14 +395,13 @@ export function sanitizeDevSitePatch(
         if (patch.hostPort >= 1 && patch.hostPort <= 65535) out.hostPort = patch.hostPort;
     }
 
-    if (patch.env && typeof patch.env === 'object' && !Array.isArray(patch.env)) {
-        const env: Record<string, string> = {};
-        for (const [name, value] of Object.entries(patch.env)) {
-            if (!ENV_NAME.test(name) || typeof value !== 'string' || value.includes('\0')) continue;
-            env[name] = value;
-        }
-        out.env = env;
-    }
+    // Site `env` is DELIBERATELY NOT persisted (genie #168). project.json is a
+    // TRACKED, committed + pushed manifest, so a secret in `sites.<id>.env` (e.g.
+    // Laravel's APP_KEY) leaks. The manifest carries STACK META only — the recipe
+    // a teammate needs to set the same site up — while env (secret and per-dev)
+    // lives in the repo's `.env`, which the app reads and Genie writes there via
+    // the create/update path. `env` is dropped here, so an existing entry that
+    // still holds it is scrubbed on the next site write.
 
     if (patch.kind === 'http' || patch.kind === 'tcp') out.kind = patch.kind;
 
@@ -438,7 +456,6 @@ const RECONFIGURE_KEYS: readonly (keyof DevSiteConfig)[] = [
     'port',
     'hostPort',
     'exposed',
-    'env',
     'kind',
     'framework',
     'upstreamHost',
