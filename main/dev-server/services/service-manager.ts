@@ -164,6 +164,28 @@ export interface DevServiceManagerDeps {
     onChanged?: () => void;
 }
 
+/**
+ * Why a host-native site's service env is what it is — the diagnostic behind an
+ * EMPTY {@link DevServiceManager.hostEnvFor}. `enabled` services that are `live`
+ * but have `withHostPort === 0` (every one in `missingHostPort`) is the "up but
+ * DB-less" state: the app would fall back to its repo `.env` and fail to reach
+ * the managed DB with no signal — this report is that signal.
+ */
+export interface HostEnvReport {
+    /** The host-form env — identical to {@link DevServiceManager.hostEnvFor}. */
+    env: Record<string, string>;
+    /** Services the workspace has ENABLED in config. */
+    enabled: number;
+    /** Of those, how many are LIVE in this process right now. */
+    live: number;
+    /** Of the live ones, how many expose a published loopback port (reachable
+     *  from the host, so they contribute env). */
+    withHostPort: number;
+    /** The engines that are live but publish NO host port — the ones that make
+     *  the env come up short. */
+    missingHostPort: string[];
+}
+
 export interface DevServiceManager {
     /** Ensure the engine is up, this workspace's slice provisioned, and the
      *  engine attached to its network. Never throws. */
@@ -197,6 +219,10 @@ export interface DevServiceManager {
      *  the engine's PUBLISHED loopback port (127.0.0.1) it can actually dial.
      *  Omits any service the runtime published nothing for. */
     hostEnvFor(workspaceId: string): Record<string, string>;
+    /** {@link hostEnvFor} plus the counts that explain an EMPTY result — so a
+     *  host-native site can log an actionable line instead of silently serving
+     *  DB-less when its services are up but unreachable from the host. */
+    hostEnvReportFor(workspaceId: string): HostEnvReport;
     /** Acquire every enabled service; release everything that no longer is. */
     reconcile(): Promise<void>;
     releaseAll(): Promise<void>;
@@ -841,6 +867,26 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             );
         },
 
+        hostEnvReportFor(workspaceId) {
+            const configured = deps.devServicesFor(workspaceId);
+            const enabled = Object.values(configured).filter((c) => c.enabled).length;
+            const mine = [...live.values()].filter((e) => e.workspaceId === workspaceId);
+            const provisioned: ProvisionedService[] = [];
+            const missingHostPort: string[] = [];
+            for (const entry of mine) {
+                const host = provisionedForHost(entry);
+                if (host) provisioned.push(host);
+                else missingHostPort.push(entry.config.engine);
+            }
+            return {
+                env: serviceEnv(provisioned),
+                enabled,
+                live: mine.length,
+                withHostPort: provisioned.length,
+                missingHostPort,
+            };
+        },
+
         async reconcile() {
             const wanted = new Set<string>();
             for (const workspace of deps.listWorkspaces()) {
@@ -1030,6 +1076,24 @@ export function devServiceEnvFor(workspaceId: string): Record<string, string> {
  */
 export function devServiceHostEnvFor(workspaceId: string): Record<string, string> {
     return instance?.hostEnvFor(workspaceId) ?? {};
+}
+
+/**
+ * {@link devServiceHostEnvFor} with the diagnostic that explains an empty result
+ * — enabled vs live vs host-published counts, so a host-native site can log WHY
+ * it got no service env rather than serving DB-less in silence. All-zeroes when
+ * nothing is initialised.
+ */
+export function devServiceHostEnvReportFor(workspaceId: string): HostEnvReport {
+    return (
+        instance?.hostEnvReportFor(workspaceId) ?? {
+            env: {},
+            enabled: 0,
+            live: 0,
+            withHostPort: 0,
+            missingHostPort: [],
+        }
+    );
 }
 
 /** Test-only: drop the process-wide instance. */

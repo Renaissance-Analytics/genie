@@ -46,7 +46,9 @@ interface Fake extends ContainerRuntime {
     readonly containers: Map<string, ContainerSummary>;
 }
 
-function fakeRuntime(opts: { detection?: RuntimeDetection; execFails?: string } = {}): Fake {
+function fakeRuntime(
+    opts: { detection?: RuntimeDetection; execFails?: string; publishNothing?: boolean } = {},
+): Fake {
     const ran: ContainerSpec[] = [];
     const started: string[] = [];
     const stopped: string[] = [];
@@ -108,14 +110,21 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; execFails?: string } 
                 state: 'running',
                 ...(spec.workspaceId === null ? {} : { workspaceId: spec.workspaceId }),
             });
+            // `publishNothing` stands in for a host whose runtime published (or
+            // surfaced) NO loopback port for the engine — the container is up and
+            // ready via its own in-container check, but `docker port` returns
+            // nothing, so no endpoint carries a hostPort. This is the state that
+            // silently strips a host-native site's DB env (moic's beta.245 report).
             ports.set(
                 id,
-                (spec.ports ?? []).map((p) => ({
-                    container: p.container,
-                    protocol: 'tcp' as const,
-                    hostIp: p.hostIp ?? '127.0.0.1',
-                    hostPort: (nextHostPort += 1),
-                })),
+                opts.publishNothing
+                    ? []
+                    : (spec.ports ?? []).map((p) => ({
+                          container: p.container,
+                          protocol: 'tcp' as const,
+                          hostIp: p.hostIp ?? '127.0.0.1',
+                          hostPort: (nextHostPort += 1),
+                      })),
             );
             return { id, name: spec.name };
         },
@@ -294,6 +303,43 @@ describe('one engine, two workspaces', () => {
         expect(hostEnv.DB_HOST).toBe('127.0.0.1');
         expect(hostEnv.DB_PORT).toBe(String(hostPort));
         expect(hostEnv.DATABASE_URL).toContain(`@127.0.0.1:${hostPort}/`);
+    });
+
+    it('hostEnvFor is EMPTY when a live engine has no published loopback port — the silent DB-less trap', async () => {
+        // The engine is up and READY (its in-container check passes), but the host
+        // published/surfaced no loopback port — so a host-native site gets NOTHING
+        // to reach the DB with and falls back to its repo `.env` (moic beta.245).
+        const runtime = fakeRuntime({ publishNothing: true });
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }));
+        const status = await manager.acquire('a', 'svc-a');
+
+        expect(status.state).toBe('running');
+        expect(status.endpoints?.every((e) => e.hostPort === undefined)).toBe(true);
+        // The container-form env still works (it dials the engine by NAME), which
+        // is why a CONTAINER site is fine while a host-native one is broken.
+        expect(manager.envFor('a').DB_HOST).toBe('genie-svc-postgres-16');
+        // The trap: silently empty, with no signal that the DB is unreachable.
+        expect(manager.hostEnvFor('a')).toEqual({});
+    });
+
+    it('hostEnvReportFor says WHY host env is empty — enabled vs live vs host-published', async () => {
+        // Healthy: the engine is live AND has a published loopback port.
+        const healthy = createDevServiceManager(deps(fakeRuntime(), { a: pgFor('svc-a') }));
+        await healthy.acquire('a', 'svc-a');
+        const ok = healthy.hostEnvReportFor('a');
+        expect(ok).toMatchObject({ enabled: 1, live: 1, withHostPort: 1, missingHostPort: [] });
+        expect(ok.env.DB_HOST).toBe('127.0.0.1');
+
+        // Degraded: the engine is live but nothing is published — the report names
+        // the engine that has no host port, so the site can log an actionable line
+        // instead of serving DB-less in silence.
+        const degraded = createDevServiceManager(
+            deps(fakeRuntime({ publishNothing: true }), { a: pgFor('svc-a') }),
+        );
+        await degraded.acquire('a', 'svc-a');
+        const bad = degraded.hostEnvReportFor('a');
+        expect(bad).toMatchObject({ enabled: 1, live: 1, withHostPort: 0, missingHostPort: ['postgres'] });
+        expect(bad.env).toEqual({});
     });
 });
 

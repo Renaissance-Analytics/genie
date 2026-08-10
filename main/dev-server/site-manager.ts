@@ -11,7 +11,8 @@ import {
     startSiteProcess,
     stopSiteProcess,
 } from './site-process';
-import { composeHostSiteEnv } from './host-site-process';
+import { composeHostSiteEnv, describeEmptyHostServiceEnv } from './host-site-process';
+import type { HostEnvReport } from './services/service-manager';
 import { hostBrowserRoutes as selectHostBrowserRoutes } from './host-browser-routes';
 import type { HostSiteRoute } from './host-reconcile';
 import { ensureWorkspaceSandbox, HOST_GATEWAY_HOSTNAME } from './workspace-sandbox';
@@ -194,6 +195,11 @@ export interface HostProcessRun {
         /** The repo dir ON THE HOST (not a container mount). */
         cwd: string;
         env: Record<string, string>;
+        /** A one-line `[genie]` note prepended to the site's log before the dev
+         *  server's own output — used to record a start-time diagnostic (e.g. the
+         *  workspace's services resolved to no host env) where `manageSite logs`
+         *  and the progress tail will show it. */
+        note?: string;
     }): Promise<{ ok: true; pid: number } | { ok: false; error: string }>;
     stop(siteId: string): Promise<void>;
     alive(siteId: string): Promise<boolean>;
@@ -244,6 +250,16 @@ export interface DevSiteManagerDeps {
      * Merged UNDER the site's own env.
      */
     serviceHostEnvFor?: (workspaceId: string) => Promise<Record<string, string>>;
+    /**
+     * HOST-FORM service env WITH the diagnostic that explains an EMPTY result
+     * (enabled vs live vs host-published counts). Preferred over
+     * {@link serviceHostEnvFor} when present: its `env` is used the same way, and
+     * when a host-native site's workspace has services enabled but the env is
+     * empty, the start records an actionable line to the site log instead of
+     * silently serving DB-less (moic's beta.245 report). Absent ⇒ fall back to
+     * {@link serviceHostEnvFor} (no diagnostic).
+     */
+    serviceHostEnvReportFor?: (workspaceId: string) => Promise<HostEnvReport>;
     /**
      * Run a HOST-NATIVE site's dev server as a real HOST process (story #238).
      * Absent ⇒ a `runMode: 'host'` site fails with a clear "not available" status
@@ -885,13 +901,29 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
 
         // Same env precedence as a container site, but HOST-FORM services (beta.237).
         // `portEnv` (the allocated PORT, for stacks that read it) is stamped LAST so
-        // the host-owned port always wins.
-        const serviceHostEnv = deps.serviceHostEnvFor
-            ? await deps.serviceHostEnvFor(workspaceId).catch(() => ({}))
-            : {};
+        // the host-owned port always wins. Prefer the REPORT form: it carries the
+        // enabled/live/host-published counts, so when a workspace has services but
+        // the env comes back empty we can say WHY in the log rather than start the
+        // site pointed at nothing and let it 500 in silence (moic's beta.245 report).
+        let serviceHostEnv: Record<string, string> = {};
+        let note: string | undefined;
+        if (deps.serviceHostEnvReportFor) {
+            const report = await deps.serviceHostEnvReportFor(workspaceId).catch(() => null);
+            serviceHostEnv = report?.env ?? {};
+            if (report) note = describeEmptyHostServiceEnv(report) ?? undefined;
+        } else if (deps.serviceHostEnvFor) {
+            serviceHostEnv = await deps.serviceHostEnvFor(workspaceId).catch(() => ({}));
+        }
         const env = { ...composeHostSiteEnv(config, command, serviceHostEnv), ...portEnv };
 
-        const started = await hostSpawn.start({ siteId, workspaceId, command, cwd, env });
+        const started = await hostSpawn.start({
+            siteId,
+            workspaceId,
+            command,
+            cwd,
+            env,
+            ...(note ? { note } : {}),
+        });
         if (!started.ok) {
             return failed(workspaceId, siteId, config, `The dev server did not start: ${started.error}`);
         }

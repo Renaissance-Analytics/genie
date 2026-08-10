@@ -37,7 +37,11 @@ import { listLocalEnabledGenSites, resolveEnabledSite } from './sites/local-site
 import { remoteGenUrl } from './sites/gen-url';
 import { LOCAL_CONN_KEY, openTestingBrowser } from './testing-browser';
 import { devLifecycle } from './dev-server/lifecycle';
-import { devServiceEnvFor, devServiceHostEnvFor } from './dev-server/services/service-manager';
+import {
+    devServiceEnvFor,
+    devServiceHostEnvFor,
+    devServiceHostEnvReportFor,
+} from './dev-server/services/service-manager';
 import { resolveContainerRuntime } from './dev-server';
 import { devServerHostBrowserRoutes } from './dev-server/site-manager';
 import { createDesktopHostBrowserReconciler } from './dev-server/host-browser-desktop';
@@ -1085,6 +1089,9 @@ app.whenReady().then(async () => {
         // Same services in HOST form (127.0.0.1:<published port>) for a HOST-NATIVE
         // site's dev server (story #238 / beta.237).
         devServiceHostEnvFor: (id) => devServiceHostEnvFor(id),
+        // …with the diagnostic behind an EMPTY result, so a host-native start logs
+        // WHY it got no service env rather than serving DB-less (moic's beta.245).
+        devServiceHostEnvReportFor: (id) => devServiceHostEnvReportFor(id),
         // A host-native site's dev server runs as a real HOST process; its captured
         // output is logged here (under the Genie data dir).
         hostSiteLogDir: path.join(app.getPath('userData'), 'host-sites'),

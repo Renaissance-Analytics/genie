@@ -63,6 +63,41 @@ describe('createHostProcessRun', () => {
         expect(readLogTail.mock.calls[0][1]).toBe(50);
     });
 
+    it('writes a start-time [genie] note to the site log, before the dev server output', async () => {
+        const appendLog = vi.fn();
+        const run = createHostProcessRun({
+            logDir: '/logs',
+            primitives: fakePrims(),
+            ensureDir: vi.fn(),
+            appendLog,
+        });
+        await run.start({
+            siteId: 's',
+            workspaceId: 'ws',
+            command: ['php', 'artisan', 'serve'],
+            cwd: '/r',
+            env: {},
+            note: '3 service(s) are running but publish no reachable loopback port',
+        });
+        expect(appendLog).toHaveBeenCalledOnce();
+        const [path, text] = appendLog.mock.calls[0];
+        expect(path).toContain('s');
+        expect(text).toContain('[genie]');
+        expect(text).toContain('no reachable loopback port');
+    });
+
+    it('writes NO note when the start carries none', async () => {
+        const appendLog = vi.fn();
+        const run = createHostProcessRun({
+            logDir: '/logs',
+            primitives: fakePrims(),
+            ensureDir: vi.fn(),
+            appendLog,
+        });
+        await run.start({ siteId: 's', workspaceId: 'ws', command: ['x'], cwd: '/r', env: {} });
+        expect(appendLog).not.toHaveBeenCalled();
+    });
+
     it('surfaces a spawn failure as ok:false rather than throwing', async () => {
         const prims = fakePrims({
             spawnDetached: vi.fn().mockImplementation(() => {
