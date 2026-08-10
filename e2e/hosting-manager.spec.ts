@@ -398,12 +398,15 @@ test('the site Edit form offers the external-browser toggle for a host-native si
     // UX in sync with the host-native model: NO legacy serve field, NO container-only
     // fields (port + image are host-owned/absent), and the startup hint is host-native
     // — never "in the sandbox" or "the port above" (the host allocates the port now).
-    await expect(edit).not.toContainText('Serve command (legacy)');
-    await expect(edit).not.toContainText('Port the server listens on');
-    await expect(edit).not.toContainText('Server image');
-    await expect(edit).not.toContainText('in the sandbox');
-    await expect(edit).not.toContainText('the port above');
-    await expect(edit).toContainText('Genie assigns the port');
+    // Scope to the Edit modal specifically — the panel behind it is also a modal, so a
+    // bare MODAL locator matches two and trips strict mode.
+    const editModal = edit.filter({ has: page.getByRole('heading', { name: 'Edit web' }) });
+    await expect(editModal).not.toContainText('Serve command (legacy)');
+    await expect(editModal).not.toContainText('Port the server listens on');
+    await expect(editModal).not.toContainText('Server image');
+    await expect(editModal).not.toContainText('in the sandbox');
+    await expect(editModal).not.toContainText('the port above');
+    await expect(editModal).toContainText('Genie assigns the port');
 
     // Turn it on and save.
     await toggle.click();
