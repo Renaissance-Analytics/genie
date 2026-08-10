@@ -12,7 +12,7 @@ import {
     stopSiteProcess,
 } from './site-process';
 import { composeHostSiteEnv, describeEmptyHostServiceEnv } from './host-site-process';
-import { serveCaddyfile, caddyServeArgv } from './serve-config';
+import { serveCaddyfile, caddyServeArgv, phpFastcgiWorkerCommand } from './serve-config';
 import type { HostEnvReport } from './services/service-manager';
 import { hostBrowserRoutes as selectHostBrowserRoutes } from './host-browser-routes';
 import type { HostSiteRoute } from './host-reconcile';
@@ -381,6 +381,15 @@ function repoCwdOnHost(workspacePath: string, repo: string): string | null {
 function resolveServeRoot(cwd: string, rel: string): string | null {
     if (rel.split(/[\\/]/).some((seg) => seg === '..')) return null;
     return `${cwd}/${rel}`.replace(/\/+$/, '');
+}
+
+/** The companion process key for a PHP site's FastCGI worker. A PHP site runs TWO
+ *  host processes — Genie's Caddy (keyed by the site id) and a `php-cgi` worker
+ *  (this key) — so a distinct hostSpawn key lets the one-process-per-key registry
+ *  manage the worker beside the Caddy with no registry changes. Matches SITE_ID_RE
+ *  (`[A-Za-z0-9_-]+`) because a site id is an alnum hash. */
+function fcgiSiteId(siteId: string): string {
+    return `${siteId}-fcgi`;
 }
 
 /**
@@ -864,37 +873,45 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
      * so it reaches the managed DB/redis. Nothing is containerised.
      */
     /**
-     * The command that serves a `hostServe` site — Genie's bundled Caddy pointed at
-     * a generated per-site config, so an AGENT never writes a server block. `static`
-     * serves a built directory (with an optional SPA fallback); `php` is not wired
-     * yet. Returns a clear failure rather than spawning nothing.
+     * How Genie serves a `hostServe` site with its bundled Caddy — the agent wrote
+     * no server config. `static` serves a built directory (optional SPA fallback) in
+     * ONE process (`command` = Caddy). `php` is the nginx model in TWO: `command` is
+     * still Caddy (`php_fastcgi` over `public/`), and `worker` is a `php-cgi` FastCGI
+     * server on a SECOND allocated port that the Caddyfile points at — the caller
+     * starts the worker as a companion process. Returns a clear failure rather than
+     * spawning nothing.
      */
-    function planHostServe(
+    async function planHostServe(
         hostServe: HostServeConfig,
         cwd: string,
-        port: number,
+        sitePort: number,
         siteId: string,
-    ): { ok: true; command: string[] } | { ok: false; error: string } {
-        if (hostServe.mode === 'php') {
-            return {
-                ok: false,
-                error:
-                    'PHP serve mode is not available in this build yet — set a host `command` ' +
-                    '(e.g. ["php","artisan","serve"]) for now.',
-            };
-        }
+    ): Promise<{ ok: true; command: string[]; worker?: string[] } | { ok: false; error: string }> {
         if (!deps.caddyBin || !deps.writeServeConfig) {
+            const which = hostServe.mode === 'php' ? 'PHP' : 'Static';
             return {
                 ok: false,
-                error: 'Static serving is not available in this build (Genie has no bundled Caddy here).',
+                error: `${which} serving is not available in this build (Genie has no bundled Caddy here).`,
             };
         }
         const root = resolveServeRoot(cwd, hostServe.root);
         if (!root) {
             return { ok: false, error: `Invalid serve root ${JSON.stringify(hostServe.root)}.` };
         }
+        if (hostServe.mode === 'php') {
+            // A SECOND guaranteed-free port for the FastCGI worker — never the site
+            // port or one a live site holds.
+            const fcgiPort = await allocateFreePort(new Set([...livePortSet(), sitePort]));
+            const caddyfile = serveCaddyfile({ sitePort, serve: { kind: 'php', root, fcgiPort } });
+            const configPath = deps.writeServeConfig(siteId, caddyfile);
+            return {
+                ok: true,
+                command: caddyServeArgv(deps.caddyBin, configPath),
+                worker: phpFastcgiWorkerCommand(fcgiPort),
+            };
+        }
         const caddyfile = serveCaddyfile({
-            sitePort: port,
+            sitePort,
             serve: { kind: 'static', root, spa: hostServe.spa ?? false },
         });
         const configPath = deps.writeServeConfig(siteId, caddyfile);
@@ -951,11 +968,13 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         //     public/ via FastCGI) — the agent wrote no server config;
         //   - otherwise → the repo's OWN dev server, reverse-proxied (Phase 1).
         let command: string[];
+        let worker: string[] | undefined;
         let portEnv: Record<string, string> = {};
         if (config.hostServe) {
-            const planned = planHostServe(config.hostServe, cwd, port, siteId);
+            const planned = await planHostServe(config.hostServe, cwd, port, siteId);
             if (!planned.ok) return failed(workspaceId, siteId, config, planned.error);
             command = planned.command;
+            worker = planned.worker;
         } else {
             const baseCommand = effectiveCommand(config);
             if (!baseCommand) {
@@ -991,6 +1010,28 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         }
         const env = { ...composeHostSiteEnv(config, command, serviceHostEnv), ...portEnv };
 
+        // PHP (nginx model): bring up the FastCGI worker — a companion process keyed
+        // `<siteId>-fcgi` — BEFORE the Caddy that proxies to it, in the repo cwd with
+        // the SAME env (so PHP reaches the managed DB). If the worker will not start,
+        // the site cannot serve, so fail before spawning a Caddy pointed at nothing.
+        if (worker) {
+            const workerStarted = await hostSpawn.start({
+                siteId: fcgiSiteId(siteId),
+                workspaceId,
+                command: worker,
+                cwd,
+                env,
+            });
+            if (!workerStarted.ok) {
+                return failed(
+                    workspaceId,
+                    siteId,
+                    config,
+                    `The PHP FastCGI worker did not start: ${workerStarted.error}`,
+                );
+            }
+        }
+
         const started = await hostSpawn.start({
             siteId,
             workspaceId,
@@ -1000,6 +1041,8 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             ...(note ? { note } : {}),
         });
         if (!started.ok) {
+            // Don't orphan the worker if the Caddy failed to come up.
+            if (worker) await hostSpawn.stop(fcgiSiteId(siteId)).catch(() => {});
             return failed(workspaceId, siteId, config, `The dev server did not start: ${started.error}`);
         }
         return await recordHostNativeLive(workspaceId, siteId, config, buildRoute(port));
@@ -1057,7 +1100,12 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         // MANAGED HOST-NATIVE (story #238): Genie owns the dev server process — stop
         // it. No container runtime involved.
         if (entry.config.runMode === 'host') {
-            if (deps.hostSpawn) await deps.hostSpawn.stop(siteId).catch(() => {});
+            if (deps.hostSpawn) {
+                await deps.hostSpawn.stop(siteId).catch(() => {});
+                // Stop the PHP FastCGI worker companion too — a no-op for a static or
+                // proxy site, which has no such process tracked.
+                await deps.hostSpawn.stop(fcgiSiteId(siteId)).catch(() => {});
+            }
             changed();
             return;
         }

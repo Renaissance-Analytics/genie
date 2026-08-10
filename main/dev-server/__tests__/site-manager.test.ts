@@ -1114,6 +1114,90 @@ describe('service env injection (#234 P3)', () => {
         expect(status.state).toBe('failed');
     });
 
+    it('serves a host-native PHP site with a php-cgi FastCGI worker + Genie’s Caddy (2 processes, nginx model)', async () => {
+        // PHP is the one stack that is not its own web server: Genie runs a php-cgi
+        // FastCGI worker AND its bundled Caddy (php_fastcgi over public/), both host
+        // processes on allocated ports. The worker is a companion keyed <siteId>-fcgi
+        // so the one-process registry manages it beside the site's Caddy.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const spawned: Array<{ siteId: string; command: string[]; cwd: string; env: Record<string, string> }> = [];
+        const stopped: string[] = [];
+        const hostSpawn = {
+            start: async (i: {
+                siteId: string;
+                workspaceId: string;
+                command: string[];
+                cwd: string;
+                env: Record<string, string>;
+                note?: string;
+            }) => {
+                spawned.push(i);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async (id: string) => {
+                stopped.push(id);
+            },
+            alive: async () => false,
+            readLog: async () => '',
+        };
+        const written: Array<{ siteId: string; content: string }> = [];
+        let nextPort = 5300;
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'moic',
+                genName: 'moic.acme.gen',
+                repo: 'moicsuite',
+                runMode: 'host',
+                kind: 'http',
+                enabled: true,
+                hostServe: { mode: 'php', root: 'public' },
+            },
+        };
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            probeReady: async () => true,
+            // Distinct ports per call: the site (Caddy) port, then the worker port.
+            allocateFreePort: async () => (nextPort += 1),
+            caddyBin: '/opt/genie/caddy',
+            writeServeConfig: (siteId, content) => {
+                written.push({ siteId, content });
+                return `/cfg/${siteId}.caddyfile`;
+            },
+            serviceHostEnvReportFor: async () => ({
+                env: { DB_HOST: '127.0.0.1', DB_PORT: '58783' },
+                enabled: 1,
+                live: 1,
+                withHostPort: 1,
+                missingHostPort: [],
+            }),
+        });
+        const status = await m.start('acme', SITE_ID);
+
+        expect(status.state).toBe('running');
+        expect(runtime.ran).toHaveLength(0); // nothing containerised
+        // TWO processes: the FastCGI worker (companion key) + Genie's Caddy (site key).
+        expect(spawned).toHaveLength(2);
+        const worker = spawned.find((s) => s.siteId === `${SITE_ID}-fcgi`);
+        const caddy = spawned.find((s) => s.siteId === SITE_ID);
+        // The worker is php-cgi bound to a loopback FastCGI port, run in the repo cwd,
+        // with the DB env so PHP reaches the managed database.
+        expect(worker?.command).toEqual(['php-cgi', '-b', expect.stringMatching(/^127\.0\.0\.1:\d+$/)]);
+        expect(worker?.env.DB_HOST).toBe('127.0.0.1');
+        const fcgiPort = worker?.command[2]?.split(':')[1];
+        // Genie's Caddy serves public/ and routes PHP to that same worker port.
+        expect(caddy?.command[0]).toBe('/opt/genie/caddy');
+        const caddyfile = written.find((w) => w.siteId === SITE_ID)?.content ?? '';
+        expect(caddyfile).toContain(`php_fastcgi 127.0.0.1:${fcgiPort}`);
+        expect(caddyfile).toContain('public');
+        // .gen routes to the Caddy's site port like any host-native site.
+        expect(m.genSites()[0]?.genName).toBe('moic.acme.gen');
+
+        // Stopping the site tears down BOTH processes.
+        await m.stop(SITE_ID);
+        expect(stopped).toContain(SITE_ID);
+        expect(stopped).toContain(`${SITE_ID}-fcgi`);
+    });
+
     it('two same-stack host sites NEVER share a port — the moic.gen/fancy collision, closed', async () => {
         // The reported bug: two workspaces ran the same command on the same default
         // port. With the REAL allocator + the live-port exclude set, the two sites
