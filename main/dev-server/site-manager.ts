@@ -2,7 +2,8 @@ import { devContainerNameFor } from './argv';
 import { CADDY_HTTPS_PORT, type CaddySite } from './caddyfile';
 import { applyCaddyConfig } from './caddy-proxy';
 import { GENIE_DEV_BASE_IMAGE, WORKSPACE_MOUNT_TARGET } from './images';
-import { DEFAULT_READY_TIMEOUT_MS, waitForHttp, waitForHttpsSni, waitForPort } from './port-probe';
+import { allocateFreePort as realAllocateFreePort, DEFAULT_READY_TIMEOUT_MS, waitForHttp, waitForHttpsSni, waitForPort } from './port-probe';
+import { withPort } from './serve-recipe';
 import { planHostAllowlist } from './host-allowlist';
 import {
     readSiteProcessLog,
@@ -249,6 +250,13 @@ export interface DevSiteManagerDeps {
      * rather than silently falling back to a container.
      */
     hostSpawn?: HostProcessRun;
+    /**
+     * Allocate a guaranteed-free host port for a managed host-native site, never
+     * one already held by a live site (passed in `exclude`). The HOST owns ports —
+     * agents never pick one — so two sites can never collide. Injectable for tests;
+     * defaults to the real loopback allocator.
+     */
+    allocateFreePort?: (exclude: Set<number>) => Promise<number>;
     /** Fired whenever the live set changes, so the UX and other agents follow. */
     onChanged?: () => void;
     /**
@@ -444,11 +452,16 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                     : waitForHttp(port, timeoutMs, hostHeader)
                 : waitForPort(port, timeoutMs));
     const readyTimeoutMs = deps.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
+    const allocateFreePort = deps.allocateFreePort ?? realAllocateFreePort;
 
     /** Sites that are up, keyed by siteId. */
     const live = new Map<string, Live>();
     const lastFailure = new Map<string, DevSiteStatus>();
     const starting = new Map<string, Promise<DevSiteStatus>>();
+
+    /** Ports currently held by live sites — passed to the allocator so a new site
+     *  can never be handed a port another live site already holds. */
+    const livePortSet = () => new Set([...live.values()].map((e) => e.caddyHostPort));
 
     const changed = () => {
         try {
@@ -815,22 +828,13 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         config: DevSiteConfig,
         workspacePath: string,
     ): Promise<DevSiteStatus> {
-        const command = effectiveCommand(config);
-        if (!command) {
+        const baseCommand = effectiveCommand(config);
+        if (!baseCommand) {
             return failed(
                 workspaceId,
                 siteId,
                 config,
-                `Host-native site "${config.name}" has no command — set its \`command\`, e.g. ["php","artisan","serve","--host=127.0.0.1","--port=8001"].`,
-            );
-        }
-        const port = config.port;
-        if (!port || !Number.isInteger(port) || port < 1 || port > 65535) {
-            return failed(
-                workspaceId,
-                siteId,
-                config,
-                `Host-native site "${config.name}" needs a valid port — the port its dev server binds on the host, so \`.gen\` can route to it.`,
+                `Host-native site "${config.name}" has no command — set its \`command\`, e.g. ["php","artisan","serve"].`,
             );
         }
         const cwd = repoCwdOnHost(workspacePath, config.repo);
@@ -847,32 +851,48 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         }
         const hostSpawn = deps.hostSpawn;
 
-        beginPhase(workspaceId, siteId, config, 'starting');
-        const route: HostNativeRoute = {
+        const buildRoute = (port: number): HostNativeRoute => ({
             genName: config.genName,
             scheme: 'http',
             loopback: '127.0.0.1',
             port,
             ...(config.upstreamHost ? { upstreamHost: config.upstreamHost } : {}),
-        };
+        });
 
-        // Already running (a reconcile, a re-entrant start): re-record, don't respawn.
-        if (live.has(siteId) && (await hostSpawn.alive(siteId))) {
-            return await recordHostNativeLive(workspaceId, siteId, config, route);
+        beginPhase(workspaceId, siteId, config, 'starting');
+
+        // Already running (a reconcile, a re-entrant start): re-record on its LIVE
+        // port — don't allocate a fresh one and don't respawn.
+        const existing = live.get(siteId);
+        if (existing && (await hostSpawn.alive(siteId))) {
+            return await recordHostNativeLive(workspaceId, siteId, config, buildRoute(existing.caddyHostPort));
         }
         live.delete(siteId);
 
+        // The HOST owns the port: allocate a guaranteed-free one (never a port a live
+        // site already holds) and rewrite the command to bind exactly that — so two
+        // sites can never collide and `.gen` always routes to the right app. The
+        // stored `config.port` is ignored on this path precisely because a fixed
+        // stored port is the collision vector.
+        const port = await allocateFreePort(livePortSet());
+        const { command, env: portEnv } = withPort(baseCommand, port, {
+            ...(config.stack ? { stack: config.stack } : {}),
+            ...(config.framework ? { framework: config.framework } : {}),
+        });
+
         // Same env precedence as a container site, but HOST-FORM services (beta.237).
+        // `portEnv` (the allocated PORT, for stacks that read it) is stamped LAST so
+        // the host-owned port always wins.
         const serviceHostEnv = deps.serviceHostEnvFor
             ? await deps.serviceHostEnvFor(workspaceId).catch(() => ({}))
             : {};
-        const env = composeHostSiteEnv(config, command, serviceHostEnv);
+        const env = { ...composeHostSiteEnv(config, command, serviceHostEnv), ...portEnv };
 
         const started = await hostSpawn.start({ siteId, workspaceId, command, cwd, env });
         if (!started.ok) {
             return failed(workspaceId, siteId, config, `The dev server did not start: ${started.error}`);
         }
-        return await recordHostNativeLive(workspaceId, siteId, config, route);
+        return await recordHostNativeLive(workspaceId, siteId, config, buildRoute(port));
     }
 
     function statusOf(
@@ -915,7 +935,14 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         // asked to be, which is not the same as being broken.
         lastFailure.delete(siteId);
         const entry = live.get(siteId);
-        if (!entry) return;
+        if (!entry) {
+            // Not live (already stopped, or never started) — but a browser-exposed
+            // site may still have a `.gen` hosts line / host-Caddy vhost from a prior
+            // run, so fire changed() to let the host-browser reconcile DRAIN it. A
+            // redundant schedule is harmless (the reconcile no-ops when in sync).
+            changed();
+            return;
+        }
         live.delete(siteId);
         // MANAGED HOST-NATIVE (story #238): Genie owns the dev server process — stop
         // it. No container runtime involved.

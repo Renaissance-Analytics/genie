@@ -1,7 +1,7 @@
 import net from 'node:net';
 import https from 'node:https';
 import { afterEach, describe, expect, it } from 'vitest';
-import { waitForHttp, waitForHttpsSni, waitForPort } from '../port-probe';
+import { allocateFreePort, waitForHttp, waitForHttpsSni, waitForPort } from '../port-probe';
 
 /**
  * READINESS — and the Docker Desktop trap that makes the obvious probe lie.
@@ -27,6 +27,40 @@ const servers: net.Server[] = [];
 
 afterEach(() => {
     for (const server of servers.splice(0)) server.close();
+});
+
+/**
+ * FREE-PORT ALLOCATION — the "two sites never share a port" invariant.
+ *
+ * The reported bug (moic.gen served the fancy app) was two workspaces running the
+ * same dev command on the same fixed default port. The host must instead hand each
+ * site a guaranteed-free port and — critically — never one already held by another
+ * live site, so a collision is impossible rather than merely unlikely.
+ */
+describe('allocateFreePort', () => {
+    it('returns a real, bindable port and successive calls differ', async () => {
+        const a = await allocateFreePort();
+        const b = await allocateFreePort();
+        expect(Number.isInteger(a)).toBe(true);
+        expect(a).toBeGreaterThan(0);
+        expect(a).toBeLessThan(65536);
+        expect(a).not.toBe(b);
+    });
+
+    it('NEVER returns a port in the exclude set — the manager passes ports its live sites hold', async () => {
+        const held = await allocateFreePort();
+        for (let i = 0; i < 20; i++) {
+            const p = await allocateFreePort(new Set([held]));
+            expect(p).not.toBe(held);
+        }
+    });
+
+    it('still terminates and returns an excluded-free port with a large exclude set', async () => {
+        const exclude = new Set<number>();
+        for (let i = 0; i < 500; i++) exclude.add(20_000 + i);
+        const p = await allocateFreePort(exclude);
+        expect(exclude.has(p)).toBe(false);
+    });
 });
 
 /** A long-lived self-signed cert/key (shared with the mobile site-proxy tests) —

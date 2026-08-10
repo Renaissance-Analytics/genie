@@ -230,6 +230,61 @@ export function devCommandForRecipe(option: Pick<HostingOption, 'stack' | 'frame
     return null;
 }
 
+/**
+ * Stamp a HOST-ALLOCATED free port onto a dev command so the dev server binds
+ * exactly the port `<name>.gen` routes to (agents never pick ports; the host does,
+ * at start, via {@link allocateFreePort}). The port lives in a DIFFERENT place per
+ * stack, so this rewrites the right one rather than blindly replacing a substring:
+ *
+ *  - php/laravel → the `--port=N` flag (rewritten in place, or appended); host kept.
+ *  - django      → the `host:port` positional (`127.0.0.1:N`).
+ *  - node/vite   → `PORT` env AND `-- --port <N> --strictPort` appended. `--strictPort`
+ *                  is REQUIRED: without it Vite silently drifts to `N+1` when its
+ *                  target is taken, and `.gen` would then route to nothing.
+ *  - node/next|nuxt, go, anything else → `PORT` env (the common convention). Best
+ *    effort; the readiness probe is the backstop when a stack ignores it.
+ *
+ * Returns the rewritten `command` and any `env` to merge into the site's env.
+ */
+export function withPort(
+    argv: string[],
+    port: number,
+    hint: { stack?: HostingStack; framework?: DevFramework },
+): { command: string[]; env: Record<string, string> } {
+    const p = String(port);
+    const fw = hint.framework;
+    const stack = hint.stack;
+
+    // 1) If the command ALREADY expresses a port, rewrite it in place — hint-free,
+    //    so an explicit user command (or a stored command with no stack hint) is
+    //    re-pointed at the allocated port too.
+    if (argv.some((a) => a.startsWith('--port='))) {
+        return { command: argv.map((a) => (a.startsWith('--port=') ? `--port=${p}` : a)), env: {} };
+    }
+    const hostPortIdx = argv.findIndex((a) => /^(\d{1,3}(\.\d{1,3}){3}|localhost)?:\d+$/.test(a));
+    if (hostPortIdx >= 0) {
+        const host = argv[hostPortIdx].split(':')[0] || '127.0.0.1';
+        const command = [...argv];
+        command[hostPortIdx] = `${host}:${p}`;
+        return { command, env: {} };
+    }
+
+    // 2) No port in the command — use the stack hint to add one.
+    if (fw === 'laravel' || stack === 'php') {
+        return { command: [...argv, `--port=${p}`], env: {} };
+    }
+    if (fw === 'django') {
+        return { command: [...argv, `127.0.0.1:${p}`], env: { PORT: p } };
+    }
+    if (fw === 'vite') {
+        // PORT for tooling that reads it, plus the explicit strict flag so Vite
+        // binds THIS port or fails loudly rather than drifting to port+1.
+        return { command: [...argv, '--', '--port', p, '--strictPort'], env: { PORT: p } };
+    }
+    // node (next/nuxt), go, and unknown stacks honor PORT.
+    return { command: [...argv], env: { PORT: p } };
+}
+
 // --- layer 1: the repo's own container config ------------------------------
 
 const COMPOSE_FILES = [

@@ -4,10 +4,11 @@ import type { DevSiteConfig } from '../sites-config';
 
 /**
  * Which live sites the host reconcile (CA + hosts-file + host Caddy :443) should
- * serve to REAL external browsers (story #238 P2). The rule is narrow on purpose:
- * a site is included ONLY when it is host-native (no container) AND the owner
- * opted it in with `browserExposed`. The in-app Testing Browser is unaffected —
- * it serves every `.gen` site through its own carrier regardless of this.
+ * serve to REAL external browsers (story #238 P2). Every browser-exposed `http`
+ * site is included — host-native AND container/image alike — with the upstream
+ * SCHEME set per type (plain http for host-native, https-insecure for a container
+ * reached through its self-signed sandbox Caddy). The in-app Testing Browser is
+ * unaffected — it serves every `.gen` site through its own carrier regardless.
  */
 const base = (over: Partial<DevSiteConfig> = {}): DevSiteConfig => ({
     name: 'web',
@@ -39,11 +40,15 @@ describe('hostBrowserRoutes', () => {
         expect(hostBrowserRoutes([{ config: base({}), port: 8001 }])).toEqual([]); // undefined ⇒ off
     });
 
-    it('EXCLUDES a container site even when opted in (host-native only)', () => {
-        // A container site is served by the sandbox Caddy; the host reconcile is
-        // for host-native sites, which run no container.
-        const container = base({ runMode: 'explicit', command: ['npm', 'run', 'dev'], browserExposed: true });
-        expect(hostBrowserRoutes([{ config: container, port: 8001 }])).toEqual([]);
+    it('INCLUDES a browser-exposed container site, reached via https-insecure (the fixed bug)', () => {
+        // A container site is reachable from the host only through its sandbox Caddy
+        // (self-signed, routes by Host). It used to be dropped here, so it loaded in
+        // the Testing Browser but 502'd in the real browser. Now it is included with
+        // the https-insecure upstream, and its `port` is the published sandbox port.
+        const container = base({ runMode: 'explicit', command: ['npm', 'run', 'dev'], browserExposed: true, genName: 'moic.gen' });
+        expect(hostBrowserRoutes([{ config: container, port: 49_001 }])).toEqual([
+            { genName: 'moic.gen', port: 49_001, upstreamScheme: 'https-insecure' },
+        ]);
     });
 
     it('EXCLUDES a non-http (tcp) site', () => {

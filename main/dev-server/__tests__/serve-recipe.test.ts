@@ -5,8 +5,61 @@ import {
     detectHostingOptions,
     recommendedOption,
     resolveHostedRun,
+    withPort,
 } from '../serve-recipe';
 import type { RepoFacts } from '../serve-recipe';
+
+/**
+ * withPort — stamp a HOST-ALLOCATED free port onto a dev command.
+ *
+ * The host owns ports now (agents never pass one), so at start it allocates a
+ * free port and rewrites the command to bind exactly that. The port lives in a
+ * DIFFERENT place per stack (php `--port=`, django `host:port`, node via env/flag),
+ * so a blind string replace is wrong — each stack is handled explicitly.
+ */
+describe('withPort', () => {
+    it('php/laravel: rewrites an existing --port and keeps the host', () => {
+        const r = withPort(
+            ['php', 'artisan', 'serve', '--host=127.0.0.1', '--port=8000'],
+            5321,
+            { stack: 'php', framework: 'laravel' },
+        );
+        expect(r.command).toEqual(['php', 'artisan', 'serve', '--host=127.0.0.1', '--port=5321']);
+        expect(r.command.filter((a) => a.startsWith('--port=')).length).toBe(1);
+    });
+
+    it('php: appends --port when the command carries none', () => {
+        const r = withPort(['php', 'artisan', 'serve'], 5321, { stack: 'php', framework: 'laravel' });
+        expect(r.command).toContain('--port=5321');
+    });
+
+    it('django: rewrites the host:port positional', () => {
+        const r = withPort(
+            ['python', 'manage.py', 'runserver', '127.0.0.1:8000'],
+            5321,
+            { stack: 'python', framework: 'django' },
+        );
+        expect(r.command).toEqual(['python', 'manage.py', 'runserver', '127.0.0.1:5321']);
+    });
+
+    it('node/vite: sets PORT and appends -- --port <p> --strictPort (no silent drift)', () => {
+        const r = withPort(['npm', 'run', 'dev'], 5321, { stack: 'node', framework: 'vite' });
+        expect(r.env.PORT).toBe('5321');
+        expect(r.command.join(' ')).toContain('-- --port 5321 --strictPort');
+    });
+
+    it('node/next: sets PORT env, no vite flags appended', () => {
+        const r = withPort(['npm', 'run', 'dev'], 5321, { stack: 'node', framework: 'next' });
+        expect(r.env.PORT).toBe('5321');
+        expect(r.command).toEqual(['npm', 'run', 'dev']);
+    });
+
+    it('go: sets PORT env, argv unchanged', () => {
+        const r = withPort(['go', 'run', '.'], 5321, { stack: 'go' });
+        expect(r.env.PORT).toBe('5321');
+        expect(r.command).toEqual(['go', 'run', '.']);
+    });
+});
 
 /**
  * The PRODUCTION build + serve recipe (the Hosting Manager's site model).

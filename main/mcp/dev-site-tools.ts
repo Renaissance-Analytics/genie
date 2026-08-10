@@ -397,7 +397,11 @@ export async function runManageSite(
                         options ? { options: options.map(toOption) } : {},
                     );
                 }
-                if (!port && !hostPort) {
+                // A managed host-native site needs NO port from the caller: the HOST
+                // allocates a guaranteed-free one at start (agents never pick ports).
+                // Only a container/recipe site needs a port for its sandbox-Caddy
+                // upstream; an external `hostPort` site brings its own.
+                if (!port && !hostPort && runMode !== 'host') {
                     return fail(
                         'create requires `port` — the port the site\'s command listens on INSIDE the sandbox. Without it Caddy has nothing to route `.gen` to. (Or pass `hostPort` for a host-native site that points `.gen` straight at a host dev-server port.)',
                         options ? { options: options.map(toOption) } : {},
@@ -415,7 +419,10 @@ export async function runManageSite(
                     ...(build?.length ? { build } : {}),
                     ...(command?.length ? { command } : {}),
                     ...(serve ? { serve } : {}),
-                    ...(port ? { port } : {}),
+                    // A managed host-native site's port is HOST-owned (allocated fresh
+                    // at start), so it is never persisted — persisting a fixed port is
+                    // exactly the collision vector this redesign removes.
+                    ...(port && runMode !== 'host' ? { port } : {}),
                     ...(hostPort ? { hostPort } : {}),
                     ...(req.exposed
                         ? { exposed: req.exposed as never }

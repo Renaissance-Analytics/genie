@@ -50,6 +50,28 @@ describe('buildHostCaddyfile', () => {
         expect(cf).toContain('reverse_proxy 127.0.0.1:5173 {');
     });
 
+    it('a CONTAINER site proxies over https-insecure to the sandbox Caddy (Host = the gen name)', () => {
+        // A container site is reachable from the host ONLY through its sandbox Caddy,
+        // which serves a self-signed leaf and routes by Host. So the host Caddy dials
+        // it over https, skips verification, and sends Host = the gen name — the same
+        // way the in-app carrier reaches it. Without this, the container site loads in
+        // the Testing Browser but 502s in the real browser.
+        const cf = buildHostCaddyfile(
+            [{ host: 'moic.gen', port: 49001, upstreamScheme: 'https-insecure' }],
+            TLS,
+        );
+        expect(cf).toContain('reverse_proxy https://127.0.0.1:49001 {');
+        expect(cf).toContain('header_up Host moic.gen');
+        expect(cf).toContain('tls_insecure_skip_verify');
+    });
+
+    it('a host-native site stays PLAIN-http reverse_proxy (no tls transport)', () => {
+        const cf = buildHostCaddyfile([{ host: 'web.gen', port: 5173 }], TLS);
+        expect(cf).toContain('reverse_proxy 127.0.0.1:5173');
+        expect(cf).not.toContain('tls_insecure_skip_verify');
+        expect(cf).not.toContain('https://127.0.0.1');
+    });
+
     it('is deterministic/sorted so an unchanged set is a no-op reload', () => {
         const a = buildHostCaddyfile(
             [

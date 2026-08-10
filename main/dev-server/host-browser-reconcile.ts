@@ -20,6 +20,12 @@ export interface HostBrowserReconcilerDeps {
     reconcile: (routes: HostSiteRoute[]) => Promise<HostReconcileResult>;
     /** Trailing-edge debounce window for {@link HostBrowserReconciler.schedule}. */
     debounceMs?: number;
+    /**
+     * Seed the "have we ever applied?" latch from durable state (a Genie CA on
+     * disk ⇒ this machine opted in before), so a boot with zero live sites still
+     * DRAINS a leftover `.gen` hosts line from a previous session.
+     */
+    initiallyApplied?: boolean;
     log?: (msg: string) => void;
 }
 
@@ -34,13 +40,19 @@ export function createHostBrowserReconciler(deps: HostBrowserReconcilerDeps): Ho
     const debounceMs = deps.debounceMs ?? 400;
     const log = deps.log ?? (() => {});
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // Have we ever reconciled a non-empty set (or opted in a prior session)? Until
+    // then, an empty set means "never touched this machine" and we stay silent. Once
+    // true, an empty set is a real DRAIN (clear the hosts block + Caddyfile).
+    let applied = deps.initiallyApplied ?? false;
 
     async function runNow(): Promise<void> {
         const routes = deps.routes();
-        // Opt-in floor: nothing exposed ⇒ touch NOTHING.
-        if (routes.length === 0) return;
+        // Opt-in floor, but NOT a teardown floor: skip only when nothing is exposed
+        // AND we have never applied — otherwise removing the last site must drain.
+        if (routes.length === 0 && !applied) return;
         try {
             await deps.reconcile(routes);
+            if (routes.length > 0) applied = true;
         } catch (e) {
             log(`host-browser reconcile failed: ${e instanceof Error ? e.message : String(e)}`);
         }
