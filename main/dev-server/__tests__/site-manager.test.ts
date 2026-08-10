@@ -1198,6 +1198,41 @@ describe('service env injection (#234 P3)', () => {
         expect(stopped).toContain(`${SITE_ID}-fcgi`);
     });
 
+    it('warns in the site log when the repo declares an engine version the host does not match (item 4)', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const spawned: Array<{ note?: string }> = [];
+        const hostSpawn = {
+            start: async (i: {
+                siteId: string;
+                workspaceId: string;
+                command: string[];
+                cwd: string;
+                env: Record<string, string>;
+                note?: string;
+            }) => {
+                spawned.push(i);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async () => {},
+            alive: async () => false,
+            readLog: async () => '',
+        };
+        const sites: DevSites = {
+            [SITE_ID]: { name: 'web', genName: 'web.acme.gen', repo: 'app', runMode: 'host', stack: 'node', command: ['npm', 'run', 'dev'], port: 5173, kind: 'http', enabled: true },
+        };
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            probeReady: async () => true,
+            allocateFreePort: async () => 5321,
+            // A host-native site runs on the HOST runtime — a declared/host mismatch
+            // is surfaced as a start-time note, not a silent wrong-version run.
+            engineMismatchNote: async (_cwd, stack) =>
+                stack === 'node' ? "this repo declares node 22 but Genie's host has node 20" : null,
+        });
+        await m.start('acme', SITE_ID);
+        expect(spawned[0]?.note).toMatch(/node 22.*node 20/);
+    });
+
     it('two same-stack host sites NEVER share a port — the moic.gen/fancy collision, closed', async () => {
         // The reported bug: two workspaces ran the same command on the same default
         // port. With the REAL allocator + the live-port exclude set, the two sites

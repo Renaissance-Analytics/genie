@@ -35,6 +35,7 @@ import type {
     HostEnvReport,
 } from '../dev-server/services/service-manager';
 import { createHostProcessRun } from '../dev-server/host-process-run';
+import { createEngineMismatchNote } from '../dev-server/host-engine-probe';
 import { initDevLifecycle } from '../dev-server/lifecycle';
 import type { DevServerLifecycle, DevServerLifecycleDeps } from '../dev-server/lifecycle';
 import { registerDevSiteTools } from '../mcp/dev-site-tools';
@@ -201,6 +202,10 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         // serve mode off with a clear status.
         ...(ports.caddyBin ? { caddyBin: ports.caddyBin } : {}),
         ...(ports.writeServeConfig ? { writeServeConfig: ports.writeServeConfig } : {}),
+        // Engine-version validation (goal item 4, interim): warn at a host-native
+        // start when the repo declares a php/node/go/python version the host runtime
+        // doesn't match. Composed from the repo's declared version + a host probe.
+        engineMismatchNote: createEngineMismatchNote(),
         onChanged: ports.onChanged,
         onProgress: ports.onSiteProgress,
     };
