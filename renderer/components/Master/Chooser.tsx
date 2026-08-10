@@ -47,6 +47,7 @@ import {
     api,
     detectedShells,
     isSystemWorkspace,
+    processSpecWorkspace,
     SYSTEM_WORKSPACE_ID,
     type DevSiteInfo,
     type McpStatus,
@@ -1714,9 +1715,11 @@ export default function Chooser({
                             className="proj-popover-item"
                             onMouseDown={(e) => {
                                 e.preventDefault();
-                                const ws = workspaces.find(
-                                    (w) => w.id === procMenu.spec.workspace_id,
-                                );
+                                // Resolve the OWNING workspace — a system process
+                                // (reverb, a scheduled task) persists unattached
+                                // (workspace_id null), so a bare id lookup found
+                                // nothing and Edit silently did nothing.
+                                const ws = processSpecWorkspace(procMenu.spec, workspaces);
                                 if (ws) openEditProcess(ws, procMenu.spec);
                                 setProcMenu(null);
                             }}

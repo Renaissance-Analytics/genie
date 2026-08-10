@@ -3303,6 +3303,29 @@ export function isSystemWorkspace(ws: { id: string }): boolean {
 }
 
 /**
+ * The workspace that OWNS a process spec — the lookup the process context menu's
+ * "Edit…" needs. Mirrors the sidebar's own bucketing: a System Workspace process
+ * persists UNATTACHED ({@link TerminalSpec.workspace_id} `null` + `meta.system`)
+ * yet belongs to the System Workspace row, so resolve it there; every other spec
+ * resolves by its `workspace_id`. Returns null when no owning workspace is present
+ * (e.g. the System Workspace row is hidden), so the caller DECLINES rather than
+ * opening a mis-targeted editor.
+ *
+ * Without the system-spec branch, `find(w => w.id === spec.workspace_id)` on a
+ * global process (id `null`) matched nothing and the Edit menu silently did
+ * nothing — the reported bug on a `reverb:start` process.
+ */
+export function processSpecWorkspace<W extends { id: string }>(
+    spec: { workspace_id: string | null; meta?: { system?: boolean } | null },
+    workspaces: W[],
+): W | null {
+    if (spec.workspace_id === null && spec.meta?.system === true) {
+        return workspaces.find(isSystemWorkspace) ?? null;
+    }
+    return workspaces.find((w) => w.id === spec.workspace_id) ?? null;
+}
+
+/**
  * A workspace does NOT require a Tynn/Aionima project — associating one is
  * optional. When absent, `project_id`/`project_name` are empty, so display the
  * folder's leaf name instead of a blank. (The System Workspace keeps its own
