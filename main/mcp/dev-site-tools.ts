@@ -10,7 +10,7 @@ import {
     devSiteReconfigureNeedsRestart,
     slugLabel,
 } from '../dev-server/sites-config';
-import { describeRepoRun } from '../dev-server/repo-facts';
+import { describeRepoRun, detectStaticServe } from '../dev-server/repo-facts';
 import { applySetEnv } from '../env-store';
 import { devSiteManager } from '../dev-server/site-manager';
 import { resolveContainerRuntime } from '../dev-server';
@@ -358,10 +358,15 @@ export async function runManageSite(
                 // no recipe, no build. When set, it bypasses recipe detection and
                 // the command/port requirements below.
                 const hostPort = req.hostPort;
-                // GENIE-served host-native site (static / php): the agent declared a
-                // serve MODE, so there is nothing to detect and no command/port to
-                // require — Genie owns the web server AND the port. Force host-native.
-                const hostServe = req.hostServe;
+                // GENIE-served host-native site (static / php): an explicit serve MODE,
+                // OR — when nothing else is specified — a DETECTED built static site
+                // (dist/build/out + index.html, no dev server). Genie owns the web
+                // server AND the port, so there is nothing to detect or require below.
+                const detectedServe =
+                    !command && !serve && !req.image && !hostPort && !req.hostServe
+                        ? detectStaticServe(repo.dir)
+                        : null;
+                const hostServe = req.hostServe ?? detectedServe ?? undefined;
                 if (hostServe) runMode = 'host';
                 // Narrow the loose request shape to the stored discriminated union;
                 // the store re-validates the root through sanitizeDevSitePatch.
@@ -496,6 +501,11 @@ export async function runManageSite(
                 const notes = [
                     ...createAdvisoryNotes(req),
                     ...routeSiteEnvToDotEnv(ws.path, req.repo, req.env),
+                    ...(detectedServe && !req.hostServe
+                        ? [
+                              `Detected a built static site (${detectedServe.root}/) — serving it with Genie's static file server + SPA fallback. Pass a \`command\` to run a dev server instead, or \`hostServe\` to override.`,
+                          ]
+                        : []),
                 ];
                 if (req.enabled === false) {
                     return {

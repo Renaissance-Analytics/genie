@@ -124,6 +124,38 @@ export function readRepoFacts(repoDir: string): RepoFacts {
     return facts;
 }
 
+/**
+ * Detect a repo that should be served as a STATIC site (a built directory) rather
+ * than run as a dev server (goal item 2). The one unambiguous case: a built output
+ * dir — `dist`/`build`/`out` — holding `index.html`, in a repo with NO runnable dev
+ * server. A repo you DEVELOP (a dev/start/serve script) is left to its dev command;
+ * serving a BUILD of such a repo is an explicit `hostServe` choice, never a silent
+ * default that a stale `dist/` could trigger over `npm run dev`. A bare root
+ * `index.html` is deliberately NOT served — that would expose source. Returns the
+ * serve config to hand `manageSite create`, or null to fall through to the dev
+ * command.
+ */
+export function detectStaticServe(
+    repoDir: string,
+): { mode: 'static'; root: string; spa: boolean } | null {
+    const facts = readRepoFacts(repoDir);
+    const scripts = facts.packageJson?.scripts ?? {};
+    if (scripts.dev || scripts.start || scripts.serve) return null;
+    for (const dir of ['dist', 'build', 'out']) {
+        try {
+            if (fs.existsSync(path.join(repoDir, dir, 'index.html'))) {
+                // SPA fallback on by default: a built dir is almost always a
+                // single-page app, and `try_files … /index.html` only affects paths
+                // that would otherwise 404, so it is safe for a multipage build too.
+                return { mode: 'static', root: dir, spa: true };
+            }
+        } catch {
+            /* one unreadable dir must not fail detection */
+        }
+    }
+    return null;
+}
+
 /** Every way a repo on disk could be built and served in production, best-offer
  *  first, plus the one to take. The single call the MCP tool and the UX make. */
 export function describeRepoRun(
