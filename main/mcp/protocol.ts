@@ -666,6 +666,18 @@ export interface ManageSiteRequest {
      * and pass its port here. Mutually exclusive with `command`/`serve`/`image`/`build`.
      */
     hostPort?: number;
+    /**
+     * create: serve this host-native site with GENIE's OWN web server instead of a
+     * repo dev server — the agent declares a MODE and Genie renders the config, so
+     * nobody hand-writes an nginx/Caddy server block. `static` serves a built
+     * directory (`root`, e.g. `dist` or `dashboard/dist`), `spa` adding the
+     * index.html fallback for client-side routing; `php` serves `public/` via a
+     * FastCGI worker. `root` is repo-relative. No `command`/`port` needed — Genie
+     * owns both the server and the port. For a repo's OWN dev server, or a service
+     * you already run, use `command`+`port` or `hostPort` instead (a reverse-proxy,
+     * no generated config).
+     */
+    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean };
     /** create: extra BROWSER-FACING surfaces. Backend services never go here. */
     exposed?: Array<{ name: string; port: number; protocol: string; reason: string }>;
     env?: Record<string, string>;
@@ -1547,6 +1559,35 @@ const MANAGE_SITE_TOOL = {
                 type: 'number',
                 description:
                     'create: the port the site\'s `command` listens on INSIDE the sandbox (on loopback). Caddy reverse-proxies `<name>.gen` to it over https.',
+            },
+            hostPort: {
+                type: 'number',
+                description:
+                    'create: HOST-NATIVE — point `<name>.gen` straight at a dev server you ALREADY run as a HOST process on `127.0.0.1:<hostPort>` (e.g. one started with `manageProcess`), NO container and NO build. Mutually exclusive with `command`/`serve`/`image`.',
+            },
+            hostServe: {
+                type: 'object',
+                properties: {
+                    mode: {
+                        type: 'string',
+                        enum: ['static', 'php'],
+                        description:
+                            '`static` serves a built directory (SPA-aware); `php` serves `public/` via a FastCGI worker.',
+                    },
+                    root: {
+                        type: 'string',
+                        description:
+                            'The repo-RELATIVE directory to serve — a built front end (`dist`, `dashboard/dist`) for static; the app root for php (Genie serves its `public/`).',
+                    },
+                    spa: {
+                        type: 'boolean',
+                        description:
+                            'static only: fall back to index.html for unmatched paths so client-side routes (deep links, refresh) resolve.',
+                    },
+                },
+                required: ['mode', 'root'],
+                description:
+                    'create (optional): have GENIE serve this host-native site with its OWN web server instead of running a repo dev server — you declare the mode, Genie writes the config (no hand-rolled nginx/Caddy). No `command`/`port` needed. For a repo’s own dev server, or a service you already run, use `command`+`port` or `hostPort` instead (a reverse-proxy, no generated config).',
             },
             exposed: {
                 type: 'array',
@@ -2755,6 +2796,8 @@ export async function handleMcpMessage(
                     command: a.command,
                     serve: a.serve,
                     port: a.port,
+                    hostPort: a.hostPort,
+                    hostServe: a.hostServe,
                     exposed: a.exposed,
                     env: a.env,
                     kind: a.kind,

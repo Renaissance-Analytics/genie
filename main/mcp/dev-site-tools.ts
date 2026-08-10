@@ -20,7 +20,7 @@ import type { DevFramework } from '../dev-server/host-allowlist';
 import { devCommandForRecipe } from '../dev-server/serve-recipe';
 import type { BuildStep, HostingOption } from '../dev-server/serve-recipe';
 import type { DevSiteRow } from '../dev-server/site-manager';
-import type { DevSiteConfig } from '../dev-server/sites-config';
+import type { DevSiteConfig, HostServeConfig } from '../dev-server/sites-config';
 import type {
     DevSiteInfo,
     DevSiteRunOption,
@@ -326,6 +326,18 @@ export async function runManageSite(
                 // no recipe, no build. When set, it bypasses recipe detection and
                 // the command/port requirements below.
                 const hostPort = req.hostPort;
+                // GENIE-served host-native site (static / php): the agent declared a
+                // serve MODE, so there is nothing to detect and no command/port to
+                // require — Genie owns the web server AND the port. Force host-native.
+                const hostServe = req.hostServe;
+                if (hostServe) runMode = 'host';
+                // Narrow the loose request shape to the stored discriminated union;
+                // the store re-validates the root through sanitizeDevSitePatch.
+                const hostServeConfig: HostServeConfig | undefined = hostServe
+                    ? hostServe.mode === 'php'
+                        ? { mode: 'php', root: hostServe.root }
+                        : { mode: 'static', root: hostServe.root, ...(hostServe.spa ? { spa: true } : {}) }
+                    : undefined;
                 let applied: HostingOption | undefined;
                 let options: HostingOption[] | undefined;
                 let framework: DevFramework | undefined;
@@ -339,7 +351,7 @@ export async function runManageSite(
                 // the caller EXPLICITLY asks (runMode: recipe|dockerfile|compose|
                 // devcontainer). Skipped entirely when the caller gave a `command`,
                 // `image` or `hostPort`.
-                if (!command && !serve && !req.image && !hostPort) {
+                if (!command && !serve && !req.image && !hostPort && !hostServe) {
                     const described = describeRepoRun(repo.dir, port ? { port } : {});
                     options = described.options;
                     applied = runMode
@@ -391,9 +403,9 @@ export async function runManageSite(
                     }
                 }
 
-                if (!command && !serve && !image && !hostPort) {
+                if (!command && !serve && !image && !hostPort && !hostServe) {
                     return fail(
-                        'create needs a `command` — the argv Genie runs to start the site against the live source, e.g. ["npm","run","dev"]. (Legacy `serve`/`image` also work; or pass `hostPort` to point `.gen` at a dev server you already run on the host, no container.)',
+                        'create needs a `command` — the argv Genie runs to start the site against the live source, e.g. ["npm","run","dev"]. (Legacy `serve`/`image` also work; pass `hostPort` to point `.gen` at a dev server you already run on the host, or `hostServe` to have Genie serve a built dir / PHP app itself.)',
                         options ? { options: options.map(toOption) } : {},
                     );
                 }
@@ -424,6 +436,7 @@ export async function runManageSite(
                     // exactly the collision vector this redesign removes.
                     ...(port && runMode !== 'host' ? { port } : {}),
                     ...(hostPort ? { hostPort } : {}),
+                    ...(hostServeConfig ? { hostServe: hostServeConfig } : {}),
                     ...(req.exposed
                         ? { exposed: req.exposed as never }
                         : {}),
