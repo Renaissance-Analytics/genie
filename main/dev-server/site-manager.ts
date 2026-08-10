@@ -262,6 +262,14 @@ export interface DevSiteManagerDeps {
      */
     serviceHostEnvReportFor?: (workspaceId: string) => Promise<HostEnvReport>;
     /**
+     * A one-line warning when the repo at `cwd` declares a runtime version (php/
+     * node/go/python, from its stack) the HOST doesn't match — surfaced in the site
+     * log at start (goal item 4, interim: detect + validate + warn). Absent ⇒ no
+     * engine-version validation. Composed in the host layer from the repo's declared
+     * version + a host `<engine> --version` probe.
+     */
+    engineMismatchNote?: (cwd: string, stack?: string) => Promise<string | null>;
+    /**
      * Run a HOST-NATIVE site's dev server as a real HOST process (story #238).
      * Absent ⇒ a `runMode: 'host'` site fails with a clear "not available" status
      * rather than silently falling back to a container.
@@ -999,15 +1007,24 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         // enabled/live/host-published counts, so when a workspace has services but
         // the env comes back empty we can say WHY in the log rather than start the
         // site pointed at nothing and let it 500 in silence (moic's beta.245 report).
+        const notes: string[] = [];
         let serviceHostEnv: Record<string, string> = {};
-        let note: string | undefined;
         if (deps.serviceHostEnvReportFor) {
             const report = await deps.serviceHostEnvReportFor(workspaceId).catch(() => null);
             serviceHostEnv = report?.env ?? {};
-            if (report) note = describeEmptyHostServiceEnv(report) ?? undefined;
+            const n = report ? describeEmptyHostServiceEnv(report) : null;
+            if (n) notes.push(n);
         } else if (deps.serviceHostEnvFor) {
             serviceHostEnv = await deps.serviceHostEnvFor(workspaceId).catch(() => ({}));
         }
+        // Engine-version validation (goal item 4, interim): a host-native site runs
+        // on the HOST's runtime, so warn — don't fail — when the repo declares a
+        // php/node/go/python version the host doesn't match.
+        if (deps.engineMismatchNote) {
+            const n = await deps.engineMismatchNote(cwd, config.stack).catch(() => null);
+            if (n) notes.push(n);
+        }
+        const note = notes.length ? notes.join('\n') : undefined;
         const env = { ...composeHostSiteEnv(config, command, serviceHostEnv), ...portEnv };
 
         // PHP (nginx model): bring up the FastCGI worker — a companion process keyed
