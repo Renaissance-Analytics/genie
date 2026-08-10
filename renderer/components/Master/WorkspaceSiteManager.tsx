@@ -694,10 +694,8 @@ function EditSiteForm({
     // Genie fronts on the host Caddy, not the sandbox one) — don't show a control
     // that would silently do nothing for a container site.
     const isHostNative = runMode === 'host' || Boolean(row.hostPort);
-    // The USER-CONTROLLED startup argv — the canonical way to start a site. Falls
-    // back to the legacy serve argv for a site saved before the sandbox-serve rework.
-    const [command, setCommand] = useState((row.command ?? row.serve ?? []).join(' '));
-    const [serve, setServe] = useState((row.serve ?? []).join(' '));
+    // The USER-CONTROLLED startup argv — the canonical way to start a site.
+    const [command, setCommand] = useState((row.command ?? []).join(' '));
     const [env, setEnv] = useState(
         Object.entries(row.env ?? {})
             .map(([k, v]) => `${k}=${v}`)
@@ -725,17 +723,13 @@ function EditSiteForm({
         if (upstreamHost.trim() !== (row.upstreamHost ?? '')) patch.upstreamHost = upstreamHost.trim();
         if (browserExposed !== (row.browserExposed ?? false)) patch.browserExposed = browserExposed;
 
+        // A host-native site's port is HOST-owned (allocated at start), so it is not
+        // an editable field; only a container/recipe site carries a user port.
         const portNum = port.trim() ? Number(port.trim()) : undefined;
-        if (portNum && portNum !== row.port) patch.port = portNum;
+        if (!isHostNative && portNum && portNum !== row.port) patch.port = portNum;
 
         const commandArgv = command.trim() ? command.trim().split(/\s+/) : [];
-        const rowCommandSig = (row.command ?? row.serve ?? []).join(' ');
-        if (commandArgv.join(' ') !== rowCommandSig) patch.command = commandArgv;
-
-        const serveArgv = serve.trim() ? serve.trim().split(/\s+/) : [];
-        if (serveArgv.length && serveArgv.join(' ') !== (row.serve ?? []).join(' ')) {
-            patch.serve = serveArgv;
-        }
+        if (commandArgv.join(' ') !== (row.command ?? []).join(' ')) patch.command = commandArgv;
 
         const envObj: Record<string, string> = {};
         for (const line of env.split('\n')) {
@@ -759,8 +753,8 @@ function EditSiteForm({
     };
 
     const RUN_MODES = [
-        { value: 'recipe', label: 'Detected recipe' },
-        { value: 'explicit', label: 'Explicit build + serve' },
+        { value: 'host', label: 'Dev server on the host' },
+        { value: 'recipe', label: 'Production build (container)' },
         { value: 'dockerfile', label: "The repo's Dockerfile" },
     ];
 
@@ -794,10 +788,6 @@ function EditSiteForm({
                         />
                     </label>
                     <label className="site-field">
-                        <span>Port inside the container</span>
-                        <Input value={port} onValueChange={setPort} placeholder="8000" />
-                    </label>
-                    <label className="site-field">
                         <span>How it runs</span>
                         <Select
                             value={runMode}
@@ -805,10 +795,21 @@ function EditSiteForm({
                             list={RUN_MODES}
                         />
                     </label>
-                    <label className="site-field">
-                        <span>Server image (optional)</span>
-                        <Input value={image} onValueChange={setImage} placeholder="nginx:1.27" />
-                    </label>
+                    {/* A host-native site's port is host-owned (allocated at start),
+                        and it needs no container image — those fields are only for a
+                        container/production-build site. */}
+                    {!isHostNative && (
+                        <>
+                            <label className="site-field">
+                                <span>Port the server listens on</span>
+                                <Input value={port} onValueChange={setPort} placeholder="8000" />
+                            </label>
+                            <label className="site-field">
+                                <span>Server image (optional)</span>
+                                <Input value={image} onValueChange={setImage} placeholder="nginx:1.27" />
+                            </label>
+                        </>
+                    )}
                     <label className="site-field">
                         <span>Upstream Host (optional)</span>
                         <Input
@@ -840,21 +841,12 @@ function EditSiteForm({
                             placeholder="npm run dev"
                         />
                         <small className="site-field-hint">
-                            The exact argv Genie runs against your live source in the sandbox — no
-                            forced dev server, no build. It must listen on the port above; Genie
-                            fronts it at your .gen address over https.
+                            The exact argv Genie runs on the host against your live source — no
+                            forced dev server, no build. Genie assigns the port and fronts it at
+                            your <code>.gen</code> address over https. Leave blank to use the
+                            repo&apos;s detected dev server.
                         </small>
                     </label>
-                    {row.serve && row.serve.length > 0 && (
-                        <label className="site-field site-field-wide">
-                            <span>Serve command (legacy)</span>
-                            <Input
-                                value={serve}
-                                onValueChange={setServe}
-                                placeholder="gunicorn app.wsgi --bind 0.0.0.0:8000"
-                            />
-                        </label>
-                    )}
                     <label className="site-field site-field-wide">
                         <span>Environment — KEY=value, one per line</span>
                         <Textarea
@@ -867,8 +859,8 @@ function EditSiteForm({
                     </label>
                 </div>
                 <Text size="xs" className="text-zinc-500">
-                    A running site is rebuilt and restarted only when a change needs it — a port,
-                    build, serve, env, image or address change. Cosmetic edits leave it serving.
+                    A running site is restarted only when a change needs it — its command, env, or
+                    address. Cosmetic edits leave it serving.
                 </Text>
                 <div className="set-actions">
                     <Action
@@ -1162,10 +1154,11 @@ function ServicesTab({
                         <h2>What your app is given</h2>
                     </div>
                     <div className="set-note">
-                        These are injected into this workspace&apos;s site containers at start.
-                        They address each engine by its CONTAINER NAME on the workspace network —
-                        not the loopback port above, which only this machine can reach. A site&apos;s
-                        own <code>env</code> always wins over these.
+                        These are injected into this workspace&apos;s site at start, so it reaches the
+                        managed engines with no <code>.env</code> edit. A host-native site reaches
+                        them on <code>127.0.0.1:&lt;port&gt;</code>; a container site addresses each
+                        engine by its CONTAINER NAME on the workspace network. A site&apos;s own{' '}
+                        <code>env</code> always wins over these.
                     </div>
                     <div className="svc-env">
                         <CodeView
