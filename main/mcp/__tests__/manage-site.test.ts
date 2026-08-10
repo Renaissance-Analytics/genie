@@ -151,6 +151,41 @@ describe('tools/call dispatch', () => {
         );
     });
 
+    it('forwards a `hostServe` static site — the agent declares a mode, not a server config', async () => {
+        // The owner's screenshot: an agent hand-rolled nginx to serve a built SPA.
+        // Now `hostServe` rides through so Genie serves it; no command/port needed.
+        const manageSite = vi.fn().mockResolvedValue({ ok: true, sites: [] });
+        await call(
+            {
+                action: 'create',
+                name: 'wallet',
+                repo: 'imp-wallet',
+                hostServe: { mode: 'static', root: 'dist', spa: true },
+            },
+            { manageSite },
+        );
+        expect(manageSite).toHaveBeenCalledWith(
+            'term-1',
+            expect.objectContaining({
+                action: 'create',
+                name: 'wallet',
+                hostServe: { mode: 'static', root: 'dist', spa: true },
+            }),
+        );
+    });
+
+    it('forwards `hostPort` — pointing .gen at a dev server the agent already runs (was silently dropped)', async () => {
+        const manageSite = vi.fn().mockResolvedValue({ ok: true, sites: [] });
+        await call(
+            { action: 'create', name: 'api', repo: 'app', hostPort: 3000 },
+            { manageSite },
+        );
+        expect(manageSite).toHaveBeenCalledWith(
+            'term-1',
+            expect.objectContaining({ action: 'create', name: 'api', hostPort: 3000 }),
+        );
+    });
+
     it('accepts and forwards the `update` action with only the changed fields', async () => {
         const manageSite = vi.fn().mockResolvedValue({ ok: true, sites: [] });
         await call(

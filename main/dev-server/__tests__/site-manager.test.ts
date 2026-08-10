@@ -1011,6 +1011,108 @@ describe('service env injection (#234 P3)', () => {
         expect(spawned[0]?.note).toBeUndefined();
     });
 
+    it('serves a host-native STATIC/SPA site with Genie’s own Caddy — the agent writes NO server config', async () => {
+        // The owner's screenshot: an agent hand-rolled `printf "server { … try_files …
+        // /index.html }" > default.conf; exec nginx` just to serve a built SPA. Now
+        // the agent declares `hostServe: static` and Genie renders + runs the config.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const spawned: Array<{ command: string[]; cwd: string }> = [];
+        const hostSpawn = {
+            start: async (i: {
+                siteId: string;
+                workspaceId: string;
+                command: string[];
+                cwd: string;
+                env: Record<string, string>;
+                note?: string;
+            }) => {
+                spawned.push(i);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async () => {},
+            alive: async () => false,
+            readLog: async () => '',
+        };
+        const written: Array<{ siteId: string; content: string }> = [];
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'wallet',
+                genName: 'wallet.acme.gen',
+                repo: 'imp-wallet',
+                runMode: 'host',
+                kind: 'http',
+                enabled: true,
+                hostServe: { mode: 'static', root: 'dist', spa: true },
+            },
+        };
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            probeReady: async () => true,
+            allocateFreePort: async () => 5321,
+            caddyBin: '/opt/genie/caddy',
+            writeServeConfig: (siteId, content) => {
+                written.push({ siteId, content });
+                return `/cfg/${siteId}.caddyfile`;
+            },
+        });
+        const status = await m.start('acme', SITE_ID);
+
+        expect(status.state).toBe('running');
+        expect(runtime.ran).toHaveLength(0); // nothing containerised
+        // Genie wrote the Caddyfile serving the built dir WITH the SPA fallback.
+        expect(written).toHaveLength(1);
+        expect(written[0]?.content).toContain('file_server');
+        expect(written[0]?.content).toContain('try_files {path} /index.html');
+        expect(written[0]?.content).toContain(':5321 {');
+        expect(written[0]?.content).toContain('dist');
+        // …and ran GENIE'S Caddy against it, not a repo command.
+        expect(spawned[0]?.command).toEqual([
+            '/opt/genie/caddy',
+            'run',
+            '--config',
+            `/cfg/${SITE_ID}.caddyfile`,
+            '--adapter',
+            'caddyfile',
+        ]);
+        // Routed at the allocated port exactly like any host-native site.
+        expect(m.genSites()).toEqual([
+            {
+                workspaceId: 'acme',
+                genName: 'wallet.acme.gen',
+                siteId: SITE_ID,
+                hostname: 'wallet.acme.gen',
+                scheme: 'http',
+                port: 5321,
+                loopback: '127.0.0.1',
+            },
+        ]);
+    });
+
+    it('a static serve fails CLEARLY when this build has no bundled Caddy', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const hostSpawn = {
+            start: async () => ({ ok: true as const, pid: 1 }),
+            stop: async () => {},
+            alive: async () => false,
+            readLog: async () => '',
+        };
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'wallet',
+                genName: 'wallet.acme.gen',
+                repo: 'imp-wallet',
+                runMode: 'host',
+                kind: 'http',
+                enabled: true,
+                hostServe: { mode: 'static', root: 'dist' },
+            },
+        };
+        // No caddyBin / writeServeConfig injected — the serve mode is unavailable.
+        const m = manager(runtime, sites, { hostSpawn, probeReady: async () => true, allocateFreePort: async () => 5321 });
+        const status = await m.start('acme', SITE_ID);
+        expect(status.state).toBe('failed');
+    });
+
     it('two same-stack host sites NEVER share a port — the moic.gen/fancy collision, closed', async () => {
         // The reported bug: two workspaces ran the same command on the same default
         // port. With the REAL allocator + the live-port exclude set, the two sites
