@@ -97,8 +97,8 @@ for exact workspace resolution; optional.
 **host-native** (story #238): Genie runs the repo's OWN dev server as a HOST
 process against the LIVE source — **no container, no build** — and serves it at a
 stable \`https://<name>.gen\` origin reachable whether the viewer is on this
-machine or connected remotely. "Just serve the repo the site points to", the way
-Herd did. A bare \`create {name}\` DETECTS the stack and runs its own dev server:
+machine or connected remotely. Just serve the repo the site points to, live. A
+bare \`create {name}\` DETECTS the stack and runs its own dev server:
 PHP/Laravel → \`php artisan serve\`; Node (Vite/Next/Nuxt) → the repo's own
 \`npm run dev\`; Django → \`manage.py runserver\`; Go → \`go run .\`. Override with an
 explicit \`command\` + \`port\` to run YOUR dev server, or \`hostPort\` to point
@@ -465,8 +465,8 @@ stable \`https://<name>.gen\` whether the viewer is local or connected remotely:
 
 - **\`manageSite\`** runs the repo's dev server on the host — \`php artisan serve\`
   for Laravel, the repo's \`npm run dev\` for Vite/Next/Nuxt, \`manage.py runserver\`
-  for Django, \`go run .\` for Go — the way Herd did. Call it with just a \`name\` to
-  take the detected dev server, or pass an explicit \`command\` + \`port\`. A
+  for Django, \`go run .\` for Go — against the live source. Call it with just a
+  \`name\` to take the detected dev server, or pass an explicit \`command\` + \`port\`. A
   PRODUCTION build+serve (the shipped artifact — FrankenPHP over \`public/\`,
   \`next start\`, nginx over a built SPA, gunicorn/uvicorn, a compiled binary, or
   the repo's own Dockerfile) is OPT-IN via \`runMode:'recipe'\`/\`'dockerfile'\`.
@@ -520,7 +520,7 @@ export const GENIE_AGENTS_BRIEF = `You are running inside **Genie** — a deskto
 - **Need a decision, or blocked? → \`ForceTheQuestion\` — NEVER ask in plaintext and wait.** A plaintext question is invisible to the user; you'll hang forever. HOW: ONE call with 1–4 questions, each offering 2–4 options plus an always-available free-text note — **batch every open question together.** It pops an OS-level, always-on-top modal (above every app) and blocks until answered. Pass your \`terminalId\`.
   - **WRITE the question as MARKDOWN, structured.** The modal renders markdown: a short lead sentence, then blank-line paragraphs / bullet lists / **bold** for the key facts. Never one run-on paragraph.
   - **NAME THE ACTOR in every option.** The modal is read by the USER, so bare "I"/"you" invert and confuse. Convention: the agent = "Agent:"/"the agent", the user = "You:"/"you" — lead each option label with the actor (e.g. \`Agent: I create the repo and push\` vs \`You: you create the repo\`).
-- **Need to HOST a repo as a real site (build + serve at \`<name>.gen\`), or give it a database/cache? → \`manageSite\` / \`manageService\` (the Hosting Manager).** \`manageSite\` BUILDS the repo and serves it the PRODUCTION way (FrankenPHP / \`next start\` / nginx / gunicorn / a compiled binary) in the workspace's container sandbox — it is NOT a \`npm run dev\` launcher, so don't stand an app up as a raw process. \`manageService\` backs it with shared Postgres/Redis/… engines and injects the connection env. Requires Docker/Podman; the tools only appear in \`tools/list\` when a runtime is present.
+- **Need to HOST a repo as a real site at \`<name>.gen\`, or give it a database/cache? → \`manageSite\` / \`manageService\` (the Hosting Manager).** \`manageSite\` runs the repo's dev server on the host against the live source and fronts it at \`https://<name>.gen\` over https (a production build+serve in a container is opt-in via \`runMode\`). To host an app, use this — not a hand-rolled \`manageProcess\` process. \`manageService\` backs it with shared Postgres/Redis/… engines and injects the connection env (Docker/Podman needed for services + the opt-in production build).
 - **Need a supervised background COMMAND (dev server, worker, SSR) or a cron job? → \`manageProcess\`.** Don't \`&\`-background it in a terminal — Genie's Processes feature owns these so they survive and stay controllable. HOW: \`list\` / \`create\` (label + command, optional repo + autostart; add a 5-field \`schedule\` to make it a cron task) / \`start\` / \`stop\` / \`restart\` / \`enable\` / \`disable\` / \`delete\` / \`run-now\`. To actually HOST an app, reach for \`manageSite\`, not this.
 - **Need to run commands, read terminal output, or launch/drive another coding agent? → \`manageTerminals\` / \`runAgent\`.** \`manageTerminals\` spawns + drives real terminals (\`create\` / \`write\` / \`read\` / \`list\` / \`kill\`); \`runAgent\` launches + steers a coding agent (claude / codex / custom) — here or in a workspace this Ops project governs. These are **HIGH-POWER** (arbitrary code + autonomous agents): \`create\` / \`write\` / agent \`start\` / \`send\` are approval-gated by default. Use \`manageWorkspaces\` to list / open / activate / remove the workspaces you can act on.
 
