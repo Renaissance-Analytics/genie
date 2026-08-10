@@ -73,10 +73,16 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; existing?: ContainerS
     );
     const ports = new Map<string, PortMapping[]>();
     for (const c of opts.existing ?? []) {
-        // A sandbox publishes its Caddy https port; that is the one door adopt
-        // reads back to route every `.gen` through.
+        // A published ENGINE exposes its own port on loopback (postgres 5432) — a
+        // real adopted engine has this, and adoption must find it or it would
+        // (correctly) treat the container as unpublished and re-create it. A
+        // SANDBOX publishes its Caddy https port; that is the one door adopt reads
+        // back to route every `.gen` through.
+        const isEngine = c.name.startsWith('genie-svc-');
         ports.set(c.id, [
-            { container: CADDY_HTTPS_PORT, protocol: 'tcp', hostIp: '127.0.0.1', hostPort: 49_900 },
+            isEngine
+                ? { container: 5432, protocol: 'tcp', hostIp: '127.0.0.1', hostPort: 49_910 }
+                : { container: CADDY_HTTPS_PORT, protocol: 'tcp', hostIp: '127.0.0.1', hostPort: 49_900 },
         ]);
     }
 

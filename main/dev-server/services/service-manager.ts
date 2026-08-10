@@ -308,6 +308,10 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
     const acquiring = new Map<string, Promise<DevServiceStatus>>();
     /** Why a service is NOT running, kept until it is acquired or released. */
     const lastFailure = new Map<string, DevServiceStatus>();
+    /** Engine containers we have already re-created to add a missing loopback
+     *  publication — so a runtime that keeps failing to report a port can never
+     *  loop us into recreating the same container over and over. */
+    const republished = new Set<string>();
 
     const changed = () => {
         try {
@@ -475,6 +479,62 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             adminUser: spec.adminUser ?? 'admin',
         });
 
+        // Create the engine container, published to LOOPBACK so a person, a
+        // program or an agent on this machine can connect. Shared by the create
+        // and the re-publish-an-adopted-one paths, so the publication is defined
+        // in exactly one place.
+        const createContainer = async (): Promise<
+            { ok: true; id: string } | { ok: false; error: string }
+        > => {
+            if (!(await runtime.imageExists(image))) {
+                const pulled = await pullEngineImage(runtime, image, config, workspaceId);
+                if (!pulled.ok) return { ok: false, error: pulled.error };
+            }
+            // A shared engine's HOME is the services network — not whichever
+            // workspace happened to be first, which would leave it homeless on
+            // that workspace's release. A dedicated one lives on the workspace's
+            // own network and needs no attachment at all.
+            const network = dedicated
+                ? (await runtime.networkEnsure(workspaceId)).name
+                : (
+                      await runtime.networkEnsureNamed(SHARED_SERVICES_NETWORK, {
+                          [ROLE_LABEL]: SERVICE_ROLE,
+                      })
+                  ).name;
+            const ports =
+                config.engine === 'custom' && config.port
+                    ? [{ container: config.port, hostIp: '127.0.0.1' }]
+                    : spec.ports.map((p) => ({ container: p.container, hostIp: '127.0.0.1' }));
+            const created = await runtime.runContainer({
+                workspaceId: ownerId,
+                name: containerName,
+                image,
+                network,
+                labels: {
+                    [SERVICE_LABEL]: engineKey,
+                    [ROLE_LABEL]: SERVICE_ROLE,
+                    ...(ownerId ? { [WORKSPACE_LABEL]: ownerId } : {}),
+                },
+                ...(spec.command ? { command: spec.command(admin.password) } : {}),
+                env: {
+                    ...(spec.adminEnv?.(admin.password) ?? {}),
+                    ...(config.engine === 'custom' ? config.env ?? {} : {}),
+                },
+                // A named volume, never a bind: a database's data directory needs
+                // the container's own uid/gid and filesystem semantics, and it
+                // must outlive the container — which is what makes re-creating a
+                // mis-published one safe.
+                volumes: spec.volumes.map((v) => ({
+                    name: serviceVolumeNameFor(engineKey, v.suffix, ownerId ?? undefined),
+                    target: v.target,
+                })),
+                ports,
+                restart: 'unless-stopped',
+                init: true,
+            });
+            return { ok: true, id: created.id };
+        };
+
         try {
             // --- the engine container ---------------------------------------
             const existing = (await runtime.psServices(engineKey)).find(
@@ -486,53 +546,34 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 // Postgres 16 finds the first's container by its derived name.
                 if (existing.state !== 'running') await runtime.start(existing.id);
                 containerId = existing.id;
-            } else {
-                if (!(await runtime.imageExists(image))) {
-                    const pulled = await pullEngineImage(runtime, image, config, workspaceId);
-                    if (!pulled.ok) return failed(workspaceId, serviceId, config, pulled.error);
+
+                // The adoption gap (moic beta.245): a published port is FIXED at
+                // create — there is no way to add one to a running container. An
+                // engine adopted from an older Genie that never published to
+                // loopback is unreachable from the host, so every host-native
+                // site, terminal and `queue:work` gets no service env. When the
+                // engine expects a published port but the adopted container
+                // exposes NONE, re-create it WITH the publication (the named
+                // volume keeps the data). Guarded so a runtime that simply fails
+                // to report ports can never loop us into endless re-creation.
+                const expectsPublish =
+                    (config.engine === 'custom' && Boolean(config.port)) || spec.ports.length > 0;
+                if (expectsPublish && !republished.has(containerName)) {
+                    const adopted = await endpointsFor(runtime, spec, config, containerName, containerId);
+                    if (!adopted.some((e) => e.hostPort)) {
+                        republished.add(containerName);
+                        await runtime.stop(containerId).catch(() => {});
+                        await runtime.remove(containerId).catch(() => {});
+                        const recreated = await createContainer();
+                        if (!recreated.ok) {
+                            return failed(workspaceId, serviceId, config, recreated.error);
+                        }
+                        containerId = recreated.id;
+                    }
                 }
-                // A shared engine's HOME is the services network — not whichever
-                // workspace happened to be first, which would leave it homeless
-                // on that workspace's release. A dedicated one lives on the
-                // workspace's own network and needs no attachment at all.
-                const network = dedicated
-                    ? (await runtime.networkEnsure(workspaceId)).name
-                    : (await runtime.networkEnsureNamed(SHARED_SERVICES_NETWORK, {
-                          [ROLE_LABEL]: SERVICE_ROLE,
-                      })).name;
-                const ports =
-                    config.engine === 'custom' && config.port
-                        ? [{ container: config.port, hostIp: '127.0.0.1' }]
-                        : spec.ports.map((p) => ({ container: p.container, hostIp: '127.0.0.1' }));
-                const created = await runtime.runContainer({
-                    workspaceId: ownerId,
-                    name: containerName,
-                    image,
-                    network,
-                    labels: {
-                        [SERVICE_LABEL]: engineKey,
-                        [ROLE_LABEL]: SERVICE_ROLE,
-                        ...(ownerId ? { [WORKSPACE_LABEL]: ownerId } : {}),
-                    },
-                    ...(spec.command ? { command: spec.command(admin.password) } : {}),
-                    env: {
-                        ...(spec.adminEnv?.(admin.password) ?? {}),
-                        ...(config.engine === 'custom' ? config.env ?? {} : {}),
-                    },
-                    // A named volume, never a bind: a database's data directory
-                    // needs the container's own uid/gid and filesystem
-                    // semantics, and it must outlive the container.
-                    volumes: spec.volumes.map((v) => ({
-                        name: serviceVolumeNameFor(engineKey, v.suffix, ownerId ?? undefined),
-                        target: v.target,
-                    })),
-                    // Published to LOOPBACK so a person, a program or an agent
-                    // on this machine can connect — the owner's "non-HTTP
-                    // surfaces are exposed and listed" requirement.
-                    ports,
-                    restart: 'unless-stopped',
-                    init: true,
-                });
+            } else {
+                const created = await createContainer();
+                if (!created.ok) return failed(workspaceId, serviceId, config, created.error);
                 containerId = created.id;
             }
 
