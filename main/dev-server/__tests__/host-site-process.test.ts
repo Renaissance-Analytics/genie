@@ -7,6 +7,7 @@ import {
     killTreeWinArgv,
     hostSpawnInvocation,
     describeHostSpawnFailure,
+    describeEmptyHostServiceEnv,
     type HostSpawnPrimitives,
 } from '../host-site-process';
 import type { DevSiteConfig } from '../sites-config';
@@ -150,5 +151,55 @@ describe('describeHostSpawnFailure', () => {
 
     it('folds in the underlying errno when the async error carried one', () => {
         expect(describeHostSpawnFailure(['php'], 'ENOENT')).toContain('ENOENT');
+    });
+});
+
+/**
+ * The "up but DB-less" trap (moic's beta.245 report): a host-native site whose
+ * workspace has services enabled, but whose resolved host-form env is EMPTY, gets
+ * started with no DB/cache connection and silently falls back to its repo `.env` —
+ * a real request 500s while a cookieless one looks healthy. Instead of that
+ * silence, the start writes an actionable `[genie]` diagnostic that names WHY the
+ * env is empty. This is that message; it must stay silent (null) when there is
+ * nothing wrong.
+ */
+describe('describeEmptyHostServiceEnv', () => {
+    it('is silent when the workspace has NO services enabled — nothing to inject', () => {
+        expect(
+            describeEmptyHostServiceEnv({ enabled: 0, live: 0, withHostPort: 0, missingHostPort: [] }),
+        ).toBeNull();
+    });
+
+    it('is silent when at least one service contributed env (host env is NOT empty)', () => {
+        expect(
+            describeEmptyHostServiceEnv({ enabled: 2, live: 2, withHostPort: 2, missingHostPort: [] }),
+        ).toBeNull();
+    });
+
+    it('warns, and points at a workspace/config mismatch, when enabled services are NONE live here', () => {
+        const msg = describeEmptyHostServiceEnv({
+            enabled: 4,
+            live: 0,
+            withHostPort: 0,
+            missingHostPort: [],
+        });
+        expect(msg).toContain('4');
+        expect(msg).toMatch(/live/i);
+        // It must explain the visible symptom so the reader connects it to a 500.
+        expect(msg).toMatch(/\.env/);
+        expect(msg).toMatch(/500/);
+    });
+
+    it('warns, naming the engines, when live services publish no reachable loopback port', () => {
+        const msg = describeEmptyHostServiceEnv({
+            enabled: 3,
+            live: 3,
+            withHostPort: 0,
+            missingHostPort: ['postgres', 'redis'],
+        });
+        expect(msg).toContain('postgres');
+        expect(msg).toContain('redis');
+        expect(msg).toMatch(/loopback|port/i);
+        expect(msg).toMatch(/\.env/);
     });
 });

@@ -28,6 +28,8 @@ export interface HostProcessRunDeps {
     readLogTail?: (path: string, tail: number) => string;
     /** Ensure the log dir exists. Default: real fs mkdir. */
     ensureDir?: (dir: string) => void;
+    /** Append a line to a site's log (the start-time `[genie]` note). Default: real fs. */
+    appendLog?: (path: string, text: string) => void;
 }
 
 /**
@@ -43,14 +45,26 @@ export function createHostProcessRun(deps: HostProcessRunDeps): HostProcessRun {
     const prims = deps.primitives ?? realPrimitives(platform);
     const readLogTail = deps.readLogTail ?? realReadLogTail;
     const ensureDir = deps.ensureDir ?? ((dir: string) => mkdirSync(dir, { recursive: true }));
+    const appendLog = deps.appendLog ?? ((path: string, text: string) => appendFileSync(path, text));
     const tracked = new Map<string, { pid: number; logPath: string }>();
 
     return {
-        async start({ siteId, command, cwd, env }) {
+        async start({ siteId, command, cwd, env, note }) {
             if (!SITE_ID_RE.test(siteId)) return { ok: false, error: `unsafe site id ${JSON.stringify(siteId)}` };
             try {
                 ensureDir(deps.logDir);
                 const logPath = join(deps.logDir, `${siteId}.log`);
+                // A start-time diagnostic (e.g. no service env resolved) goes to the
+                // TOP of this run's log, before the dev server's own output, so
+                // `manageSite logs` and the progress tail surface it. Same `[genie]`
+                // convention as the async spawn-error note below.
+                if (note) {
+                    try {
+                        appendLog(logPath, `\n[genie] ${note}\n`);
+                    } catch {
+                        // best-effort — the diagnostic is advisory, never fatal to the start.
+                    }
+                }
                 const spec: HostSiteSpawnSpec = { command, cwd, env, logPath };
                 const pid = startHostSite(spec, prims);
                 tracked.set(siteId, { pid, logPath });

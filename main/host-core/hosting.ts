@@ -32,6 +32,7 @@ import type {
     DevServiceManager,
     DevServiceManagerDeps,
     EngineAdminRequest,
+    HostEnvReport,
 } from '../dev-server/services/service-manager';
 import { createHostProcessRun } from '../dev-server/host-process-run';
 import { initDevLifecycle } from '../dev-server/lifecycle';
@@ -66,6 +67,13 @@ export interface HostingPorts {
     /** This workspace's provisioned services in HOST form (127.0.0.1:<published
      *  port>), for a HOST-NATIVE site's dev server (story #238 / beta.237). */
     devServiceHostEnvFor: (workspaceId: string) => Record<string, string>;
+    /** {@link devServiceHostEnvFor} plus the enabled/live/host-published counts
+     *  that explain an EMPTY result, so a host-native start can log WHY it got no
+     *  service env instead of serving DB-less in silence (moic's beta.245 report).
+     *  Optional so a host that has not adopted it yet still compiles — absent ⇒ the
+     *  env still flows (via {@link devServiceHostEnvFor}), only the diagnostic is
+     *  skipped. */
+    devServiceHostEnvReportFor?: (workspaceId: string) => HostEnvReport;
     /** Where a HOST-NATIVE site's dev-server output is logged (a Genie data dir).
      *  Absent ⇒ host-native hosting (runMode 'host') is off and fails with a clear
      *  message rather than silently containerising. */
@@ -148,14 +156,31 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
             return ports.devServiceEnvFor(workspaceId);
         },
         // The HOST-FORM service env (127.0.0.1:<published port>) a host-native dev
-        // server uses — same ensure-services-up-first as serviceEnvFor (story #238).
-        serviceHostEnvFor: async (workspaceId) => {
+        // server uses — same ensure-services-up-first as serviceEnvFor (story #238),
+        // but returned WITH its diagnostic: a per-service acquire failure no longer
+        // strips the healthy services' env (each is tolerated), and the report's
+        // counts let the site log say WHY the env is empty rather than serve DB-less
+        // in silence (moic's beta.245 report).
+        serviceHostEnvReportFor: async (workspaceId) => {
             const svc = devServiceManager();
-            if (!svc) return {};
+            if (!svc) return { env: {}, enabled: 0, live: 0, withHostPort: 0, missingHostPort: [] };
             for (const row of svc.list(workspaceId)) {
-                if (row.enabled) await svc.acquire(workspaceId, row.serviceId);
+                // Tolerate a single service failing: acquire never throws (it returns
+                // a failed status), but guard anyway so one engine can never abort the
+                // batch and wipe the DB env the rest would have provided.
+                if (row.enabled) await svc.acquire(workspaceId, row.serviceId).catch(() => {});
             }
-            return ports.devServiceHostEnvFor(workspaceId);
+            // A host that supplies the report port gets the full diagnostic; one that
+            // only supplies the env port still gets the env (no counts ⇒ no warning).
+            return ports.devServiceHostEnvReportFor
+                ? ports.devServiceHostEnvReportFor(workspaceId)
+                : {
+                      env: ports.devServiceHostEnvFor(workspaceId),
+                      enabled: 0,
+                      live: 0,
+                      withHostPort: 0,
+                      missingHostPort: [],
+                  };
         },
         // Genie runs a host-native site's dev server as a real HOST process (no
         // container). Only when a log dir is provided — otherwise host-native is off.

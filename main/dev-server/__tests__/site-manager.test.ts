@@ -918,6 +918,99 @@ describe('service env injection (#234 P3)', () => {
         ]);
     });
 
+    it('a host-native site whose services resolve to EMPTY host-env logs a diagnostic instead of serving DB-less (moic beta.245)', async () => {
+        // The reported blocker: a workspace with services ENABLED but no host env
+        // reaching the dev server. It fell back to its repo `.env`, pointed at a
+        // local DB that did not exist, and 500'd — with NO signal from Genie. The
+        // start must now record WHY the env is empty to the site log.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const spawned: Array<{ note?: string; env: Record<string, string> }> = [];
+        const hostSpawn = {
+            start: async (i: {
+                siteId: string;
+                workspaceId: string;
+                command: string[];
+                cwd: string;
+                env: Record<string, string>;
+                note?: string;
+            }) => {
+                spawned.push(i);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async () => {},
+            alive: async () => false,
+            readLog: async () => '',
+        };
+        const sites: DevSites = {
+            [SITE_ID]: { name: 'web', genName: 'web.acme.gen', repo: 'app', runMode: 'host', command: ['php', 'artisan', 'serve'], port: 8001, kind: 'http', enabled: true },
+        };
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            probeReady: async () => true,
+            allocateFreePort: async () => 5321,
+            // Services ENABLED and live, but none publish a reachable loopback port,
+            // so the host-form env is empty — the exact "up but DB-less" shape.
+            serviceHostEnvReportFor: async () => ({
+                env: {},
+                enabled: 3,
+                live: 3,
+                withHostPort: 0,
+                missingHostPort: ['postgres', 'redis'],
+            }),
+        });
+        await m.start('acme', SITE_ID);
+
+        expect(spawned).toHaveLength(1);
+        // No DB env reached the process (the reported failure) …
+        expect(spawned[0]?.env.DB_HOST).toBeUndefined();
+        // … but it did NOT happen in silence: the site log gets an actionable note
+        // that names the engines and connects the emptiness to the 500.
+        expect(spawned[0]?.note).toBeTruthy();
+        expect(spawned[0]?.note).toContain('postgres');
+        expect(spawned[0]?.note).toMatch(/\.env/);
+    });
+
+    it('a host-native site with healthy service env starts with NO diagnostic note', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const spawned: Array<{ note?: string; env: Record<string, string> }> = [];
+        const hostSpawn = {
+            start: async (i: {
+                siteId: string;
+                workspaceId: string;
+                command: string[];
+                cwd: string;
+                env: Record<string, string>;
+                note?: string;
+            }) => {
+                spawned.push(i);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async () => {},
+            alive: async () => false,
+            readLog: async () => '',
+        };
+        const sites: DevSites = {
+            [SITE_ID]: { name: 'web', genName: 'web.acme.gen', repo: 'app', runMode: 'host', command: ['php', 'artisan', 'serve'], port: 8001, kind: 'http', enabled: true },
+        };
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            probeReady: async () => true,
+            allocateFreePort: async () => 5321,
+            serviceHostEnvReportFor: async () => ({
+                env: { DB_HOST: '127.0.0.1', DB_PORT: '54329' },
+                enabled: 1,
+                live: 1,
+                withHostPort: 1,
+                missingHostPort: [],
+            }),
+        });
+        await m.start('acme', SITE_ID);
+
+        // The env reached the process, and there is nothing to warn about.
+        expect(spawned[0]?.env.DB_HOST).toBe('127.0.0.1');
+        expect(spawned[0]?.note).toBeUndefined();
+    });
+
     it('two same-stack host sites NEVER share a port — the moic.gen/fancy collision, closed', async () => {
         // The reported bug: two workspaces ran the same command on the same default
         // port. With the REAL allocator + the live-port exclude set, the two sites

@@ -46,7 +46,17 @@ interface Fake extends ContainerRuntime {
     readonly containers: Map<string, ContainerSummary>;
 }
 
-function fakeRuntime(opts: { detection?: RuntimeDetection; execFails?: string } = {}): Fake {
+function fakeRuntime(
+    opts: {
+        detection?: RuntimeDetection;
+        execFails?: string;
+        publishNothing?: boolean;
+        /** Pre-seed already-RUNNING containers with NO published ports, to stand in
+         *  for a container adopted from an older Genie that never published its
+         *  engine port to loopback (moic beta.245 — the adoption gap). */
+        seedUnpublished?: Array<{ name: string; id: string }>;
+    } = {},
+): Fake {
     const ran: ContainerSpec[] = [];
     const started: string[] = [];
     const stopped: string[] = [];
@@ -58,6 +68,11 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; execFails?: string } 
     const containers = new Map<string, ContainerSummary>();
     const ports = new Map<string, PortMapping[]>();
     let nextHostPort = 49_800;
+    for (const seed of opts.seedUnpublished ?? []) {
+        // Running, but no `ports.set` — so portMappings returns [] for it, exactly
+        // like a container created before loopback publishing existed.
+        containers.set(seed.name, { id: seed.id, name: seed.name, image: 'seeded', state: 'running' });
+    }
 
     return {
         kind: 'docker',
@@ -108,14 +123,21 @@ function fakeRuntime(opts: { detection?: RuntimeDetection; execFails?: string } 
                 state: 'running',
                 ...(spec.workspaceId === null ? {} : { workspaceId: spec.workspaceId }),
             });
+            // `publishNothing` stands in for a host whose runtime published (or
+            // surfaced) NO loopback port for the engine — the container is up and
+            // ready via its own in-container check, but `docker port` returns
+            // nothing, so no endpoint carries a hostPort. This is the state that
+            // silently strips a host-native site's DB env (moic's beta.245 report).
             ports.set(
                 id,
-                (spec.ports ?? []).map((p) => ({
-                    container: p.container,
-                    protocol: 'tcp' as const,
-                    hostIp: p.hostIp ?? '127.0.0.1',
-                    hostPort: (nextHostPort += 1),
-                })),
+                opts.publishNothing
+                    ? []
+                    : (spec.ports ?? []).map((p) => ({
+                          container: p.container,
+                          protocol: 'tcp' as const,
+                          hostIp: p.hostIp ?? '127.0.0.1',
+                          hostPort: (nextHostPort += 1),
+                      })),
             );
             return { id, name: spec.name };
         },
@@ -294,6 +316,100 @@ describe('one engine, two workspaces', () => {
         expect(hostEnv.DB_HOST).toBe('127.0.0.1');
         expect(hostEnv.DB_PORT).toBe(String(hostPort));
         expect(hostEnv.DATABASE_URL).toContain(`@127.0.0.1:${hostPort}/`);
+    });
+
+    it('hostEnvFor is EMPTY when a live engine has no published loopback port — the silent DB-less trap', async () => {
+        // The engine is up and READY (its in-container check passes), but the host
+        // published/surfaced no loopback port — so a host-native site gets NOTHING
+        // to reach the DB with and falls back to its repo `.env` (moic beta.245).
+        const runtime = fakeRuntime({ publishNothing: true });
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }));
+        const status = await manager.acquire('a', 'svc-a');
+
+        expect(status.state).toBe('running');
+        expect(status.endpoints?.every((e) => e.hostPort === undefined)).toBe(true);
+        // The container-form env still works (it dials the engine by NAME), which
+        // is why a CONTAINER site is fine while a host-native one is broken.
+        expect(manager.envFor('a').DB_HOST).toBe('genie-svc-postgres-16');
+        // The trap: silently empty, with no signal that the DB is unreachable.
+        expect(manager.hostEnvFor('a')).toEqual({});
+    });
+
+    it('RE-CREATES an adopted engine that has NO published loopback port, restoring host env (moic beta.245)', async () => {
+        // The adoption gap: a Postgres container already exists (adopted from an
+        // older Genie) but was never published to loopback, so a host-native site
+        // gets no DB env. A published port is fixed at CREATE — the only fix is to
+        // re-create the container WITH the publication; the named volume keeps the
+        // data. After acquire, the host env must be populated.
+        const runtime = fakeRuntime({
+            seedUnpublished: [{ name: 'genie-svc-postgres-16', id: 'old-unpublished-pg' }],
+        });
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }));
+        const status = await manager.acquire('a', 'svc-a');
+
+        expect(status.state).toBe('running');
+        // The unpublished container was removed and a published one created for it.
+        expect(runtime.removed).toContain('old-unpublished-pg');
+        expect(runtime.ran.some((s) => s.name === 'genie-svc-postgres-16')).toBe(true);
+        // The whole point: a HOST process can now reach the DB.
+        const hostEnv = manager.hostEnvFor('a');
+        expect(hostEnv.DB_HOST).toBe('127.0.0.1');
+        expect(Number(hostEnv.DB_PORT)).toBeGreaterThan(1024);
+    });
+
+    it('does NOT re-create an adopted engine that is ALREADY published (no needless restart)', async () => {
+        // First acquire creates + publishes the shared container; a second acquire
+        // (another workspace) adopts it. Since it IS published, adoption must reuse
+        // it as-is — never stop/remove a healthy shared engine.
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(
+            deps(runtime, { a: pgFor('svc-a'), b: pgFor('svc-b') }),
+        );
+        await manager.acquire('a', 'svc-a');
+        const runsAfterFirst = runtime.ran.length;
+        await manager.acquire('b', 'svc-b');
+
+        // No re-creation, no removal — the adopted published container is reused.
+        expect(runtime.ran.length).toBe(runsAfterFirst);
+        expect(runtime.removed).toEqual([]);
+        expect(manager.hostEnvFor('b').DB_HOST).toBe('127.0.0.1');
+    });
+
+    it('re-creates a mis-published engine AT MOST ONCE — a runtime that never reports a port cannot loop', async () => {
+        // A runtime that keeps publishing nothing (a broken `docker port`, say):
+        // the adopted container has no host port, so we re-create it once — but the
+        // new one also reports none, and we must NOT stop/remove/recreate forever.
+        const runtime = fakeRuntime({
+            publishNothing: true,
+            seedUnpublished: [{ name: 'genie-svc-postgres-16', id: 'old-unpublished-pg' }],
+        });
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }));
+        await manager.acquire('a', 'svc-a');
+        await manager.acquire('a', 'svc-a'); // a second pass must not re-create again
+
+        // Exactly one re-creation: the seeded container removed once, one create.
+        expect(runtime.removed).toEqual(['old-unpublished-pg']);
+        expect(runtime.ran.filter((s) => s.name === 'genie-svc-postgres-16')).toHaveLength(1);
+    });
+
+    it('hostEnvReportFor says WHY host env is empty — enabled vs live vs host-published', async () => {
+        // Healthy: the engine is live AND has a published loopback port.
+        const healthy = createDevServiceManager(deps(fakeRuntime(), { a: pgFor('svc-a') }));
+        await healthy.acquire('a', 'svc-a');
+        const ok = healthy.hostEnvReportFor('a');
+        expect(ok).toMatchObject({ enabled: 1, live: 1, withHostPort: 1, missingHostPort: [] });
+        expect(ok.env.DB_HOST).toBe('127.0.0.1');
+
+        // Degraded: the engine is live but nothing is published — the report names
+        // the engine that has no host port, so the site can log an actionable line
+        // instead of serving DB-less in silence.
+        const degraded = createDevServiceManager(
+            deps(fakeRuntime({ publishNothing: true }), { a: pgFor('svc-a') }),
+        );
+        await degraded.acquire('a', 'svc-a');
+        const bad = degraded.hostEnvReportFor('a');
+        expect(bad).toMatchObject({ enabled: 1, live: 1, withHostPort: 0, missingHostPort: ['postgres'] });
+        expect(bad.env).toEqual({});
     });
 });
 

@@ -140,6 +140,46 @@ export function describeHostSpawnFailure(command: string[], detail?: string): st
     return detail ? `${base} (${detail})` : base;
 }
 
+/**
+ * The "up but DB-less" diagnostic (moic's beta.245 report). A host-native site
+ * whose workspace has services ENABLED but whose resolved host-form env is EMPTY
+ * would start pointed at nothing and fall back to its repo `.env` — a real
+ * (session/DB-backed) request 500s while a cookieless one looks healthy, which is
+ * exactly the silent failure that took a Laravel site off Genie hosting. Rather
+ * than serve DB-less without a word, the start writes this line to the site log.
+ *
+ * Returns `null` when there is nothing to warn about — no services enabled, or at
+ * least one service actually contributed env (`withHostPort > 0`). The two failure
+ * shapes are disambiguated for the reader:
+ *   - `live === 0` → the enabled services are not live for THIS workspace (a
+ *     workspace-id / config mismatch, or they are down);
+ *   - `live > 0 && withHostPort === 0` → they are running but publish no reachable
+ *     loopback port, so nothing on the host can dial them.
+ */
+export function describeEmptyHostServiceEnv(report: {
+    enabled: number;
+    live: number;
+    withHostPort: number;
+    missingHostPort: string[];
+}): string | null {
+    const { enabled, live, withHostPort, missingHostPort } = report;
+    if (enabled === 0 || withHostPort > 0) return null;
+    const tail =
+        'so no DB/cache/service env was injected — the site falls back to its repo ' +
+        '`.env` (e.g. a local database that may not exist), which is why a DB-backed ' +
+        'request can return 500 while a cookieless one still looks healthy.';
+    if (live === 0) {
+        return (
+            `${enabled} service(s) are enabled for this workspace but 0 are live here, ${tail}`
+        );
+    }
+    const engines = missingHostPort.length ? ` (${missingHostPort.join(', ')})` : '';
+    return (
+        `${live} service(s)${engines} are running but publish no reachable loopback port ` +
+        `on the host, ${tail}`
+    );
+}
+
 /** Start a host site's serve command detached; returns the tracked pid. */
 export function startHostSite(spec: HostSiteSpawnSpec, prims: HostSpawnPrimitives): number {
     if (!Array.isArray(spec.command) || spec.command.length === 0) {
