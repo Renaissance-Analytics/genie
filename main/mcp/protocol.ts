@@ -540,6 +540,9 @@ export interface ProvisionWorkspacesResult {
 export interface DevSiteInfo {
     /** The opaque id every non-create action takes back. */
     id: string;
+    /** The workspace this site belongs to — so an agent can correlate a site with
+     *  its workspace's services/env when debugging (genie #169). */
+    workspaceId: string;
     /** The site's name inside its workspace (a DNS label). */
     name: string;
     /** The browser-facing `.gen` name. */

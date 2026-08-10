@@ -137,6 +137,7 @@ export function resetDevServerDetectionCache(): void {
 function toInfo(row: DevSiteRow): DevSiteInfo {
     return {
         id: row.siteId,
+        workspaceId: row.workspaceId,
         name: row.name,
         genName: row.genName,
         repo: row.repo,

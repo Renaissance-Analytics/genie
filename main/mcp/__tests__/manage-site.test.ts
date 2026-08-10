@@ -209,6 +209,7 @@ describe('tools/call dispatch', () => {
             sites: [
                 {
                     id: 'abc',
+                    workspaceId: 'acme',
                     name: 'web',
                     genName: 'web.acme.gen',
                     repo: 'app',
@@ -238,6 +239,7 @@ describe('tools/call dispatch', () => {
 describe('manageSiteSummary', () => {
     const site = (over: Partial<ManageSiteResult['sites'][number]> = {}) => ({
         id: 'abc',
+        workspaceId: 'acme',
         name: 'web',
         genName: 'web.acme.gen',
         repo: '',
