@@ -269,6 +269,19 @@ describe('host-native serve mode — Genie serves it, the agent writes no config
             ),
         ).toBe(true);
     });
+
+    it('an EXPLICIT clear emits the key so the merge drops a stored serve (static → proxy)', () => {
+        // The Edit form switching a site back to its OWN dev server passes a cleared
+        // hostServe. Sanitize must EMIT the key (present, undefined value): the write
+        // merges `{...previous, ...clean}`, so a MISSING key would keep the site
+        // static forever. Presence-with-undefined is what overrides the stored value.
+        const cleared = sanitizeDevSitePatch({ ...base(), hostServe: null as never });
+        expect('hostServe' in cleared).toBe(true);
+        expect(cleared.hostServe).toBeUndefined();
+        // A patch that never mentions hostServe leaves the key ABSENT — so a cosmetic
+        // edit (renaming, toggling enabled) can never clear a site's serve mode.
+        expect('hostServe' in sanitizeDevSitePatch(base())).toBe(false);
+    });
 });
 
 describe('external-browser opt-in (story #238 P1) — `browserExposed`', () => {

@@ -117,6 +117,7 @@ interface SiteInfo {
     origin?: string;
     localOrigin?: string;
     command?: string[];
+    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean };
     browserExposed?: boolean;
 }
 
@@ -427,6 +428,7 @@ interface SiteRequest {
     runMode?: string;
     command?: string[];
     port?: number;
+    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean } | null;
     browserExposed?: boolean;
 }
 
@@ -506,7 +508,9 @@ export function registerHostingE2EMocks(): void {
                 // the HOST (`runMode: 'host'`), not a built container. A recipe
                 // runMode is the opt-in, and only reaches here when the human
                 // chose the production-build picker.
-                const runMode = req.runMode ?? 'host';
+                // A Genie-served (static/php) site is host-native and carries its
+                // serve mode; mirrors runManageSite forcing runMode:'host' on hostServe.
+                const runMode = req.hostServe ? 'host' : (req.runMode ?? 'host');
                 const created: SiteInfo = {
                     id: `site-${name}`,
                     name,
@@ -522,6 +526,7 @@ export function registerHostingE2EMocks(): void {
                     origin: `https://${name}.hosting-e2e.gen`,
                     localOrigin: 'http://127.0.0.1:49001',
                     ...(req.command ? { command: req.command } : {}),
+                    ...(req.hostServe ? { hostServe: req.hostServe } : {}),
                 };
                 sites.push(created);
                 return { ok: true, sites, affectedId: created.id };
@@ -546,6 +551,15 @@ export function registerHostingE2EMocks(): void {
                     if (req.port !== undefined) row.port = req.port;
                     if (req.command !== undefined) row.command = req.command;
                     if (req.browserExposed !== undefined) row.browserExposed = req.browserExposed;
+                    // Serve mode: null CLEARS (back to proxy), a config SETS it (and
+                    // makes the site host-native), undefined leaves it — mirrors main.
+                    if (req.hostServe !== undefined) {
+                        if (req.hostServe === null) delete row.hostServe;
+                        else {
+                            row.hostServe = req.hostServe;
+                            row.runMode = 'host';
+                        }
+                    }
                 }
                 return { ok: true, sites, ...(row ? { affectedId: row.id } : {}) };
             case 'logs':

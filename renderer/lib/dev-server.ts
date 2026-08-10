@@ -4,6 +4,7 @@ import type {
     DevSiteInfo,
     DevSitePhase,
     DevSiteRunOption,
+    HostServeConfig,
 } from './genie';
 
 /**
@@ -143,6 +144,52 @@ export interface SiteReach {
 
 export function siteReach(site: DevSiteInfo): SiteReach {
     return { browser: site.origin ?? null, local: site.localOrigin ?? null };
+}
+
+// --- the serve-mode picker --------------------------------------------------
+
+/**
+ * The three ways a host-native site is served, as the Site Manager picker offers
+ * them (genie #167/#171). `proxy` runs the repo's OWN dev server and Genie only
+ * reverse-proxies it — the config-less default. `static`/`php` hand the serving
+ * to Genie's bundled Caddy so nobody hand-rolls an nginx/Caddy block; the human
+ * declares the mode and a `root`, exactly as an agent does via `hostServe`.
+ */
+export type ServeMode = 'proxy' | 'static' | 'php';
+
+/** A site's CURRENT serve mode, for prefilling the Edit picker. No stored
+ *  `hostServe` means the repo runs its own dev server — the `proxy` default. */
+export function serveModeOf(site: DevSiteInfo): ServeMode {
+    return site.hostServe?.mode ?? 'proxy';
+}
+
+/**
+ * The `hostServe` request field a picker choice produces — the SAME shape an
+ * agent passes. `proxy` declares nothing (Genie generates no config), so it maps
+ * to `undefined`; `static`/`php` carry the trimmed `root` (and, for static only,
+ * the SPA fallback). A blank root yields nothing — the form guards submit, and
+ * this is the backstop so a half-filled static never ships an empty root.
+ */
+export function buildHostServe(mode: ServeMode, root: string, spa: boolean): HostServeConfig | undefined {
+    const dir = root.trim();
+    if (mode === 'proxy' || !dir) return undefined;
+    if (mode === 'php') return { mode: 'php', root: dir };
+    return { mode: 'static', root: dir, ...(spa ? { spa: true } : {}) };
+}
+
+/**
+ * The serve-mode value an Edit patch should carry, given the site's stored config
+ * and the picker's new one. `undefined` ⇒ unchanged, so omit it and the update
+ * never restarts a running site for a serve mode that did not move. `null` ⇒
+ * CLEAR it back to proxy — an explicit signal, because the store merges the patch
+ * OVER the stored row, so a plain omit would leave a static site static forever.
+ */
+export function hostServePatch(
+    prev: HostServeConfig | undefined,
+    next: HostServeConfig | undefined,
+): HostServeConfig | null | undefined {
+    if (JSON.stringify(prev ?? null) === JSON.stringify(next ?? null)) return undefined;
+    return next ?? null;
 }
 
 // --- the rail indicator -----------------------------------------------------

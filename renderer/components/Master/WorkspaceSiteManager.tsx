@@ -26,12 +26,16 @@ import {
     type WorkspaceRow,
 } from '../../lib/genie';
 import {
+    buildHostServe,
     canOpenInBrowser,
     holdersNote,
+    hostServePatch,
     isolationNote,
     optionCaveat,
     optionLabel,
     runtimeSummary,
+    serveModeOf,
+    type ServeMode,
     serviceStatusLabel,
     serviceStatusTone,
     serviceTitle,
@@ -694,6 +698,13 @@ function EditSiteForm({
     // Genie fronts on the host Caddy, not the sandbox one) — don't show a control
     // that would silently do nothing for a container site.
     const isHostNative = runMode === 'host' || Boolean(row.hostPort);
+    // Serve mode (genie #167/#171), prefilled from the stored config: proxy runs
+    // the repo's dev server, static/php hand serving to Genie.
+    const [serveMode, setServeMode] = useState<ServeMode>(serveModeOf(row));
+    const [serveRoot, setServeRoot] = useState(row.hostServe?.root ?? '');
+    const [serveSpa, setServeSpa] = useState(
+        row.hostServe?.mode === 'static' ? Boolean(row.hostServe.spa) : true,
+    );
     // The USER-CONTROLLED startup argv — the canonical way to start a site.
     const [command, setCommand] = useState((row.command ?? []).join(' '));
     const [env, setEnv] = useState(
@@ -722,6 +733,17 @@ function EditSiteForm({
         if (image.trim() !== (row.image ?? '')) patch.image = image.trim();
         if (upstreamHost.trim() !== (row.upstreamHost ?? '')) patch.upstreamHost = upstreamHost.trim();
         if (browserExposed !== (row.browserExposed ?? false)) patch.browserExposed = browserExposed;
+
+        // Serve mode: only for a host-native site (Genie can't serve a container's
+        // folder). `undefined` ⇒ unchanged (omit); a config sets it; `null` clears it
+        // back to the repo's own dev server. main sets runMode:'host' on a set.
+        if (isHostNative) {
+            const servePatch = hostServePatch(
+                row.hostServe,
+                buildHostServe(serveMode, serveRoot, serveSpa),
+            );
+            if (servePatch !== undefined) patch.hostServe = servePatch;
+        }
 
         // A host-native site's port is HOST-owned (allocated at start), so it is not
         // an editable field; only a container/recipe site carries a user port.
@@ -795,6 +817,18 @@ function EditSiteForm({
                             list={RUN_MODES}
                         />
                     </label>
+                    {/* Serve mode is a host-native concept — Genie serves the folder
+                        itself. A container site is served by its own image, not Caddy. */}
+                    {isHostNative && (
+                        <ServeModeFields
+                            mode={serveMode}
+                            root={serveRoot}
+                            spa={serveSpa}
+                            onMode={setServeMode}
+                            onRoot={setServeRoot}
+                            onSpa={setServeSpa}
+                        />
+                    )}
                     {/* A host-native site's port is host-owned (allocated at start),
                         and it needs no container image — those fields are only for a
                         container/production-build site. */}
@@ -833,20 +867,24 @@ function EditSiteForm({
                             </small>
                         </label>
                     )}
-                    <label className="site-field site-field-wide">
-                        <span>Startup command</span>
-                        <Input
-                            value={command}
-                            onValueChange={setCommand}
-                            placeholder="npm run dev"
-                        />
-                        <small className="site-field-hint">
-                            The exact argv Genie runs on the host against your live source — no
-                            forced dev server, no build. Genie assigns the port and fronts it at
-                            your <code>.gen</code> address over https. Leave blank to use the
-                            repo&apos;s detected dev server.
-                        </small>
-                    </label>
+                    {/* A Genie-served (static/php) site has no startup command — Genie
+                        runs its own web server. Only a proxied dev server takes argv. */}
+                    {serveMode === 'proxy' && (
+                        <label className="site-field site-field-wide">
+                            <span>Startup command</span>
+                            <Input
+                                value={command}
+                                onValueChange={setCommand}
+                                placeholder="npm run dev"
+                            />
+                            <small className="site-field-hint">
+                                The exact argv Genie runs on the host against your live source — no
+                                forced dev server, no build. Genie assigns the port and fronts it at
+                                your <code>.gen</code> address over https. Leave blank to use the
+                                repo&apos;s detected dev server.
+                            </small>
+                        </label>
+                    )}
                     <label className="site-field site-field-wide">
                         <span>Environment — KEY=value, one per line</span>
                         <Textarea
@@ -896,6 +934,77 @@ function EditSiteForm({
     );
 }
 
+/** The three serve modes, as the picker offers them (genie #167/#171). */
+const SERVE_MODES: { value: ServeMode; label: string }[] = [
+    { value: 'proxy', label: "Run the repo's dev server (Genie proxies it)" },
+    { value: 'static', label: 'Serve a built folder (static / SPA)' },
+    { value: 'php', label: 'Serve a PHP app' },
+];
+
+/**
+ * The serve-mode picker's fields, shared by the Add and Edit forms so a human
+ * declares a MODE exactly as an agent does via `hostServe` — and Genie writes the
+ * web-server config, instead of anyone hand-rolling an nginx/Caddy block. `proxy`
+ * (the default) runs the repo's own dev server; `static`/`php` hand serving to
+ * Genie's bundled Caddy against a repo-relative `root`.
+ */
+function ServeModeFields({
+    mode,
+    root,
+    spa,
+    onMode,
+    onRoot,
+    onSpa,
+}: {
+    mode: ServeMode;
+    root: string;
+    spa: boolean;
+    onMode: (mode: ServeMode) => void;
+    onRoot: (root: string) => void;
+    onSpa: (spa: boolean) => void;
+}) {
+    return (
+        <>
+            <label className="site-field">
+                <span>How Genie serves it</span>
+                <Select
+                    value={mode}
+                    onValueChange={(v) => onMode(v as ServeMode)}
+                    list={SERVE_MODES}
+                    aria-label="How Genie serves this site"
+                />
+            </label>
+            {mode !== 'proxy' && (
+                <label className="site-field">
+                    <span>Directory to serve</span>
+                    <Input
+                        value={root}
+                        onValueChange={onRoot}
+                        placeholder={mode === 'php' ? 'public' : 'dist'}
+                        aria-label="Directory Genie serves"
+                    />
+                    <small className="site-field-hint">
+                        {mode === 'php'
+                            ? "Repo-relative app root — Genie serves its public/ over a FastCGI PHP worker (the nginx/Valet model). No command, no hand-written web-server config."
+                            : 'Repo-relative built folder — Genie serves it with its own file server. No dev command, no hand-written web-server config.'}
+                    </small>
+                </label>
+            )}
+            {mode === 'static' && (
+                <label className="site-field site-field-wide">
+                    <span>Single-page app fallback</span>
+                    <Switch checked={spa} onCheckedChange={onSpa} />
+                    <small className="site-field-hint">
+                        On for client-routed apps (React/Vue routers): unmatched paths fall back to{' '}
+                        <code>index.html</code> so deep links and refresh resolve. Off for a plain
+                        static folder.
+                    </small>
+                </label>
+            )}
+        </>
+    );
+}
+
 /**
  * Add a site — the LAYERED run-option picker, as a form.
  *
@@ -903,6 +1012,10 @@ function EditSiteForm({
  * would actually start now, and each one that is a GUESS says what it guessed:
  * an option whose port was defaulted rather than read will publish 8080, get a
  * connection refused, and look like a working site.
+ *
+ * The serve-mode picker sits above the recipe path: `static`/`php` hand serving
+ * to Genie (no dev command, no port), so when either is chosen the recipe/port
+ * controls are hidden — there is nothing to detect.
  */
 function AddSiteForm({
     workspace,
@@ -921,6 +1034,16 @@ function AddSiteForm({
     const [port, setPort] = useState('');
     const [detecting, setDetecting] = useState(false);
     const [saving, setSaving] = useState(false);
+    // Serve mode (genie #167/#171): proxy runs the repo's dev server, static/php
+    // hand serving to Genie. SPA defaults ON — a built folder is nearly always a
+    // client-routed bundle. `serveMode !== 'proxy'` bypasses the recipe/port path.
+    const [serveMode, setServeMode] = useState<ServeMode>('proxy');
+    const [serveRoot, setServeRoot] = useState('');
+    const [serveSpa, setServeSpa] = useState(true);
+    const hostServe = buildHostServe(serveMode, serveRoot, serveSpa);
+    // A chosen static/php mode with no directory yet is not startable — Genie has
+    // nothing to serve. Guard submit rather than ship an empty root.
+    const serveIncomplete = serveMode !== 'proxy' && !hostServe;
 
     useEffect(() => {
         void api()
@@ -970,64 +1093,82 @@ function AddSiteForm({
                         ]}
                     />
                 </label>
-                <label className="site-field">
-                    <span>Port (optional)</span>
-                    <Input
-                        value={port}
-                        onValueChange={setPort}
-                        placeholder="5173"
-                        aria-label="The port the dev server listens on"
-                    />
-                </label>
-            </div>
-
-            <div className="set-actions">
-                <Action
-                    size="sm"
-                    variant="ghost"
-                    icon="search"
-                    disabled={detecting}
-                    onClick={() => void detect()}
-                >
-                    {detecting ? 'Reading the repo…' : 'Advanced — pick how it runs'}
-                </Action>
-            </div>
-
-            {options !== null && (
-                <div className="site-card-fields">
-                    <label className="site-field site-field-wide">
-                        <span>Run it as</span>
-                        <Select
-                            value={String(chosen)}
-                            onValueChange={(v) => {
-                                const i = Number(v);
-                                setChosen(i);
-                                const picked = options[i];
-                                if (picked?.port) setPort(String(picked.port));
-                            }}
-                            list={options.map((o, i) => ({
-                                value: String(i),
-                                label: optionLabel(o),
-                            }))}
+                <ServeModeFields
+                    mode={serveMode}
+                    root={serveRoot}
+                    spa={serveSpa}
+                    onMode={setServeMode}
+                    onRoot={setServeRoot}
+                    onSpa={setServeSpa}
+                />
+                {/* proxy only: Genie owns the port for a static/php site it serves. */}
+                {serveMode === 'proxy' && (
+                    <label className="site-field">
+                        <span>Port (optional)</span>
+                        <Input
+                            value={port}
+                            onValueChange={setPort}
+                            placeholder="5173"
+                            aria-label="The port the dev server listens on"
                         />
                     </label>
-                </div>
-            )}
+                )}
+            </div>
 
-            {option && (
+            {/* The recipe/run-picker only applies to a proxied dev server — a
+                static/php site has nothing to detect (Genie serves the folder). */}
+            {serveMode === 'proxy' && (
                 <>
-                    <Text size="xs" className="text-zinc-500">
-                        {option.reason}
-                    </Text>
-                    {option.command && (
-                        <Text size="xs" className="text-zinc-500">
-                            <Icon name="terminal" size="xs" /> <code>{option.command.join(' ')}</code>
-                        </Text>
+                    <div className="set-actions">
+                        <Action
+                            size="sm"
+                            variant="ghost"
+                            icon="search"
+                            disabled={detecting}
+                            onClick={() => void detect()}
+                        >
+                            {detecting ? 'Reading the repo…' : 'Advanced — pick how it runs'}
+                        </Action>
+                    </div>
+
+                    {options !== null && (
+                        <div className="site-card-fields">
+                            <label className="site-field site-field-wide">
+                                <span>Run it as</span>
+                                <Select
+                                    value={String(chosen)}
+                                    onValueChange={(v) => {
+                                        const i = Number(v);
+                                        setChosen(i);
+                                        const picked = options[i];
+                                        if (picked?.port) setPort(String(picked.port));
+                                    }}
+                                    list={options.map((o, i) => ({
+                                        value: String(i),
+                                        label: optionLabel(o),
+                                    }))}
+                                />
+                            </label>
+                        </div>
                     )}
-                    {optionCaveat(option) && (
-                        <Callout color="amber" icon={<Icon name="alert-triangle" size="sm" />}>
-                            Check this before starting: {optionCaveat(option)}.
-                        </Callout>
+
+                    {option && (
+                        <>
+                            <Text size="xs" className="text-zinc-500">
+                                {option.reason}
+                            </Text>
+                            {option.command && (
+                                <Text size="xs" className="text-zinc-500">
+                                    <Icon name="terminal" size="xs" />{' '}
+                                    <code>{option.command.join(' ')}</code>
+                                </Text>
+                            )}
+                            {optionCaveat(option) && (
+                                <Callout color="amber" icon={<Icon name="alert-triangle" size="sm" />}>
+                                    Check this before starting: {optionCaveat(option)}.
+                                </Callout>
+                            )}
+                        </>
                     )}
                 </>
             )}
@@ -1037,16 +1178,22 @@ function AddSiteForm({
                     size="sm"
                     color="blue"
                     icon="check"
-                    disabled={saving || !name.trim()}
+                    disabled={saving || !name.trim() || serveIncomplete}
                     onClick={async () => {
                         setSaving(true);
                         try {
                             await onCreate({
                                 name: name.trim(),
                                 ...(repo ? { repo } : {}),
-                                ...(option?.runMode ? { runMode: option.runMode } : {}),
-                                ...(option?.command ? { command: option.command } : {}),
-                                ...(port ? { port: Number(port) } : {}),
+                                // static/php: Genie serves it — send ONLY the mode.
+                                // No recipe runMode/command/port (create sets host).
+                                ...(hostServe
+                                    ? { hostServe }
+                                    : {
+                                          ...(option?.runMode ? { runMode: option.runMode } : {}),
+                                          ...(option?.command ? { command: option.command } : {}),
+                                          ...(port ? { port: Number(port) } : {}),
+                                      }),
                             });
                         } finally {
                             setSaving(false);

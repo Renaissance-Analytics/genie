@@ -594,6 +594,9 @@ export interface DevSiteInfo {
     env?: Record<string, string>;
     /** The Host header sent upstream, when overridden from the `.gen` name. */
     upstreamHost?: string;
+    /** How Genie serves this host-native site (static/php), when it does — so the
+     *  Edit form's serve-mode picker prefills. Absent ⇒ the repo's own dev server. */
+    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean };
     /** The transient start stage, present ONLY while a start is in flight:
      *  `pulling` → `building` → `starting` → `ready`|`failed`. A settled row omits
      *  it — read `state`/`ready` then. Surfaces observable startup (Gap 2). */
@@ -679,8 +682,11 @@ export interface ManageSiteRequest {
      * owns both the server and the port. For a repo's OWN dev server, or a service
      * you already run, use `command`+`port` or `hostPort` instead (a reverse-proxy,
      * no generated config).
+     *
+     * update: pass `null` to CLEAR it — switch a static/php site back to running the
+     * repo's own dev server (proxy). Omit the field to leave the serve mode untouched.
      */
-    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean };
+    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean } | null;
     /** create: extra BROWSER-FACING surfaces. Backend services never go here. */
     exposed?: Array<{ name: string; port: number; protocol: string; reason: string }>;
     env?: Record<string, string>;
@@ -1569,7 +1575,9 @@ const MANAGE_SITE_TOOL = {
                     'create: HOST-NATIVE — point `<name>.gen` straight at a dev server you ALREADY run as a HOST process on `127.0.0.1:<hostPort>` (e.g. one started with `manageProcess`), NO container and NO build. Mutually exclusive with `command`/`serve`/`image`.',
             },
             hostServe: {
-                type: 'object',
+                // `null` (update only) CLEARS it — see the description; the object
+                // branch's `required` does not constrain the null value.
+                type: ['object', 'null'],
                 properties: {
                     mode: {
                         type: 'string',
@@ -1590,7 +1598,7 @@ const MANAGE_SITE_TOOL = {
                 },
                 required: ['mode', 'root'],
                 description:
-                    'create (optional): have GENIE serve this host-native site with its OWN web server instead of running a repo dev server — you declare the mode, Genie writes the config (no hand-rolled nginx/Caddy). No `command`/`port` needed. For a repo’s own dev server, or a service you already run, use `command`+`port` or `hostPort` instead (a reverse-proxy, no generated config).',
+                    'create (optional): have GENIE serve this host-native site with its OWN web server instead of running a repo dev server — you declare the mode, Genie writes the config (no hand-rolled nginx/Caddy). No `command`/`port` needed. For a repo’s own dev server, or a service you already run, use `command`+`port` or `hostPort` instead (a reverse-proxy, no generated config). update: pass `null` to CLEAR it — switch a static/php site back to the repo’s own dev server.',
             },
             exposed: {
                 type: 'array',

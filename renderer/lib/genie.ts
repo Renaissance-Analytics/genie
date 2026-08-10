@@ -264,6 +264,19 @@ export interface DevSiteRunOption {
     needs?: string;
 }
 
+/**
+ * How Genie's OWN bundled web server (Caddy) serves a host-native site that is
+ * NOT its own dev server — the human/agent declares a MODE and Genie renders the
+ * config (genie #167/#171). Mirror of main's `HostServeConfig`; `root` is
+ * repo-relative (`dist`, `dashboard/dist`, `public`).
+ *   - `static` — serve a built directory, `spa` adding the index.html fallback;
+ *   - `php`    — serve `public/` via a FastCGI PHP worker (the nginx/Valet model).
+ * Absent ⇒ the site runs the repo's OWN dev server, reverse-proxied (proxy mode).
+ */
+export type HostServeConfig =
+    | { mode: 'static'; root: string; spa?: boolean }
+    | { mode: 'php'; root: string };
+
 /** One configured dev site plus whatever is currently true about it. */
 export interface DevSiteInfo {
     id: string;
@@ -301,6 +314,9 @@ export interface DevSiteInfo {
     /** The stored env + upstream Host, so the Edit form can prefill them. */
     env?: Record<string, string>;
     upstreamHost?: string;
+    /** How Genie serves this host-native site (static/php), so the Edit form can
+     *  prefill the serve-mode picker. Absent ⇒ it runs the repo's own dev server. */
+    hostServe?: HostServeConfig;
     /** The transient start stage, present ONLY while a start is in flight (Gap 2):
      *  `pulling → building → starting → ready|failed`. A settled row omits it. */
     phase?: DevSitePhase;
@@ -346,6 +362,13 @@ export interface ManageSiteRequest {
     build?: Array<{ label?: string; command: string[]; optional?: boolean }>;
     serve?: string[];
     port?: number;
+    /** create: point `<name>.gen` at a dev server ALREADY running as a host process
+     *  on `127.0.0.1:<hostPort>` — no container, no build (a reverse-proxy). */
+    hostPort?: number;
+    /** create/update: have GENIE serve this host-native site (static/php) rather
+     *  than running a repo dev server. `null` on update CLEARS it back to proxy
+     *  (the repo's own dev server); omit to leave the serve mode untouched. */
+    hostServe?: HostServeConfig | null;
     env?: Record<string, string>;
     /** create/update: extra browser-facing surfaces. */
     exposed?: Array<{ name: string; port: number; protocol: string; reason: string }>;

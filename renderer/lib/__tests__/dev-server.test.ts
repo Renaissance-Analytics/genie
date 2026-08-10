@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+    buildHostServe,
     canOpenInBrowser,
     devServerGuidance,
     holdersNote,
+    hostServePatch,
     isolationNote,
     optionCaveat,
     optionLabel,
     railSitesTitle,
     railSitesTone,
     runtimeSummary,
+    serveModeOf,
     serviceStatusLabel,
     serviceStatusTone,
     serviceTitle,
@@ -278,6 +281,57 @@ describe('the container runtime', () => {
     it('guides a remote window to the machine that actually runs the containers', () => {
         expect(devServerGuidance('remote')).toMatch(/machine itself|on that machine/i);
         expect(devServerGuidance('ready')).toBeNull();
+    });
+});
+
+// --- the serve-mode picker (host-native, Genie serves it) -------------------
+
+describe('the serve-mode picker (proxy | static | php)', () => {
+    it('reads a site’s current serve mode from its stored hostServe', () => {
+        // No hostServe = the repo runs its OWN dev server (Genie only proxies) —
+        // the picker's default, and the pre-#167 behaviour for every site.
+        expect(serveModeOf(SITE)).toBe('proxy');
+        expect(serveModeOf({ ...SITE, hostServe: { mode: 'static', root: 'dist' } })).toBe('static');
+        expect(serveModeOf({ ...SITE, hostServe: { mode: 'php', root: 'public' } })).toBe('php');
+    });
+
+    it('builds the hostServe request field from the picker — proxy declares nothing', () => {
+        // proxy = run the repo's own dev server; Genie generates no config, so the
+        // request carries no hostServe at all (the config-less path).
+        expect(buildHostServe('proxy', 'dist', true)).toBeUndefined();
+        expect(buildHostServe('static', 'dist', false)).toEqual({ mode: 'static', root: 'dist' });
+        expect(buildHostServe('static', 'dist', true)).toEqual({
+            mode: 'static',
+            root: 'dist',
+            spa: true,
+        });
+        // php is not a client-routed bundle, so it never carries the SPA flag.
+        expect(buildHostServe('php', 'public', true)).toEqual({ mode: 'php', root: 'public' });
+        // The root is trimmed; a blank one yields nothing (the form guards submit,
+        // this is the backstop so a half-filled static never ships an empty root).
+        expect(buildHostServe('static', '  dist  ', false)).toEqual({ mode: 'static', root: 'dist' });
+        expect(buildHostServe('static', '   ', false)).toBeUndefined();
+        expect(buildHostServe('php', '', false)).toBeUndefined();
+    });
+
+    it('turns an Edit into a patch field — omit when unchanged, null to CLEAR back to proxy', () => {
+        // Unchanged ⇒ omitted (undefined): the update never restarts a running site
+        // for a serve mode that did not actually move.
+        expect(hostServePatch(undefined, undefined)).toBeUndefined();
+        expect(
+            hostServePatch({ mode: 'static', root: 'dist' }, { mode: 'static', root: 'dist' }),
+        ).toBeUndefined();
+        // Set / change ⇒ the new config rides the patch.
+        expect(hostServePatch(undefined, { mode: 'php', root: 'public' })).toEqual({
+            mode: 'php',
+            root: 'public',
+        });
+        expect(
+            hostServePatch({ mode: 'static', root: 'dist' }, { mode: 'static', root: 'build' }),
+        ).toEqual({ mode: 'static', root: 'build' });
+        // static/php → proxy ⇒ an EXPLICIT null: a plain omit would leave the site
+        // static forever, because the store merges the patch OVER the stored row.
+        expect(hostServePatch({ mode: 'static', root: 'dist' }, undefined)).toBeNull();
     });
 });
 
