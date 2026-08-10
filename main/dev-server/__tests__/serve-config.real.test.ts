@@ -87,6 +87,29 @@ describe('REAL static serve mode — the bundled Caddy actually serves the folde
         const res = await fetch(`http://127.0.0.1:${port}/does-not-exist.html`);
         expect(res.status).toBe(404);
     });
+
+    it('runs TWO sites AT ONCE, each serving its own app — the :2019 admin-port regression', async () => {
+        // THE bug, reproduced deterministically. Each hostServe site spawns its own
+        // Caddy, and Caddy's default admin endpoint binds 127.0.0.1:2019 — so the
+        // SECOND concurrent Caddy died with "address already in use" and never came
+        // up. Two AT ONCE is the only shape that reproduces it: a single site (or
+        // sequential ones on a clean runner) binds :2019 alone and passes even unfixed.
+        // With `admin off` neither touches :2019, so both serve — and each gets its
+        // OWN app, not the other's (the moic.gen "wrong app" class of failure).
+        const [portA, portB] = await Promise.all([
+            serveStatic(true, 'GENIE-REAL-TWO-A'),
+            serveStatic(true, 'GENIE-REAL-TWO-B'),
+        ]);
+        expect(portA).not.toBe(portB);
+        const [a, b] = await Promise.all([
+            fetch(`http://127.0.0.1:${portA}/`).then((r) => r.text()),
+            fetch(`http://127.0.0.1:${portB}/`).then((r) => r.text()),
+        ]);
+        expect(a).toContain('GENIE-REAL-TWO-A');
+        expect(a).not.toContain('GENIE-REAL-TWO-B');
+        expect(b).toContain('GENIE-REAL-TWO-B');
+        expect(b).not.toContain('GENIE-REAL-TWO-A');
+    });
 });
 
 /** Is `php-cgi` on PATH (the exact binary production's worker command spawns)? The
