@@ -231,6 +231,24 @@ export function devCommandForRecipe(option: Pick<HostingOption, 'stack' | 'frame
 }
 
 /**
+ * The Herd-model DEV serve for a PHP/Laravel app run as a HOST process: FrankenPHP
+ * (Caddy + embedded php) serves the repo's `public/` directly over the LIVE source —
+ * static files as-is, everything else to the front controller — on a LOOPBACK port
+ * the host allocates. No `artisan serve`, no build. Genie uses this when its bundled
+ * FrankenPHP binary is present; otherwise it falls back to `php artisan serve`. The
+ * container recipe's FrankenPHP serve binds `0.0.0.0` (inside its netns); a HOST
+ * process binds `127.0.0.1` so it is never exposed on the LAN.
+ */
+export function frankenphpDevServe(root: string, port: number): DevServe {
+    return {
+        command: ['frankenphp', 'php-server', '--listen', `127.0.0.1:${port}`, '--root', root],
+        port,
+        framework: 'laravel',
+        stack: 'php',
+    };
+}
+
+/**
  * Stamp a HOST-ALLOCATED free port onto a dev command so the dev server binds
  * exactly the port `<name>.gen` routes to (agents never pick ports; the host does,
  * at start, via {@link allocateFreePort}). The port lives in a DIFFERENT place per

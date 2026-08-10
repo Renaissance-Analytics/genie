@@ -3,11 +3,42 @@ import {
     DEFAULT_STACK_PORTS,
     GENIE_BUILD_DIR,
     detectHostingOptions,
+    frankenphpDevServe,
     recommendedOption,
     resolveHostedRun,
     withPort,
 } from '../serve-recipe';
 import type { RepoFacts } from '../serve-recipe';
+
+/**
+ * frankenphpDevServe — the Herd-model DEV serve for a PHP/Laravel app run as a HOST
+ * process. FrankenPHP (Caddy + embedded php) serves the repo's public/ directly over
+ * the live source — no `artisan serve`, no build — on a loopback port the host owns.
+ * Used when the bundled FrankenPHP binary is present; otherwise Genie falls back to
+ * `php artisan serve`.
+ */
+describe('frankenphpDevServe', () => {
+    it('serves the repo public/ via FrankenPHP php-server on the given loopback port', () => {
+        const r = frankenphpDevServe('/repos/moic/public', 5321);
+        expect(r.command).toEqual([
+            'frankenphp',
+            'php-server',
+            '--listen',
+            '127.0.0.1:5321',
+            '--root',
+            '/repos/moic/public',
+        ]);
+        expect(r.port).toBe(5321);
+        expect(r.framework).toBe('laravel');
+        expect(r.stack).toBe('php');
+    });
+
+    it('binds LOOPBACK (127.0.0.1), not 0.0.0.0 — a host process is not exposed on the LAN', () => {
+        const r = frankenphpDevServe('/x/public', 8080);
+        expect(r.command.join(' ')).toContain('127.0.0.1:8080');
+        expect(r.command.join(' ')).not.toContain('0.0.0.0');
+    });
+});
 
 /**
  * withPort — stamp a HOST-ALLOCATED free port onto a dev command.
