@@ -1,0 +1,87 @@
+/**
+ * Genie owns the web-server config for the cases where a repo is NOT its own
+ * server — so an agent declares a SERVE MODE and Genie renders the Caddyfile,
+ * instead of hand-rolling `printf "server { … } " > /etc/nginx/... ; exec nginx`
+ * (the owner's screenshot). Genie already bundles Caddy, so no new binary.
+ *
+ * Two generated modes, both plain-http listeners on a loopback port that the
+ * `.gen` front door (which owns TLS) reverse-proxies to — identical, from the
+ * router's view, to any other host-native site on a port:
+ *   - `static` — serve a built directory over `file_server`, with an optional SPA
+ *     fallback to `index.html` (client-side routing);
+ *   - `php`    — serve `public/` and hand `.php` to a FastCGI worker (`php-cgi`),
+ *     the nginx/Valet model, for the one language that is not its own web server.
+ *
+ * The THIRD case — a repo's own dev server, or a service the agent runs — is a
+ * plain reverse-proxy and needs NO generated config; it stays on the Phase-1
+ * host-native path. PURE builders here: deterministically testable, no fs/spawn.
+ */
+
+/** What a generated-config site serves. Reverse-proxy sites are NOT here — they
+ *  need no config. */
+export type SiteServe =
+    | { kind: 'static'; root: string; spa: boolean }
+    | { kind: 'php'; root: string; fcgiPort: number };
+
+/** Quote a docroot for a Caddyfile: normalise Windows `\` to `/` (Caddy accepts
+ *  it, and it dodges quote-escaping), then refuse anything that could break the
+ *  quotes or inject a directive. */
+function quoteRoot(p: string): string {
+    if (typeof p !== 'string' || p.length === 0) {
+        throw new Error('serve-config: missing root');
+    }
+    const norm = p.replace(/\\/g, '/');
+    if (/["\n\r{}]/.test(norm)) {
+        throw new Error(`serve-config: refusing injectable root ${JSON.stringify(p)}`);
+    }
+    return `"${norm}"`;
+}
+
+function assertPort(port: number, which: string): void {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error(`serve-config: invalid ${which} ${JSON.stringify(port)}`);
+    }
+}
+
+/**
+ * The per-site PLAIN-HTTP Caddyfile for a generated serve mode. `auto_https off`
+ * because the `.gen` front door owns TLS; the site listens on `sitePort` (loopback)
+ * and the front door proxies to it.
+ */
+export function serveCaddyfile(opts: { sitePort: number; serve: SiteServe }): string {
+    assertPort(opts.sitePort, 'site port');
+    const root = quoteRoot(opts.serve.root);
+    const body: string[] = [`\troot * ${root}`];
+    if (opts.serve.kind === 'static') {
+        // SPA: an unmatched path serves index.html so a client-side route (deep
+        // link, refresh) resolves instead of 404ing — the exact `try_files` an
+        // agent otherwise writes by hand.
+        if (opts.serve.spa) body.push('\ttry_files {path} /index.html');
+        body.push('\tfile_server');
+    } else {
+        assertPort(opts.serve.fcgiPort, 'fcgi port');
+        // `php_fastcgi` adds its own file server + front-controller try_files.
+        body.push(`\tphp_fastcgi 127.0.0.1:${opts.serve.fcgiPort}`);
+    }
+    return ['{', '\tauto_https off', '}', `:${opts.sitePort} {`, ...body, '}', ''].join('\n');
+}
+
+/**
+ * The PHP FastCGI worker command: `php-cgi -b 127.0.0.1:<port>` runs php-cgi as a
+ * FastCGI server. `php-cgi` ships with PHP on every OS (unlike `php-fpm`, which is
+ * Unix-only), so this is the portable worker Caddy's `php_fastcgi` connects to.
+ */
+export function phpFastcgiWorkerCommand(fcgiPort: number): string[] {
+    assertPort(fcgiPort, 'fcgi port');
+    return ['php-cgi', '-b', `127.0.0.1:${fcgiPort}`];
+}
+
+/**
+ * Run Genie's bundled Caddy in the FOREGROUND against a per-site config. `run`
+ * (not the front door's detached `start`): this Caddy IS the host process Genie
+ * tracks for the site, so hostSpawn owns its lifecycle exactly like a repo's own
+ * dev server.
+ */
+export function caddyServeArgv(caddyBin: string, configPath: string): string[] {
+    return [caddyBin, 'run', '--config', configPath, '--adapter', 'caddyfile'];
+}
