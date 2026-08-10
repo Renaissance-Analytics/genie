@@ -78,6 +78,14 @@ export interface HostingPorts {
      *  Absent ⇒ host-native hosting (runMode 'host') is off and fails with a clear
      *  message rather than silently containerising. */
     hostSiteLogDir?: string;
+    /** Absolute path to Genie's bundled Caddy binary, for serving a `hostServe`
+     *  (static / php) site with Genie's own web server. Absent ⇒ those serve modes
+     *  fail with a clear "not available" status. */
+    caddyBin?: string;
+    /** Write a per-site generated web-server config and return its path — the fs
+     *  seam the shell owns (desktop writes under its data dir). Absent ⇒ generated
+     *  serve modes are unavailable. */
+    writeServeConfig?: (siteId: string, content: string) => string;
     /** Consent for fetching a missing image. Absent ⇒ no pull. */
     confirmImagePull?: (req: ImagePullConsent) => Promise<boolean> | boolean;
     /** The `.gen` change event — desktop broadcasts to the renderer, the cloud
@@ -187,6 +195,12 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         ...(ports.hostSiteLogDir
             ? { hostSpawn: createHostProcessRun({ logDir: ports.hostSiteLogDir }) }
             : {}),
+        // Genie's bundled Caddy + a config writer: together they let a `hostServe`
+        // (static / php) site be served by Genie's own web server, so an agent never
+        // hand-rolls an nginx/Caddy config. Both required — either absent leaves the
+        // serve mode off with a clear status.
+        ...(ports.caddyBin ? { caddyBin: ports.caddyBin } : {}),
+        ...(ports.writeServeConfig ? { writeServeConfig: ports.writeServeConfig } : {}),
         onChanged: ports.onChanged,
         onProgress: ports.onSiteProgress,
     };

@@ -12,6 +12,7 @@ import {
     stopSiteProcess,
 } from './site-process';
 import { composeHostSiteEnv, describeEmptyHostServiceEnv } from './host-site-process';
+import { serveCaddyfile, caddyServeArgv } from './serve-config';
 import type { HostEnvReport } from './services/service-manager';
 import { hostBrowserRoutes as selectHostBrowserRoutes } from './host-browser-routes';
 import type { HostSiteRoute } from './host-reconcile';
@@ -19,7 +20,7 @@ import { ensureWorkspaceSandbox, HOST_GATEWAY_HOSTNAME } from './workspace-sandb
 import { effectiveCommand, hostNativeRoute, sandboxCommandFor, type HostNativeRoute } from './sites-config';
 import type { ContainerRuntime, RuntimeDetection } from './container-runtime';
 import type { HostIds } from './host-ids';
-import type { DevSiteConfig, DevSites } from './sites-config';
+import type { DevSiteConfig, DevSites, HostServeConfig } from './sites-config';
 import type { ImagePullConsent } from './workspace-sandbox';
 
 /**
@@ -273,6 +274,19 @@ export interface DevSiteManagerDeps {
      * defaults to the real loopback allocator.
      */
     allocateFreePort?: (exclude: Set<number>) => Promise<number>;
+    /**
+     * Absolute path to Genie's bundled Caddy binary — the web server Genie runs to
+     * serve a host-native site that is NOT its own dev server (a `hostServe` static
+     * or php site). Absent ⇒ those serve modes fail with a clear "not available"
+     * status. The reverse-proxy (repo-dev-server) path never needs it.
+     */
+    caddyBin?: string;
+    /**
+     * Write a per-site generated web-server config (a Caddyfile) and return its
+     * absolute path — so `startHostNativeManaged` can point Genie's Caddy at it.
+     * Injectable so the serve orchestration is unit-tested without touching disk.
+     */
+    writeServeConfig?: (siteId: string, content: string) => string;
     /** Fired whenever the live set changes, so the UX and other agents follow. */
     onChanged?: () => void;
     /**
@@ -359,6 +373,14 @@ function repoCwdOnHost(workspacePath: string, repo: string): string | null {
     if (!repo) return workspacePath;
     if (!SAFE_REPO.test(repo) || repo === '.' || repo === '..') return null;
     return `${workspacePath}/repos/${repo}`;
+}
+
+/** The absolute docroot Genie's Caddy serves for a host-serve site: the repo dir
+ *  plus the (already sanitized, repo-relative) serve root. Guarded against a `..`
+ *  even so — it becomes a served directory, so it must not climb out of the repo. */
+function resolveServeRoot(cwd: string, rel: string): string | null {
+    if (rel.split(/[\\/]/).some((seg) => seg === '..')) return null;
+    return `${cwd}/${rel}`.replace(/\/+$/, '');
 }
 
 /**
@@ -841,21 +863,50 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
      * repo's real on-disk dir with the workspace's HOST-FORM service env (beta.237),
      * so it reaches the managed DB/redis. Nothing is containerised.
      */
+    /**
+     * The command that serves a `hostServe` site — Genie's bundled Caddy pointed at
+     * a generated per-site config, so an AGENT never writes a server block. `static`
+     * serves a built directory (with an optional SPA fallback); `php` is not wired
+     * yet. Returns a clear failure rather than spawning nothing.
+     */
+    function planHostServe(
+        hostServe: HostServeConfig,
+        cwd: string,
+        port: number,
+        siteId: string,
+    ): { ok: true; command: string[] } | { ok: false; error: string } {
+        if (hostServe.mode === 'php') {
+            return {
+                ok: false,
+                error:
+                    'PHP serve mode is not available in this build yet — set a host `command` ' +
+                    '(e.g. ["php","artisan","serve"]) for now.',
+            };
+        }
+        if (!deps.caddyBin || !deps.writeServeConfig) {
+            return {
+                ok: false,
+                error: 'Static serving is not available in this build (Genie has no bundled Caddy here).',
+            };
+        }
+        const root = resolveServeRoot(cwd, hostServe.root);
+        if (!root) {
+            return { ok: false, error: `Invalid serve root ${JSON.stringify(hostServe.root)}.` };
+        }
+        const caddyfile = serveCaddyfile({
+            sitePort: port,
+            serve: { kind: 'static', root, spa: hostServe.spa ?? false },
+        });
+        const configPath = deps.writeServeConfig(siteId, caddyfile);
+        return { ok: true, command: caddyServeArgv(deps.caddyBin, configPath) };
+    }
+
     async function startHostNativeManaged(
         workspaceId: string,
         siteId: string,
         config: DevSiteConfig,
         workspacePath: string,
     ): Promise<DevSiteStatus> {
-        const baseCommand = effectiveCommand(config);
-        if (!baseCommand) {
-            return failed(
-                workspaceId,
-                siteId,
-                config,
-                `Host-native site "${config.name}" has no command — set its \`command\`, e.g. ["php","artisan","serve"].`,
-            );
-        }
         const cwd = repoCwdOnHost(workspacePath, config.repo);
         if (cwd === null) {
             return failed(workspaceId, siteId, config, `Invalid repo name ${JSON.stringify(config.repo)}.`);
@@ -894,10 +945,34 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         // stored `config.port` is ignored on this path precisely because a fixed
         // stored port is the collision vector.
         const port = await allocateFreePort(livePortSet());
-        const { command, env: portEnv } = withPort(baseCommand, port, {
-            ...(config.stack ? { stack: config.stack } : {}),
-            ...(config.framework ? { framework: config.framework } : {}),
-        });
+
+        // How the site is served on `port`:
+        //   - `hostServe` → GENIE serves it with its bundled Caddy (a built dir, or
+        //     public/ via FastCGI) — the agent wrote no server config;
+        //   - otherwise → the repo's OWN dev server, reverse-proxied (Phase 1).
+        let command: string[];
+        let portEnv: Record<string, string> = {};
+        if (config.hostServe) {
+            const planned = planHostServe(config.hostServe, cwd, port, siteId);
+            if (!planned.ok) return failed(workspaceId, siteId, config, planned.error);
+            command = planned.command;
+        } else {
+            const baseCommand = effectiveCommand(config);
+            if (!baseCommand) {
+                return failed(
+                    workspaceId,
+                    siteId,
+                    config,
+                    `Host-native site "${config.name}" has no command — set its \`command\`, e.g. ["php","artisan","serve"].`,
+                );
+            }
+            const withP = withPort(baseCommand, port, {
+                ...(config.stack ? { stack: config.stack } : {}),
+                ...(config.framework ? { framework: config.framework } : {}),
+            });
+            command = withP.command;
+            portEnv = withP.env;
+        }
 
         // Same env precedence as a container site, but HOST-FORM services (beta.237).
         // `portEnv` (the allocated PORT, for stacks that read it) is stamped LAST so

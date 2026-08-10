@@ -1062,6 +1062,20 @@ app.whenReady().then(async () => {
     // native routes → the real host CA + hosts-file + Caddy :443. Assembled once;
     // fired on boot and (debounced) on every `.gen` change below. No-op — and no
     // admin prompt — until a site is opted in.
+    // Write a per-site generated Caddyfile under the Genie data dir, returning its
+    // path — the fs seam behind `writeServeConfig`. The siteId is a devSiteIdFor
+    // hash (a safe path segment); guarded anyway so nothing user-derived escapes.
+    function writeHostServeConfig(siteId: string, content: string): string {
+        if (!/^[A-Za-z0-9_-]+$/.test(siteId)) {
+            throw new Error(`unsafe site id ${JSON.stringify(siteId)}`);
+        }
+        const dir = path.join(app.getPath('userData'), 'host-site-configs');
+        fs.mkdirSync(dir, { recursive: true });
+        const file = path.join(dir, `${siteId}.caddyfile`);
+        fs.writeFileSync(file, content);
+        return file;
+    }
+
     hostBrowserReconciler = createDesktopHostBrowserReconciler({
         userDataDir: app.getPath('userData'),
         resourcesPath: process.resourcesPath,
@@ -1095,6 +1109,16 @@ app.whenReady().then(async () => {
         // A host-native site's dev server runs as a real HOST process; its captured
         // output is logged here (under the Genie data dir).
         hostSiteLogDir: path.join(app.getPath('userData'), 'host-sites'),
+        // Genie's bundled Caddy + where its generated per-site configs are written,
+        // so a `hostServe` (static / php) site is served by Genie's own web server —
+        // the agent declares a mode, Genie writes the config (moic/blockchain: no
+        // hand-rolled nginx). Same bundled binary the host `.gen` proxy uses.
+        caddyBin: path.join(
+            process.resourcesPath,
+            'runtime',
+            process.platform === 'win32' ? 'caddy.exe' : 'caddy',
+        ),
+        writeServeConfig: (siteId, content) => writeHostServeConfig(siteId, content),
         confirmImagePull: confirmContainerImagePull,
         // The `.gen` change event, so the header popover, the rail icon, the Site
         // Manager and the Testing Browser's resolver all re-pull when a container

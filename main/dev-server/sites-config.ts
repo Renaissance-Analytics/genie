@@ -134,6 +134,14 @@ export interface DevSiteConfig {
      * from a "Bad Request (400)" page.
      */
     upstreamHost?: string;
+    /**
+     * When set (host-native only), Genie serves this site with its OWN bundled
+     * web server (Caddy) rather than running a repo dev server: a built directory
+     * (`static`) or a PHP app via FastCGI (`php`). The agent declares the mode and
+     * never writes a server config. Absent ⇒ run the repo's own dev server. See
+     * {@link HostServeConfig} and `serve-config.ts`.
+     */
+    hostServe?: HostServeConfig;
     /** Strict opt-in: nothing runs until this is true. */
     enabled: boolean;
     /**
@@ -147,6 +155,21 @@ export interface DevSiteConfig {
      */
     browserExposed?: boolean;
 }
+
+/**
+ * How Genie's OWN bundled web server (Caddy) serves a host-native site that is
+ * NOT its own dev server — so an agent declares a serve MODE and Genie renders
+ * the config, instead of hand-rolling an nginx/Caddy server block. `root` is a
+ * repo-relative directory (`dist`, `dashboard/dist`, `public`).
+ *   - `static` — serve a built directory over `file_server`, `spa` adding the
+ *     `index.html` fallback so client-side routes resolve;
+ *   - `php`    — serve `public/` with a FastCGI PHP worker (the nginx/Valet model).
+ * Absent ⇒ the host-native site runs the repo's OWN dev server, reverse-proxied
+ * (the config-less path). See `serve-config.ts`.
+ */
+export type HostServeConfig =
+    | { mode: 'static'; root: string; spa?: boolean }
+    | { mode: 'php'; root: string };
 
 /** A workspace's dev sites, keyed by {@link devSiteIdFor}. */
 export type DevSites = Record<string, DevSiteConfig>;
@@ -237,6 +260,30 @@ export function slugLabel(value: string): string {
 // --- sanitize ---------------------------------------------------------------
 
 /** PURE. Normalize an untrusted patch: only well-typed, in-bounds fields survive. */
+/** A serve root is a repo-RELATIVE directory. Reject anything that climbs out of
+ *  the repo or carries shell/quote metacharacters — it becomes a docroot Genie's
+ *  Caddy serves, so it must stay inside the repo Genie mounted. */
+function cleanServeRoot(root: unknown): string | null {
+    if (typeof root !== 'string') return null;
+    const r = root.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+    if (!r || r.startsWith('/') || !/^[A-Za-z0-9._\-/]+$/.test(r)) return null;
+    if (r.split('/').some((seg) => seg === '' || seg === '..')) return null;
+    return r;
+}
+
+/** Validate a {@link HostServeConfig}: a known mode + an in-repo root. */
+function cleanHostServe(hs: unknown): HostServeConfig | null {
+    if (!hs || typeof hs !== 'object') return null;
+    const candidate = hs as HostServeConfig;
+    const root = cleanServeRoot(candidate.root);
+    if (!root) return null;
+    if (candidate.mode === 'static') {
+        return { mode: 'static', root, ...(candidate.spa ? { spa: true } : {}) };
+    }
+    if (candidate.mode === 'php') return { mode: 'php', root };
+    return null;
+}
+
 export function sanitizeDevSitePatch(
     patch: Partial<DevSiteConfig> | null | undefined,
 ): Partial<DevSiteConfig> {
@@ -349,6 +396,9 @@ export function sanitizeDevSitePatch(
         }
     }
 
+    const hostServe = cleanHostServe(patch.hostServe);
+    if (hostServe) out.hostServe = hostServe;
+
     if (typeof patch.enabled === 'boolean') out.enabled = patch.enabled;
 
     // Opt-in external-browser exposure (#238). A boolean only — never coerced;
@@ -392,6 +442,7 @@ const RECONFIGURE_KEYS: readonly (keyof DevSiteConfig)[] = [
     'kind',
     'framework',
     'upstreamHost',
+    'hostServe',
 ];
 
 export function devSiteReconfigureNeedsRestart(

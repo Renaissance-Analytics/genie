@@ -179,6 +179,54 @@ describe('host-native site (story #238) — point .gen at a host dev-server port
     });
 });
 
+describe('host-native serve mode — Genie serves it, the agent writes no config', () => {
+    it('accepts a static serve with an in-repo root, keeping the SPA flag only when set', () => {
+        expect(sanitizeDevSitePatch({ ...base(), hostServe: { mode: 'static', root: 'dist', spa: true } }).hostServe).toEqual({
+            mode: 'static',
+            root: 'dist',
+            spa: true,
+        });
+        // spa omitted ⇒ not stored (plain static, no index.html fallback).
+        expect(
+            sanitizeDevSitePatch({ ...base(), hostServe: { mode: 'static', root: 'dashboard/dist' } }).hostServe,
+        ).toEqual({ mode: 'static', root: 'dashboard/dist' });
+    });
+
+    it('accepts a php serve rooted at public/', () => {
+        expect(sanitizeDevSitePatch({ ...base(), hostServe: { mode: 'php', root: 'public' } }).hostServe).toEqual({
+            mode: 'php',
+            root: 'public',
+        });
+    });
+
+    it('normalises Windows separators and a trailing slash', () => {
+        expect(
+            sanitizeDevSitePatch({ ...base(), hostServe: { mode: 'static', root: 'dashboard\\dist\\' } }).hostServe,
+        ).toEqual({ mode: 'static', root: 'dashboard/dist' });
+    });
+
+    it('rejects an unknown mode, an absolute root, or one that climbs out of the repo', () => {
+        expect(
+            sanitizeDevSitePatch({ ...base(), hostServe: { mode: 'nginx', root: 'dist' } as never }).hostServe,
+        ).toBeUndefined();
+        expect(
+            sanitizeDevSitePatch({ ...base(), hostServe: { mode: 'static', root: '/etc' } }).hostServe,
+        ).toBeUndefined();
+        expect(
+            sanitizeDevSitePatch({ ...base(), hostServe: { mode: 'static', root: '../secrets' } }).hostServe,
+        ).toBeUndefined();
+    });
+
+    it('a serve-mode change needs a restart', () => {
+        expect(
+            devSiteReconfigureNeedsRestart(
+                base({ hostServe: { mode: 'static', root: 'dist' } }),
+                base({ hostServe: { mode: 'static', root: 'build' } }),
+            ),
+        ).toBe(true);
+    });
+});
+
 describe('external-browser opt-in (story #238 P1) — `browserExposed`', () => {
     it('sanitize keeps browserExposed only as a boolean', () => {
         expect(sanitizeDevSitePatch({ ...base(), browserExposed: true }).browserExposed).toBe(true);
