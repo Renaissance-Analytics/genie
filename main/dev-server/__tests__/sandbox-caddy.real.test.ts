@@ -106,6 +106,10 @@ function sniGet(port: number, servername: string): Promise<{ status: number; bod
                 port,
                 path: '/',
                 servername,
+                // Loopback dial of Caddy's `tls internal` leaf — no MITM surface, and
+                // the point is to test the internal CA, so validation is off (same as
+                // port-probe's waitForHttpsSni).
+                // codeql[js/disabling-certificate-validation]
                 rejectUnauthorized: false,
                 headers: { Host: servername },
             },
