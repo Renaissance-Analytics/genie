@@ -42,6 +42,18 @@ describe('serveCaddyfile — static', () => {
             serveCaddyfile({ sitePort: 1, serve: { kind: 'static', root: 'a"\n}', spa: false } }),
         ).toThrow();
     });
+
+    it('disables the admin API + shared autosave so MANY per-site Caddys coexist', () => {
+        // Each hostServe site spawns its OWN Caddy. Caddy's admin endpoint binds
+        // 127.0.0.1:2019 by DEFAULT, so a SECOND site's Caddy died with "listen tcp
+        // 127.0.0.1:2019: bind: address already in use" and never started — two
+        // static/php sites could not run at once (caught by serve-config.real.test.ts,
+        // invisible to the mocked hosting E2E). These Caddys are driven by hostSpawn,
+        // never Caddy's API, so the API is off and there is no shared autosave to race.
+        const cf = serveCaddyfile({ sitePort: 5321, serve: { kind: 'static', root: 'dist', spa: false } });
+        expect(cf).toContain('admin off');
+        expect(cf).toContain('persist_config off');
+    });
 });
 
 describe('serveCaddyfile — php', () => {

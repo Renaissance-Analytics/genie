@@ -32,3 +32,27 @@ jobs:
         run: npm test
       - name: Build renderer (static export)
         run: npx next build renderer
+
+  # REAL hosting tests (`*.real.test.ts`) — launch the ACTUAL bundled Caddy /
+  # php-cgi and curl them, so a broken serve mode fails CI instead of shipping
+  # (the mocked hosting E2E never runs a web server; two hostServe sites colliding
+  # on Caddy's :2019 admin port sailed straight through it). Linux-only: the
+  # runner has Docker for future container-backed real tests, and php-cgi installs
+  # cleanly. Needs `build:runtime` first for the Caddy binary.
+  hosting:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Install php-cgi (the FastCGI worker the php serve mode spawns)
+        run: sudo apt-get update && sudo apt-get install -y php-cgi
+      - name: Build the service runtime (bundled Caddy)
+        run: npm run build:runtime
+      - name: Real hosting tests (bundled Caddy + php-cgi)
+        run: npm run test:hosting

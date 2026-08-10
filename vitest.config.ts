@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { defineConfig, configDefaults } from 'vitest/config';
 import path from 'node:path';
 
 /**
@@ -24,6 +24,11 @@ export default defineConfig({
             'main/**/__tests__/**/*.test.ts',
             'renderer/**/__tests__/**/*.test.ts',
         ],
+        // `*.real.test.ts` are REAL hosting tests — they spawn the bundled Caddy /
+        // php-cgi / Docker and bind real ports, and need `npm run build:runtime`
+        // first. They run in their OWN lane (`npm run test:hosting`, see
+        // vitest.hosting.config.ts + the CI hosting job), NOT this fast unit run.
+        exclude: [...configDefaults.exclude, '**/*.real.test.ts'],
         // Every file shares ONE fork (below), so a file that swaps a global
         // timer and doesn't restore it breaks whichever file runs next. This
         // guard fails the file that LEAKED instead of the innocent one that
