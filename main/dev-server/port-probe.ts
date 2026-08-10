@@ -95,6 +95,35 @@ export async function waitForPort(
     return poll((attemptMs) => connectOnce(host, port, attemptMs), timeoutMs);
 }
 
+/**
+ * Allocate a guaranteed-free loopback TCP port, never one in `exclude`.
+ *
+ * The host hands each site its OWN port so `<name>.gen` can route to it, and — by
+ * passing the ports its live sites already hold in `exclude` — two Genie sites can
+ * never share one. The collision that had `moic.gen` serving another workspace's
+ * app (two sites, same default port) becomes IMPOSSIBLE rather than merely
+ * unlikely. Binds `:0` so the OS picks a free ephemeral port, reads it, and
+ * releases it; the caller binds it moments later and the readiness probe is the
+ * backstop for the tiny release→bind window (same port-race stance as the rest of
+ * this file).
+ */
+export async function allocateFreePort(exclude: Set<number> = new Set()): Promise<number> {
+    // Bounded retry so a pathological `exclude` can never spin forever.
+    for (let attempt = 0; attempt < 1000; attempt++) {
+        const port = await new Promise<number>((resolve, reject) => {
+            const server = net.createServer();
+            server.once('error', reject);
+            server.listen(0, '127.0.0.1', () => {
+                const addr = server.address();
+                const p = addr && typeof addr === 'object' ? addr.port : 0;
+                server.close(() => resolve(p));
+            });
+        });
+        if (port > 0 && !exclude.has(port)) return port;
+    }
+    throw new Error('could not allocate a free port after 1000 attempts');
+}
+
 /** One HTTP attempt. True only when a response actually arrives. */
 function requestOnce(
     host: string,

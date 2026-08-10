@@ -888,6 +888,9 @@ describe('service env injection (#234 P3)', () => {
             hostSpawn,
             serviceHostEnvFor: async () => ({ DB_HOST: '127.0.0.1', DB_PORT: '54329' }),
             probeReady: async () => true,
+            // The HOST owns the port now — allocate a free one at start and IGNORE
+            // the stored config.port (a fixed stored port is the collision vector).
+            allocateFreePort: async () => 5321,
         });
         const status = await m.start('acme', SITE_ID);
 
@@ -896,11 +899,12 @@ describe('service env injection (#234 P3)', () => {
         expect(status.ready).toBe(true);
         expect(runtime.ran).toHaveLength(0);
         expect(spawned).toHaveLength(1);
-        expect(spawned[0]?.command).toEqual(['php', 'artisan', 'serve', '--host=127.0.0.1', '--port=8001']);
+        // The command's port was rewritten to the ALLOCATED port, not the stored 8001.
+        expect(spawned[0]?.command).toEqual(['php', 'artisan', 'serve', '--host=127.0.0.1', '--port=5321']);
         // Host-form service env (beta.237) reached the dev server.
         expect(spawned[0]?.env.DB_HOST).toBe('127.0.0.1');
         expect(spawned[0]?.env.DB_PORT).toBe('54329');
-        // .gen routes straight at the host dev-server port.
+        // .gen routes straight at the ALLOCATED host dev-server port.
         expect(m.genSites()).toEqual([
             {
                 workspaceId: 'acme',
@@ -908,10 +912,72 @@ describe('service env injection (#234 P3)', () => {
                 siteId: SITE_ID,
                 hostname: 'web.acme.gen',
                 scheme: 'http',
-                port: 8001,
+                port: 5321,
                 loopback: '127.0.0.1',
             },
         ]);
+    });
+
+    it('two same-stack host sites NEVER share a port — the moic.gen/fancy collision, closed', async () => {
+        // The reported bug: two workspaces ran the same command on the same default
+        // port. With the REAL allocator + the live-port exclude set, the two sites
+        // must land on DISTINCT ports so `<name>.gen` can never route to the wrong app.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const hostSpawn = {
+            start: async () => ({ ok: true as const, pid: 4242 }),
+            stop: async () => {},
+            alive: async () => false,
+            readLog: async () => '',
+        };
+        const webId = devSiteIdFor('acme', 'web');
+        const apiId = devSiteIdFor('acme', 'api');
+        const sameCommand = ['php', 'artisan', 'serve', '--host=127.0.0.1', '--port=8000'];
+        const sites: DevSites = {
+            [webId]: { name: 'web', genName: 'web.acme.gen', repo: 'web', runMode: 'host', command: sameCommand, port: 8000, kind: 'http', enabled: true },
+            [apiId]: { name: 'api', genName: 'api.acme.gen', repo: 'api', runMode: 'host', command: sameCommand, port: 8000, kind: 'http', enabled: true },
+        };
+        // REAL allocator (no injection) — proves the invariant end to end.
+        const m = manager(runtime, sites, { hostSpawn, probeReady: async () => true });
+        await m.start('acme', webId);
+        await m.start('acme', apiId);
+
+        const ports = m.genSites().map((g) => g.port);
+        expect(ports).toHaveLength(2);
+        expect(ports[0]).not.toBe(ports[1]);
+    });
+
+    it('a re-entrant start (reconcile) keeps the LIVE allocated port — no re-alloc, no respawn', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        let starts = 0;
+        let alive = false;
+        const hostSpawn = {
+            start: async () => {
+                starts += 1;
+                alive = true;
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async () => {},
+            alive: async () => alive,
+            readLog: async () => '',
+        };
+        const sites: DevSites = {
+            [SITE_ID]: { name: 'web', genName: 'web.acme.gen', repo: 'app', runMode: 'host', command: ['php', 'artisan', 'serve', '--port=8000'], port: 8000, kind: 'http', enabled: true },
+        };
+        let allocations = 0;
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            probeReady: async () => true,
+            allocateFreePort: async () => {
+                allocations += 1;
+                return 5321;
+            },
+        });
+        await m.start('acme', SITE_ID); // allocates 5321, spawns
+        await m.start('acme', SITE_ID); // re-entrant: alive → re-record, NO respawn
+
+        expect(starts).toBe(1); // spawned once
+        expect(allocations).toBe(1); // allocated once
+        expect(m.genSites()[0]?.port).toBe(5321); // still on the live port
     });
 
     it('a MANAGED host-native site FAILS clearly when host-native hosting is unavailable (no hostSpawn)', async () => {

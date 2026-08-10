@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -104,9 +105,13 @@ export function createDesktopHostBrowserReconciler(opts: DesktopHostBrowserOpts)
     const io = hostBrowserIo(opts.platform);
     const reconcile = (routes: HostSiteRoute[]): Promise<HostReconcileResult> =>
         reconcileHostSites(routes, buildHostReconcileEffects(paths, io));
+    // A Genie CA on disk ⇒ this machine opted in before, so a boot with zero live
+    // sites must still DRAIN a `.gen` hosts line left over from a previous session.
+    const initiallyApplied = existsSync(paths.caCertPath);
     return createHostBrowserReconciler({
         routes: opts.routes,
         reconcile,
+        initiallyApplied,
         ...(opts.log ? { log: opts.log } : {}),
         ...(opts.debounceMs === undefined ? {} : { debounceMs: opts.debounceMs }),
     });

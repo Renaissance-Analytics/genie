@@ -19,10 +19,14 @@ import { reconcileHostsFile } from './hosts-file';
 export interface HostSiteRoute {
     /** The `.gen` name this site answers on. */
     genName: string;
-    /** The app's plain-http port on the HOST's loopback. */
+    /** The upstream port on the HOST's loopback — a host-native dev server's plain
+     *  port, or (for a container site) its sandbox Caddy's published https port. */
     port: number;
     /** Upstream `Host` override for host-checking frameworks (Django/Vite). */
     upstreamHost?: string;
+    /** `https-insecure` for a container site (reach its self-signed sandbox Caddy);
+     *  omitted/`http` for a host-native dev server. */
+    upstreamScheme?: 'http' | 'https-insecure';
 }
 
 export interface HostReconcileEffects {
@@ -66,16 +70,19 @@ export async function reconcileHostSites(
     const routes = [...bySite.values()].sort((a, b) => a.genName.localeCompare(b.genName));
     const genNames = routes.map((r) => r.genName);
 
-    // 1. Ensure a trusted CA exists. Install into the trust store ONLY when a new
-    //    one was minted (an existing, still-valid CA is already trusted).
-    const { material, created } = await loadOrCreateGenCa(fx.caStore);
-    if (created) await fx.installCaTrust(material.caPem);
-
-    // 2. Issue ONE multi-SAN leaf over every current name (skip when there are no
-    //    sites — an empty Caddyfile references no cert).
+    // 1 + 2. Ensure a trusted CA and issue ONE multi-SAN leaf — but ONLY when there
+    //    are sites to serve. An empty reconcile is a DRAIN (clear the hosts block +
+    //    write a bare Caddyfile); it needs no cert and must NEVER mint/install a CA,
+    //    so a teardown can never trigger the one-time Administrator trust prompt.
     let tls = { certPath: '', keyPath: '' };
+    let created = false;
     if (genNames.length > 0) {
-        const leaf = issueGenLeaf(material, genNames);
+        const ca = await loadOrCreateGenCa(fx.caStore);
+        created = ca.created;
+        // Install into the trust store ONLY when a new CA was minted (an existing,
+        // still-valid CA is already trusted).
+        if (created) await fx.installCaTrust(ca.material.caPem);
+        const leaf = issueGenLeaf(ca.material, genNames);
         tls = await fx.writeLeaf(leaf);
     }
 
@@ -89,6 +96,7 @@ export async function reconcileHostSites(
             host: r.genName,
             port: r.port,
             ...(r.upstreamHost ? { upstreamHost: r.upstreamHost } : {}),
+            ...(r.upstreamScheme ? { upstreamScheme: r.upstreamScheme } : {}),
         })),
         tls,
     );

@@ -80,6 +80,10 @@ describe('reconcileHostSites', () => {
         expect(cf).not.toContain('reverse_proxy');
         // The stale hosts block is removed.
         expect((fx.hostsIo.write as ReturnType<typeof vi.fn>).mock.calls[0][0]).not.toContain('old.gen');
+        // A DRAIN must never mint/install a CA — a teardown can't trigger the
+        // one-time Administrator trust prompt (the machine has no CA here).
+        expect(fx.installCaTrust).not.toHaveBeenCalled();
+        expect(res.caCreated).toBe(false);
     });
 
     it('dedupes + sorts sites so the Caddyfile is deterministic', async () => {

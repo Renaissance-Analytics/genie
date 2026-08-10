@@ -27,11 +27,22 @@ export interface HostCaddySite {
     /** The vhost this site answers on, e.g. `moic.gen`. Both the TLS SNI and the
      *  default upstream `Host`. */
     host: string;
-    /** The app's PLAIN-HTTP port on the HOST's loopback (127.0.0.1:port). */
+    /** The upstream port on the HOST's loopback (127.0.0.1:port) — a host-native
+     *  dev server's plain-http port, or (for a container site) its sandbox Caddy's
+     *  published https port. */
     port: number;
     /** The `Host` header to send the app when it must differ from {@link host}
      *  (Django `ALLOWED_HOSTS`, Vite `allowedHosts`). Omit to pass `.gen` through. */
     upstreamHost?: string;
+    /**
+     * How to reach the upstream. `http` (default) = a host-native dev server on
+     * plain loopback. `https-insecure` = a CONTAINER site's sandbox Caddy, which
+     * serves a self-signed leaf and routes by Host — so the hop is https with
+     * verification skipped and `Host`/SNI set to the gen name (exactly how the
+     * in-app carrier reaches it). The browser-facing leaf is unaffected — only this
+     * upstream hop is insecure-skipped.
+     */
+    upstreamScheme?: 'http' | 'https-insecure';
 }
 
 /** The single Genie-CA leaf (multi-SAN over every live `.gen`) every vhost serves. */
@@ -114,15 +125,27 @@ export function buildHostCaddyfile(sites: HostCaddySite[], tls: HostCaddyTls): s
         '\t\tstream',
         `\t\t"http://${s.host}" "https://${s.host}"`,
         '\t}',
-        `\treverse_proxy 127.0.0.1:${s.port} {`,
-        // Only when the app checks Host: rewrite the upstream Host, browser origin
-        // unchanged.
-        ...(s.upstreamHost ? [`\t\theader_up Host ${s.upstreamHost}`] : []),
+        s.upstreamScheme === 'https-insecure'
+            ? `\treverse_proxy https://127.0.0.1:${s.port} {`
+            : `\treverse_proxy 127.0.0.1:${s.port} {`,
+        // Container upstream: route the sandbox Caddy by Host = the gen name (it
+        // routes by Host and applies the app's own upstreamHost internally). A
+        // host-native upstream only rewrites Host when the app pins one.
+        ...(s.upstreamScheme === 'https-insecure'
+            ? [`\t\theader_up Host ${s.host}`]
+            : s.upstreamHost
+              ? [`\t\theader_up Host ${s.upstreamHost}`]
+              : []),
         // Strip upstream compression so `replace` sees a plaintext body to rewrite.
         '\t\theader_up -Accept-Encoding',
         // FORCE https on the app's own redirects (beta.236): rewrite a leading
         // `http:` Location back to `https:` at the front door.
         '\t\theader_down Location "^http:" "https:"',
+        // A container upstream (its sandbox Caddy) serves a self-signed leaf and
+        // expects SNI = the gen name; dial https, skip verification, set the SNI.
+        ...(s.upstreamScheme === 'https-insecure'
+            ? ['\t\ttransport http {', '\t\t\ttls_insecure_skip_verify', `\t\t\ttls_server_name ${s.host}`, '\t\t}']
+            : []),
         '\t}',
         '}',
         '',

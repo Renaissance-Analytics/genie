@@ -43,6 +43,34 @@ describe('createHostBrowserReconciler', () => {
         expect(log).toHaveBeenCalledWith(expect.stringContaining('trust store denied'));
     });
 
+    it('DRAINS to empty once a site has been exposed — removing the last site clears the block', async () => {
+        // The bug: removing the last browser-exposed site left its `.gen` hosts line
+        // behind because the opt-in floor skipped the reconcile at empty. Once we HAVE
+        // reconciled a non-empty set, a later empty set must still run so the hosts
+        // block + Caddyfile drain to nothing.
+        const reconcile = vi.fn().mockResolvedValue({});
+        let routes = [route('web.acme.gen', 8001)];
+        const r = createHostBrowserReconciler({ routes: () => routes, reconcile });
+        await r.runNow(); // non-empty → applied
+        routes = [];
+        await r.runNow(); // empty → MUST still reconcile (drain)
+        expect(reconcile).toHaveBeenNthCalledWith(2, []);
+    });
+
+    it('a never-opted-in machine with initiallyApplied stays FALSE untouched on empty', async () => {
+        const reconcile = vi.fn().mockResolvedValue({});
+        const r = createHostBrowserReconciler({ routes: () => [], reconcile });
+        await r.runNow();
+        expect(reconcile).not.toHaveBeenCalled();
+    });
+
+    it('initiallyApplied:true drains a leftover block at boot (a CA on disk ⇒ opted-in before)', async () => {
+        const reconcile = vi.fn().mockResolvedValue({});
+        const r = createHostBrowserReconciler({ routes: () => [], reconcile, initiallyApplied: true });
+        await r.runNow();
+        expect(reconcile).toHaveBeenCalledWith([]);
+    });
+
     it('debounces a burst of schedule() calls into a single reconcile (trailing edge)', () => {
         vi.useFakeTimers();
         const reconcile = vi.fn().mockResolvedValue({});
