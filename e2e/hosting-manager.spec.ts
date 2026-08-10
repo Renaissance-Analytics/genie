@@ -316,6 +316,85 @@ test('add-a-site: the advanced run-picker moves the port with the choice, and sa
     expect((await readHostingState(app))?.calls.site).not.toContain('create');
 });
 
+// --- the serve-mode picker (genie #167/#171) --------------------------------
+
+test('add-a-site: the serve-mode picker hands a built folder to GENIE (static/SPA), no dev command', async () => {
+    // The owner's screenshot: an agent hand-rolled nginx to serve a built SPA.
+    // The picker makes that a first-class choice — pick static, name the folder,
+    // and Genie serves it. So the recipe/port controls (a proxied dev server's
+    // concern) drop away, and the create carries the SAME `hostServe` an agent sends.
+    const modal = await openPanel(page);
+    await modal.getByRole('button', { name: 'Add a site…' }).click();
+    await modal.getByLabel('Name for the new site').fill('wallet');
+
+    const serveAs = modal
+        .locator('label.site-field', { hasText: 'How Genie serves it' })
+        .locator('select');
+    await serveAs.selectOption('static');
+
+    // A Genie-served site has nothing to detect: the recipe control is gone, and
+    // Add & start is GATED until a folder is named (an empty root serves nothing).
+    await expect(modal.getByRole('button', { name: 'Advanced — pick how it runs' })).toHaveCount(0);
+    await expect(modal.getByRole('button', { name: 'Add & start' })).toBeDisabled();
+    await modal.getByLabel('Directory Genie serves').fill('dist');
+    await expect(modal.getByRole('button', { name: 'Add & start' })).toBeEnabled();
+
+    await modal.getByRole('button', { name: 'Add & start' }).click();
+
+    // THE state assertion: the site is HOST-NATIVE and carries the declared serve
+    // mode (SPA on by default) — Genie serves the folder, no server config written.
+    await expect
+        .poll(async () => (await readHostingSites(app)).find((s) => s.name === 'wallet')?.hostServe)
+        .toEqual({ mode: 'static', root: 'dist', spa: true });
+    expect((await readHostingSites(app)).find((s) => s.name === 'wallet')?.runMode).toBe('host');
+});
+
+test('the site Edit form prefills the serve mode and switches a static site back to proxy', async () => {
+    await seedHostingSites(app, [
+        {
+            id: 'site-wallet',
+            name: 'wallet',
+            genName: 'wallet.hosting-e2e.gen',
+            repo: '',
+            runMode: 'host',
+            kind: 'http',
+            enabled: true,
+            state: 'running',
+            ready: true,
+            hostPort: 49020,
+            hostServe: { mode: 'static', root: 'dist', spa: true },
+        },
+    ]);
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    const modal = await openPanel(page);
+
+    await modal.getByRole('button', { name: 'Edit' }).click();
+    const edit = page.locator(MODAL);
+    await expect(edit.getByRole('heading', { name: 'Edit wallet' })).toBeVisible();
+
+    // Prefilled from the stored config: static, rooted at dist. And because GENIE
+    // serves it, there is NO startup-command field (that is a proxied server's).
+    const serveAs = edit
+        .locator('label.site-field', { hasText: 'How Genie serves it' })
+        .locator('select');
+    await expect(serveAs).toHaveValue('static');
+    await expect(edit.getByLabel('Directory Genie serves')).toHaveValue('dist');
+    const editModal = edit.filter({ has: page.getByRole('heading', { name: 'Edit wallet' }) });
+    await expect(editModal).not.toContainText('Startup command');
+
+    // Switch back to the repo's own dev server and save.
+    await serveAs.selectOption('proxy');
+    await edit.getByRole('button', { name: 'Save changes' }).click();
+    await expect(page.locator(MODAL).getByRole('heading', { name: 'Edit wallet' })).toHaveCount(0);
+
+    // THE assertion the DOM only implies: the update CLEARED the serve mode (a plain
+    // omit would leave it static — the store merges the patch over the stored row).
+    const site = (await readHostingSites(app)).find((s) => s.id === 'site-wallet');
+    expect(site?.hostServe, 'switching to proxy must clear the stored serve mode').toBeUndefined();
+    expect((await readHostingState(app))?.calls.site).toContain('update');
+});
+
 test('the Services view shows what this workspace uses, and what a stop would really do', async () => {
     const modal = await openPanel(page);
     await expect(modal).toContainText('Nothing hosted here yet.');

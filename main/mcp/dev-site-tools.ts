@@ -161,6 +161,8 @@ function toInfo(row: DevSiteRow): DevSiteInfo {
         // Stored env + upstream Host, so the human Edit form can prefill them.
         ...(row.env && Object.keys(row.env).length ? { env: row.env } : {}),
         ...(row.upstreamHost ? { upstreamHost: row.upstreamHost } : {}),
+        // The serve mode (static/php), so the Edit form's picker prefills.
+        ...(row.hostServe ? { hostServe: row.hostServe } : {}),
         ...(row.browserExposed ? { browserExposed: row.browserExposed } : {}),
         // The transient start phase, present only while a start is in flight.
         ...(row.phase ? { phase: row.phase } : {}),
@@ -182,6 +184,21 @@ function toOption(option: HostingOption): DevSiteRunOption {
         confident: option.confident,
         ...(option.needs ? { needs: option.needs } : {}),
     };
+}
+
+/**
+ * Narrow the loose request/detected serve shape to the stored discriminated
+ * union — the create AND update paths share this. A falsy input (proxy, cleared,
+ * or nothing detected) is `undefined`; the store re-validates the `root` through
+ * `sanitizeDevSitePatch`, so this only picks the branch.
+ */
+function narrowHostServe(
+    hs: { mode: 'static' | 'php'; root: string; spa?: boolean } | null | undefined,
+): HostServeConfig | undefined {
+    if (!hs) return undefined;
+    return hs.mode === 'php'
+        ? { mode: 'php', root: hs.root }
+        : { mode: 'static', root: hs.root, ...(hs.spa ? { spa: true } : {}) };
 }
 
 /** Normalize a caller-supplied build list — a step with no label still runs. */
@@ -371,11 +388,7 @@ export async function runManageSite(
                 if (hostServe) runMode = 'host';
                 // Narrow the loose request shape to the stored discriminated union;
                 // the store re-validates the root through sanitizeDevSitePatch.
-                const hostServeConfig: HostServeConfig | undefined = hostServe
-                    ? hostServe.mode === 'php'
-                        ? { mode: 'php', root: hostServe.root }
-                        : { mode: 'static', root: hostServe.root, ...(hostServe.spa ? { spa: true } : {}) }
-                    : undefined;
+                const hostServeConfig = narrowHostServe(hostServe);
                 let applied: HostingOption | undefined;
                 let options: HostingOption[] | undefined;
                 let framework: DevFramework | undefined;
@@ -582,6 +595,15 @@ export async function runManageSite(
                 if (req.upstreamHost !== undefined) patch.upstreamHost = req.upstreamHost;
                 if (req.enabled !== undefined) patch.enabled = req.enabled;
                 if (req.browserExposed !== undefined) patch.browserExposed = req.browserExposed;
+                // Serve mode (genie #167/#171). `null` CLEARS it (back to the repo's
+                // own dev server); a config SETS it — and a served site is host-native,
+                // so set `runMode:'host'` too (mirrors create). The key is set even for
+                // the clear (undefined value) so the merge overrides the stored serve;
+                // an OMITTED hostServe leaves it untouched.
+                if (req.hostServe !== undefined) {
+                    patch.hostServe = req.hostServe === null ? undefined : narrowHostServe(req.hostServe);
+                    if (patch.hostServe && req.runMode === undefined) patch.runMode = 'host';
+                }
 
                 // A passed `env` goes to the repo's `.env` (gitignored), never the
                 // tracked project.json (genie #168) — written before the reconfigure

@@ -414,8 +414,13 @@ export function sanitizeDevSitePatch(
         }
     }
 
-    const hostServe = cleanHostServe(patch.hostServe);
-    if (hostServe) out.hostServe = hostServe;
+    // Serve mode (genie #167/#171). PRESENCE decides, not validity: a patch that
+    // MENTIONS hostServe is setting it (Edit picker / agent), so the key is always
+    // emitted — a valid static|php config is stored, anything else (an explicit
+    // clear, or junk) drops to `undefined`. Because the write merges the patch OVER
+    // the stored row, that present-but-undefined key is what switches a site back to
+    // its OWN dev server; a MISSING key (a cosmetic edit) leaves the serve mode as-is.
+    if ('hostServe' in patch) out.hostServe = cleanHostServe(patch.hostServe) ?? undefined;
 
     if (typeof patch.enabled === 'boolean') out.enabled = patch.enabled;
 

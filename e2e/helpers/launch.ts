@@ -123,6 +123,7 @@ export interface E2ESeedSite {
     ready?: boolean;
     port?: number;
     hostPort?: number;
+    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean };
     browserExposed?: boolean;
 }
 
@@ -143,7 +144,14 @@ export async function seedHostingSites(
 /** Read the hosting fixture's sites back — to assert an edit PERSISTED what the
  *  DOM only implied (e.g. the browserExposed the toggle sends). */
 export async function readHostingSites(app: ElectronApplication): Promise<
-    Array<{ id: string; name: string; runMode: string; hostPort?: number; browserExposed?: boolean }>
+    Array<{
+        id: string;
+        name: string;
+        runMode: string;
+        hostPort?: number;
+        hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean };
+        browserExposed?: boolean;
+    }>
 > {
     return app.evaluate(() => {
         const h = (globalThis as Record<string, any>).__GENIE_E2E_HOSTING__;
@@ -152,6 +160,9 @@ export async function readHostingSites(app: ElectronApplication): Promise<
             name: s.name as string,
             runMode: s.runMode as string,
             hostPort: s.hostPort as number | undefined,
+            hostServe: s.hostServe as
+                | { mode: 'static' | 'php'; root: string; spa?: boolean }
+                | undefined,
             browserExposed: s.browserExposed as boolean | undefined,
         }));
     });
