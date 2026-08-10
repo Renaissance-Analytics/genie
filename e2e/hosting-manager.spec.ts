@@ -395,6 +395,16 @@ test('the site Edit form offers the external-browser toggle for a host-native si
     const toggle = toggleRow.getByRole('switch');
     await expect(toggle).toHaveAttribute('aria-checked', 'false');
 
+    // UX in sync with the host-native model: NO legacy serve field, NO container-only
+    // fields (port + image are host-owned/absent), and the startup hint is host-native
+    // — never "in the sandbox" or "the port above" (the host allocates the port now).
+    await expect(edit).not.toContainText('Serve command (legacy)');
+    await expect(edit).not.toContainText('Port the server listens on');
+    await expect(edit).not.toContainText('Server image');
+    await expect(edit).not.toContainText('in the sandbox');
+    await expect(edit).not.toContainText('the port above');
+    await expect(edit).toContainText('Genie assigns the port');
+
     // Turn it on and save.
     await toggle.click();
     await edit.getByRole('button', { name: 'Save changes' }).click();
