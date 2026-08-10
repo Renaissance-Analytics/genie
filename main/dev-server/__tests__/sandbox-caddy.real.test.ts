@@ -3,7 +3,6 @@ import { spawnSync } from 'node:child_process';
 import { closeSync, copyFileSync, mkdtempSync, openSync, readSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import https from 'node:https';
 import { createDockerRuntime } from '../docker-adapter';
 import type { ContainerRef, ContainerRuntime } from '../container-runtime';
 import { applyCaddyConfig, CADDY_DIR } from '../caddy-proxy';
@@ -96,34 +95,6 @@ async function pollInside(cid: string, shellTest: string, timeoutMs: number): Pr
     return false;
 }
 
-/** A raw HTTPS GET that presents `servername` as SNI (Caddy routes by it) and
- *  trusts the internal CA — the exact dial the in-app carrier makes. */
-function sniGet(port: number, servername: string): Promise<{ status: number; body: string }> {
-    return new Promise((resolve, reject) => {
-        const req = https.request(
-            {
-                host: '127.0.0.1',
-                port,
-                path: '/',
-                servername,
-                // Loopback dial of Caddy's `tls internal` leaf — no MITM surface, and
-                // the point is to test the internal CA, so validation is off (same as
-                // port-probe's waitForHttpsSni).
-                // codeql[js/disabling-certificate-validation]
-                rejectUnauthorized: false,
-                headers: { Host: servername },
-            },
-            (res) => {
-                let body = '';
-                res.on('data', (c) => (body += c));
-                res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
-            },
-        );
-        req.on('error', reject);
-        req.end();
-    });
-}
-
 beforeAll(async () => {
     if (!canRun) return;
     // A non-root image carrying Genie's OWN bundled Caddy — exactly how the dev
@@ -209,6 +180,9 @@ describe('REAL sandbox Caddy — applyCaddyConfig starts + serves TLS-SNI as the
         const maps = await rt.portMappings(ref.id);
         const hostPort = maps.find((m) => m.container === CADDY_HTTPS_PORT)?.hostPort;
         expect(hostPort, 'the sandbox Caddy 8443 must be published').toBeTruthy();
+        // waitForHttpsSni is the REAL probe site-manager uses: it dials the vhost by
+        // SNI and returns true ONLY on a non-gateway response — i.e. the proxy reached
+        // the live upstream and served its 200 end-to-end (a 502 would read as false).
         const sniUp = await waitForHttpsSni(hostPort!, host, 25_000);
         if (!sniUp) {
             const log = await rt.exec(ref.id, ['sh', '-c', `cat ${CADDY_DIR}/caddy.log 2>/dev/null | tail -25`]);
@@ -216,11 +190,7 @@ describe('REAL sandbox Caddy — applyCaddyConfig starts + serves TLS-SNI as the
                 `SNI dial to 8443 (host ${hostPort}) failed. caddy.log:\n${log.stdout}${log.stderr}`,
             );
         }
-
-        // And it serves the proxied site end-to-end (proxy → upstream → body).
-        const res = await sniGet(hostPort!, host);
-        expect(res.status).toBe(200);
-        expect(res.body).toContain('SANDBOX-SITE-OK');
+        expect(sniUp, 'the non-root sandbox Caddy must serve the proxied site over TLS-SNI').toBe(true);
 
         // Belt-and-braces: the tls-internal CA really was written under the writable
         // XDG dir (the beta.230 fix), not a root-owned path.
