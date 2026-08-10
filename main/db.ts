@@ -5,6 +5,7 @@ import {
     devSiteIdFor,
     parseDevSites,
     sanitizeDevSitePatch,
+    withoutPersistedEnv,
     type DevSiteConfig,
     type DevSites,
 } from './dev-server/sites-config';
@@ -1936,9 +1937,11 @@ export function getWorkspaceDevSites(id: string): DevSites {
     return resolveDevSites(devSitesStore, id);
 }
 
-/** Replace this workspace's whole dev-site map — writes the envelope + mirror. */
+/** Replace this workspace's whole dev-site map — writes the envelope + mirror.
+ *  `env` is stripped from every site first (genie #168): the tracked manifest
+ *  never holds a secret, and an existing leaked env is scrubbed on this write. */
 export function setWorkspaceDevSites(id: string, sites: DevSites): void {
-    persistDevSites(devSitesStore, id, sites);
+    persistDevSites(devSitesStore, id, withoutPersistedEnv(sites));
 }
 
 /**
