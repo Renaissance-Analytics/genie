@@ -805,7 +805,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         const ready = await probe({
             port: route.port,
             kind: 'http',
-            servername: config.genName,
+            // NO servername: a host-native dev server speaks PLAIN HTTP on the host
+            // port, so the probe must use waitForHttp — a servername would route it
+            // to the HTTPS-SNI path, whose TLS handshake fails against the plain-http
+            // port and reports ready:false for a site that is actually up (genie#160).
             hostHeader: config.upstreamHost ?? config.genName,
             timeoutMs: probeTimeoutMs,
         });
