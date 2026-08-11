@@ -11,6 +11,11 @@
  *     Fancy component plus the file types it opens), so the component renders in
  *     whichever window the user is sitting at. `remote-bridge` already treats it
  *     this way: it keeps `editorFor` client-local and forwards only the bytes.
+ *   - `panels[]` → also a CLIENT surface, served by `panels.ts` (which panels a
+ *     workspace can open) and rendered by `PluginPanelHost` through the renderer's
+ *     compile-time adapter registry. Like editors, the plugin ships no UI code;
+ *     any host work a panel triggers (the repo panel's git ops) runs through CORE
+ *     Genie IPC, not the plugin worker sandbox (first-party-with-a-plugin-seam).
  *
  *   - `mcpTools[]` → a HOST surface, served by `registry.ts`
  *     (`pluginToolDescriptors` / tool dispatch / `pluginAgentSkills`, each gated
@@ -51,7 +56,7 @@ export interface PluginSides {
 /** Classify a manifest's surfaces. A plugin may be both (e.g. Presentation). */
 export function pluginSides(manifest: PluginManifest): PluginSides {
     return {
-        client: (manifest.editors ?? []).length > 0,
+        client: (manifest.editors ?? []).length > 0 || (manifest.panels ?? []).length > 0,
         host: (manifest.mcpTools ?? []).length > 0 || (manifest.recipes ?? []).length > 0,
     };
 }

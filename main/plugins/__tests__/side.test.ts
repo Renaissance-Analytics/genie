@@ -57,6 +57,21 @@ describe('pluginSides', () => {
         expect(pluginSides(manifest({ recipes })).host).toBe(true);
     });
 
+    it('classifies a panels-only plugin as CLIENT-side only (renders in the window)', () => {
+        const panels = [
+            {
+                id: 'changes',
+                title: 'Repository',
+                fancyComponent: {
+                    package: '@particle-academy/fancy-git-ui',
+                    version: '>=0.5.0',
+                    export: 'RepoChangesPanel',
+                },
+            },
+        ];
+        expect(pluginSides(manifest({ panels }))).toEqual({ client: true, host: false });
+    });
+
     it('classifies a plugin with BOTH surfaces as client AND host', () => {
         expect(pluginSides(manifest({ editors: [EDITOR], mcpTools: [TOOL] }))).toEqual({
             client: true,

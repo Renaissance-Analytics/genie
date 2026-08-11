@@ -12,12 +12,13 @@ import type { ViewType, ViewMeta, TerminalSpec } from './genie';
  */
 
 /** The panel component kind a view spec dispatches to. */
-export type PanelKind = 'terminal' | 'code' | 'plugin';
+export type PanelKind = 'terminal' | 'code' | 'plugin' | 'plugin-panel';
 
 /** Map a spec's `type` to its panel component kind. Drives PanelFor's dispatch. */
 export function panelKindForSpecType(type: ViewType): PanelKind {
     if (type === 'code') return 'code';
     if (type === 'plugin') return 'plugin';
+    if (type === 'plugin-panel') return 'plugin-panel';
     return 'terminal';
 }
 
@@ -54,6 +55,36 @@ export function pluginSpecMeta(
         fancy_export: pluginEditor.fancyExport,
         fancy_package: pluginEditor.fancyPackage,
         fancy_version: pluginEditor.fancyVersion,
+    };
+}
+
+/**
+ * A plugin PANEL contribution resolved for opening (sent from main via
+ * `plugins.panels()`). Mirror of {@link PluginEditorRef} for the non-file panel
+ * surface: the renderer mounts the declared Fancy component through the
+ * compile-time adapter registry keyed by `fancyExport`.
+ */
+export interface PluginPanelRef {
+    pluginId: string;
+    panelId: string;
+    title: string;
+    icon?: string;
+    fancyExport: string;
+    fancyPackage: string;
+    fancyVersion: string;
+}
+
+/** Build the persisted meta for a `plugin-panel` spec created from a launcher pick. */
+export function pluginPanelSpecMeta(panel: PluginPanelRef, system: boolean): ViewMeta {
+    return {
+        ...(system ? { system: true } : {}),
+        plugin_id: panel.pluginId,
+        panel_id: panel.panelId,
+        panel_title: panel.title,
+        ...(panel.icon ? { panel_icon: panel.icon } : {}),
+        fancy_export: panel.fancyExport,
+        fancy_package: panel.fancyPackage,
+        fancy_version: panel.fancyVersion,
     };
 }
 

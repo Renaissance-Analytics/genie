@@ -5,6 +5,7 @@ import AgentTerminalForm, { type AgentFormValues } from './AgentTerminalForm';
 import {
     api,
     type AgentType,
+    type PluginPanelView,
     type TerminalSpec,
     type ViewType,
     type WorkspaceRow,
@@ -34,6 +35,8 @@ export default function TerminalTypeSplitButton({
     lastType,
     onLastTypeChange,
     onAddView,
+    pluginPanels = [],
+    onAddPluginPanel,
     onAgentCreated,
     customCommand,
     includeFiles,
@@ -51,6 +54,10 @@ export default function TerminalTypeSplitButton({
     onLastTypeChange: (id: TerminalTypeId) => void;
     /** Create a plain view — 'terminal' (regular) or 'code' (Add Files…). */
     onAddView: (type: ViewType) => void;
+    /** Launchable plugin panels (enabled + `ui.panel`-granted) offered in the menu. */
+    pluginPanels?: PluginPanelView[];
+    /** Open a plugin panel as a `plugin-panel` grid spec. */
+    onAddPluginPanel?: (panel: PluginPanelView) => void;
     /** A specialized agent spec was created — select it into view. */
     onAgentCreated: (spec: TerminalSpec) => void;
     /** The configured custom-agent command (placeholder for the command field). */
@@ -187,6 +194,11 @@ export default function TerminalTypeSplitButton({
         onAddView('code');
     };
 
+    const pickPanel = (panel: PluginPanelView) => {
+        setMenuOpen(false);
+        onAddPluginPanel?.(panel);
+    };
+
     const submitForm = async (agent: AgentType, values: AgentFormValues) => {
         setBusy(true);
         setError(null);
@@ -296,6 +308,30 @@ export default function TerminalTypeSplitButton({
                                         </span>
                                     </span>
                                 </button>
+                            </>
+                        )}
+                        {onAddPluginPanel && pluginPanels.length > 0 && (
+                            <>
+                                <div className="addview-menu-divider" />
+                                {pluginPanels.map((p) => (
+                                    <button
+                                        key={p.launchId}
+                                        type="button"
+                                        role="menuitem"
+                                        className="addview-type-item"
+                                        onClick={() => pickPanel(p)}
+                                    >
+                                        <IconCode size={14} />
+                                        <span className="addview-type-main">
+                                            <span className="addview-type-label">
+                                                {p.panel.title}
+                                            </span>
+                                            <span className="addview-type-hint">
+                                                {p.pluginName} panel
+                                            </span>
+                                        </span>
+                                    </button>
+                                ))}
                             </>
                         )}
                     </div>,

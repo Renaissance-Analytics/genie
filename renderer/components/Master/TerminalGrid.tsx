@@ -9,6 +9,7 @@ import {
 import TerminalPanel from './TerminalPanel';
 import CodePanel from '../Code/CodePanel';
 import PluginEditorHost from '../Plugins/PluginEditorHost';
+import PluginPanelHost from '../Plugins/PluginPanelHost';
 import ErrorBoundary from '../ErrorBoundary';
 import { IconCode, IconPlus } from './icons';
 import {
@@ -727,6 +728,23 @@ function PanelFor({
     if (spec.type === 'plugin') {
         return (
             <PluginEditorHost
+                spec={spec}
+                workspace={workspace}
+                focused={focused}
+                attention={attention}
+                maximized={maximized}
+                style={style}
+                onClose={onClose}
+                onMaximize={onMaximize}
+                onMinimize={onMinimize}
+                drag={drag}
+            />
+        );
+    }
+
+    if (spec.type === 'plugin-panel') {
+        return (
+            <PluginPanelHost
                 spec={spec}
                 workspace={workspace}
                 focused={focused}

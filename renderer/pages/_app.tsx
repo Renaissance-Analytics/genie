@@ -4,6 +4,7 @@ import '@particle-academy/react-fancy/styles.css';
 import '@particle-academy/fancy-code/styles.css';
 import '@particle-academy/fancy-slides/styles.css';
 import '@particle-academy/fancy-sheets/styles.css';
+import '@particle-academy/fancy-git-ui/styles.css';
 import '../styles/globals.css';
 import '../styles/master.css';
 import ErrorBoundary from '../components/ErrorBoundary';

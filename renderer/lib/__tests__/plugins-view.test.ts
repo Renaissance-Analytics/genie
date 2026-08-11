@@ -23,6 +23,7 @@ function view(over: Partial<InstalledPluginView> = {}): InstalledPluginView {
         publisher: null,
         tools: [],
         editors: [],
+        panels: [],
         sides: { client: false, host: false },
         permissions: [],
         integrity: null,
@@ -68,6 +69,14 @@ describe('pluginSummaryLine — what a COLLAPSED plugin row still says', () => {
         });
         expect(pluginSummaryLine(both)).toMatch(/2 tools/);
         expect(pluginSummaryLine(both)).toMatch(/2 editors/);
+    });
+
+    it('names a contributed workspace panel', () => {
+        const panels = view({
+            sides: { client: true, host: false },
+            panels: [{ id: 'changes', title: 'Repository', fancyComponent: 'p@1#RepoChangesPanel' }],
+        });
+        expect(pluginSummaryLine(panels)).toMatch(/1 panel\b/);
     });
 
     it('says a plugin contributes nothing rather than trailing an empty separator', () => {
