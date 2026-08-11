@@ -34,6 +34,11 @@ export interface RepoSeed {
 }
 
 function git(cwd: string, args: string[]): void {
+    // NB: no GIT_CONFIG_GLOBAL/SYSTEM override — pointing them at os.devNull
+    // (`\\.\nul` on Windows) makes git fail to open its config there, which broke
+    // the seed on the windows-latest E2E leg. The repo's LOCAL user config (set
+    // right after init) plus the author/committer env below make the commit
+    // identity deterministic without needing to isolate the global config.
     execFileSync('git', args, {
         cwd,
         stdio: 'ignore',
@@ -43,8 +48,6 @@ function git(cwd: string, args: string[]): void {
             GIT_AUTHOR_EMAIL: 'e2e@genie.test',
             GIT_COMMITTER_NAME: 'Genie E2E',
             GIT_COMMITTER_EMAIL: 'e2e@genie.test',
-            GIT_CONFIG_GLOBAL: os.devNull,
-            GIT_CONFIG_SYSTEM: os.devNull,
         },
     });
 }
