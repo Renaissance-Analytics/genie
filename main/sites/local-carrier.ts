@@ -1,6 +1,6 @@
 import http from 'node:http';
 import https from 'node:https';
-import { Duplex } from 'node:stream';
+import { Duplex, Readable, Transform } from 'node:stream';
 import {
     buildUpstreamHeaders,
     parseSiteProxyUrl,
@@ -89,6 +89,67 @@ function resolveForward(
     return { target, upstreamPath: stripTokenParam(parsed.upstreamPath) };
 }
 
+/**
+ * Content types whose body is text we can safely rewrite. Binary bodies (images,
+ * fonts, wasm, octet-stream) are passed through untouched.
+ */
+export function isRewritableTextType(contentType: string | undefined): boolean {
+    if (!contentType) return false;
+    const ct = contentType.toLowerCase();
+    return (
+        ct.startsWith('text/') ||
+        ct.includes('javascript') ||
+        ct.includes('json') ||
+        ct.includes('xml') || // application/xml, xhtml+xml, image/svg+xml
+        ct.includes('html')
+    );
+}
+
+/**
+ * A streaming transform that rewrites every `http://<host>` → `https://<host>`,
+ * correct ACROSS chunk boundaries — the in-process twin of the external host
+ * Caddy's `replace { "http://<host>" "https://<host>" }` (host-caddyfile.ts).
+ * Scoped to the site's OWN gen host so third-party URLs are never touched. Works
+ * on raw bytes (the needle is ASCII) so it can't split a multi-byte UTF-8 char.
+ */
+export function createGenHttpsBodyRewriter(host: string): Transform {
+    const needle = Buffer.from(`http://${host}`, 'latin1');
+    const replacement = Buffer.from(`https://${host}`, 'latin1');
+    let pending = Buffer.alloc(0);
+    return new Transform({
+        transform(chunk: Buffer, _enc, cb) {
+            const buf = pending.length ? Buffer.concat([pending, chunk]) : chunk;
+            const parts: Buffer[] = [];
+            let from = 0;
+            let at: number;
+            while ((at = buf.indexOf(needle, from)) !== -1) {
+                parts.push(buf.subarray(from, at), replacement);
+                from = at + needle.length;
+            }
+            // The remaining [from, end) has no COMPLETE needle; any INCOMPLETE one
+            // is a suffix ≤ needle.length-1 long, so hold back that many bytes for
+            // the next chunk and emit the rest.
+            const keep = Math.min(needle.length - 1, buf.length - from);
+            const cut = buf.length - keep;
+            parts.push(buf.subarray(from, cut));
+            pending = Buffer.from(buf.subarray(cut)); // copy: detach from `buf`
+            cb(null, Buffer.concat(parts));
+        },
+        flush(cb) {
+            cb(null, pending);
+        },
+    });
+}
+
+/** Upgrade a `Location` that points at THIS gen host from http → https. */
+export function upgradeGenLocation(location: string, host: string): string {
+    const prefix = `http://${host}`;
+    if (location.toLowerCase().startsWith(prefix.toLowerCase())) {
+        return `https://${host}${location.slice(prefix.length)}`;
+    }
+    return location;
+}
+
 /** Build the loopback dial options for a target + upstream path/headers. */
 function dialOptions(
     target: LocalTarget,
@@ -97,6 +158,23 @@ function dialOptions(
     keepUpgrade: boolean,
 ): https.RequestOptions {
     const isTls = target.scheme === 'https';
+    const upstreamHeaders = buildUpstreamHeaders(headers as http.IncomingHttpHeaders, target.hostname, {
+        keepUpgrade,
+        preserveApplicationAuthorization: true,
+        // The carrier IS the https-terminating reverse proxy for `.gen`: the
+        // Testing Browser reaches it over `https://<name>.gen`, and it then
+        // dials the loopback target. A CONTAINER site's Caddy re-derives these,
+        // but a HOST-NATIVE dev server is dialled DIRECTLY (plain http, no
+        // Caddy) — so without these a proxy-trusting app sees plain http and
+        // builds `http://<name>.gen` links the Testing Browser blocks. `proto` is
+        // always https because the browser always reached the carrier over https
+        // at `.gen`, whatever the upstream hop.
+        forwarded: { proto: 'https', host: target.hostname, for: LOOPBACK },
+    });
+    // Strip Accept-Encoding on the forward path so the upstream returns a PLAINTEXT
+    // body the https backstop (createGenHttpsBodyRewriter) can rewrite — mirrors the
+    // host Caddy's `header_up -Accept-Encoding`. WS upgrades don't get rewritten.
+    if (!keepUpgrade) delete upstreamHeaders['accept-encoding'];
     return {
         // Dedicated pool with an idle window below the upstream's — see
         // CARRIER_IDLE_TIMEOUT_MS. Never the global agent.
@@ -105,19 +183,7 @@ function dialOptions(
         port: target.port,
         method: keepUpgrade ? 'GET' : undefined,
         path: upstreamPath,
-        headers: buildUpstreamHeaders(headers as http.IncomingHttpHeaders, target.hostname, {
-            keepUpgrade,
-            preserveApplicationAuthorization: true,
-            // The carrier IS the https-terminating reverse proxy for `.gen`: the
-            // Testing Browser reaches it over `https://<name>.gen`, and it then
-            // dials the loopback target. A CONTAINER site's Caddy re-derives these,
-            // but a HOST-NATIVE dev server is dialled DIRECTLY (plain http, no
-            // Caddy) — so without these the app (Tynn: `trustProxies(at:'*')`)
-            // sees plain http and builds `http://<name>.gen` links the Testing
-            // Browser blocks. `proto` is always https because the browser always
-            // reached the carrier over https at `.gen`, whatever the upstream hop.
-            forwarded: { proto: 'https', host: target.hostname, for: LOOPBACK },
-        }),
+        headers: upstreamHeaders,
         // Terminate the dev site's local TLS as a client with SNI = the vhost;
         // loopback has no MITM surface, so a self-signed .test cert is fine.
         // codeql[js/disabling-certificate-validation]
@@ -141,9 +207,25 @@ export function createLocalSiteCarrier(
                 const agent = isTls ? https : http;
                 const opts = dialOptions(r.target, r.upstreamPath, req.headers, false);
                 opts.method = req.method;
-                upReq = agent.request(opts, (upRes) =>
-                    resolve2({ status: upRes.statusCode ?? 502, headers: upRes.headers, body: upRes }),
-                );
+                const host = r.target.hostname;
+                upReq = agent.request(opts, (upRes) => {
+                    // Site-agnostic https backstop (parity with the external host
+                    // Caddy): force the app's own http self-links + redirects to
+                    // https so a non-proxy-trusting stack's `http://<name>.gen`
+                    // URLs don't hit the Testing Browser's https-only block.
+                    const headers: http.IncomingHttpHeaders = { ...upRes.headers };
+                    if (typeof headers.location === 'string') {
+                        headers.location = upgradeGenLocation(headers.location, host);
+                    }
+                    let body: Readable = upRes;
+                    if (isRewritableTextType(headers['content-type']) && !headers['content-encoding']) {
+                        delete headers['content-length']; // the rewrite changes the length
+                        const rewriter = createGenHttpsBodyRewriter(host);
+                        upRes.on('error', (e) => rewriter.destroy(e));
+                        body = upRes.pipe(rewriter);
+                    }
+                    resolve2({ status: upRes.statusCode ?? 502, headers, body });
+                });
                 upReq.on('error', reject);
                 req.body.on('error', () => upReq?.destroy());
                 req.body.pipe(upReq);
