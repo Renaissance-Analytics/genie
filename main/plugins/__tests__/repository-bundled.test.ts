@@ -10,28 +10,38 @@ import {
     materialiseBundled,
     listBundledPlugins,
 } from '../official';
-import { PLUGIN_MANIFEST_FILENAME, validatePluginManifest, type PluginManifest } from '../manifest';
+import {
+    PLUGIN_MANIFEST_FILENAME,
+    manifestContributions,
+    validatePluginManifest,
+    type PluginManifest,
+} from '../manifest';
 import { collectPluginPanels, PANEL_CAPABILITY } from '../panels';
+import { collectPluginRecipes, RECIPE_CAPABILITY } from '../recipes';
 import { emptyPluginGrants, type PluginRow } from '../../db';
 
 /**
  * The bundled first-party "Repository" plugin (repo-management) — genie #63 line.
  *
  * Repository ships BUNDLED exactly like Presentation/Spreadsheet/Document (embedded
- * in `official.ts`, materialised to disk), so it appears in Settings → Plugins with
- * no marketplace. As of the plugin-panel surface it is a PANEL plugin: it declares
- * a vetted, Genie-bundled Fancy git component (the primary UX), gated by the
- * grantable `ui.panel` capability; its git EXECUTION is core host IPC (main/repo/*),
- * so it declares no MCP tools and — deliberately — no recipes. This suite pins:
- * it is bundled + first-party, its manifest validates, it declares the `ui.panel`
- * capability + the Changes panel, it materialises to disk with the panel intact,
- * and — once granted — it surfaces the panel as launchable while contributing
- * NOTHING without the grant.
+ * in `official.ts`, materialised to disk). It declares TWO surfaces in the unified
+ * `contributes {}` block: a Changes PANEL (the PRIMARY git UX, mounting vetted
+ * Genie-bundled Fancy git components) and the git recipe WIZARDS (the SECONDARY
+ * entry, reachable from the recipe launcher). Its git EXECUTION is core host IPC
+ * (main/repo/*) / recipe terminal steps — it declares no MCP tools. This suite
+ * pins: it is bundled + first-party, its manifest validates, it declares BOTH the
+ * `ui.panel` + `recipes` capabilities, it uses `contributes {}` (not legacy
+ * top-level arrays), it materialises with both surfaces intact, and — once granted
+ * — it surfaces both the panel and every recipe while contributing NOTHING for an
+ * ungranted surface.
  */
 
 const REPO_ID = 'ai.genie.repository';
+const EXPECTED_RECIPE_IDS = ['status', 'stage', 'commit', 'branch', 'push', 'pull', 'pr'];
+const FORBIDDEN_ARG_TOKENS = ['--force', '-f', '--force-with-lease', 'reset', 'clean'];
 
 const repoSource = () => BUNDLED_PLUGIN_SOURCES.find((b) => b.id === REPO_ID);
+const repoManifest = () => repoSource()!.manifest as unknown as PluginManifest;
 
 describe('Repository bundled plugin — embedded source', () => {
     it('is bundled + recognised as first-party', () => {
@@ -43,28 +53,56 @@ describe('Repository bundled plugin — embedded source', () => {
     });
 
     it('has a manifest that VALIDATES against the strict schema', () => {
-        const res = validatePluginManifest(repoSource()!.manifest);
-        expect(res.ok).toBe(true);
+        expect(validatePluginManifest(repoSource()!.manifest).ok).toBe(true);
     });
 
-    it('declares the grantable `ui.panel` capability (else the panel cannot surface)', () => {
-        const manifest = repoSource()!.manifest as unknown as PluginManifest;
-        expect(manifest.capabilities?.genieApi).toContain(PANEL_CAPABILITY);
+    it('declares surfaces in the unified `contributes {}` block, not legacy top-level arrays', () => {
+        const m = repoManifest();
+        expect(m.contributes).toBeTruthy();
+        expect(m.panels).toBeUndefined();
+        expect(m.recipes).toBeUndefined();
+        expect(m.mcpTools).toBeUndefined();
     });
 
-    it('declares a Changes panel mounting a vetted Genie-bundled Fancy git component', () => {
-        const manifest = repoSource()!.manifest as unknown as PluginManifest;
-        const panels = manifest.panels ?? [];
-        expect(panels.map((p) => p.id)).toContain('changes');
-        const changes = panels.find((p) => p.id === 'changes')!;
-        expect(changes.fancyComponent.package).toBe('@particle-academy/fancy-git-ui');
-        expect(changes.fancyComponent.export).toBe('RepoChangesPanel');
+    it('declares BOTH the ui.panel + recipes capabilities (else neither surface can appear)', () => {
+        const genieApi = repoManifest().capabilities?.genieApi ?? [];
+        expect(genieApi).toContain(PANEL_CAPABILITY);
+        expect(genieApi).toContain(RECIPE_CAPABILITY);
     });
 
-    it('registers NO MCP tools and NO recipes (git runs as core host IPC, not a sandbox)', () => {
-        const manifest = repoSource()!.manifest as unknown as PluginManifest;
-        expect(manifest.mcpTools ?? []).toHaveLength(0);
-        expect(manifest.recipes ?? []).toHaveLength(0);
+    it('contributes a Changes panel (primary) mounting a vetted Fancy git component', () => {
+        const c = manifestContributions(repoManifest());
+        const changes = c.panels.find((p) => p.id === 'changes');
+        expect(changes).toBeTruthy();
+        expect(changes!.fancyComponent.package).toBe('@particle-academy/fancy-git-ui');
+        expect(changes!.fancyComponent.export).toBe('RepoChangesPanel');
+    });
+
+    it('contributes every git recipe wizard (secondary), each running real git/gh', () => {
+        const recipes = manifestContributions(repoManifest()).recipes;
+        const ids = recipes.map((r) => r.id);
+        for (const id of EXPECTED_RECIPE_IDS) expect(ids).toContain(id);
+        for (const r of recipes) {
+            const terminals = r.steps.filter((s) => s.type === 'terminal');
+            expect(terminals.length).toBeGreaterThan(0);
+            for (const t of terminals) {
+                if (t.type !== 'terminal') continue;
+                expect(['git', 'gh']).toContain(t.command);
+            }
+        }
+    });
+
+    it('keeps destructive operations OUT of the recipes (no force-push / reset / clean)', () => {
+        for (const r of manifestContributions(repoManifest()).recipes) {
+            for (const s of r.steps) {
+                if (s.type !== 'terminal') continue;
+                for (const a of s.args ?? []) expect(FORBIDDEN_ARG_TOKENS).not.toContain(a);
+            }
+        }
+    });
+
+    it('registers NO MCP tools (git runs as core host IPC / recipe steps, not a sandbox)', () => {
+        expect(manifestContributions(repoManifest()).mcpTools).toHaveLength(0);
     });
 });
 
@@ -89,44 +127,48 @@ describe('Repository bundled plugin — materialisation + surfacing', () => {
     });
 
     it('appears in listBundledPlugins() (the Settings → Official list)', () => {
-        const listed = listBundledPlugins();
-        const repo = listed.find((b) => b.id === REPO_ID);
+        const repo = listBundledPlugins().find((b) => b.id === REPO_ID);
         expect(repo).toBeTruthy();
         expect(repo!.name).toBe('Repository');
         expect(fs.existsSync(repo!.path)).toBe(true);
     });
 
-    it('materialises a valid genie-plugin.json to disk with its panel intact', () => {
+    it('materialises a valid genie-plugin.json to disk with BOTH surfaces intact', () => {
         const mat = materialiseBundled(REPO_ID);
         const manifestPath = path.join(mat.path, PLUGIN_MANIFEST_FILENAME);
-        expect(fs.existsSync(manifestPath)).toBe(true);
-
         const onDisk = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
         const res = validatePluginManifest(onDisk);
         expect(res.ok).toBe(true);
         if (res.ok) {
-            expect((res.manifest.panels ?? []).map((p) => p.id)).toEqual(['changes']);
-            expect(res.manifest.capabilities?.genieApi).toContain(PANEL_CAPABILITY);
+            const c = manifestContributions(res.manifest);
+            expect(c.panels.map((p) => p.id)).toEqual(['changes']);
+            expect(c.recipes.map((r) => r.id).sort()).toEqual([...EXPECTED_RECIPE_IDS].sort());
         }
     });
 
-    it('surfaces the panel as launchable once the `ui.panel` grant is held', () => {
-        const manifest = repoSource()!.manifest as unknown as PluginManifest;
-        const out = collectPluginPanels([row(manifest, true)]);
-        expect(out.map((p) => p.launchId)).toEqual(['repository.changes']);
-        expect(out[0].panel.fancyComponent.export).toBe('RepoChangesPanel');
+    it('surfaces the panel once the `ui.panel` grant is held; nothing without it', () => {
+        const m = repoManifest();
+        expect(collectPluginPanels([row(m, true, false)]).map((p) => p.launchId)).toEqual([
+            'repository.changes',
+        ]);
+        expect(collectPluginPanels([row(m, false, false)])).toHaveLength(0);
     });
 
-    it('contributes NOTHING without the `ui.panel` grant (permission gate, fail-closed)', () => {
-        const manifest = repoSource()!.manifest as unknown as PluginManifest;
-        expect(collectPluginPanels([row(manifest, false)])).toHaveLength(0);
+    it('surfaces every recipe once the `recipes` grant is held; nothing without it', () => {
+        const m = repoManifest();
+        const granted = collectPluginRecipes([row(m, false, true)]);
+        expect(granted.map((r) => r.launchId).sort()).toEqual(
+            EXPECTED_RECIPE_IDS.map((id) => `repository.${id}`).sort(),
+        );
+        expect(collectPluginRecipes([row(m, false, false)])).toHaveLength(0);
     });
 });
 
-/** Build a surfaceable PluginRow from the bundled manifest, optionally granting `ui.panel`. */
-function row(manifest: PluginManifest, grantPanel: boolean): PluginRow {
+/** A surfaceable PluginRow from the bundled manifest, granting either/both surface caps. */
+function row(manifest: PluginManifest, grantPanel: boolean, grantRecipes: boolean): PluginRow {
     const grants = emptyPluginGrants();
     if (grantPanel) grants.genieApi[PANEL_CAPABILITY] = true;
+    if (grantRecipes) grants.genieApi[RECIPE_CAPABILITY] = true;
     return {
         id: manifest.id,
         namespace: manifest.namespace,

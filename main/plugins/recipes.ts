@@ -16,6 +16,7 @@
 import { listEnabledPlugins, type PluginRow } from '../db';
 import {
     RECIPE_CAPABILITY,
+    manifestContributions,
     validatePluginManifest,
     type PluginManifest,
     type PluginRecipeManifest,
@@ -57,7 +58,7 @@ export function collectPluginRecipes(plugins: PluginRow[]): ResolvedPluginRecipe
         if (plugin.grants.genieApi[RECIPE_CAPABILITY] !== true) continue;
         const manifest = manifestOf(plugin);
         if (!manifest) continue; // fail-closed: skip a malformed plugin
-        for (const recipe of manifest.recipes ?? []) {
+        for (const recipe of manifestContributions(manifest).recipes) {
             const launchId = `${plugin.namespace}.${recipe.id}`;
             if (seen.has(launchId)) continue;
             seen.add(launchId);

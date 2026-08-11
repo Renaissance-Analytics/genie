@@ -29,6 +29,7 @@ import {
     type PluginRow,
 } from '../db';
 import {
+    manifestContributions,
     validatePluginManifest,
     namespacedToolName,
     type PluginManifest,
@@ -114,7 +115,7 @@ export function pluginToolDescriptors(): PluginToolDescriptor[] {
             if (!pluginRowIsSurfaceable(plugin)) continue;
             const manifest = manifestOf(plugin);
             if (!manifest) continue; // fail-closed: skip a malformed plugin
-            for (const tool of manifest.mcpTools ?? []) {
+            for (const tool of manifestContributions(manifest).mcpTools) {
                 out.push({
                     name: namespacedToolName(manifest.namespace, tool.name),
                     description: manifest.agent?.guide
@@ -146,7 +147,7 @@ function resolvePluginTool(
         if (!pluginRowIsSurfaceable(plugin)) continue;
         const manifest = manifestOf(plugin);
         if (!manifest || manifest.namespace !== namespace) continue;
-        const tool = (manifest.mcpTools ?? []).find((t) => t.name === bare);
+        const tool = manifestContributions(manifest).mcpTools.find((t) => t.name === bare);
         if (tool) return { plugin, manifest, tool };
     }
     return null;
@@ -184,14 +185,15 @@ export function pluginAgentSkills(): PluginSkill[] {
             const manifest = manifestOf(plugin);
             if (!manifest) continue;
             const guide = manifest.agent?.guide?.trim();
+            const mcpTools = manifestContributions(manifest).mcpTools;
             // No tools ⇒ nothing to guide (an editor-only plugin like `document`).
-            if (!guide || !manifest.mcpTools?.length) continue;
+            if (!guide || !mcpTools.length) continue;
             out.push({
                 namespace: manifest.namespace,
                 name: manifest.name,
                 description: manifest.description?.trim() ?? '',
                 guide,
-                tools: manifest.mcpTools.map((t) => ({
+                tools: mcpTools.map((t) => ({
                     name: namespacedToolName(manifest.namespace, t.name),
                     description: t.description,
                 })),

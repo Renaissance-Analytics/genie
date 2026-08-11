@@ -13,7 +13,7 @@
  * and any unexpected error degrades to "no plugin editor" (default code editor).
  */
 import { listEnabledPlugins, type PluginRow } from '../db';
-import { validatePluginManifest, type PluginManifest } from './manifest';
+import { manifestContributions, validatePluginManifest, type PluginManifest } from './manifest';
 import { pluginRowIsSurfaceable } from './trust';
 import { pluginFileExtension } from './side';
 
@@ -50,7 +50,7 @@ export function matchEditorForExtension(
     for (const plugin of plugins) {
         const manifest = manifestOf(plugin);
         if (!manifest) continue; // fail-closed: skip a malformed plugin
-        for (const editor of manifest.editors ?? []) {
+        for (const editor of manifestContributions(manifest).editors) {
             const exts = (editor.extensions ?? []).map((e) => e.toLowerCase());
             if (exts.includes(ext)) {
                 return {

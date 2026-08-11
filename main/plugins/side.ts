@@ -43,7 +43,7 @@
  * usable from both the desktop shell and a headless host.
  */
 
-import type { PluginManifest, PluginEditorMapping } from './manifest';
+import { manifestContributions, type PluginManifest, type PluginEditorMapping } from './manifest';
 
 /** Which sides of the split a manifest's declared surfaces land on. */
 export interface PluginSides {
@@ -55,9 +55,10 @@ export interface PluginSides {
 
 /** Classify a manifest's surfaces. A plugin may be both (e.g. Presentation). */
 export function pluginSides(manifest: PluginManifest): PluginSides {
+    const c = manifestContributions(manifest);
     return {
-        client: (manifest.editors ?? []).length > 0 || (manifest.panels ?? []).length > 0,
-        host: (manifest.mcpTools ?? []).length > 0 || (manifest.recipes ?? []).length > 0,
+        client: c.editors.length > 0 || c.panels.length > 0,
+        host: c.mcpTools.length > 0 || c.recipes.length > 0,
     };
 }
 
@@ -85,7 +86,7 @@ export function editorClaiming(
 ): PluginEditorMapping | null {
     const ext = pluginFileExtension(fileName);
     if (!ext) return null;
-    for (const editor of manifest.editors ?? []) {
+    for (const editor of manifestContributions(manifest).editors) {
         if ((editor.extensions ?? []).some((e) => e.toLowerCase() === ext)) return editor;
     }
     return null;

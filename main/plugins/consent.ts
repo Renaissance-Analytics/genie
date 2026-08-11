@@ -26,7 +26,7 @@ import {
     emptyPluginGrants,
     type PluginGrants,
 } from '../db';
-import { validatePluginManifest, type PluginManifest } from './manifest';
+import { manifestContributions, validatePluginManifest, type PluginManifest } from './manifest';
 import { isDeveloperMode, restrictGrantsForTrust } from './trust';
 import { requiresHostEnablement } from './side';
 import { forceQuestion } from '../ask/force-question';
@@ -169,7 +169,7 @@ export async function consentAndEnablePlugin(id: string): Promise<ConsentResult>
         return { ok: true, enabled: true };
     }
 
-    const toolCount = manifest?.mcpTools?.length ?? 0;
+    const toolCount = manifest ? manifestContributions(manifest).mcpTools.length : 0;
     const questions: ForceQuestion[] = [];
     // An UNSIGNED plugin gets a loud, explicit "enable this unverified code?"
     // confirmation FIRST (§5.5 escalated consent).

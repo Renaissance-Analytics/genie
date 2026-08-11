@@ -33,7 +33,7 @@ import {
     type PluginRow,
     type PluginGrants,
 } from '../db';
-import { validatePluginManifest, type PluginManifest, type RejectedMarketplaceEntry } from './manifest';
+import { manifestContributions, validatePluginManifest, type PluginManifest, type RejectedMarketplaceEntry } from './manifest';
 import {
     installPluginFromRepo,
     installMarketplacePlugin as installMarketplacePluginLib,
@@ -163,6 +163,9 @@ function permissionViews(manifest: PluginManifest, grants: PluginGrants): Plugin
 
 export function toView(row: PluginRow): InstalledPluginView {
     const manifest = manifestOf(row);
+    // Read the EFFECTIVE surfaces so the view is identical whether the manifest
+    // used the unified `contributes {}` block or the legacy top-level arrays.
+    const contributions = manifest ? manifestContributions(manifest) : null;
     return {
         id: row.id,
         name: row.name,
@@ -174,17 +177,17 @@ export function toView(row: PluginRow): InstalledPluginView {
         sourceUrl: row.source_url,
         marketplaceId: row.marketplace_id,
         publisher: manifest?.publisher?.name ?? null,
-        tools: (manifest?.mcpTools ?? []).map((t) => ({
+        tools: (contributions?.mcpTools ?? []).map((t) => ({
             name: `${row.namespace}.${t.name}`,
             description: t.description,
         })),
-        editors: (manifest?.editors ?? []).map((e) => ({
+        editors: (contributions?.editors ?? []).map((e) => ({
             id: e.id,
             title: e.title,
             extensions: e.extensions,
             fancyEditor: `${e.fancyEditor.package}@${e.fancyEditor.version}#${e.fancyEditor.export}`,
         })),
-        panels: (manifest?.panels ?? []).map((p) => ({
+        panels: (contributions?.panels ?? []).map((p) => ({
             id: p.id,
             title: p.title,
             ...(p.icon ? { icon: p.icon } : {}),
