@@ -3,7 +3,10 @@ import {
     validatePluginManifest,
     validateMarketplaceManifest,
     namespacedToolName,
+    manifestContributions,
     PANEL_CAPABILITY,
+    RECIPE_CAPABILITY,
+    type PluginManifest,
 } from '../manifest';
 
 /** A minimal VALID plugin manifest (the hello-world shape). */
@@ -421,5 +424,210 @@ describe('validatePluginManifest — panels', () => {
         const res = validatePluginManifest(m);
         expect(res.ok).toBe(false);
         if (!res.ok) expect(res.errors.join('\n')).toContain('`panels` must be an array');
+    });
+});
+
+/**
+ * The unified `contributes {}` block (design §3). A plugin declares every surface
+ * kind in one block instead of growing unrelated top-level arrays; the legacy
+ * top-level arrays remain accepted (older installed manifests) and normalize into
+ * the same effective set. `contributes` and top-level surface arrays are mutually
+ * exclusive — a manifest uses one form or the other, never both.
+ */
+// Fresh objects per call — tests mutate these, so shared module-level constants
+// would leak corruption into later tests (they run in one process, in order).
+const changesPanel = () => ({
+    id: 'changes',
+    title: 'Repository',
+    fancyComponent: {
+        package: '@particle-academy/fancy-git-ui',
+        version: '>=0.5.0',
+        export: 'RepoChangesPanel',
+    },
+});
+const statusRecipe = () => ({
+    id: 'status',
+    title: 'Git status',
+    steps: [{ type: 'terminal', id: 'run', title: 'Run', command: 'git', args: ['status'] }],
+});
+
+function validContributesPlugin(): Record<string, unknown> {
+    return {
+        id: 'ai.genie.repository',
+        namespace: 'repository',
+        name: 'Repository',
+        version: '1.0.0',
+        entry: { tools: 'tools.cjs' },
+        agent: { guide: 'Use the repository tools when asked to inspect a repo.' },
+        capabilities: { genieApi: [PANEL_CAPABILITY, RECIPE_CAPABILITY] },
+        contributes: {
+            panels: [changesPanel()],
+            recipes: [statusRecipe()],
+            mcpTools: [
+                {
+                    name: 'inspect',
+                    description: 'Inspect the repo.',
+                    inputSchema: { type: 'object', properties: {} },
+                    run: 'tools',
+                },
+            ],
+        },
+    };
+}
+
+describe('validatePluginManifest — contributes {} block', () => {
+    it('accepts a manifest that declares surfaces under `contributes`', () => {
+        const res = validatePluginManifest(validContributesPlugin());
+        expect(res.ok).toBe(true);
+        if (res.ok) {
+            expect(res.manifest.contributes?.panels?.[0].id).toBe('changes');
+            expect(res.manifest.contributes?.recipes?.[0].id).toBe('status');
+        }
+    });
+
+    it('lets one plugin declare BOTH a panel (primary) and recipes (secondary)', () => {
+        const m = validContributesPlugin();
+        // The repository shape: a Changes panel + git recipe wizards together.
+        delete (m.contributes as Record<string, unknown>).mcpTools;
+        delete m.entry;
+        delete m.agent;
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(true);
+        if (res.ok) {
+            const c = manifestContributions(res.manifest);
+            expect(c.panels).toHaveLength(1);
+            expect(c.recipes).toHaveLength(1);
+        }
+    });
+
+    it('validates contributes.recipes with the SAME rules (unknown step type rejected)', () => {
+        const m = validContributesPlugin();
+        (m.contributes as { recipes: Array<{ steps: unknown[] }> }).recipes[0].steps = [
+            { type: 'task', id: 'x', title: 'X' },
+        ];
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.errors.join('\n')).toContain('contributes.recipes[0].steps[0].type');
+    });
+
+    it('validates contributes.panels fancyComponent (mirrored per-array validation)', () => {
+        const m = validContributesPlugin();
+        (m.contributes as { panels: Array<Record<string, unknown>> }).panels[0].fancyComponent = { package: 'x' };
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) {
+            const joined = res.errors.join('\n');
+            expect(joined).toContain('contributes.panels[0].fancyComponent.version');
+            expect(joined).toContain('contributes.panels[0].fancyComponent.export');
+        }
+    });
+
+    it('requires the ui.panel + recipes caps for contributes panels/recipes', () => {
+        const m = validContributesPlugin();
+        m.capabilities = { genieApi: [] };
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) {
+            const joined = res.errors.join('\n');
+            expect(joined).toContain('"ui.panel"');
+            expect(joined).toContain('"recipes"');
+        }
+    });
+
+    it('requires agent.guide when contributes.mcpTools are present', () => {
+        const m = validContributesPlugin();
+        delete m.agent;
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.errors.join('\n')).toContain('`agent.guide` is required when `mcpTools` are present');
+    });
+
+    it('rejects declaring the SAME surface both at top level AND in contributes', () => {
+        const m = validContributesPlugin();
+        m.panels = [changesPanel()]; // also top-level → ambiguous
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) {
+            const joined = res.errors.join('\n');
+            expect(joined).toContain('contributes');
+            expect(joined).toMatch(/not at the top level/i);
+        }
+    });
+
+    it('rejects a non-object contributes', () => {
+        const m = validContributesPlugin();
+        m.contributes = [];
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.errors.join('\n')).toContain('`contributes` must be an object');
+    });
+
+    it('accepts reserved surface kinds (flyouts/modals/pages) when present', () => {
+        const m = validContributesPlugin();
+        (m.contributes as Record<string, unknown>).flyouts = [
+            { id: 'alerts', title: 'Alerts', fancyComponent: changesPanel().fancyComponent },
+        ];
+        (m.contributes as Record<string, unknown>).workstationPage = {
+            fancyComponent: changesPanel().fancyComponent,
+        };
+        expect(validatePluginManifest(m).ok).toBe(true);
+    });
+
+    it('rejects a reserved kind of the wrong JSON type', () => {
+        const m = validContributesPlugin();
+        (m.contributes as Record<string, unknown>).flyouts = 'nope';
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.errors.join('\n')).toContain('contributes.flyouts');
+    });
+});
+
+describe('manifestContributions', () => {
+    it('normalizes legacy top-level arrays into the effective set', () => {
+        const legacy = validatePluginManifest({
+            id: 'ai.genie.document',
+            namespace: 'document',
+            name: 'Document',
+            version: '1.0.0',
+            editors: [
+                {
+                    id: 'doc',
+                    title: 'Document',
+                    extensions: ['.md'],
+                    fancyEditor: { package: 'p', version: '1.0.0', export: 'Editor' },
+                },
+            ],
+        });
+        expect(legacy.ok).toBe(true);
+        if (legacy.ok) {
+            const c = manifestContributions(legacy.manifest);
+            expect(c.editors).toHaveLength(1);
+            expect(c.panels).toHaveLength(0);
+            expect(c.recipes).toHaveLength(0);
+        }
+    });
+
+    it('reads from contributes when present', () => {
+        const res = validatePluginManifest(validContributesPlugin());
+        expect(res.ok).toBe(true);
+        if (res.ok) {
+            const c = manifestContributions(res.manifest);
+            expect(c.panels).toHaveLength(1);
+            expect(c.recipes).toHaveLength(1);
+            expect(c.mcpTools).toHaveLength(1);
+        }
+    });
+
+    it('returns empty arrays for a surface-less manifest', () => {
+        const c = manifestContributions({
+            id: 'x.y',
+            namespace: 'x',
+            name: 'X',
+            version: '1.0.0',
+        } as PluginManifest);
+        expect(c.mcpTools).toEqual([]);
+        expect(c.editors).toEqual([]);
+        expect(c.recipes).toEqual([]);
+        expect(c.panels).toEqual([]);
     });
 });

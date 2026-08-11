@@ -410,11 +410,12 @@ describe('ensureBundledPluginsInstalled — auto-grants first-party DECLARED cap
         }
     });
 
-    it('grants EXACTLY the declared set — Repository gets its genieApi ui.panel grant but NO fs grant it never declared', async () => {
+    it('grants EXACTLY the declared set — Repository gets its ui.panel + recipes grants but NO fs grant it never declared', async () => {
         await ensureBundledPluginsInstalled({ enable: true });
         const row = getPlugin('ai.genie.repository')!;
-        // It declares `genieApi: ['ui.panel']` (the panel surface) — granted.
+        // It declares `genieApi: ['ui.panel', 'recipes']` (panel + wizard surfaces) — both granted.
         expect(row.grants.genieApi['ui.panel']).toBe(true);
+        expect(row.grants.genieApi['recipes']).toBe(true);
         // …and no fs capability, so it is granted none (declared, never blanket).
         expect(row.grants.fs.workspace).toBeFalsy();
     });

@@ -162,6 +162,102 @@ export const RECIPE_CAPABILITY = 'recipes';
 /** The serializable step types a plugin manifest may declare. */
 const PLUGIN_RECIPE_STEP_TYPES = ['form', 'choice', 'terminal', 'browser'] as const;
 
+/** A DECLARED first-party Fancy component: a package@version + export (provenance
+ *  + the renderer's compile-time adapter-registry key). Shared by every vetted-
+ *  Fancy surface (panels, and the reserved flyouts/modals/pages). */
+export interface FancyComponentRef {
+    package: string;
+    version: string;
+    export: string;
+}
+
+/** Reserved: a host-rendered side sheet mounting a vetted Fancy component (Phase 2). */
+export interface PluginFlyoutContribution {
+    id: string;
+    title: string;
+    icon?: string;
+    fancyComponent: FancyComponentRef;
+}
+
+/** Reserved: a modal mounting a vetted Fancy component (Phase 3). */
+export interface PluginModalContribution {
+    id: string;
+    title: string;
+    icon?: string;
+    fancyComponent: FancyComponentRef;
+}
+
+/** Reserved: a fixed host-owned page mounting a vetted Fancy component (Phase 5). */
+export interface PluginPageContribution {
+    fancyComponent: FancyComponentRef;
+}
+
+/**
+ * The unified `contributes {}` block (design §3): every surface kind a plugin
+ * contributes, in ONE place, instead of unrelated growing top-level arrays. The
+ * four ACTIVE kinds (mcpTools / editors / recipes / panels) are validated with the
+ * same rules as their legacy top-level forms; the RESERVED kinds
+ * (flyouts / modals / wizards / workstationPage / workspaceSettingsPage) are
+ * accepted with a light structural gate — their per-item schema lands in each
+ * surface's own phase. A manifest declares surfaces EITHER here OR at the top
+ * level (legacy), never both.
+ */
+export interface PluginContributes {
+    mcpTools?: PluginMcpTool[];
+    editors?: PluginEditorMapping[];
+    panels?: PluginPanelContribution[];
+    recipes?: PluginRecipeManifest[];
+    /** Reserved (Phase 2). */
+    flyouts?: PluginFlyoutContribution[];
+    /** Reserved (Phase 3). */
+    modals?: PluginModalContribution[];
+    /** Reserved (Phase 4) — the same shape as recipes. */
+    wizards?: PluginRecipeManifest[];
+    /** Reserved (Phase 5). */
+    workstationPage?: PluginPageContribution;
+    /** Reserved (Phase 5). */
+    workspaceSettingsPage?: PluginPageContribution;
+}
+
+/** The effective, normalized contributions of a manifest (contributes ∪ legacy). */
+export interface ResolvedContributions {
+    mcpTools: PluginMcpTool[];
+    editors: PluginEditorMapping[];
+    panels: PluginPanelContribution[];
+    recipes: PluginRecipeManifest[];
+    flyouts: PluginFlyoutContribution[];
+    modals: PluginModalContribution[];
+    wizards: PluginRecipeManifest[];
+    workstationPage?: PluginPageContribution;
+    workspaceSettingsPage?: PluginPageContribution;
+}
+
+/** The surface-array kinds that may appear EITHER as legacy top-level OR in `contributes`. */
+const LEGACY_SURFACE_KEYS = ['mcpTools', 'editors', 'recipes', 'panels'] as const;
+
+/**
+ * The EFFECTIVE contributions of a manifest, normalizing the legacy top-level
+ * arrays and the unified `contributes {}` block into one shape. `contributes` and
+ * the legacy arrays are mutually exclusive (enforced at validation), so a simple
+ * "contributes value, else legacy value, else []" resolves correctly. Every
+ * reader (registry / editor-routing / recipes / panels / side / manage) goes
+ * through here so the two manifest forms behave identically.
+ */
+export function manifestContributions(m: PluginManifest): ResolvedContributions {
+    const c = m.contributes;
+    return {
+        mcpTools: c?.mcpTools ?? m.mcpTools ?? [],
+        editors: c?.editors ?? m.editors ?? [],
+        recipes: c?.recipes ?? m.recipes ?? [],
+        panels: c?.panels ?? m.panels ?? [],
+        flyouts: c?.flyouts ?? [],
+        modals: c?.modals ?? [],
+        wizards: c?.wizards ?? [],
+        workstationPage: c?.workstationPage,
+        workspaceSettingsPage: c?.workspaceSettingsPage,
+    };
+}
+
 /** Granular declared capabilities. Each entry is an independent grant (§12.1). */
 export interface PluginCapabilities {
     /** Filesystem: a named scope + an extension allow-list (guard-resolved). */
@@ -192,13 +288,23 @@ export interface PluginManifest {
     engines?: { genie?: string };
     /** Named entry modules (relative paths), keyed by a tool's `run`. */
     entry?: { tools?: string };
+    /**
+     * The unified surface block (design §3) — the preferred way to declare every
+     * contribution. Mutually exclusive with the legacy top-level `mcpTools` /
+     * `editors` / `recipes` / `panels` arrays below (kept for back-compat with
+     * older installed manifests). Read the EFFECTIVE set via
+     * {@link manifestContributions}, never a raw field.
+     */
+    contributes?: PluginContributes;
+    /** LEGACY (use `contributes.mcpTools`). Normalized by {@link manifestContributions}. */
     mcpTools?: PluginMcpTool[];
     /** Required when mcpTools are present: agents need a workflow, not bare verbs. */
     agent?: PluginAgentGuidance;
+    /** LEGACY (use `contributes.editors`). */
     editors?: PluginEditorMapping[];
-    /** Declared workspace-panel contributions (mirror of editors; vetted-Fancy-only). */
+    /** LEGACY (use `contributes.panels`). */
     panels?: PluginPanelContribution[];
-    /** Declared recipes contributed to the WizardModal launcher (§ recipes). */
+    /** LEGACY (use `contributes.recipes`). */
     recipes?: PluginRecipeManifest[];
     capabilities?: PluginCapabilities;
     /** npm deps the plugin needs (audited/pinned downstream). */
@@ -296,6 +402,169 @@ function nonEmpty(v: unknown): v is string {
     return typeof v === 'string' && v.trim().length > 0;
 }
 
+/** A DECLARED first-party Fancy component (package@version + export). Shared by
+ *  editors (`fancyEditor`) and panels/flyouts/modals/pages (`fancyComponent`). */
+function validateFancyRef(fc: unknown, at: string, errors: string[]): void {
+    if (!isRecord(fc)) {
+        errors.push(`${at} is required (a first-party Fancy package@version + export — plugins never ship UI code)`);
+        return;
+    }
+    if (!nonEmpty(fc.package)) errors.push(`${at}.package is required`);
+    if (!nonEmpty(fc.version)) errors.push(`${at}.version is required`);
+    if (!nonEmpty(fc.export)) errors.push(`${at}.export is required`);
+}
+
+/** Validate a surface array (`mcpTools` / `editors` / `panels` / `recipes`) at a
+ *  given coordinate prefix. Same rules for the legacy top-level form and the
+ *  `contributes.*` form — the prefix is the only difference. */
+function validateMcpToolsField(value: unknown, prefix: string, entry: unknown, errors: string[]): void {
+    if (!Array.isArray(value)) {
+        errors.push(`\`${prefix}\` must be an array when present`);
+        return;
+    }
+    const toolNames = new Set<string>();
+    value.forEach((t, i) => {
+        const at = `${prefix}[${i}]`;
+        if (!isRecord(t)) {
+            errors.push(`${at} must be an object`);
+            return;
+        }
+        if (!nonEmpty(t.name)) errors.push(`${at}.name is required`);
+        else if (!TOOL_SLUG.test(t.name))
+            errors.push(`${at}.name must start with a letter and use [A-Za-z0-9_]`);
+        else if (toolNames.has(t.name)) errors.push(`${at}.name "${t.name}" is duplicated`);
+        else toolNames.add(t.name);
+
+        if (!nonEmpty(t.description)) errors.push(`${at}.description is required`);
+
+        if (!isRecord(t.inputSchema) || t.inputSchema.type !== 'object')
+            errors.push(`${at}.inputSchema is required and must be a JSON Schema with type:"object"`);
+
+        if (t.run !== undefined && !nonEmpty(t.run))
+            errors.push(`${at}.run must be a non-empty string when present`);
+
+        if (t.process !== undefined && t.process !== 'worker' && t.process !== 'subprocess')
+            errors.push(`${at}.process must be "worker" or "subprocess" when present`);
+
+        if (t.gated !== undefined && typeof t.gated !== 'boolean')
+            errors.push(`${at}.gated must be a boolean when present`);
+
+        // A tool needs a resolvable entry module. Its `run` (default 'tools') must
+        // map to an `entry` key.
+        const runKey = nonEmpty(t.run) ? t.run : 'tools';
+        const entryObj = isRecord(entry) ? entry : undefined;
+        if (!entryObj || !nonEmpty(entryObj[runKey]))
+            errors.push(`${at} needs entry.${runKey} pointing at its tools module`);
+    });
+}
+
+function validateEditorsField(value: unknown, prefix: string, errors: string[]): void {
+    if (!Array.isArray(value)) {
+        errors.push(`\`${prefix}\` must be an array when present`);
+        return;
+    }
+    value.forEach((e, i) => {
+        const at = `${prefix}[${i}]`;
+        if (!isRecord(e)) {
+            errors.push(`${at} must be an object`);
+            return;
+        }
+        if (!nonEmpty(e.id)) errors.push(`${at}.id is required`);
+        if (!nonEmpty(e.title)) errors.push(`${at}.title is required`);
+        if (
+            !Array.isArray(e.extensions) ||
+            e.extensions.length === 0 ||
+            !e.extensions.every((x) => nonEmpty(x) && (x as string).startsWith('.'))
+        )
+            errors.push(`${at}.extensions must be a non-empty array of dot-prefixed extensions (e.g. ".pptx")`);
+        // §12.2: DECLARED first-party Fancy editor, not a shipped bundle.
+        validateFancyRef(e.fancyEditor, `${at}.fancyEditor`, errors);
+    });
+}
+
+function validatePanelsField(value: unknown, prefix: string, errors: string[]): void {
+    if (!Array.isArray(value)) {
+        errors.push(`\`${prefix}\` must be an array when present`);
+        return;
+    }
+    const panelIds = new Set<string>();
+    value.forEach((p, i) => {
+        const at = `${prefix}[${i}]`;
+        if (!isRecord(p)) {
+            errors.push(`${at} must be an object`);
+            return;
+        }
+        if (!nonEmpty(p.id)) errors.push(`${at}.id is required`);
+        else if (panelIds.has(p.id)) errors.push(`${at}.id "${p.id}" is duplicated`);
+        else panelIds.add(p.id);
+        if (!nonEmpty(p.title)) errors.push(`${at}.title is required`);
+        if (p.icon !== undefined && !isStr(p.icon))
+            errors.push(`${at}.icon must be a string when present`);
+        if (p.placement !== undefined && p.placement !== 'grid' && p.placement !== 'workspace')
+            errors.push(`${at}.placement must be "grid" or "workspace" when present`);
+        validateFancyRef(p.fancyComponent, `${at}.fancyComponent`, errors);
+    });
+}
+
+function validateRecipesField(value: unknown, prefix: string, errors: string[]): void {
+    if (!Array.isArray(value)) {
+        errors.push(`\`${prefix}\` must be an array when present`);
+        return;
+    }
+    const recipeIds = new Set<string>();
+    value.forEach((r, i) => {
+        const at = `${prefix}[${i}]`;
+        if (!isRecord(r)) {
+            errors.push(`${at} must be an object`);
+            return;
+        }
+        if (!nonEmpty(r.id)) errors.push(`${at}.id is required`);
+        else if (recipeIds.has(r.id)) errors.push(`${at}.id "${r.id}" is duplicated`);
+        else recipeIds.add(r.id);
+        if (!nonEmpty(r.title)) errors.push(`${at}.title is required`);
+        if (!Array.isArray(r.steps) || r.steps.length === 0) {
+            errors.push(`${at}.steps must be a non-empty array`);
+            return;
+        }
+        const stepIds = new Set<string>();
+        r.steps.forEach((s, j) => {
+            const sat = `${at}.steps[${j}]`;
+            if (!isRecord(s)) {
+                errors.push(`${sat} must be an object`);
+                return;
+            }
+            if (!isStr(s.type) || !PLUGIN_RECIPE_STEP_TYPES.includes(s.type as never)) {
+                errors.push(
+                    `${sat}.type must be one of ${PLUGIN_RECIPE_STEP_TYPES.join(', ')} (a plugin manifest can only declare serializable steps — no "task")`,
+                );
+                return;
+            }
+            if (!nonEmpty(s.id)) errors.push(`${sat}.id is required`);
+            else if (stepIds.has(s.id)) errors.push(`${sat}.id "${s.id}" is duplicated`);
+            else stepIds.add(s.id);
+            if (!nonEmpty(s.title)) errors.push(`${sat}.title is required`);
+            if (s.type === 'form') {
+                if (!Array.isArray(s.fields) || s.fields.length === 0)
+                    errors.push(`${sat}.fields must be a non-empty array`);
+                else
+                    s.fields.forEach((f, k) => {
+                        if (!isRecord(f) || !nonEmpty(f.key))
+                            errors.push(`${sat}.fields[${k}].key is required`);
+                        if (!isRecord(f) || !nonEmpty(f.label))
+                            errors.push(`${sat}.fields[${k}].label is required`);
+                    });
+            } else if (s.type === 'choice') {
+                if (!Array.isArray(s.options) || s.options.length === 0)
+                    errors.push(`${sat}.options must be a non-empty array`);
+            } else if (s.type === 'terminal') {
+                if (!nonEmpty(s.command)) errors.push(`${sat}.command is required`);
+            } else if (s.type === 'browser') {
+                if (!nonEmpty(s.url)) errors.push(`${sat}.url is required (a string; plugin recipes cannot ship a URL function)`);
+            }
+        });
+    });
+}
+
 /**
  * Validate a parsed `genie-plugin.json`. Returns the typed manifest or a list of
  * every problem found (all collected, not first-fail, so an author sees the full
@@ -355,207 +624,71 @@ export function validatePluginManifest(raw: unknown): ValidationResult<PluginMan
         }
     }
 
-    // mcpTools --------------------------------------------------------------
-    const toolNames = new Set<string>();
-    if (raw.mcpTools !== undefined) {
-        if (!Array.isArray(raw.mcpTools)) {
-            errors.push('`mcpTools` must be an array when present');
-        } else {
-            raw.mcpTools.forEach((t, i) => {
-                const at = `mcpTools[${i}]`;
-                if (!isRecord(t)) {
-                    errors.push(`${at} must be an object`);
-                    return;
-                }
-                if (!nonEmpty(t.name)) errors.push(`${at}.name is required`);
-                else if (!TOOL_SLUG.test(t.name))
-                    errors.push(`${at}.name must start with a letter and use [A-Za-z0-9_]`);
-                else if (toolNames.has(t.name)) errors.push(`${at}.name "${t.name}" is duplicated`);
-                else toolNames.add(t.name);
-
-                if (!nonEmpty(t.description)) errors.push(`${at}.description is required`);
-
-                if (!isRecord(t.inputSchema) || t.inputSchema.type !== 'object')
-                    errors.push(`${at}.inputSchema is required and must be a JSON Schema with type:"object"`);
-
-                if (t.run !== undefined && !nonEmpty(t.run))
-                    errors.push(`${at}.run must be a non-empty string when present`);
-
-                if (t.process !== undefined && t.process !== 'worker' && t.process !== 'subprocess')
-                    errors.push(`${at}.process must be "worker" or "subprocess" when present`);
-
-                if (t.gated !== undefined && typeof t.gated !== 'boolean')
-                    errors.push(`${at}.gated must be a boolean when present`);
-
-                // A tool needs a resolvable entry module. Its `run` (default
-                // 'tools') must map to an `entry` key.
-                const runKey = nonEmpty(t.run) ? t.run : 'tools';
-                const entry = isRecord(raw.entry) ? raw.entry : undefined;
-                if (!entry || !nonEmpty(entry[runKey]))
-                    errors.push(`${at} needs entry.${runKey} pointing at its tools module`);
-            });
-        }
+    // Surfaces — the unified `contributes {}` block, or the legacy top-level
+    // arrays (mutually exclusive). Both forms use the SAME per-kind validators;
+    // only the coordinate prefix differs. The cross-cutting capability + agent
+    // rules below run on the EFFECTIVE set, so they hold for either form.
+    const contributes = isRecord(raw.contributes) ? raw.contributes : undefined;
+    if (raw.contributes !== undefined && !contributes) {
+        errors.push('`contributes` must be an object when present');
     }
-    if (Array.isArray(raw.mcpTools) && raw.mcpTools.length > 0) {
+    if (contributes) {
+        // A manifest declares surfaces in `contributes` OR at the top level — never
+        // both. A legacy array alongside `contributes` is ambiguous → reject it.
+        for (const key of LEGACY_SURFACE_KEYS) {
+            if (raw[key] !== undefined)
+                errors.push(
+                    `\`${key}\` must be declared inside \`contributes\`, not at the top level, when \`contributes\` is present (declare surfaces in one place, not both)`,
+                );
+        }
+        if (contributes.mcpTools !== undefined)
+            validateMcpToolsField(contributes.mcpTools, 'contributes.mcpTools', raw.entry, errors);
+        if (contributes.editors !== undefined)
+            validateEditorsField(contributes.editors, 'contributes.editors', errors);
+        if (contributes.panels !== undefined)
+            validatePanelsField(contributes.panels, 'contributes.panels', errors);
+        if (contributes.recipes !== undefined)
+            validateRecipesField(contributes.recipes, 'contributes.recipes', errors);
+        // Reserved kinds (flyouts / modals / wizards / pages): a light structural
+        // gate only — the per-item schema lands in each surface's own phase.
+        for (const k of ['flyouts', 'modals', 'wizards'] as const) {
+            if (contributes[k] !== undefined && !Array.isArray(contributes[k]))
+                errors.push(`\`contributes.${k}\` must be an array when present`);
+        }
+        for (const k of ['workstationPage', 'workspaceSettingsPage'] as const) {
+            if (contributes[k] !== undefined && !isRecord(contributes[k]))
+                errors.push(`\`contributes.${k}\` must be an object when present`);
+        }
+    } else {
+        if (raw.mcpTools !== undefined)
+            validateMcpToolsField(raw.mcpTools, 'mcpTools', raw.entry, errors);
+        if (raw.editors !== undefined) validateEditorsField(raw.editors, 'editors', errors);
+        if (raw.panels !== undefined) validatePanelsField(raw.panels, 'panels', errors);
+        if (raw.recipes !== undefined) validateRecipesField(raw.recipes, 'recipes', errors);
+    }
+
+    // Cross-cutting rules on the EFFECTIVE surface arrays (contributes ∪ legacy).
+    const effArray = (kind: (typeof LEGACY_SURFACE_KEYS)[number]): unknown[] => {
+        const v = contributes ? contributes[kind] : raw[kind];
+        return Array.isArray(v) ? v : [];
+    };
+    const caps = isRecord(raw.capabilities) ? raw.capabilities : undefined;
+    const genieApi = caps && Array.isArray(caps.genieApi) ? caps.genieApi : [];
+
+    if (effArray('mcpTools').length > 0) {
         const agent = isRecord(raw.agent) ? raw.agent : null;
-        if (!agent || !nonEmpty(agent.guide)) {
-            errors.push(
-                '`agent.guide` is required when `mcpTools` are present',
-            );
-        }
+        if (!agent || !nonEmpty(agent.guide))
+            errors.push('`agent.guide` is required when `mcpTools` are present');
     }
-
-    // editors ---------------------------------------------------------------
-    if (raw.editors !== undefined) {
-        if (!Array.isArray(raw.editors)) {
-            errors.push('`editors` must be an array when present');
-        } else {
-            raw.editors.forEach((e, i) => {
-                const at = `editors[${i}]`;
-                if (!isRecord(e)) {
-                    errors.push(`${at} must be an object`);
-                    return;
-                }
-                if (!nonEmpty(e.id)) errors.push(`${at}.id is required`);
-                if (!nonEmpty(e.title)) errors.push(`${at}.title is required`);
-                if (
-                    !Array.isArray(e.extensions) ||
-                    e.extensions.length === 0 ||
-                    !e.extensions.every((x) => nonEmpty(x) && (x as string).startsWith('.'))
-                )
-                    errors.push(`${at}.extensions must be a non-empty array of dot-prefixed extensions (e.g. ".pptx")`);
-                // §12.2: DECLARED first-party Fancy editor, not a shipped bundle.
-                if (!isRecord(e.fancyEditor)) {
-                    errors.push(`${at}.fancyEditor is required (a first-party Fancy package@version + export — plugins never ship editor UI)`);
-                } else {
-                    if (!nonEmpty(e.fancyEditor.package)) errors.push(`${at}.fancyEditor.package is required`);
-                    if (!nonEmpty(e.fancyEditor.version)) errors.push(`${at}.fancyEditor.version is required`);
-                    if (!nonEmpty(e.fancyEditor.export)) errors.push(`${at}.fancyEditor.export is required`);
-                }
-            });
-        }
+    if (effArray('recipes').length > 0 && !genieApi.includes(RECIPE_CAPABILITY)) {
+        errors.push(
+            `\`capabilities.genieApi\` must include "${RECIPE_CAPABILITY}" when \`recipes\` are present (the user consents to it at enable-time)`,
+        );
     }
-
-    // panels ----------------------------------------------------------------
-    // A panel DECLARES a vetted first-party Fancy component (never ships UI
-    // code), exactly like an editor mapping. Mounting it is a CLIENT surface, so
-    // the plugin must hold the grantable `ui.panel` capability the user consents
-    // to at enable-time (the recipes precedent).
-    if (raw.panels !== undefined) {
-        if (!Array.isArray(raw.panels)) {
-            errors.push('`panels` must be an array when present');
-        } else {
-            const panelIds = new Set<string>();
-            raw.panels.forEach((p, i) => {
-                const at = `panels[${i}]`;
-                if (!isRecord(p)) {
-                    errors.push(`${at} must be an object`);
-                    return;
-                }
-                if (!nonEmpty(p.id)) errors.push(`${at}.id is required`);
-                else if (panelIds.has(p.id)) errors.push(`${at}.id "${p.id}" is duplicated`);
-                else panelIds.add(p.id);
-                if (!nonEmpty(p.title)) errors.push(`${at}.title is required`);
-                if (p.icon !== undefined && !isStr(p.icon))
-                    errors.push(`${at}.icon must be a string when present`);
-                if (
-                    p.placement !== undefined &&
-                    p.placement !== 'grid' &&
-                    p.placement !== 'workspace'
-                )
-                    errors.push(`${at}.placement must be "grid" or "workspace" when present`);
-                // Vetted-Fancy-only: DECLARED first-party Fancy component, not a bundle.
-                if (!isRecord(p.fancyComponent)) {
-                    errors.push(`${at}.fancyComponent is required (a first-party Fancy package@version + export — plugins never ship panel UI)`);
-                } else {
-                    if (!nonEmpty(p.fancyComponent.package)) errors.push(`${at}.fancyComponent.package is required`);
-                    if (!nonEmpty(p.fancyComponent.version)) errors.push(`${at}.fancyComponent.version is required`);
-                    if (!nonEmpty(p.fancyComponent.export)) errors.push(`${at}.fancyComponent.export is required`);
-                }
-            });
-            // A panel surface is gated by a permission the user consents to.
-            if (raw.panels.length > 0) {
-                const caps = isRecord(raw.capabilities) ? raw.capabilities : undefined;
-                const genieApi = caps && Array.isArray(caps.genieApi) ? caps.genieApi : [];
-                if (!genieApi.includes(PANEL_CAPABILITY)) {
-                    errors.push(
-                        `\`capabilities.genieApi\` must include "${PANEL_CAPABILITY}" when \`panels\` are present (the user consents to it at enable-time)`,
-                    );
-                }
-            }
-        }
-    }
-
-    // recipes ---------------------------------------------------------------
-    if (raw.recipes !== undefined) {
-        if (!Array.isArray(raw.recipes)) {
-            errors.push('`recipes` must be an array when present');
-        } else {
-            const recipeIds = new Set<string>();
-            raw.recipes.forEach((r, i) => {
-                const at = `recipes[${i}]`;
-                if (!isRecord(r)) {
-                    errors.push(`${at} must be an object`);
-                    return;
-                }
-                if (!nonEmpty(r.id)) errors.push(`${at}.id is required`);
-                else if (recipeIds.has(r.id)) errors.push(`${at}.id "${r.id}" is duplicated`);
-                else recipeIds.add(r.id);
-                if (!nonEmpty(r.title)) errors.push(`${at}.title is required`);
-                if (!Array.isArray(r.steps) || r.steps.length === 0) {
-                    errors.push(`${at}.steps must be a non-empty array`);
-                } else {
-                    const stepIds = new Set<string>();
-                    r.steps.forEach((s, j) => {
-                        const sat = `${at}.steps[${j}]`;
-                        if (!isRecord(s)) {
-                            errors.push(`${sat} must be an object`);
-                            return;
-                        }
-                        if (!isStr(s.type) || !PLUGIN_RECIPE_STEP_TYPES.includes(s.type as never)) {
-                            errors.push(
-                                `${sat}.type must be one of ${PLUGIN_RECIPE_STEP_TYPES.join(', ')} (a plugin manifest can only declare serializable steps — no "task")`,
-                            );
-                            return;
-                        }
-                        if (!nonEmpty(s.id)) errors.push(`${sat}.id is required`);
-                        else if (stepIds.has(s.id)) errors.push(`${sat}.id "${s.id}" is duplicated`);
-                        else stepIds.add(s.id);
-                        if (!nonEmpty(s.title)) errors.push(`${sat}.title is required`);
-                        if (s.type === 'form') {
-                            if (!Array.isArray(s.fields) || s.fields.length === 0)
-                                errors.push(`${sat}.fields must be a non-empty array`);
-                            else
-                                s.fields.forEach((f, k) => {
-                                    if (!isRecord(f) || !nonEmpty(f.key))
-                                        errors.push(`${sat}.fields[${k}].key is required`);
-                                    if (!isRecord(f) || !nonEmpty(f.label))
-                                        errors.push(`${sat}.fields[${k}].label is required`);
-                                });
-                        } else if (s.type === 'choice') {
-                            if (!Array.isArray(s.options) || s.options.length === 0)
-                                errors.push(`${sat}.options must be a non-empty array`);
-                        } else if (s.type === 'terminal') {
-                            if (!nonEmpty(s.command)) errors.push(`${sat}.command is required`);
-                        } else if (s.type === 'browser') {
-                            if (!nonEmpty(s.url)) errors.push(`${sat}.url is required (a string; plugin recipes cannot ship a URL function)`);
-                        }
-                    });
-                }
-            });
-            // A recipe surface is powerful (it can run terminal commands) → it must
-            // be gated by a permission the user consents to. Require the plugin to
-            // DECLARE the grantable `recipes` Genie-API capability.
-            if (raw.recipes.length > 0) {
-                const caps = isRecord(raw.capabilities) ? raw.capabilities : undefined;
-                const genieApi = caps && Array.isArray(caps.genieApi) ? caps.genieApi : [];
-                if (!genieApi.includes(RECIPE_CAPABILITY)) {
-                    errors.push(
-                        `\`capabilities.genieApi\` must include "${RECIPE_CAPABILITY}" when \`recipes\` are present (the user consents to it at enable-time)`,
-                    );
-                }
-            }
-        }
+    if (effArray('panels').length > 0 && !genieApi.includes(PANEL_CAPABILITY)) {
+        errors.push(
+            `\`capabilities.genieApi\` must include "${PANEL_CAPABILITY}" when \`panels\` are present (the user consents to it at enable-time)`,
+        );
     }
 
     // capabilities ----------------------------------------------------------

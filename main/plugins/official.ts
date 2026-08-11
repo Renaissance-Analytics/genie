@@ -366,51 +366,209 @@ const DOCUMENT_SOURCE: BundledPluginSource = {
 // --- Repository (repo-management — a workspace PANEL over host-side git) ------
 
 const REPOSITORY_TOOLS = `'use strict';
-// The Repository plugin is PANEL-ONLY: it contributes a workspace panel that
-// mounts the vetted fancy-git-ui components (Changes list, commit box, diff).
-// Its git EXECUTION is core Genie host IPC (main/repo/*), not the plugin worker
-// sandbox, so it registers no MCP tools and no fs/network worker capabilities.
+// The Repository plugin's PRIMARY surface is a workspace PANEL that mounts the
+// vetted fancy-git-ui components (Changes list, commit box, diff); its git
+// EXECUTION is core Genie host IPC (main/repo/*). Its SECONDARY surface is the
+// original git recipe wizards (run from the "Run a recipe" launcher), whose
+// terminal steps run real git on the host. It registers no MCP tools.
 module.exports = {};
 `;
+
+/**
+ * A recipe terminal step running a real git/gh command in the workspace repo.
+ * `cwd` is omitted deliberately: the WizardModal spawns terminal steps with the
+ * workspace as the default cwd. Wizard inputs reach the argv via `{{key}}`
+ * placeholders (interpolated from the preceding form step), and args are passed
+ * to the pty as an ARGV array (never a shell string), so a value with spaces
+ * stays one argument — no shell-injection surface.
+ */
+function gitStep(id: string, title: string, command: string, args: string[]): {
+    type: 'terminal';
+    id: string;
+    title: string;
+    command: string;
+    args: string[];
+} {
+    return { type: 'terminal', id, title, command, args };
+}
 
 const REPOSITORY_SOURCE: BundledPluginSource = {
     id: 'ai.genie.repository',
     name: 'Repository',
     description:
-        'Review changes, stage, commit, branch, push and pull for the workspace repo in a panel.',
+        'Review changes, stage, commit, branch, push and pull for the workspace repo — a panel, plus git recipe wizards.',
     manifest: {
         id: 'ai.genie.repository',
         namespace: 'repository',
         name: 'Repository',
-        version: '0.2.0',
+        version: '0.3.0',
         description:
-            'Repository management for the workspace repo as a workspace PANEL: browse pending changes, review a side-by-side diff, stage/unstage, commit, create a branch, and push/pull — all human-initiated. The panel mounts vetted, Genie-bundled Fancy git components; git runs on the host that holds the workspace. Destructive operations (force-push, reset) are intentionally excluded.',
+            'Repository management for the workspace repo. PRIMARY: a workspace PANEL that browses pending changes, reviews a side-by-side diff, and stages/commits/branches/pushes/pulls — all human-initiated, mounting vetted Genie-bundled Fancy git components (git runs on the host that holds the workspace). SECONDARY: the original git recipe wizards (status/stage/commit/branch/push/pull and open a PR) run from the recipe launcher. Destructive operations (force-push, reset) are intentionally excluded.',
         publisher: { name: 'Genie', url: 'https://github.com/Renaissance-Analytics/genie' },
         engines: { genie: '>=0.7.0' },
         entry: { tools: 'tools.cjs' },
-        mcpTools: [],
-        panels: [
-            {
-                id: 'changes',
-                title: 'Repository',
-                icon: 'git-branch',
-                // A DECLARED, vetted Genie-bundled Fancy component (the plugin ships no
-                // UI). The renderer resolves this export through its compile-time
-                // adapter registry to the first-party RepoChangesPanel adapter, built
-                // from fancy-git-ui's WorkingTree / CommitComposer / DiffViewer.
-                fancyComponent: {
-                    package: '@particle-academy/fancy-git-ui',
-                    version: '>=0.5.0',
-                    export: 'RepoChangesPanel',
+        // The unified `contributes {}` block (design §3): both surfaces in one place.
+        contributes: {
+            panels: [
+                {
+                    id: 'changes',
+                    title: 'Repository',
+                    icon: 'git-branch',
+                    // A DECLARED, vetted Genie-bundled Fancy component (the plugin ships no
+                    // UI). The renderer resolves this export through its compile-time
+                    // adapter registry to the first-party RepoChangesPanel adapter, built
+                    // from fancy-git-ui's WorkingTree / CommitComposer / DiffViewer.
+                    fancyComponent: {
+                        package: '@particle-academy/fancy-git-ui',
+                        version: '>=0.5.0',
+                        export: 'RepoChangesPanel',
+                    },
                 },
-            },
-        ],
+            ],
+            // Secondary surface: the original git wizards, kept reachable from the
+            // "Run a recipe" launcher (owner decision — the panel is primary, the
+            // wizards stay as a secondary entry).
+            recipes: [
+                {
+                    id: 'status',
+                    title: 'Git status',
+                    steps: [gitStep('run', 'git status', 'git', ['status'])],
+                },
+                {
+                    id: 'stage',
+                    title: 'Stage changes',
+                    steps: [
+                        {
+                            type: 'form',
+                            id: 'what',
+                            title: 'What to stage',
+                            fields: [
+                                {
+                                    key: 'paths',
+                                    label: 'Path or pathspec',
+                                    placeholder: '.',
+                                    description: 'Defaults to "." — the whole worktree. Give a path to stage just that.',
+                                    required: true,
+                                    defaultValue: '.',
+                                },
+                            ],
+                        },
+                        gitStep('run', 'git add', 'git', ['add', '{{paths}}']),
+                    ],
+                },
+                {
+                    id: 'commit',
+                    title: 'Commit',
+                    steps: [
+                        {
+                            type: 'form',
+                            id: 'message',
+                            title: 'Commit message',
+                            fields: [
+                                {
+                                    key: 'message',
+                                    label: 'Commit message',
+                                    placeholder: 'Describe your change',
+                                    required: true,
+                                },
+                            ],
+                        },
+                        gitStep('run', 'git commit', 'git', ['commit', '-m', '{{message}}']),
+                    ],
+                },
+                {
+                    id: 'branch',
+                    title: 'Create + switch branch',
+                    steps: [
+                        {
+                            type: 'form',
+                            id: 'name-form',
+                            title: 'New branch',
+                            fields: [
+                                {
+                                    key: 'name',
+                                    label: 'Branch name',
+                                    placeholder: 'feat/my-change',
+                                    required: true,
+                                },
+                            ],
+                        },
+                        gitStep('run', 'git switch -c', 'git', ['switch', '-c', '{{name}}']),
+                    ],
+                },
+                {
+                    id: 'push',
+                    title: 'Push',
+                    steps: [
+                        {
+                            type: 'form',
+                            id: 'remote-form',
+                            title: 'Push to',
+                            fields: [
+                                {
+                                    key: 'remote',
+                                    label: 'Remote',
+                                    placeholder: 'origin',
+                                    description: 'Pushes the current branch and sets its upstream on this remote.',
+                                    required: true,
+                                    defaultValue: 'origin',
+                                },
+                            ],
+                        },
+                        // `-u <remote> HEAD` pushes the CURRENT branch and sets upstream —
+                        // works the same for a brand-new branch and an already-tracked one.
+                        gitStep('run', 'git push', 'git', ['push', '-u', '{{remote}}', 'HEAD']),
+                    ],
+                },
+                {
+                    id: 'pull',
+                    title: 'Pull',
+                    // `--ff-only` never fabricates a surprise merge commit: it fast-forwards
+                    // or stops and tells you, which is the safe default for a wizard.
+                    steps: [gitStep('run', 'git pull', 'git', ['pull', '--ff-only'])],
+                },
+                {
+                    id: 'pr',
+                    title: 'Open a pull request',
+                    steps: [
+                        {
+                            type: 'form',
+                            id: 'pr-form',
+                            title: 'Pull request',
+                            fields: [
+                                {
+                                    key: 'title',
+                                    label: 'Title',
+                                    placeholder: 'Add the thing',
+                                    required: true,
+                                },
+                                {
+                                    key: 'body',
+                                    label: 'Description',
+                                    placeholder: 'What and why (optional)',
+                                },
+                            ],
+                        },
+                        gitStep('run', 'gh pr create', 'gh', [
+                            'pr',
+                            'create',
+                            '--title',
+                            '{{title}}',
+                            '--body',
+                            '{{body}}',
+                        ]),
+                    ],
+                },
+            ],
+        },
         capabilities: {
-            // A panel is a client surface gated by a permission the user consents to
-            // at enable-time (the manifest schema enforces this when `panels` present).
-            genieApi: ['ui.panel'],
-            // No worker fs and no worker network: git runs as core host IPC, not
-            // through the plugin bridges. Declared empty so "no network" is explicit.
+            // The panel (client surface) + the recipe surface (spawns terminal
+            // commands) are each gated by a permission the user consents to at
+            // enable-time (the schema enforces this when panels/recipes are present).
+            genieApi: ['ui.panel', 'recipes'],
+            // No worker fs and no worker network: git runs as core host IPC / recipe
+            // terminal steps, not through the plugin bridges. Declared empty so
+            // "no network" is explicit + fail-closed.
             network: { hosts: [] },
         },
     },

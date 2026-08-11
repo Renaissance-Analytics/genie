@@ -17,6 +17,7 @@
 import { listEnabledPlugins, type PluginRow } from '../db';
 import {
     PANEL_CAPABILITY,
+    manifestContributions,
     validatePluginManifest,
     type PluginManifest,
     type PluginPanelContribution,
@@ -58,7 +59,7 @@ export function collectPluginPanels(plugins: PluginRow[]): ResolvedPluginPanel[]
         if (plugin.grants.genieApi[PANEL_CAPABILITY] !== true) continue;
         const manifest = manifestOf(plugin);
         if (!manifest) continue; // fail-closed: skip a malformed plugin
-        for (const panel of manifest.panels ?? []) {
+        for (const panel of manifestContributions(manifest).panels) {
             const launchId = `${plugin.namespace}.${panel.id}`;
             if (seen.has(launchId)) continue;
             seen.add(launchId);
