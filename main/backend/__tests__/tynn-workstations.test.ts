@@ -3,7 +3,7 @@ import { session } from 'electron';
 import { TynnBackend, TynnAuthError } from '../tynn';
 
 // tynn.ts reads `getAllSettings().tynn_host`; stub it so host() resolves to the
-// dev default (https://tynn.test) without touching a real settings DB.
+// dev default (https://tynn.gen) without touching a real settings DB.
 vi.mock('../../db', () => ({ getAllSettings: () => ({}) }));
 
 /**
@@ -67,7 +67,7 @@ describe('TynnBackend.listConnectableWorkstations', () => {
         );
 
         const out = await new TynnBackend().listConnectableWorkstations();
-        expect(captured[0].url).toBe('https://tynn.test/workstations/connectable');
+        expect(captured[0].url).toBe('https://tynn.gen/workstations/connectable');
         expect(captured[0].method ?? 'GET').toBe('GET');
         expect(out).toHaveLength(1);
         expect(out[0]).toMatchObject({ id: 'ws1', connectable: true, source: 'owner' });
@@ -100,7 +100,7 @@ describe('TynnBackend.connectGrant', () => {
         );
 
         const grant = await new TynnBackend().connectGrant('ws1');
-        expect(captured[0].url).toBe('https://tynn.test/workstations/ws1/connect-grant');
+        expect(captured[0].url).toBe('https://tynn.gen/workstations/ws1/connect-grant');
         expect(captured[0].method).toBe('POST');
         expect(captured[0].body).toBeUndefined();
         expect(grant.token).toBe('jws.header.sig');
@@ -160,7 +160,7 @@ describe('TynnBackend.selfRegisterWorkstation', () => {
         );
 
         const out = await new TynnBackend().selfRegisterWorkstation('studio-pc');
-        expect(captured[0].url).toBe('https://tynn.test/api/v1/workstations/self-register');
+        expect(captured[0].url).toBe('https://tynn.gen/api/v1/workstations/self-register');
         expect(captured[0].method).toBe('POST');
         expect(JSON.parse(captured[0].body as string)).toEqual({ name: 'studio-pc' });
         expect(out.enrollment).toEqual({ workstation_id: 'ws-new', secret: 's3cr3t', expires_at: null });
@@ -183,7 +183,7 @@ describe('TynnBackend.enrollWorkstation', () => {
         );
 
         const out = await new TynnBackend().enrollWorkstation('ws-new', 's3cr3t', 'SPKIb64', 'fp-hex');
-        expect(captured[0].url).toBe('https://tynn.test/api/v1/workstations/ws-new/enroll');
+        expect(captured[0].url).toBe('https://tynn.gen/api/v1/workstations/ws-new/enroll');
         expect(captured[0].method).toBe('POST');
         expect(JSON.parse(captured[0].body as string)).toEqual({
             enrollment_secret: 's3cr3t',
@@ -208,7 +208,7 @@ describe('TynnBackend.fetchFeatures', () => {
         mockFetch(captured, () => json({ features: { issuewatch: true, agentinbox: false } }));
 
         const out = await new TynnBackend().fetchFeatures();
-        expect(captured[0].url).toBe('https://tynn.test/api/v1/features');
+        expect(captured[0].url).toBe('https://tynn.gen/api/v1/features');
         expect(captured[0].method ?? 'GET').toBe('GET');
         expect(out).toEqual({ issuewatch: true, agentinbox: false });
     });
@@ -229,7 +229,7 @@ describe('TynnBackend.fetchBroadcastConfig', () => {
         mockFetch(captured, () => json({ key: 'pk_public', cluster: 'eu' }));
 
         const out = await new TynnBackend().fetchBroadcastConfig();
-        expect(captured[0].url).toBe('https://tynn.test/api/v1/broadcasting-config');
+        expect(captured[0].url).toBe('https://tynn.gen/api/v1/broadcasting-config');
         expect(out).toEqual({ key: 'pk_public', cluster: 'eu' });
     });
 
@@ -257,7 +257,7 @@ describe('TynnBackend.introspectGrant', () => {
         );
 
         const out = await new TynnBackend().introspectGrant('jws.header.sig');
-        expect(captured[0].url).toBe('https://tynn.test/api/v1/workstations/grants/introspect');
+        expect(captured[0].url).toBe('https://tynn.gen/api/v1/workstations/grants/introspect');
         expect(captured[0].method).toBe('POST');
         expect(JSON.parse(captured[0].body as string)).toEqual({ token: 'jws.header.sig' });
         expect(out.active).toBe(true);

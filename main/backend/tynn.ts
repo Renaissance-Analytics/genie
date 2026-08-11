@@ -79,12 +79,15 @@ export interface WorkstationGrantIntrospection {
 /**
  * Default Tynn host depends on whether Genie is running packaged
  * (production install) or from `npm run dev`. Packaged installs talk
- * to the public Tynn at tynn.ai; dev sessions talk to the local Herd
- * site at tynn.test that's serving the _app/ source. A user setting
+ * to the public Tynn at tynn.ai; dev sessions talk to the Genie-hosted
+ * seeded Tynn at tynn.gen — served by the host-native external-browser
+ * reconcile (host Caddy fronts https://tynn.gen over the gen CA, which
+ * that reconcile installs into the OS trust store, so this session-bound
+ * fetch trusts it natively — no Herd). A user setting (`tynn_host`)
  * overrides both for self-hosted / staging cases.
  */
 function defaultTynnHost(): string {
-    return app.isPackaged ? 'https://tynn.ai' : 'https://tynn.test';
+    return app.isPackaged ? 'https://tynn.ai' : 'https://tynn.gen';
 }
 
 export class TynnBackend implements Backend {
