@@ -136,47 +136,50 @@ const PRESENTATION_SOURCE: BundledPluginSource = {
         agent: {
             guide: 'Use presentation.createDeck when the user asks to generate a PowerPoint deck. Gather or infer a title and ordered slide outline, write only within the workspace, then report the created path.',
         },
-        mcpTools: [
-            {
-                name: 'createDeck',
-                description:
-                    'Generate a .pptx slide deck from a structured outline and write it into the workspace. Provide slides (each with a title and a markdown body or bullets); optional title, theme, and a workspace-relative output path.',
-                inputSchema: {
-                    type: 'object',
-                    properties: {
-                        title: { type: 'string', description: 'Deck title (used for the default filename).' },
-                        theme: { type: 'string', description: 'Theme name (defaults to default).' },
-                        path: { type: 'string', description: 'Workspace-relative output path; defaults to <title>.pptx.' },
-                        slides: {
-                            type: 'array',
-                            description: 'The slides, in order.',
-                            items: {
-                                type: 'object',
-                                properties: {
-                                    title: { type: 'string' },
-                                    body: { type: 'string', description: 'Markdown body.' },
-                                    bullets: { type: 'array', items: { type: 'string' } },
-                                    layout: { type: 'string' },
+        // Surfaces declared in the unified `contributes {}` block (design §3).
+        contributes: {
+            mcpTools: [
+                {
+                    name: 'createDeck',
+                    description:
+                        'Generate a .pptx slide deck from a structured outline and write it into the workspace. Provide slides (each with a title and a markdown body or bullets); optional title, theme, and a workspace-relative output path.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            title: { type: 'string', description: 'Deck title (used for the default filename).' },
+                            theme: { type: 'string', description: 'Theme name (defaults to default).' },
+                            path: { type: 'string', description: 'Workspace-relative output path; defaults to <title>.pptx.' },
+                            slides: {
+                                type: 'array',
+                                description: 'The slides, in order.',
+                                items: {
+                                    type: 'object',
+                                    properties: {
+                                        title: { type: 'string' },
+                                        body: { type: 'string', description: 'Markdown body.' },
+                                        bullets: { type: 'array', items: { type: 'string' } },
+                                        layout: { type: 'string' },
+                                    },
                                 },
                             },
                         },
+                        required: ['slides'],
                     },
-                    required: ['slides'],
+                    run: 'tools',
+                    process: 'worker',
+                    gated: false,
                 },
-                run: 'tools',
-                process: 'worker',
-                gated: false,
-            },
-        ],
-        editors: [
-            {
-                id: 'deck',
-                title: 'Slides',
-                extensions: ['.pptx', '.odp'],
-                fancyEditor: { package: '@particle-academy/fancy-slides', version: '>=0.1.0', export: 'DeckEditor' },
-                toolbarActions: [{ id: 'present', title: 'Present', icon: 'play', mode: 'fullscreen' }],
-            },
-        ],
+            ],
+            editors: [
+                {
+                    id: 'deck',
+                    title: 'Slides',
+                    extensions: ['.pptx', '.odp'],
+                    fancyEditor: { package: '@particle-academy/fancy-slides', version: '>=0.1.0', export: 'DeckEditor' },
+                    toolbarActions: [{ id: 'present', title: 'Present', icon: 'play', mode: 'fullscreen' }],
+                },
+            ],
+        },
         capabilities: {
             fs: { scope: 'workspace', extensions: ['.pptx', '.odp'] },
             network: { hosts: [] },
@@ -267,50 +270,53 @@ const SPREADSHEET_SOURCE: BundledPluginSource = {
         agent: {
             guide: 'Use spreadsheet.createWorkbook when the user asks to generate an Excel workbook from structured rows, CSV, or sheets. Write only within the workspace, then report the created path.',
         },
-        mcpTools: [
-            {
-                name: 'createWorkbook',
-                description:
-                    'Generate an .xlsx workbook from structured data and write it into the workspace. Provide sheets (name + columns + rows), or a flat rows array (with optional headers), or csv text; optional title and workspace-relative output path.',
-                inputSchema: {
-                    type: 'object',
-                    properties: {
-                        title: { type: 'string' },
-                        path: { type: 'string', description: 'Workspace-relative output path; defaults to <title>.xlsx.' },
-                        sheetName: { type: 'string' },
-                        headers: { type: 'array', items: { type: 'string' } },
-                        rows: {
-                            type: 'array',
-                            description: 'Flat rows (each an array of cell values) when not using sheets.',
-                            items: { type: 'array' },
-                        },
-                        csv: { type: 'string', description: 'CSV text; the first row is treated as headers.' },
-                        sheets: {
-                            type: 'array',
-                            items: {
-                                type: 'object',
-                                properties: {
-                                    name: { type: 'string' },
-                                    columns: { type: 'array' },
-                                    rows: { type: 'array' },
+        // Surfaces declared in the unified `contributes {}` block (design §3).
+        contributes: {
+            mcpTools: [
+                {
+                    name: 'createWorkbook',
+                    description:
+                        'Generate an .xlsx workbook from structured data and write it into the workspace. Provide sheets (name + columns + rows), or a flat rows array (with optional headers), or csv text; optional title and workspace-relative output path.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            title: { type: 'string' },
+                            path: { type: 'string', description: 'Workspace-relative output path; defaults to <title>.xlsx.' },
+                            sheetName: { type: 'string' },
+                            headers: { type: 'array', items: { type: 'string' } },
+                            rows: {
+                                type: 'array',
+                                description: 'Flat rows (each an array of cell values) when not using sheets.',
+                                items: { type: 'array' },
+                            },
+                            csv: { type: 'string', description: 'CSV text; the first row is treated as headers.' },
+                            sheets: {
+                                type: 'array',
+                                items: {
+                                    type: 'object',
+                                    properties: {
+                                        name: { type: 'string' },
+                                        columns: { type: 'array' },
+                                        rows: { type: 'array' },
+                                    },
                                 },
                             },
                         },
                     },
+                    run: 'tools',
+                    process: 'worker',
+                    gated: false,
                 },
-                run: 'tools',
-                process: 'worker',
-                gated: false,
-            },
-        ],
-        editors: [
-            {
-                id: 'sheet',
-                title: 'Sheets',
-                extensions: ['.xlsx', '.csv', '.ods'],
-                fancyEditor: { package: '@particle-academy/fancy-sheets', version: '>=0.1.0', export: 'SheetWorkbook' },
-            },
-        ],
+            ],
+            editors: [
+                {
+                    id: 'sheet',
+                    title: 'Sheets',
+                    extensions: ['.xlsx', '.csv', '.ods'],
+                    fancyEditor: { package: '@particle-academy/fancy-sheets', version: '>=0.1.0', export: 'SheetWorkbook' },
+                },
+            ],
+        },
         capabilities: {
             fs: { scope: 'workspace', extensions: ['.xlsx', '.csv', '.ods'] },
             network: { hosts: [] },
@@ -342,19 +348,23 @@ const DOCUMENT_SOURCE: BundledPluginSource = {
         publisher: { name: 'Genie', url: 'https://github.com/Renaissance-Analytics/genie' },
         engines: { genie: '>=0.7.0' },
         entry: { tools: 'tools.cjs' },
-        mcpTools: [],
-        editors: [
-            {
-                id: 'document',
-                title: 'Document',
-                extensions: ['.md', '.markdown', '.mdc', '.docx'],
-                fancyEditor: {
-                    package: '@particle-academy/react-fancy',
-                    version: '>=4.9.0',
-                    export: 'Editor',
+        // Editors-only, declared in the unified `contributes {}` block (design §3).
+        // It registers no MCP tools, so it declares none (the effective mcpTools set
+        // stays empty — the same as the previous top-level `mcpTools: []`).
+        contributes: {
+            editors: [
+                {
+                    id: 'document',
+                    title: 'Document',
+                    extensions: ['.md', '.markdown', '.mdc', '.docx'],
+                    fancyEditor: {
+                        package: '@particle-academy/react-fancy',
+                        version: '>=4.9.0',
+                        export: 'Editor',
+                    },
                 },
-            },
-        ],
+            ],
+        },
         capabilities: {
             fs: { scope: 'workspace', extensions: ['.md', '.markdown', '.mdc', '.docx'] },
             network: { hosts: [] },
