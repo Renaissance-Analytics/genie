@@ -1074,6 +1074,19 @@ describe('handleMcpMessage', () => {
         expect((res?.result as { content: unknown[] }).content).toBeInstanceOf(Array);
     });
 
+    it('imDone reminds the agent to raise questions via ForceTheQuestion, not plaintext', async () => {
+        // Default ctx() returns zero IssueWatch counts, so the only extra beyond
+        // the base ack is the static ForceTheQuestion reminder — always present.
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 53, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
+            ctx(),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('ForceTheQuestion');
+        expect(text).toContain('Operator');
+        expect(text).toMatch(/plaintext question goes unseen/);
+    });
+
     it('imDone appends the IssueWatch counts line (resolved from the terminal)', async () => {
         const checkIssues = vi.fn().mockResolvedValue({
             connected: true,

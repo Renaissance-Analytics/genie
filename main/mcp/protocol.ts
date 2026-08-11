@@ -2685,7 +2685,16 @@ export async function handleMcpMessage(
                 }
                 const base =
                     'Done — this terminal is now glowing in Genie until you focus it.';
-                const extras = [countsLine, mailLine].filter(Boolean).join('\n');
+                // Always remind the agent to route questions/concerns through
+                // ForceTheQuestion. A plaintext question printed here goes UNSEEN
+                // — the Operator rarely watches THIS terminal — so it would just
+                // stall the work. Unlike the IssueWatch lines above this is not
+                // conditional; it's appended on every imDone.
+                const ftqReminder =
+                    'Questions or concerns for the Operator? Use ForceTheQuestion — never print a question and wait; a plaintext question goes unseen.';
+                const extras = [countsLine, mailLine, ftqReminder]
+                    .filter(Boolean)
+                    .join('\n');
                 return ok(msg.id, {
                     content: [
                         {
