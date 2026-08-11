@@ -186,19 +186,43 @@ export function stripTokenParam(upstreamPath: string): string {
 }
 
 /**
+ * The standard reverse-proxy forwarded headers a TLS-terminating edge sends its
+ * upstream so a proxy-trusting app (e.g. Laravel `TrustProxies`) builds self-URLs
+ * at the ORIGIN the browser actually reached, not the plain-http loopback hop.
+ * The LOCAL carrier terminates https at `.gen` and then dials a plain-http
+ * host-native dev server directly (no Caddy in the path), so it MUST supply these
+ * or the app emits `http://<name>.gen` links the Testing Browser blocks.
+ */
+export interface ForwardedHeaders {
+    /** The scheme the browser reached the edge over — `https` for a `.gen` site. */
+    proto: SiteScheme;
+    /** The origin host the browser used — the `.gen` name. */
+    host: string;
+    /** The client's address (loopback for the local carrier). */
+    for: string;
+}
+
+/**
  * PURE. Build the upstream request headers: copy the inbound set, but
  *   - FORCE `Host` to the site's vhost name (THE crux — the local proxy routes
  *     on Host; without this it serves its default/404 vhost),
  *   - drop the inbound `Authorization` (never leak the Genie token to the site),
  *   - strip hop-by-hop + `Proxy-*` headers (and any header the peer listed in
- *     `Connection`).
+ *     `Connection`),
+ *   - when `forwarded` is given, SET the reverse-proxy forwarded headers
+ *     (`X-Forwarded-Proto`/`-Host`/`-For`), OVERRIDING any inbound values — the
+ *     edge is authoritative about the origin the browser actually reached.
  * For a WebSocket upgrade, `keepUpgrade` preserves `Upgrade`/`Connection` so the
  * handshake survives.
  */
 export function buildUpstreamHeaders(
     inbound: http.IncomingHttpHeaders,
     hostname: string,
-    opts: { keepUpgrade?: boolean; preserveApplicationAuthorization?: boolean } = {},
+    opts: {
+        keepUpgrade?: boolean;
+        preserveApplicationAuthorization?: boolean;
+        forwarded?: ForwardedHeaders;
+    } = {},
 ): http.OutgoingHttpHeaders {
     const out: http.OutgoingHttpHeaders = {};
     const connTokens = connectionTokens(inbound['connection']);
@@ -210,6 +234,11 @@ export function buildUpstreamHeaders(
         if (lk === PRESERVE_ORIGIN_HEADER) continue; // Genie control header — never leaks upstream
         if (lk === TRANSPORT_TOKEN_HEADER) continue;
         if (lk.startsWith('proxy-')) continue; // Proxy-* family
+        // Any inbound forwarded header is dropped here and re-set below from
+        // `forwarded` — the edge, not the peer, is authoritative about the origin.
+        if (opts.forwarded && (lk === 'x-forwarded-proto' || lk === 'x-forwarded-host' || lk === 'x-forwarded-for')) {
+            continue;
+        }
         if (HOP_BY_HOP.has(lk)) {
             if (opts.keepUpgrade && (lk === 'upgrade' || lk === 'connection')) {
                 out[k] = v; // keep the upgrade mechanics for a WS handshake
@@ -220,6 +249,11 @@ export function buildUpstreamHeaders(
         out[k] = v;
     }
     out['host'] = hostname;
+    if (opts.forwarded) {
+        out['x-forwarded-proto'] = opts.forwarded.proto;
+        out['x-forwarded-host'] = opts.forwarded.host;
+        out['x-forwarded-for'] = opts.forwarded.for;
+    }
     return out;
 }
 
