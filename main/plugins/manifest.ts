@@ -81,6 +81,35 @@ export interface PluginEditorMapping {
 }
 
 /**
+ * A DECLARED plugin PANEL contribution — a workspace panel (like the editor and
+ * terminals) that mounts a vetted, Genie-bundled Fancy component. Mirror of
+ * {@link PluginEditorMapping}: the plugin DECLARES which first-party Fancy
+ * component to render (package@version + export) and never ships panel UI code
+ * (owner security rule). The renderer resolves the declared `export` through a
+ * COMPILE-TIME adapter registry — it cannot dynamically import an arbitrary
+ * package — so an unknown export mounts an inert placeholder rather than running
+ * plugin code. Contributing panels requires the grantable `ui.panel` Genie-API
+ * permission ({@link PANEL_CAPABILITY}).
+ */
+export interface PluginPanelContribution {
+    id: string;
+    title: string;
+    /** An icon from Genie's vetted catalog (optional). */
+    icon?: string;
+    /**
+     * The first-party Fancy component this panel renders — a package@version +
+     * export. Genie resolves the export through a vetted compile-time registry;
+     * the plugin NEVER ships panel bundle code (mirror of `editors[].fancyEditor`).
+     */
+    fancyComponent: { package: string; version: string; export: string };
+    /** Where the panel prefers to open (advisory; the host decides). */
+    placement?: 'grid' | 'workspace';
+}
+
+/** The Genie-API permission key a panel-contributing plugin must declare + hold. */
+export const PANEL_CAPABILITY = 'ui.panel';
+
+/**
  * A DECLARED recipe a plugin contributes to the WizardModal launcher. Because a
  * manifest is JSON, plugin recipes are the SERIALIZABLE subset of the Recipe API
  * — form / choice / terminal / browser(url string). The function-valued step
@@ -167,6 +196,8 @@ export interface PluginManifest {
     /** Required when mcpTools are present: agents need a workflow, not bare verbs. */
     agent?: PluginAgentGuidance;
     editors?: PluginEditorMapping[];
+    /** Declared workspace-panel contributions (mirror of editors; vetted-Fancy-only). */
+    panels?: PluginPanelContribution[];
     /** Declared recipes contributed to the WizardModal launcher (§ recipes). */
     recipes?: PluginRecipeManifest[];
     capabilities?: PluginCapabilities;
@@ -402,6 +433,56 @@ export function validatePluginManifest(raw: unknown): ValidationResult<PluginMan
                     if (!nonEmpty(e.fancyEditor.export)) errors.push(`${at}.fancyEditor.export is required`);
                 }
             });
+        }
+    }
+
+    // panels ----------------------------------------------------------------
+    // A panel DECLARES a vetted first-party Fancy component (never ships UI
+    // code), exactly like an editor mapping. Mounting it is a CLIENT surface, so
+    // the plugin must hold the grantable `ui.panel` capability the user consents
+    // to at enable-time (the recipes precedent).
+    if (raw.panels !== undefined) {
+        if (!Array.isArray(raw.panels)) {
+            errors.push('`panels` must be an array when present');
+        } else {
+            const panelIds = new Set<string>();
+            raw.panels.forEach((p, i) => {
+                const at = `panels[${i}]`;
+                if (!isRecord(p)) {
+                    errors.push(`${at} must be an object`);
+                    return;
+                }
+                if (!nonEmpty(p.id)) errors.push(`${at}.id is required`);
+                else if (panelIds.has(p.id)) errors.push(`${at}.id "${p.id}" is duplicated`);
+                else panelIds.add(p.id);
+                if (!nonEmpty(p.title)) errors.push(`${at}.title is required`);
+                if (p.icon !== undefined && !isStr(p.icon))
+                    errors.push(`${at}.icon must be a string when present`);
+                if (
+                    p.placement !== undefined &&
+                    p.placement !== 'grid' &&
+                    p.placement !== 'workspace'
+                )
+                    errors.push(`${at}.placement must be "grid" or "workspace" when present`);
+                // Vetted-Fancy-only: DECLARED first-party Fancy component, not a bundle.
+                if (!isRecord(p.fancyComponent)) {
+                    errors.push(`${at}.fancyComponent is required (a first-party Fancy package@version + export — plugins never ship panel UI)`);
+                } else {
+                    if (!nonEmpty(p.fancyComponent.package)) errors.push(`${at}.fancyComponent.package is required`);
+                    if (!nonEmpty(p.fancyComponent.version)) errors.push(`${at}.fancyComponent.version is required`);
+                    if (!nonEmpty(p.fancyComponent.export)) errors.push(`${at}.fancyComponent.export is required`);
+                }
+            });
+            // A panel surface is gated by a permission the user consents to.
+            if (raw.panels.length > 0) {
+                const caps = isRecord(raw.capabilities) ? raw.capabilities : undefined;
+                const genieApi = caps && Array.isArray(caps.genieApi) ? caps.genieApi : [];
+                if (!genieApi.includes(PANEL_CAPABILITY)) {
+                    errors.push(
+                        `\`capabilities.genieApi\` must include "${PANEL_CAPABILITY}" when \`panels\` are present (the user consents to it at enable-time)`,
+                    );
+                }
+            }
         }
     }
 

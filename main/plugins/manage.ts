@@ -53,6 +53,7 @@ import { disposePlugin } from './registry';
 import { OFFICIAL_PLUGINS, listBundledPlugins, materialiseBundled } from './official';
 import { consentAndEnablePlugin } from './consent';
 import { listPluginRecipes, type ResolvedPluginRecipe } from './recipes';
+import { listPluginPanels, type ResolvedPluginPanel } from './panels';
 import { userTrustedKeys, addUserTrustedKey, removeUserTrustedKey } from './trust';
 import { pluginSides, type PluginSides } from './side';
 
@@ -80,6 +81,8 @@ export interface InstalledPluginView {
     tools: Array<{ name: string; description: string }>;
     /** Declared editor file-type → Fancy mappings (§12.2). */
     editors: Array<{ id: string; title: string; extensions: string[]; fancyEditor: string }>;
+    /** Declared workspace-panel → Fancy component mappings (vetted-Fancy-only). */
+    panels: Array<{ id: string; title: string; icon?: string; fancyComponent: string }>;
     /**
      * WHERE this plugin's surfaces run (`side.ts`). `host` is what the enable
      * toggle + permissions below actually govern; a `client`-only plugin runs no
@@ -180,6 +183,12 @@ export function toView(row: PluginRow): InstalledPluginView {
             title: e.title,
             extensions: e.extensions,
             fancyEditor: `${e.fancyEditor.package}@${e.fancyEditor.version}#${e.fancyEditor.export}`,
+        })),
+        panels: (manifest?.panels ?? []).map((p) => ({
+            id: p.id,
+            title: p.title,
+            ...(p.icon ? { icon: p.icon } : {}),
+            fancyComponent: `${p.fancyComponent.package}@${p.fancyComponent.version}#${p.fancyComponent.export}`,
         })),
         sides: manifest ? pluginSides(manifest) : { client: false, host: false },
         // Permissions gate the plugin's HOST code only (see `sides`) — a client-side
@@ -374,6 +383,11 @@ export function pluginsOfficial(): { curated: typeof OFFICIAL_PLUGINS; bundled: 
 /** Launchable recipes for the WizardModal launcher — enabled + `recipes`-granted only. */
 export function pluginsRecipes(): ResolvedPluginRecipe[] {
     return listPluginRecipes();
+}
+
+/** Launchable panels for the Add-view launcher — enabled + `ui.panel`-granted only. */
+export function pluginsPanels(): ResolvedPluginPanel[] {
+    return listPluginPanels();
 }
 
 export async function pluginsInstallBundled(id: string): Promise<PluginActionResult> {

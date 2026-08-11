@@ -25,6 +25,7 @@ export function pluginSummaryLine(plugin: InstalledPluginView): string {
 
     if (plugin.tools.length > 0) parts.push(plural(plugin.tools.length, 'tool'));
     if (plugin.editors.length > 0) parts.push(plural(plugin.editors.length, 'editor'));
+    if (plugin.panels.length > 0) parts.push(plural(plugin.panels.length, 'panel'));
 
     const declared = plugin.permissions.length;
     const granted = plugin.permissions.filter((p) => p.granted).length;

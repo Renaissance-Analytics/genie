@@ -3,6 +3,7 @@ import {
     validatePluginManifest,
     validateMarketplaceManifest,
     namespacedToolName,
+    PANEL_CAPABILITY,
 } from '../manifest';
 
 /** A minimal VALID plugin manifest (the hello-world shape). */
@@ -325,5 +326,100 @@ describe('validatePluginManifest — recipes', () => {
         const res = validatePluginManifest(m);
         expect(res.ok).toBe(false);
         if (!res.ok) expect(res.errors.join('\n')).toContain('key');
+    });
+});
+
+/**
+ * A minimal VALID panel-contributing plugin. A panel is a CLIENT surface that
+ * mounts a DECLARED, vetted, Genie-bundled Fancy component (mirror of the editor
+ * model) — the plugin ships no UI code. Contributing panels REQUIRES the grantable
+ * `ui.panel` Genie-API permission the user consents to at enable-time.
+ */
+function validPanelPlugin(): Record<string, unknown> {
+    return {
+        id: 'ai.genie.repository',
+        namespace: 'repository',
+        name: 'Repository',
+        version: '1.0.0',
+        capabilities: { genieApi: [PANEL_CAPABILITY] },
+        panels: [
+            {
+                id: 'changes',
+                title: 'Repository',
+                icon: 'git-branch',
+                fancyComponent: {
+                    package: '@particle-academy/fancy-git-ui',
+                    version: '>=0.5.0',
+                    export: 'RepoChangesPanel',
+                },
+            },
+        ],
+    };
+}
+
+describe('validatePluginManifest — panels', () => {
+    it('accepts a well-formed panel plugin', () => {
+        const res = validatePluginManifest(validPanelPlugin());
+        expect(res.ok).toBe(true);
+        if (res.ok) {
+            expect(res.manifest.panels?.[0].id).toBe('changes');
+            expect(res.manifest.panels?.[0].fancyComponent.export).toBe('RepoChangesPanel');
+        }
+    });
+
+    it('exposes the `ui.panel` capability constant', () => {
+        expect(PANEL_CAPABILITY).toBe('ui.panel');
+    });
+
+    it('requires the `ui.panel` genieApi permission when panels are present', () => {
+        const m = validPanelPlugin();
+        m.capabilities = { genieApi: [] };
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.errors.join('\n')).toContain('`capabilities.genieApi` must include "ui.panel"');
+    });
+
+    it('requires a DECLARED first-party Fancy component (package + version + export)', () => {
+        const m = validPanelPlugin();
+        (m.panels as Array<Record<string, unknown>>)[0].fancyComponent = { package: 'x' };
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) {
+            const joined = res.errors.join('\n');
+            expect(joined).toContain('fancyComponent.version');
+            expect(joined).toContain('fancyComponent.export');
+        }
+    });
+
+    it('requires a panel to have an id and a title', () => {
+        const m = validPanelPlugin();
+        (m.panels as Array<Record<string, unknown>>)[0].id = '';
+        (m.panels as Array<Record<string, unknown>>)[0].title = '';
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) {
+            const joined = res.errors.join('\n');
+            expect(joined).toContain('panels[0].id is required');
+            expect(joined).toContain('panels[0].title is required');
+        }
+    });
+
+    it('rejects duplicate panel ids', () => {
+        const m = validPanelPlugin();
+        m.panels = [
+            (m.panels as unknown[])[0],
+            (m.panels as unknown[])[0],
+        ];
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.errors.join('\n')).toContain('duplicated');
+    });
+
+    it('rejects a non-array panels field', () => {
+        const m = validPanelPlugin();
+        m.panels = { id: 'x' };
+        const res = validatePluginManifest(m);
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.errors.join('\n')).toContain('`panels` must be an array');
     });
 });

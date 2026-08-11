@@ -179,6 +179,8 @@ const api = {
         official: () => ipcRenderer.invoke('plugins:official'),
         installBundled: (id: string) => ipcRenderer.invoke('plugins:install-bundled', id),
         recipes: () => ipcRenderer.invoke('plugins:recipes'),
+        // Launchable workspace panels contributed by enabled + `ui.panel`-granted plugins.
+        panels: () => ipcRenderer.invoke('plugins:panels'),
         // Capability-scoped binary bridge for a granted plugin's editor (§6.2).
         editorRead: (pluginId: string, root: string, relPath: string) =>
             ipcRenderer.invoke('plugins:editor-read', pluginId, root, relPath),
@@ -198,6 +200,29 @@ const api = {
             ipcRenderer.invoke('plugins:add-trusted-key', publicKeyPem, label),
         removeTrustedKey: (keyId: string) =>
             ipcRenderer.invoke('plugins:remove-trusted-key', keyId),
+    },
+
+    // Repository panel (the first plugin-panel consumer): host-side git ops the
+    // renderer's RepoChangesPanel adapter drives. Every op is contained to the
+    // workspace root + a workspace-relative repo folder.
+    repo: {
+        list: (workspaceRoot: string) => ipcRenderer.invoke('repo:list', workspaceRoot),
+        status: (workspaceRoot: string, repoRel: string) =>
+            ipcRenderer.invoke('repo:status', workspaceRoot, repoRel),
+        diff: (workspaceRoot: string, repoRel: string, filePath: string, staged: boolean) =>
+            ipcRenderer.invoke('repo:diff', workspaceRoot, repoRel, filePath, staged),
+        stage: (workspaceRoot: string, repoRel: string, paths: string[]) =>
+            ipcRenderer.invoke('repo:stage', workspaceRoot, repoRel, paths),
+        unstage: (workspaceRoot: string, repoRel: string, paths: string[]) =>
+            ipcRenderer.invoke('repo:unstage', workspaceRoot, repoRel, paths),
+        commit: (workspaceRoot: string, repoRel: string, message: string) =>
+            ipcRenderer.invoke('repo:commit', workspaceRoot, repoRel, message),
+        push: (workspaceRoot: string, repoRel: string, remote?: string) =>
+            ipcRenderer.invoke('repo:push', workspaceRoot, repoRel, remote),
+        pull: (workspaceRoot: string, repoRel: string) =>
+            ipcRenderer.invoke('repo:pull', workspaceRoot, repoRel),
+        createBranch: (workspaceRoot: string, repoRel: string, name: string) =>
+            ipcRenderer.invoke('repo:create-branch', workspaceRoot, repoRel, name),
     },
 
     // Mobile remote-control server (Settings → Mobile). Desktop-only — the phone

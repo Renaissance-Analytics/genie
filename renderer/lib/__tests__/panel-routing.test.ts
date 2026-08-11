@@ -4,7 +4,9 @@ import {
     specTypeForOpen,
     pluginSpecMeta,
     pickReusePluginPanel,
+    pluginPanelSpecMeta,
     type PluginEditorRef,
+    type PluginPanelRef,
 } from '../panel-routing';
 import type { TerminalSpec } from '../genie';
 
@@ -49,6 +51,37 @@ describe('panelKindForSpecType', () => {
         expect(panelKindForSpecType('code')).toBe('code');
         expect(panelKindForSpecType('terminal')).toBe('terminal');
         expect(panelKindForSpecType('process')).toBe('terminal');
+    });
+
+    it('routes a plugin-panel spec to the plugin-panel host', () => {
+        expect(panelKindForSpecType('plugin-panel')).toBe('plugin-panel');
+    });
+});
+
+const panelRef: PluginPanelRef = {
+    pluginId: 'ai.genie.repository',
+    panelId: 'changes',
+    title: 'Repository',
+    icon: 'git-branch',
+    fancyExport: 'RepoChangesPanel',
+    fancyPackage: '@particle-academy/fancy-git-ui',
+    fancyVersion: '>=0.5.0',
+};
+
+describe('pluginPanelSpecMeta', () => {
+    it('carries plugin id + panel id + title + icon + fancy mapping', () => {
+        const meta = pluginPanelSpecMeta(panelRef, false);
+        expect(meta.plugin_id).toBe('ai.genie.repository');
+        expect(meta.panel_id).toBe('changes');
+        expect(meta.panel_title).toBe('Repository');
+        expect(meta.panel_icon).toBe('git-branch');
+        expect(meta.fancy_export).toBe('RepoChangesPanel');
+        expect(meta.fancy_package).toBe('@particle-academy/fancy-git-ui');
+        expect(meta.system).toBeUndefined();
+    });
+
+    it('tags a System-workspace spec', () => {
+        expect(pluginPanelSpecMeta(panelRef, true).system).toBe(true);
     });
 });
 

@@ -27,6 +27,7 @@ import {
     pluginsInstallMarketplacePlugin,
     pluginsOfficial,
     pluginsRecipes,
+    pluginsPanels,
     pluginsInstallBundled,
     pluginsDeveloperMode,
     pluginsSetDeveloperMode,
@@ -99,6 +100,8 @@ export function registerPluginsIpc(): void {
     // Launchable recipes for the WizardModal launcher — only from enabled +
     // surfaceable plugins that hold the `recipes` grant (fail-closed).
     ipcMain.handle('plugins:recipes', () => pluginsRecipes());
+
+    ipcMain.handle('plugins:panels', () => pluginsPanels());
 
     ipcMain.handle('plugins:install-bundled', (_e, id: string) => pluginsInstallBundled(id));
 

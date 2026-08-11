@@ -43,6 +43,7 @@ import {
 } from '../lib/view-state';
 import { planCommitStep, shouldDriveRestart } from '../lib/updater-flow';
 import { pickReusePanel, emitOpenInPanel, newPanelAttachment } from '../lib/editor-open';
+import { pluginPanelSpecMeta } from '../lib/panel-routing';
 import {
     workstationConnectState,
     connectableWorkstationIds,
@@ -89,6 +90,7 @@ import {
     type KnownHost,
     type GenieHost,
     type ConnectableWorkstation,
+    type PluginPanelView,
 } from '../lib/genie';
 
 /**
@@ -282,6 +284,9 @@ function MasterInner() {
     // workspace so a recipe's git/gh terminal steps default their cwd to the
     // repo — see recipeLaunchScope + RecipeLauncher.
     const [recipeLauncherOpen, setRecipeLauncherOpen] = useState(false);
+    // Launchable plugin PANELS (enabled + `ui.panel`-granted plugins). Client-local
+    // (like editorFor): the panel renders in whichever window the user sits at.
+    const [pluginPanels, setPluginPanels] = useState<PluginPanelView[]>([]);
     // The container Dev Server (#234). One map of workspaceId → its dev sites,
     // because the rail's indicator is per-row and a per-workspace fetch on paint
     // would be N calls. HOST-SOURCED in a remote window now: `api().devServer.site`
@@ -912,6 +917,60 @@ function MasterInner() {
             setSelected((prev) => new Set(prev).add(created.id));
         },
         [specs, workspacesById],
+    );
+
+    // Load the launchable plugin panels for the Add-view menu (client-local).
+    useEffect(() => {
+        let alive = true;
+        void (async () => {
+            try {
+                const panels = await api().plugins.panels();
+                if (alive) setPluginPanels(panels);
+            } catch {
+                if (alive) setPluginPanels([]);
+            }
+        })();
+        return () => {
+            alive = false;
+        };
+    }, []);
+
+    /**
+     * Open a plugin PANEL (e.g. the Repository panel) as a `plugin-panel` grid
+     * spec in a workspace — the generic open trigger for the panel surface. The
+     * declared Fancy component is mounted through the renderer's compile-time
+     * adapter registry (`PluginPanelBody`); the plugin ships no UI code.
+     */
+    const addPluginPanel = useCallback(
+        async (workspaceId: string, panel: PluginPanelView) => {
+            const ws = workspacesById.get(workspaceId);
+            if (!ws) return;
+            const system = isSystemWorkspace(ws);
+            const persistedWsId = system ? null : workspaceId;
+            const meta = pluginPanelSpecMeta(
+                {
+                    pluginId: panel.pluginId,
+                    panelId: panel.panel.id,
+                    title: panel.panel.title,
+                    icon: panel.panel.icon,
+                    fancyExport: panel.panel.fancyComponent.export,
+                    fancyPackage: panel.panel.fancyComponent.package,
+                    fancyVersion: panel.panel.fancyComponent.version,
+                },
+                system,
+            );
+            const created = await api().terminalSpec.create({
+                id: ulid(),
+                workspace_id: persistedWsId,
+                label: panel.panel.title.toLowerCase().replace(/\s+/g, '-'),
+                cwd: ws.path,
+                type: 'plugin-panel',
+                meta,
+            });
+            setSpecs((prev) => [...prev, created]);
+            setSelected((prev) => new Set(prev).add(created.id));
+        },
+        [workspacesById],
     );
 
     /**
@@ -1774,6 +1833,10 @@ function MasterInner() {
                         onLayoutMode={setLayoutMode}
                         onAddView={(type) =>
                             activeWorkspaceId && void addSpec(activeWorkspaceId, type)
+                        }
+                        pluginPanels={pluginPanels}
+                        onAddPluginPanel={(panel) =>
+                            activeWorkspaceId && void addPluginPanel(activeWorkspaceId, panel)
                         }
                         addDisabled={atMaxViews}
                         addDisabledReason={maxViewsReason}
@@ -3495,6 +3558,9 @@ interface ToolbarProps {
     layoutMode: LayoutMode;
     onLayoutMode: (m: LayoutMode) => void;
     onAddView: (type: ViewType) => void;
+    /** Launchable plugin panels (Add-view menu) + the open trigger. */
+    pluginPanels: PluginPanelView[];
+    onAddPluginPanel: (panel: PluginPanelView) => void;
     addDisabled?: boolean;
     addDisabledReason?: string;
     /** Open the "Run a recipe" launcher for the active workspace. */
@@ -3512,6 +3578,8 @@ function Toolbar({
     layoutMode,
     onLayoutMode,
     onAddView,
+    pluginPanels,
+    onAddPluginPanel,
     addDisabled,
     addDisabledReason,
     onRunRecipe,
@@ -3594,6 +3662,8 @@ function Toolbar({
                 lastType={lastTerminalType}
                 onLastTypeChange={onLastTerminalType}
                 onAddView={onAddView}
+                pluginPanels={pluginPanels}
+                onAddPluginPanel={onAddPluginPanel}
                 onAgentCreated={onAgentCreated}
                 customCommand={agentCustomCommand}
                 includeFiles

@@ -1235,7 +1235,7 @@ export interface Changelog {
 }
 
 /** A view spec is a terminal, a fancy-code editor, or a background process runner. */
-export type ViewType = 'terminal' | 'code' | 'process' | 'plugin';
+export type ViewType = 'terminal' | 'code' | 'process' | 'plugin' | 'plugin-panel';
 
 /** Lifecycle status of a background Process service runner. */
 export type ProcessStatus =
@@ -1321,11 +1321,17 @@ export interface ViewMeta {
     editor_id?: string;
     /** Plugin editor view: the workspace-relative file the editor is bound to. */
     file?: string;
-    /** Plugin editor view: the declared first-party Fancy component export. */
+    /** Plugin editor/panel view: the declared first-party Fancy component export. */
     fancy_export?: string;
-    /** Plugin editor view: the declared Fancy package + version (provenance). */
+    /** Plugin editor/panel view: the declared Fancy package + version (provenance). */
     fancy_package?: string;
     fancy_version?: string;
+    /** Plugin panel view: the plugin's panel id from its manifest (`plugin-panel`). */
+    panel_id?: string;
+    /** Plugin panel view: the panel's display title. */
+    panel_title?: string;
+    /** Plugin panel view: the panel's declared icon name (from Genie's catalog). */
+    panel_icon?: string;
     /** Specialized terminal: the AI-TUI kind this terminal launches (claude /
      *  codex / custom). Set on agent terminals created via terminalSpec.createAgent;
      *  absent on a plain shell. Gates the AgentInbox identity + the sidebar badge. */
@@ -1773,10 +1779,12 @@ export interface InstalledPluginView {
     publisher: string | null;
     tools: Array<{ name: string; description: string }>;
     editors: Array<{ id: string; title: string; extensions: string[]; fancyEditor: string }>;
+    /** Declared workspace-panel → Fancy component mappings (vetted-Fancy-only). */
+    panels: Array<{ id: string; title: string; icon?: string; fancyComponent: string }>;
     /**
-     * WHERE this plugin's surfaces run. `client` = editors (rendered in whichever
-     * Genie window opens the file); `host` = MCP tools / recipes (code that runs on
-     * this machine). Only host surfaces need enabling + permissions here.
+     * WHERE this plugin's surfaces run. `client` = editors + panels (rendered in
+     * whichever Genie window opens them); `host` = MCP tools / recipes (code that
+     * runs on this machine). Only host surfaces need enabling + permissions here.
      */
     sides: { client: boolean; host: boolean };
     permissions: PluginPermissionView[];
@@ -1826,6 +1834,69 @@ export interface PluginRecipeView {
     /** Namespaced, collision-free launch id: `${namespace}.${recipe.id}`. */
     launchId: string;
     recipe: { id: string; title: string; steps: PluginRecipeStepView[] };
+}
+
+/**
+ * A plugin-contributed workspace PANEL as delivered to the Add-view launcher.
+ * The renderer mounts the declared Fancy component through its compile-time
+ * adapter registry (keyed by `fancyComponent.export`) — never a dynamic import.
+ */
+export interface PluginPanelView {
+    pluginId: string;
+    pluginName: string;
+    namespace: string;
+    /** Namespaced, collision-free launch id: `${namespace}.${panel.id}`. */
+    launchId: string;
+    panel: {
+        id: string;
+        title: string;
+        icon?: string;
+        fancyComponent: { package: string; version: string; export: string };
+        placement?: 'grid' | 'workspace';
+    };
+}
+
+// --- Repository panel (host-side git ops) -----------------------------------
+
+/** A discriminated result from a `repo:*` op (host git binding). */
+export type RepoResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+/** One selectable repo in the panel's repo picker (root + each member repo). */
+export interface RepoRef {
+    /** Workspace-relative folder ('' = the workspace root itself). */
+    rel: string;
+    name: string;
+}
+
+export type RepoChangeLabel =
+    | 'added'
+    | 'modified'
+    | 'deleted'
+    | 'renamed'
+    | 'copied'
+    | 'typechange'
+    | 'untracked'
+    | 'conflicted';
+
+/** One changed file, split across the staged (index) and unstaged (worktree) sides. */
+export interface RepoChange {
+    path: string;
+    index: string;
+    worktree: string;
+    staged: boolean;
+    unstaged: boolean;
+    untracked: boolean;
+    label: RepoChangeLabel;
+}
+
+/** The panel's view model for one repo: branch header + changed files. */
+export interface RepoStatus {
+    branch: string | null;
+    upstream: string | null;
+    ahead: number;
+    behind: number;
+    detached: boolean;
+    changes: RepoChange[];
 }
 
 /** Developer Mode state + the user's developer-trusted signing keys. */
@@ -2077,6 +2148,8 @@ export interface GenieApi {
         installBundled: (id: string) => Promise<PluginActionResult>;
         /** Launchable recipes contributed by enabled + `recipes`-granted plugins. */
         recipes: () => Promise<PluginRecipeView[]>;
+        /** Launchable workspace panels contributed by enabled + `ui.panel`-granted plugins. */
+        panels: () => Promise<PluginPanelView[]>;
         /** Capability-scoped binary read/write for a granted plugin editor (§6.2). */
         editorRead: (
             pluginId: string,
@@ -2113,6 +2186,40 @@ export interface GenieApi {
             label?: string,
         ) => Promise<PluginActionResult<{ keyId: string }>>;
         removeTrustedKey: (keyId: string) => Promise<PluginActionResult<boolean>>;
+    };
+    /**
+     * Repository panel (the first plugin-panel consumer): host-side git ops the
+     * RepoChangesPanel adapter drives. Every op is contained to the workspace root
+     * + a workspace-relative repo folder ('' = the root itself). Human-initiated +
+     * ungated. Remote windows get a "desktop-only for now" degradation (Phase 6).
+     */
+    repo: {
+        list: (workspaceRoot: string) => Promise<RepoResult<RepoRef[]>>;
+        status: (workspaceRoot: string, repoRel: string) => Promise<RepoResult<RepoStatus>>;
+        diff: (
+            workspaceRoot: string,
+            repoRel: string,
+            filePath: string,
+            staged: boolean,
+        ) => Promise<RepoResult<{ patch: string }>>;
+        stage: (workspaceRoot: string, repoRel: string, paths: string[]) => Promise<RepoResult<null>>;
+        unstage: (
+            workspaceRoot: string,
+            repoRel: string,
+            paths: string[],
+        ) => Promise<RepoResult<null>>;
+        commit: (
+            workspaceRoot: string,
+            repoRel: string,
+            message: string,
+        ) => Promise<RepoResult<{ commit: string }>>;
+        push: (workspaceRoot: string, repoRel: string, remote?: string) => Promise<RepoResult<null>>;
+        pull: (workspaceRoot: string, repoRel: string) => Promise<RepoResult<null>>;
+        createBranch: (
+            workspaceRoot: string,
+            repoRel: string,
+            name: string,
+        ) => Promise<RepoResult<null>>;
     };
     /**
      * Mobile remote-control server (Settings → Mobile). Desktop-only namespace —

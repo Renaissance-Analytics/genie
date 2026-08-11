@@ -222,6 +222,7 @@ import { markDesktopRuntime, isHeadless } from './runtime-mode';
 import { registerFilesIpc } from './files/ipc';
 import { registerGithubIpc } from './github/ipc';
 import { registerPluginsIpc } from './plugins/ipc';
+import { registerRepoIpc } from './repo/ipc';
 import { registerPluginEditorBridge } from './plugins/editor-bridge';
 import { registerDocumentConvert } from './plugins/document-convert';
 // (plugin editor-routing is consumed via the plugins:editor-for IPC in
@@ -252,6 +253,7 @@ import {
     startTunnelE2EHarness,
 } from './e2e/tunnel';
 import { seedAgentAccessE2E } from './e2e/agent-access';
+import { seedRepoE2E } from './e2e/repo';
 
 /**
  * Genie — Tynn desktop companion.
@@ -1310,6 +1312,8 @@ app.whenReady().then(async () => {
     }
     registerFilesIpc();
     registerGithubIpc();
+    // Repository panel (the first plugin-panel consumer): host-side git ops.
+    registerRepoIpc();
     // Plugin System (Settings → Plugins): install / enable / grant / marketplace.
     registerPluginsIpc();
     registerPluginEditorBridge();
@@ -2032,6 +2036,7 @@ function showE2EWindow(): void {
         'e2e-agent-access',
         'e2e-picker-layer',
         'e2e-hosting',
+        'e2e-repo-panel',
     ] as const;
     const page = (ALLOWED as readonly string[]).includes(requested)
         ? requested
@@ -2044,6 +2049,15 @@ function showE2EWindow(): void {
             seedAgentAccessE2E();
         } catch (e) {
             console.error('[e2e] agent-access seed failed', e);
+        }
+    }
+    if (page === 'e2e-repo-panel') {
+        // Seed the fixture git repo + workspace BEFORE the window loads; the
+        // harness page discovers it via workspaces.list() on mount.
+        try {
+            seedRepoE2E();
+        } catch (e) {
+            console.error('[e2e] repo-panel seed failed', e);
         }
     }
     const win = new BrowserWindow({

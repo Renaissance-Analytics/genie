@@ -868,6 +868,28 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             })) as Awaited<ReturnType<GenieApi['plugins']['editorWrite']>>,
     };
 
+    // The Repository panel's git ops run on the machine that HOLDS the workspace.
+    // Over a remote connection that's the HOST, and Genie must never run git
+    // against the local client while presenting the result as the host's repo
+    // (context attribution is part of authorization — design §8). Host/REST parity
+    // is a follow-up (s217 §3.6); until then a remote window degrades cleanly with
+    // an explicit, honest message rather than silently acting on the wrong machine.
+    const repoUnavailable = async () => ({
+        ok: false as const,
+        error: 'The Repository panel runs on the local desktop for now — remote host support is coming.',
+    });
+    const repo: GenieApi['repo'] = {
+        list: repoUnavailable,
+        status: repoUnavailable,
+        diff: repoUnavailable,
+        stage: repoUnavailable,
+        unstage: repoUnavailable,
+        commit: repoUnavailable,
+        push: repoUnavailable,
+        pull: repoUnavailable,
+        createBranch: repoUnavailable,
+    };
+
     return {
         ...local,
         workspaces,
@@ -887,5 +909,6 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         tynnHost,
         mcp,
         plugins,
+        repo,
     };
 }
