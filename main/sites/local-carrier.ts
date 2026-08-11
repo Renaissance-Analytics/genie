@@ -108,6 +108,15 @@ function dialOptions(
         headers: buildUpstreamHeaders(headers as http.IncomingHttpHeaders, target.hostname, {
             keepUpgrade,
             preserveApplicationAuthorization: true,
+            // The carrier IS the https-terminating reverse proxy for `.gen`: the
+            // Testing Browser reaches it over `https://<name>.gen`, and it then
+            // dials the loopback target. A CONTAINER site's Caddy re-derives these,
+            // but a HOST-NATIVE dev server is dialled DIRECTLY (plain http, no
+            // Caddy) — so without these the app (Tynn: `trustProxies(at:'*')`)
+            // sees plain http and builds `http://<name>.gen` links the Testing
+            // Browser blocks. `proto` is always https because the browser always
+            // reached the carrier over https at `.gen`, whatever the upstream hop.
+            forwarded: { proto: 'https', host: target.hostname, for: LOOPBACK },
         }),
         // Terminate the dev site's local TLS as a client with SNI = the vhost;
         // loopback has no MITM surface, so a self-signed .test cert is fine.
