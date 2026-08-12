@@ -7,6 +7,9 @@ import { planToolchainInstall } from './toolchain-plan';
 import type { InstallStep } from './toolchain-plan';
 import { summarizeInstallPlan } from './toolchain-choice';
 import type { PackageManager } from './toolchain-packages';
+import { createLatestFor } from './toolchain-latest';
+import { detectToolUpdates } from './toolchain-updates';
+import type { ToolUpdate } from './toolchain-updates';
 
 /**
  * The composition FACADE of the zero-setup toolchain (Tynn #240).
@@ -84,4 +87,37 @@ export async function inspectToolchain(opts: InspectToolchainOptions): Promise<T
         plan,
         consent,
     };
+}
+
+export interface DetectUpdatesOptions {
+    runner: CommandRunner;
+    os?: NodeJS.Platform | string;
+    wanted?: readonly HostToolName[];
+}
+
+/**
+ * Scan the installed toolchain for available updates — the Toolchain Manager's
+ * "what's out of date?" read (#242).
+ *
+ * Composes the pieces: detect what's installed + which manager exists (both
+ * cheap reads over the same runner), then fold the detection report through the
+ * real {@link createLatestFor} — which queries that manager's outdated list ONCE
+ * — into a per-tool update report. Only installed tools appear; a machine with a
+ * manager that isn't reachable, or nothing installed, scans to an empty report
+ * rather than an error (the never-throws contract, all the way up).
+ */
+export async function detectToolchainUpdates(opts: DetectUpdatesOptions): Promise<ToolUpdate[]> {
+    const os = String(opts.os ?? process.platform);
+    const wanted = opts.wanted ?? DEFAULT_TOOLCHAIN;
+
+    const [report, packageManagers] = await Promise.all([
+        detectToolchain({ runner: opts.runner, platform: os, wanted }),
+        availablePackageManagers({ runner: opts.runner, os }),
+    ]);
+
+    const latestFor = createLatestFor({
+        runner: opts.runner,
+        ...(packageManagers.recommended ? { pm: packageManagers.recommended } : {}),
+    });
+    return detectToolUpdates(report, latestFor);
 }
