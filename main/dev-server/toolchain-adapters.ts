@@ -81,8 +81,10 @@ type BuiltRun = Omit<RunInstallCommand, 'tool' | 'requiresElevation' | 'requires
 type BuiltDownload = Omit<DownloadInstallCommand, 'tool' | 'requiresElevation' | 'requiresRestart'>;
 
 /** The agent-TUI npm packages. Keyed by tool, since the bin name (`claude`)
- *  differs from both the tool name and the package. */
-const NPM_PACKAGES: Partial<Record<HostToolName, string>> = {
+ *  differs from both the tool name and the package. Exported as the single
+ *  source of truth for both installing (`npm i -g`) and update-checking
+ *  (`npm outdated -g`, #242). */
+export const NPM_PACKAGES: Partial<Record<HostToolName, string>> = {
     'claude-code': '@anthropic-ai/claude-code',
     codex: '@openai/codex',
 };
