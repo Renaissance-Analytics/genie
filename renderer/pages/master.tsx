@@ -3,6 +3,7 @@ import Chooser from '../components/Master/Chooser';
 import ProjectContextMenu from '../components/Master/ProjectContextMenu';
 import WorkspaceSettingsModal from '../components/Master/WorkspaceSettingsModal';
 import WorkspaceSiteManager from '../components/Master/WorkspaceSiteManager';
+import { ToolchainSetupWizard } from '../components/Master/ToolchainSetupWizard';
 import SpecContextMenu from '../components/Master/SpecContextMenu';
 import { PromptHost, showPrompt } from '../components/Master/Prompt';
 import QuitTerminalsModal, {
@@ -294,6 +295,26 @@ function MasterInner() {
     // sites and the `dev-server:changed` push arrives via PASSTHROUGH_EVENTS.
     const [siteManagerWsId, setSiteManagerWsId] = useState<string | null>(null);
     const [devSites, setDevSites] = useState<Record<string, DevSiteInfo[]>>({});
+
+    // First-run toolchain setup (#240): on a fresh machine that is missing dev
+    // tools, offer to install them ONCE. `toolchainInspect` is a pure probe (it
+    // installs nothing), so this is safe to run on boot; a dismissal is remembered
+    // so it never nags, and a machine that already has everything never sees it.
+    const [toolchainWizardOpen, setToolchainWizardOpen] = useState(false);
+    useEffect(() => {
+        if (!hasGenieBridge()) return;
+        if (localStorage.getItem('toolchain-setup-dismissed') === '1') return;
+        let cancelled = false;
+        void api()
+            .devServer.toolchainInspect()
+            .then((insp) => {
+                if (!cancelled && insp.report.missing.length > 0) setToolchainWizardOpen(true);
+            })
+            .catch(() => {});
+        return () => {
+            cancelled = true;
+        };
+    }, []);
     useEffect(() => {
         if (!hasGenieBridge()) return;
         const load = () => {
@@ -1982,6 +2003,16 @@ function MasterInner() {
                     />
                 );
             })()}
+
+            {/* First-run toolchain setup (#240): auto-offered once when a fresh
+                machine is missing dev tools; closing remembers the dismissal. */}
+            <ToolchainSetupWizard
+                open={toolchainWizardOpen}
+                onClose={() => {
+                    localStorage.setItem('toolchain-setup-dismissed', '1');
+                    setToolchainWizardOpen(false);
+                }}
+            />
 
             {/* "Run a recipe" (Toolbar wand). Scoped to the active workspace:
                 the launcher lists every registered recipe (built-in + plugin —
