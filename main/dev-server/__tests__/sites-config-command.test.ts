@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     effectiveCommand,
+    portableArgv,
     sandboxCommandFor,
     sanitizeDevSitePatch,
     withoutPersistedEnv,
@@ -143,6 +144,52 @@ describe('site config — user-controlled command', () => {
         expect(devSiteReconfigureNeedsRestart(before, base({ command: ['npm', 'run', 'dev'] }))).toBe(
             false,
         );
+    });
+});
+
+describe('machine-specific binary paths are NEVER persisted to project.json (genie #199)', () => {
+    it('rewrites an ABSOLUTE toolchain-binary path to its bare, PATH-resolved name', () => {
+        // The exact Herd case from the bug: Herd exposes `php` as a .bat shim that
+        // can't be spawned, so the real php84\php.exe absolute path leaks into the
+        // stored command — and project.json is the COMMITTED, cloned envelope.
+        expect(
+            portableArgv(['C:\\Users\\glenn\\.config\\herd\\bin\\php84\\php.exe', 'artisan', 'serve']),
+        ).toEqual(['php', 'artisan', 'serve']);
+        // Unix absolute path too.
+        expect(portableArgv(['/opt/homebrew/bin/php', '-S', '127.0.0.1:8000'])).toEqual([
+            'php',
+            '-S',
+            '127.0.0.1:8000',
+        ]);
+        // Executable extension + case are dropped.
+        expect(portableArgv(['C:\\tools\\node\\NODE.EXE', 'server.js'])).toEqual(['node', 'server.js']);
+        expect(portableArgv(['C:\\x\\composer.bat', 'install'])).toEqual(['composer', 'install']);
+    });
+
+    it('leaves portable commands ALONE — a bare name, or a repo-relative script', () => {
+        expect(portableArgv(['php', 'artisan', 'serve'])).toEqual(['php', 'artisan', 'serve']);
+        expect(portableArgv(['npm', 'run', 'dev'])).toEqual(['npm', 'run', 'dev']);
+        // A repo-local script is already portable across clones — don't bare it.
+        expect(portableArgv(['./vendor/bin/pest'])).toEqual(['./vendor/bin/pest']);
+        expect(portableArgv([])).toEqual([]);
+    });
+
+    it('leaves an absolute path to an UNKNOWN binary as-is — baring it could point at nothing', () => {
+        // Not a known toolchain bin, so we can't assume the bare name resolves on
+        // PATH; a wrong-but-visible path beats a silently-broken bare name.
+        expect(portableArgv(['C:\\custom\\mytool.exe', 'go'])).toEqual(['C:\\custom\\mytool.exe', 'go']);
+    });
+
+    it('normalizes command, serve, AND build steps at the write boundary', () => {
+        const clean = sanitizeDevSitePatch({
+            ...base(),
+            command: ['C:\\Users\\glenn\\.config\\herd\\bin\\php84\\php.exe', 'artisan', 'serve'],
+            serve: ['/usr/local/bin/php', 'artisan', 'serve'],
+            build: [{ label: 'assets', command: ['C:\\tools\\node\\node.exe', 'build.js'] }],
+        } as DevSiteConfig);
+        expect(clean.command).toEqual(['php', 'artisan', 'serve']);
+        expect(clean.serve).toEqual(['php', 'artisan', 'serve']);
+        expect(clean.build?.[0]?.command).toEqual(['node', 'build.js']);
     });
 });
 

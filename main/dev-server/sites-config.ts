@@ -217,6 +217,63 @@ function cleanArgv(value: unknown): string[] | null {
     return [...(value as string[])];
 }
 
+/**
+ * Toolchain binaries the spawn layer resolves by their BARE name on PATH — so an
+ * absolute, machine-specific path to one can be stored portably as just its name.
+ */
+const PORTABLE_TOOLCHAIN_BINS: ReadonlySet<string> = new Set([
+    'php',
+    'node',
+    'npm',
+    'npx',
+    'pnpm',
+    'yarn',
+    'bun',
+    'deno',
+    'composer',
+    'git',
+    'python',
+    'python3',
+    'ruby',
+    'go',
+    'cargo',
+    'dotnet',
+    'java',
+]);
+
+/** Executable extensions dropped when reading a binary's bare name. */
+const EXE_EXT = /\.(exe|bat|cmd|com|ps1)$/i;
+
+/** An absolute path in EITHER OS's notation (`C:\…`, `\\unc`, `/abs`, `\abs`) —
+ *  the config may have been written on a different platform than it's read on. */
+function isAbsolutePathToken(token: string): boolean {
+    return /^[a-zA-Z]:[\\/]/.test(token) || /^[\\/]/.test(token);
+}
+
+/**
+ * Strip a machine-specific absolute toolchain path out of a stored command
+ * (genie #199).
+ *
+ * A site's `command` is committed to `project.json` — the SHARED, cloned Aionima
+ * envelope — so an absolute path like `C:\Users\x\.config\herd\bin\php84\php.exe`
+ * (a workaround for Herd exposing `php` as an unspawnable `.bat` shim) is dead on
+ * anyone else's machine. When argv[0] is an ABSOLUTE path to a KNOWN toolchain
+ * binary, rewrite it to the bare name the spawn layer already resolves on PATH.
+ *
+ * Left ALONE: a bare name (`php`) and a repo-relative script (`./vendor/bin/pest`)
+ * are already portable; an absolute path to an UNKNOWN binary stays, because
+ * baring it could point at nothing on PATH — a visible wrong path beats a silent
+ * break. Same class of fix as stripping env at the write boundary (#168).
+ */
+export function portableArgv(argv: string[]): string[] {
+    if (argv.length === 0) return argv;
+    const first = argv[0];
+    if (!isAbsolutePathToken(first)) return argv;
+    const bare = (first.split(/[\\/]/).pop() ?? first).replace(EXE_EXT, '').toLowerCase();
+    if (!PORTABLE_TOOLCHAIN_BINS.has(bare)) return argv;
+    return [bare, ...argv.slice(1)];
+}
+
 // --- identity ---------------------------------------------------------------
 
 /**
@@ -344,18 +401,22 @@ export function sanitizeDevSitePatch(
     if (patch.stack && STACKS.includes(patch.stack)) out.stack = patch.stack;
     if (patch.server && SERVERS.includes(patch.server)) out.server = patch.server;
 
+    // portableArgv strips a machine-specific absolute toolchain path (e.g. Herd's
+    // php.exe) out of every stored command — project.json is the cloned envelope
+    // (genie #199), same reason env is stripped here (#168).
     const command = cleanArgv(patch.command);
-    if (command) out.command = command;
+    if (command) out.command = portableArgv(command);
 
     const serve = cleanArgv(patch.serve);
-    if (serve) out.serve = serve;
+    if (serve) out.serve = portableArgv(serve);
 
     if (Array.isArray(patch.build)) {
         const build: BuildStep[] = [];
         for (const step of patch.build) {
             if (!step || typeof step !== 'object') continue;
-            const command = cleanArgv((step as BuildStep).command);
-            if (!command) continue;
+            const cleaned = cleanArgv((step as BuildStep).command);
+            if (!cleaned) continue;
+            const command = portableArgv(cleaned);
             const label = String((step as BuildStep).label ?? '').trim().slice(0, 120);
             build.push({
                 // A step with no label still runs; showing the argv beats
