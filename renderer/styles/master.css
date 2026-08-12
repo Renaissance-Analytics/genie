@@ -1839,7 +1839,9 @@
 /* project group */
 .tproj {
     margin-bottom: 2px;
-    /* Anchor the AgentPulse sparkline, which paints as a background layer. */
+    /* Own stacking context so a workspace block's layers never bleed into a
+       neighbour's. The AgentPulse sparkline anchors to the head itself (see
+       .agent-pulse-spark), not here. */
     position: relative;
     isolation: isolate;
 }
@@ -1860,15 +1862,18 @@
     50% { box-shadow: 0 0 6px 1px color-mix(in srgb, var(--agent) 55%, transparent); }
 }
 
-/* The 1-minute sparkline drawn BEHIND a workspace bar. Fills the row, sits
-   under the content (row children are z-index:1 via the head below), never
-   intercepts clicks/drag. Faint by default; brighter while actively streaming. */
+/* The 1-minute sparkline, drawn as a layer INSIDE the head button. z-index:-1
+   places it in the head's OWN stacking context ABOVE the head's background
+   (including the opaque `:hover` fill) but BELOW its non-positioned text/icons —
+   so hovering the row no longer paints over the pulse (it used to sit behind the
+   whole head at z-index:0 and the opaque hover background covered it). Fills the
+   head, never intercepts clicks/drag. Faint by default; brighter while streaming. */
 .agent-pulse-spark {
     position: absolute;
     inset: 0;
     width: 100%;
     height: 100%;
-    z-index: 0;
+    z-index: -1;
     pointer-events: none;
     opacity: 0.55;
     transition: opacity 200ms ease-out;

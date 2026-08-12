@@ -1064,17 +1064,6 @@ export default function Chooser({
                                     commitReorder();
                                 }}
                             >
-                                {/* AgentPulse: last-60s activity sparkline drawn
-                                    BEHIND the row content — COLLAPSED workspaces
-                                    only. An expanded workspace shows its own
-                                    terminals' rows instead, each with its own
-                                    per-terminal activity light (SpecRow below). */}
-                                {collapsed && (
-                                    <AgentPulseSparkline
-                                        ring={pulseRings.current.get(ws.id)}
-                                        active={activeWs.has(ws.id)}
-                                    />
-                                )}
                                 <button
                                     type="button"
                                     className="tproj-head"
@@ -1110,6 +1099,19 @@ export default function Chooser({
                                     }}
                                     onDragEnd={() => commitReorder()}
                                 >
+                                    {/* AgentPulse: last-60s activity sparkline,
+                                        drawn as a layer INSIDE the head at
+                                        z-index:-1 — above the head's (hover)
+                                        background but below its text/icons, so
+                                        hovering the row no longer paints over it.
+                                        COLLAPSED workspaces only; an expanded one
+                                        shows its terminals' own per-row lights. */}
+                                    {collapsed && (
+                                        <AgentPulseSparkline
+                                            ring={pulseRings.current.get(ws.id)}
+                                            active={activeWs.has(ws.id)}
+                                        />
+                                    )}
                                     <span
                                         className="chev"
                                         role="button"
