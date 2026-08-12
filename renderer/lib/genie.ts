@@ -519,6 +519,83 @@ export interface DevWorkstationInfo {
     error?: string;
 }
 
+// --- first-run toolchain setup (#240) --------------------------------------
+// Mirrors main/dev-server (toolchain-detect / -plan / -choice / -setup): the
+// renderer can't import main types, so the wizard's shapes are restated here.
+
+export type HostToolName =
+    | 'git'
+    | 'node'
+    | 'npm'
+    | 'php'
+    | 'composer'
+    | 'docker'
+    | 'claude-code'
+    | 'codex';
+export type ToolchainPackageManager = 'winget' | 'brew' | 'apt' | 'dnf';
+export type ToolchainInstallMethod = 'pm' | 'direct' | 'npm-global';
+
+export interface HostToolProbe {
+    name: HostToolName;
+    installed: boolean;
+    version?: string;
+    /** Docker only: CLI present AND engine reachable. */
+    running?: boolean;
+    detail?: string;
+}
+export interface ToolchainReport {
+    platform: string;
+    probes: HostToolProbe[];
+    present: HostToolName[];
+    missing: HostToolName[];
+}
+export interface ToolchainPmProbe {
+    pm: ToolchainPackageManager;
+    available: boolean;
+    version?: string;
+}
+export interface PackageManagerChoices {
+    os: string;
+    available: ToolchainPackageManager[];
+    recommended?: ToolchainPackageManager;
+    /** The manager to plan with by default — `direct` when none exists. */
+    defaultChoice: ToolchainPackageManager | 'direct';
+    probes: ToolchainPmProbe[];
+}
+export interface ToolchainInstallStep {
+    tool: HostToolName;
+    method: ToolchainInstallMethod;
+    packageManager?: ToolchainPackageManager;
+    requiresElevation: boolean;
+    requiresRestart: boolean;
+    dependsOn: HostToolName[];
+}
+export interface ToolchainConsentLine {
+    tool: HostToolName;
+    method: ToolchainInstallMethod;
+    packageManager?: ToolchainPackageManager;
+    requiresElevation: boolean;
+    requiresRestart: boolean;
+}
+export interface ToolchainConsent {
+    count: number;
+    installs: ToolchainConsentLine[];
+    requiresElevation: boolean;
+    requiresRestart: boolean;
+    elevated: HostToolName[];
+    restarts: HostToolName[];
+}
+/** The wizard's "look" payload — what's here, what would install, at what cost. */
+export interface ToolchainInspection {
+    os: string;
+    arch?: string;
+    report: ToolchainReport;
+    packageManagers: PackageManagerChoices;
+    pmChoice: ToolchainPackageManager | 'direct';
+    plan: ToolchainInstallStep[];
+    consent: ToolchainConsent;
+}
+
 /** Machine-level start | stop | logs for ONE shared engine. */
 export interface DevEngineActionRequest {
     recordKey: string;
@@ -2099,6 +2176,11 @@ export interface GenieApi {
         service: (workspaceId: string, req: ManageServiceRequest) => Promise<ManageServiceResult>;
         /** Which container runtime is driving, or why none is. Never downloads. */
         runtimeStatus: () => Promise<DevRuntimeInfo>;
+        /** First-run toolchain setup (#240): inspect what dev tools THIS machine
+         *  has, the managers that could install the rest, the plan, and the
+         *  consent object. Inspecting installs nothing; pass a package-manager
+         *  choice to re-plan with it. */
+        toolchainInspect: (pmChoice?: string) => Promise<ToolchainInspection>;
         /** The MACHINE's Dev Server: the runtime, the dev base image's
          *  toolchains, and every shared service engine with its holders. A pure
          *  read — opening it never pulls or starts anything. */

@@ -162,6 +162,8 @@ import { runManageSite, runtimeInfo } from './mcp/dev-site-tools';
 import { runManageService } from './mcp/dev-service-tools';
 import { devLifecycle } from './dev-server/lifecycle';
 import { workstationDevServerInfo, workstationEngineAction } from './dev-server/workstation';
+import { inspectToolchain } from './dev-server/toolchain-setup';
+import { defaultCommandRunner } from './dev-server/seams';
 import type { EngineActionRequest } from './dev-server/services/service-manager';
 import type { ManageServiceRequest, ManageSiteRequest } from './mcp/protocol';
 import type { DevSiteProgress } from './dev-server/site-manager';
@@ -534,6 +536,19 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('dev:engine', (_e, req: EngineActionRequest) =>
         workstationEngineAction(req ?? { recordKey: '', action: 'logs' }),
     );
+    // First-run toolchain setup (Tynn #240): what dev tools THIS machine has, the
+    // package managers it could install with, the plan for what's missing, and the
+    // consent object to approve. A PURE probe — inspecting never installs. Local
+    // (this machine) because zero-setup runs where Genie runs.
+    ipcMain.handle('toolchain:inspect', (_e, pmChoice?: string) =>
+        inspectToolchain({
+            runner: defaultCommandRunner,
+            os: process.platform,
+            arch: process.arch,
+            ...(pmChoice ? { pmChoice: pmChoice as never } : {}),
+        }),
+    );
+
     // The repos a site can be created against, so the picker offers them rather
     // than asking a user to type a subfolder name that has to match exactly.
     ipcMain.handle('dev:repos', (_e, workspaceId: string) => {

@@ -211,6 +211,25 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             ok: false,
             error: 'Service engines are managed on the machine itself.',
         }),
+        // First-run toolchain setup is a MACHINE-level concern (this machine, on
+        // first run). A remote window driving another host has nothing to set up
+        // here, so it stays inert — an empty inspection with nothing to install,
+        // exactly as `workstation` above does.
+        toolchainInspect: async () => ({
+            os: '',
+            report: { platform: '', probes: [], present: [], missing: [] },
+            packageManagers: { os: '', available: [], defaultChoice: 'direct', probes: [] },
+            pmChoice: 'direct',
+            plan: [],
+            consent: {
+                count: 0,
+                installs: [],
+                requiresElevation: false,
+                requiresRestart: false,
+                elevated: [],
+                restarts: [],
+            },
+        }),
     };
 
     // The host's terminal-spec model (the grid's backbone) — pass-through.

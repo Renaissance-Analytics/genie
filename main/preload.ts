@@ -697,6 +697,12 @@ const api = {
         /** Which container runtime is driving, or why none is. A pure probe —
          *  looking at the settings page never starts a download. */
         runtimeStatus: () => ipcRenderer.invoke('dev:runtime-status'),
+        /** First-run toolchain setup (#240): inspect what dev tools THIS machine
+         *  has, which package managers could install the rest, the plan for the
+         *  missing set, and the consent object. Inspecting installs NOTHING; pass
+         *  a package-manager choice to re-plan with it. */
+        toolchainInspect: (pmChoice?: string) =>
+            ipcRenderer.invoke('toolchain:inspect', pmChoice),
         /** The MACHINE's Dev Server: which runtime is driving, what the dev base
          *  image provides, and every shared service engine with its holders.
          *  Machine-level because an engine is shared across every workspace on
