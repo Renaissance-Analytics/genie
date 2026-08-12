@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     buildHostServe,
+    serveConfigIncomplete,
     canOpenInBrowser,
     devServerGuidance,
     holdersNote,
@@ -312,6 +313,21 @@ describe('the serve-mode picker (proxy | static | php)', () => {
         expect(buildHostServe('static', '  dist  ', false)).toEqual({ mode: 'static', root: 'dist' });
         expect(buildHostServe('static', '   ', false)).toBeUndefined();
         expect(buildHostServe('php', '', false)).toBeUndefined();
+    });
+
+    it('flags a serve mode that still needs a directory — the guard BOTH forms owe', () => {
+        // proxy runs the repo's own dev server: nothing else to fill.
+        expect(serveConfigIncomplete('proxy', '', false)).toBe(false);
+        expect(serveConfigIncomplete('proxy', 'dist', false)).toBe(false);
+        // static/php serve a folder, so an empty root is incomplete — saving it
+        // would silently drop the mode (buildHostServe → undefined). This is the
+        // predicate the Add form already guarded on and the Edit form did not,
+        // which is why switching a site to "run PHP app" appeared to do nothing.
+        expect(serveConfigIncomplete('php', '', false)).toBe(true);
+        expect(serveConfigIncomplete('php', '   ', false)).toBe(true);
+        expect(serveConfigIncomplete('php', 'public', false)).toBe(false);
+        expect(serveConfigIncomplete('static', '', false)).toBe(true);
+        expect(serveConfigIncomplete('static', 'dist', false)).toBe(false);
     });
 
     it('turns an Edit into a patch field — omit when unchanged, null to CLEAR back to proxy', () => {

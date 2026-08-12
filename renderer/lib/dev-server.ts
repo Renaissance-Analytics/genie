@@ -178,6 +178,19 @@ export function buildHostServe(mode: ServeMode, root: string, spa: boolean): Hos
 }
 
 /**
+ * Whether a serve-mode choice still lacks the directory it needs, so submit must
+ * be blocked. `proxy` runs the repo's own dev server and needs nothing; `static`
+ * and `php` serve a folder, so a blank root produces no config
+ * ({@link buildHostServe} → `undefined`) and the choice would be SILENTLY DROPPED
+ * on save. Both the Add and the Edit form disable submit on this — without it,
+ * switching a site to "run PHP app" with no directory looked like it saved but
+ * did nothing (genie #198).
+ */
+export function serveConfigIncomplete(mode: ServeMode, root: string, spa: boolean): boolean {
+    return mode !== 'proxy' && !buildHostServe(mode, root, spa);
+}
+
+/**
  * The serve-mode value an Edit patch should carry, given the site's stored config
  * and the picker's new one. `undefined` ⇒ unchanged, so omit it and the update
  * never restarts a running site for a serve mode that did not move. `null` ⇒

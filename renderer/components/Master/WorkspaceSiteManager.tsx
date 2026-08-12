@@ -34,6 +34,7 @@ import {
     optionCaveat,
     optionLabel,
     runtimeSummary,
+    serveConfigIncomplete,
     serveModeOf,
     type ServeMode,
     serviceStatusLabel,
@@ -780,6 +781,12 @@ function EditSiteForm({
         { value: 'dockerfile', label: "The repo's Dockerfile" },
     ];
 
+    // A static/php serve mode needs a directory, or buildHostServe yields nothing
+    // and the change is silently dropped on save — the exact bug where switching a
+    // site to "run PHP app" appeared to do nothing (genie #198). The Add form
+    // already guarded this; the Edit form did not.
+    const serveIncomplete = isHostNative && serveConfigIncomplete(serveMode, serveRoot, serveSpa);
+
     return (
         <Modal open onClose={onCancel} size="lg">
             <Modal.Header>
@@ -900,12 +907,18 @@ function EditSiteForm({
                     A running site is restarted only when a change needs it — its command, env, or
                     address. Cosmetic edits leave it serving.
                 </Text>
+                {serveIncomplete && (
+                    <div className="set-note bad">
+                        Enter the directory Genie should serve (e.g. <code>public</code> for a PHP app)
+                        to switch to this serve mode.
+                    </div>
+                )}
                 <div className="set-actions">
                     <Action
                         size="sm"
                         color="blue"
                         icon="check"
-                        disabled={saving || !name.trim() || !genName.trim()}
+                        disabled={saving || !name.trim() || !genName.trim() || serveIncomplete}
                         onClick={async () => {
                             const patch = buildPatch();
                             if (Object.keys(patch).length === 0) {
@@ -1042,8 +1055,9 @@ function AddSiteForm({
     const [serveSpa, setServeSpa] = useState(true);
     const hostServe = buildHostServe(serveMode, serveRoot, serveSpa);
     // A chosen static/php mode with no directory yet is not startable — Genie has
-    // nothing to serve. Guard submit rather than ship an empty root.
-    const serveIncomplete = serveMode !== 'proxy' && !hostServe;
+    // nothing to serve. Guard submit rather than ship an empty root (the same
+    // predicate the Edit form uses — genie #198).
+    const serveIncomplete = serveConfigIncomplete(serveMode, serveRoot, serveSpa);
 
     useEffect(() => {
         void api()
