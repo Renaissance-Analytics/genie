@@ -1,5 +1,13 @@
 import { DEFAULT_TOOLCHAIN } from './toolchain-detect';
 import type { HostToolName, ToolchainReport } from './toolchain-detect';
+import { pmCanInstall } from './toolchain-packages';
+import type { PackageManager } from './toolchain-packages';
+
+// The package-manager identity lives in one place (`toolchain-packages.ts`) so
+// the planner's method choice and the adapter's concrete command can never
+// disagree about what a manager can install. Re-exported for callers that used
+// to import it from here.
+export type { PackageManager } from './toolchain-packages';
 
 /**
  * PURE. "Given what this machine HAS, what should be installed, in what order,
@@ -28,10 +36,6 @@ import type { HostToolName, ToolchainReport } from './toolchain-detect';
  *
  * It never runs anything. The output is a plan an executor and a wizard read.
  */
-
-/** A package manager the plan can drive. Availability (which of these EXIST on
- *  the machine) is Phase 3's question; this module is TOLD which one to use. */
-export type PackageManager = 'winget' | 'brew' | 'apt' | 'dnf';
 
 /**
  * How a tool gets installed.
@@ -83,22 +87,6 @@ export const INSTALL_ORDER: readonly HostToolName[] = [
 
 /** The agent TUIs — installed with `npm i -g`, never by a system PM. */
 const NPM_GLOBAL_TOOLS: ReadonlySet<HostToolName> = new Set(['claude-code', 'codex']);
-
-/**
- * Which tools each package manager can install itself.
- *
- * A tool absent from a PM's set falls back to a direct download. The one that
- * bites in practice is **composer under winget**: there is no first-class winget
- * package for it, so Windows installs composer with its own php-driven installer
- * even when the rest of the toolchain came from winget. brew/apt/dnf all ship
- * composer, so only winget carries the gap.
- */
-const PM_CAPABILITIES: Record<PackageManager, ReadonlySet<HostToolName>> = {
-    winget: new Set(['git', 'node', 'npm', 'php', 'docker']),
-    brew: new Set(['git', 'node', 'npm', 'php', 'composer', 'docker']),
-    apt: new Set(['git', 'node', 'npm', 'php', 'composer', 'docker']),
-    dnf: new Set(['git', 'node', 'npm', 'php', 'composer', 'docker']),
-};
 
 /** Each tool's prerequisite tools. Absent → no prerequisite. */
 const DEPENDS_ON: Partial<Record<HostToolName, HostToolName[]>> = {
@@ -154,7 +142,7 @@ function buildStep(
 /** PM where it can do the job; the agent TUIs always via npm; direct otherwise. */
 function methodFor(tool: HostToolName, pmChoice: PackageManager | 'direct'): InstallMethod {
     if (NPM_GLOBAL_TOOLS.has(tool)) return 'npm-global';
-    if (pmChoice !== 'direct' && PM_CAPABILITIES[pmChoice].has(tool)) return 'pm';
+    if (pmChoice !== 'direct' && pmCanInstall(pmChoice, tool)) return 'pm';
     return 'direct';
 }
 
