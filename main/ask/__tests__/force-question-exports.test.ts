@@ -22,6 +22,9 @@ interface FakeWin {
         isLoading: () => boolean;
         once: () => void;
         send: () => void;
+        getURL: () => string;
+        on: (ev: string, fn: (...a: unknown[]) => void) => void;
+        setWindowOpenHandler: (fn: (d: { url: string }) => unknown) => void;
     };
 }
 
@@ -47,6 +50,11 @@ vi.mock('electron', () => {
                 isLoading: () => false,
                 once: () => {},
                 send: () => {},
+                // Link-routing (wireAskLinkRouting) attaches to these; no test
+                // here navigates, so no-ops suffice.
+                getURL: () => 'http://localhost:8888/ask',
+                on: () => {},
+                setWindowOpenHandler: () => {},
             };
             state.windows.push(self);
         }

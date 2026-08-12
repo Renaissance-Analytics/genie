@@ -1,7 +1,9 @@
-import { BrowserWindow, ipcMain } from 'electron';
+import { BrowserWindow, ipcMain, shell } from 'electron';
 import crypto from 'crypto';
 import path from 'path';
 import { getAllSettings } from '../db';
+import { LOCAL_CONN_KEY, openTestingBrowser } from '../testing-browser';
+import { wireAskLinkRouting } from './link-route';
 import { resolveAlertSound, deliverAlertSound } from '../notify-sound';
 import { demandWindowAttention } from '../attention-flash';
 import type {
@@ -530,6 +532,23 @@ function createAskWindow(): BrowserWindow {
     // focus so the user lands on the modal immediately.
     w.setAlwaysOnTop(true, 'screen-saver');
     w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+
+    // A link in the question markdown must NEVER navigate this frameless modal
+    // (that turned it into a browser tab and stranded the question). Route it: a
+    // `.gen` link opens in the Genie Browser (unless it's turned off), everything
+    // else in the machine browser.
+    wireAskLinkRouting(w.webContents, {
+        genieBrowserEnabled: () => {
+            try {
+                return getAllSettings().genie_browser_enabled !== 'off';
+            } catch {
+                return true;
+            }
+        },
+        openExternal: (url) => void shell.openExternal(url).catch(() => {}),
+        openGenieBrowser: (url) =>
+            void openTestingBrowser(LOCAL_CONN_KEY, 'This machine', url).catch(() => {}),
+    });
 
     if (config.isDev) {
         w.loadURL('http://localhost:8888/ask');

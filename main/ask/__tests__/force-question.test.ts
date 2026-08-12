@@ -37,6 +37,9 @@ interface FakeWin {
         isLoading: () => boolean;
         once: (ev: string, fn: () => void) => void;
         send: (channel: string, payload: unknown) => void;
+        getURL: () => string;
+        on: (ev: string, fn: (...a: unknown[]) => void) => void;
+        setWindowOpenHandler: (fn: (d: { url: string }) => unknown) => void;
     };
 }
 
@@ -71,6 +74,11 @@ vi.mock('electron', () => {
                 id: wcId,
                 isLoading: () => false,
                 once: () => {},
+                // The frameless modal wires link-routing on these (see
+                // wireAskLinkRouting); the queue tests never navigate, so no-ops.
+                getURL: () => 'http://localhost:8888/ask',
+                on: () => {},
+                setWindowOpenHandler: () => {},
                 send: (channel: string, payload: unknown) => {
                     if (channel === 'ask:show') {
                         self.shown.push(
