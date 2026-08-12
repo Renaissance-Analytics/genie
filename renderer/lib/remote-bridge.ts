@@ -230,6 +230,14 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 restarts: [],
             },
         }),
+        // Nothing to install on a remotely-driven host from here (first-run setup
+        // is a local-machine concern) — inert, like the inspection above.
+        toolchainInstall: async () => ({
+            ok: false,
+            results: [],
+            restartRequired: false,
+            skipped: [],
+        }),
     };
 
     // The host's terminal-spec model (the grid's backbone) — pass-through.

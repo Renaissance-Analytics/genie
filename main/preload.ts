@@ -703,6 +703,10 @@ const api = {
          *  a package-manager choice to re-plan with it. */
         toolchainInspect: (pmChoice?: string) =>
             ipcRenderer.invoke('toolchain:inspect', pmChoice),
+        /** Run the reviewed install plan (main runs its OWN plan; the choice is the
+         *  only lever). Per-tool progress arrives on `on.toolchainProgress`. */
+        toolchainInstall: (pmChoice?: string) =>
+            ipcRenderer.invoke('toolchain:install', pmChoice),
         /** The MACHINE's Dev Server: which runtime is driving, what the dev base
          *  image provides, and every shared service engine with its holders.
          *  Machine-level because an engine is shared across every workspace on
@@ -1562,6 +1566,19 @@ const api = {
             const handler = (_e: unknown, payload: Parameters<typeof cb>[0]) => cb(payload);
             ipcRenderer.on('dev-server:site-progress', handler);
             return () => ipcRenderer.off('dev-server:site-progress', handler);
+        },
+        /** Per-tool progress from an in-flight toolchain install (#240): a `start`
+         *  then a `done` (with status) for each tool the wizard is installing. */
+        toolchainProgress: (
+            cb: (payload: {
+                tool: string;
+                phase: 'start' | 'done';
+                status?: 'succeeded' | 'failed' | 'skipped';
+            }) => void,
+        ) => {
+            const handler = (_e: unknown, payload: Parameters<typeof cb>[0]) => cb(payload);
+            ipcRenderer.on('toolchain:progress', handler);
+            return () => ipcRenderer.off('toolchain:progress', handler);
         },
         /** Tier 3 detached-host status — fired when the host is unavailable and
          *  Genie falls back to in-process. The renderer surfaces a non-fatal toast. */

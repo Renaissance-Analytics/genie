@@ -164,6 +164,10 @@ import { devLifecycle } from './dev-server/lifecycle';
 import { workstationDevServerInfo, workstationEngineAction } from './dev-server/workstation';
 import { inspectToolchain } from './dev-server/toolchain-setup';
 import { defaultCommandRunner } from './dev-server/seams';
+import { runInstallPlan } from './dev-server/toolchain-install';
+import { createPerformInstall } from './dev-server/toolchain-perform';
+import { createToolchainPerformDeps } from './dev-server/toolchain-effects';
+import { createToolchainPrimitives } from './dev-server/toolchain-primitives';
 import type { EngineActionRequest } from './dev-server/services/service-manager';
 import type { ManageServiceRequest, ManageSiteRequest } from './mcp/protocol';
 import type { DevSiteProgress } from './dev-server/site-manager';
@@ -548,6 +552,33 @@ export function registerIpcHandlers(): void {
             ...(pmChoice ? { pmChoice: pmChoice as never } : {}),
         }),
     );
+    // Run the install plan the wizard reviewed. MAIN re-inspects and runs its OWN
+    // plan (never a renderer-supplied one), so a compromised renderer can't ask to
+    // run an arbitrary command; the only lever it has is the package-manager
+    // choice. Clicking Install in the reviewed wizard IS the consent (approved).
+    // Per-tool progress streams back on `toolchain:progress`.
+    ipcMain.handle('toolchain:install', async (e, pmChoice?: string) => {
+        const ctx = { os: process.platform, arch: process.arch };
+        const insp = await inspectToolchain({
+            runner: defaultCommandRunner,
+            ...ctx,
+            ...(pmChoice ? { pmChoice: pmChoice as never } : {}),
+        });
+        const perform = createPerformInstall(
+            createToolchainPerformDeps(createToolchainPrimitives()),
+            ctx,
+        );
+        return runInstallPlan({
+            steps: insp.plan,
+            ctx,
+            perform,
+            approved: true,
+            present: insp.report.present,
+            onProgress: (p) => {
+                if (!e.sender.isDestroyed()) e.sender.send('toolchain:progress', p);
+            },
+        });
+    });
 
     // The repos a site can be created against, so the picker offers them rather
     // than asking a user to type a subfolder name that has to match exactly.

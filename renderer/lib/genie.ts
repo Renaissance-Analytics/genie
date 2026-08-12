@@ -596,6 +596,28 @@ export interface ToolchainInspection {
     consent: ToolchainConsent;
 }
 
+export type ToolchainStepStatus = 'succeeded' | 'failed' | 'skipped';
+/** Streamed per tool as an install runs (`on.toolchainProgress`). */
+export interface ToolchainProgress {
+    tool: HostToolName;
+    phase: 'start' | 'done';
+    status?: ToolchainStepStatus;
+}
+export interface ToolchainStepResult {
+    tool: HostToolName;
+    status: ToolchainStepStatus;
+    error?: string;
+    version?: string;
+}
+/** The outcome of running an install plan (`devServer.toolchainInstall`). */
+export interface ToolchainInstallResult {
+    ok: boolean;
+    results: ToolchainStepResult[];
+    refused?: 'not-approved';
+    restartRequired: boolean;
+    skipped: HostToolName[];
+}
+
 /** Machine-level start | stop | logs for ONE shared engine. */
 export interface DevEngineActionRequest {
     recordKey: string;
@@ -2181,6 +2203,10 @@ export interface GenieApi {
          *  consent object. Inspecting installs nothing; pass a package-manager
          *  choice to re-plan with it. */
         toolchainInspect: (pmChoice?: string) => Promise<ToolchainInspection>;
+        /** Run the reviewed install plan (main runs its own plan; the package-
+         *  manager choice is the only lever). Per-tool progress arrives on
+         *  `on.toolchainProgress`. */
+        toolchainInstall: (pmChoice?: string) => Promise<ToolchainInstallResult>;
         /** The MACHINE's Dev Server: the runtime, the dev base image's
          *  toolchains, and every shared service engine with its holders. A pure
          *  read — opening it never pulls or starts anything. */
@@ -3323,6 +3349,9 @@ export interface GenieApi {
          *  open Site Manager card reflects a site coming up the moment Start is
          *  clicked. High-frequency; separate from the coarse `devServerChanged`. */
         devSiteProgress: (cb: (payload: DevSiteProgress) => void) => () => void;
+        /** Per-tool progress from an in-flight toolchain install (#240): a `start`
+         *  then a `done` (with status) for each tool the wizard installs. */
+        toolchainProgress: (cb: (payload: ToolchainProgress) => void) => () => void;
         /** A file changed on disk in a watched workspace (an agent, a git op, a
          *  tool) — the Files panel re-lists its tree AND reloads ONLY the open
          *  tabs whose file is named in `changed` (forward-slashed rel paths). A

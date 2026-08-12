@@ -1,0 +1,143 @@
+import { get } from 'node:https';
+import { createWriteStream } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
+import { URL } from 'node:url';
+import type { CommandResult } from './container-runtime';
+import { defaultCommandRunner } from './seams';
+import { elevationLauncherArgv, isProcessElevated } from './elevate';
+import { resolveDownloadUrl } from './toolchain-resolve';
+import { artifactRunCommand } from './toolchain-artifact';
+import type { ToolchainEffectPrimitives } from './toolchain-effects';
+
+/**
+ * The REAL machine primitives the install executor runs through — the one place
+ * that actually spawns, elevates and downloads. Everything above it is tested
+ * against fakes; this is the impure floor, so it is kept small and boring:
+ * `run`/`verify` come from the tested effect assembly, and the three impure
+ * verbs here (`runElevated`, `download`, `installArtifact`) each do exactly one
+ * thing. Its correctness is a CI/owner concern — the Genie installer is not
+ * buildable on the Windows dev box — which is why the DECISIONS it carries out
+ * (what to run, which URL, which argv) live in tested pure modules and not here.
+ */
+
+/** A hung installer must not wedge the wizard forever; generous because an MSI
+ *  or a Docker Desktop install legitimately takes minutes. */
+const INSTALL_TIMEOUT_MS = 15 * 60_000;
+const FETCH_TIMEOUT_MS = 30_000;
+
+/** Run a command with OS elevation. Already-privileged (root/CI) spawns direct;
+ *  otherwise through the OS launcher (UAC / osascript / pkexec), which `-Wait`s
+ *  so the exit code reflects the installer. The real success signal is still the
+ *  post-install `verify` re-probe — an elevated launch can obscure the child's
+ *  own code. */
+async function runElevated(command: string, args: string[]): Promise<CommandResult> {
+    const platform = process.platform;
+    if (isProcessElevated(platform)) {
+        return defaultCommandRunner.run(command, args, { timeoutMs: INSTALL_TIMEOUT_MS });
+    }
+    const launcher = elevationLauncherArgv(command, args, platform);
+    return defaultCommandRunner.run(launcher[0], launcher.slice(1), { timeoutMs: INSTALL_TIMEOUT_MS });
+}
+
+/** GET a URL, following redirects, returning the parsed body. GitHub's API
+ *  demands a User-Agent, so every request carries one. Rejects on a non-2xx or a
+ *  parse failure; the resolver/caller turns that into a null/failed outcome. */
+function httpGet(url: string, asJson: boolean, redirectsLeft = 5): Promise<{ body: string }> {
+    return new Promise((resolve, reject) => {
+        const req = get(
+            url,
+            { headers: { 'user-agent': 'Genie-Toolchain-Setup', accept: asJson ? 'application/json' : '*/*' } },
+            (res) => {
+                const status = res.statusCode ?? 0;
+                const location = res.headers.location;
+                if (status >= 300 && status < 400 && location) {
+                    res.resume();
+                    if (redirectsLeft <= 0) return reject(new Error('too many redirects'));
+                    return resolve(httpGet(new URL(location, url).toString(), asJson, redirectsLeft - 1));
+                }
+                if (status < 200 || status >= 300) {
+                    res.resume();
+                    return reject(new Error(`HTTP ${status} for ${url}`));
+                }
+                let body = '';
+                res.setEncoding('utf8');
+                res.on('data', (c) => (body += c));
+                res.on('end', () => resolve({ body }));
+            },
+        );
+        req.setTimeout(FETCH_TIMEOUT_MS, () => req.destroy(new Error(`timed out fetching ${url}`)));
+        req.on('error', reject);
+    });
+}
+
+/** Fetch + JSON.parse — the resolver's injected seam. */
+async function fetchJson(url: string): Promise<unknown> {
+    const { body } = await httpGet(url, true);
+    return JSON.parse(body);
+}
+
+/** Stream a URL to a temp file. Follows redirects itself (installers live behind
+ *  CDNs). Returns the local path, or an error — never throws. */
+async function download(url: string): Promise<{ ok: boolean; path?: string; error?: string }> {
+    try {
+        const dir = await mkdtemp(join(tmpdir(), 'genie-toolchain-'));
+        const name = basename(new URL(url).pathname) || 'download';
+        const path = join(dir, name);
+        await streamTo(url, path);
+        return { ok: true, path };
+    } catch (e) {
+        return { ok: false, error: String(e) };
+    }
+}
+
+function streamTo(url: string, path: string, redirectsLeft = 5): Promise<void> {
+    return new Promise((resolve, reject) => {
+        const req = get(url, { headers: { 'user-agent': 'Genie-Toolchain-Setup' } }, (res) => {
+            const status = res.statusCode ?? 0;
+            const location = res.headers.location;
+            if (status >= 300 && status < 400 && location) {
+                res.resume();
+                if (redirectsLeft <= 0) return reject(new Error('too many redirects'));
+                return resolve(streamTo(new URL(location, url).toString(), path, redirectsLeft - 1));
+            }
+            if (status < 200 || status >= 300) {
+                res.resume();
+                return reject(new Error(`HTTP ${status} for ${url}`));
+            }
+            const file = createWriteStream(path);
+            res.pipe(file);
+            file.on('finish', () => file.close(() => resolve()));
+            file.on('error', reject);
+        });
+        req.setTimeout(INSTALL_TIMEOUT_MS, () => req.destroy(new Error(`timed out downloading ${url}`)));
+        req.on('error', reject);
+    });
+}
+
+/** Assemble the real primitives. `runner`/`verify` come from the tested effect
+ *  assembly ({@link createToolchainPerformDeps}); the three impure verbs are the
+ *  ones above. */
+export function createToolchainPrimitives(): ToolchainEffectPrimitives {
+    return {
+        runner: defaultCommandRunner,
+        runElevated,
+        download,
+        resolveDownloadUrl: (source, ctx) => resolveDownloadUrl(source, ctx, fetchJson),
+        async installArtifact(command, localPath) {
+            const plan = artifactRunCommand(command, localPath);
+            if ('unsupported' in plan) {
+                return {
+                    code: 1,
+                    stdout: '',
+                    stderr: `Genie can't install a ${plan.unsupported} artifact automatically yet — install ${command.tool} manually and re-run setup.`,
+                };
+            }
+            const { command: cmd, args } = plan.run;
+            return command.requiresElevation
+                ? runElevated(cmd, args)
+                : defaultCommandRunner.run(cmd, args, { timeoutMs: INSTALL_TIMEOUT_MS });
+        },
+    };
+}

@@ -4,7 +4,9 @@ import {
     api,
     type HostToolName,
     type ToolchainInspection,
+    type ToolchainInstallResult,
     type ToolchainPackageManager,
+    type ToolchainStepStatus,
 } from '../../lib/genie';
 
 /**
@@ -46,7 +48,38 @@ const METHOD_LABEL: Record<string, string> = {
     'npm-global': 'npm install -g',
 };
 
-type Step = 'inspecting' | 'review' | 'error';
+/** How one tool's live install status reads while / after a run. */
+function statusLabel(live?: 'start' | 'succeeded' | 'failed' | 'skipped'): string {
+    switch (live) {
+        case 'start':
+            return 'installing…';
+        case 'succeeded':
+            return 'installed';
+        case 'failed':
+            return 'failed';
+        case 'skipped':
+            return 'skipped (a prerequisite failed)';
+        default:
+            return 'waiting…';
+    }
+}
+function statusClass(live?: 'start' | 'succeeded' | 'failed' | 'skipped'): string {
+    if (live === 'failed') return 'text-red-500';
+    if (live === 'skipped') return 'text-amber-500';
+    if (live === 'succeeded') return 'text-zinc-400';
+    return 'text-zinc-500';
+}
+function statusGlyph(live?: 'start' | 'succeeded' | 'failed' | 'skipped') {
+    if (live === 'succeeded') return <Icon name="check" size="xs" className="text-green-500" />;
+    if (live === 'failed') return <Icon name="x" size="xs" className="text-red-500" />;
+    if (live === 'skipped') return <Icon name="minus" size="xs" className="text-amber-500" />;
+    if (live === 'start') return <Icon name="loader" size="xs" className="text-blue-500" />;
+    return null;
+}
+
+type Step = 'inspecting' | 'review' | 'installing' | 'done' | 'error';
+/** Per-tool live status: `start` while running, then the settled outcome. */
+type LiveStatus = 'start' | ToolchainStepStatus;
 
 export function ToolchainSetupWizard({ open, onClose }: { open: boolean; onClose: () => void }) {
     const [insp, setInsp] = useState<ToolchainInspection | null>(null);
@@ -55,6 +88,9 @@ export function ToolchainSetupWizard({ open, onClose }: { open: boolean; onClose
     // The manager the user picked (drives a re-plan). undefined ⇒ follow the
     // machine's recommendation from the first inspection.
     const [pmChoice, setPmChoice] = useState<ToolchainPackageManager | 'direct' | undefined>(undefined);
+    // Live per-tool status while installing, and the final outcome.
+    const [progress, setProgress] = useState<Record<string, LiveStatus>>({});
+    const [result, setResult] = useState<ToolchainInstallResult | null>(null);
 
     const inspect = useCallback(
         async (choice?: ToolchainPackageManager | 'direct') => {
@@ -81,6 +117,31 @@ export function ToolchainSetupWizard({ open, onClose }: { open: boolean; onClose
     const onPickPm = (choice: ToolchainPackageManager | 'direct') => {
         setPmChoice(choice);
         void inspect(choice);
+    };
+
+    const runInstall = async () => {
+        setStep('installing');
+        setProgress({});
+        setResult(null);
+        setError(null);
+        // Stream per-tool status; main re-plans and runs its OWN plan, so the
+        // choice is the only thing sent.
+        const off = api().on.toolchainProgress((p) => {
+            setProgress((prev) => ({
+                ...prev,
+                [p.tool]: p.phase === 'start' ? 'start' : (p.status ?? 'succeeded'),
+            }));
+        });
+        try {
+            const r = await api().devServer.toolchainInstall(pmChoice);
+            setResult(r);
+            setStep('done');
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+            setStep('error');
+        } finally {
+            off();
+        }
     };
 
     // The managers to offer: those detected, plus the always-available direct path.
@@ -229,24 +290,54 @@ export function ToolchainSetupWizard({ open, onClose }: { open: boolean; onClose
                     </>
                 )}
 
+                {(step === 'installing' || step === 'done') && insp && (
+                    <section className="tcw-section">
+                        <Text size="xs" className="text-zinc-500">
+                            {step === 'installing' ? 'Installing…' : 'Result'}
+                        </Text>
+                        <ul className="tcw-plan">
+                            {insp.plan.map((s) => {
+                                const live = progress[s.tool];
+                                return (
+                                    <li key={s.tool} className="tcw-plan-row">
+                                        <span className="tcw-plan-tool">{TOOL_LABEL[s.tool]}</span>
+                                        <span className={`tcw-plan-method ${statusClass(live)}`}>
+                                            {statusLabel(live)}
+                                        </span>
+                                        <span className="tcw-plan-flags">{statusGlyph(live)}</span>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                        {step === 'done' && result && (
+                            <div className={`set-note${result.ok ? '' : ' bad'}`}>
+                                {result.ok
+                                    ? 'All set — your toolchain is ready.'
+                                    : 'Some tools didn’t install. You can re-run setup, or install the rest manually.'}
+                                {result.restartRequired && (
+                                    <div>
+                                        <Icon name="refresh" size="xs" /> Restart your machine to finish the Docker /
+                                        WSL2 setup.
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </section>
+                )}
+
                 <div className="set-actions">
                     {step === 'review' && insp && !nothingToDo && (
-                        <Action
-                            size="sm"
-                            color="blue"
-                            icon="download"
-                            // Install execution (streaming per-tool progress) is wired to
-                            // devServer.toolchainInstall once the platform primitives land;
-                            // until then the wizard stops at reviewed consent rather than
-                            // claim an install it can't yet run.
-                            disabled
-                            title="Installing runs once the platform installers are wired"
-                        >
+                        <Action size="sm" color="blue" icon="download" onClick={() => void runInstall()}>
                             Install {insp.plan.length} tool{insp.plan.length === 1 ? '' : 's'}
                         </Action>
                     )}
-                    <Action size="sm" variant="ghost" onClick={onClose}>
-                        {nothingToDo ? 'Done' : 'Close'}
+                    {step === 'done' && result && !result.ok && (
+                        <Action size="sm" variant="ghost" icon="refresh" onClick={() => void inspect(pmChoice)}>
+                            Re-check
+                        </Action>
+                    )}
+                    <Action size="sm" variant="ghost" onClick={onClose} disabled={step === 'installing'}>
+                        {step === 'done' || nothingToDo ? 'Done' : 'Close'}
                     </Action>
                 </div>
             </div>
