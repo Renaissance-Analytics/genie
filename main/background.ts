@@ -179,6 +179,7 @@ import {
     isHostBacked,
     disconnectHostLeaveRunning,
     terminalManager,
+    getHostClient,
 } from '@particle-academy/fancy-term-host';
 import {
     wireTerminalAdapter,
@@ -186,6 +187,7 @@ import {
     snapshotHostTerminalsForUpdate,
     detachedTerminalsEnabled,
     electronEncryptor,
+    buildHostRecoveryDeps,
 } from './terminal/genie-adapter';
 import { setSecretEncryptor } from './secrets/store';
 import { buildHostServerDeps } from './host-core/server-deps';
@@ -194,6 +196,8 @@ import {
     hostBackendKind,
     shouldKillHostForUpdate,
     detachedHostPinsBinary,
+    wireHostLossRecovery,
+    recoverFromHostLoss,
 } from './terminal/host-service';
 import { runBackendSelection as runBackendSelectionCore } from './host-core/backend-selection';
 import {
@@ -1222,6 +1226,28 @@ app.whenReady().then(async () => {
     // surfacing as "No handler registered for 'terminal:resize'" in the
     // renderer once a window mounts.
     registerTerminalIpc();
+    // Host-loss watchdog (genie#203): when the single shared detached host dies
+    // mid-session, fancy-term-host only reverts to in-process + toasts, leaving
+    // every terminal frozen. Arm its socket-close 'error' → recover (snapshot →
+    // respawn via backend selection → tell the renderer to remount + replay →
+    // structured status). Re-arms onto the respawned client. Detects the clean
+    // death modes today; the HUNG-host case (pipe stays open, no event) is gated
+    // on an upstream heartbeat (Particle-Academy/fancy-term-host#11).
+    if (selection.kind === 'detached' || selection.kind === 'service') {
+        wireHostLossRecovery({
+            getActiveClient: () => {
+                const c = getHostClient();
+                return c ? { once: (e, cb) => c.once(e, cb) } : null;
+            },
+            recover: () =>
+                recoverFromHostLoss(
+                    buildHostRecoveryDeps(async () => {
+                        const s = await runBackendSelection();
+                        return { host: s.host };
+                    }),
+                ),
+        });
+    }
     if (backendInit.host && backendInit.reattachIds.length > 0) {
         // The renderer remounts retained specs on launch via the create() rejoin
         // path; the host client's mirror already holds their scrollback, so the

@@ -1291,3 +1291,45 @@ export async function recoverFromHostLoss(
         hostRecoveryInFlight = false;
     }
 }
+
+/** The one-shot loss signal a host client exposes. Modelled as `once('error')`
+ *  — the package's HostClient emits 'error' on socket close/error and does not
+ *  re-emit, so we re-subscribe after each recovery. */
+export interface HostLossEmitter {
+    once(event: 'error', listener: () => unknown): void;
+}
+
+/**
+ * Arm host-loss → recovery (genie#203, detection half).
+ *
+ * Subscribes to the active host client's one-shot `'error'` (the package's
+ * socket-close/error signal). On a loss it runs `recover`, then RE-ARMS onto
+ * whatever client is active afterwards — the respawned host, so a second death
+ * is caught too, or nothing when recovery degraded to in-process (no host left
+ * to watch). Idempotent: re-arming onto the client already watched is a no-op.
+ * `recover` is expected to be `() => recoverFromHostLoss(realDeps)`, which is
+ * itself single-flight, so overlapping losses can't double-recover.
+ */
+export function wireHostLossRecovery(deps: {
+    getActiveClient: () => HostLossEmitter | null;
+    recover: () => Promise<unknown>;
+}): { armed: () => boolean; rearm: () => void } {
+    let watching: HostLossEmitter | null = null;
+    const handleLoss = async () => {
+        watching = null; // the one-shot fired; the dead client is gone
+        try {
+            await deps.recover();
+        } catch {
+            /* recoverFromHostLoss never throws; belt-and-suspenders */
+        }
+        rearm(); // re-subscribe to the respawned client, if any
+    };
+    const rearm = () => {
+        const client = deps.getActiveClient();
+        if (!client || client === watching) return;
+        watching = client;
+        client.once('error', handleLoss);
+    };
+    rearm();
+    return { armed: () => watching !== null, rearm };
+}

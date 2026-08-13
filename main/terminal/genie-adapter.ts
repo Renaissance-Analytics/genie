@@ -1,7 +1,7 @@
 import { app, BrowserWindow, safeStorage } from 'electron';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import { getAllSettings, updateTerminalSpec } from '../db';
+import { getAllSettings, updateTerminalSpec, listTerminalSpecs } from '../db';
 import {
     ptyHostScriptPath,
     createSnapshotStore,
@@ -26,6 +26,7 @@ import {
     writeDetachedMode,
     logHostService,
     openPtyhostLogStdio,
+    type HostRecoveryDeps,
 } from './host-service';
 
 /**
@@ -246,6 +247,60 @@ function broadcastHostStatus(s: HostStatus): void {
             /* window tearing down */
         }
     }
+}
+
+/** Send an IPC event to every live window. Shared by the recovery broadcasts. */
+function broadcastToWindows(channel: string, payload: unknown): void {
+    for (const w of BrowserWindow.getAllWindows()) {
+        if (w.isDestroyed()) continue;
+        try {
+            w.webContents.send(channel, payload);
+        } catch {
+            /* window tearing down */
+        }
+    }
+}
+
+/**
+ * Assemble the real recovery deps for {@link recoverFromHostLoss} from the live
+ * Electron/SQLite/host primitives (genie#203). `respawn` is injected because the
+ * backend-selection orchestrator lives in background.ts (its startup composition
+ * root) — passing it in keeps this free of an import cycle.
+ */
+export function buildHostRecoveryDeps(
+    respawn: () => Promise<{ host: boolean }>,
+): HostRecoveryDeps {
+    return {
+        // The pty-backed terminals (shells + agents) — the panes to re-attach.
+        // Read from the spec DB, not the client: on a loss the client is already
+        // gone, but the specs persist.
+        affectedIds: () =>
+            listTerminalSpecs()
+                .filter((s) => s.type === 'terminal')
+                .map((s) => s.id),
+        // Best-effort scrollback capture: only possible while a client is still
+        // readable (a graceful loss). On a hard crash the client is already null
+        // → nothing to capture, and the re-created pane gets a fresh shell.
+        snapshotAffected: (ids) => {
+            const client = getHostClient();
+            if (!client) return;
+            const store = getSnapshotStore();
+            for (const id of ids) {
+                try {
+                    const sb = client.getScrollback(id);
+                    if (sb) store.writeSnapshot(id, sb);
+                } catch {
+                    /* per-id best-effort */
+                }
+            }
+        },
+        respawn,
+        // Tell the renderer to remount these panes; the remount's terminal:create
+        // rejoins the fresh backend and replays scrollback (master.tsx enableSpec).
+        reattach: (ids) => broadcastToWindows('terminal:recover', { ids }),
+        emitStatus: (state) =>
+            broadcastToWindows('terminal:recovery-status', { state }),
+    };
 }
 
 /**
