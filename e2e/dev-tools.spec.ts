@@ -57,3 +57,18 @@ test('clicking Update reaches main with the tool and repaints the row', async ()
     await expect(gitRow()).toContainText('Up to date');
     await expect(updateButton(gitRow())).toHaveCount(0);
 });
+
+test('the section badges the update count and can be asked to check again', async () => {
+    // The count is the whole reason to look at this section, so it rides the
+    // HEADING — nobody should have to scan the rows to learn there is nothing
+    // to do. (git was updated by the test above, so the fixture is back to 0.)
+    const heading = page.locator('.set-section', { hasText: 'Dev tools' });
+    await expect(heading).not.toContainText('update available');
+
+    // The scan is CACHED (it queries winget/brew/npm), which is exactly why an
+    // explicit re-check has to exist.
+    await heading.getByRole('button', { name: 'Check again' }).click();
+    // It goes back to main rather than repainting from memory: the rows survive
+    // and the section is still readable afterwards.
+    await expect(page.getByTestId('devtool-git')).toBeVisible();
+});

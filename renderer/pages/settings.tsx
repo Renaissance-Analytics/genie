@@ -3566,9 +3566,11 @@ function DevToolsSection() {
     const [busy, setBusy] = useState<HostToolName | null>(null);
     const [error, setError] = useState<string | null>(null);
 
-    const refresh = useCallback(() => {
+    /** `force` is the explicit Refresh: it re-runs the (slow, network-touching)
+     *  package-manager scan instead of reusing main's cached answer. */
+    const refresh = useCallback((force = false) => {
         void api()
-            .devServer.toolchainUpdates()
+            .devServer.toolchainUpdates(force)
             .then(setUpdates)
             .catch(() => setUpdates([]));
     }, []);
@@ -3576,8 +3578,10 @@ function DevToolsSection() {
     useEffect(() => {
         refresh();
         // Same push-driven refresh as the engines below — a finished install or a
-        // detected change repaints the versions without reopening the page.
-        return api().on.devServerChanged(refresh);
+        // detected change repaints the versions without reopening the page. Wrapped
+        // so the event payload can never arrive as `force` and turn every change
+        // notification into a fresh package-manager scan.
+        return api().on.devServerChanged(() => refresh());
     }, [refresh]);
 
     const update = async (name: HostToolName) => {
@@ -3604,6 +3608,12 @@ function DevToolsSection() {
         <SetSection
             title="Dev tools"
             desc="The host tools Genie builds and runs your work with — with a one-click update when a newer version is out"
+            // The entry-point badge (#242 P4): the count is the whole reason to
+            // look, so it rides the section heading rather than making someone
+            // scan the rows to find out there is nothing to do.
+            {...(count > 0
+                ? { status: `${count} update${count === 1 ? '' : 's'}`, statusColor: '#f59e0b' }
+                : {})}
         >
             {error && <div className="set-note bad">{error}</div>}
             {updates === null ? (
@@ -3659,6 +3669,23 @@ function DevToolsSection() {
                 <div className="set-note">
                     {count} update{count === 1 ? '' : 's'} available. Updating installs the latest
                     and may prompt for permission.
+                </div>
+            )}
+            {/* The answer is CACHED (a scan queries winget/brew/npm, so opening
+                this page twice is not two scans) — which means there has to be a
+                way to ask again on purpose. */}
+            {updates !== null && (
+                <div className="set-actions">
+                    <Action
+                        size="sm"
+                        variant="ghost"
+                        icon="refresh-cw"
+                        disabled={busy !== null}
+                        onClick={() => refresh(true)}
+                        title="Re-query the package managers for newer versions now, instead of reusing the last answer."
+                    >
+                        Check again
+                    </Action>
                 </div>
             )}
         </SetSection>

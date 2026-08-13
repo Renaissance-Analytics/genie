@@ -163,6 +163,13 @@ import { runManageService } from './mcp/dev-service-tools';
 import { devLifecycle } from './dev-server/lifecycle';
 import { workstationDevServerInfo, workstationEngineAction } from './dev-server/workstation';
 import { inspectToolchain, detectToolchainUpdates } from './dev-server/toolchain-setup';
+import { shouldCheckToolchainUpdates } from './dev-server/toolchain-updates';
+import type { ToolUpdate } from './dev-server/toolchain-updates';
+
+/** The last completed toolchain update scan, reused until it goes stale (#242
+ *  P4). Process-lifetime only: a fresh boot re-scans, which is the right default
+ *  after an install or an upgrade. */
+let toolchainUpdateCache: { at: number | null; rows: ToolUpdate[] } = { at: null, rows: [] };
 import { defaultCommandRunner } from './dev-server/seams';
 import { runInstallPlan } from './dev-server/toolchain-install';
 import { planToolUpdate } from './dev-server/toolchain-plan';
@@ -558,12 +565,28 @@ export function registerIpcHandlers(): void {
     // Scan the installed toolchain for available updates (Toolchain Manager,
     // #242). A PURE read — it runs `<pm> outdated` etc. but installs nothing;
     // this machine's tools/engines with their update status.
-    ipcMain.handle('toolchain:updates', () =>
-        detectToolchainUpdates({
+    // CACHED: a scan shells out to `winget upgrade` / `brew outdated` /
+    // `npm outdated -g`, so re-running it every time a settings page opens would
+    // make the page feel broken and hammer three package managers for an answer
+    // that changes about daily. Not a poll either — nothing runs on a timer; an
+    // open (or an explicit Refresh) decides whether THIS moment does the work.
+    ipcMain.handle('toolchain:updates', async (_e, force?: boolean) => {
+        if (
+            !shouldCheckToolchainUpdates({
+                lastCheckedAt: toolchainUpdateCache.at,
+                now: Date.now(),
+                ...(force ? { force: true } : {}),
+            })
+        ) {
+            return toolchainUpdateCache.rows;
+        }
+        const rows = await detectToolchainUpdates({
             runner: defaultCommandRunner,
             os: process.platform,
-        }),
-    );
+        });
+        toolchainUpdateCache = { at: Date.now(), rows };
+        return rows;
+    });
 
     // Run the install plan the wizard reviewed. MAIN re-inspects and runs its OWN
     // plan (never a renderer-supplied one), so a compromised renderer can't ask to
@@ -610,7 +633,7 @@ export function registerIpcHandlers(): void {
             createToolchainPerformDeps(createToolchainPrimitives()),
             ctx,
         );
-        return runInstallPlan({
+        const result = await runInstallPlan({
             steps: [planToolUpdate(tool as HostToolName, ctx.os, insp.pmChoice)],
             ctx,
             perform,
@@ -621,6 +644,10 @@ export function registerIpcHandlers(): void {
                 if (!e.sender.isDestroyed()) e.sender.send('toolchain:progress', p);
             },
         });
+        // The machine just changed, so the cached scan is now a lie — drop it so
+        // the next read reports the version we actually installed.
+        toolchainUpdateCache = { at: null, rows: [] };
+        return result;
     });
 
     // The repos a site can be created against, so the picker offers them rather

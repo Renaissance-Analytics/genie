@@ -2229,8 +2229,10 @@ export interface GenieApi {
          *  `on.toolchainProgress`. */
         toolchainInstall: (pmChoice?: string) => Promise<ToolchainInstallResult>;
         /** Toolchain Manager (#242): scan installed tools for available updates.
-         *  A pure read — queries `<pm> outdated` but installs nothing. */
-        toolchainUpdates: () => Promise<ToolUpdate[]>;
+         *  A pure read — queries `<pm> outdated` but installs nothing. CACHED:
+         *  a fresh answer is reused so opening the page twice is not two scans;
+         *  pass `force` for an explicit Refresh. */
+        toolchainUpdates: (force?: boolean) => Promise<ToolUpdate[]>;
         /** Toolchain Manager (#242 P2): update ONE installed tool to latest. Main
          *  validates the tool + builds the command. Progress on `on.toolchainProgress`. */
         toolchainUpdate: (tool: HostToolName) => Promise<ToolchainInstallResult>;

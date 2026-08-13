@@ -715,7 +715,7 @@ const api = {
             ipcRenderer.invoke('toolchain:install', pmChoice),
         /** Toolchain Manager (#242): scan installed tools for available updates.
          *  A pure read — it queries `<pm> outdated` but installs nothing. */
-        toolchainUpdates: () => ipcRenderer.invoke('toolchain:updates'),
+        toolchainUpdates: (force?: boolean) => ipcRenderer.invoke('toolchain:updates', force),
         /** Toolchain Manager (#242 P2): update ONE installed tool to latest. Main
          *  validates the tool + builds the command; the renderer picks only which
          *  known tool. Per-tool progress arrives on `on.toolchainProgress`. */

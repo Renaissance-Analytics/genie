@@ -109,3 +109,44 @@ export async function detectToolUpdates(
     }
     return updates;
 }
+
+// --- when to re-scan (#242 P4) ----------------------------------------------
+
+/** How long an update scan's answer stays good enough to reuse. */
+export const TOOLCHAIN_UPDATE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+export interface ToolchainCheckState {
+    /** Epoch ms of the last completed scan, or null if never. */
+    lastCheckedAt: number | null;
+    /** Now (epoch ms). */
+    now: number;
+    /** How old an answer may be before it is re-scanned. */
+    maxAgeMs?: number;
+    /** The user asked explicitly (a Refresh button) — always scan. */
+    force?: boolean;
+}
+
+/**
+ * PURE. Is it time to run an update scan?
+ *
+ * A scan shells out to `winget upgrade` / `brew outdated` / `npm outdated -g`:
+ * slow, and it touches the network. Running one on every settings-page open
+ * would make the page feel broken and hammer three package managers for an
+ * answer that changes maybe daily. Sitting on a week-old answer is the opposite
+ * failure — a badge that never appears.
+ *
+ * This is NOT a poll ([[feedback_no_polling_prefer_push]]): nothing runs on a
+ * timer. The question is asked when something ALREADY happened — a panel opened,
+ * an install finished — and this decides whether that moment does the work.
+ *
+ * A `lastCheckedAt` in the FUTURE (a resumed laptop, a corrected clock) counts
+ * as stale rather than fresh, so a bad timestamp can never freeze the badge
+ * permanently.
+ */
+export function shouldCheckToolchainUpdates(s: ToolchainCheckState): boolean {
+    if (s.force) return true;
+    if (s.lastCheckedAt == null) return true;
+    const age = s.now - s.lastCheckedAt;
+    if (age < 0) return true;
+    return age >= (s.maxAgeMs ?? TOOLCHAIN_UPDATE_MAX_AGE_MS);
+}

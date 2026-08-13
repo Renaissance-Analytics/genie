@@ -4,6 +4,7 @@ import {
     compareVersions,
     detectToolUpdates,
     isUpdateAvailable,
+    shouldCheckToolchainUpdates,
 } from '../toolchain-updates';
 
 /**
@@ -125,5 +126,71 @@ describe('detectToolUpdates', () => {
         const latestFor = vi.fn(async () => null);
         await detectToolUpdates(report, latestFor);
         expect(latestFor).toHaveBeenCalledWith('node', '20.11.0');
+    });
+});
+
+/**
+ * WHEN to re-scan (#242 P4).
+ *
+ * A scan is not free — it shells out to `winget upgrade` / `brew outdated` /
+ * `npm outdated -g`, which are slow and hit the network. So the manager must not
+ * re-run one every time a settings page opens, and equally must not sit on a
+ * week-old answer. Between those is a staleness decision, and it is pure.
+ *
+ * This is deliberately NOT a poll: nothing here runs on a timer. The question is
+ * only ever asked when something already happened (a panel opened, an install
+ * finished), and the answer decides whether that moment is allowed to trigger
+ * the work.
+ */
+describe('shouldCheckToolchainUpdates', () => {
+    const HOUR = 60 * 60 * 1000;
+
+    it('checks when nothing has ever been checked', () => {
+        expect(
+            shouldCheckToolchainUpdates({ lastCheckedAt: null, now: 1_000, maxAgeMs: 6 * HOUR }),
+        ).toBe(true);
+    });
+
+    it('does NOT re-check a fresh answer — opening the page twice is not two scans', () => {
+        expect(
+            shouldCheckToolchainUpdates({
+                lastCheckedAt: 10 * HOUR,
+                now: 10 * HOUR + 60_000,
+                maxAgeMs: 6 * HOUR,
+            }),
+        ).toBe(false);
+    });
+
+    it('checks once the answer is older than the window', () => {
+        expect(
+            shouldCheckToolchainUpdates({
+                lastCheckedAt: 1 * HOUR,
+                now: 1 * HOUR + 6 * HOUR + 1,
+                maxAgeMs: 6 * HOUR,
+            }),
+        ).toBe(true);
+    });
+
+    it('always checks when the caller FORCES it (the explicit refresh button)', () => {
+        expect(
+            shouldCheckToolchainUpdates({
+                lastCheckedAt: 10 * HOUR,
+                now: 10 * HOUR + 1,
+                maxAgeMs: 6 * HOUR,
+                force: true,
+            }),
+        ).toBe(true);
+    });
+
+    it('re-checks if the clock moved BACKWARDS rather than trusting the future', () => {
+        // A resumed laptop or a corrected clock can put `lastCheckedAt` ahead of
+        // now; treating that as "fresh" would freeze the badge indefinitely.
+        expect(
+            shouldCheckToolchainUpdates({
+                lastCheckedAt: 20 * HOUR,
+                now: 5 * HOUR,
+                maxAgeMs: 6 * HOUR,
+            }),
+        ).toBe(true);
     });
 });
