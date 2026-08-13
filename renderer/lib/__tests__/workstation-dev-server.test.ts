@@ -7,8 +7,14 @@ import {
     engineUsageNote,
     runtimeDiagnostics,
     stopEngineWarning,
+    toolLabel,
+    toolRowAction,
+    toolUpdateCount,
+    toolUpdateRow,
+    toolUpdateRows,
+    toolUpdateTone,
 } from '../workstation-dev-server';
-import type { DevEngineInfo, DevWorkstationInfo } from '../genie';
+import type { DevEngineInfo, DevWorkstationInfo, ToolUpdate } from '../genie';
 
 /**
  * WHAT THE WORKSTATION DEV SERVER PAGE DECIDES.
@@ -221,5 +227,81 @@ describe('runtimeDiagnostics', () => {
         expect(d.probes).toHaveLength(2);
         expect(d.probes[0]).toMatchObject({ kind: 'docker', label: expect.stringMatching(/not running/i) });
         expect(d.probes[1]?.label).toMatch(/not installed/i);
+    });
+});
+
+/**
+ * The Dev Tools section (Toolchain Manager, #242 P2). Each row shows an installed
+ * host tool's version plus an update-available badge and, when a newer version is
+ * known, an Update action. The renderer has no DOM harness, so the row model and
+ * badge/action decisions are pinned here; the section wiring lives in settings.tsx.
+ */
+const upd = (over: Partial<ToolUpdate> = {}): ToolUpdate => ({
+    name: 'git',
+    installed: '2.40.0',
+    latest: '2.45.0',
+    updateAvailable: true,
+    source: 'package-manager',
+    ...over,
+});
+
+describe('tool update rows', () => {
+    it('labels tools for humans, not by their internal ids', () => {
+        expect(toolLabel('claude-code')).toBe('Claude Code');
+        expect(toolLabel('node')).toBe('Node.js');
+        expect(toolLabel('git')).toBe('Git');
+        expect(toolLabel('php')).toBe('PHP');
+    });
+
+    it('marks a newer-version-available tool as update-available', () => {
+        expect(toolUpdateTone(upd({ updateAvailable: true }))).toBe('update-available');
+    });
+
+    it('marks an installed tool with a known latest and no newer version up-to-date', () => {
+        expect(
+            toolUpdateTone(upd({ installed: '2.45.0', latest: '2.45.0', updateAvailable: false })),
+        ).toBe('up-to-date');
+    });
+
+    it('marks an installed tool whose latest could not be learned as unknown', () => {
+        expect(
+            toolUpdateTone(upd({ installed: '2.40.0', latest: undefined, updateAvailable: false, source: 'unknown' })),
+        ).toBe('unknown');
+    });
+
+    it('marks a tool that is not installed as not-installed', () => {
+        expect(toolUpdateTone(upd({ installed: undefined, updateAvailable: false }))).toBe(
+            'not-installed',
+        );
+    });
+
+    it('offers Update only when a newer version is known AND the tool is installed', () => {
+        expect(toolRowAction(upd({ installed: '2.40.0', updateAvailable: true }))).toBe('update');
+        expect(toolRowAction(upd({ installed: '2.45.0', updateAvailable: false }))).toBe('none');
+        // No Install action in the manager — the first-run wizard owns install.
+        expect(toolRowAction(upd({ installed: undefined, updateAvailable: false }))).toBe('none');
+    });
+
+    it('builds a row that carries the version pair, tone and action together', () => {
+        expect(toolUpdateRow(upd({ name: 'node', installed: '20.9.0', latest: '20.11.0' }))).toEqual({
+            name: 'node',
+            label: 'Node.js',
+            installed: '20.9.0',
+            latest: '20.11.0',
+            updateAvailable: true,
+            tone: 'update-available',
+            action: 'update',
+            source: 'package-manager',
+        });
+    });
+
+    it('maps a whole report and counts only the tools with an update available', () => {
+        const updates = [
+            upd({ name: 'git', updateAvailable: true }),
+            upd({ name: 'node', updateAvailable: false, latest: '20.11.0', installed: '20.11.0' }),
+            upd({ name: 'docker', installed: undefined, updateAvailable: false }),
+        ];
+        expect(toolUpdateRows(updates).map((r) => r.name)).toEqual(['git', 'node', 'docker']);
+        expect(toolUpdateCount(updates)).toBe(1);
     });
 });

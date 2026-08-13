@@ -1,4 +1,11 @@
-import type { DevEngineInfo, DevRuntimeProbe, DevWorkstationInfo } from './genie';
+import type {
+    DevEngineInfo,
+    DevRuntimeProbe,
+    DevWorkstationInfo,
+    HostToolName,
+    ToolUpdate,
+    ToolchainUpdateSource,
+} from './genie';
 import type { DevTone } from './dev-server';
 
 /**
@@ -233,4 +240,88 @@ function listNames(names: string[]): string {
         return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
     }
     return `${names.slice(0, 3).join(', ')} and ${names.length - 3} more`;
+}
+
+// --- host tool updates (Toolchain Manager, #242 P2, the Dev Tools section) ---
+//
+// The read side (`devServer.toolchainUpdates`) already decides whether a newer
+// version exists per tool (main/dev-server/toolchain-updates.ts). This is the
+// VIEW model the Dev Tools section renders from: a human label, the badge tone,
+// and whether an Update action is offered. INSTALL is deliberately absent — the
+// first-run wizard (#240) owns getting a missing tool onto the machine; this
+// section manages what is already here.
+
+export type ToolUpdateTone = 'update-available' | 'up-to-date' | 'not-installed' | 'unknown';
+export type ToolRowAction = 'update' | 'none';
+
+export interface ToolUpdateRow {
+    name: HostToolName;
+    /** Human label, e.g. `Claude Code` for `claude-code`. */
+    label: string;
+    installed?: string;
+    latest?: string;
+    updateAvailable: boolean;
+    tone: ToolUpdateTone;
+    action: ToolRowAction;
+    source: ToolchainUpdateSource;
+}
+
+const TOOL_LABELS: Record<HostToolName, string> = {
+    git: 'Git',
+    node: 'Node.js',
+    npm: 'npm',
+    php: 'PHP',
+    composer: 'Composer',
+    docker: 'Docker',
+    'claude-code': 'Claude Code',
+    codex: 'Codex',
+};
+
+/** The display name for a tool — never its internal id in the UI. */
+export function toolLabel(name: HostToolName): string {
+    return TOOL_LABELS[name] ?? name;
+}
+
+/**
+ * The badge tone for a tool row. Four genuinely different states: a newer version
+ * is out (act), it is current (reassure), it is here but no source could say what
+ * the latest is (honest "unknown", not a false "up to date"), or it is not
+ * installed at all.
+ */
+export function toolUpdateTone(u: ToolUpdate): ToolUpdateTone {
+    if (!u.installed) return 'not-installed';
+    if (u.updateAvailable) return 'update-available';
+    if (u.latest) return 'up-to-date';
+    return 'unknown';
+}
+
+/** Offer Update only when a newer version is actually known AND the tool is here
+ *  to update. Everything else has no action in this section. */
+export function toolRowAction(u: ToolUpdate): ToolRowAction {
+    return u.updateAvailable && u.installed ? 'update' : 'none';
+}
+
+/** One tool's row: the version pair, badge tone and action folded together. */
+export function toolUpdateRow(u: ToolUpdate): ToolUpdateRow {
+    return {
+        name: u.name,
+        label: toolLabel(u.name),
+        ...(u.installed !== undefined ? { installed: u.installed } : {}),
+        ...(u.latest !== undefined ? { latest: u.latest } : {}),
+        updateAvailable: u.updateAvailable,
+        tone: toolUpdateTone(u),
+        action: toolRowAction(u),
+        source: u.source,
+    };
+}
+
+/** The whole Dev Tools table, order preserved. */
+export function toolUpdateRows(updates: ToolUpdate[]): ToolUpdateRow[] {
+    return updates.map(toolUpdateRow);
+}
+
+/** How many installed tools have an update available — drives the section (and,
+ *  in #242 P4, the entry-point) badge. */
+export function toolUpdateCount(updates: ToolUpdate[]): number {
+    return updates.filter((u) => u.updateAvailable).length;
 }
