@@ -3570,6 +3570,11 @@ function DevToolsSection() {
      *  dismissal is remembered forever, so a machine that was skipped (or where
      *  a tool failed to install) had no way back to it. */
     const [wizardOpen, setWizardOpen] = useState(false);
+    /** An update main held back because live work would be hit — held until the
+     *  human sees WHAT and says go. */
+    const [confirmUpdate, setConfirmUpdate] = useState<{ tool: HostToolName; reason: string } | null>(
+        null,
+    );
 
     /** `force` is the explicit Refresh: it re-runs the (slow, network-touching)
      *  package-manager scan instead of reusing main's cached answer. */
@@ -3589,11 +3594,20 @@ function DevToolsSection() {
         return api().on.devServerChanged(() => refresh());
     }, [refresh]);
 
-    const update = async (name: HostToolName) => {
+    const update = async (name: HostToolName, confirmed = false) => {
         setBusy(name);
         setError(null);
         try {
-            const res = await api().devServer.toolchainUpdate(name);
+            const res = await api().devServer.toolchainUpdate(name, confirmed);
+            // Main REFUSED because live work would be hit. `blocked` is final —
+            // replacing the binary an agent is mid-turn on fails on Windows and
+            // corrupts the turn elsewhere, so there is no "do it anyway". `warn`
+            // is a real choice, so it gets a dialog that NAMES the cost.
+            if (!res.ok && res.risk) {
+                if (res.risk === 'blocked') setError(res.error ?? 'Not safe to update right now.');
+                else setConfirmUpdate({ tool: name, reason: res.error ?? '' });
+                return;
+            }
             if (!res.ok) {
                 const failed = res.results.find((r) => r.status === 'failed');
                 setError(failed?.error ?? 'The update did not complete.');
@@ -3716,6 +3730,37 @@ function DevToolsSection() {
                     refresh(true);
                 }}
             />
+
+            {/* The update would hit live work. Not "are you sure" — the sentence
+                NAMES the containers or sites at stake, the same way a machine-
+                level engine stop names the workspaces it would take down. */}
+            {confirmUpdate && (
+                <Modal open onClose={() => setConfirmUpdate(null)} size="sm">
+                    <div className="ws-confirm">
+                        <Heading as="h3" size="xs">
+                            Update {confirmUpdate.tool} now?
+                        </Heading>
+                        <Callout color="amber" icon={<Icon name="triangle-alert" size="sm" />}>
+                            <span data-testid="update-risk">{confirmUpdate.reason}</span>
+                        </Callout>
+                        <div className="ws-confirm-actions">
+                            <Action variant="ghost" onClick={() => setConfirmUpdate(null)}>
+                                Not now
+                            </Action>
+                            <Action
+                                color="amber"
+                                onClick={() => {
+                                    const tool = confirmUpdate.tool;
+                                    setConfirmUpdate(null);
+                                    void update(tool, true);
+                                }}
+                            >
+                                Update anyway
+                            </Action>
+                        </div>
+                    </div>
+                </Modal>
+            )}
         </SetSection>
     );
 }

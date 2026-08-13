@@ -223,6 +223,19 @@ export class AgentPulse {
         this.flush(workspaceId, s, this.now());
     }
 
+    /**
+     * Every agent terminal that is MID-TURN right now, across all workspaces.
+     *
+     * The glow is per-workspace, but "is it safe to replace the binary an agent
+     * is running on?" is a MACHINE question — a toolchain update on the settings
+     * page has no workspace context and would endanger an agent in any of them.
+     */
+    workingAgentTerminals(): string[] {
+        const ids: string[] = [];
+        for (const s of this.ws.values()) ids.push(...s.workingAgents);
+        return ids;
+    }
+
     /** Whether a workspace currently reads as active (byte activity OR agent mid-turn). */
     isActive(workspaceId: string): boolean {
         const s = this.ws.get(workspaceId);

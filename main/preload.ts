@@ -719,7 +719,8 @@ const api = {
         /** Toolchain Manager (#242 P2): update ONE installed tool to latest. Main
          *  validates the tool + builds the command; the renderer picks only which
          *  known tool. Per-tool progress arrives on `on.toolchainProgress`. */
-        toolchainUpdate: (tool: string) => ipcRenderer.invoke('toolchain:update', tool),
+        toolchainUpdate: (tool: string, confirmed?: boolean) =>
+            ipcRenderer.invoke('toolchain:update', tool, confirmed),
         /** The MACHINE's Dev Server: which runtime is driving, what the dev base
          *  image provides, and every shared service engine with its holders.
          *  Machine-level because an engine is shared across every workspace on

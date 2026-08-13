@@ -170,6 +170,36 @@ import type { ToolUpdate } from './dev-server/toolchain-updates';
  *  P4). Process-lifetime only: a fresh boot re-scans, which is the right default
  *  after an install or an upgrade. */
 let toolchainUpdateCache: { at: number | null; rows: ToolUpdate[] } = { at: null, rows: [] };
+
+/**
+ * What a toolchain update would walk into RIGHT NOW.
+ *
+ * Read fresh at the moment of the click, never cached: the whole point is the
+ * state of the machine as the binary is about to be replaced, and an agent can
+ * start a turn between opening the page and pressing Update.
+ */
+async function readToolchainActivity(): Promise<ToolchainActivity> {
+    const busyAgents = agentPulse
+        .workingAgentTerminals()
+        // A terminal id means nothing to a human; the warning has to say WHO.
+        .map((id) => getTerminalSpec(id)?.label || id);
+    const openTerminals = listTerminalSpecs().length;
+    let runningEngines: string[] = [];
+    try {
+        const info = await workstationDevServerInfo();
+        runningEngines = info.engines
+            .filter((e) => e.state === 'running')
+            .map((e) => (e.engine === 'custom' ? e.label : `${e.label} ${e.version}`));
+    } catch {
+        // Never let a diagnostics read block the guard — an unknown engine list
+        // means we simply cannot NAME containers, not that the update is safe to
+        // wave through on the agent-critical path above.
+    }
+    // A `.gen` site only resolves a port once its server is up, so this set IS
+    // the running one.
+    const runningSites = devServerGenSites().map((s) => s.genName);
+    return { busyAgents, openTerminals, runningSites, runningEngines };
+}
 import { hostToolCommandRunner } from './dev-server/seams';
 import { runInstallPlan } from './dev-server/toolchain-install';
 import { planToolUpdate } from './dev-server/toolchain-plan';
@@ -180,6 +210,9 @@ import { createToolchainPerformDeps } from './dev-server/toolchain-effects';
 import { createToolchainPrimitives } from './dev-server/toolchain-primitives';
 import type { EngineActionRequest } from './dev-server/services/service-manager';
 import type { ManageServiceRequest, ManageSiteRequest } from './mcp/protocol';
+import { devServerGenSites } from './dev-server/site-manager';
+import { toolchainUpdateRisk } from './dev-server/toolchain-update-risk';
+import type { ToolchainActivity } from './dev-server/toolchain-update-risk';
 import type { DevSiteProgress } from './dev-server/site-manager';
 import { remoteGenUrl } from './sites/gen-url';
 import {
@@ -623,9 +656,26 @@ export function registerIpcHandlers(): void {
     // arbitrary command line — and re-inspects to pick the package manager. The
     // `update` intent makes a package-manager step an upgrade, not an install.
     // Per-tool progress streams on `toolchain:progress`, same as install.
-    ipcMain.handle('toolchain:update', async (e, tool: string) => {
+    ipcMain.handle('toolchain:update', async (e, tool: string, confirmed?: boolean) => {
         if (!(DEFAULT_TOOLCHAIN as readonly string[]).includes(tool)) {
             return { ok: false, results: [], restartRequired: false, skipped: [] };
+        }
+        // What this would walk into, read at the MOMENT of the click. An update
+        // replaces a binary other live things are running on: replacing an agent
+        // TUI (or Node) mid-turn fails on Windows and corrupts the turn
+        // elsewhere, and a Docker update restarts the engine under running
+        // containers. Refuse the first, and make the rest an informed choice.
+        const risk = toolchainUpdateRisk(tool as HostToolName, await readToolchainActivity());
+        if (risk.risk === 'blocked' || (risk.risk === 'warn' && !confirmed)) {
+            return {
+                ok: false,
+                results: [],
+                restartRequired: false,
+                skipped: [],
+                risk: risk.risk,
+                error: risk.reason,
+                affected: risk.affected,
+            };
         }
         const ctx = { os: process.platform, arch: process.arch };
         const insp = await inspectToolchain({ runner: hostToolCommandRunner, ...ctx });

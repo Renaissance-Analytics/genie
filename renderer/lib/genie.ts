@@ -619,6 +619,13 @@ export interface ToolchainInstallResult {
     refused?: 'not-approved';
     restartRequired: boolean;
     skipped: HostToolName[];
+    /** Set when the update was HELD because live work would be hit: `blocked`
+     *  cannot be overridden, `warn` proceeds if the human confirms. */
+    risk?: 'blocked' | 'warn';
+    /** Why it was held — names the agents / containers / sites at stake. */
+    error?: string;
+    /** Exactly what is at stake. */
+    affected?: string[];
 }
 
 /** Where a candidate "latest" version was learned. */
@@ -2234,8 +2241,11 @@ export interface GenieApi {
          *  pass `force` for an explicit Refresh. */
         toolchainUpdates: (force?: boolean) => Promise<ToolUpdate[]>;
         /** Toolchain Manager (#242 P2): update ONE installed tool to latest. Main
-         *  validates the tool + builds the command. Progress on `on.toolchainProgress`. */
-        toolchainUpdate: (tool: HostToolName) => Promise<ToolchainInstallResult>;
+         *  validates the tool + builds the command. Progress on `on.toolchainProgress`.
+         *  Main REFUSES (or asks) when the update would walk into live work —
+         *  replacing an agent TUI mid-turn, or restarting Docker under running
+         *  containers; pass `confirmed` to accept a `warn`. */
+        toolchainUpdate: (tool: HostToolName, confirmed?: boolean) => Promise<ToolchainInstallResult>;
         /** The MACHINE's Dev Server: the runtime, the dev base image's
          *  toolchains, and every shared service engine with its holders. A pure
          *  read — opening it never pulls or starts anything. */
