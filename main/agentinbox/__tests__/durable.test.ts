@@ -214,6 +214,27 @@ describe('AgentInbox durable inbox (Track B)', () => {
         expect(woken).toEqual(['t-b']);
     });
 
+    it('an agent explicitly opted OUT is never announced to (owner: default ON, OFF is honoured)', () => {
+        // The per-agent toggle now governs the IMMEDIATE notice too, and its
+        // default flipped to ON. Someone who deliberately silenced an agent must
+        // keep that silence -- a setting that stops being honoured is worse than
+        // no setting.
+        const b = new AgentInboxBroker();
+        b.setStore(store);
+        const woken: string[] = [];
+        b.setWakeSink((tid) => woken.push(tid));
+
+        join(b, 'a');
+        join(b, 'quiet', { wakeOnDm: false }); // explicit OFF
+        join(b, 'normal'); // never set -> default ON
+
+        b.send({ fromAgentId: 'a', toAgentId: 'quiet', text: 'shh' });
+        expect(woken).toHaveLength(0);
+
+        b.send({ fromAgentId: 'a', toAgentId: 'normal', text: 'hello' });
+        expect(woken).toEqual(['t-normal']);
+    });
+
     it('wake-on-DM remains the FALLBACK when a notice is held back by a human draft', () => {
         // The opt-in idle nudge is not deleted: it still covers the case the
         // immediate notice refuses (a draft in the box) for an agent that asked

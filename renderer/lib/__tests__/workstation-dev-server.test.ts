@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
     engineActionAvailability,
+    engineGroupOf,
     engineGroups,
+    engineInstalledNote,
     engineStatusLabel,
     engineStatusTone,
     engineUsageNote,
@@ -348,5 +350,69 @@ describe('engineActionAvailability — install another version', () => {
         expect(
             engineActionAvailability(engine({ installed: false, configured: 1 }), true).canInstall,
         ).toBe(true);
+    });
+});
+
+/**
+ * FOLLOWING THE ROW after an action (#242 P3 UX).
+ *
+ * Installing a version moves it out of the group you clicked in — the tabs key
+ * off exactly the state the action changed. A row that silently vanishes from
+ * the tab you are looking at reads as "nothing happened" (or worse, "it broke"),
+ * so the page has to say what happened AND go where the thing went.
+ */
+describe('engineGroupOf', () => {
+    it('places a running engine in the active group', () => {
+        expect(engineGroupOf(engine({ state: 'running', installed: true }))).toBe('active');
+    });
+
+    it('places a downloaded-but-idle engine on this machine', () => {
+        expect(engineGroupOf(engine({ installed: true }))).toBe('installed');
+    });
+
+    it('places a configured-but-absent engine on this machine, not in the catalog', () => {
+        expect(engineGroupOf(engine({ configured: 1 }))).toBe('installed');
+    });
+
+    it('places an untouched catalog row in available', () => {
+        expect(engineGroupOf(engine())).toBe('available');
+    });
+
+    it('agrees with engineGroups for every row', () => {
+        // One source of truth: the tab a row is IN and the tab we follow it to
+        // must never disagree.
+        const rows = [
+            engine({ recordKey: 'a', state: 'running', installed: true }),
+            engine({ recordKey: 'b', installed: true }),
+            engine({ recordKey: 'c' }),
+        ];
+        const groups = engineGroups(rows);
+        expect(groups.active.map((e) => e.recordKey)).toEqual(
+            rows.filter((e) => engineGroupOf(e) === 'active').map((e) => e.recordKey),
+        );
+        expect(groups.installed.map((e) => e.recordKey)).toEqual(
+            rows.filter((e) => engineGroupOf(e) === 'installed').map((e) => e.recordKey),
+        );
+        expect(groups.available.map((e) => e.recordKey)).toEqual(
+            rows.filter((e) => engineGroupOf(e) === 'available').map((e) => e.recordKey),
+        );
+    });
+});
+
+describe('engineInstalledNote', () => {
+    it('names the engine, where it went, and that nothing is running yet', () => {
+        const note = engineInstalledNote(engine({ label: 'MySQL', version: '8' }));
+        expect(note).toContain('MySQL 8');
+        // Where it went — the row moved tabs, so the confirmation has to say so.
+        expect(note).toContain('On this machine');
+        // A pulled image is not a running engine; claiming otherwise would be a lie
+        // the very next glance disproves.
+        expect(note).toMatch(/not running|nothing is running/i);
+    });
+
+    it('does not append a version to a custom engine', () => {
+        expect(engineInstalledNote(engine({ engine: 'custom', label: 'Ollama' }))).toContain(
+            'Ollama',
+        );
     });
 });

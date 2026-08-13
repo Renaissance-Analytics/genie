@@ -155,15 +155,56 @@ export interface EngineGroups {
  * are actually running. Order within each group is preserved from the backend,
  * which already ranks running → installed → absent.
  */
+export type EngineGroupId = keyof EngineGroups;
+
+/**
+ * Which group ONE row belongs to.
+ *
+ * Split out of {@link engineGroups} so the page can FOLLOW a row after an action
+ * that changes its state — installing a version moves it out of the tab it was
+ * clicked in, and a row that silently vanishes reads as "nothing happened".
+ * Deriving both the grouping and the follow-to destination from this one
+ * function is what stops the tab a row is IN and the tab we send you to from
+ * ever disagreeing.
+ */
+export function engineGroupOf(engine: DevEngineInfo): EngineGroupId {
+    if (engine.state === 'running') return 'active';
+    if (engine.installed || engine.configured > 0 || engine.state === 'stopped') return 'installed';
+    return 'available';
+}
+
 export function engineGroups(engines: DevEngineInfo[]): EngineGroups {
     const groups: EngineGroups = { active: [], installed: [], available: [] };
-    for (const engine of engines) {
-        if (engine.state === 'running') groups.active.push(engine);
-        else if (engine.installed || engine.configured > 0 || engine.state === 'stopped') {
-            groups.installed.push(engine);
-        } else groups.available.push(engine);
-    }
+    for (const engine of engines) groups[engineGroupOf(engine)].push(engine);
     return groups;
+}
+
+/** The human label of each group tab — one source of truth for the tab and for
+ *  the sentence that tells you where a row went. */
+export const ENGINE_GROUP_LABELS: Readonly<Record<EngineGroupId, string>> = {
+    active: 'Running',
+    installed: 'On this machine',
+    available: 'Available',
+};
+
+/** An engine's display name — `custom` has no meaningful version to append. */
+function engineDisplayName(engine: DevEngineInfo): string {
+    return engine.engine === 'custom' ? engine.label : `${engine.label} ${engine.version}`;
+}
+
+/**
+ * The confirmation after a version is pre-downloaded.
+ *
+ * Says the three things the screen alone no longer can: WHAT finished, WHERE the
+ * row went (it changed tabs), and that the image being here does NOT mean
+ * anything is running — the distinction this page keeps everywhere else, and a
+ * claim the very next glance would otherwise disprove.
+ */
+export function engineInstalledNote(engine: DevEngineInfo): string {
+    return (
+        `${engineDisplayName(engine)} is downloaded — it moved to “${ENGINE_GROUP_LABELS.installed}”. ` +
+        'Nothing is running yet; it starts when a workspace uses it.'
+    );
 }
 
 // --- the container runtime --------------------------------------------------

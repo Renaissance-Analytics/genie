@@ -284,6 +284,10 @@ export class AgentInboxBroker {
      */
     private notifyNow(target: AgentInboxAgent, msg: AgentInboxMessage): boolean {
         if (!this.wakeSink || !target.terminalId) return false;
+        // The per-agent toggle governs THIS too, and defaults ON (owner). Someone
+        // who deliberately silenced an agent keeps that silence — a setting that
+        // stops being honoured is worse than no setting.
+        if (!target.wakeOnDm) return false;
         if (
             !shouldNotifyNow({
                 pendingInput: target.pendingInput,
@@ -617,10 +621,12 @@ export class AgentInboxBroker {
             inbox: existing?.inbox ?? [],
             waiter: existing?.waiter ?? null,
             cursor: existing?.cursor ?? 0,
-            // Wake-on-DM: the opt-in is a persisted preference (from the join input,
-            // e.g. spec meta) that survives a re-join; the idle-signal timestamps are
-            // runtime state carried across a re-join, never reset by it.
-            wakeOnDm: input.wakeOnDm ?? existing?.wakeOnDm ?? false,
+            // Inbox announcements: a persisted preference (from the join input, e.g.
+            // spec meta) that survives a re-join; the idle-signal timestamps are
+            // runtime state carried across a re-join, never reset by it. Defaults ON
+            // (owner, beta.248) — an agent is told about its mail unless someone
+            // explicitly turned it off.
+            wakeOnDm: input.wakeOnDm ?? existing?.wakeOnDm ?? true,
             lastTurnEndAt: existing?.lastTurnEndAt ?? null,
             lastOutputAt: existing?.lastOutputAt ?? null,
             lastWokenAt: existing?.lastWokenAt ?? null,

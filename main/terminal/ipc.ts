@@ -549,7 +549,10 @@ function joinInputFromSpec(spec: TerminalSpecRow | null): AgentInboxJoinInput | 
             ? (spec.meta.whisper_workspaces as string[])
             : [],
         chatSessionId: spec.meta?.chat_session_id ?? null,
-        wakeOnDm: spec.meta?.whisper_wake_on_dm === true,
+        // Default ON (owner, beta.248): the meta key is written ONLY when someone
+        // sets the toggle, so `undefined` means "never chose" → announce, and only
+        // an explicit `false` silences the agent.
+        wakeOnDm: spec.meta?.whisper_wake_on_dm !== false,
         // Explicitly-joined channels (genie #65) — the broker re-adds these on
         // (re)join so a restart doesn't silently evict the agent from them.
         channels: Array.isArray(spec.meta?.whisper_channels)

@@ -51,6 +51,8 @@ import {
     engineStatusLabel,
     engineStatusTone,
     engineUsageNote,
+    engineGroupOf,
+    engineInstalledNote,
     runtimeDiagnostics,
     stopEngineWarning,
     toolUpdateCount,
@@ -3675,6 +3677,9 @@ export function DevServerSection({
     /** The row with an action in flight — disables just that row. */
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    /** What just finished, shown until the next action. An install MOVES the row
+     *  to another tab, so without this the click reads as "nothing happened". */
+    const [done, setDone] = useState<string | null>(null);
     /** The one engine whose log is open, and its tail. */
     const [logs, setLogs] = useState<{ recordKey: string; text: string } | null>(null);
     /** A stop that would hit other workspaces, held until it is confirmed. */
@@ -3706,6 +3711,7 @@ export function DevServerSection({
     const act = async (engine: DevEngineInfo, action: 'start' | 'stop' | 'logs' | 'install') => {
         setBusy(engine.recordKey);
         setError(null);
+        setDone(null);
         try {
             const res = await api().devServer.engine({
                 recordKey: engine.recordKey,
@@ -3715,6 +3721,14 @@ export function DevServerSection({
             if (!res.ok && res.error) setError(res.error);
             if (action === 'logs' && res.ok) {
                 setLogs({ recordKey: engine.recordKey, text: res.logs ?? '' });
+            }
+            // A download changes the row's STATE, which is what the tabs group by
+            // — so the row leaves the tab it was clicked in. FOLLOW it and say what
+            // happened, rather than letting it vanish (entry → action → visible
+            // confirm → next).
+            if (action === 'install' && res.ok) {
+                setEngineTab(engineGroupOf({ ...engine, installed: true }));
+                setDone(engineInstalledNote(engine));
             }
             refresh();
         } catch (e) {
@@ -3839,6 +3853,13 @@ export function DevServerSection({
                 desc="Postgres, Redis and friends — ONE container per engine and major version, shared by every workspace on this machine"
             >
                 {error && <div className="set-note bad">{error}</div>}
+                {/* The visible confirmation for an action whose row moved tabs.
+                    Dismissible, and replaced by the next action's outcome. */}
+                {done && (
+                    <div className="set-note" role="status" data-testid="engine-done">
+                        {done}
+                    </div>
+                )}
 
                 {/* Grouped, not flat: a dozen catalog rows would bury the two
                     that are actually running, which are the only ones anyone
@@ -4061,7 +4082,9 @@ function EngineRow({
                             disabled={busy}
                             onClick={() => onInstall(engine)}
                         >
-                            Install
+                            {/* A pull is hundreds of megabytes — a button that just
+                                goes quiet for a minute reads as broken. */}
+                            {busy ? 'Downloading…' : 'Install'}
                         </Action>
                     )}
                     {actions.canStart && (

@@ -153,13 +153,17 @@ test('switching engine groups SWAPS the list — the three are not one long page
         .poll(async () => (await readHostingState(app))?.calls.engine ?? [])
         .toContain('install:mysql-8');
 
-    // ...and the image is now HERE, so the row REGROUPS: it leaves "Available"
-    // (which is the catalog of what this machine could run) and appears under
-    // "On this machine". Asserting the move is what proves the pull actually
-    // changed the machine's state rather than just firing an IPC.
-    await expect(engines.getByText('MySQL 8', { exact: true })).toHaveCount(0);
+    // ...and the page FOLLOWS the row. The image being here changes the state the
+    // tabs group by, so the row leaves "Available" — vanishing from under the
+    // click would read as "nothing happened", so the page switches to where it
+    // went and SAYS so (entry -> action -> visible confirm -> next).
+    await expect(page.getByTestId('engine-done')).toContainText('MySQL 8 is downloaded');
+    await expect(page.getByTestId('engine-done')).toContainText('Nothing is running yet');
+    await expect(page.getByRole('tab', { name: /^On this machine/ })).toHaveAttribute(
+        'aria-selected',
+        'true',
+    );
 
-    await page.getByRole('tab', { name: /^On this machine/ }).click();
     const installed = engines.locator('.ws-engine', { hasText: 'MySQL 8' });
     // Downloaded, NOT started — a pulled image is not a running engine, and the
     // page keeps those two facts separate.

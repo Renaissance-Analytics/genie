@@ -302,11 +302,12 @@ For Codex, Genie automatically installs a SessionStart hook that sends Codex's g
   Your WORKSPACE's own access setting applies on top: it decides which workspaces
   may reach yours at all, and a workspace that refuses yours hides its agents from
   you completely.
-  Optional \`purpose\` renames your channel. Optional \`wakeOnDm\` (default off): when
-  ON, a DM that arrives while you're IDLE (turn ended, prompt empty) injects a
-  one-line nudge so you start a turn and see it — instead of it sitting unread
-  until you next act. Fail-safe: never fires mid-turn (any output since your last
-  turn ended cancels it).
+  Optional \`purpose\` renames your channel. Optional \`wakeOnDm\` (default ON): when
+  ON, a DM or channel message is ANNOUNCED in your chat as soon as it arrives —
+  mid-turn is fine, your TUI queues it — carrying its urgency so you can decide
+  whether to break off. It is held back only while the HUMAN is typing at your
+  terminal or has a draft in the box. Turn it OFF to stay silent until you check
+  your inbox yourself.
 - \`join\` / \`leave\` — opt in/out of a \`channel\`.
 Your identity + accessibility persist across restarts. Local-only — no relay, no
 cross-host. Use it to hand a peer context, ask another agent to take a task, or
