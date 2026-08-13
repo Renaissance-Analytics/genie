@@ -53,6 +53,10 @@ interface Props {
     attentionIds: Set<string>;
     /** Clear a terminal's attention glow when its panel gains focus. */
     onAttentionClear?: (id: string) => void;
+    /** Per-terminal recovery generation (genie#203). A bump remounts the panel
+     *  so its terminal:create rejoins the respawned host and replays scrollback
+     *  after a mid-session pty-host loss. Absent/0 for terminals never lost. */
+    recoverGen?: Record<string, number>;
     maximizedId: string | null;
     onClose: (id: string) => void;
     onFocus: (id: string) => void;
@@ -115,6 +119,7 @@ export default function TerminalGrid({
     focusId,
     attentionIds,
     onAttentionClear,
+    recoverGen = {},
     maximizedId,
     onClose,
     onFocus,
@@ -210,6 +215,7 @@ export default function TerminalGrid({
             focusId={focusId}
             attentionIds={attentionIds}
             onAttentionClear={onAttentionClear}
+            recoverGen={recoverGen}
             maximizedId={maximizedId}
             onClose={onClose}
             onFocus={onFocus}
@@ -239,6 +245,7 @@ interface ResizableGridProps {
     focusId: string | null;
     attentionIds: Set<string>;
     onAttentionClear?: (id: string) => void;
+    recoverGen?: Record<string, number>;
     maximizedId: string | null;
     onClose: (id: string) => void;
     onFocus: (id: string) => void;
@@ -269,6 +276,7 @@ const ResizableGrid = ({
     focusId,
     attentionIds,
     onAttentionClear,
+    recoverGen = {},
     maximizedId,
     onClose,
     onFocus,
@@ -470,7 +478,11 @@ const ResizableGrid = ({
                     // workspace + open file come along so navigating away heals
                     // it (see panelResetKeys).
                     <ErrorBoundary
-                        key={p.spec.id}
+                        // recoverGen bump (genie#203) changes this key → the panel
+                        // subtree remounts so Terminal's create() rejoins the
+                        // respawned host and replays scrollback. 0 normally, so no
+                        // churn on reorders/layout — only on an actual recovery.
+                        key={`${p.spec.id}:${recoverGen[p.spec.id] ?? 0}`}
                         compact
                         name={String(p.spec.label ?? 'Panel')}
                         resetKeys={panelResetKeys(p.spec, activeWorkspaceId)}

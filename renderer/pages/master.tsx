@@ -467,6 +467,36 @@ function MasterInner() {
         return api().on.terminalHostStatus((p) => setToast(p.message));
     }, []);
 
+    // Host-loss recovery (genie#203). When the shared pty-host dies mid-session,
+    // main respawns a backend and asks us to remount the affected panes (their
+    // create() rejoins + replays) via a per-id generation bump, plus a banner.
+    const [recoverGenById, setRecoverGenById] = useState<
+        Record<string, number>
+    >({});
+    const [recovery, setRecovery] = useState<
+        'recovering' | 'recovered' | 'degraded' | null
+    >(null);
+    useEffect(() => {
+        return api().on.terminalRecover?.(({ ids }) => {
+            setRecoverGenById((prev) => {
+                const next = { ...prev };
+                for (const id of ids) next[id] = (next[id] ?? 0) + 1;
+                return next;
+            });
+        });
+    }, []);
+    useEffect(() => {
+        return api().on.terminalRecoveryStatus?.(({ state }) =>
+            setRecovery(state),
+        );
+    }, []);
+    // Auto-dismiss the banner once recovery settles (keep 'recovering' pinned).
+    useEffect(() => {
+        if (recovery !== 'recovered' && recovery !== 'degraded') return;
+        const t = setTimeout(() => setRecovery(null), 5000);
+        return () => clearTimeout(t);
+    }, [recovery]);
+
     // Customization: play the notification sound when an agent calls imDone or
     // ForceTheQuestion (gated by Settings → Customization on the main side). The
     // payload carries a `sound` descriptor resolved per-alert: 'synth' keeps the
@@ -1878,6 +1908,7 @@ function MasterInner() {
                             focusId={focusId}
                             attentionIds={attentionIds}
                             onAttentionClear={clearAttention}
+                            recoverGen={recoverGenById}
                             maximizedId={maximizedId}
                             onClose={closeSelected}
                             onFocus={(id) => setFocusId((cur) => (cur === id ? null : id))}
@@ -1946,6 +1977,20 @@ function MasterInner() {
             {toast && (
                 <div className="g-toast" role="status" onClick={() => setToast(null)}>
                     {toast}
+                </div>
+            )}
+
+            {recovery && (
+                <div
+                    className="g-toast"
+                    role="status"
+                    onClick={() => setRecovery(null)}
+                >
+                    {recovery === 'recovering'
+                        ? 'Terminal host lost — reconnecting terminals…'
+                        : recovery === 'recovered'
+                          ? 'Terminals reconnected (host recovered). Running agents were restarted.'
+                          : 'Terminals reconnected in-process. Running agents were restarted.'}
                 </div>
             )}
 

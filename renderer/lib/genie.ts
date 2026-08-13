@@ -3383,6 +3383,18 @@ export interface GenieApi {
         terminalHostStatus: (
             cb: (payload: { message: string; level: 'info' | 'warn' }) => void,
         ) => () => void;
+        /** Host-loss recovery (genie#203): main asks the renderer to remount these
+         *  terminals so their create() rejoins the respawned host + replays
+         *  scrollback. Optional — absent on the remote bridge (local-host concern). */
+        terminalRecover?: (
+            cb: (payload: { ids: string[] }) => void,
+        ) => () => void;
+        /** Host-loss recovery status (genie#203), for the recovery banner. */
+        terminalRecoveryStatus?: (
+            cb: (payload: {
+                state: 'recovering' | 'recovered' | 'degraded';
+            }) => void,
+        ) => () => void;
         /**
          * Manual-quit terminal confirmation (T3). Main asks the master window to
          * pick which detached terminals to keep running vs shut down before quit.

@@ -1595,6 +1595,28 @@ const api = {
             ipcRenderer.on('terminal:host-status', handler);
             return () => ipcRenderer.off('terminal:host-status', handler);
         },
+        /** Host-loss recovery (genie#203): main asks the renderer to remount these
+         *  terminals so their create() rejoins the respawned host and replays
+         *  scrollback after a mid-session pty-host death. */
+        terminalRecover: (cb: (payload: { ids: string[] }) => void) => {
+            const handler = (_e: unknown, payload: { ids: string[] }) => cb(payload);
+            ipcRenderer.on('terminal:recover', handler);
+            return () => ipcRenderer.off('terminal:recover', handler);
+        },
+        /** Host-loss recovery status (genie#203): 'recovering' → 'recovered' |
+         *  'degraded', for the recovery banner. */
+        terminalRecoveryStatus: (
+            cb: (payload: {
+                state: 'recovering' | 'recovered' | 'degraded';
+            }) => void,
+        ) => {
+            const handler = (
+                _e: unknown,
+                payload: { state: 'recovering' | 'recovered' | 'degraded' },
+            ) => cb(payload);
+            ipcRenderer.on('terminal:recovery-status', handler);
+            return () => ipcRenderer.off('terminal:recovery-status', handler);
+        },
         /**
          * Manual-quit terminal confirmation (T3). Main asks the master window to
          * confirm which detached terminals to keep running vs shut down before
