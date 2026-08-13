@@ -152,10 +152,20 @@ test('switching engine groups SWAPS the list — the three are not one long page
     await expect
         .poll(async () => (await readHostingState(app))?.calls.engine ?? [])
         .toContain('install:mysql-8');
-    // ...and the row repainted as on-this-machine WITHOUT starting anything: a
-    // pulled image is not a running engine.
-    await expect(row).toContainText('Downloaded but not running');
-    await expect(row.getByRole('button', { name: 'Install', exact: true })).toHaveCount(0);
+
+    // ...and the image is now HERE, so the row REGROUPS: it leaves "Available"
+    // (which is the catalog of what this machine could run) and appears under
+    // "On this machine". Asserting the move is what proves the pull actually
+    // changed the machine's state rather than just firing an IPC.
+    await expect(engines.getByText('MySQL 8', { exact: true })).toHaveCount(0);
+
+    await page.getByRole('tab', { name: /^On this machine/ }).click();
+    const installed = engines.locator('.ws-engine', { hasText: 'MySQL 8' });
+    // Downloaded, NOT started — a pulled image is not a running engine, and the
+    // page keeps those two facts separate.
+    await expect(installed).toContainText('Downloaded but not running');
+    await expect(installed.getByRole('button', { name: 'Install', exact: true })).toHaveCount(0);
+    await expect(installed.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0);
 });
 
 test('stopping a SHARED engine asks first, names who it takes down, and does NOT fire on cancel', async () => {
