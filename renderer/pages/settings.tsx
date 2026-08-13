@@ -44,6 +44,7 @@ import {
     type HostToolName,
 } from '../lib/genie';
 import { isolationNote } from '../lib/dev-server';
+import { ToolchainSetupWizard } from '../components/Master/ToolchainSetupWizard';
 import { checkedAgoLabel, pluginSummaryLine } from '../lib/plugins-view';
 import {
     engineActionAvailability,
@@ -3565,6 +3566,10 @@ function DevToolsSection() {
     /** The tool whose Update is in flight — disables every Update while one runs. */
     const [busy, setBusy] = useState<HostToolName | null>(null);
     const [error, setError] = useState<string | null>(null);
+    /** Re-entry into the first-run wizard. It is otherwise offered ONCE and the
+     *  dismissal is remembered forever, so a machine that was skipped (or where
+     *  a tool failed to install) had no way back to it. */
+    const [wizardOpen, setWizardOpen] = useState(false);
 
     /** `force` is the explicit Refresh: it re-runs the (slow, network-touching)
      *  package-manager scan instead of reusing main's cached answer. */
@@ -3686,8 +3691,31 @@ function DevToolsSection() {
                     >
                         Check again
                     </Action>
+                    {/* The way BACK to the first-run wizard. It is auto-offered
+                        once and the dismissal is remembered, so without this a
+                        machine that skipped it — or where a tool failed — could
+                        never reach it again. */}
+                    <Action
+                        size="sm"
+                        variant="ghost"
+                        icon="sparkles"
+                        disabled={busy !== null}
+                        onClick={() => setWizardOpen(true)}
+                        title="Re-run the guided setup: re-detect what this machine has and install anything still missing."
+                    >
+                        Set up toolchain
+                    </Action>
                 </div>
             )}
+            <ToolchainSetupWizard
+                open={wizardOpen}
+                onClose={() => {
+                    setWizardOpen(false);
+                    // It may have installed something — re-read rather than
+                    // leaving the rows showing the pre-setup machine.
+                    refresh(true);
+                }}
+            />
         </SetSection>
     );
 }

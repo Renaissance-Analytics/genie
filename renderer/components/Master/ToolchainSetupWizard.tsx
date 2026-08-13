@@ -298,6 +298,12 @@ export function ToolchainSetupWizard({ open, onClose }: { open: boolean; onClose
                         <ul className="tcw-plan">
                             {insp.plan.map((s) => {
                                 const live = progress[s.tool];
+                                // WHY it failed. The executor already reports a
+                                // per-tool reason ("Genie can't install a zip
+                                // artifact automatically yet…", "spawn npm
+                                // ENOENT"); rendering only "failed" turns an
+                                // actionable message into a dead end.
+                                const why = result?.results.find((r) => r.tool === s.tool)?.error;
                                 return (
                                     <li key={s.tool} className="tcw-plan-row">
                                         <span className="tcw-plan-tool">{TOOL_LABEL[s.tool]}</span>
@@ -305,6 +311,14 @@ export function ToolchainSetupWizard({ open, onClose }: { open: boolean; onClose
                                             {statusLabel(live)}
                                         </span>
                                         <span className="tcw-plan-flags">{statusGlyph(live)}</span>
+                                        {why && (
+                                            <span
+                                                className="tcw-plan-why text-zinc-500"
+                                                data-testid={`tcw-why-${s.tool}`}
+                                            >
+                                                {why}
+                                            </span>
+                                        )}
                                     </li>
                                 );
                             })}

@@ -90,9 +90,16 @@ export interface HostSpawnInvocation {
     detached: boolean;
 }
 
-/** Quote ONE argv token for a cmd.exe command line — only when it needs it, so a
- *  token with a space (a path, a flag value) survives as a single argument. */
-function quoteWinToken(token: string): string {
+/**
+ * Quote ONE argv token for a cmd.exe command line — only when it needs it, so a
+ * token with a space (a path, a flag value) survives as a single argument.
+ *
+ * Exported because the HOST-TOOL runner (`seams.ts`, genie#205) faces the same
+ * `.cmd` shim problem and must quote identically. One implementation on purpose:
+ * two copies of this drift, and the drift shows up as an injection hole in
+ * whichever copy stopped being maintained.
+ */
+export function quoteWinToken(token: string): string {
     if (token === '') return '""';
     if (!/[\s"&|<>^()]/.test(token)) return token;
     return `"${token.replace(/"/g, '""')}"`;

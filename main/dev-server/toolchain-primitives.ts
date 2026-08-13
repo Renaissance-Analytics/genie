@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { URL } from 'node:url';
 import type { CommandResult } from './container-runtime';
-import { defaultCommandRunner } from './seams';
+import { defaultCommandRunner, hostToolCommandRunner } from './seams';
 import { elevationLauncherArgv, isProcessElevated } from './elevate';
 import { resolveDownloadUrl } from './toolchain-resolve';
 import { artifactRunCommand } from './toolchain-artifact';
@@ -121,7 +121,11 @@ function streamTo(url: string, path: string, redirectsLeft = 5): Promise<void> {
  *  ones above. */
 export function createToolchainPrimitives(): ToolchainEffectPrimitives {
     return {
-        runner: defaultCommandRunner,
+        // The SHIM-aware runner (genie#205): an `npm-global` step runs `npm`,
+        // which on Windows is `npm.cmd` — unspawnable without a shell, which is
+        // why installing the agent TUIs failed there. The elevated + artifact
+        // paths below run real executables, so they keep the no-shell runner.
+        runner: hostToolCommandRunner,
         runElevated,
         download,
         resolveDownloadUrl: (source, ctx) => resolveDownloadUrl(source, ctx, fetchJson),

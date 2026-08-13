@@ -5456,8 +5456,18 @@ body.gutter-dragging .grid-gutter {
 .tcw-plan-row {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 10px;
     padding: 8px 12px;
+}
+/* WHY a tool failed — its own line under the row, because the reason is a
+   sentence ("Genie can't install a zip artifact automatically yet…"), not a
+   label, and squeezing it into the status column would truncate the one thing
+   that makes the failure actionable. */
+.tcw-plan-why {
+    flex-basis: 100%;
+    font-size: 11px;
+    line-height: 1.45;
 }
 .tcw-plan-row + .tcw-plan-row {
     border-top: 1px solid var(--zinc-800, #27272a);

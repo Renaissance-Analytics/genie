@@ -170,7 +170,7 @@ import type { ToolUpdate } from './dev-server/toolchain-updates';
  *  P4). Process-lifetime only: a fresh boot re-scans, which is the right default
  *  after an install or an upgrade. */
 let toolchainUpdateCache: { at: number | null; rows: ToolUpdate[] } = { at: null, rows: [] };
-import { defaultCommandRunner } from './dev-server/seams';
+import { hostToolCommandRunner } from './dev-server/seams';
 import { runInstallPlan } from './dev-server/toolchain-install';
 import { planToolUpdate } from './dev-server/toolchain-plan';
 import { DEFAULT_TOOLCHAIN } from './dev-server/toolchain-detect';
@@ -556,7 +556,7 @@ export function registerIpcHandlers(): void {
     // (this machine) because zero-setup runs where Genie runs.
     ipcMain.handle('toolchain:inspect', (_e, pmChoice?: string) =>
         inspectToolchain({
-            runner: defaultCommandRunner,
+            runner: hostToolCommandRunner,
             os: process.platform,
             arch: process.arch,
             ...(pmChoice ? { pmChoice: pmChoice as never } : {}),
@@ -581,7 +581,7 @@ export function registerIpcHandlers(): void {
             return toolchainUpdateCache.rows;
         }
         const rows = await detectToolchainUpdates({
-            runner: defaultCommandRunner,
+            runner: hostToolCommandRunner,
             os: process.platform,
         });
         toolchainUpdateCache = { at: Date.now(), rows };
@@ -596,7 +596,7 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('toolchain:install', async (e, pmChoice?: string) => {
         const ctx = { os: process.platform, arch: process.arch };
         const insp = await inspectToolchain({
-            runner: defaultCommandRunner,
+            runner: hostToolCommandRunner,
             ...ctx,
             ...(pmChoice ? { pmChoice: pmChoice as never } : {}),
         });
@@ -628,7 +628,7 @@ export function registerIpcHandlers(): void {
             return { ok: false, results: [], restartRequired: false, skipped: [] };
         }
         const ctx = { os: process.platform, arch: process.arch };
-        const insp = await inspectToolchain({ runner: defaultCommandRunner, ...ctx });
+        const insp = await inspectToolchain({ runner: hostToolCommandRunner, ...ctx });
         const perform = createPerformInstall(
             createToolchainPerformDeps(createToolchainPrimitives()),
             ctx,
