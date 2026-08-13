@@ -44,6 +44,8 @@ interface Fake extends ContainerRuntime {
     readonly disconnected: { network: string; id: string }[];
     readonly execs: { id: string; argv: string[] }[];
     readonly containers: Map<string, ContainerSummary>;
+    /** Images this runtime was asked to pull (#242 P3, multi-version install). */
+    readonly pulled: string[];
 }
 
 function fakeRuntime(
@@ -51,6 +53,8 @@ function fakeRuntime(
         detection?: RuntimeDetection;
         execFails?: string;
         publishNothing?: boolean;
+        /** No image is on this machine — the pre-install (#242 P3) case. */
+        imageMissing?: boolean;
         /** Pre-seed already-RUNNING containers with NO published ports, to stand in
          *  for a container adopted from an older Genie that never published its
          *  engine port to loopback (moic beta.245 — the adoption gap). */
@@ -65,6 +69,7 @@ function fakeRuntime(
     const connected: { network: string; id: string }[] = [];
     const disconnected: { network: string; id: string }[] = [];
     const execs: { id: string; argv: string[] }[] = [];
+    const pulled: string[] = [];
     const containers = new Map<string, ContainerSummary>();
     const ports = new Map<string, PortMapping[]>();
     let nextHostPort = 49_800;
@@ -84,6 +89,7 @@ function fakeRuntime(
         connected,
         disconnected,
         execs,
+        pulled,
         containers,
         async detect() {
             return opts.detection ?? DOCKER_OK;
@@ -105,9 +111,10 @@ function fakeRuntime(
             removedVolumes.push(name);
         },
         async imageExists() {
-            return true;
+            return !opts.imageMissing;
         },
         async pullImage(image) {
+            pulled.push(image);
             return { ok: true, image };
         },
         async buildImage(spec) {
@@ -723,5 +730,65 @@ describe('the machine-level view', () => {
         const res = await manager.engineAction({ recordKey: 'postgres-16', action: 'stop' });
         expect(res.ok).toBe(false);
         expect(res.error).toBeTruthy();
+    });
+});
+
+/**
+ * MULTI-VERSION pre-install (#242 P3).
+ *
+ * Each (engine, version) is its own image, container and VOLUME, so holding
+ * postgres 17 ready while 16 serves today is cheap — and it is the one machine
+ * action with NO consumer requirement: a version nobody uses yet is exactly what
+ * someone wants downloaded before they need it. It PULLS ONLY; a pre-installed
+ * image is not a running engine, and starting still needs a workspace.
+ */
+describe('engineAction — install (multi-version)', () => {
+    it('pulls the image for a version no workspace uses yet', async () => {
+        const runtime = fakeRuntime({ imageMissing: true });
+        const manager = createDevServiceManager(
+            deps(runtime, {}, { confirmImagePull: () => true }),
+        );
+
+        const res = await manager.engineAction({ recordKey: 'postgres-17', action: 'install' });
+        expect(res.ok).toBe(true);
+        // The CATALOG's image for that major (pgvector, so extensions work) —
+        // derived, never a tag the caller supplied.
+        expect(runtime.pulled).toEqual(['pgvector/pgvector:pg17']);
+        // A pull is not a start: nothing was run, so no engine came up.
+        expect(runtime.ran).toHaveLength(0);
+    });
+
+    it('does not download without consent, and says so', async () => {
+        // ABSENT MEANS NO PULL — the same default the acquire path uses. A
+        // settings page must not be able to start a 400MB download unasked.
+        const runtime = fakeRuntime({ imageMissing: true });
+        const manager = createDevServiceManager(
+            deps(runtime, {}, { confirmImagePull: () => false }),
+        );
+
+        const res = await manager.engineAction({ recordKey: 'postgres-17', action: 'install' });
+        expect(res.ok).toBe(false);
+        expect(runtime.pulled).toEqual([]);
+    });
+
+    it('is a no-op success when the image is already on this machine', async () => {
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(deps(runtime, {}, { confirmImagePull: () => true }));
+
+        const res = await manager.engineAction({ recordKey: 'postgres-16', action: 'install' });
+        expect(res.ok).toBe(true);
+        expect(runtime.pulled).toEqual([]);
+    });
+
+    it('refuses a version it has no image pinned for rather than pulling an arbitrary tag', async () => {
+        // The recordKey becomes an image TAG, so an unknown one is an arbitrary
+        // image to run with a workspace's data in it — the same refusal
+        // `resolveEngineVersion` makes.
+        const runtime = fakeRuntime({ imageMissing: true });
+        const manager = createDevServiceManager(deps(runtime, {}, { confirmImagePull: () => true }));
+
+        const res = await manager.engineAction({ recordKey: 'postgres-99', action: 'install' });
+        expect(res.ok).toBe(false);
+        expect(runtime.pulled).toEqual([]);
     });
 });

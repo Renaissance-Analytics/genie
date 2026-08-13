@@ -3703,7 +3703,7 @@ export function DevServerSection({
     const runtime = info ? runtimeDiagnostics(info) : null;
     const groups = engineGroups(info?.engines ?? []);
 
-    const act = async (engine: DevEngineInfo, action: 'start' | 'stop' | 'logs') => {
+    const act = async (engine: DevEngineInfo, action: 'start' | 'stop' | 'logs' | 'install') => {
         setBusy(engine.recordKey);
         setError(null);
         try {
@@ -3864,6 +3864,7 @@ export function DevServerSection({
                                 onStart={(e) => void act(e, 'start')}
                                 onStop={stop}
                                 onToggleLog={toggleLog}
+                                onInstall={(e) => void act(e, 'install')}
                             />
                         </Tabs.Panel>
                         <Tabs.Panel value="installed">
@@ -3876,6 +3877,7 @@ export function DevServerSection({
                                 onStart={(e) => void act(e, 'start')}
                                 onStop={stop}
                                 onToggleLog={toggleLog}
+                                onInstall={(e) => void act(e, 'install')}
                             />
                         </Tabs.Panel>
                         <Tabs.Panel value="available">
@@ -3888,6 +3890,7 @@ export function DevServerSection({
                                 onStart={(e) => void act(e, 'start')}
                                 onStop={stop}
                                 onToggleLog={toggleLog}
+                                onInstall={(e) => void act(e, 'install')}
                             />
                         </Tabs.Panel>
                     </Tabs.Panels>
@@ -3960,6 +3963,7 @@ function EngineList({
     onStart,
     onStop,
     onToggleLog,
+    onInstall,
 }: {
     engines: DevEngineInfo[];
     empty: string;
@@ -3969,6 +3973,7 @@ function EngineList({
     onStart: (engine: DevEngineInfo) => void;
     onStop: (engine: DevEngineInfo) => void;
     onToggleLog: (engine: DevEngineInfo) => void;
+    onInstall: (engine: DevEngineInfo) => void;
 }) {
     if (engines.length === 0) {
         return (
@@ -3989,6 +3994,7 @@ function EngineList({
                     onStart={onStart}
                     onStop={onStop}
                     onToggleLog={onToggleLog}
+                    onInstall={onInstall}
                 />
             ))}
         </div>
@@ -4013,6 +4019,7 @@ function EngineRow({
     onStart,
     onStop,
     onToggleLog,
+    onInstall,
 }: {
     engine: DevEngineInfo;
     hasRuntime: boolean;
@@ -4021,6 +4028,7 @@ function EngineRow({
     onStart: (engine: DevEngineInfo) => void;
     onStop: (engine: DevEngineInfo) => void;
     onToggleLog: (engine: DevEngineInfo) => void;
+    onInstall: (engine: DevEngineInfo) => void;
 }) {
     const actions = engineActionAvailability(engine, hasRuntime);
     const usage = engineUsageNote(engine);
@@ -4042,6 +4050,20 @@ function EngineRow({
                     <Badge color="zinc">Downloaded</Badge>
                 )}
                 <div className="ws-engine-actions">
+                    {/* Pre-download another major (#242 P3). Offered with NO
+                        consumer on purpose: holding 17 ready while 16 serves is
+                        the point of multi-version. Pulls only — never starts. */}
+                    {actions.canInstall && (
+                        <Action
+                            size="sm"
+                            variant="ghost"
+                            icon="download"
+                            disabled={busy}
+                            onClick={() => onInstall(engine)}
+                        >
+                            Install
+                        </Action>
+                    )}
                     {actions.canStart && (
                         <Action
                             size="sm"

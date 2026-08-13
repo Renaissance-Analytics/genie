@@ -10,6 +10,8 @@ import {
 import {
     engineKeyFor,
     engineSpecFor,
+    parseEngineKey,
+    resolveEngineVersion,
     workspaceDnsName,
     workspaceSqlIdentifier,
 } from './catalog';
@@ -251,7 +253,9 @@ export interface DevServiceManager {
 export interface EngineActionRequest {
     /** The CONTAINER: an engine key, or `<engineKey>@<workspaceId>`. */
     recordKey: string;
-    action: 'start' | 'stop' | 'logs';
+    /** `install` PRE-DOWNLOADS this version's image (#242 P3, multi-version) —
+     *  it never starts anything. */
+    action: 'start' | 'stop' | 'logs' | 'install';
     tail?: number;
 }
 
@@ -990,6 +994,62 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                         detection.installHint ??
                         'No container runtime (Docker or Podman) is available on this machine.',
                 };
+            }
+
+            // INSTALL — pre-download a version's image (#242 P3). The one action
+            // with no consumer requirement: each (engine, version) is its own
+            // image, so holding 17 ready while 16 serves today is the point. It
+            // PULLS ONLY — a downloaded image is not a running engine, and
+            // starting still needs a workspace to provision for.
+            if (action === 'install') {
+                const parsed = parseEngineKey(recordKey.split('@')[0] ?? '');
+                // The version becomes an image TAG, so an unknown one is an
+                // arbitrary image to run with a workspace's data in it — refused
+                // here for the same reason `resolveEngineVersion` refuses it.
+                const version = parsed ? resolveEngineVersion(parsed.engine, parsed.version) : null;
+                if (!parsed || !version) {
+                    return {
+                        ok: false,
+                        error: `Genie has no image pinned for ${recordKey}, so there is nothing to install.`,
+                    };
+                }
+                const image = engineSpecFor(parsed.engine).image(version);
+                if (!image) {
+                    return {
+                        ok: false,
+                        error: `${parsed.engine} has no image until a workspace names one, so there is nothing to install.`,
+                    };
+                }
+                if (await runtime.imageExists(image)) return { ok: true };
+                if (!deps.confirmImagePull) {
+                    return {
+                        ok: false,
+                        error:
+                            `The image ${image} is not on this machine. ` +
+                            `Run \`${runtime.kind} pull ${image}\` and try again.`,
+                    };
+                }
+                const agreed = await deps.confirmImagePull({
+                    image,
+                    reason:
+                        `Genie would download the ${parsed.engine} ${version} image ${image} so this ` +
+                        'machine can run that version. It is downloaded once and shared by every ' +
+                        'workspace that uses it afterwards.',
+                });
+                if (!agreed) {
+                    return { ok: false, error: `The image ${image} was not downloaded.` };
+                }
+                const pull = await runtime.pullImage(image, {
+                    ...(deps.onImagePullProgress ? { onProgress: deps.onImagePullProgress } : {}),
+                });
+                if (!pull.ok) {
+                    return {
+                        ok: false,
+                        error: `Downloading ${image} failed: ${pull.error ?? 'unknown error'}`,
+                    };
+                }
+                changed();
+                return { ok: true };
             }
 
             /** Which workspaces have this exact CONTAINER configured. */

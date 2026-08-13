@@ -465,7 +465,7 @@ interface ServiceRequest {
 
 interface EngineRequest {
     recordKey: string;
-    action: 'start' | 'stop' | 'logs';
+    action: 'start' | 'stop' | 'logs' | 'install';
 }
 
 /**
@@ -526,6 +526,12 @@ export function registerHostingE2EMocks(): void {
             (row) => row.recordKey === req.recordKey,
         );
         if (!engine) return { ok: false, error: `no engine ${req.recordKey}` };
+        // Pre-install (#242 P3): the image lands on this machine and NOTHING
+        // starts — a pulled image is not a running engine.
+        if (req.action === 'install') {
+            engine.installed = true;
+            return { ok: true };
+        }
         if (req.action === 'logs') {
             return { ok: true, logs: `${engine.containerName}: ready to accept connections\n` };
         }

@@ -112,20 +112,29 @@ export interface EngineActions {
     canStart: boolean;
     canStop: boolean;
     canLogs: boolean;
+    /** Pre-download this version's image (#242 P3, multi-version). */
+    canInstall: boolean;
 }
 
 export function engineActionAvailability(
     engine: DevEngineInfo,
     hasRuntime: boolean,
 ): EngineActions {
-    if (!hasRuntime) return { canStart: false, canStop: false, canLogs: false };
+    if (!hasRuntime) {
+        return { canStart: false, canStop: false, canLogs: false, canInstall: false };
+    }
+    // Install is the one action that does NOT need a consumer — holding several
+    // majors ready is the whole point of multi-version, and each (engine,
+    // version) is its own image. Nothing to pull once it is here, or for a
+    // `custom` engine whose image no workspace has named yet.
+    const canInstall = !engine.installed && !!engine.image;
     if (engine.state === 'running') {
-        return { canStart: false, canStop: true, canLogs: true };
+        return { canStart: false, canStop: true, canLogs: true, canInstall };
     }
     // Start needs a CONSUMER: with no workspace using it there are no
     // credentials to provision and nothing to serve, so the action would fail
     // every time. A button that always fails is worse than no button.
-    return { canStart: engine.configured > 0, canStop: false, canLogs: false };
+    return { canStart: engine.configured > 0, canStop: false, canLogs: false, canInstall };
 }
 
 // --- grouping ---------------------------------------------------------------

@@ -637,7 +637,9 @@ export interface ToolUpdate {
 /** Machine-level start | stop | logs for ONE shared engine. */
 export interface DevEngineActionRequest {
     recordKey: string;
-    action: 'start' | 'stop' | 'logs';
+    /** `install` PRE-DOWNLOADS this version's image (#242 P3, multi-version) —
+     *  it never starts anything. */
+    action: 'start' | 'stop' | 'logs' | 'install';
     tail?: number;
 }
 

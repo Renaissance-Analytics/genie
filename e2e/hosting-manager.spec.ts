@@ -141,6 +141,21 @@ test('switching engine groups SWAPS the list — the three are not one long page
     // Nothing uses it, so there is nothing to start: a Start that would fail
     // every time is worse than no Start.
     await expect(engines.getByRole('button', { name: 'Start', exact: true })).toHaveCount(0);
+
+    // ...but it CAN be pre-downloaded (#242 P3, multi-version). Install is the
+    // one action with no consumer requirement — holding another major ready
+    // before a workspace asks for it is the entire point.
+    const row = engines.locator('.ws-engine', { hasText: 'MySQL 8' });
+    await row.getByRole('button', { name: 'Install', exact: true }).click();
+
+    // It reached main as an install for THAT version...
+    await expect
+        .poll(async () => (await readHostingState(app))?.calls.engine ?? [])
+        .toContain('install:mysql-8.4');
+    // ...and the row repainted as on-this-machine WITHOUT starting anything: a
+    // pulled image is not a running engine.
+    await expect(row).toContainText('Downloaded but not running');
+    await expect(row.getByRole('button', { name: 'Install', exact: true })).toHaveCount(0);
 });
 
 test('stopping a SHARED engine asks first, names who it takes down, and does NOT fire on cancel', async () => {

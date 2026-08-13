@@ -305,3 +305,48 @@ describe('tool update rows', () => {
         expect(toolUpdateCount(updates)).toBe(1);
     });
 });
+
+/**
+ * MULTI-VERSION (#242 P3). Containers make holding several majors cheap — each
+ * (engine, version) is its own image, container and VOLUME — so the manager lets
+ * a version be installed BEFORE any workspace asks for it. That is the one action
+ * whose availability does not depend on a consumer: pre-pulling postgres 17 while
+ * 16 serves today is exactly the point.
+ */
+describe('engineActionAvailability — install another version', () => {
+    it('offers Install for a version whose image is not on this machine, even with no consumer', () => {
+        // The multi-version case: no workspace uses postgres 17 yet, and that is
+        // precisely when someone wants it downloaded and ready.
+        expect(
+            engineActionAvailability(
+                engine({ recordKey: 'postgres-17', version: '17', installed: false, configured: 0 }),
+                true,
+            ).canInstall,
+        ).toBe(true);
+    });
+
+    it('does not offer Install for an image already here', () => {
+        expect(
+            engineActionAvailability(engine({ installed: true, state: 'stopped' }), true).canInstall,
+        ).toBe(false);
+    });
+
+    it('does not offer Install without a container runtime', () => {
+        // Nothing can be pulled without a runtime to pull it.
+        expect(engineActionAvailability(engine({ installed: false }), false).canInstall).toBe(false);
+    });
+
+    it('does not offer Install for an engine with no image yet (custom)', () => {
+        // A `custom` engine has no image until a workspace names one — there is
+        // nothing to pull, and a button that always fails is worse than no button.
+        expect(
+            engineActionAvailability(engine({ engine: 'custom', image: '' }), true).canInstall,
+        ).toBe(false);
+    });
+
+    it('still offers Install for a version a workspace configured but never downloaded', () => {
+        expect(
+            engineActionAvailability(engine({ installed: false, configured: 1 }), true).canInstall,
+        ).toBe(true);
+    });
+});
