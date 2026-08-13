@@ -2,6 +2,7 @@ import {
     deleteWorkspaceDevService,
     getWorkspaceDevServices,
     setWorkspaceDevService,
+    setWorkspaceDevServices,
 } from '../db';
 import {
     DEFAULT_VERSIONS,
@@ -11,7 +12,11 @@ import {
     isServiceEngine,
     resolveEngineVersion,
 } from '../dev-server/services/catalog';
-import { devServiceIdFor } from '../dev-server/services/services-config';
+import {
+    devServiceIdFor,
+    setActiveService,
+    switchActiveWarning,
+} from '../dev-server/services/services-config';
 import { devServiceManager } from '../dev-server/services/service-manager';
 import { runtimeInfo } from './dev-site-tools';
 import { resolveAgentTarget } from './host-tools';
@@ -347,6 +352,39 @@ export async function runManageService(
                     // actually given, so an agent can reason about the app's
                     // config without guessing at key names.
                     env: manager.envFor(ws.id),
+                    runtime,
+                };
+            }
+
+            case 'active': {
+                // Which VERSION this workspace's apps connect to, when it holds
+                // more than one major of an engine (#242 P3). Every single-valued
+                // name (DATABASE_URL, DB_*, PG*) follows this choice; the other
+                // version stays a reachable container but contributes no
+                // environment, so the two can no longer contradict each other.
+                const target = targetService();
+                if ('error' in target) return fail(target.error);
+                const configs = getWorkspaceDevServices(ws.id);
+                const current = Object.values(configs).find(
+                    (c) => c.engine === target.config.engine && c.active,
+                );
+                if (target.config.active) {
+                    return { ok: true, services: services(), affectedId: target.serviceId, runtime };
+                }
+                setWorkspaceDevServices(ws.id, setActiveService(configs, target.serviceId));
+                // Re-acquire so the consumers' environment is rebuilt around the
+                // new choice; a config change nobody re-read would leave running
+                // sites pointed at the old version until their next restart.
+                const status = await manager.acquire(ws.id, target.serviceId);
+                const warning = switchActiveWarning(current, target.config);
+                return {
+                    ok: status.state !== 'failed',
+                    // The data does NOT come along — each version keeps its own
+                    // volume, so the newly-active one starts empty. Said plainly
+                    // rather than discovered from an application with no rows.
+                    ...(status.error ? { error: status.error } : warning ? { note: warning } : {}),
+                    services: services(),
+                    affectedId: target.serviceId,
                     runtime,
                 };
             }

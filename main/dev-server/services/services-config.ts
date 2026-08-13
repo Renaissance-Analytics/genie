@@ -52,6 +52,19 @@ export interface DevServiceConfig {
      * the toggle.
      */
     dedicated: boolean;
+    /**
+     * This is the version whose connection this workspace's apps get (#242 P3).
+     *
+     * The service key is (workspace, engine, VERSION), so a workspace can hold
+     * postgres 16 AND 17 — different containers, different VOLUMES, different
+     * data. `DATABASE_URL` / `DB_*` / `PG*` name ONE connection, so exactly one
+     * version per engine may own them; the others stay reachable containers but
+     * contribute no environment. At most one `active` per engine.
+     *
+     * NOTE: like {@link dedicated}, switching does NOT move data — each version
+     * keeps its own volume, so the newly-active one starts empty.
+     */
+    active?: boolean;
     /** This workspace's credential on the engine. Minted once; see the header. */
     password: string;
     /** `custom` only: the image to run. */
@@ -135,6 +148,7 @@ export function sanitizeDevServicePatch(
     }
 
     if (typeof patch.dedicated === 'boolean') out.dedicated = patch.dedicated;
+    if (typeof patch.active === 'boolean') out.active = patch.active;
     // A caller-supplied image has no multi-tenant story — it cannot be shared.
     if (out.engine && engineSpecFor(out.engine).alwaysDedicated) out.dedicated = true;
 
@@ -205,4 +219,56 @@ export function parseDevServices(raw: string | null | undefined): DevServices {
         } as DevServiceConfig;
     }
     return out;
+}
+
+// --- the ACTIVE version of an engine (#242 P3) -------------------------------
+
+/**
+ * PURE. Make one service the ACTIVE version of its engine, clearing the previous
+ * one.
+ *
+ * Active is a property of the ENGINE, not of a row: a workspace can hold
+ * postgres 16 and 17 (the key is (workspace, engine, VERSION)), but
+ * `DATABASE_URL` / `DB_*` / `PG*` name ONE connection. Setting a new active
+ * without clearing the old would leave two claimants and put the environment
+ * back in the incoherent state this exists to remove — so the un-set is part of
+ * the same operation rather than a second call a caller could forget.
+ *
+ * Other engines are untouched: the rule is one active PER ENGINE, so choosing a
+ * Postgres never disturbs the workspace's Redis. Returns a new map; an unknown
+ * id is returned unchanged rather than throwing.
+ */
+export function setActiveService(services: DevServices, serviceId: string): DevServices {
+    const target = services[serviceId];
+    if (!target) return services;
+    const next: DevServices = {};
+    for (const [id, config] of Object.entries(services)) {
+        next[id] =
+            config.engine === target.engine ? { ...config, active: id === serviceId } : config;
+    }
+    return next;
+}
+
+/**
+ * The sentence shown BEFORE switching which version an engine's apps use, or
+ * `null` when nothing would be lost.
+ *
+ * Each version keeps its OWN volume, so a switch does not carry the data — the
+ * newly-active database is EMPTY. That is the same surprise {@link
+ * DevServiceConfig.dedicated} carries, and the same reason it is said out loud:
+ * discovering it after the switch means discovering it from an application that
+ * suddenly has no rows.
+ */
+export function switchActiveWarning(
+    current: DevServiceConfig | undefined,
+    next: DevServiceConfig,
+): string | null {
+    if (!current || current.version === next.version) return null;
+    const spec = engineSpecFor(next.engine);
+    return (
+        `${spec.label} ${next.version} keeps its own data, separate from ${spec.label} ` +
+        `${current.version}. Switching points this workspace's apps at ${next.version}, which ` +
+        `starts EMPTY — nothing is copied across, and nothing in ${current.version} is deleted ` +
+        '(switching back brings it into view again).'
+    );
 }

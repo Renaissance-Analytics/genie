@@ -202,3 +202,55 @@ describe('nothing provisioned', () => {
         expect(serviceEnv([])).toEqual({});
     });
 });
+
+/**
+ * TWO MAJORS OF ONE ENGINE (#242 P3).
+ *
+ * A workspace's services are keyed by (engine, VERSION), so it can hold
+ * postgres 16 AND 17 at once — and they are different containers with different
+ * VOLUMES, i.e. different data. But `DATABASE_URL`, `DB_*` and `PG*` name ONE
+ * connection, so somebody has to lose. Left to the old ordering the answer was
+ * incoherent rather than merely arbitrary: the single-valued keys were pinned to
+ * the FIRST entry while the engine-native keys were overwritten by the LAST, so
+ * an app reading DB_HOST and a tool reading PGHOST reached DIFFERENT DATABASES.
+ *
+ * The ACTIVE version owns every name for its engine; the other stays reachable
+ * as a container but contributes no environment.
+ */
+describe('two versions of one engine', () => {
+    const pg16 = pg({ host: 'genie-svc-postgres-16', version: '16' });
+    const pg17 = pg({ host: 'genie-svc-postgres-17', version: '17', active: true });
+
+    it('gives EVERY name to the active version — never a split brain', () => {
+        const env = serviceEnv([pg16, pg17]);
+        expect(env.PGHOST).toBe('genie-svc-postgres-17');
+        expect(env.DATABASE_URL).toContain('genie-svc-postgres-17');
+        expect(env.DB_HOST).toBe('genie-svc-postgres-17');
+        // The losing version contributes NOTHING — no half-set of variables
+        // pointing at a database the app is not using.
+        expect(env.DATABASE_URL).not.toContain('postgres-16');
+    });
+
+    it('is order-independent — the active one wins whichever way they arrive', () => {
+        expect(serviceEnv([pg17, pg16]).PGHOST).toBe(serviceEnv([pg16, pg17]).PGHOST);
+    });
+
+    it('falls back to a STABLE choice when neither is marked active', () => {
+        // No explicit choice is still not licence to be incoherent: one version
+        // owns all the names, and the same one every time.
+        const env = serviceEnv([pg16, pg({ host: 'genie-svc-postgres-17', version: '17' })]);
+        expect(env.DATABASE_URL).toContain(env.PGHOST!);
+        expect(env.DB_HOST).toBe(env.PGHOST);
+    });
+
+    it('still lets a DIFFERENT engine keep its own native variables', () => {
+        // The rule is one-per-ENGINE, not one overall: a workspace with Postgres
+        // and MySQL still gets MYSQL_* alongside the primary's DATABASE_URL.
+        const env = serviceEnv([
+            pg17,
+            { ...pg(), engine: 'mysql', host: 'genie-svc-mysql-8', port: 3306 },
+        ]);
+        expect(env.DATABASE_URL).toContain('postgres-17');
+        expect(env.MYSQL_HOST).toBe('genie-svc-mysql-8');
+    });
+});

@@ -825,6 +825,9 @@ export interface ManageServiceRequest {
         | 'remove'
         | 'connection'
         | 'dedicated'
+        /** Make THIS version the one this workspace's apps connect to, when the
+         *  workspace holds more than one major of the same engine (#242 P3). */
+        | 'active'
         /** MACHINE-level: every engine on this workstation, and who holds it. */
         | 'inventory';
     /** Target workspace. Omit for your own; an Ops agent may pass a governed one. */
@@ -904,6 +907,10 @@ export interface ManageServiceResult {
     logs?: string;
     /** connection: the env this workspace's site containers are given. */
     env?: Record<string, string>;
+    /** A consequence the caller must know about even though the action SUCCEEDED
+     *  — e.g. switching the active engine version leaves the old version's data
+     *  behind, so the newly-active one starts empty (#242 P3). */
+    note?: string;
     /** Which container runtime is driving, or why none is. */
     runtime?: { kind: string; version?: string; installHint?: string };
 }

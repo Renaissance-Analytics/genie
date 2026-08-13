@@ -32,6 +32,12 @@ import type { WorkspaceSlice } from './provision';
 
 export interface ProvisionedService {
     engine: ServiceEngine;
+    /** The engine's major version. A workspace can hold two of them (the service
+     *  key is (engine, VERSION)), which is why {@link active} has to exist. */
+    version?: string;
+    /** This is the version whose connection the shared names point at (#242 P3).
+     *  At most one per engine; absent everywhere ⇒ a deterministic fallback. */
+    active?: boolean;
     /** The engine container's name — how a sibling container reaches it. */
     host: string;
     /** The port INSIDE the container. */
@@ -75,9 +81,41 @@ function envToken(value: string): string {
     return value.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'SERVICE';
 }
 
+/**
+ * One entry per ENGINE — the ACTIVE version (#242 P3).
+ *
+ * A workspace can hold postgres 16 and 17 at once, and they are different
+ * containers with different VOLUMES, i.e. different data. Every name they would
+ * emit (`DATABASE_URL`, `DB_*`, `PG*`) is single-valued, so letting both through
+ * does not produce a debatable answer — it produces an INCOHERENT one: the
+ * single-valued keys took the first entry while the engine-native keys were
+ * overwritten by the last, so an app reading `DB_HOST` and a tool reading
+ * `PGHOST` reached different databases.
+ *
+ * So exactly one version of each engine contributes: the one marked active, else
+ * a deterministic fallback (the existing container-name order) so an unchosen
+ * workspace is at least consistent with itself. `custom` is exempt — several
+ * custom services are legitimate and namespaced by their own name.
+ */
+function activeOnly(ordered: ProvisionedService[]): ProvisionedService[] {
+    const chosen = new Map<ServiceEngine, ProvisionedService>();
+    const customs: ProvisionedService[] = [];
+    for (const entry of ordered) {
+        if (entry.engine === 'custom') {
+            customs.push(entry);
+            continue;
+        }
+        const current = chosen.get(entry.engine);
+        // An explicit choice always wins; otherwise keep the first (stable).
+        if (!current || (entry.active && !current.active)) chosen.set(entry.engine, entry);
+    }
+    // Preserve the incoming order so the primary-relational pick is unchanged.
+    return ordered.filter((e) => customs.includes(e) || chosen.get(e.engine) === e);
+}
+
 export function serviceEnv(entries: ProvisionedService[]): Record<string, string> {
     const env: Record<string, string> = {};
-    const ordered = sorted(entries);
+    const ordered = activeOnly(sorted(entries));
 
     const primaryRelational = RELATIONAL_PRIORITY.map((engine) =>
         ordered.find((e) => e.engine === engine),

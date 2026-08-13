@@ -684,6 +684,11 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             entry.endpoints[0];
         return {
             engine: entry.config.engine,
+            version: entry.config.version,
+            // Which version owns this engine's single-valued env names (#242 P3).
+            // Two majors of one engine are different containers with different
+            // VOLUMES; without a choice the environment contradicts itself.
+            ...(entry.config.active ? { active: true } : {}),
             host: entry.containerName,
             port: primary?.port ?? 0,
             slice: entry.slice,

@@ -4,8 +4,11 @@ import {
     generateServicePassword,
     parseDevServices,
     sanitizeDevServicePatch,
+    setActiveService,
+    switchActiveWarning,
     withServiceCredentials,
 } from '../services-config';
+import type { DevServices } from '../services-config';
 
 /**
  * The persisted per-workspace SERVICE model (Tynn #234, P3).
@@ -142,5 +145,70 @@ describe('parse', () => {
     it('drops a row with no password: it could never be connected to', () => {
         const raw = JSON.stringify({ c: { engine: 'postgres', version: '16', enabled: true } });
         expect(parseDevServices(raw)).toEqual({});
+    });
+});
+
+/**
+ * SET-ACTIVE across a workspace's services (#242 P3).
+ *
+ * "Active" is a property of the ENGINE, not of one row: making postgres 17
+ * active must un-make 16, or the invariant every consumer relies on (at most one
+ * active per engine) is broken the moment someone clicks twice. And because each
+ * version keeps its OWN volume, the switch does not carry the data — which the
+ * user has to be told BEFORE they click, not discover in an empty database.
+ */
+describe('setActiveService', () => {
+    const services = (): DevServices => ({
+        'pg-16': { engine: 'postgres', version: '16', dedicated: false, enabled: true, password: 'a', active: true },
+        'pg-17': { engine: 'postgres', version: '17', dedicated: false, enabled: true, password: 'b' },
+        'redis-7': { engine: 'redis', version: '7', dedicated: false, enabled: true, password: 'c', active: true },
+    });
+
+    it('moves active to the chosen version and clears the previous one', () => {
+        const next = setActiveService(services(), 'pg-17');
+        expect(next['pg-17']?.active).toBe(true);
+        expect(next['pg-16']?.active).toBe(false);
+    });
+
+    it('leaves OTHER engines alone — the rule is one active per engine', () => {
+        expect(setActiveService(services(), 'pg-17')['redis-7']?.active).toBe(true);
+    });
+
+    it('is idempotent', () => {
+        const once = setActiveService(services(), 'pg-17');
+        expect(setActiveService(once, 'pg-17')).toEqual(once);
+    });
+
+    it('does not mutate the input', () => {
+        const before = services();
+        setActiveService(before, 'pg-17');
+        expect(before['pg-16']?.active).toBe(true);
+    });
+
+    it('returns the map unchanged for an unknown service id', () => {
+        const before = services();
+        expect(setActiveService(before, 'nope')).toEqual(before);
+    });
+});
+
+describe('switchActiveWarning', () => {
+    const pg16 = { engine: 'postgres' as const, version: '16', dedicated: false, enabled: true, password: 'a', active: true };
+    const pg17 = { engine: 'postgres' as const, version: '17', dedicated: false, enabled: true, password: 'b' };
+
+    it('says the data does NOT come along, naming both versions', () => {
+        const warning = switchActiveWarning(pg16, pg17);
+        expect(warning).toContain('16');
+        expect(warning).toContain('17');
+        // The whole point: each version has its own volume, so the new one is
+        // EMPTY. Finding that out after switching is finding out too late.
+        expect(warning).toMatch(/data|empty/i);
+    });
+
+    it('says nothing when there is no previous active version to lose', () => {
+        expect(switchActiveWarning(undefined, pg17)).toBeNull();
+    });
+
+    it('says nothing when the chosen version is already active', () => {
+        expect(switchActiveWarning(pg16, pg16)).toBeNull();
     });
 });
