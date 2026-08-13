@@ -188,7 +188,13 @@ import {
     detachedTerminalsEnabled,
     electronEncryptor,
     buildHostRecoveryDeps,
+    broadcastToWindows,
 } from './terminal/genie-adapter';
+import {
+    TERMINAL_RECOVER_CHANNEL,
+    TERMINAL_RECOVERY_STATUS_CHANNEL,
+    type RecoveryState,
+} from './terminal/recovery-channels';
 import { setSecretEncryptor } from './secrets/store';
 import { buildHostServerDeps } from './host-core/server-deps';
 import type { HostCorePorts } from './host-core/ports';
@@ -2063,6 +2069,7 @@ function showE2EWindow(): void {
         'e2e-picker-layer',
         'e2e-hosting',
         'e2e-repo-panel',
+        'e2e-terminal-recovery',
     ] as const;
     const page = (ALLOWED as readonly string[]).includes(requested)
         ? requested
@@ -2085,6 +2092,17 @@ function showE2EWindow(): void {
         } catch (e) {
             console.error('[e2e] repo-panel seed failed', e);
         }
+    }
+    if (page === 'e2e-terminal-recovery') {
+        // Let the spec drive the host-loss watchdog's OWN emit path (genie#203):
+        // the SAME broadcastToWindows + channel constants genie-adapter uses, so a
+        // channel-string drift between emit (genie-adapter) and listen (preload)
+        // surfaces as a failing E2E rather than a silent dead path.
+        (globalThis as Record<string, unknown>).__GENIE_E2E_RECOVERY__ = {
+            emitStatus: (state: RecoveryState) =>
+                broadcastToWindows(TERMINAL_RECOVERY_STATUS_CHANNEL, { state }),
+            reattach: (ids: string[]) => broadcastToWindows(TERMINAL_RECOVER_CHANNEL, { ids }),
+        };
     }
     const win = new BrowserWindow({
         width: 900,

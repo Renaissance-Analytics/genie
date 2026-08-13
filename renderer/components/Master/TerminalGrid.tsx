@@ -28,6 +28,7 @@ import {
     type LayoutMode,
     type ResolvedMode,
 } from '../../lib/terminal-grid-layout';
+import { panelRecoverKey } from '../../lib/host-loss-recovery';
 import {
     applyPanelOrder,
     movePanel,
@@ -482,7 +483,7 @@ const ResizableGrid = ({
                         // subtree remounts so Terminal's create() rejoins the
                         // respawned host and replays scrollback. 0 normally, so no
                         // churn on reorders/layout — only on an actual recovery.
-                        key={`${p.spec.id}:${recoverGen[p.spec.id] ?? 0}`}
+                        key={panelRecoverKey(p.spec.id, recoverGen[p.spec.id])}
                         compact
                         name={String(p.spec.label ?? 'Panel')}
                         resetKeys={panelResetKeys(p.spec, activeWorkspaceId)}

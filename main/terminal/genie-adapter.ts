@@ -28,6 +28,10 @@ import {
     openPtyhostLogStdio,
     type HostRecoveryDeps,
 } from './host-service';
+import {
+    TERMINAL_RECOVER_CHANNEL,
+    TERMINAL_RECOVERY_STATUS_CHANNEL,
+} from './recovery-channels';
 
 /**
  * Genie adapter — the COMPOSITION ROOT for the terminal subsystem.
@@ -249,8 +253,10 @@ function broadcastHostStatus(s: HostStatus): void {
     }
 }
 
-/** Send an IPC event to every live window. Shared by the recovery broadcasts. */
-function broadcastToWindows(channel: string, payload: unknown): void {
+/** Send an IPC event to every live window. Shared by the recovery broadcasts.
+ *  Exported so the GENIE_E2E harness can drive the SAME emit path (real channel
+ *  constants, real preload listeners) the watchdog uses. */
+export function broadcastToWindows(channel: string, payload: unknown): void {
     for (const w of BrowserWindow.getAllWindows()) {
         if (w.isDestroyed()) continue;
         try {
@@ -297,9 +303,9 @@ export function buildHostRecoveryDeps(
         respawn,
         // Tell the renderer to remount these panes; the remount's terminal:create
         // rejoins the fresh backend and replays scrollback (master.tsx enableSpec).
-        reattach: (ids) => broadcastToWindows('terminal:recover', { ids }),
+        reattach: (ids) => broadcastToWindows(TERMINAL_RECOVER_CHANNEL, { ids }),
         emitStatus: (state) =>
-            broadcastToWindows('terminal:recovery-status', { state }),
+            broadcastToWindows(TERMINAL_RECOVERY_STATUS_CHANNEL, { state }),
     };
 }
 

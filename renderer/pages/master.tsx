@@ -24,6 +24,8 @@ import AgentInboxFlyout from '../components/Master/AgentInboxFlyout';
 import QuestionInboxFlyout from '../components/Master/QuestionInboxFlyout';
 import TerminalTypeSplitButton from '../components/Master/TerminalTypeSplitButton';
 import AgentTerminalForm from '../components/Master/AgentTerminalForm';
+import RecoveryBanner from '../components/Master/RecoveryBanner';
+import { bumpRecoverGen, type RecoveryState } from '../lib/host-loss-recovery';
 import GithubCapabilitiesFlyout from '../components/Master/GithubCapabilitiesFlyout';
 import { useGithubCapabilities } from '../lib/githubCapabilities';
 import { issueWatchBadge } from '../lib/issuewatch';
@@ -473,16 +475,10 @@ function MasterInner() {
     const [recoverGenById, setRecoverGenById] = useState<
         Record<string, number>
     >({});
-    const [recovery, setRecovery] = useState<
-        'recovering' | 'recovered' | 'degraded' | null
-    >(null);
+    const [recovery, setRecovery] = useState<RecoveryState | null>(null);
     useEffect(() => {
         return api().on.terminalRecover?.(({ ids }) => {
-            setRecoverGenById((prev) => {
-                const next = { ...prev };
-                for (const id of ids) next[id] = (next[id] ?? 0) + 1;
-                return next;
-            });
+            setRecoverGenById((prev) => bumpRecoverGen(prev, ids));
         });
     }, []);
     useEffect(() => {
@@ -1980,19 +1976,7 @@ function MasterInner() {
                 </div>
             )}
 
-            {recovery && (
-                <div
-                    className="g-toast"
-                    role="status"
-                    onClick={() => setRecovery(null)}
-                >
-                    {recovery === 'recovering'
-                        ? 'Terminal host lost — reconnecting terminals…'
-                        : recovery === 'recovered'
-                          ? 'Terminals reconnected (host recovered). Running agents were restarted.'
-                          : 'Terminals reconnected in-process. Running agents were restarted.'}
-                </div>
-            )}
+            <RecoveryBanner state={recovery} onDismiss={() => setRecovery(null)} />
 
             {addingWorkspace && (
                 <AddWorkspaceModal

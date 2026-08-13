@@ -1,6 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { TailscaleStatus } from './tailscale';
 import type { AgentInboxScope } from './agentinbox/types';
+import {
+    TERMINAL_RECOVER_CHANNEL,
+    TERMINAL_RECOVERY_STATUS_CHANNEL,
+    type TerminalRecoverPayload,
+    type TerminalRecoveryStatusPayload,
+} from './terminal/recovery-channels';
 
 /** Remote-link health pushed/read by a host window's overlay (see link-state.ts). */
 type RemoteLinkStatePayload = {
@@ -1598,24 +1604,19 @@ const api = {
         /** Host-loss recovery (genie#203): main asks the renderer to remount these
          *  terminals so their create() rejoins the respawned host and replays
          *  scrollback after a mid-session pty-host death. */
-        terminalRecover: (cb: (payload: { ids: string[] }) => void) => {
-            const handler = (_e: unknown, payload: { ids: string[] }) => cb(payload);
-            ipcRenderer.on('terminal:recover', handler);
-            return () => ipcRenderer.off('terminal:recover', handler);
+        terminalRecover: (cb: (payload: TerminalRecoverPayload) => void) => {
+            const handler = (_e: unknown, payload: TerminalRecoverPayload) => cb(payload);
+            ipcRenderer.on(TERMINAL_RECOVER_CHANNEL, handler);
+            return () => ipcRenderer.off(TERMINAL_RECOVER_CHANNEL, handler);
         },
         /** Host-loss recovery status (genie#203): 'recovering' → 'recovered' |
          *  'degraded', for the recovery banner. */
         terminalRecoveryStatus: (
-            cb: (payload: {
-                state: 'recovering' | 'recovered' | 'degraded';
-            }) => void,
+            cb: (payload: TerminalRecoveryStatusPayload) => void,
         ) => {
-            const handler = (
-                _e: unknown,
-                payload: { state: 'recovering' | 'recovered' | 'degraded' },
-            ) => cb(payload);
-            ipcRenderer.on('terminal:recovery-status', handler);
-            return () => ipcRenderer.off('terminal:recovery-status', handler);
+            const handler = (_e: unknown, payload: TerminalRecoveryStatusPayload) => cb(payload);
+            ipcRenderer.on(TERMINAL_RECOVERY_STATUS_CHANNEL, handler);
+            return () => ipcRenderer.off(TERMINAL_RECOVERY_STATUS_CHANNEL, handler);
         },
         /**
          * Manual-quit terminal confirmation (T3). Main asks the master window to

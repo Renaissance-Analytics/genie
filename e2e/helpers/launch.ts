@@ -50,7 +50,8 @@ export type E2EHarnessPage =
     | 'agent-access'
     | 'picker-layer'
     | 'hosting'
-    | 'repo-panel';
+    | 'repo-panel'
+    | 'terminal-recovery';
 
 const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
     issuewatch: 'e2e-issuewatch',
@@ -59,6 +60,7 @@ const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
     'picker-layer': 'e2e-picker-layer',
     hosting: 'e2e-hosting',
     'repo-panel': 'e2e-repo-panel',
+    'terminal-recovery': 'e2e-terminal-recovery',
 };
 
 export async function launchGenieE2E(
