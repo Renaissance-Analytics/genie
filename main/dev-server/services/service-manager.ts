@@ -99,6 +99,9 @@ export interface DevServiceStatus {
     /** The `<engine>-<version>` key — the SHARING unit. */
     engineKey: string;
     dedicated: boolean;
+    /** This is the version whose connection this workspace's apps get, when it
+     *  holds more than one major of the engine (#242 P3). */
+    active?: boolean;
     state: DevServiceState;
     /** True when the engine answered its own readiness check. */
     ready?: boolean;
@@ -355,6 +358,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         version: config?.version ?? '',
         engineKey: config ? engineKeyFor(config.engine, config.version) : '',
         dedicated: config?.dedicated ?? false,
+        ...(config?.active ? { active: true } : {}),
         state: 'failed',
         error,
     });
@@ -728,6 +732,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             version: entry.config.version,
             engineKey: entry.engineKey,
             dedicated: entry.config.dedicated || Boolean(engineSpecFor(entry.config.engine).alwaysDedicated),
+            ...(entry.config.active ? { active: true } : {}),
             state: 'running',
             ready: entry.ready,
             containerId: entry.containerId,
@@ -841,6 +846,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                               version: config.version,
                               engineKey: engineKeyFor(config.engine, config.version),
                               dedicated: config.dedicated,
+                              ...(config.active ? { active: true } : {}),
                               state: 'stopped' as const,
                           };
                     rows.push({

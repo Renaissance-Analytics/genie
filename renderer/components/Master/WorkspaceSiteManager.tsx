@@ -40,6 +40,7 @@ import {
     serviceStatusLabel,
     serviceStatusTone,
     serviceTitle,
+    serviceVersionChoice,
     siteIsStarting,
     sitePhaseBadge,
     siteReach,
@@ -1277,6 +1278,7 @@ function ServicesTab({
                             <ServiceCard
                                 key={row.id}
                                 row={row}
+                                allServices={services}
                                 entry={byEngine.get(row.engine) ?? null}
                                 busy={busy === row.id}
                                 hasRuntime={hasRuntime}
@@ -1341,6 +1343,7 @@ function ServicesTab({
  *  really has, and how to reach it from either side of the boundary. */
 function ServiceCard({
     row,
+    allServices,
     entry,
     busy,
     hasRuntime,
@@ -1349,6 +1352,9 @@ function ServiceCard({
     onToggleLog,
 }: {
     row: DevServiceInfo;
+    /** Every service this workspace holds — needed to know whether ANOTHER major
+     *  of this engine is present, which is the only time versions are a choice. */
+    allServices: DevServiceInfo[];
     entry: DevServiceCatalogEntry | null;
     busy: boolean;
     hasRuntime: boolean;
@@ -1359,6 +1365,8 @@ function ServiceCard({
     const tone = serviceStatusTone(row);
     const holders = holdersNote(row);
     const isolation = isolationNote(row.dedicated ? 'dedicated' : entry?.provision ?? '');
+    // Only speaks up when this workspace holds two majors of the same engine.
+    const choice = serviceVersionChoice(row, allServices);
 
     return (
         <Card variant="outlined" padding="md" className="site-card">
@@ -1369,7 +1377,14 @@ function ServiceCard({
                         {serviceTitle(row)}{' '}
                         <Badge size="sm" variant="soft" color={row.dedicated ? 'amber' : 'zinc'}>
                             {row.dedicated ? 'dedicated' : 'shared'}
-                        </Badge>
+                        </Badge>{' '}
+                        {/* Two majors of one engine are two DIFFERENT databases;
+                            this says which one the apps actually reach. */}
+                        {choice.contested && choice.isActive && (
+                            <Badge size="sm" variant="soft" color="emerald">
+                                in use
+                            </Badge>
+                        )}
                     </Text>
                     {entry && (
                         <Text size="xs" className="text-zinc-500">
@@ -1459,6 +1474,26 @@ function ServiceCard({
                 >
                     Connection
                 </Action>
+                {/* Only when the workspace holds TWO majors of this engine: then
+                    DATABASE_URL can point at just one of them, and which one has
+                    to be visible AND changeable. Absent for the ordinary
+                    one-version workspace, which has no choice to make. */}
+                {choice.contested && !choice.isActive && (
+                    <Action
+                        size="sm"
+                        variant="ghost"
+                        icon="check"
+                        disabled={busy}
+                        onClick={() => onAction({ action: 'active' })}
+                        title={
+                            `Point this workspace's apps at ${row.engine} ${row.version}. Each ` +
+                            'version keeps its OWN data, so the one you switch to starts EMPTY — ' +
+                            'nothing is copied across, and nothing in the other one is deleted.'
+                        }
+                    >
+                        Use this version
+                    </Action>
+                )}
                 {entry?.shared && (
                     <Action
                         size="sm"

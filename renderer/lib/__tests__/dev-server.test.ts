@@ -16,6 +16,7 @@ import {
     serviceStatusLabel,
     serviceStatusTone,
     serviceTitle,
+    serviceVersionChoice,
     siteIsStarting,
     sitePhaseBadge,
     sitePhaseLabel,
@@ -394,5 +395,62 @@ describe('the layered run options', () => {
                 confident: true,
             }),
         ).toBeNull();
+    });
+});
+
+/**
+ * PICKING THE ACTIVE VERSION (#242 P3).
+ *
+ * A workspace can hold postgres 16 AND 17 — different containers, different
+ * volumes, different data — but `DATABASE_URL` names ONE connection. The panel
+ * has to say which version the apps actually get, and let it be changed. It must
+ * NOT clutter the ordinary case: a workspace with one Postgres has no choice to
+ * make, so it gets no badge and no button.
+ */
+describe('serviceVersionChoice', () => {
+    const svc = (over: Partial<DevServiceInfo> = {}): DevServiceInfo => ({
+        id: 'pg16',
+        engine: 'postgres',
+        version: '16',
+        engineKey: 'postgres-16',
+        dedicated: false,
+        enabled: true,
+        state: 'running',
+        ...over,
+    });
+
+    it('offers nothing when the workspace holds ONE version of the engine', () => {
+        const only = svc();
+        expect(serviceVersionChoice(only, [only])).toEqual({ contested: false });
+    });
+
+    it('marks the ACTIVE row when two versions of one engine are held', () => {
+        const a = svc({ id: 'pg16', version: '16', active: true });
+        const b = svc({ id: 'pg17', version: '17', engineKey: 'postgres-17' });
+        expect(serviceVersionChoice(a, [a, b])).toMatchObject({ contested: true, isActive: true });
+    });
+
+    it('offers the switch on the row that is NOT active', () => {
+        const a = svc({ id: 'pg16', version: '16', active: true });
+        const b = svc({ id: 'pg17', version: '17', engineKey: 'postgres-17' });
+        expect(serviceVersionChoice(b, [a, b])).toMatchObject({
+            contested: true,
+            isActive: false,
+            activeVersion: '16',
+        });
+    });
+
+    it('treats an unchosen pair as contested, so the panel still explains itself', () => {
+        // Neither marked: the environment still resolves to one of them, so the
+        // user needs to see that a choice exists (and which way it fell).
+        const a = svc({ id: 'pg16', version: '16' });
+        const b = svc({ id: 'pg17', version: '17', engineKey: 'postgres-17' });
+        expect(serviceVersionChoice(a, [a, b]).contested).toBe(true);
+    });
+
+    it('does not confuse DIFFERENT engines for versions of one', () => {
+        const pg = svc();
+        const redis = svc({ id: 'r7', engine: 'redis', version: '7', engineKey: 'redis-7' });
+        expect(serviceVersionChoice(pg, [pg, redis])).toEqual({ contested: false });
     });
 });

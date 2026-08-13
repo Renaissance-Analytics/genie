@@ -783,6 +783,9 @@ export interface DevServiceInfo {
     engineKey: string;
     /** True when this workspace opted out of sharing and runs its own. */
     dedicated: boolean;
+    /** This is the version whose connection this workspace's apps get. Only
+     *  meaningful when the workspace holds two majors of one engine (#242 P3). */
+    active?: boolean;
     enabled: boolean;
     /** running | stopped | failed */
     state: string;

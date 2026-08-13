@@ -404,3 +404,44 @@ export function optionCaveat(option: DevSiteRunOption): string | null {
     if (option.confident) return null;
     return option.needs ?? 'Some of this was inferred — check the command and the port.';
 }
+
+// --- which VERSION of an engine this workspace's apps use (#242 P3) ----------
+
+export interface ServiceVersionChoice {
+    /** The workspace holds more than one major of THIS engine, so a choice
+     *  exists and the panel has to explain it. */
+    contested: boolean;
+    /** This row is the one the apps connect to. */
+    isActive?: boolean;
+    /** The version that currently owns the connection, when it isn't this row. */
+    activeVersion?: string;
+}
+
+/**
+ * PURE. Does this service row need to talk about versions at all, and if so,
+ * where does it stand?
+ *
+ * The ordinary workspace holds one Postgres and has no choice to make — so it
+ * gets no badge and no button, because decorating every row with "active" would
+ * teach people to ignore the word before it ever mattered. The moment a SECOND
+ * major of the SAME engine appears, though, `DATABASE_URL` can only point at one
+ * of them, and a panel that stays silent leaves the user to discover which by
+ * querying an empty database.
+ *
+ * When neither row is marked, the pair is still contested: the environment
+ * resolves to one of them regardless, so the choice exists whether or not
+ * anybody has made it.
+ */
+export function serviceVersionChoice(
+    service: DevServiceInfo,
+    all: DevServiceInfo[],
+): ServiceVersionChoice {
+    const siblings = all.filter((s) => s.engine === service.engine);
+    if (siblings.length < 2) return { contested: false };
+    const active = siblings.find((s) => s.active);
+    return {
+        contested: true,
+        isActive: Boolean(service.active),
+        ...(active && active.id !== service.id ? { activeVersion: active.version } : {}),
+    };
+}

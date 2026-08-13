@@ -71,6 +71,7 @@ function toInfo(row: DevServiceRow): DevServiceInfo {
         version: row.version,
         engineKey: row.engineKey,
         dedicated: row.dedicated,
+        ...(row.active ? { active: true } : {}),
         enabled: row.enabled,
         state: row.state,
         ...(row.ready === undefined ? {} : { ready: row.ready }),
