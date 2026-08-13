@@ -707,6 +707,9 @@ const api = {
          *  only lever). Per-tool progress arrives on `on.toolchainProgress`. */
         toolchainInstall: (pmChoice?: string) =>
             ipcRenderer.invoke('toolchain:install', pmChoice),
+        /** Toolchain Manager (#242): scan installed tools for available updates.
+         *  A pure read — it queries `<pm> outdated` but installs nothing. */
+        toolchainUpdates: () => ipcRenderer.invoke('toolchain:updates'),
         /** The MACHINE's Dev Server: which runtime is driving, what the dev base
          *  image provides, and every shared service engine with its holders.
          *  Machine-level because an engine is shared across every workspace on

@@ -162,7 +162,7 @@ import { runManageSite, runtimeInfo } from './mcp/dev-site-tools';
 import { runManageService } from './mcp/dev-service-tools';
 import { devLifecycle } from './dev-server/lifecycle';
 import { workstationDevServerInfo, workstationEngineAction } from './dev-server/workstation';
-import { inspectToolchain } from './dev-server/toolchain-setup';
+import { inspectToolchain, detectToolchainUpdates } from './dev-server/toolchain-setup';
 import { defaultCommandRunner } from './dev-server/seams';
 import { runInstallPlan } from './dev-server/toolchain-install';
 import { createPerformInstall } from './dev-server/toolchain-perform';
@@ -552,6 +552,16 @@ export function registerIpcHandlers(): void {
             ...(pmChoice ? { pmChoice: pmChoice as never } : {}),
         }),
     );
+    // Scan the installed toolchain for available updates (Toolchain Manager,
+    // #242). A PURE read — it runs `<pm> outdated` etc. but installs nothing;
+    // this machine's tools/engines with their update status.
+    ipcMain.handle('toolchain:updates', () =>
+        detectToolchainUpdates({
+            runner: defaultCommandRunner,
+            os: process.platform,
+        }),
+    );
+
     // Run the install plan the wizard reviewed. MAIN re-inspects and runs its OWN
     // plan (never a renderer-supplied one), so a compromised renderer can't ask to
     // run an arbitrary command; the only lever it has is the package-manager

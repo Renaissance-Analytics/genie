@@ -618,6 +618,22 @@ export interface ToolchainInstallResult {
     skipped: HostToolName[];
 }
 
+/** Where a candidate "latest" version was learned. */
+export type ToolchainUpdateSource =
+    | 'version-index'
+    | 'package-manager'
+    | 'npm-global'
+    | 'registry'
+    | 'unknown';
+/** One installed tool's update status (`devServer.toolchainUpdates`). */
+export interface ToolUpdate {
+    name: HostToolName;
+    installed?: string;
+    latest?: string;
+    updateAvailable: boolean;
+    source: ToolchainUpdateSource;
+}
+
 /** Machine-level start | stop | logs for ONE shared engine. */
 export interface DevEngineActionRequest {
     recordKey: string;
@@ -2207,6 +2223,9 @@ export interface GenieApi {
          *  manager choice is the only lever). Per-tool progress arrives on
          *  `on.toolchainProgress`. */
         toolchainInstall: (pmChoice?: string) => Promise<ToolchainInstallResult>;
+        /** Toolchain Manager (#242): scan installed tools for available updates.
+         *  A pure read — queries `<pm> outdated` but installs nothing. */
+        toolchainUpdates: () => Promise<ToolUpdate[]>;
         /** The MACHINE's Dev Server: the runtime, the dev base image's
          *  toolchains, and every shared service engine with its holders. A pure
          *  read — opening it never pulls or starts anything. */
