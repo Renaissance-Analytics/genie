@@ -95,7 +95,13 @@ export async function launchGenieE2E(
  * only the call log tells them apart.
  */
 export async function readHostingState(app: ElectronApplication): Promise<{
-    calls: { workstation: number; engine: string[]; site: string[]; service: string[] };
+    calls: {
+        workstation: number;
+        engine: string[];
+        site: string[];
+        service: string[];
+        toolchainUpdate: string[];
+    };
     runtimeKind: string;
     siteNames: string[];
 } | null> {
@@ -108,6 +114,7 @@ export async function readHostingState(app: ElectronApplication): Promise<{
                 engine: [...h.state.calls.engine],
                 site: [...h.state.calls.site],
                 service: [...h.state.calls.service],
+                toolchainUpdate: [...h.state.calls.toolchainUpdate],
             },
             runtimeKind: h.state.workstation.runtime.kind,
             siteNames: h.state.sites.map((s: { name: string }) => s.name),

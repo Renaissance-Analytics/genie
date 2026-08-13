@@ -241,6 +241,14 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         // Toolchain updates are a machine-level read (this machine); inert in a
         // window driving another host.
         toolchainUpdates: async () => [],
+        // Updating a tool is a machine-level action on THIS machine; inert in a
+        // window driving another host.
+        toolchainUpdate: async () => ({
+            ok: false,
+            results: [],
+            restartRequired: false,
+            skipped: [],
+        }),
     };
 
     // The host's terminal-spec model (the grid's backbone) — pass-through.

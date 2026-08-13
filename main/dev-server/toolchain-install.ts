@@ -1,7 +1,7 @@
 import type { HostToolName } from './toolchain-detect';
 import type { InstallStep } from './toolchain-plan';
 import { buildInstallCommand } from './toolchain-adapters';
-import type { AdapterContext, InstallCommand } from './toolchain-adapters';
+import type { AdapterContext, InstallCommand, InstallIntent } from './toolchain-adapters';
 
 /**
  * The install EXECUTOR core — pure orchestration over a single injected effect.
@@ -74,6 +74,9 @@ export interface RunInstallPlanOptions {
     /** Tools already present, so their dependents' prerequisites are satisfied
      *  without a step for them. */
     present?: HostToolName[];
+    /** Install a missing tool (default) or UPDATE a present one (#242 P2) — only
+     *  changes the package-manager verb the adapter emits. */
+    intent?: InstallIntent;
     onProgress?: (p: InstallProgress) => void;
 }
 
@@ -105,7 +108,7 @@ export async function runInstallPlan(opts: RunInstallPlanOptions): Promise<Insta
         }
 
         opts.onProgress?.({ tool: step.tool, phase: 'start' });
-        const outcome = await performStep(step, opts.ctx, opts.perform);
+        const outcome = await performStep(step, opts.ctx, opts.perform, opts.intent ?? 'install');
         const status: StepStatus = outcome.ok ? 'succeeded' : 'failed';
         results.push({
             tool: step.tool,
@@ -134,10 +137,11 @@ async function performStep(
     step: InstallStep,
     ctx: AdapterContext,
     perform: PerformInstall,
+    intent: InstallIntent,
 ): Promise<StepOutcome> {
     let command: InstallCommand;
     try {
-        command = buildInstallCommand(step, ctx);
+        command = buildInstallCommand(step, ctx, intent);
     } catch (e) {
         return { ok: false, error: `could not build install command: ${String(e)}` };
     }

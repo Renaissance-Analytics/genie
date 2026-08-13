@@ -2226,6 +2226,9 @@ export interface GenieApi {
         /** Toolchain Manager (#242): scan installed tools for available updates.
          *  A pure read — queries `<pm> outdated` but installs nothing. */
         toolchainUpdates: () => Promise<ToolUpdate[]>;
+        /** Toolchain Manager (#242 P2): update ONE installed tool to latest. Main
+         *  validates the tool + builds the command. Progress on `on.toolchainProgress`. */
+        toolchainUpdate: (tool: HostToolName) => Promise<ToolchainInstallResult>;
         /** The MACHINE's Dev Server: the runtime, the dev base image's
          *  toolchains, and every shared service engine with its holders. A pure
          *  read — opening it never pulls or starts anything. */

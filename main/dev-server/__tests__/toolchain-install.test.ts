@@ -207,3 +207,36 @@ describe('runInstallPlan — resilience', () => {
         expect(result.ok).toBe(false);
     });
 });
+
+/**
+ * The Toolchain Manager (#242 P2) runs a single-tool UPDATE through this same
+ * executor, passing intent:'update' so the materialised command upgrades a
+ * present tool rather than installing it. Default (no intent) stays 'install'.
+ */
+describe('runInstallPlan — update intent', () => {
+    it('threads intent:update into the materialised command (winget upgrade)', async () => {
+        const { perform, ran } = performing();
+        await runInstallPlan({
+            steps: [step({ tool: 'git', method: 'pm', packageManager: 'winget' })],
+            ctx: WIN,
+            approved: true,
+            perform,
+            intent: 'update',
+        });
+        const cmd = ran[0];
+        expect(cmd.via).toBe('run');
+        if (cmd.via === 'run') expect(cmd.args[0]).toBe('upgrade');
+    });
+
+    it('defaults to an install command when no intent is given', async () => {
+        const { perform, ran } = performing();
+        await runInstallPlan({
+            steps: [step({ tool: 'git', method: 'pm', packageManager: 'winget' })],
+            ctx: WIN,
+            approved: true,
+            perform,
+        });
+        const cmd = ran[0];
+        if (cmd.via === 'run') expect(cmd.args[0]).toBe('install');
+    });
+});

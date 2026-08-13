@@ -40,6 +40,8 @@ import {
     type DevEngineInfo,
     type DevWorkstationInfo,
     type WorkspaceRow,
+    type ToolUpdate,
+    type HostToolName,
 } from '../lib/genie';
 import { isolationNote } from '../lib/dev-server';
 import { checkedAgoLabel, pluginSummaryLine } from '../lib/plugins-view';
@@ -51,6 +53,9 @@ import {
     engineUsageNote,
     runtimeDiagnostics,
     stopEngineWarning,
+    toolUpdateCount,
+    toolUpdateRows,
+    type ToolUpdateTone,
 } from '../lib/workstation-dev-server';
 import {
     NAV_GROUPS,
@@ -3530,6 +3535,134 @@ function RemoteHostCard() {
  * Exported for the `e2e-hosting` harness page, which mounts THIS component
  * (never a stand-in) so the E2E spec drives the shipped surface.
  */
+/** Badge color + label per tool-update tone (#242 P2). The tone decision is
+ *  workstation-dev-server's (pure, unit-tested); this is only its presentation. */
+function toolToneBadge(tone: ToolUpdateTone): { color: 'amber' | 'emerald' | 'zinc'; label: string } {
+    switch (tone) {
+        case 'update-available':
+            return { color: 'amber', label: 'Update available' };
+        case 'up-to-date':
+            return { color: 'emerald', label: 'Up to date' };
+        case 'not-installed':
+            return { color: 'zinc', label: 'Not installed' };
+        case 'unknown':
+            return { color: 'zinc', label: 'Installed' };
+    }
+}
+
+/**
+ * The Dev Tools section of the Toolchain Manager (#242 P2). Lists the host tools
+ * Genie builds and runs work with (git, node, php, …) with their installed
+ * version and, when a newer version is known, a one-click Update. The read is
+ * pure (`toolchainUpdates`); an Update runs the single-tool upgrade in main. The
+ * row model + badge tone are decided in workstation-dev-server (pure, unit-
+ * tested) — this is the wiring, same split the rest of the page uses.
+ */
+function DevToolsSection() {
+    const [updates, setUpdates] = useState<ToolUpdate[] | null>(null);
+    /** The tool whose Update is in flight — disables every Update while one runs. */
+    const [busy, setBusy] = useState<HostToolName | null>(null);
+    const [error, setError] = useState<string | null>(null);
+
+    const refresh = useCallback(() => {
+        void api()
+            .devServer.toolchainUpdates()
+            .then(setUpdates)
+            .catch(() => setUpdates([]));
+    }, []);
+
+    useEffect(() => {
+        refresh();
+        // Same push-driven refresh as the engines below — a finished install or a
+        // detected change repaints the versions without reopening the page.
+        return api().on.devServerChanged(refresh);
+    }, [refresh]);
+
+    const update = async (name: HostToolName) => {
+        setBusy(name);
+        setError(null);
+        try {
+            const res = await api().devServer.toolchainUpdate(name);
+            if (!res.ok) {
+                const failed = res.results.find((r) => r.status === 'failed');
+                setError(failed?.error ?? 'The update did not complete.');
+            }
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(null);
+            refresh();
+        }
+    };
+
+    const rows = updates ? toolUpdateRows(updates) : [];
+    const count = updates ? toolUpdateCount(updates) : 0;
+
+    return (
+        <SetSection
+            title="Dev tools"
+            desc="The host tools Genie builds and runs your work with — with a one-click update when a newer version is out"
+        >
+            {error && <div className="set-note bad">{error}</div>}
+            {updates === null ? (
+                <div className="set-note">Checking for updates…</div>
+            ) : rows.length === 0 ? (
+                <div className="set-note">
+                    No dev tools detected on this machine yet — the first-run setup installs them.
+                </div>
+            ) : (
+                <div className="ws-tools" data-testid="dev-tools">
+                    {rows.map((row) => {
+                        const badge = toolToneBadge(row.tone);
+                        return (
+                            <div
+                                className="ws-engine"
+                                key={row.name}
+                                data-testid={`devtool-${row.name}`}
+                            >
+                                <div className="ws-engine-head">
+                                    <div className="ws-engine-name">
+                                        <Text size="sm" style={{ fontWeight: 600 }}>
+                                            {row.label}
+                                        </Text>
+                                        <Text size="xs" className="text-zinc-500">
+                                            {row.installed
+                                                ? `Installed ${row.installed}`
+                                                : 'Not installed'}
+                                            {row.tone === 'update-available' && row.latest
+                                                ? ` — ${row.latest} available`
+                                                : ''}
+                                        </Text>
+                                    </div>
+                                    <Badge color={badge.color}>{badge.label}</Badge>
+                                    <div className="ws-engine-actions">
+                                        {row.action === 'update' && (
+                                            <Action
+                                                size="sm"
+                                                variant="ghost"
+                                                disabled={busy !== null}
+                                                onClick={() => void update(row.name)}
+                                            >
+                                                {busy === row.name ? 'Updating…' : 'Update'}
+                                            </Action>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+            {count > 0 && (
+                <div className="set-note">
+                    {count} update{count === 1 ? '' : 's'} available. Updating installs the latest
+                    and may prompt for permission.
+                </div>
+            )}
+        </SetSection>
+    );
+}
+
 export function DevServerSection({
     genieBrowserEnabled,
     onGenieBrowserChange,
@@ -3698,6 +3831,8 @@ export function DevServerSection({
                     </div>
                 )}
             </SetSection>
+
+            <DevToolsSection />
 
             <SetSection
                 title="Service engines"

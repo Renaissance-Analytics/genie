@@ -262,3 +262,81 @@ describe('planner ↔ adapter consistency (single source of truth)', () => {
         ]);
     });
 });
+
+/**
+ * The Toolchain Manager's per-tool UPDATE (#242 P2). An update targets a tool
+ * that is ALREADY installed, so a package manager must UPGRADE it, not `install`
+ * (winget/brew `install` on a present package is a no-op or a re-pin). npm-global
+ * and direct downloads already fetch the latest, so their update IS their install.
+ */
+describe('buildInstallCommand — update intent', () => {
+    it('winget upgrades by id, keeping the non-interactive flags', () => {
+        expect(
+            asRun(
+                buildInstallCommand(
+                    step({ tool: 'git', method: 'pm', packageManager: 'winget' }),
+                    { os: 'win32' },
+                    'update',
+                ),
+            ).args,
+        ).toEqual([
+            'upgrade',
+            '--id',
+            'Git.Git',
+            '-e',
+            '--silent',
+            '--accept-source-agreements',
+            '--accept-package-agreements',
+        ]);
+    });
+
+    it('brew upgrades a formula', () => {
+        expect(
+            asRun(
+                buildInstallCommand(
+                    step({ tool: 'git', method: 'pm', packageManager: 'brew' }),
+                    { os: 'darwin' },
+                    'update',
+                ),
+            ).args,
+        ).toEqual(['upgrade', 'git']);
+    });
+
+    it('brew upgrades a cask', () => {
+        expect(
+            asRun(
+                buildInstallCommand(
+                    step({ tool: 'docker', method: 'pm', packageManager: 'brew' }),
+                    { os: 'darwin' },
+                    'update',
+                ),
+            ).args,
+        ).toEqual(['upgrade', '--cask', 'docker']);
+    });
+
+    it('apt upgrades ONLY an installed package — never re-adds a removed one', () => {
+        expect(
+            asRun(
+                buildInstallCommand(
+                    step({ tool: 'git', method: 'pm', packageManager: 'apt' }),
+                    { os: 'linux' },
+                    'update',
+                ),
+            ).args,
+        ).toEqual(['install', '-y', '--only-upgrade', 'git']);
+    });
+
+    it('npm-global update is identical to its install (npm i -g fetches latest)', () => {
+        const asStep = step({ tool: 'claude-code', method: 'npm-global' });
+        expect(buildInstallCommand(asStep, { os: 'linux' }, 'update')).toEqual(
+            buildInstallCommand(asStep, { os: 'linux' }, 'install'),
+        );
+    });
+
+    it('defaults to install when no intent is given (back-compat)', () => {
+        const asStep = step({ tool: 'git', method: 'pm', packageManager: 'winget' });
+        expect(buildInstallCommand(asStep, { os: 'win32' })).toEqual(
+            buildInstallCommand(asStep, { os: 'win32' }, 'install'),
+        );
+    });
+});

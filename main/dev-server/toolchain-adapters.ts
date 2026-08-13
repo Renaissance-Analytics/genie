@@ -74,6 +74,15 @@ export interface DownloadInstallCommand extends InstallCommandBase {
 
 export type InstallCommand = RunInstallCommand | DownloadInstallCommand;
 
+/**
+ * Install a missing tool, or UPDATE an already-present one (Toolchain Manager,
+ * #242 P2). Only package-manager commands differ — `install` on a present winget
+ * or brew package is a no-op, so an update must use the manager's `upgrade` verb;
+ * npm-global and direct downloads already fetch the latest, so their update IS
+ * their install.
+ */
+export type InstallIntent = 'install' | 'update';
+
 /** What a per-method builder returns: the command minus the three fields
  *  {@link buildInstallCommand} injects from the step (tool + the two cost flags).
  *  `label` stays with the builder — it is the tool-specific part. */
@@ -97,7 +106,11 @@ export const NPM_PACKAGES: Partial<Record<HostToolName, string>> = {
  * package exists), so a throw here means the two drifted, which is a bug to
  * surface loudly, not a fake id to paper over.
  */
-export function buildInstallCommand(step: InstallStep, ctx: AdapterContext): InstallCommand {
+export function buildInstallCommand(
+    step: InstallStep,
+    ctx: AdapterContext,
+    intent: InstallIntent = 'install',
+): InstallCommand {
     const base = {
         tool: step.tool,
         requiresElevation: step.requiresElevation,
@@ -105,7 +118,9 @@ export function buildInstallCommand(step: InstallStep, ctx: AdapterContext): Ins
     };
     switch (step.method) {
         case 'pm':
-            return { ...base, ...buildPmCommand(step.tool, requirePm(step)) };
+            return { ...base, ...buildPmCommand(step.tool, requirePm(step), intent) };
+        // npm-global (`npm i -g`) and direct downloads already resolve the latest,
+        // so update and install are the same command.
         case 'npm-global':
             return { ...base, ...buildNpmGlobalCommand(step.tool) };
         case 'direct':
@@ -122,18 +137,23 @@ function requirePm(step: InstallStep): PackageManager {
 
 // --- package managers ------------------------------------------------------
 
-function buildPmCommand(tool: HostToolName, pm: PackageManager): BuiltRun {
+function buildPmCommand(tool: HostToolName, pm: PackageManager, intent: InstallIntent): BuiltRun {
     const pkg = pmPackageFor(pm, tool);
     if (!pkg) {
         throw new Error(`toolchain: ${pm} has no package for ${tool}`);
     }
+    const updating = intent === 'update';
     switch (pm) {
-        case 'winget':
+        case 'winget': {
+            // `upgrade` is the same shape as `install`, just the verb — both take
+            // the id and the non-interactive flags; `install` on a present package
+            // would not move its version.
+            const verb = updating ? 'upgrade' : 'install';
             return {
                 via: 'run',
                 command: 'winget',
                 args: [
-                    'install',
+                    verb,
                     '--id',
                     pkg.id,
                     '-e',
@@ -141,31 +161,37 @@ function buildPmCommand(tool: HostToolName, pm: PackageManager): BuiltRun {
                     '--accept-source-agreements',
                     '--accept-package-agreements',
                 ],
-                label: `winget install ${pkg.id}`,
+                label: `winget ${verb} ${pkg.id}`,
             };
-        case 'brew':
+        }
+        case 'brew': {
+            const verb = updating ? 'upgrade' : 'install';
             return {
                 via: 'run',
                 command: 'brew',
-                args: pkg.cask ? ['install', '--cask', pkg.id] : ['install', pkg.id],
-                label: `brew install ${pkg.cask ? '--cask ' : ''}${pkg.id}`,
+                args: pkg.cask ? [verb, '--cask', pkg.id] : [verb, pkg.id],
+                label: `brew ${verb} ${pkg.cask ? '--cask ' : ''}${pkg.id}`,
             };
+        }
         case 'apt':
             // `-y` so it never blocks on a prompt. `apt-get`, not `apt`, because
             // `apt` prints "unstable CLI" on non-interactive use. The index
             // refresh is a separate pass — see `packageManagerRefreshCommand`.
+            // `--only-upgrade` updates a package ONLY if it is installed — the
+            // right semantics for a manager row that exists because the tool is
+            // already here (never silently re-add a user's removed package).
             return {
                 via: 'run',
                 command: 'apt-get',
-                args: ['install', '-y', pkg.id],
-                label: `apt-get install ${pkg.id}`,
+                args: updating ? ['install', '-y', '--only-upgrade', pkg.id] : ['install', '-y', pkg.id],
+                label: `apt-get install ${updating ? '--only-upgrade ' : ''}${pkg.id}`,
             };
         case 'dnf':
             return {
                 via: 'run',
                 command: 'dnf',
-                args: ['install', '-y', pkg.id],
-                label: `dnf install ${pkg.id}`,
+                args: updating ? ['upgrade', '-y', pkg.id] : ['install', '-y', pkg.id],
+                label: `dnf ${updating ? 'upgrade' : 'install'} ${pkg.id}`,
             };
     }
 }

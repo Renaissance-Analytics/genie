@@ -46,6 +46,7 @@
 
 import { ipcMain } from 'electron';
 import { broadcastDevServerChanged } from '../ipc';
+import type { ToolUpdate } from '../dev-server/toolchain-updates';
 
 /** True only when the Hosting Manager harness was requested. */
 export function isE2EHosting(): boolean {
@@ -183,7 +184,11 @@ export interface HostingE2EState {
         engine: string[];
         site: string[];
         service: string[];
+        /** Tools whose Update was clicked, in order (Toolchain Manager, #242 P2). */
+        toolchainUpdate: string[];
     };
+    /** The Dev Tools section's update rows (#242 P2). */
+    toolchainUpdates: ToolUpdate[];
 }
 
 // --- the fixture ------------------------------------------------------------
@@ -411,7 +416,26 @@ export function defaultHostingE2EState(): HostingE2EState {
                 needs: 'the port was defaulted rather than read from the repo',
             },
         ],
-        calls: { workstation: 0, engine: [], site: [], service: [] },
+        calls: { workstation: 0, engine: [], site: [], service: [], toolchainUpdate: [] },
+        // Dev Tools (#242 P2): one tool with an update, one current, one whose
+        // latest could not be learned — the three tones the row model renders.
+        toolchainUpdates: [
+            {
+                name: 'git',
+                installed: '2.40.0',
+                latest: '2.45.0',
+                updateAvailable: true,
+                source: 'package-manager',
+            },
+            {
+                name: 'node',
+                installed: '22.11.0',
+                latest: '22.11.0',
+                updateAvailable: false,
+                source: 'version-index',
+            },
+            { name: 'docker', installed: '27.1.1', updateAvailable: false, source: 'unknown' },
+        ],
     };
 }
 
@@ -474,6 +498,27 @@ export function registerHostingE2EMocks(): void {
     });
 
     override('dev:repos', async () => hostingE2EState.repos);
+
+    // Dev Tools section (#242 P2). The read is deterministic here (the real one
+    // shells out to `<pm> outdated`); an Update records the tool and reflects it
+    // as now-current, so a spec can assert the button reached main AND the row
+    // repainted — without installing anything on the runner.
+    override('toolchain:updates', async () => hostingE2EState.toolchainUpdates);
+
+    override('toolchain:update', async (_e, tool: string) => {
+        hostingE2EState.calls.toolchainUpdate.push(tool);
+        const row = hostingE2EState.toolchainUpdates.find((u) => u.name === tool);
+        if (row) {
+            row.updateAvailable = false;
+            if (row.latest) row.installed = row.latest;
+        }
+        return {
+            ok: true,
+            results: [{ tool, status: 'succeeded' as const }],
+            restartRequired: false,
+            skipped: [],
+        };
+    });
 
     override('dev:engine', async (_e, req: EngineRequest) => {
         hostingE2EState.calls.engine.push(`${req.action}:${req.recordKey}`);

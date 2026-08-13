@@ -165,6 +165,9 @@ import { workstationDevServerInfo, workstationEngineAction } from './dev-server/
 import { inspectToolchain, detectToolchainUpdates } from './dev-server/toolchain-setup';
 import { defaultCommandRunner } from './dev-server/seams';
 import { runInstallPlan } from './dev-server/toolchain-install';
+import { planToolUpdate } from './dev-server/toolchain-plan';
+import { DEFAULT_TOOLCHAIN } from './dev-server/toolchain-detect';
+import type { HostToolName } from './dev-server/toolchain-detect';
 import { createPerformInstall } from './dev-server/toolchain-perform';
 import { createToolchainPerformDeps } from './dev-server/toolchain-effects';
 import { createToolchainPrimitives } from './dev-server/toolchain-primitives';
@@ -584,6 +587,36 @@ export function registerIpcHandlers(): void {
             perform,
             approved: true,
             present: insp.report.present,
+            onProgress: (p) => {
+                if (!e.sender.isDestroyed()) e.sender.send('toolchain:progress', p);
+            },
+        });
+    });
+
+    // Update ONE already-installed tool to latest (Toolchain Manager, #242 P2).
+    // Same trust model as install: MAIN validates the tool against its OWN
+    // toolchain set and builds the command from its OWN tables (planToolUpdate +
+    // the adapters) — the renderer's only lever is WHICH known tool, never an
+    // arbitrary command line — and re-inspects to pick the package manager. The
+    // `update` intent makes a package-manager step an upgrade, not an install.
+    // Per-tool progress streams on `toolchain:progress`, same as install.
+    ipcMain.handle('toolchain:update', async (e, tool: string) => {
+        if (!(DEFAULT_TOOLCHAIN as readonly string[]).includes(tool)) {
+            return { ok: false, results: [], restartRequired: false, skipped: [] };
+        }
+        const ctx = { os: process.platform, arch: process.arch };
+        const insp = await inspectToolchain({ runner: defaultCommandRunner, ...ctx });
+        const perform = createPerformInstall(
+            createToolchainPerformDeps(createToolchainPrimitives()),
+            ctx,
+        );
+        return runInstallPlan({
+            steps: [planToolUpdate(tool as HostToolName, ctx.os, insp.pmChoice)],
+            ctx,
+            perform,
+            approved: true,
+            present: insp.report.present,
+            intent: 'update',
             onProgress: (p) => {
                 if (!e.sender.isDestroyed()) e.sender.send('toolchain:progress', p);
             },

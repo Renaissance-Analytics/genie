@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { HostToolName, HostToolProbe, ToolchainReport } from '../toolchain-detect';
 import { DEFAULT_TOOLCHAIN } from '../toolchain-detect';
-import { INSTALL_ORDER, planToolchainInstall } from '../toolchain-plan';
+import { INSTALL_ORDER, planToolchainInstall, planToolUpdate } from '../toolchain-plan';
 
 /**
  * The planner is the load-bearing pure decision in #240: given what a machine
@@ -233,5 +233,43 @@ describe('planToolchainInstall — dependencies', () => {
         expect(dep('codex')).toEqual(['npm']);
         expect(dep('git')).toEqual([]);
         expect(dep('docker')).toEqual([]);
+    });
+});
+
+/**
+ * The single-tool UPDATE step for the Toolchain Manager (#242 P2). Unlike an
+ * install plan it targets a tool already present, so it never consults a
+ * present-set — the method + cost are exactly what an install of that tool would
+ * choose for this OS + package manager.
+ */
+describe('planToolUpdate', () => {
+    it('uses the package manager on Windows when it can install the tool', () => {
+        expect(planToolUpdate('git', 'win32', 'winget')).toMatchObject({
+            tool: 'git',
+            method: 'pm',
+            packageManager: 'winget',
+        });
+    });
+
+    it('routes an agent TUI through npm-global regardless of the PM choice', () => {
+        expect(planToolUpdate('claude-code', 'darwin', 'brew')).toMatchObject({
+            tool: 'claude-code',
+            method: 'npm-global',
+        });
+    });
+
+    it('carries docker its elevation + Windows reboot cost', () => {
+        expect(planToolUpdate('docker', 'win32', 'winget')).toMatchObject({
+            tool: 'docker',
+            requiresElevation: true,
+            requiresRestart: true,
+        });
+    });
+
+    it('falls back to a direct download where the PM has no package (php on winget)', () => {
+        expect(planToolUpdate('php', 'win32', 'winget')).toMatchObject({
+            tool: 'php',
+            method: 'direct',
+        });
     });
 });

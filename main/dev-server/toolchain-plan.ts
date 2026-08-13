@@ -123,6 +123,23 @@ export function planToolchainInstall(opts: PlanToolchainOptions): InstallStep[] 
     );
 }
 
+/**
+ * The single-tool UPDATE step for the Toolchain Manager (#242 P2).
+ *
+ * Unlike {@link planToolchainInstall} this targets a tool that is already
+ * PRESENT — bringing it to latest — so it never consults a present-set (which
+ * would filter it out). The method and cost are exactly what an install of that
+ * tool would choose for this OS + package manager; the adapter's `update` intent
+ * turns a `pm` step into an upgrade rather than an install.
+ */
+export function planToolUpdate(
+    tool: HostToolName,
+    os: NodeJS.Platform | string,
+    pmChoice: PackageManager | 'direct',
+): InstallStep {
+    return buildStep(tool, os, pmChoice);
+}
+
 function buildStep(
     tool: HostToolName,
     os: NodeJS.Platform | string,
