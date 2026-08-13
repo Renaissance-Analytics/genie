@@ -45,11 +45,36 @@ export function hostBrowserPaths(opts: HostBrowserPathOpts): HostEffectPaths {
     };
 }
 
+/**
+ * How the host Caddy is spawned, per platform (genie#183).
+ *
+ * On Windows `detached: true` hands the child its OWN CONSOLE — a blank terminal
+ * at `…\caddy.exe` that opens when a `.gen` site is first exposed and then just
+ * sits there. It is not needed either: `caddy start` daemonises itself, so the
+ * process we spawn exits immediately regardless. The same conclusion
+ * `host-process-run.ts` reached for site dev servers, in the same words: on
+ * win32 NEVER detach, always hide.
+ *
+ * On posix the detach is load-bearing (its own process group is what keeps the
+ * daemon alive past this call), and `windowsHide` is simply inert.
+ */
+export function hostCaddySpawnOptions(platform: NodeJS.Platform | string): {
+    detached: boolean;
+    windowsHide: boolean;
+} {
+    return { detached: platform !== 'win32', windowsHide: true };
+}
+
 /** The real node bindings for {@link HostEffectIo}. Thin on purpose. */
 export function hostBrowserIo(platform: NodeJS.Platform): HostEffectIo {
     const runToEnd = (cmd: string, args: string[]): Promise<{ code: number; stderr?: string }> =>
         new Promise((resolve) => {
-            const child = spawn(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+            // `caddy reload` runs on EVERY reconcile (each browser-exposed site
+            // start/stop), so without this a console flashes each time.
+            const child = spawn(cmd, args, {
+                stdio: ['ignore', 'ignore', 'pipe'],
+                windowsHide: true,
+            });
             let stderr = '';
             child.stderr?.on('data', (d) => (stderr += String(d)));
             child.on('error', (e) => resolve({ code: 1, stderr: e.message }));
@@ -80,7 +105,10 @@ export function hostBrowserIo(platform: NodeJS.Platform): HostEffectIo {
         spawnDetached: (argv) =>
             new Promise((resolve) => {
                 try {
-                    const child = spawn(argv[0], argv.slice(1), { detached: true, stdio: 'ignore' });
+                    const child = spawn(argv[0], argv.slice(1), {
+                        stdio: 'ignore',
+                        ...hostCaddySpawnOptions(platform),
+                    });
                     child.on('error', (e) => resolve({ ok: false, error: e.message }));
                     child.unref();
                     // `caddy start` daemonises and exits; give it a tick to fail loudly.
