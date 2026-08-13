@@ -789,6 +789,11 @@ export function registerTerminalIpc(): void {
 
     ipcMain.handle('terminal:write', (_event, id: string, data: string): boolean => {
         noteTerminalActivity(id);
+        // HUMAN keystrokes (this IPC is a renderer sending what a person typed —
+        // Genie's own injection goes through `writeToTerminal`). Feeds the draft
+        // guard so an immediate AgentInbox notice never lands in the middle of a
+        // half-written prompt.
+        agentInboxBroker.noteUserInput(id, data);
         return mgr().write(id, data);
     });
 

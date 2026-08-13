@@ -18,6 +18,7 @@ import {
 } from './types';
 import { noopAgentInboxStore, type AgentInboxStore, type StoredAttachment } from './store';
 import { shouldWakeAgent, wakeNudgeText } from './wake';
+import { inboxNoticeText, noteKeystrokes, shouldNotifyNow } from './notify';
 
 /**
  * AgentInbox broker — the in-memory registry + channels + inboxes powering the
@@ -90,6 +91,11 @@ interface AgentInboxAgent extends Omit<AgentInboxAgentInfo, 'reachable'> {
     lastOutputAt: number | null;
     /** Epoch ms we last woke this agent, or null. One wake per idle period. */
     lastWokenAt: number | null;
+    /** The HUMAN has typed at this terminal since their last submit — a draft is
+     *  sitting in the box, so an immediate notice must not inject over it. */
+    pendingInput: boolean;
+    /** Epoch ms of the last HUMAN keystroke at this terminal, or null. */
+    lastUserInputAt: number | null;
 }
 
 /** Normalise a DM pair into a stable, order-independent log key. */
@@ -241,9 +247,74 @@ export class AgentInboxBroker {
         if (a) a.lastOutputAt = this.now();
     }
 
+    /**
+     * Record HUMAN keystrokes at an agent terminal — the guard for immediate
+     * inbox notices ({@link notifyNow}). Called from the `terminal:write` IPC
+     * (a renderer sending what a person typed), NOT from Genie's own injection
+     * path, so the draft state reflects the person and never our own bytes.
+     * No-op for a terminal with no agent.
+     */
+    noteUserInput(terminalId: string, data: string): void {
+        const a = this.agentForTerminal(terminalId);
+        if (!a) return;
+        a.pendingInput = noteKeystrokes(a.pendingInput, data);
+        a.lastUserInputAt = this.now();
+    }
+
     /** Whether a terminal is a registered agent (drives the mid-turn AgentPulse glow). */
     isAgentTerminal(terminalId: string): boolean {
         return this.byTerminal.has(terminalId);
+    }
+
+    /**
+     * Announce a just-delivered message in the agent's own chat, IMMEDIATELY —
+     * the owner's beta.248 change.
+     *
+     * Wake-on-DM ({@link maybeWake}) waits for a provably-idle agent, which means
+     * a busy agent hears nothing until its turn ends. A TUI queues text that
+     * arrives mid-turn (it is how a human interjects), so the message can simply
+     * be announced when it lands, with its URGENCY, and the agent decides whether
+     * to break flow.
+     *
+     * The only thing held back for is the HUMAN's draft: {@link shouldNotifyNow}
+     * refuses while they have text in the box or are mid-keystroke, because
+     * injecting there would splice into their sentence and submit it. A held
+     * notice loses nothing — the message is in the inbox, the MCP stream was
+     * notified, and imDone still reports the count.
+     */
+    private notifyNow(target: AgentInboxAgent, msg: AgentInboxMessage): boolean {
+        if (!this.wakeSink || !target.terminalId) return false;
+        if (
+            !shouldNotifyNow({
+                pendingInput: target.pendingInput,
+                lastUserInputAt: target.lastUserInputAt,
+                now: this.now(),
+            })
+        ) {
+            return false;
+        }
+        const text = inboxNoticeText({
+            from: msg.fromLabel,
+            ...(msg.channel ? { channel: this.channelDisplayName(msg.channel) } : {}),
+            priority: msg.interrupt ? 'high' : 'normal',
+        });
+        try {
+            this.wakeSink(target.terminalId, text);
+            // Submitting text to an idle TUI IS what starts a turn, so a delivered
+            // notice is also the wake — the caller skips maybeWake and the agent
+            // gets ONE injection, not two competing prompts.
+            target.lastWokenAt = this.now();
+            return true;
+        } catch {
+            /* a failed notice still leaves the message in the inbox to be pulled */
+            return false;
+        }
+    }
+
+    /** The bare room name for a channel key (`<workspace>:<purpose>` → purpose). */
+    private channelDisplayName(key: string): string {
+        const idx = key.indexOf(':');
+        return idx < 0 ? key : key.slice(idx + 1);
     }
 
     private agentForTerminal(terminalId: string): AgentInboxAgent | null {
@@ -553,6 +624,10 @@ export class AgentInboxBroker {
             lastTurnEndAt: existing?.lastTurnEndAt ?? null,
             lastOutputAt: existing?.lastOutputAt ?? null,
             lastWokenAt: existing?.lastWokenAt ?? null,
+            // The human's draft state at this terminal — runtime state, carried
+            // across a re-join like the idle timestamps.
+            pendingInput: existing?.pendingInput ?? false,
+            lastUserInputAt: existing?.lastUserInputAt ?? null,
         };
         this.agents.set(agent.agentId, agent);
         this.byTerminal.set(agent.terminalId, agent.agentId);
@@ -1004,9 +1079,12 @@ export class AgentInboxBroker {
             // Server-push: nudge the recipient's MCP GET stream (if it has one)
             // so a connected, waiting agent sees the DM without re-polling.
             this.notifyDelivery(target, msg);
-            // Wake-on-DM (opt-in, fail-safe): nudge a genuinely-idle target so a
-            // dormant agent starts a turn instead of staying deaf.
-            this.maybeWake(target);
+            // Tell the recipient NOW (beta.248) — mid-turn is fine, a TUI queues
+            // it; only the human's own draft holds it back. Carries the urgency
+            // so the agent can decide whether to break flow. When it lands it IS
+            // the wake, so the opt-in idle nudge is only the FALLBACK for a notice
+            // held back by a human mid-draft.
+            if (!this.notifyNow(target, msg)) this.maybeWake(target);
             if (input.interrupt) {
                 if (target.terminalId) {
                     this.emit({ type: 'interrupt', terminalId: target.terminalId });
@@ -1067,6 +1145,11 @@ export class AgentInboxBroker {
                 if (!member) continue;
                 this.push(member, msg);
                 this.notifyDelivery(member, msg);
+                // Channels get the same immediate notice as DMs (beta.248): the
+                // owner's ask is "a message to any channel or DM the agent has
+                // access to", and a room posting that nobody hears until their
+                // next idle moment is the same deafness in a different shape.
+                this.notifyNow(member, msg);
                 delivered++;
             }
             this.appendLog(this.channelLogs, key, msg);

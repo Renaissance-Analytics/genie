@@ -3,6 +3,7 @@ import { AgentInboxBroker } from '../broker';
 import type { AgentInboxStore } from '../store';
 import type { AgentInboxJoinInput, AgentInboxMessage } from '../types';
 import { WAKE_QUIET_MS } from '../wake';
+import { TYPING_QUIET_MS } from '../notify';
 import { formatAgentInboxMailLine } from '../../mcp/protocol';
 
 /**
@@ -121,7 +122,102 @@ describe('AgentInbox durable inbox (Track B)', () => {
         expect(store.rows[0]).toMatchObject({ kind: 'dm', from: 'a', to: 'b', text: 'hi b' });
     });
 
-    it('wake-on-DM: nudges an opted-in IDLE target, once, and NEVER after output (#9)', () => {
+    it('IMMEDIATE notice: a DM announces itself in the recipient chat even MID-TURN (beta.248)', () => {
+        // THE CHANGE. Wake-on-DM only reached a provably-IDLE agent, so a message
+        // to a working agent sat unseen until its turn ended. A TUI queues text
+        // that arrives mid-turn (it is how a human interjects), so the notice goes
+        // in as soon as the message lands -- no idle wait, no opt-in.
+        let clock = 1_000_000;
+        const b = new AgentInboxBroker();
+        b.setStore(store);
+        b.setClock(() => clock);
+        const woken: Array<{ terminalId: string; text: string }> = [];
+        b.setWakeSink((terminalId, text) => woken.push({ terminalId, text }));
+
+        join(b, 'a');
+        join(b, 'b'); // NOT opted in, and never finished a turn -- busy from birth.
+
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping1' });
+        expect(woken).toHaveLength(1);
+        expect(woken[0].terminalId).toBe('t-b');
+        expect(woken[0].text).toMatch(/not urgent/i);
+        expect(woken[0].text).toContain('a'); // the sender's label
+
+        // Mid-turn output is no longer a gate: the agent is plainly working and
+        // still gets told.
+        b.noteOutput('t-b');
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping2' });
+        expect(woken).toHaveLength(2);
+    });
+
+    it('IMMEDIATE notice: an interrupt DM says check it NOW, a normal one says when free', () => {
+        const b = new AgentInboxBroker();
+        b.setStore(store);
+        const woken: string[] = [];
+        b.setWakeSink((_tid, text) => woken.push(text));
+
+        join(b, 'a');
+        join(b, 'b');
+
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'whenever', interrupt: false });
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'NOW', interrupt: true });
+
+        expect(woken[0]).toMatch(/when you are not busy/i);
+        expect(woken[1]).toMatch(/immediately/i);
+        expect(woken[1]).toMatch(/HIGH PRIORITY/i);
+    });
+
+    it('IMMEDIATE notice: a CHANNEL post notifies every member but the sender', () => {
+        const b = new AgentInboxBroker();
+        b.setStore(store);
+        const woken: Array<{ terminalId: string; text: string }> = [];
+        b.setWakeSink((terminalId, text) => woken.push({ terminalId, text }));
+
+        join(b, 'a');
+        join(b, 'b');
+        // Both are in the same workspace purpose room by construction.
+        const res = b.send({ fromAgentId: 'a', channelArg: 'general', text: 'standup' });
+
+        if (res.ok) {
+            // Only the OTHER member is told -- never an echo to the sender.
+            expect(woken.every((w) => w.terminalId !== 't-a')).toBe(true);
+            for (const w of woken) expect(w.text).toMatch(/channel/i);
+        }
+    });
+
+    it('IMMEDIATE notice: HELD while the human has a draft in the box, so it never splices their prompt', () => {
+        // The one hard rule that replaced the idle gate. `terminal:write` is the
+        // human keystroke path; a draft there must be untouchable.
+        let clock = 1_000_000;
+        const b = new AgentInboxBroker();
+        b.setStore(store);
+        b.setClock(() => clock);
+        const woken: string[] = [];
+        b.setWakeSink((tid) => woken.push(tid));
+
+        join(b, 'a');
+        join(b, 'b');
+
+        // The human starts typing at B's terminal.
+        b.noteUserInput('t-b', 'hold on, I am wri');
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping1' });
+        expect(woken).toHaveLength(0);
+
+        // They submit; the box is empty again, but they are still mid-keystroke.
+        b.noteUserInput('t-b', '\r');
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping2' });
+        expect(woken).toHaveLength(0);
+
+        // Typing has gone quiet -> the notice lands.
+        clock += TYPING_QUIET_MS + 1;
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping3' });
+        expect(woken).toEqual(['t-b']);
+    });
+
+    it('wake-on-DM remains the FALLBACK when a notice is held back by a human draft', () => {
+        // The opt-in idle nudge is not deleted: it still covers the case the
+        // immediate notice refuses (a draft in the box) for an agent that asked
+        // to be woken -- and it stays idle-gated, so it can never land mid-turn.
         let clock = 1_000_000;
         const b = new AgentInboxBroker();
         b.setStore(store);
@@ -132,82 +228,15 @@ describe('AgentInbox durable inbox (Track B)', () => {
         join(b, 'a');
         join(b, 'b', { wakeOnDm: true });
 
-        // B finished a turn (imDone) → idle at its prompt, but not yet quiet enough.
+        // A draft holds the immediate notice back...
+        b.noteUserInput('t-b', 'typing');
+        // ...and B is idle + quiet, so the legacy nudge covers it.
         b.markTurnEnd('t-b');
-        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping1' });
-        expect(woken).toHaveLength(0);
-
-        // Past the quiet window → a DM wakes B with the canned nudge.
         clock += WAKE_QUIET_MS + 1;
-        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping2' });
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping' });
+
         expect(woken).toHaveLength(1);
-        expect(woken[0].terminalId).toBe('t-b');
         expect(woken[0].text).toContain('unread AgentInbox');
-
-        // One wake per idle period — a further DM doesn't re-nudge.
-        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping3' });
-        expect(woken).toHaveLength(1);
-
-        // B produces output (a new turn / a human typing) → the core safety gate:
-        // any output after the turn end means NOT idle, so no more wakes.
-        clock += WAKE_QUIET_MS + 1;
-        b.noteOutput('t-b');
-        clock += WAKE_QUIET_MS + 1;
-        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping4' });
-        expect(woken).toHaveLength(1);
-    });
-
-    it('wake-on-DM: an opted-OUT agent (default) is never woken', () => {
-        let clock = 1_000_000;
-        const b = new AgentInboxBroker();
-        b.setStore(store);
-        b.setClock(() => clock);
-        const woken: string[] = [];
-        b.setWakeSink((tid) => woken.push(tid));
-
-        join(b, 'a');
-        join(b, 'b'); // wakeOnDm defaults false
-        b.markTurnEnd('t-b');
-        clock += WAKE_QUIET_MS + 1;
-        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'hi' });
-        expect(woken).toHaveLength(0);
-    });
-
-    it('wake-on-DM: setAccessibility live-toggles the opt-in on a RUNNING agent (#9)', () => {
-        // The "Wake on direct message" agent-settings toggle edits the channel
-        // (agentInbox:update-channel → setAccessibility) — it must take effect on the
-        // already-running agent, not only after a restart/rejoin.
-        let clock = 1_000_000;
-        const b = new AgentInboxBroker();
-        b.setStore(store);
-        b.setClock(() => clock);
-        const woken: string[] = [];
-        b.setWakeSink((tid) => woken.push(tid));
-
-        join(b, 'a');
-        join(b, 'b'); // opted OUT by default
-        b.markTurnEnd('t-b');
-
-        // Idle + past the quiet window, but opted out → no wake.
-        clock += WAKE_QUIET_MS + 1;
-        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping1' });
-        expect(woken).toHaveLength(0);
-
-        // User flips the toggle ON — live, no restart.
-        b.setAccessibility('b', { wakeOnDm: true });
-        expect(b.wakeOnDmFor('b')).toBe(true);
-
-        // A further idle DM now wakes it.
-        clock += WAKE_QUIET_MS + 1;
-        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping2' });
-        expect(woken).toEqual(['t-b']);
-
-        // Flipping it back OFF stops future wakes, even in a fresh idle period.
-        b.setAccessibility('b', { wakeOnDm: false });
-        b.markTurnEnd('t-b');
-        clock += WAKE_QUIET_MS + 1;
-        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping3' });
-        expect(woken).toEqual(['t-b']); // unchanged
     });
 
     it('wakeTerminalIfIdle (IssueWatch): wakes an IDLE agent regardless of the AgentInbox opt-in, but NEVER mid-turn', () => {
