@@ -1,14 +1,15 @@
 import { get } from 'node:https';
 import { createWriteStream } from 'node:fs';
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { copyFile, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 import { URL } from 'node:url';
 import type { CommandResult } from './container-runtime';
 import { defaultCommandRunner, hostToolCommandRunner } from './seams';
 import { elevationLauncherArgv, isProcessElevated } from './elevate';
 import { resolveDownloadUrl } from './toolchain-resolve';
-import { artifactRunCommand } from './toolchain-artifact';
+import { artifactInstallPlan } from './toolchain-artifact';
+import type { ArtifactContext } from './toolchain-artifact';
 import type { ToolchainEffectPrimitives } from './toolchain-effects';
 
 /**
@@ -116,6 +117,72 @@ function streamTo(url: string, path: string, redirectsLeft = 5): Promise<void> {
     });
 }
 
+/**
+ * Where Genie puts the tools it installs ITSELF (#205).
+ *
+ * A Genie-owned directory under its data dir: no elevation, nothing of the
+ * user's is overwritten, and uninstalling a tool is deleting a folder. Electron
+ * is resolved lazily so this module still loads in the headless build and in
+ * tests, falling back to the home directory when there is no app.
+ */
+function genieToolsContext(): ArtifactContext {
+    let base: string;
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        base = (require('electron') as typeof import('electron')).app.getPath('userData');
+    } catch {
+        base = join(homedir(), '.genie');
+    }
+    const toolsDir = join(base, 'tools');
+    return { toolsDir, binDir: join(toolsDir, 'bin'), os: process.platform };
+}
+
+/**
+ * Put a Genie-installed tool's directory on PATH.
+ *
+ * TWO scopes, and both matter:
+ *   - `process.env.PATH` right now, so every terminal, agent and dev server
+ *     Genie spawns AFTER this finds the tool without restarting anything;
+ *   - the persisted USER PATH on Windows, or the tool vanishes the next time
+ *     Genie starts and re-inherits the system environment. (mac/Linux installs
+ *     go through brew/apt, which own PATH themselves.)
+ *
+ * Never fails the install over PATH: the bytes ARE on disk, and reporting a
+ * successful install as failed would send the user to reinstall something they
+ * already have.
+ */
+async function addToolsPathEntry(dir: string): Promise<CommandResult> {
+    const current = process.env.PATH ?? '';
+    const sep = process.platform === 'win32' ? ';' : ':';
+    const already = current
+        .split(sep)
+        .some(
+            (p) =>
+                p.replace(/[\\/]+$/, '').toLowerCase() === dir.replace(/[\\/]+$/, '').toLowerCase(),
+        );
+    if (!already) process.env.PATH = current ? `${current}${sep}${dir}` : dir;
+
+    if (process.platform !== 'win32') return { code: 0, stdout: '', stderr: '' };
+    // Read-modify-write the USER Path (never the machine one, which needs
+    // elevation, and never `setx`, which truncates a long PATH at 1024 chars).
+    const ps =
+        `$p = [Environment]::GetEnvironmentVariable('Path','User'); ` +
+        `if ($p -notlike '*${dir}*') { ` +
+        `[Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';${dir}'), 'User') }`;
+    const res = await defaultCommandRunner.run(
+        'powershell',
+        ['-NoProfile', '-NonInteractive', '-Command', ps],
+        { timeoutMs: 60_000 },
+    );
+    return res.code === 0
+        ? res
+        : {
+              code: 0,
+              stdout: '',
+              stderr: `Installed, but could not add ${dir} to your PATH permanently — new terminals in this Genie session will still find it.`,
+          };
+}
+
 /** Assemble the real primitives. `runner`/`verify` come from the tested effect
  *  assembly ({@link createToolchainPerformDeps}); the three impure verbs are the
  *  ones above. */
@@ -130,18 +197,46 @@ export function createToolchainPrimitives(): ToolchainEffectPrimitives {
         download,
         resolveDownloadUrl: (source, ctx) => resolveDownloadUrl(source, ctx, fetchJson),
         async installArtifact(command, localPath) {
-            const plan = artifactRunCommand(command, localPath);
-            if ('unsupported' in plan) {
-                return {
-                    code: 1,
-                    stdout: '',
-                    stderr: `Genie can't install a ${plan.unsupported} artifact automatically yet — install ${command.tool} manually and re-run setup.`,
-                };
+            const plan = artifactInstallPlan(command, localPath, genieToolsContext());
+            switch (plan.kind) {
+                case 'unsupported':
+                    return {
+                        code: 1,
+                        stdout: '',
+                        stderr: `Genie can't install a ${plan.artifact} artifact automatically yet — install ${command.tool} manually and re-run setup.`,
+                    };
+                case 'run':
+                    return command.requiresElevation
+                        ? runElevated(plan.command, plan.args)
+                        : defaultCommandRunner.run(plan.command, plan.args, {
+                              timeoutMs: INSTALL_TIMEOUT_MS,
+                          });
+                case 'extract': {
+                    // php/node on Windows arrive as a zip of loose binaries: unpack
+                    // into a Genie-owned dir (no elevation, nothing of the user's
+                    // overwritten) and put that dir on PATH, or the files are there
+                    // and nothing can find them.
+                    const res = await defaultCommandRunner.run(plan.command, plan.args, {
+                        timeoutMs: INSTALL_TIMEOUT_MS,
+                    });
+                    if (res.code !== 0) return res;
+                    return addToolsPathEntry(plan.pathAdd);
+                }
+                case 'phar': {
+                    // composer is a phar — not executable by itself, so it is placed
+                    // beside a launcher that feeds it to php.
+                    try {
+                        await mkdir(dirname(plan.to), { recursive: true });
+                        await copyFile(plan.from, plan.to);
+                        await writeFile(plan.shimPath, plan.shimBody, {
+                            ...(plan.executable ? { mode: 0o755 } : {}),
+                        });
+                    } catch (e) {
+                        return { code: 1, stdout: '', stderr: `Could not place ${command.tool}: ${String(e)}` };
+                    }
+                    return addToolsPathEntry(plan.pathAdd);
+                }
             }
-            const { command: cmd, args } = plan.run;
-            return command.requiresElevation
-                ? runElevated(cmd, args)
-                : defaultCommandRunner.run(cmd, args, { timeoutMs: INSTALL_TIMEOUT_MS });
         },
     };
 }
