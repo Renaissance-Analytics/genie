@@ -111,3 +111,46 @@ describe('toolchainUpdateRisk', () => {
         expect(r.affected).toEqual([]);
     });
 });
+
+/**
+ * GIT ON WINDOWS — open terminals are a HARD blocker, not a warning.
+ *
+ * Proven by the installer's own log after the owner tried it from the settings
+ * page (winget downloaded, verified, elevated, then):
+ *
+ *     bash.exe (PID 25992) ... x18
+ *     Please terminate those processes and retry.
+ *     Got EAbort exception.
+ *
+ * Git Bash ships WITH Git for Windows, so every Genie terminal is holding the
+ * files the installer has to replace. The installer does not degrade — it
+ * ABORTS. So the earlier "warn only when agents are busy" was wrong for this
+ * case: the blocker is terminal PRESENCE, and it fails deterministically, which
+ * makes a button that offers it a button that always fails.
+ */
+describe('toolchainUpdateRisk — git on Windows with terminals open', () => {
+    const win = { ...idle, platform: 'win32' as const };
+
+    it('BLOCKS while any terminal is open, naming Git Bash as the reason', () => {
+        const r = toolchainUpdateRisk('git', { ...win, openTerminals: 18 });
+        expect(r.risk).toBe('blocked');
+        // The message has to say WHAT to do — the installer just aborts.
+        expect(r.reason).toMatch(/terminal/i);
+        expect(r.reason).toMatch(/close/i);
+    });
+
+    it('allows it once every terminal is closed', () => {
+        expect(toolchainUpdateRisk('git', { ...win, openTerminals: 0 }).risk).toBe('safe');
+    });
+
+    it('does NOT block git off Windows, where Git Bash is not the shell', () => {
+        const r = toolchainUpdateRisk('git', { ...idle, platform: 'linux', openTerminals: 18 });
+        expect(r.risk).not.toBe('blocked');
+    });
+
+    it('still blocks an agent TUI mid-turn regardless of terminals', () => {
+        expect(
+            toolchainUpdateRisk('claude-code', { ...win, busyAgents: ['a'], openTerminals: 0 }).risk,
+        ).toBe('blocked');
+    });
+});

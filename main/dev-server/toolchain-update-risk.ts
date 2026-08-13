@@ -29,8 +29,11 @@ import type { HostToolName } from './toolchain-detect';
 export interface ToolchainActivity {
     /** Agent terminals MID-TURN right now, by label. */
     busyAgents: string[];
-    /** Terminals with a live pty at all. Presence, not activity. */
+    /** Terminals with a LIVE pty. Presence, not activity — but see the git rule:
+     *  on Windows presence alone aborts the Git installer. */
     openTerminals: number;
+    /** Which OS this is. Only Windows has the Git Bash problem. */
+    platform?: NodeJS.Platform | string;
     /** Host-native dev servers currently running, by site name. */
     runningSites: string[];
     /** Service engines currently running, by label. */
@@ -75,7 +78,30 @@ export function toolchainUpdateRisk(
         };
     }
 
-    // 2. Docker: the update restarts the engine, taking containers with it.
+    // 2. GIT ON WINDOWS. Git Bash ships WITH Git for Windows, so every open
+    //    terminal is holding files the installer must replace — and the
+    //    installer does not degrade, it ABORTS:
+    //
+    //        bash.exe (PID 25992) …  Please terminate those processes and retry.
+    //        Got EAbort exception.
+    //
+    //    (from the installer's own log, after this failed for real.) It fails
+    //    DETERMINISTICALLY, so offering it would be a button that always fails —
+    //    worse than no button. Refuse, and say what to close.
+    if (tool === 'git' && activity.platform === 'win32' && activity.openTerminals > 0) {
+        const n = activity.openTerminals;
+        return {
+            risk: 'blocked',
+            affected: [`${n} open terminal${n === 1 ? '' : 's'}`],
+            reason:
+                `Genie has ${n} terminal${n === 1 ? '' : 's'} open, and they run Git Bash — the ` +
+                'Git for Windows installer refuses to replace files while those are running, so ' +
+                `it would abort. Close ${n === 1 ? 'it' : 'them'} and try again (or update Git ` +
+                'outside Genie).',
+        };
+    }
+
+    // 3. Docker: the update restarts the engine, taking containers with it.
     if (tool === 'docker' && activity.runningEngines.length > 0) {
         return {
             risk: 'warn',

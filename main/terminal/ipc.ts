@@ -1064,6 +1064,22 @@ export function stopWorkspaceTerminals(workspaceId: string): string[] {
     return stopped;
 }
 
+/**
+ * How many terminals have a LIVE pty right now.
+ *
+ * Not the spec count — a spec persists after its pty exits (terminals are
+ * revivable), and the toolchain update guard has to know what is actually
+ * RUNNING: on Windows every live terminal is a `bash.exe` holding Git's files,
+ * which is what aborts the Git installer (genie#205).
+ */
+export function liveTerminalCount(): number {
+    try {
+        return terminalManager().list().length;
+    } catch {
+        return 0;
+    }
+}
+
 /** Forward the broadcast helper for callers that want it. */
 export function broadcastTerminalCount(): void {
     const count = terminalManager().list().length;

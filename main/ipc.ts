@@ -68,7 +68,7 @@ import {
 } from './workspace/envelope';
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
 import { armSchedule, forgetSchedule } from './terminal/process-scheduler';
-import { broadcastTerminalSpecsChanged } from './terminal/ipc';
+import { broadcastTerminalSpecsChanged, liveTerminalCount } from './terminal/ipc';
 import { agentPulse } from './terminal/agent-pulse';
 import {
     createSpecializedAgentTerminal,
@@ -183,7 +183,9 @@ async function readToolchainActivity(): Promise<ToolchainActivity> {
         .workingAgentTerminals()
         // A terminal id means nothing to a human; the warning has to say WHO.
         .map((id) => getTerminalSpec(id)?.label || id);
-    const openTerminals = listTerminalSpecs().length;
+    // LIVE ptys, not specs: a spec outlives its pty (terminals are revivable),
+    // and what aborts the Git installer is a RUNNING bash.exe.
+    const openTerminals = liveTerminalCount();
     let runningEngines: string[] = [];
     try {
         const info = await workstationDevServerInfo();
@@ -198,7 +200,7 @@ async function readToolchainActivity(): Promise<ToolchainActivity> {
     // A `.gen` site only resolves a port once its server is up, so this set IS
     // the running one.
     const runningSites = devServerGenSites().map((s) => s.genName);
-    return { busyAgents, openTerminals, runningSites, runningEngines };
+    return { busyAgents, openTerminals, runningSites, runningEngines, platform: process.platform };
 }
 import { hostToolCommandRunner } from './dev-server/seams';
 import { runInstallPlan } from './dev-server/toolchain-install';
