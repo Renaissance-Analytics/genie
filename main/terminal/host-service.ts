@@ -624,6 +624,127 @@ export function logHostService(line: string): void {
     }
 }
 
+/* ─── Detached pty-host stdout/stderr capture ────────────────────────────────
+ *
+ * The detached host is the SINGLE process that owns every terminal in every
+ * workspace. It used to be spawned with stdio:'ignore' (genie-adapter
+ * `spawnDetached`) and, on the Run-key path, by a `.cmd` that also redirected
+ * nothing — so when it died it left ZERO trace: the whole terminal fleet froze
+ * with "no sign of a crash" (genie#203; the Windows launcher gap is fth#10).
+ *
+ * These helpers open append fds for the host's stdout/stderr under
+ * `<userData>/logs/ptyhost.{out,err}.log` so the NEXT death is diagnosable. The
+ * contract is: NEVER throw. A logging failure must degrade a single stream to
+ * 'ignore' — never block the host spawn, because a silent death is still far
+ * better than no host at all.
+ */
+
+/** Bytes after which a pty-host log is rotated (one `.1` backup kept). Keeps the
+ *  capture from growing unbounded on a chatty or crash-looping host. */
+export const PTYHOST_LOG_MAX_BYTES = 4 * 1024 * 1024;
+
+/** The fs operations `openPtyhostLogStdio` needs, seamed so it is unit-testable
+ *  without touching the real disk. */
+export interface HostLogIo {
+    /** Ensure the log dir exists (recursive, idempotent). */
+    mkdir(dir: string): void;
+    /** Size of an existing file in bytes; 0 when it does not exist. */
+    size(p: string): number;
+    /** Rotate `p` → `p + '.1'` (overwriting any prior backup). Best-effort. */
+    rotate(p: string): void;
+    /** Open `p` for appending and return its fd. */
+    open(p: string): number;
+    /** Close a previously-opened fd. */
+    close(fd: number): void;
+}
+
+const nodeHostLogIo: HostLogIo = {
+    mkdir: (dir) => fs.mkdirSync(dir, { recursive: true }),
+    size: (p) => {
+        try {
+            return fs.statSync(p).size;
+        } catch {
+            return 0;
+        }
+    },
+    rotate: (p) => {
+        try {
+            fs.rmSync(`${p}.1`, { force: true });
+        } catch {
+            /* no prior backup — fine */
+        }
+        fs.renameSync(p, `${p}.1`);
+    },
+    open: (p) => fs.openSync(p, 'a'),
+    close: (fd) => fs.closeSync(fd),
+};
+
+/** The absolute paths the detached pty-host's stdout/stderr are captured to. */
+export function ptyhostLogPaths(userDataDir: string): {
+    dir: string;
+    out: string;
+    err: string;
+} {
+    const dir = path.join(userDataDir, 'logs');
+    return {
+        dir,
+        out: path.join(dir, 'ptyhost.out.log'),
+        err: path.join(dir, 'ptyhost.err.log'),
+    };
+}
+
+export interface HostLogStdio {
+    /** Pass straight to `child_process.spawn`'s `stdio` option: stdin is always
+     *  'ignore'; stdout/stderr are log fds, or 'ignore' if they couldn't open. */
+    stdio: ['ignore', number | 'ignore', number | 'ignore'];
+    /** Close the PARENT's copies of the opened fds. Call AFTER spawn — the child
+     *  has already dup'd them, so this just stops Genie from leaking fds. */
+    close(): void;
+}
+
+/**
+ * Open append fds for the detached pty-host's stdout/stderr under
+ * `<userData>/logs`, rotating a stream that has grown past {@link
+ * PTYHOST_LOG_MAX_BYTES}. NEVER throws: any failure degrades that one stream to
+ * 'ignore' so a logging problem can't block the host spawn.
+ */
+export function openPtyhostLogStdio(
+    userDataDir: string,
+    io: HostLogIo = nodeHostLogIo,
+    cap: number = PTYHOST_LOG_MAX_BYTES,
+): HostLogStdio {
+    const { dir, out, err } = ptyhostLogPaths(userDataDir);
+    const opened: number[] = [];
+    const openOne = (p: string): number | 'ignore' => {
+        try {
+            io.mkdir(dir);
+            if (io.size(p) >= cap) io.rotate(p);
+            const fd = io.open(p);
+            opened.push(fd);
+            return fd;
+        } catch {
+            return 'ignore';
+        }
+    };
+    const stdio: ['ignore', number | 'ignore', number | 'ignore'] = [
+        'ignore',
+        openOne(out),
+        openOne(err),
+    ];
+    return {
+        stdio,
+        close: () => {
+            for (const fd of opened) {
+                try {
+                    io.close(fd);
+                } catch {
+                    /* best-effort — a failed close only leaks one fd */
+                }
+            }
+        },
+    };
+}
+
 /* ─── Windows Run-key autostart — the policy-blocked-schtasks fallback ────────
  *
  * Managed Windows machines commonly DENY `schtasks /Create` (the log shows

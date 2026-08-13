@@ -25,6 +25,7 @@ import {
     resolveMaterializedHostScript,
     writeDetachedMode,
     logHostService,
+    openPtyhostLogStdio,
 } from './host-service';
 
 /**
@@ -162,6 +163,12 @@ export function electronHostSpawner(_dirname: string): HostSpawner {
                 };
                 // Make sure no inherited Electron flag confuses standalone Node.
                 delete standaloneEnv.ELECTRON_RUN_AS_NODE;
+                // Capture the host's stdout/stderr to <userData>/logs so a death
+                // of this single shared host is diagnosable — it used to be
+                // stdio:'ignore', which is why a crash froze every terminal with
+                // "no sign of a crash" (genie#203). NEVER throws; degrades to
+                // 'ignore' if the logs can't open, so it can't block the spawn.
+                const hostLog = openPtyhostLogStdio(app.getPath('userData'));
                 const child = spawn(rt.nodePath, [script], {
                     detached: true,
                     // Hide the host's console window. node.exe is a console-
@@ -172,10 +179,12 @@ export function electronHostSpawner(_dirname: string): HostSpawner {
                     // this is only the HOST process's own console. Matches the
                     // package's service-spawn, which already sets windowsHide.
                     windowsHide: true,
-                    stdio: 'ignore',
+                    stdio: hostLog.stdio,
                     env: standaloneEnv,
                 });
                 child.unref();
+                // The child dup'd the log fds; release Genie's own copies.
+                hostLog.close();
                 writeDetachedMode('standalone', child.pid, script);
                 logHostService(
                     `detached host spawned on standalone Node — ${rt.nodePath}`,
@@ -186,13 +195,14 @@ export function electronHostSpawner(_dirname: string): HostSpawner {
             // child (pins the binary; the update will kill + restart it). Still
             // launches the materialized script so the host maps user-data node-pty
             // (the binary pin, not node-pty, is what forces the kill here).
+            const hostLog = openPtyhostLogStdio(app.getPath('userData'));
             const child = spawn(process.execPath, [script], {
                 detached: true,
                 // Belt-and-suspenders: electron.exe is GUI-subsystem so it won't
                 // create a console anyway, but keep the flag consistent with the
                 // standalone-Node branch above.
                 windowsHide: true,
-                stdio: 'ignore',
+                stdio: hostLog.stdio,
                 env: {
                     ...process.env,
                     ELECTRON_RUN_AS_NODE: '1',
@@ -200,6 +210,7 @@ export function electronHostSpawner(_dirname: string): HostSpawner {
                 },
             });
             child.unref();
+            hostLog.close();
             writeDetachedMode('electron', child.pid, script);
             logHostService(
                 'detached host spawned on Genie binary (no standalone runtime shipped)',
