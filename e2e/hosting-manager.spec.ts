@@ -151,7 +151,7 @@ test('switching engine groups SWAPS the list — the three are not one long page
     // It reached main as an install for THAT version...
     await expect
         .poll(async () => (await readHostingState(app))?.calls.engine ?? [])
-        .toContain('install:mysql-8.4');
+        .toContain('install:mysql-8');
     // ...and the row repainted as on-this-machine WITHOUT starting anything: a
     // pulled image is not a running engine.
     await expect(row).toContainText('Downloaded but not running');
