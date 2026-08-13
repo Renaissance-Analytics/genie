@@ -1205,3 +1205,89 @@ export async function selectTerminalBackend(deps: {
         serviceReason: svc.reason,
     };
 }
+
+/** The result of a recovery run. 'recovered' = a detached host came back;
+ *  'degraded' = only in-process came back (terminals work, no host-survival);
+ *  'busy' = a recovery was already in flight and this call was a no-op. */
+export type HostRecoveryOutcome = 'recovered' | 'degraded' | 'busy';
+
+/** Injected steps for {@link recoverFromHostLoss}. Each is best-effort — the
+ *  orchestrator guarantees it never throws regardless of what these do. */
+export interface HostRecoveryDeps {
+    /** The ids that were live on the dead host — the terminals to re-attach. */
+    affectedIds(): string[];
+    /** Persist the last-known scrollback of the affected ids so the fresh backend
+     *  can replay it on re-create. The dead host's client mirror is the ONLY
+     *  surviving copy, so this MUST run before that client is dropped. */
+    snapshotAffected(ids: string[]): void;
+    /** Bring a backend back up — respawn the detached host, or promote in-process.
+     *  Should never throw; resolves { host:true } when a detached host returned. */
+    respawn(): Promise<{ host: boolean }>;
+    /** Re-create each id on the fresh backend so the renderer replays its snapshot
+     *  and binds input to a live pty again. Best-effort per id. */
+    reattach(ids: string[]): void;
+    /** Surface the recovery state to the renderer (the banner). */
+    emitStatus(state: 'recovering' | 'recovered' | 'degraded'): void;
+}
+
+/** True while a recovery is in flight, so a second death signal can't stack a
+ *  concurrent recovery on top (which would double snapshot/respawn/reattach). */
+let hostRecoveryInFlight = false;
+
+/**
+ * Recover from a mid-session pty-host loss (genie#203).
+ *
+ * When the single shared detached host dies, the package reverts to in-process
+ * and shows a toast but leaves every terminal frozen — bound to ids no backend
+ * owns. This drives the recovery it skips: snapshot the dead ids → respawn a
+ * backend → re-attach the ids (the renderer replays each from its snapshot) →
+ * emit a structured status for the banner.
+ *
+ * Re-entrancy guarded (an overlapping death signal is a no-op) and NEVER throws:
+ * a recovery that itself crashed would strand the user worse than the freeze.
+ */
+export async function recoverFromHostLoss(
+    deps: HostRecoveryDeps,
+): Promise<HostRecoveryOutcome> {
+    if (hostRecoveryInFlight) return 'busy';
+    hostRecoveryInFlight = true;
+    try {
+        let ids: string[] = [];
+        try {
+            ids = deps.affectedIds();
+        } catch {
+            ids = [];
+        }
+        // Snapshot FIRST — the dead client's mirror is the only scrollback left.
+        try {
+            deps.snapshotAffected(ids);
+        } catch {
+            /* best-effort — a missed snapshot only costs replayed history */
+        }
+        try {
+            deps.emitStatus('recovering');
+        } catch {
+            /* best-effort */
+        }
+        let host = false;
+        try {
+            ({ host } = await deps.respawn());
+        } catch {
+            host = false; // no backend came back → degrade, don't abort
+        }
+        try {
+            deps.reattach(ids);
+        } catch {
+            /* best-effort per the contract; one failed id can't sink the rest */
+        }
+        const outcome: 'recovered' | 'degraded' = host ? 'recovered' : 'degraded';
+        try {
+            deps.emitStatus(outcome);
+        } catch {
+            /* best-effort */
+        }
+        return outcome;
+    } finally {
+        hostRecoveryInFlight = false;
+    }
+}
