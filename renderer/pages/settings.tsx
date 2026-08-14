@@ -3712,7 +3712,7 @@ function LanguagesTab({
                     {section.rows.length === 0 ? (
                         <div className="set-note">{section.emptyNote}</div>
                     ) : (
-                        <div className="ws-engines">
+                        <div className="tc-installs">
                             {section.rows.map((row) => (
                                 <div
                                     className="ws-engine"

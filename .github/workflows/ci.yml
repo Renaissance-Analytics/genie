@@ -28,6 +28,13 @@ jobs:
         run: npx tsc --noEmit -p main/tsconfig.json
       - name: Typecheck (renderer)
         run: npx tsc --noEmit -p renderer/tsconfig.json
+      # The E2E specs used to be the one tree nothing typechecked, and the cost
+      # was not theoretical: a helper whose return type omitted a field made a
+      # spec wait 15 seconds for something that could never arrive, and the
+      # feature under test was working the whole time. Checked HERE (cheap,
+      # seconds) rather than discovered in the E2E workflow (minutes, per OS).
+      - name: Typecheck (e2e)
+        run: npx tsc --noEmit -p e2e/tsconfig.json
       - name: Vitest
         run: npm test
       - name: Build renderer (static export)

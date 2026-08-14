@@ -101,6 +101,8 @@ export async function readHostingState(app: ElectronApplication): Promise<{
         site: string[];
         service: string[];
         toolchainUpdate: string[];
+        toolchainSetDefault: string[];
+        toolchainRemove: string[];
     };
     runtimeKind: string;
     siteNames: string[];
@@ -115,6 +117,13 @@ export async function readHostingState(app: ElectronApplication): Promise<{
                 site: [...h.state.calls.site],
                 service: [...h.state.calls.service],
                 toolchainUpdate: [...h.state.calls.toolchainUpdate],
+                // This projection is a hand-written subset, so a `calls` field
+                // added to the harness and NOT added here silently reads as
+                // "nothing reached main" — the spec then fails against a
+                // perfectly working button. (`e2e/` is outside both typecheck
+                // projects, so nothing flags the missing key either.)
+                toolchainSetDefault: [...h.state.calls.toolchainSetDefault],
+                toolchainRemove: [...h.state.calls.toolchainRemove],
             },
             runtimeKind: h.state.workstation.runtime.kind,
             siteNames: h.state.sites.map((s: { name: string }) => s.name),

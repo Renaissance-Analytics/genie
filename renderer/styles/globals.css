@@ -1842,6 +1842,15 @@ button.m-card:disabled {
     gap: 4px;
     min-width: 0;
 }
+/* The version rows. Styled like `.ws-engines` but a class of its OWN: a service
+   engine and a language install are different things, and sharing the hook made
+   a `.ws-engines` locator ambiguous the moment both were on one page. */
+.tc-installs {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 8px;
+}
 .tc-lang-head {
     display: flex;
     align-items: center;

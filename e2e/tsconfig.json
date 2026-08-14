@@ -1,0 +1,23 @@
+{
+  // The E2E specs were the one source tree nothing typechecked: the root
+  // tsconfig includes only `main/**` and `renderer/**`, so a spec could call a
+  // helper with the wrong shape and the mistake only surfaced as a mysterious
+  // 15-second timeout on CI — the helper silently returned undefined, the spec
+  // "waited" for something that could never arrive, and the button under test
+  // was working the whole time. Cheap to check, expensive to debug without it.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "types": ["node"]
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["node_modules"]
+}
