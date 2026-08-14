@@ -1076,7 +1076,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                     config,
                     `The PHP FastCGI worker exited immediately, so this site cannot serve PHP.${
                         why ? `\n\n${why}` : ''
-                    }\n\nServing a PHP app needs \`php-cgi\` on Genie's PATH — install PHP from Settings → Dev tools → Set up toolchain, then start the site again.`,
+                    }\n\nServing a PHP app needs \`php-cgi\` on Genie's PATH — add a PHP version in Settings → Toolchain → Languages, then start the site again.`,
                 );
             }
         }
