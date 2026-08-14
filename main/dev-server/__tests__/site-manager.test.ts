@@ -1137,7 +1137,10 @@ describe('service env injection (#234 P3)', () => {
             stop: async (id: string) => {
                 stopped.push(id);
             },
-            alive: async () => false,
+            // A started process STAYS UP — the ordinary case. (The fake used to say
+            // nothing was ever alive, which quietly modelled a machine where every
+            // worker dies; genie#206 is what happens when that is real.)
+            alive: async (id: string) => spawned.some((s) => s.siteId === id),
             readLog: async () => '',
         };
         const written: Array<{ siteId: string; content: string }> = [];
@@ -1195,6 +1198,65 @@ describe('service env injection (#234 P3)', () => {
         // Stopping the site tears down BOTH processes.
         await m.stop(SITE_ID);
         expect(stopped).toContain(SITE_ID);
+        expect(stopped).toContain(`${SITE_ID}-fcgi`);
+    });
+
+    it('FAILS the site when the php-cgi worker dies instantly, and says why (genie#206)', async () => {
+        // The owner's beta.249 report. `php-cgi` was not on PATH, and on Windows the
+        // command runs through a SHELL (it must — php/npm are `.cmd` shims), so the
+        // spawn SUCCEEDS: cmd.exe gets a pid, prints "'php-cgi' is not recognized",
+        // and exits. The old check only asked for a pid, so Genie brought Caddy up in
+        // front of a dead backend and reported "Serving." while every request 502'd.
+        //
+        // A pid is not proof it ran. The worker has to still be there a moment later,
+        // and when it is not the site must fail carrying the WORKER'S OWN output —
+        // that line is the whole diagnosis, and it lives in a log nothing else reads.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const spawned: string[] = [];
+        const stopped: string[] = [];
+        const hostSpawn = {
+            start: async (i: { siteId: string }) => {
+                spawned.push(i.siteId);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async (id: string) => {
+                stopped.push(id);
+            },
+            // The worker exited; nothing is alive.
+            alive: async () => false,
+            readLog: async () =>
+                "'php-cgi' is not recognized as an internal or external command,\noperable program or batch file.",
+        };
+        let nextPort = 5400;
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'moic',
+                genName: 'moic.acme.gen',
+                repo: 'moicsuite',
+                runMode: 'host',
+                kind: 'http',
+                enabled: true,
+                hostServe: { mode: 'php', root: 'public' },
+            },
+        };
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            probeReady: async () => true,
+            allocateFreePort: async () => (nextPort += 1),
+            caddyBin: '/opt/genie/caddy',
+            writeServeConfig: (siteId: string) => `/cfg/${siteId}.caddyfile`,
+        });
+
+        const status = await m.start('acme', SITE_ID);
+
+        expect(status.state).toBe('failed');
+        // The actual reason, verbatim from the worker — not "the site failed".
+        expect(status.error).toContain('php-cgi');
+        // ...and what to do about it.
+        expect(status.error).toMatch(/Dev tools|toolchain/i);
+        // Caddy was NEVER started in front of a backend that cannot answer.
+        expect(spawned).toEqual([`${SITE_ID}-fcgi`]);
+        // The dead worker is cleaned up rather than left tracked.
         expect(stopped).toContain(`${SITE_ID}-fcgi`);
     });
 

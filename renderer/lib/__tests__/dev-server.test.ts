@@ -21,6 +21,7 @@ import {
     sitePhaseBadge,
     sitePhaseLabel,
     siteReach,
+    siteRunLine,
     siteStatusLabel,
     siteStatusTone,
 } from '../dev-server';
@@ -452,5 +453,61 @@ describe('serviceVersionChoice', () => {
         const pg = svc();
         const redis = svc({ id: 'r7', engine: 'redis', version: '7', engineKey: 'redis-7' });
         expect(serviceVersionChoice(pg, [pg, redis])).toEqual({ contested: false });
+    });
+});
+
+/**
+ * WHAT THE CARD SAYS A SITE RUNS (genie#206).
+ *
+ * The card printed `site.serve ?? site.command` — the STORED argv. For a site
+ * Genie serves itself (`hostServe`), that argv is not what runs: Genie generates
+ * a Caddy (+ a php-cgi worker) at start time and never stores it. So a site
+ * switched from its own dev server to "Serve a PHP app" kept displaying its OLD
+ * command — the owner's card read `frankenphp php-server …` for a site that runs
+ * neither frankenphp nor that port. A card that describes a command the site does
+ * not run is worse than one that says nothing.
+ */
+describe('siteRunLine', () => {
+    const site = (over: Partial<DevSiteInfo> = {}): DevSiteInfo => ({
+        id: 's1',
+        name: 'ih',
+        genName: 'ih.gen',
+        repo: 'repos/impact-hub',
+        runMode: 'host',
+        kind: 'http',
+        enabled: true,
+        state: 'running',
+        ...over,
+    });
+
+    it('describes PHP serving instead of a stale stored command', () => {
+        const line = siteRunLine(
+            site({ command: ['frankenphp', 'php-server'], hostServe: { mode: 'php', root: 'public' } }),
+        );
+        expect(line).not.toContain('frankenphp');
+        expect(line).toMatch(/php/i);
+        // The root is the thing the user chose, so it has to appear.
+        expect(line).toContain('public');
+    });
+
+    it('describes static serving, and says when it is an SPA', () => {
+        expect(siteRunLine(site({ hostServe: { mode: 'static', root: 'dist', spa: true } }))).toMatch(
+            /dist/,
+        );
+        expect(siteRunLine(site({ hostServe: { mode: 'static', root: 'dist', spa: true } }))).toMatch(
+            /SPA|single-page/i,
+        );
+    });
+
+    it('still shows the real command for a site that runs its OWN dev server', () => {
+        expect(siteRunLine(site({ command: ['npm', 'run', 'dev'] }))).toBe('npm run dev');
+    });
+
+    it('prefers the legacy serve argv when there is no command', () => {
+        expect(siteRunLine(site({ serve: ['php', 'artisan', 'serve'] }))).toBe('php artisan serve');
+    });
+
+    it('says nothing rather than guessing when there is nothing to say', () => {
+        expect(siteRunLine(site())).toBeNull();
     });
 });

@@ -44,6 +44,7 @@ import {
     siteIsStarting,
     sitePhaseBadge,
     siteReach,
+    siteRunLine,
     siteStatusLabel,
     siteStatusTone,
 } from '../../lib/dev-server';
@@ -487,7 +488,10 @@ function SiteCard({
     const tone = siteStatusTone(view);
     const reach = siteReach(view);
     const starting = siteIsStarting(view);
-    const serve = view.serve ?? view.command;
+    // What the site actually RUNS. A Genie-SERVED site (hostServe) has no stored
+    // argv that means anything — Genie generates its Caddy at start — so this
+    // describes the serving instead of printing a stale command (genie#206).
+    const runLine = siteRunLine(view);
     // The streaming build/pull log while a site comes up, and the last build's
     // log on a failure — the single most common reason a site does not start.
     const buildLog = (starting || view.state === 'failed') && view.buildLog ? view.buildLog : null;
@@ -549,9 +553,9 @@ function SiteCard({
                 </div>
             )}
 
-            {serve && serve.length > 0 && (
+            {runLine && (
                 <Text size="xs" className="text-zinc-500">
-                    <Icon name="terminal" size="xs" /> <code>{serve.join(' ')}</code>
+                    <Icon name="terminal" size="xs" /> <code>{runLine}</code>
                 </Text>
             )}
 

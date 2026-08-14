@@ -399,6 +399,11 @@ function resolveServeRoot(cwd: string, rel: string): string | null {
  *  (this key) — so a distinct hostSpawn key lets the one-process-per-key registry
  *  manage the worker beside the Caddy with no registry changes. Matches SITE_ID_RE
  *  (`[A-Za-z0-9_-]+`) because a site id is an alnum hash. */
+/** How long a companion worker gets to fall over before we believe it started.
+ *  A shell that could not find its command exits in tens of milliseconds; a real
+ *  `php-cgi` is still there. Short enough not to be felt on a good start. */
+const WORKER_SETTLE_MS = 400;
+
 function fcgiSiteId(siteId: string): string {
     return `${siteId}-fcgi`;
 }
@@ -1035,8 +1040,9 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         // the SAME env (so PHP reaches the managed DB). If the worker will not start,
         // the site cannot serve, so fail before spawning a Caddy pointed at nothing.
         if (worker) {
+            const workerId = fcgiSiteId(siteId);
             const workerStarted = await hostSpawn.start({
-                siteId: fcgiSiteId(siteId),
+                siteId: workerId,
                 workspaceId,
                 command: worker,
                 cwd,
@@ -1048,6 +1054,29 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                     siteId,
                     config,
                     `The PHP FastCGI worker did not start: ${workerStarted.error}`,
+                );
+            }
+            // A PID IS NOT PROOF IT RAN (genie#206). On Windows the command goes
+            // through a SHELL — it has to, since php/npm are `.cmd` shims — so a
+            // MISSING `php-cgi` starts cmd.exe successfully, prints "'php-cgi' is
+            // not recognized", and exits. The start reports ok, the worker is dead,
+            // and Caddy then comes up in front of a backend that never answers:
+            // the site says "Serving." while every request 502s.
+            //
+            // So confirm it is still there a moment later, and when it is not, fail
+            // with the WORKER'S OWN OUTPUT — that log line is the entire diagnosis
+            // and it otherwise sits in a file nothing reads.
+            await new Promise((r) => setTimeout(r, WORKER_SETTLE_MS));
+            if (!(await hostSpawn.alive(workerId).catch(() => false))) {
+                const why = (await hostSpawn.readLog(workerId, 20).catch(() => '')).trim();
+                await hostSpawn.stop(workerId).catch(() => {});
+                return failed(
+                    workspaceId,
+                    siteId,
+                    config,
+                    `The PHP FastCGI worker exited immediately, so this site cannot serve PHP.${
+                        why ? `\n\n${why}` : ''
+                    }\n\nServing a PHP app needs \`php-cgi\` on Genie's PATH — install PHP from Settings → Dev tools → Set up toolchain, then start the site again.`,
                 );
             }
         }
@@ -1308,9 +1337,21 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             // MANAGED HOST-NATIVE (story #238): Genie owns the dev server process, so
             // its captured output IS available.
             if (entry.config.runMode === 'host') {
-                return deps.hostSpawn
-                    ? deps.hostSpawn.readLog(siteId, tail)
-                    : 'Host-native hosting is not available, so the log cannot be read.';
+                if (!deps.hostSpawn) {
+                    return 'Host-native hosting is not available, so the log cannot be read.';
+                }
+                const main = await deps.hostSpawn.readLog(siteId, tail);
+                // A PHP site is TWO processes, and the interesting failures happen in
+                // the one nobody was showing (genie#206): the front Caddy logs a
+                // tidy 502 while the FastCGI worker's log holds the actual reason
+                // ("'php-cgi' is not recognized"). Show both, labelled.
+                if (entry.config.hostServe?.mode !== 'php') return main;
+                const workerLog = (await deps.hostSpawn
+                    .readLog(fcgiSiteId(siteId), tail)
+                    .catch(() => '')).trim();
+                return workerLog
+                    ? `${main}\n\n--- PHP FastCGI worker ---\n${workerLog}`
+                    : main;
             }
             // An EXTERNAL host-native site (hostPort) has no container and no process
             // Genie owns: its output is the user's own dev server log.

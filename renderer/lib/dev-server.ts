@@ -445,3 +445,29 @@ export function serviceVersionChoice(
         ...(active && active.id !== service.id ? { activeVersion: active.version } : {}),
     };
 }
+
+/**
+ * PURE. What the card should say a site actually RUNS (genie#206).
+ *
+ * The card used to print `serve ?? command` — the STORED argv. For a site GENIE
+ * serves (`hostServe`), that argv is not what runs and may not even exist:
+ * Genie generates a Caddy (plus a php-cgi worker) at start time and never stores
+ * it. So a site switched from its own dev server to "Serve a PHP app" went on
+ * displaying its OLD command — the owner's card read `frankenphp php-server
+ * --listen 0.0.0.0:8080` for a site running neither frankenphp nor that port.
+ *
+ * A card describing a command the site does not run is worse than one that says
+ * nothing: it sends someone debugging the wrong process. So a served site
+ * describes the SERVING instead, in the terms the Edit dialog uses.
+ */
+export function siteRunLine(site: DevSiteInfo): string | null {
+    const serve = site.hostServe;
+    if (serve) {
+        const root = serve.root || '.';
+        return serve.mode === 'php'
+            ? `Genie serves ${root}/ as a PHP app (FastCGI worker)`
+            : `Genie serves ${root}/ as static files${serve.spa ? ' (SPA fallback)' : ''}`;
+    }
+    const argv = site.command ?? site.serve;
+    return argv && argv.length > 0 ? argv.join(' ') : null;
+}
