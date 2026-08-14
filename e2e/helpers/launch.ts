@@ -145,7 +145,7 @@ export interface E2ESeedSite {
     ready?: boolean;
     port?: number;
     hostPort?: number;
-    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean };
+    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean; version?: string };
     browserExposed?: boolean;
 }
 
