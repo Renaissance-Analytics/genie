@@ -142,6 +142,24 @@ export function engineCompanionExes(tool: LanguageTool, platform: string): strin
     return (COMPANION_BINS[tool] ?? []).map((b) => `${b}${exeSuffix(platform)}`);
 }
 
+/**
+ * The FILE NAME of one of an engine's binaries on this platform — the primary or
+ * a companion — or `undefined` for a name this install is not known to hold.
+ *
+ * The scan proves the primary and every companion are present before it calls a
+ * directory an install ({@link engineCompanionExes}); nothing else has been
+ * proven, so nothing else may be spawned from it. That refusal is why a caller
+ * cannot ask for `php-fpm` and get a path that does not exist.
+ */
+export function engineBinFileName(
+    tool: LanguageTool,
+    bin: string,
+    platform: string,
+): string | undefined {
+    const known = [PRIMARY_BIN[tool], ...(COMPANION_BINS[tool] ?? [])];
+    return known.includes(bin) ? `${bin}${exeSuffix(platform)}` : undefined;
+}
+
 // --- paths (pure, platform-parameterised so a win32 layout is testable on CI) ---
 
 const sepFor = (platform: string): string => (platform === 'win32' ? '\\' : '/');
