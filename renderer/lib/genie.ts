@@ -2313,7 +2313,7 @@ export interface GenieApi {
          *  machine defaults, what this release could still install, and the
          *  sites that consume each language. A pure read — it lists directories
          *  and never downloads. */
-        toolchainInstalls: () => Promise<ToolchainInstallsInfo>;
+        toolchainInstalls: (force?: boolean) => Promise<ToolchainInstallsInfo>;
         /** Make a GENIE-managed version the machine default. Sites that pinned
          *  nothing follow it, and change on their next start. */
         toolchainSetDefault: (

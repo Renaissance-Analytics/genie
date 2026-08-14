@@ -3851,9 +3851,11 @@ export function ToolchainSection() {
         null,
     );
 
-    const refreshInstalls = useCallback(() => {
+    /** `force` re-reads the machine now instead of reusing main’s cached scan
+     *  (which spawns a PATH lookup per language and walks install directories). */
+    const refreshInstalls = useCallback((force = false) => {
         void api()
-            .devServer.toolchainInstalls()
+            .devServer.toolchainInstalls(force)
             .then(setInfo)
             .catch(() =>
                 setInfo({ installs: [], defaults: {}, addable: {}, sites: [], root: '' }),
@@ -3895,7 +3897,7 @@ export function ToolchainSection() {
             setError(e instanceof Error ? e.message : String(e));
         } finally {
             setBusy(null);
-            refreshInstalls();
+            refreshInstalls(true);
         }
     };
 
@@ -3912,7 +3914,7 @@ export function ToolchainSection() {
             setError(e instanceof Error ? e.message : String(e));
         } finally {
             setBusy(null);
-            refreshInstalls();
+            refreshInstalls(true);
         }
     };
 
@@ -3943,7 +3945,7 @@ export function ToolchainSection() {
             setError(e instanceof Error ? e.message : String(e));
         } finally {
             setBusy(null);
-            refreshInstalls();
+            refreshInstalls(true);
         }
     };
 
@@ -4073,7 +4075,7 @@ export function ToolchainSection() {
                     icon="refresh-cw"
                     disabled={busy !== null || toolBusy !== null}
                     onClick={() => {
-                        refreshInstalls();
+                        refreshInstalls(true);
                         refreshUpdates(true);
                     }}
                     title="Re-read this machine's toolchain and re-query the package managers now, instead of reusing the last answer."
@@ -4096,7 +4098,9 @@ export function ToolchainSection() {
                 open={wizardOpen}
                 onClose={() => {
                     setWizardOpen(false);
-                    refreshInstalls();
+                    // It may have installed something — re-read rather than
+                    // leaving the page showing the pre-setup machine.
+                    refreshInstalls(true);
                     refreshUpdates(true);
                 }}
             />

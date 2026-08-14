@@ -71,6 +71,38 @@ export interface ScanToolchainOptions {
     resolveOnPath(bin: string): Promise<string | undefined>;
 }
 
+// --- scan freshness ---------------------------------------------------------
+
+/**
+ * How long a scan stays good. A toolchain changes when someone installs
+ * something, which is minutes-to-months apart — but `devServerChanged` fires on
+ * every site start, stop and reconfigure, and each refresh spawns a
+ * `where`/`which` per language and walks Genie's install directories. Long
+ * enough that a busy workspace is not a process storm; short enough that an
+ * install done outside Genie shows up without hunting for a button.
+ */
+const SCAN_TTL_MS = 60_000;
+
+/**
+ * Should the toolchain be re-scanned, or is the last answer still good?
+ *
+ * Not a poll — nothing runs on a timer. A page open (or an explicit Check
+ * again) decides whether THIS moment does the work. Same shape as
+ * `shouldCheckToolchainUpdates`, deliberately: two caches that behave
+ * differently are two caches someone has to hold in their head.
+ */
+export function shouldRescanToolchain(opts: {
+    lastScanAt: number | null;
+    now: number;
+    force?: boolean;
+}): boolean {
+    if (opts.force || opts.lastScanAt === null) return true;
+    const age = opts.now - opts.lastScanAt;
+    // A backwards clock (a resume, an NTP correction) would otherwise pin the
+    // cache as "fresh" for as long as the jump lasted.
+    return age < 0 || age >= SCAN_TTL_MS;
+}
+
 // --- pure parsing -----------------------------------------------------------
 
 /**

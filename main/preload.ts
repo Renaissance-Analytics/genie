@@ -726,7 +726,7 @@ const api = {
          *  own under `<userData>/toolchain` plus the ones Herd / XAMPP / nvm /
          *  the system left, the latter for AWARENESS only. A pure read: it lists
          *  directories and never downloads. */
-        toolchainInstalls: () => ipcRenderer.invoke('toolchain:installs'),
+        toolchainInstalls: (force?: boolean) => ipcRenderer.invoke('toolchain:installs', force),
         /** Make a Genie-managed version the MACHINE default. Unpinned sites
          *  follow it, so main names which ones before this is called. */
         toolchainSetDefault: (tool: string, version: string) =>

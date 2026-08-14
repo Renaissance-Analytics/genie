@@ -5,6 +5,7 @@ import {
     parseHerdPhpDir,
     parseNvmNodeDir,
     scanToolchain,
+    shouldRescanToolchain,
     type ToolchainFs,
 } from '../toolchain-scan';
 
@@ -38,6 +39,32 @@ function fakeFs(tree: Record<string, string[] | null>): ToolchainFs & { sizes: R
 }
 
 const NO_PROBE = async () => undefined;
+
+describe('when a re-scan is worth doing', () => {
+    // A scan spawns a `where`/`which` per language and walks Genie's install
+    // directories. `devServerChanged` fires on every site start, stop and
+    // reconfigure, so refreshing on each one turns a settings page into a
+    // process storm for an answer that changes when someone installs something.
+    it('scans when nothing has been scanned yet', () => {
+        expect(shouldRescanToolchain({ lastScanAt: null, now: 1_000 })).toBe(true);
+    });
+
+    it('reuses a fresh answer', () => {
+        expect(shouldRescanToolchain({ lastScanAt: 1_000, now: 3_000 })).toBe(false);
+    });
+
+    it('re-scans once the answer is stale', () => {
+        expect(shouldRescanToolchain({ lastScanAt: 1_000, now: 1_000 + 60_000 })).toBe(true);
+    });
+
+    it('always re-scans when explicitly asked — that is what Check again is for', () => {
+        expect(shouldRescanToolchain({ lastScanAt: 1_000, now: 1_100, force: true })).toBe(true);
+    });
+
+    it('re-scans when the clock jumped backwards rather than trusting the cache forever', () => {
+        expect(shouldRescanToolchain({ lastScanAt: 9_000, now: 1_000 })).toBe(true);
+    });
+});
 
 describe('parsing a foreign version out of a directory name', () => {
     it('reads Herd\u2019s phpNN layout', () => {

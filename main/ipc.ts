@@ -765,7 +765,14 @@ export function registerIpcHandlers(): void {
     // The read is PURE: it lists directories and, only where a directory name
     // cannot name its version, runs `--version`. Opening the page never
     // downloads anything.
-    ipcMain.handle('toolchain:installs', () => toolchainInstallsInfo(toolchainManagerDeps()));
+    // CACHED, like the update scan above and for the same reason: a scan spawns a
+    // `where`/`which` per language and walks Genie's install directories, and
+    // `devServerChanged` fires on every site start and stop. Not a poll — an open
+    // (or an explicit Check again, which passes `force`) decides whether THIS
+    // moment does the work. Every write drops the cache.
+    ipcMain.handle('toolchain:installs', (_e, force?: boolean) =>
+        toolchainInstallsInfo(toolchainManagerDeps(), force ? { force: true } : {}),
+    );
 
     // Point the machine at a different version. Main re-scans and accepts only a
     // GENIE-managed install that exists right now — the renderer's lever is

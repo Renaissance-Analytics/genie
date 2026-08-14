@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { defaultCommandRunner } from './seams';
 import { download } from './toolchain-primitives';
 import { parseToolVersion } from './toolchain-detect';
-import { scanToolchain, type ToolchainFs } from './toolchain-scan';
+import { scanToolchain, shouldRescanToolchain, type ToolchainFs } from './toolchain-scan';
 import {
     LANGUAGE_TOOLS,
     addableRecipes,
@@ -189,6 +189,25 @@ export interface ToolchainManagerDeps {
 }
 
 /**
+ * The last scan, reused while it is fresh.
+ *
+ * The scan is the expensive half — a `where`/`which` per language, a version
+ * probe for anything a directory name cannot name, and a size walk per
+ * Genie-owned install. `devServerChanged` fires on every site start and stop, so
+ * without this a busy workspace would re-run all of it several times a minute
+ * to answer a question that changes when somebody installs something. Every
+ * WRITE below drops it, so the page never renders a version it just deleted.
+ */
+let scanCache: { at: number; installs: EngineInstall[] } | null = null;
+
+function invalidateToolchainScan(): void {
+    scanCache = null;
+}
+
+/** Exported for tests + for anything that changes the toolchain out of band. */
+export { invalidateToolchainScan };
+
+/**
  * Everything the Toolchain page renders from.
  *
  * `defaults` comes back RESOLVED, not raw: a stored default whose version was
@@ -197,18 +216,31 @@ export interface ToolchainManagerDeps {
  */
 export async function toolchainInstallsInfo(
     deps: ToolchainManagerDeps,
+    opts: { force?: boolean } = {},
 ): Promise<ToolchainInstallsInfo> {
     const root = toolchainRoot();
     const ctx = machineContext();
-    const installs = await scanToolchain({
-        fs: realFs,
-        platform: process.platform,
-        root,
-        home: homedir(),
-        env: process.env,
-        probeVersion: probeEngineVersion,
-        resolveOnPath,
-    });
+    let installs: EngineInstall[];
+    if (
+        shouldRescanToolchain({
+            lastScanAt: scanCache?.at ?? null,
+            now: Date.now(),
+            ...(opts.force ? { force: true } : {}),
+        })
+    ) {
+        installs = await scanToolchain({
+            fs: realFs,
+            platform: process.platform,
+            root,
+            home: homedir(),
+            env: process.env,
+            probeVersion: probeEngineVersion,
+            resolveOnPath,
+        });
+        scanCache = { at: Date.now(), installs };
+    } else {
+        installs = scanCache!.installs;
+    }
 
     const stored = parseToolchainDefaults(deps.readDefaults());
     const defaults: ToolchainDefaults = {};
@@ -243,7 +275,7 @@ export async function setToolchainDefault(
     tool: LanguageTool,
     version: string,
 ): Promise<ToolchainVersionResult> {
-    const info = await toolchainInstallsInfo(deps);
+    const info = await toolchainInstallsInfo(deps, { force: true });
     const match = info.installs.find(
         (i) => i.tool === tool && i.version === version && i.source === 'genie',
     );
@@ -268,6 +300,8 @@ export async function addToolchainVersion(
     if (!plan.ok) return { ok: false, error: plan.reason };
 
     const result = await installEngineVersion(plan, versionInstallEffects(tool));
+    // The disk changed either way: a failed install still deleted its directory.
+    invalidateToolchainScan();
     if (!result.ok) return { ok: false, error: result.error };
 
     // First managed version of a language? It becomes the default, because a
@@ -285,7 +319,7 @@ export async function removeToolchainVersion(
     tool: LanguageTool,
     version: string,
 ): Promise<ToolchainVersionResult> {
-    const info = await toolchainInstallsInfo(deps);
+    const info = await toolchainInstallsInfo(deps, { force: true });
     const target = info.installs.find((i) => i.tool === tool && i.version === version);
     if (!target) {
         return { ok: false, error: `Genie has no ${tool} ${version} to remove.` };
@@ -299,6 +333,8 @@ export async function removeToolchainVersion(
         await rm(plan.dir, { recursive: true, force: true });
     } catch (e) {
         return { ok: false, error: `Could not delete ${plan.dir}: ${String(e)}` };
+    } finally {
+        invalidateToolchainScan();
     }
 
     if (plan.nextDefault !== undefined) {
