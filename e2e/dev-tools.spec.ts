@@ -90,7 +90,8 @@ test('Remove asks first, names the cost, and then actually removes', async () =>
     await expect(risk).toContainText('toolchain\\php\\8.3.33');
     await expect(risk).toContainText('90 MB');
 
-    await page.getByRole('button', { name: 'Remove', exact: true }).last().click();
+    // Scoped to the DIALOG, not the row that opened it — both say "Remove".
+    await page.locator('.ws-confirm').getByRole('button', { name: 'Remove', exact: true }).click();
 
     await expect
         .poll(async () => (await readHostingState(app))?.calls.toolchainRemove ?? [])

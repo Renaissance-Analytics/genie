@@ -3583,15 +3583,19 @@ function ToolUpdateList({
     busy,
     onUpdate,
     empty,
+    testId,
 }: {
     rows: ToolUpdateRow[];
     busy: HostToolName | null;
     onUpdate: (name: HostToolName) => void;
     empty: string;
+    /** Distinct per tab — both tabs render this list, and two identical ids in
+     *  one document make a test assert about whichever it found first. */
+    testId: string;
 }) {
     if (rows.length === 0) return <div className="set-note">{empty}</div>;
     return (
-        <div className="ws-tools" data-testid="dev-tools">
+        <div className="ws-tools" data-testid={testId}>
             {rows.map((row) => {
                 const badge = toolToneBadge(row.tone);
                 return (
@@ -4032,6 +4036,7 @@ export function ToolchainSection() {
                                 busy={toolBusy}
                                 onUpdate={(name) => void update(name)}
                                 empty="No dev tools detected on this machine yet — the guided setup installs them."
+                                testId="dev-tools"
                             />
                         )}
                     </Tabs.Panel>
@@ -4050,6 +4055,7 @@ export function ToolchainSection() {
                                 busy={toolBusy}
                                 onUpdate={(name) => void update(name)}
                                 empty="No agent CLIs on this machine yet."
+                                testId="agent-clis"
                             />
                         )}
                     </Tabs.Panel>
