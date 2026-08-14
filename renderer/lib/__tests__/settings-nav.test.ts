@@ -25,6 +25,29 @@ import type { Settings } from '../genie';
 
 const allIds = (): SectionId[] => NAV_GROUPS.flatMap((g) => g.items.map((i) => i.id));
 
+describe('the Toolchain page is TOP-LEVEL, not buried in Hosting', () => {
+    it('has its own nav item', () => {
+        expect(allIds()).toContain('toolchain');
+    });
+
+    it('sits beside the Hosting Manager, not inside it', () => {
+        const flat = NAV_GROUPS.flatMap((g) => g.items.map((i) => i.id));
+        const toolchain = flat.indexOf('toolchain');
+        const hosting = flat.indexOf('dev-server');
+        expect(toolchain).toBeGreaterThanOrEqual(0);
+        expect(hosting).toBeGreaterThanOrEqual(0);
+        expect(toolchain).not.toBe(hosting);
+        // Same GROUP as Hosting — the toolchain is what hosting consumes, so
+        // they belong together in the sidebar even though they are two pages.
+        const group = NAV_GROUPS.find((g) => g.items.some((i) => i.id === 'toolchain'))!;
+        expect(group.items.map((i) => i.id)).toContain('dev-server');
+    });
+
+    it('is hidden in a remote window — it configures THIS machine', () => {
+        expect(isSectionVisible('toolchain', true)).toBe(false);
+    });
+});
+
 describe('local (unrestricted) Settings', () => {
     it('shows the full nav unchanged', () => {
         expect(filterNavGroups(NAV_GROUPS, false)).toBe(NAV_GROUPS);
@@ -156,8 +179,26 @@ describe('runtime-owned (Settings-never-writes) classification', () => {
                 'last_terminal_type',
                 'layout_json',
                 'view_state_json',
+                // The machine's default language versions. Written by the
+                // Toolchain page's OWN ipc (a targeted patch), never by the
+                // Settings form — so the form's stale whole-object Save must
+                // not carry an old value back over it.
+                'toolchain_defaults',
             ].sort(),
         );
+    });
+
+    it('never lets a Settings Save revert the machine’s toolchain defaults', () => {
+        // The exact failure this guards: open Settings, switch the default PHP
+        // on the Toolchain page, click Save on some unrelated row — and the
+        // pre-switch snapshot writes the old default back, silently moving every
+        // unpinned site to the wrong runtime on its next start.
+        const out = withoutRuntimeOwnedSettings({
+            max_views: '4',
+            toolchain_defaults: '{"php":"8.2.33"}',
+        });
+        expect('toolchain_defaults' in out).toBe(false);
+        expect(out).toEqual({ max_views: '4' });
     });
 
     it('classifies the master/grid keys as runtime-owned, ordinary prefs as not', () => {

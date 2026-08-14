@@ -172,6 +172,42 @@ import type { ToolUpdate } from './dev-server/toolchain-updates';
 let toolchainUpdateCache: { at: number | null; rows: ToolUpdate[] } = { at: null, rows: [] };
 
 /**
+ * The Toolchain page's machine bindings.
+ *
+ * Injected rather than imported inside `toolchain-manager.ts` so the manager
+ * stays free of the settings store and the site manager, and so the one thing
+ * worth being careful about — that the default is written as a TARGETED patch —
+ * is visible here beside the handler that does it.
+ */
+function toolchainManagerDeps(): ToolchainManagerDeps {
+    return {
+        readDefaults: () => getAllSettings().toolchain_defaults,
+        writeDefaults: (raw) => {
+            setSettings({ toolchain_defaults: raw });
+        },
+        // Which sites consume which language, across EVERY workspace — the input
+        // to "changing the default moves these sites". A site's `stack` is what
+        // Genie detected it is; `static` sites run no engine, so they are not
+        // moved by a default change and are left out.
+        listSiteUsage: (): ToolchainSiteUsage[] => {
+            const manager = devSiteManager();
+            if (!manager) return [];
+            try {
+                return manager
+                    .list()
+                    .flatMap((row) =>
+                        isLanguageTool(row.stack)
+                            ? [{ genName: row.genName, tool: row.stack }]
+                            : [],
+                    );
+            } catch {
+                return [];
+            }
+        },
+    };
+}
+
+/**
  * What a toolchain update would walk into RIGHT NOW.
  *
  * Read fresh at the moment of the click, never cached: the whole point is the
@@ -210,6 +246,16 @@ import type { HostToolName } from './dev-server/toolchain-detect';
 import { createPerformInstall } from './dev-server/toolchain-perform';
 import { createToolchainPerformDeps } from './dev-server/toolchain-effects';
 import { createToolchainPrimitives } from './dev-server/toolchain-primitives';
+import {
+    addToolchainVersion,
+    removeToolchainVersion,
+    setToolchainDefault,
+    toolchainInstallsInfo,
+    type ToolchainManagerDeps,
+    type ToolchainSiteUsage,
+} from './dev-server/toolchain-manager';
+import { isLanguageTool } from './dev-server/toolchain-versions';
+import { devSiteManager } from './dev-server/site-manager';
 import type { EngineActionRequest } from './dev-server/services/service-manager';
 import type { ManageServiceRequest, ManageSiteRequest } from './mcp/protocol';
 import { devServerGenSites } from './dev-server/site-manager';
@@ -700,6 +746,51 @@ export function registerIpcHandlers(): void {
         // the next read reports the version we actually installed.
         toolchainUpdateCache = { at: null, rows: [] };
         return result;
+    });
+
+    // --- the Toolchain page: multi-version languages ------------------------
+    //
+    // Genie OWNS its toolchain. It DETECTS what other installers (Herd, XAMPP,
+    // nvm, a system package) put on the machine — so the machine is legible —
+    // but it INSTALLS every language, and its config, under
+    // `<userData>/toolchain/<lang>/<version>`, and only those are selectable.
+    // A borrowed toolchain is one another app can upgrade or reconfigure
+    // underneath a running site.
+    //
+    // The read is PURE: it lists directories and, only where a directory name
+    // cannot name its version, runs `--version`. Opening the page never
+    // downloads anything.
+    ipcMain.handle('toolchain:installs', () => toolchainInstallsInfo(toolchainManagerDeps()));
+
+    // Point the machine at a different version. Main re-scans and accepts only a
+    // GENIE-managed install that exists right now — the renderer's lever is
+    // WHICH known version, never a path. The write is a TARGETED settings patch
+    // (`toolchain_defaults` is in RUNTIME_OWNED_SETTINGS_KEYS) so the Settings
+    // form's whole-object Save cannot carry a stale default back over it.
+    ipcMain.handle('toolchain:set-default', async (_e, tool: string, version: string) => {
+        if (!isLanguageTool(tool)) return { ok: false, error: `Unknown language ${tool}.` };
+        const res = await setToolchainDefault(toolchainManagerDeps(), tool, String(version));
+        if (res.ok) broadcastDevServerChanged();
+        return res;
+    });
+
+    // Install one version. The version must be one THIS RELEASE has a recipe for
+    // (see TOOLCHAIN_RECIPES) — there is no free-text version, so a renderer
+    // cannot name an arbitrary download.
+    ipcMain.handle('toolchain:add-version', async (_e, tool: string, version: string) => {
+        if (!isLanguageTool(tool)) return { ok: false, error: `Unknown language ${tool}.` };
+        const res = await addToolchainVersion(toolchainManagerDeps(), tool, String(version));
+        if (res.ok) broadcastDevServerChanged();
+        return res;
+    });
+
+    // Delete a version Genie installed. Refused for anything Genie does not own
+    // — deleting Herd's php would be Genie breaking another app's install.
+    ipcMain.handle('toolchain:remove-version', async (_e, tool: string, version: string) => {
+        if (!isLanguageTool(tool)) return { ok: false, error: `Unknown language ${tool}.` };
+        const res = await removeToolchainVersion(toolchainManagerDeps(), tool, String(version));
+        if (res.ok) broadcastDevServerChanged();
+        return res;
     });
 
     // The repos a site can be created against, so the picker offers them rather

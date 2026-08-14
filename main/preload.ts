@@ -721,6 +721,21 @@ const api = {
          *  known tool. Per-tool progress arrives on `on.toolchainProgress`. */
         toolchainUpdate: (tool: string, confirmed?: boolean) =>
             ipcRenderer.invoke('toolchain:update', tool, confirmed),
+        /** The Toolchain page: every language version on this machine — Genie's
+         *  own under `<userData>/toolchain` plus the ones Herd / XAMPP / nvm /
+         *  the system left, the latter for AWARENESS only. A pure read: it lists
+         *  directories and never downloads. */
+        toolchainInstalls: () => ipcRenderer.invoke('toolchain:installs'),
+        /** Make a Genie-managed version the MACHINE default. Unpinned sites
+         *  follow it, so main names which ones before this is called. */
+        toolchainSetDefault: (tool: string, version: string) =>
+            ipcRenderer.invoke('toolchain:set-default', tool, version),
+        /** Install one version Genie has a recipe for. No free-text versions. */
+        toolchainAddVersion: (tool: string, version: string) =>
+            ipcRenderer.invoke('toolchain:add-version', tool, version),
+        /** Delete a version GENIE installed. Refused for anyone else's. */
+        toolchainRemoveVersion: (tool: string, version: string) =>
+            ipcRenderer.invoke('toolchain:remove-version', tool, version),
         /** The MACHINE's Dev Server: which runtime is driving, what the dev base
          *  image provides, and every shared service engine with its holders.
          *  Machine-level because an engine is shared across every workspace on

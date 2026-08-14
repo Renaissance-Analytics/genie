@@ -15,6 +15,7 @@ export type SectionId =
     | 'agent-mcp'
     | 'plugins'
     | 'mobile'
+    | 'toolchain'
     | 'dev-server'
     | 'connections'
     | 'devices'
@@ -50,6 +51,16 @@ export const NAV_GROUPS: NavGroup[] = [
             { id: 'agent-mcp', label: 'Agent MCP', icon: 'plug' },
             { id: 'plugins', label: 'Plugins', icon: 'puzzle' },
             { id: 'mobile', label: 'Work Mode', icon: 'monitor' },
+            // THIS MACHINE's toolchain: the language versions Genie installs and
+            // owns (php/node/python/go/rust, many side by side, one default),
+            // the single-version dev tools, and the agent CLIs. Its own page and
+            // NOT part of the Hosting Manager below: the toolchain is the
+            // machine's concern and hosting merely CONSUMES it. They shared a
+            // surface once, and the result was a chip row describing the
+            // container dev-base IMAGE sitting next to rows describing this
+            // computer — which is most of why the page read as "no UX for my
+            // toolchain at all".
+            { id: 'toolchain', label: 'Toolchain', icon: 'wrench' },
             // The MACHINE's half of the Dev Server (#234): which container
             // runtime is driving, what the dev-base image provides, which
             // shared service engines are installed and running — and the Genie
@@ -163,6 +174,13 @@ export const RUNTIME_OWNED_SETTINGS_KEYS = [
     // terminal (last-used type). Like the panel-layout keys it must NOT be
     // clobbered by the Settings window's stale-snapshot Save.
     'last_terminal_type',
+    // The MACHINE's default language version per tool, written by the Toolchain
+    // page through its own `toolchain:set-default` ipc (a targeted patch, after
+    // main has resolved which sites it moves). Same hazard as the panel keys and
+    // a worse consequence: a stale whole-object Save would put the OLD default
+    // back and quietly move every unpinned site to a different runtime on its
+    // next start.
+    'toolchain_defaults',
 ] as const satisfies readonly (keyof Settings)[];
 
 export type RuntimeOwnedSettingKey = (typeof RUNTIME_OWNED_SETTINGS_KEYS)[number];

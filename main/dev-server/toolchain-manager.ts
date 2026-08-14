@@ -1,0 +1,423 @@
+import { homedir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
+import { cp, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { defaultCommandRunner } from './seams';
+import { download } from './toolchain-primitives';
+import { parseToolVersion } from './toolchain-detect';
+import { scanToolchain, type ToolchainFs } from './toolchain-scan';
+import {
+    LANGUAGE_TOOLS,
+    addableRecipes,
+    defaultVersionFor,
+    engineVersionArgv,
+    genieToolchainRoot,
+    parseToolchainDefaults,
+    serializeToolchainDefaults,
+    type EngineInstall,
+    type LanguageTool,
+    type RecipeContext,
+    type ToolchainDefaults,
+    type VersionArtifact,
+} from './toolchain-versions';
+import {
+    installEngineVersion,
+    planVersionInstall,
+    planVersionRemoval,
+    type VersionInstallEffects,
+} from './toolchain-version-install';
+
+/**
+ * The COMPOSITION ROOT for the Toolchain page — the one module that touches a
+ * real disk, a real download and a real process, wiring the tested decision
+ * modules to the machine.
+ *
+ * Everything with a judgement in it lives above this file and is unit-tested:
+ * `toolchain-versions.ts` (the model, the recipes, php.ini),
+ * `toolchain-scan.ts` (what counts as an install), and
+ * `toolchain-version-install.ts` (the plan, and the never-report-a-half-install
+ * rule). What is left here is deliberately dull: list a directory, unpack an
+ * archive, run a binary, move a folder.
+ *
+ * Reads NEVER install. Opening the Toolchain page lists directories and — only
+ * where a directory name cannot name its version — runs `--version`. It does
+ * not touch the network, so the page cannot make a machine download anything by
+ * being looked at (the same rule the Hosting Manager page follows).
+ */
+
+// --- machine facts ----------------------------------------------------------
+
+/** Genie's data dir. Electron is resolved lazily so this module still loads
+ *  headless and in tests (mirrors `toolchain-primitives.ts`). */
+function userDataDir(): string {
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        return (require('electron') as typeof import('electron')).app.getPath('userData');
+    } catch {
+        return join(homedir(), '.genie');
+    }
+}
+
+function machineContext(): RecipeContext {
+    return { os: process.platform, arch: process.arch };
+}
+
+export function toolchainRoot(): string {
+    return genieToolchainRoot(userDataDir(), process.platform);
+}
+
+// --- the real filesystem seam ----------------------------------------------
+
+/** How deep a size walk goes. A language install is 3–6 levels; the cap exists
+ *  so a symlink loop or a pathological tree cannot hang a settings page. */
+const SIZE_WALK_MAX_DEPTH = 12;
+
+const realFs: ToolchainFs = {
+    async listDir(dir) {
+        try {
+            return await readdir(dir);
+        } catch {
+            // A missing directory is the ordinary "not installed" state.
+            return [];
+        }
+    },
+    async isFile(path) {
+        try {
+            return (await stat(path)).isFile();
+        } catch {
+            return false;
+        }
+    },
+    async dirSize(dir) {
+        return walkSize(dir, 0);
+    },
+};
+
+/**
+ * Total bytes under a directory.
+ *
+ * Called for GENIE-owned directories only. Walking Herd's or a system prefix to
+ * put a number beside a row Genie cannot delete would be a slow answer to a
+ * question nobody asked — and on a system prefix it is a permission error
+ * waiting to happen. `withFileTypes` keeps it to one syscall per entry.
+ */
+async function walkSize(dir: string, depth: number): Promise<number> {
+    if (depth > SIZE_WALK_MAX_DEPTH) return 0;
+    let total = 0;
+    let entries;
+    try {
+        entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+        return 0;
+    }
+    for (const entry of entries) {
+        const full = join(dir, entry.name);
+        // Never follow a link: a size walk is not a reason to leave the tree.
+        if (entry.isSymbolicLink()) continue;
+        if (entry.isDirectory()) {
+            total += await walkSize(full, depth + 1);
+        } else if (entry.isFile()) {
+            try {
+                total += (await stat(full)).size;
+            } catch {
+                /* vanished mid-walk */
+            }
+        }
+    }
+    return total;
+}
+
+// --- probing ----------------------------------------------------------------
+
+/** Ask an engine binary for its version. The exe is a REAL executable (the
+ *  scanner proved it), so the no-shell runner is the right one. */
+async function probeEngineVersion(
+    tool: LanguageTool,
+    exe: string,
+): Promise<string | undefined> {
+    try {
+        const res = await defaultCommandRunner.run(exe, engineVersionArgv(tool), {
+            timeoutMs: 10_000,
+        });
+        if (res.code !== 0) return undefined;
+        return parseToolVersion(res.stdout || res.stderr);
+    } catch {
+        return undefined;
+    }
+}
+
+/** Resolve a bare bin name against PATH. `where`/`which` may print several
+ *  lines — the FIRST is the one PATH would actually run. */
+async function resolveOnPath(bin: string): Promise<string | undefined> {
+    try {
+        const isWin = process.platform === 'win32';
+        const res = await defaultCommandRunner.run(isWin ? 'where' : 'which', [bin], {
+            timeoutMs: 10_000,
+        });
+        if (res.code !== 0) return undefined;
+        return res.stdout.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
+    } catch {
+        return undefined;
+    }
+}
+
+// --- the read ---------------------------------------------------------------
+
+/** A site that consumes a language, for the default-change sentence. */
+export interface ToolchainSiteUsage {
+    genName: string;
+    tool: LanguageTool;
+    /** Set when the site PINNED a version (so it does not follow the default). */
+    version?: string;
+}
+
+export interface ToolchainInstallsInfo {
+    installs: EngineInstall[];
+    defaults: Partial<Record<LanguageTool, string>>;
+    addable: Partial<Record<LanguageTool, string[]>>;
+    sites: ToolchainSiteUsage[];
+    root: string;
+}
+
+export interface ToolchainManagerDeps {
+    /** Read the persisted `toolchain_defaults` blob. */
+    readDefaults(): string | undefined;
+    /** Persist it. A TARGETED patch — never the Settings form's whole object. */
+    writeDefaults(raw: string): void;
+    /** Sites that consume a language, across every workspace. */
+    listSiteUsage(): ToolchainSiteUsage[];
+}
+
+/**
+ * Everything the Toolchain page renders from.
+ *
+ * `defaults` comes back RESOLVED, not raw: a stored default whose version was
+ * removed — or which points at a foreign install — is dropped in favour of the
+ * newest Genie install, so the page never shows a default that nothing runs on.
+ */
+export async function toolchainInstallsInfo(
+    deps: ToolchainManagerDeps,
+): Promise<ToolchainInstallsInfo> {
+    const root = toolchainRoot();
+    const ctx = machineContext();
+    const installs = await scanToolchain({
+        fs: realFs,
+        platform: process.platform,
+        root,
+        home: homedir(),
+        env: process.env,
+        probeVersion: probeEngineVersion,
+        resolveOnPath,
+    });
+
+    const stored = parseToolchainDefaults(deps.readDefaults());
+    const defaults: ToolchainDefaults = {};
+    const addable: Partial<Record<LanguageTool, string[]>> = {};
+    for (const tool of LANGUAGE_TOOLS) {
+        const resolved = defaultVersionFor(tool, installs, stored);
+        if (resolved) defaults[tool] = resolved;
+        addable[tool] = addableRecipes(tool, ctx, installs).map((r) => r.version);
+    }
+
+    return { installs, defaults, addable, sites: deps.listSiteUsage(), root };
+}
+
+// --- the writes -------------------------------------------------------------
+
+export interface ToolchainVersionResult {
+    ok: boolean;
+    error?: string;
+    nextDefault?: string | null;
+    freedBytes?: number;
+}
+
+/**
+ * Make a version the machine default.
+ *
+ * Refused unless it is a GENIE-owned install that exists right now — the whole
+ * point of the model is that a default names something Genie controls, and a
+ * renderer must not be able to point the machine at an arbitrary path.
+ */
+export async function setToolchainDefault(
+    deps: ToolchainManagerDeps,
+    tool: LanguageTool,
+    version: string,
+): Promise<ToolchainVersionResult> {
+    const info = await toolchainInstallsInfo(deps);
+    const match = info.installs.find(
+        (i) => i.tool === tool && i.version === version && i.source === 'genie',
+    );
+    if (!match) {
+        return {
+            ok: false,
+            error: `Genie does not manage ${tool} ${version} on this machine, so it cannot be the default.`,
+        };
+    }
+    const next = { ...parseToolchainDefaults(deps.readDefaults()), [tool]: version };
+    deps.writeDefaults(serializeToolchainDefaults(next));
+    return { ok: true };
+}
+
+/** Install one version into `<userData>/toolchain/<tool>/<version>`. */
+export async function addToolchainVersion(
+    deps: ToolchainManagerDeps,
+    tool: LanguageTool,
+    version: string,
+): Promise<ToolchainVersionResult> {
+    const plan = planVersionInstall(tool, version, machineContext(), toolchainRoot());
+    if (!plan.ok) return { ok: false, error: plan.reason };
+
+    const result = await installEngineVersion(plan, versionInstallEffects(tool));
+    if (!result.ok) return { ok: false, error: result.error };
+
+    // First managed version of a language? It becomes the default, because a
+    // language with an install and no default cannot serve anything.
+    const stored = parseToolchainDefaults(deps.readDefaults());
+    if (!stored[tool]) {
+        deps.writeDefaults(serializeToolchainDefaults({ ...stored, [tool]: version }));
+    }
+    return { ok: true };
+}
+
+/** Delete a Genie-owned version and move the default if it was the default. */
+export async function removeToolchainVersion(
+    deps: ToolchainManagerDeps,
+    tool: LanguageTool,
+    version: string,
+): Promise<ToolchainVersionResult> {
+    const info = await toolchainInstallsInfo(deps);
+    const target = info.installs.find((i) => i.tool === tool && i.version === version);
+    if (!target) {
+        return { ok: false, error: `Genie has no ${tool} ${version} to remove.` };
+    }
+
+    const stored = parseToolchainDefaults(deps.readDefaults());
+    const plan = planVersionRemoval(target, info.installs, stored);
+    if (!plan.ok) return { ok: false, error: plan.reason };
+
+    try {
+        await rm(plan.dir, { recursive: true, force: true });
+    } catch (e) {
+        return { ok: false, error: `Could not delete ${plan.dir}: ${String(e)}` };
+    }
+
+    if (plan.nextDefault !== undefined) {
+        const next = { ...stored };
+        if (plan.nextDefault === null) delete next[tool];
+        else next[tool] = plan.nextDefault;
+        deps.writeDefaults(serializeToolchainDefaults(next));
+    }
+    return {
+        ok: true,
+        ...(plan.nextDefault !== undefined ? { nextDefault: plan.nextDefault } : {}),
+        ...(plan.freedBytes !== undefined ? { freedBytes: plan.freedBytes } : {}),
+    };
+}
+
+// --- the impure effects the executor runs through ---------------------------
+
+const INSTALL_TIMEOUT_MS = 15 * 60_000;
+
+function versionInstallEffects(tool: LanguageTool): VersionInstallEffects {
+    return {
+        async download(urls) {
+            const errors: string[] = [];
+            // Candidates in order: a vendor that MOVES a superseded release
+            // (windows.php.net → archives/) makes the second URL the right one
+            // the day after a patch ships.
+            for (const url of urls) {
+                const res = await download(url);
+                if (res.ok && res.path) return { ok: true, path: res.path };
+                errors.push(`${url}: ${res.error ?? 'download failed'}`);
+            }
+            return { ok: false, error: errors.join('; ') };
+        },
+
+        async unpack({ archive, artifact, strip, dest }) {
+            let staging: string | undefined;
+            try {
+                staging = await mkdtemp(join(tmpdir(), 'genie-engine-'));
+                const extract = await extractArchive(archive, artifact, staging);
+                if (!extract.ok) return extract;
+                // The archives nest everything under one directory whose name
+                // carries the version; the destination is version-keyed already,
+                // so that level is stripped rather than doubled.
+                const src = strip ? join(staging, strip) : staging;
+                await mkdir(dirname(dest), { recursive: true });
+                await rm(dest, { recursive: true, force: true });
+                try {
+                    await rename(src, dest);
+                } catch {
+                    // A temp dir on another volume cannot be renamed across it.
+                    await cp(src, dest, { recursive: true });
+                }
+                return { ok: true };
+            } catch (e) {
+                return { ok: false, error: String(e) };
+            } finally {
+                if (staging) await rm(staging, { recursive: true, force: true }).catch(() => {});
+            }
+        },
+
+        async runInstaller(installer, args) {
+            const res = await defaultCommandRunner.run(installer, args, {
+                timeoutMs: INSTALL_TIMEOUT_MS,
+            });
+            return res.code === 0
+                ? { ok: true }
+                : { ok: false, error: (res.stderr || res.stdout || `exited ${res.code}`).slice(-400) };
+        },
+
+        async writeFile(path, body) {
+            await mkdir(dirname(path), { recursive: true });
+            await writeFile(path, body, 'utf8');
+        },
+
+        verify: (exe) => probeEngineVersion(tool, exe),
+
+        async removeDir(dir) {
+            await rm(dir, { recursive: true, force: true }).catch(() => {});
+        },
+    };
+}
+
+/**
+ * Unpack an archive into a staging directory.
+ *
+ * `tar` handles gzip everywhere and is present on Windows 10+ as bsdtar, but
+ * bsdtar's zip support is not something to bet a first-run install on — so a zip
+ * goes through PowerShell's `Expand-Archive` on Windows and `unzip` elsewhere,
+ * both of which are the platform's own answer. Arguments are literal argv
+ * (`shell: false`), and the only user-influenced value is a temp path Genie
+ * generated itself.
+ */
+async function extractArchive(
+    archive: string,
+    artifact: VersionArtifact,
+    dest: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (artifact === 'exe') {
+        return { ok: false, error: `${basename(archive)} is an installer, not an archive.` };
+    }
+    const cmd =
+        artifact === 'tar.gz'
+            ? { command: 'tar', args: ['-xzf', archive, '-C', dest] }
+            : process.platform === 'win32'
+              ? {
+                    command: 'powershell',
+                    args: [
+                        '-NoProfile',
+                        '-NonInteractive',
+                        '-Command',
+                        `Expand-Archive -LiteralPath '${archive}' -DestinationPath '${dest}' -Force`,
+                    ],
+                }
+              : { command: 'unzip', args: ['-q', '-o', archive, '-d', dest] };
+
+    const res = await defaultCommandRunner.run(cmd.command, cmd.args, {
+        timeoutMs: INSTALL_TIMEOUT_MS,
+    });
+    return res.code === 0
+        ? { ok: true }
+        : { ok: false, error: (res.stderr || res.stdout || `exited ${res.code}`).slice(-400) };
+}

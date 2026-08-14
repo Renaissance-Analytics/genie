@@ -644,6 +644,61 @@ export interface ToolUpdate {
     source: ToolchainUpdateSource;
 }
 
+// --- multi-version languages (the Toolchain page) --------------------------
+// Mirrors main/dev-server/toolchain-versions.ts. Restated here for the same
+// reason as the wizard shapes above: the renderer cannot import main types.
+
+/** The languages Genie manages VERSIONS of — one model for all five. */
+export type LanguageTool = 'php' | 'node' | 'python' | 'go' | 'rust';
+
+/** Who put an install on the machine. Only `genie` is selectable/removable;
+ *  the rest are detected for awareness. */
+export type EngineInstallSource = 'genie' | 'herd' | 'xampp' | 'nvm' | 'system';
+
+/** ONE installed version: a DIRECTORY holding real executables (genie#206 —
+ *  never a PATH entry, which on Windows is often just a `.bat` shim). */
+export interface EngineInstall {
+    tool: LanguageTool;
+    version: string;
+    dir: string;
+    exe: string;
+    source: EngineInstallSource;
+    removable: boolean;
+    sizeBytes?: number;
+}
+
+/** A site that consumes a language, and whether it PINNED a version. Absent
+ *  `version` = it follows the machine default (and moves when that moves). */
+export interface ToolchainSiteUsage {
+    genName: string;
+    tool: LanguageTool;
+    version?: string;
+}
+
+/** The whole Toolchain page read (`devServer.toolchainInstalls`). */
+export interface ToolchainInstallsInfo {
+    installs: EngineInstall[];
+    /** The machine default per language, already resolved. */
+    defaults: Partial<Record<LanguageTool, string>>;
+    /** Versions this release can install here, per language, newest first. */
+    addable: Partial<Record<LanguageTool, string[]>>;
+    /** Sites that consume a language, for the default-change sentence. */
+    sites: ToolchainSiteUsage[];
+    /** `<userData>/toolchain` — the directory Genie owns end to end. */
+    root: string;
+}
+
+/** The outcome of adding or removing a version. */
+export interface ToolchainVersionResult {
+    ok: boolean;
+    error?: string;
+    /** Set by a removal: the version that became the default, or null when the
+     *  language no longer has a managed install. */
+    nextDefault?: string | null;
+    /** Set by a removal: bytes reclaimed. */
+    freedBytes?: number;
+}
+
 /** Machine-level start | stop | logs for ONE shared engine. */
 export interface DevEngineActionRequest {
     recordKey: string;
@@ -949,6 +1004,11 @@ export interface Settings {
      *  default action. RUNTIME-owned — written by the master as terminals are
      *  created, never by the Settings UI. Default 'regular'. */
     last_terminal_type?: string;
+    /** The MACHINE's default version per language, JSON `{"php":"8.3.33",…}`.
+     *  Only Genie-managed installs may be named. RUNTIME-owned: written by the
+     *  Toolchain page's `toolchain:set-default` ipc, never by the Settings form's
+     *  whole-object Save (which would carry a stale default back). */
+    toolchain_defaults?: string;
     /** Specialized terminals: the launch command for a Claude Code agent
      *  (resolved server-side; blank = the built-in default `claude`). */
     agent_command_claude?: string;
@@ -2246,6 +2306,28 @@ export interface GenieApi {
          *  replacing an agent TUI mid-turn, or restarting Docker under running
          *  containers; pass `confirmed` to accept a `warn`. */
         toolchainUpdate: (tool: HostToolName, confirmed?: boolean) => Promise<ToolchainInstallResult>;
+        /** The Toolchain page: every language version on this machine, the
+         *  machine defaults, what this release could still install, and the
+         *  sites that consume each language. A pure read — it lists directories
+         *  and never downloads. */
+        toolchainInstalls: () => Promise<ToolchainInstallsInfo>;
+        /** Make a GENIE-managed version the machine default. Sites that pinned
+         *  nothing follow it, and change on their next start. */
+        toolchainSetDefault: (
+            tool: LanguageTool,
+            version: string,
+        ) => Promise<ToolchainVersionResult>;
+        /** Install one version this release has a recipe for. */
+        toolchainAddVersion: (
+            tool: LanguageTool,
+            version: string,
+        ) => Promise<ToolchainVersionResult>;
+        /** Delete a version GENIE installed. Refused for anyone else's — the
+         *  result says which installer owns it. */
+        toolchainRemoveVersion: (
+            tool: LanguageTool,
+            version: string,
+        ) => Promise<ToolchainVersionResult>;
         /** The MACHINE's Dev Server: the runtime, the dev base image's
          *  toolchains, and every shared service engine with its holders. A pure
          *  read — opening it never pulls or starts anything. */

@@ -1143,6 +1143,12 @@ export interface Settings {
      *  ids (k/v values are text, like notifications_muted). Persists the
      *  sidebar expand/collapse state across restarts. Default '[]'. */
     collapsed_workspaces?: string;
+    /** The MACHINE's default language version per tool, JSON-encoded
+     *  (`{"php":"8.3.33","node":"24.19.0"}`). Only versions Genie itself
+     *  installed under `<userData>/toolchain` may appear; a stale or foreign
+     *  entry is ignored at read time (`defaultVersionFor`). Written by the
+     *  Toolchain page's `toolchain:set-default` ipc. Default '{}'. */
+    toolchain_defaults?: string;
     /** The CLI invocation the runAgent MCP tool launches for a `claude` agent.
      *  Default 'claude'. The user can set the real command (e.g. a wrapper or a
      *  full path with flags). */

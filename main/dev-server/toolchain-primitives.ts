@@ -80,8 +80,10 @@ async function fetchJson(url: string): Promise<unknown> {
 }
 
 /** Stream a URL to a temp file. Follows redirects itself (installers live behind
- *  CDNs). Returns the local path, or an error — never throws. */
-async function download(url: string): Promise<{ ok: boolean; path?: string; error?: string }> {
+ *  CDNs). Returns the local path, or an error — never throws. Exported so the
+ *  per-VERSION installer (`toolchain-manager.ts`) fetches through the same
+ *  hardened path rather than growing a second HTTP client. */
+export async function download(url: string): Promise<{ ok: boolean; path?: string; error?: string }> {
     try {
         const dir = await mkdtemp(join(tmpdir(), 'genie-toolchain-'));
         const name = basename(new URL(url).pathname) || 'download';

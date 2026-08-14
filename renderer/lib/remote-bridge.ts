@@ -249,6 +249,31 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             restartRequired: false,
             skipped: [],
         }),
+        // The Toolchain page describes THIS MACHINE's languages — the directories
+        // Genie installed under its own userData, and the Herd / XAMPP / nvm
+        // installs beside them. In a window driving another host it would be
+        // listing the CLIENT's toolchain under a page that claims to configure
+        // the host, so it stays inert (the section is hidden in a remote window
+        // anyway — see REMOTE_SECTIONS). Empty, never a wrong answer.
+        toolchainInstalls: async () => ({
+            installs: [],
+            defaults: {},
+            addable: {},
+            sites: [],
+            root: '',
+        }),
+        toolchainSetDefault: async () => ({
+            ok: false,
+            error: 'The toolchain is managed on the machine itself.',
+        }),
+        toolchainAddVersion: async () => ({
+            ok: false,
+            error: 'The toolchain is managed on the machine itself.',
+        }),
+        toolchainRemoveVersion: async () => ({
+            ok: false,
+            error: 'The toolchain is managed on the machine itself.',
+        }),
     };
 
     // The host's terminal-spec model (the grid's backbone) — pass-through.
