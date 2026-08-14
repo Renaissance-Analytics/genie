@@ -183,8 +183,9 @@ export function buildHostServe(
     const dir = root.trim();
     if (mode === 'proxy' || !dir) return undefined;
     if (mode === 'php') {
-        const pinned = version?.trim();
-        return { mode: 'php', root: dir, ...(pinned ? { version: pinned } : {}) };
+        // DELIBERATELY BROKEN (throwaway branch): drop the pin, to prove the E2E
+        // that asserts it is stored actually fails when it is not.
+        return { mode: 'php', root: dir };
     }
     return { mode: 'static', root: dir, ...(spa ? { spa: true } : {}) };
 }
