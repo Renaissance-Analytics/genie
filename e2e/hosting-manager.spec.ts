@@ -467,7 +467,7 @@ test('the site Edit form PINS a php version — and offers only the ones Genie m
         '8.2.33',
     ]);
     // Herd's 8.4.1 is on this machine and on the Toolchain page — never here.
-    await expect(version.locator('option')).not.toContainText(['8.4.1']);
+    await expect(version.locator('option', { hasText: '8.4.1' })).toHaveCount(0);
 
     await version.selectOption('8.2.33');
     await edit.getByRole('button', { name: 'Save changes' }).click();
