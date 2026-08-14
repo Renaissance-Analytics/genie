@@ -5,6 +5,7 @@ import {
     tynnHealthRows,
     tynnHealthSummary,
     tynnHealthTone,
+    tynnToneBadgeColor,
     tynnToolsPreview,
 } from '../tynn-health-view';
 
@@ -58,6 +59,15 @@ describe('tynnHealthTone', () => {
         expect(tynnHealthTone(null)).toBe('idle');
         expect(tynnHealthTone({ ...healthy, state: 'checking' })).toBe('idle');
     });
+
+    it('HOLDS the last known tint while re-checking instead of blinking grey', () => {
+        // A re-check on a broken workspace must not go quiet for the duration of
+        // the request — that reads as "it fixed itself".
+        expect(tynnHealthTone(broken, true)).toBe('bad');
+        expect(tynnHealthTone(healthy, true)).toBe('ok');
+        // With nothing known yet there is no tint to hold.
+        expect(tynnHealthTone(null, true)).toBe('idle');
+    });
 });
 
 describe('tynnHealthSummary', () => {
@@ -88,6 +98,12 @@ describe('tynnHealthSummary', () => {
         expect(tynnHealthSummary(null)).toBe('Tynn — not checked yet');
         expect(tynnHealthSummary({ ...healthy, state: 'checking' })).toBe('Tynn — checking…');
     });
+
+    it('says checking while a probe is in flight, whatever the last result was', () => {
+        expect(tynnHealthSummary(healthy, true)).toBe('Tynn — checking…');
+        expect(tynnHealthSummary(broken, true)).toBe('Tynn — checking…');
+        expect(tynnHealthSummary(null, true)).toBe('Tynn — checking…');
+    });
 });
 
 describe('tynnHealthRows', () => {
@@ -112,6 +128,17 @@ describe('tynnHealthRows', () => {
 
     it('is empty for a health that was never computed', () => {
         expect(tynnHealthRows(null)).toEqual([]);
+    });
+});
+
+describe('tynnToneBadgeColor', () => {
+    it('gives each tone its own Fancy Badge colour, and never greens a problem', () => {
+        expect(tynnToneBadgeColor('ok')).toBe('emerald');
+        expect(tynnToneBadgeColor('warn')).toBe('amber');
+        expect(tynnToneBadgeColor('bad')).toBe('rose');
+        expect(tynnToneBadgeColor('idle')).toBe('zinc');
+        const colours = (['ok', 'warn', 'bad', 'idle'] as const).map(tynnToneBadgeColor);
+        expect(new Set(colours).size).toBe(4);
     });
 });
 

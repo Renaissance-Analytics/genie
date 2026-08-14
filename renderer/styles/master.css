@@ -5494,3 +5494,148 @@ body.gutter-dragging .grid-gutter {
     background: var(--bg-2, #18181b);
     color: var(--amber-500, #f59e0b);
 }
+
+/* ===== Tynn MCP health light (the sidebar logo) ========================= */
+/* Why the logo carries this: an unreachable Tynn makes every agent in the
+   workspace silently toolless, and the only symptom the user ever saw was a
+   bare "error 405" inside a terminal they weren't looking at. The tint is the
+   at-a-glance half; the hover popover names the cause and the fix. */
+.tynn-health {
+    display: inline-flex;
+    align-items: center;
+    /* The drag strip owns this corner — the indicator must stay clickable. */
+    -webkit-app-region: no-drag;
+}
+.tynn-health-hit {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    border-radius: 999px;
+    /* Room for the status pip to sit on the logo's bottom-right. */
+    padding: 2px;
+}
+.tynn-health-hit:focus-visible {
+    outline: 2px solid var(--accent, #6366f1);
+    outline-offset: 2px;
+}
+.tynn-health-dot {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    /* Ring it in the sidebar's own background so the pip reads as a badge on
+       the logo rather than a speck of the artwork. */
+    box-shadow: 0 0 0 2px var(--bg-1, #09090b);
+    background: var(--fg-4, #52525b);
+    transition: background 140ms ease;
+}
+.tynn-health-ok .tynn-health-dot {
+    background: #10b981;
+}
+.tynn-health-warn .tynn-health-dot {
+    background: #f59e0b;
+}
+.tynn-health-bad .tynn-health-dot {
+    background: #ef4444;
+}
+/* A red light that also breathes: broken Tynn is the state this whole feature
+   exists to make impossible to walk past. */
+.tynn-health-bad .tynn-health-dot {
+    animation: tynn-health-pulse 1.8s ease-in-out infinite;
+}
+.tynn-health.is-checking .tynn-health-dot {
+    opacity: 0.55;
+}
+@keyframes tynn-health-pulse {
+    0%,
+    100% {
+        box-shadow: 0 0 0 2px var(--bg-1, #09090b), 0 0 0 0 rgba(239, 68, 68, 0.55);
+    }
+    60% {
+        box-shadow: 0 0 0 2px var(--bg-1, #09090b), 0 0 0 5px rgba(239, 68, 68, 0);
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .tynn-health-bad .tynn-health-dot {
+        animation: none;
+    }
+}
+
+/* The popover. Fancy's Popover portals + positions it; these are its innards. */
+.tynn-health-pop {
+    width: 340px;
+    max-height: 70vh;
+    overflow-y: auto;
+    cursor: default;
+    white-space: normal;
+}
+.tynn-health-pop .thp-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.tynn-health-pop .thp-where {
+    margin-top: 2px;
+    /* A long url must wrap rather than widen the panel. */
+    overflow-wrap: anywhere;
+}
+.tynn-health-pop .thp-rows {
+    list-style: none;
+    margin: 10px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.tynn-health-pop .thp-row {
+    padding-left: 14px;
+    position: relative;
+}
+.tynn-health-pop .thp-row-head {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+.tynn-health-pop .thp-row-dot {
+    position: absolute;
+    left: 0;
+    top: 6px;
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--fg-4, #52525b);
+}
+.tynn-health-pop .thp-ok .thp-row-dot {
+    background: #10b981;
+}
+.tynn-health-pop .thp-warn .thp-row-dot {
+    background: #f59e0b;
+}
+.tynn-health-pop .thp-bad .thp-row-dot {
+    background: #ef4444;
+}
+.tynn-health-pop .thp-row-label {
+    /* The row's own status trails its title on the same line. */
+    margin-left: auto;
+    text-align: right;
+}
+.tynn-health-pop .thp-row-detail,
+.tynn-health-pop .thp-tools,
+.tynn-health-pop .thp-empty {
+    margin: 3px 0 0;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+.tynn-health-pop .thp-tools {
+    font-family: var(--mono, ui-monospace, monospace);
+    opacity: 0.85;
+}
+.tynn-health-pop .thp-foot {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-1);
+}

@@ -42,7 +42,12 @@ export interface TynnHealthViewRow {
  * in flight must not be painted green, or a broken workspace looks healthy for
  * as long as the request takes.
  */
-export function tynnHealthTone(health: TynnHealth | null): HealthTone {
+export function tynnHealthTone(health: TynnHealth | null, checking = false): HealthTone {
+    // A re-check deliberately HOLDS the last known tint (`checking` is not a
+    // tone of its own): going grey for the duration of the request reads as
+    // "it fixed itself" on a workspace that is still broken. The summary below
+    // is what says a probe is in flight.
+    void checking;
     if (!health) return 'idle';
     switch (health.state) {
         case 'healthy':
@@ -68,7 +73,8 @@ function firstProblem(health: TynnHealth): TynnHealthViewRow | null {
  * on any unhealthy one it is the failing row's own cause-naming label, so the
  * tooltip ALONE is enough to diagnose the workspace without opening anything.
  */
-export function tynnHealthSummary(health: TynnHealth | null): string {
+export function tynnHealthSummary(health: TynnHealth | null, checking = false): string {
+    if (checking) return 'Tynn — checking…';
     if (!health) return 'Tynn — not checked yet';
     if (health.state === 'checking') return 'Tynn — checking…';
     if (health.state === 'unconfigured') return `Tynn — ${health.transport.label}`;
@@ -105,6 +111,24 @@ export function tynnHealthRows(health: TynnHealth | null): TynnHealthViewRow[] {
             tools: health.permission.tools,
         },
     ];
+}
+
+/**
+ * Tone → the Fancy `Badge` colour that paints it. Here rather than inline in the
+ * component so the component holds no judgement at all, and so "a problem never
+ * comes out green" is a thing a test can assert.
+ */
+export function tynnToneBadgeColor(tone: HealthTone): 'emerald' | 'amber' | 'rose' | 'zinc' {
+    switch (tone) {
+        case 'ok':
+            return 'emerald';
+        case 'warn':
+            return 'amber';
+        case 'bad':
+            return 'rose';
+        default:
+            return 'zinc';
+    }
 }
 
 /** The tool list, capped — the full set is in the permission row's detail. */

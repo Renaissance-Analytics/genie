@@ -27,11 +27,18 @@ import AgentTerminalForm from '../components/Master/AgentTerminalForm';
 import RecoveryBanner from '../components/Master/RecoveryBanner';
 import { bumpRecoverGen, type RecoveryState } from '../lib/host-loss-recovery';
 import GithubCapabilitiesFlyout from '../components/Master/GithubCapabilitiesFlyout';
+import TynnHealthIndicator from '../components/Master/TynnHealthIndicator';
 import { useGithubCapabilities } from '../lib/githubCapabilities';
 import { issueWatchBadge } from '../lib/issuewatch';
 import { terminalTypeById, type TerminalTypeId } from '../lib/terminal-types';
 import SignInPrompt from '../components/SignInPrompt';
-import type { AgentType, BackendUser, ViewType, AgentInboxScope } from '../lib/genie';
+import type {
+    AgentType,
+    BackendUser,
+    ViewType,
+    AgentInboxScope,
+    TynnHealth,
+} from '../lib/genie';
 import { resolveShortcut } from '../lib/master-shortcuts';
 import { computeLaunchSelection } from '../lib/launch-restore';
 import { canRunRecipe, recipeLaunchScope } from '../lib/recipe-launch';
@@ -667,6 +674,50 @@ function MasterInner() {
         tynnProvisionedRef.current.add(activeWorkspaceId);
         void api().tynn.provision(ws.path).catch(() => {});
     }, [activeWorkspaceId, workspacesById]);
+
+    // --- Tynn MCP health (the logo's light) ------------------------------
+    // Can the agents in THIS workspace actually reach Tynn, and if not, why?
+    // The probe is read-only (initialize + tools/list — the endpoint is the
+    // user's production Tynn) and lives in main; see main/mcp/tynn-health.ts.
+    const [tynnHealth, setTynnHealth] = useState<Record<string, TynnHealth>>({});
+    const [tynnChecking, setTynnChecking] = useState<Record<string, boolean>>({});
+    const checkTynnHealth = useCallback(
+        async (wsId: string) => {
+            const ws = workspacesById.get(wsId);
+            if (!ws?.path || wsId === SYSTEM_WORKSPACE_ID) return;
+            setTynnChecking((m) => ({ ...m, [wsId]: true }));
+            try {
+                const health = await api().tynn.health(wsId, ws.path, ws.project_name);
+                setTynnHealth((m) => ({ ...m, [wsId]: health }));
+            } catch {
+                // The main-side probe never throws; only a dead bridge lands
+                // here, and the indicator simply keeps its last known state.
+            } finally {
+                setTynnChecking((m) => ({ ...m, [wsId]: false }));
+            }
+        },
+        [workspacesById],
+    );
+    // Probe on ACTIVATE, once per workspace per session. Not on every switch:
+    // each probe is two real requests to production, and health only moves when
+    // the config or the server does. Clicking the logo is the explicit re-check.
+    useEffect(() => {
+        if (!activeWorkspaceId || activeWorkspaceId === SYSTEM_WORKSPACE_ID) return;
+        if (tynnHealth[activeWorkspaceId] || tynnChecking[activeWorkspaceId]) return;
+        void checkTynnHealth(activeWorkspaceId);
+    }, [activeWorkspaceId, tynnHealth, tynnChecking, checkTynnHealth]);
+    // Results are PUSHED (no polling): another window's probe updates this one,
+    // and a warm cache from main survives a renderer reload.
+    useEffect(() => {
+        if (!hasGenieBridge()) return;
+        void api()
+            .tynn.healthAll()
+            .then((all) => setTynnHealth((m) => ({ ...all, ...m })))
+            .catch(() => {});
+        return api().on.tynnHealthUpdate((health) =>
+            setTynnHealth((m) => ({ ...m, [health.workspaceId]: health })),
+        );
+    }, []);
 
     // Stage windows arrive with ?stage=<workspaceId>. Read it once on mount so
     // the launch restore below can pin the grid to that workspace's terminals.
@@ -1764,7 +1815,19 @@ function MasterInner() {
             <div className="winframe">
                 <div className={`gleft${chooserPinned ? ' pinned' : ''}`}>
                     <div className="gleft-top">
-                        <AppCorner />
+                        <AppCorner
+                            tynnHealth={
+                                activeWorkspaceId ? (tynnHealth[activeWorkspaceId] ?? null) : null
+                            }
+                            tynnChecking={
+                                !!activeWorkspaceId && !!tynnChecking[activeWorkspaceId]
+                            }
+                            onRecheckTynn={
+                                activeWorkspaceId && activeWorkspaceId !== SYSTEM_WORKSPACE_ID
+                                    ? () => void checkTynnHealth(activeWorkspaceId)
+                                    : undefined
+                            }
+                        />
                     </div>
                     <Chooser
                         workspaces={displayWorkspaces}
@@ -2633,18 +2696,42 @@ function isMacPlatform(): boolean {
     );
 }
 
-function AppCorner() {
+function AppCorner({
+    tynnHealth,
+    tynnChecking = false,
+    onRecheckTynn,
+}: {
+    /** The active workspace's last Tynn MCP probe (see TynnHealthIndicator). */
+    tynnHealth?: TynnHealth | null;
+    tynnChecking?: boolean;
+    /** Omitted on the signed-out screen, where there is no workspace to probe —
+     *  the logo then renders bare, with no health affordance to mislead. */
+    onRecheckTynn?: () => void;
+}) {
     const isMac = isMacPlatform();
+    {
+        /* The PNG ships in resources/logo.png; Next copies it into
+           renderer/public at build time. Use the relative path so it works
+           under file:// (packaged) and http://localhost (dev). */
+    }
+    const logo = <img className="lamp" src="./logo.png" alt="" width={22} height={22} />;
     return (
         <>
             {/* macOS: the REAL traffic lights overlay this corner — reserve
                 their space rather than painting fakes. */}
             {isMac && <span className="traffic-pad" />}
             <span className="glogo">
-                {/* The PNG ships in resources/logo.png; Next copies it into
-                    renderer/public at build time. Use the relative path so it
-                    works under file:// (packaged) and http://localhost (dev). */}
-                <img className="lamp" src="./logo.png" alt="" width={22} height={22} />
+                {onRecheckTynn ? (
+                    <TynnHealthIndicator
+                        health={tynnHealth ?? null}
+                        checking={tynnChecking}
+                        onRecheck={onRecheckTynn}
+                    >
+                        {logo}
+                    </TynnHealthIndicator>
+                ) : (
+                    logo
+                )}
                 <span className="glogo-text">Genie</span>
             </span>
         </>

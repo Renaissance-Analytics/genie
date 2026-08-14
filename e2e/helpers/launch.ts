@@ -51,7 +51,8 @@ export type E2EHarnessPage =
     | 'picker-layer'
     | 'hosting'
     | 'repo-panel'
-    | 'terminal-recovery';
+    | 'terminal-recovery'
+    | 'tynn-health';
 
 const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
     issuewatch: 'e2e-issuewatch',
@@ -61,6 +62,7 @@ const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
     hosting: 'e2e-hosting',
     'repo-panel': 'e2e-repo-panel',
     'terminal-recovery': 'e2e-terminal-recovery',
+    'tynn-health': 'e2e-tynn-health',
 };
 
 export async function launchGenieE2E(

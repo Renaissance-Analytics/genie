@@ -2070,6 +2070,7 @@ function showE2EWindow(): void {
         'e2e-hosting',
         'e2e-repo-panel',
         'e2e-terminal-recovery',
+        'e2e-tynn-health',
     ] as const;
     const page = (ALLOWED as readonly string[]).includes(requested)
         ? requested
