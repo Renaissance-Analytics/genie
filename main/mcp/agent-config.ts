@@ -597,12 +597,43 @@ export function hasGenieAgentsSection(content: string): boolean {
  * block byte-identical to the brief-only form, so existing callers/tests that
  * omit it are unaffected.
  */
-export function applyAgentsSection(existing: string, enabled: boolean, aiSystem = ''): string {
+/**
+ * The coding harnesses Genie writes an instructions file for.
+ *
+ * TWO REAL FILES, never a symlink: Windows has no working symlinks, so Genie
+ * maintains `AGENTS.md` (Codex) and `CLAUDE.md` (Claude Code) itself. They carry
+ * the IDENTICAL protocol — only the framing differs, because each is read by a
+ * different TUI. Anything genuinely harness-specific (wiring an on-finish hook,
+ * codex-server setup) lives in `genieGuide`, NOT here, so the protocol body
+ * cannot drift between them. It already had: this envelope's CLAUDE.md went
+ * stale enough to lose the entire Hosting Manager section.
+ */
+export type AgentDocHarness = 'codex' | 'claude';
+
+export const AGENT_DOC_FILES: Record<AgentDocHarness, string> = {
+    codex: 'AGENTS.md',
+    claude: 'CLAUDE.md',
+};
+
+/** The one line that differs: which TUI reads this file, and how it gets it. */
+const HARNESS_INTRO: Record<AgentDocHarness, string> = {
+    codex:
+        '> **Codex reads `AGENTS.md`** as the instructions for this workspace. Harness-specific setup — the `notify` on-finish hook, codex-server wiring — is NOT in this protocol: call `genieGuide` for it.',
+    claude:
+        '> **Claude Code loads `CLAUDE.md`** as project memory at the start of every session. Harness-specific setup — the `Stop` hook, settings wiring — is NOT in this protocol: call `genieGuide` for it.',
+};
+
+export function applyAgentsSection(
+    existing: string,
+    enabled: boolean,
+    aiSystem = '',
+    harness: AgentDocHarness = 'codex',
+): string {
     const trimmed = aiSystem.trim();
     const aiSection = trimmed
         ? `\n\n### Ai.System — workspace instructions (set in Genie → Settings → Customization)\n\n${trimmed}`
         : '';
-    const block = `${AGENTS_BEGIN}\n## GENIE PROTOCOL\n\n${GENIE_AGENTS_BRIEF}${aiSection}\n${AGENTS_END}`;
+    const block = `${AGENTS_BEGIN}\n## GENIE PROTOCOL\n\n${HARNESS_INTRO[harness]}\n\n${GENIE_AGENTS_BRIEF}${aiSection}\n${AGENTS_END}`;
     const begin = existing.indexOf(AGENTS_BEGIN);
     const end = existing.indexOf(AGENTS_END);
     const hasBlock = begin !== -1 && end !== -1 && end > begin;
@@ -633,27 +664,44 @@ export function applyAgentsSection(existing: string, enabled: boolean, aiSystem 
  * Idempotent: re-running with the same state is a no-op write.
  */
 function syncAgentsMd(workspacePath: string, enabled: boolean): void {
-    const file = path.join(workspacePath, 'AGENTS.md');
-    let existing: string;
-    try {
-        existing = fs.readFileSync(file, 'utf8');
-    } catch {
-        return; // no AGENTS.md → nothing to update
-    }
-    // The user's Ai.System instruction set, injected into the block below.
-    // Best-effort: a settings-read failure must not break the AGENTS.md sync.
+    // The user's Ai.System instruction set, injected into the blocks below.
+    // Best-effort: a settings-read failure must not break the sync.
     let aiSystem = '';
     try {
         aiSystem = (getAllSettings().ai_system as string) ?? '';
     } catch {
         /* leave empty — sync proceeds with the brief-only block */
     }
-    const next = applyAgentsSection(existing, enabled, aiSystem);
-    if (next === existing) return;
-    try {
-        fs.writeFileSync(file, next);
-    } catch {
-        /* best-effort */
+
+    // BOTH harness files, because Windows has no working symlinks: Genie cannot
+    // point CLAUDE.md at AGENTS.md, it has to maintain each one. If EITHER
+    // exists the workspace uses agent instructions, so the other is created too
+    // — otherwise whichever harness you open next is flying blind. (That is not
+    // hypothetical: a CLAUDE.md that was never managed went stale enough to lose
+    // the entire Hosting Manager section.) A workspace with NEITHER file is left
+    // alone, so Genie still never litters into a project that uses neither.
+    const targets = (Object.keys(AGENT_DOC_FILES) as AgentDocHarness[]).map((harness) => ({
+        harness,
+        file: path.join(workspacePath, AGENT_DOC_FILES[harness]),
+    }));
+    const read = targets.map((t) => {
+        try {
+            return { ...t, existing: fs.readFileSync(t.file, 'utf8'), present: true };
+        } catch {
+            return { ...t, existing: '', present: false };
+        }
+    });
+    if (!read.some((t) => t.present)) return; // no agent docs here → nothing to do
+    // Disabling only STRIPS the block; it must never create a file to strip from.
+    for (const t of read) {
+        if (!enabled && !t.present) continue;
+        const next = applyAgentsSection(t.existing, enabled, aiSystem, t.harness);
+        if (next === t.existing) continue;
+        try {
+            fs.writeFileSync(t.file, next);
+        } catch {
+            /* best-effort */
+        }
     }
 }
 

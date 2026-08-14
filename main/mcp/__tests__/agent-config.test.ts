@@ -434,3 +434,65 @@ describe('ensureClaudeProjectMcpEnabled (genie #10 — auto-approve project MCP)
         expect(() => ensureClaudeProjectMcpEnabled('')).not.toThrow();
     });
 });
+
+/**
+ * TWO instruction files, ONE protocol (owner, 2026-08-14).
+ *
+ * Windows has no working symlinks, so Genie cannot point CLAUDE.md at AGENTS.md
+ * — it has to MANAGE BOTH as real files. They carry the SAME Genie protocol;
+ * only the framing differs, because each is read by a different TUI. Anything
+ * genuinely harness-specific (wiring an on-finish hook, codex-server setup) was
+ * moved OUT of the protocol and into `genieGuide`, so the protocol body stays
+ * identical between them and cannot drift.
+ *
+ * The drift is not hypothetical: this envelope's CLAUDE.md had gone stale enough
+ * to lose the entire Hosting Manager section, so Claude agents here were never
+ * told hosting existed.
+ */
+describe('per-harness agent docs', () => {
+    it('writes the SAME protocol body into both files', () => {
+        const codex = applyAgentsSection('# P\n', true, '', 'codex');
+        const claude = applyAgentsSection('# P\n', true, '', 'claude');
+        // The protocol is the invariant — take a distinctive line from it.
+        expect(codex).toContain('imDone');
+        expect(claude).toContain('imDone');
+        expect(codex).toContain('ForceTheQuestion');
+        expect(claude).toContain('ForceTheQuestion');
+    });
+
+    it('frames each file for the TUI that reads it', () => {
+        const codex = applyAgentsSection('# P\n', true, '', 'codex');
+        const claude = applyAgentsSection('# P\n', true, '', 'claude');
+        // Each names ITS OWN file and how that harness picks it up — the two
+        // blocks must not be byte-identical, or there was no tailoring at all.
+        expect(codex).toContain('AGENTS.md');
+        expect(claude).toContain('CLAUDE.md');
+        expect(codex).not.toBe(claude);
+        // ...and neither addresses the other harness's reader.
+        expect(codex).not.toContain('CLAUDE.md');
+        expect(claude).not.toContain('AGENTS.md');
+    });
+
+    it('keeps harness-specific SETUP out of the protocol — that lives in genieGuide', () => {
+        // The hook wiring differs per harness and duplicating it here is how the
+        // two files drift apart. The protocol points at the guide instead.
+        const claude = applyAgentsSection('# P\n', true, '', 'claude');
+        expect(claude).not.toContain('.claude/settings.json');
+        expect(claude).not.toMatch(/Codex's `notify`/);
+        expect(claude).toContain('genieGuide');
+    });
+
+    it('defaults to the codex framing, so existing callers are unchanged', () => {
+        expect(applyAgentsSection('# P\n', true)).toBe(applyAgentsSection('# P\n', true, '', 'codex'));
+    });
+
+    it('still replaces its block in place rather than duplicating it', () => {
+        const once = applyAgentsSection('# P\n', true, '', 'claude');
+        expect(applyAgentsSection(once, true, '', 'claude')).toBe(once);
+    });
+
+    it('still strips cleanly when disabled', () => {
+        const withBlock = applyAgentsSection('# P\n\nbody\n', true, '', 'claude');
+        expect(applyAgentsSection(withBlock, false, '', 'claude')).not.toContain('GENIE PROTOCOL');
+    });
+});
