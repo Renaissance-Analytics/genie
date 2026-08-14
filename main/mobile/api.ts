@@ -97,6 +97,7 @@ import {
     unlinkWorkspaceTynn,
     type TynnProvisionAuth,
 } from '../tynn/provision';
+import { tynnHealthService } from '../mcp/tynn-health-service';
 import type { ProjectJsonTynn } from '../workspace/project-json';
 
 /**
@@ -1861,6 +1862,28 @@ export async function handleApi(
             // Host: check signed-in via the workstation identity (no cookie exists),
             // so a linked host workspace reports 'already'/'provision' not 'signed-out'.
             sendJson(res, 200, await tynnProvisionStatus(wsPath, deps.hostProvisionAuth));
+            return true;
+        }
+        if (pathname === '/api/desktop/tynn/health') {
+            // Read-only by construction (initialize + tools/list — see
+            // mcp/tynn-health.ts), so it belongs ABOVE the control kill-switch
+            // with `status`, not below it with the mutations. The id and name
+            // come from the host's OWN workspace row rather than the request,
+            // so a client cannot mislabel a probe.
+            const row = dbListWorkspaces().find((w) => w.path === wsPath);
+            if (!row) {
+                sendJson(res, 404, { error: 'unknown workspace' });
+                return true;
+            }
+            sendJson(
+                res,
+                200,
+                await tynnHealthService.check({
+                    workspaceId: row.id,
+                    workspacePath: wsPath,
+                    workspaceName: row.project_name,
+                }),
+            );
             return true;
         }
         // Mutations — kill-switch-gated.

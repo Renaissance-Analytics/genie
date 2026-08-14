@@ -5,6 +5,9 @@
  */
 
 import { makeRemoteBridge } from './remote-bridge';
+import type { TynnHealth } from '../../main/mcp/tynn-health';
+
+export type { TynnHealth };
 
 export type BackendKind = 'tynn' | 'aionima';
 
@@ -2795,6 +2798,20 @@ export interface GenieApi {
         ) => Promise<{ ok: boolean }>;
         /** Clear the workspace's Tynn project link (drops the project.json block). */
         unlink: (workspacePath: string) => Promise<{ ok: boolean }>;
+        /**
+         * Probe this workspace's Tynn MCP endpoint and report WHY it is or isn't
+         * usable (main/mcp/tynn-health.ts). Read-only — `initialize` +
+         * `tools/list` only, never a work-item tool, because the endpoint is the
+         * user's production Tynn. The result also arrives on
+         * `events.tynnHealthUpdate` for every other open window.
+         */
+        health: (
+            workspaceId: string,
+            workspacePath: string,
+            workspaceName: string,
+        ) => Promise<TynnHealth>;
+        /** The last probe per workspace id, with no re-probe (boot warm-up). */
+        healthAll: () => Promise<Record<string, TynnHealth>>;
         /** Where the workspace stands without minting anything (UI display). */
         provisionStatus: (workspacePath: string) => Promise<{
             status: 'unlinked' | 'signed-out' | 'already' | 'provision';
@@ -3396,6 +3413,8 @@ export interface GenieApi {
                 needsReauth?: boolean;
             }) => void,
         ) => () => void;
+        /** A Tynn MCP health probe finished (pushed — this is never polled). */
+        tynnHealthUpdate: (cb: (payload: TynnHealth) => void) => () => void;
         terminalData: (
             cb: (payload: { id: string; data: string }) => void,
         ) => () => void;

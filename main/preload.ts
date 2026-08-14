@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { TailscaleStatus } from './tailscale';
 import type { AgentInboxScope } from './agentinbox/types';
+import type { TynnHealth } from './mcp/tynn-health';
 import {
     TERMINAL_RECOVER_CHANNEL,
     TERMINAL_RECOVERY_STATUS_CHANNEL,
@@ -822,6 +823,12 @@ const api = {
         /** Clear the workspace's Tynn project link (drops the project.json block). */
         unlink: (workspacePath: string) =>
             ipcRenderer.invoke('tynn:unlink', workspacePath),
+        /** Probe this workspace's Tynn MCP endpoint (read-only) — see
+         *  main/mcp/tynn-health.ts. Also broadcast on `tynn-health:update`. */
+        health: (workspaceId: string, workspacePath: string, workspaceName: string) =>
+            ipcRenderer.invoke('tynn:health', workspaceId, workspacePath, workspaceName),
+        /** The last probe results, per workspace id — no re-probe. */
+        healthAll: () => ipcRenderer.invoke('tynn:health-all'),
         // Ops-project repo auto-management.
         opsPlan: (workspacePath: string) =>
             ipcRenderer.invoke('tynn:ops-plan', workspacePath),
@@ -1329,6 +1336,12 @@ const api = {
             const handler = (_e: unknown, payload: any) => cb(payload);
             ipcRenderer.on('issue-watch:update', handler);
             return () => ipcRenderer.off('issue-watch:update', handler);
+        },
+        /** A Tynn MCP health probe finished (pushed — never polled). */
+        tynnHealthUpdate: (cb: (payload: TynnHealth) => void) => {
+            const handler = (_e: unknown, payload: TynnHealth) => cb(payload);
+            ipcRenderer.on('tynn-health:update', handler);
+            return () => ipcRenderer.off('tynn-health:update', handler);
         },
         terminalData: (cb: (payload: { id: string; data: string }) => void) => {
             const handler = (_e: unknown, payload: { id: string; data: string }) =>

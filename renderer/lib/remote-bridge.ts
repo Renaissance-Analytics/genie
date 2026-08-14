@@ -778,6 +778,21 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 method: 'POST',
                 json: { workspacePath },
             })) as { ok: boolean },
+        // HOST-SOURCED, for the same reason status/provision are: the `.mcp.json`
+        // being probed, and the network that has to reach Tynn, are the HOST's.
+        // Run locally this would stat a host path that doesn't exist on the
+        // client and paint a healthy workspace as "no Tynn server configured" —
+        // an indicator that lies is worse than no indicator. The host resolves
+        // the workspace id + name from its OWN row, so only the path is sent.
+        health: async (_workspaceId, workspacePath) =>
+            (await req('/api/desktop/tynn/health', {
+                method: 'POST',
+                json: { workspacePath },
+            })) as Awaited<ReturnType<GenieApi['tynn']['health']>>,
+        // No warm cache over the bridge: the host's probe cache isn't exposed as
+        // a route, and a remote window probes on activate like a local one. An
+        // empty map means "nothing known yet", which is true.
+        healthAll: async () => ({}),
         provision: async (workspacePath, force) =>
             (await req('/api/desktop/tynn/provision', {
                 method: 'POST',

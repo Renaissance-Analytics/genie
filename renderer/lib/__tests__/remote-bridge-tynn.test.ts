@@ -89,6 +89,28 @@ describe('makeRemoteBridge — host-sourced Tynn provisioning', () => {
         });
     });
 
+    it('health() probes the HOST endpoint — a local probe would report the wrong machine', async () => {
+        // Left spread-from-local this would read the CLIENT's filesystem for a
+        // host workspace path that does not exist there, and confidently paint
+        // a healthy workspace as "no Tynn server configured".
+        const request = vi.fn().mockResolvedValue({ state: 'healthy', workspaceId: 'w1' });
+        const api = makeRemoteBridge(fakeLocal(request));
+        expect(await api.tynn.health('w1', '/host/ws', 'Alpha')).toMatchObject({
+            state: 'healthy',
+        });
+        expect(request).toHaveBeenCalledWith('/api/desktop/tynn/health', {
+            method: 'POST',
+            json: { workspacePath: '/host/ws' },
+        });
+    });
+
+    it('healthAll() reports an empty warm cache rather than the CLIENT\'s probes', async () => {
+        const request = vi.fn();
+        const api = makeRemoteBridge(fakeLocal(request));
+        expect(await api.tynn.healthAll()).toEqual({});
+        expect(request).not.toHaveBeenCalled();
+    });
+
     it('tynnHost.get() reads the host tynn base (the link block references the host)', async () => {
         const request = vi.fn().mockResolvedValue({ host: 'https://tynn.ai' });
         const api = makeRemoteBridge(fakeLocal(request));

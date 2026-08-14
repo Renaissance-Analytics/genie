@@ -92,6 +92,11 @@ import type { ForceAnswer } from './mcp/protocol';
 import { getKnowledgeStore } from './knowledge/store';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import {
+    TYNN_HEALTH_CHANNEL,
+    onTynnHealthResult,
+    tynnHealthService,
+} from './mcp/tynn-health-service';
+import {
     provisionWorkspaceTynn,
     provisionStatus,
     linkWorkspaceTynn,
@@ -1532,6 +1537,20 @@ export function registerIpcHandlers(): void {
         unlinkWorkspaceTynn(workspacePath);
         return { ok: true };
     });
+    // Is this workspace's Tynn MCP actually usable, and if not, WHY? Read-only
+    // (initialize + tools/list, never a tools/call) — see mcp/tynn-health.ts.
+    // Requested on workspace activate and when the user clicks the indicator;
+    // the result is ALSO broadcast so every window updates without polling.
+    ipcMain.handle(
+        'tynn:health',
+        async (_e, workspaceId: string, workspacePath: string, workspaceName: string) =>
+            tynnHealthService.check({ workspaceId, workspacePath, workspaceName }),
+    );
+    ipcMain.handle('tynn:health-all', async () => tynnHealthService.all());
+    // Push each finished probe at every local window, so a second window on the
+    // same workspace shows the same tint without asking (and without polling —
+    // health only changes when the config or the server does).
+    onTynnHealthResult((health) => broadcastLocal(TYNN_HEALTH_CHANNEL, health));
     ipcMain.handle(
         'tynn:provision',
         async (_e, workspacePath: string, force = false) =>
