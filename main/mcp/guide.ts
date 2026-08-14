@@ -93,16 +93,22 @@ Returns the resulting process list. Pass \`terminalId\` (your \`GENIE_TERMINAL_I
 for exact workspace resolution; optional.
 
 ### manageSite
-**Host a repo the way you DEVELOP it** — Genie's Hosting Manager. The DEFAULT is
-**host-native** (story #238): Genie runs the repo's OWN dev server as a HOST
-process against the LIVE source — **no container, no build** — and serves it at a
-stable \`https://<name>.gen\` origin reachable whether the viewer is on this
-machine or connected remotely. Just serve the repo the site points to, live. A
-bare \`create {name}\` DETECTS the stack and runs its own dev server:
-PHP/Laravel → \`php artisan serve\`; Node (Vite/Next/Nuxt) → the repo's own
-\`npm run dev\`; Django → \`manage.py runserver\`; Go → \`go run .\`. Override with an
-explicit \`command\` + \`port\` to run YOUR dev server, or \`hostPort\` to point
-\`.gen\` at a dev server you ALREADY run (e.g. one started with \`manageProcess\`).
+**Host a repo at a stable \`https://<name>.gen\`** — Genie's Hosting Manager.
+
+**PREFER letting GENIE SERVE the app** (\`hostServe\`). You point a site at a REPO
+and a ROOT; Genie owns the web server, the port and the \`.gen\` address, and
+writes the config itself — nobody hand-rolls an nginx/Caddy block. A PHP/Laravel
+app points at the app root and Genie serves its \`public/\`; a built front end
+points at \`dist\` (SPA-aware). No \`command\`, no \`port\`.
+
+**Running the repo's OWN dev server is the FALLBACK** — for a stack Genie cannot
+serve yet, or when you specifically want HMR against live source. It is what a
+bare \`create {name}\` still infers (host-native, story #238: a HOST process
+against LIVE source, no container, no build — PHP/Laravel → \`php artisan serve\`;
+Node → \`npm run dev\`; Django → \`manage.py runserver\`; Go → \`go run .\`), so say
+what you want rather than taking the inference by accident. Override with an
+explicit \`command\` + \`port\`, or \`hostPort\` to point \`.gen\` at a dev server you
+ALREADY run (e.g. one started with \`manageProcess\`).
 Docker is only for the SERVICES behind it and for the OPT-IN production build.
 
 A **production build+serve** is OPT-IN via \`runMode:'recipe'\` — for when you want

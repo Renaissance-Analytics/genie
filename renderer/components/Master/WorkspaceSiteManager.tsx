@@ -952,11 +952,20 @@ function EditSiteForm({
     );
 }
 
-/** The three serve modes, as the picker offers them (genie #167/#171). */
+/**
+ * The serve modes, as the picker offers them (genie #167/#171).
+ *
+ * GENIE-SERVES FIRST (owner, 2026-08-14). Letting Genie serve the app is the
+ * preferred shape — you point a site at a repo and a root, and Genie owns the
+ * web server, the port and the `.gen` address. Running the repo's own dev server
+ * is the FALLBACK, for a stack Genie cannot serve yet or when someone wants HMR
+ * against live source. Listing it first (and calling it "recommended" nowhere)
+ * is why both agents and humans kept reaching for it by default.
+ */
 const SERVE_MODES: { value: ServeMode; label: string }[] = [
-    { value: 'proxy', label: "Run the repo's dev server (Genie proxies it)" },
-    { value: 'static', label: 'Serve a built folder (static / SPA)' },
-    { value: 'php', label: 'Serve a PHP app' },
+    { value: 'php', label: 'Genie serves a PHP app (point at public/) — recommended' },
+    { value: 'static', label: 'Genie serves a built folder (static / SPA) — recommended' },
+    { value: 'proxy', label: "Run the repo's own dev server (Genie proxies it)" },
 ];
 
 /**

@@ -1533,7 +1533,7 @@ const MANAGE_SITE_TOOL = {
                 type: 'string',
                 enum: ['dockerfile', 'devcontainer', 'compose', 'recipe', 'explicit'],
                 description:
-                    "create (optional): how it is built and served. OMIT to take the recommendation — the repo's DEV server run HOST-NATIVE (`host`): a host process against live source, no container, no build. `host` runs `command` (or the detected dev command) as a HOST process on `port`. `recipe` opts INTO the detected stack's PRODUCTION build+serve (in a container); `dockerfile` builds the repo's own Dockerfile and runs the image's CMD; `explicit` uses exactly the `build`/`serve`/`image` you pass. `devcontainer` and `compose` are not runnable yet.",
+                    "create (optional): how it is built and served. PREFER `hostServe` — let GENIE serve the app (you point at a repo + a root; Genie owns the web server, the port and the `.gen` address). Reach for a runMode only when Genie cannot serve that stack, or you specifically want the repo's own dev server (HMR against live source). `host` runs `command` (or the detected dev command) as a HOST process on `port` — this is what you get if you omit both, and it is the FALLBACK, not the recommendation. `recipe` opts INTO the detected stack's PRODUCTION build+serve (in a container); `dockerfile` builds the repo's own Dockerfile and runs the image's CMD; `explicit` uses exactly the `build`/`serve`/`image` you pass. `devcontainer` and `compose` are not runnable yet.",
             },
             image: {
                 type: 'string',
@@ -1608,7 +1608,7 @@ const MANAGE_SITE_TOOL = {
                 },
                 required: ['mode', 'root'],
                 description:
-                    'create (optional): have GENIE serve this host-native site with its OWN web server instead of running a repo dev server — you declare the mode, Genie writes the config (no hand-rolled nginx/Caddy). No `command`/`port` needed. For a repo’s own dev server, or a service you already run, use `command`+`port` or `hostPort` instead (a reverse-proxy, no generated config). update: pass `null` to CLEAR it — switch a static/php site back to the repo’s own dev server.',
+                    'create: THE PREFERRED WAY to host a site. GENIE serves it with its own web server — you point at a repo and a ROOT, declare the mode, and Genie writes the config (no hand-rolled nginx/Caddy), owns the port and answers on `<name>.gen`. No `command`/`port` needed. A PHP/Laravel app points at the app root (Genie serves its `public/`); a built front end points at `dist`. Use a repo dev server (`command`+`port`) or an already-running one (`hostPort`) only when Genie cannot serve that stack, or you want HMR against live source. update: pass `null` to CLEAR it — switch back to the repo’s own dev server.',
             },
             exposed: {
                 type: 'array',
